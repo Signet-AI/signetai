@@ -10,15 +10,15 @@
  * Idempotent — matched by canonical name + frontmatter content hash.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, basename, dirname } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { watch } from "chokidar";
 import type { DbAccessor } from "../db-accessor.js";
+import { logger } from "../logger.js";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config.js";
 import type { LlmProvider } from "./provider.js";
 import { parseSkillFile } from "./skill-frontmatter.js";
-import { installSkillNode, uninstallSkillNode } from "./skill-graph.js";
-import { logger } from "../logger.js";
+import { installSkillNode, skillEmbeddingHash, uninstallSkillNode } from "./skill-graph.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -123,21 +123,15 @@ export async function reconcileOnce(deps: ReconcilerDeps): Promise<{
 				const storedEmb = deps.accessor.withReadDb(
 					(db) =>
 						db
-							.prepare("SELECT chunk_text FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
-							.get(actualId) as { chunk_text: string } | undefined,
+							.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
+							.get(actualId) as { content_hash: string } | undefined,
 				);
+				const rawHash = skillEmbeddingHash(actualId, parsed.frontmatter);
 
-				// Compare fingerprints: if the embedding text would be different,
-				// the skill has been updated on disk
-				const currentEmbText = [
-					parsed.frontmatter.name,
-					parsed.frontmatter.description,
-					...(parsed.frontmatter.triggers && parsed.frontmatter.triggers.length > 0
-						? [parsed.frontmatter.triggers.join(", ")]
-						: []),
-				].join(" — ");
-
-				if (storedEmb && storedEmb.chunk_text !== currentEmbText) {
+				// Compare the raw on-disk frontmatter fingerprint. Installs may
+				// enrich description/triggers before generating embeddings, so
+				// comparing against chunk_text causes infinite update loops.
+				if (storedEmb && storedEmb.content_hash !== rawHash) {
 					await installSkillNode(
 						{
 							frontmatter: parsed.frontmatter,
@@ -296,15 +290,7 @@ async function reconcileSkill(skillName: string, mdPath: string, deps: Reconcile
 		const parsed = parseSkillFile(content);
 		if (!parsed) return;
 
-		// Skip if frontmatter hasn't changed (avoid redundant embedding work)
 		const entityId = `skill:default:${skillName}`;
-		const currentEmbText = [
-			parsed.frontmatter.name,
-			parsed.frontmatter.description,
-			...(parsed.frontmatter.triggers && parsed.frontmatter.triggers.length > 0
-				? [parsed.frontmatter.triggers.join(", ")]
-				: []),
-		].join(" — ");
 
 		// Look up by id or name (entity may have been adopted from extraction)
 		const existingEntity = deps.accessor.withReadDb(
@@ -314,15 +300,15 @@ async function reconcileSkill(skillName: string, mdPath: string, deps: Reconcile
 					.get(entityId, skillName) as { id: string } | undefined,
 		);
 		const lookupId = existingEntity?.id ?? entityId;
-
+		const rawHash = skillEmbeddingHash(lookupId, parsed.frontmatter);
 		const storedEmb = deps.accessor.withReadDb(
 			(db) =>
-				db.prepare("SELECT chunk_text FROM embeddings WHERE source_type = 'skill' AND source_id = ?").get(lookupId) as
-					| { chunk_text: string }
+				db.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?").get(lookupId) as
+					| { content_hash: string }
 					| undefined,
 		);
 
-		if (storedEmb && storedEmb.chunk_text === currentEmbText) {
+		if (storedEmb && storedEmb.content_hash === rawHash) {
 			logger.debug("reconciler", "Skill unchanged, skipping", { skill: skillName });
 			return;
 		}

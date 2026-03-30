@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { DEFAULT_PIPELINE_V2, type EmbeddingConfig, type PipelineV2Config } from "../memory-config";
-import { installSkillNode } from "./skill-graph";
+import { installSkillNode, skillEmbeddingHash } from "./skill-graph";
 
 function dbPath(): string {
 	const dir = join(tmpdir(), `signet-skill-graph-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -79,5 +79,16 @@ describe("installSkillNode", () => {
 		);
 		expect(row?.entity_id).toBe(id);
 		expect(row?.uninstalled_at).toBeNull();
+	});
+
+	it("scopes skill embedding hashes by entity id", () => {
+		const frontmatter = {
+			name: "shared-skill",
+			description: "same metadata",
+			version: "1.0.0",
+		} as const;
+		expect(skillEmbeddingHash("skill:default:shared-skill", frontmatter)).not.toBe(
+			skillEmbeddingHash("skill:other:shared-skill", frontmatter),
+		);
 	});
 });

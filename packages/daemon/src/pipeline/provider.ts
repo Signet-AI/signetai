@@ -8,8 +8,9 @@
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { LlmGenerateResult, LlmProvider } from "@signet/core";
 import { logger } from "../logger";
@@ -193,6 +194,47 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 				logger.warn("pipeline", `Unknown signal "${signal}", defaulting to SIGTERM`);
 			}
 			proc.kill(sigNum ?? 15);
+		},
+	};
+}
+
+function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
+	readonly env: Record<string, string | undefined>;
+	cleanup(): void;
+} {
+	const root = join(tmpdir(), "signet-codex-home");
+	mkdirSync(root, { recursive: true });
+	const home = mkdtempSync(join(root, "home-"));
+	const codexHome = join(home, ".codex");
+	mkdirSync(codexHome, { recursive: true });
+	const liveHome = baseEnv.HOME ?? homedir();
+	const liveCodexHome = baseEnv.CODEX_HOME ?? join(liveHome, ".codex");
+
+	const auth = join(liveCodexHome, "auth.json");
+	if (existsSync(auth)) {
+		const authDst = join(codexHome, "auth.json");
+		cpSync(auth, authDst);
+		chmodSync(authDst, 0o400);
+	}
+
+	const version = join(liveCodexHome, "version.json");
+	if (existsSync(version)) {
+		cpSync(version, join(codexHome, "version.json"));
+	}
+
+	let cleaned = false;
+
+	return {
+		env: {
+			...baseEnv,
+			HOME: home,
+			CODEX_HOME: codexHome,
+			XDG_CONFIG_HOME: join(home, ".config"),
+		},
+		cleanup() {
+			if (cleaned) return;
+			cleaned = true;
+			rmSync(home, { recursive: true, force: true });
 		},
 	};
 }
@@ -1206,8 +1248,11 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 				"exec",
 				"--skip-git-repo-check",
 				"--json",
+				"--ephemeral",
 				"--sandbox",
 				"read-only",
+				"-c",
+				"mcp_servers.signet.enabled=false",
 				"-C",
 				cfg.workingDirectory,
 				"--model",
@@ -1216,14 +1261,22 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 			];
 
 			const { SIGNET_NO_HOOKS: _, SIGNET_CODEX_BYPASS_WRAPPER: __, ...cleanEnv } = process.env;
-			const proc = spawnHidden(["codex", ...args], {
-				env: {
-					...cleanEnv,
-					NO_COLOR: "1",
-					SIGNET_NO_HOOKS: "1",
-					SIGNET_CODEX_BYPASS_WRAPPER: "1",
-				},
-			});
+			const sterile = createSterileCodexEnv(cleanEnv);
+			let proc: SpawnResult;
+			try {
+				proc = spawnHidden(["codex", ...args], {
+					env: {
+						...sterile.env,
+						NO_COLOR: "1",
+						SIGNET_NO_HOOKS: "1",
+						SIGNET_CODEX_BYPASS_WRAPPER: "1",
+					},
+				});
+			} catch (e) {
+				sterile.cleanup();
+				throw e;
+			}
+			proc.exited.finally(() => sterile.cleanup());
 
 			// Race the subprocess against a timeout. On timeout we kill the
 			// process and reject immediately instead of waiting for streams

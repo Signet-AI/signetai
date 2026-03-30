@@ -2,6 +2,15 @@
 
 All notable changes to Signet are documented here.
 
+## [0.88.0] - 2026-03-30
+
+### Bug Fixes
+
+- **daemon**: stop skill reconcile and codex provider loops (#412)
+- **skills**: add __pycache__/ to gitignore
+- **docker**: add skills/ to build context and runtime stage
+
+
 ## [0.87.2] - 2026-03-30
 
 ### Features

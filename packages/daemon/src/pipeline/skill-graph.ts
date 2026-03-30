@@ -77,6 +77,33 @@ function buildEmbeddingText(fm: SkillFrontmatter): string {
 	return parts.join(" — ");
 }
 
+function normalizeList(values: readonly string[] | undefined): readonly string[] {
+	if (!values || values.length === 0) return [];
+	return [...values];
+}
+
+export function skillFingerprint(fm: SkillFrontmatter): string {
+	return JSON.stringify({
+		name: fm.name,
+		description: fm.description,
+		version: fm.version ?? null,
+		author: fm.author ?? null,
+		license: fm.license ?? null,
+		triggers: normalizeList(fm.triggers),
+		tags: normalizeList(fm.tags),
+		permissions: normalizeList(fm.permissions),
+		role: fm.role ?? null,
+	});
+}
+
+export function skillFingerprintHash(fm: SkillFrontmatter): string {
+	return contentHash(skillFingerprint(fm));
+}
+
+export function skillEmbeddingHash(entityId: string, fm: SkillFrontmatter): string {
+	return contentHash(`${entityId}\n${skillFingerprint(fm)}`);
+}
+
 function contentHash(text: string): string {
 	const h = new Bun.CryptoHasher("sha256");
 	h.update(text);
@@ -253,8 +280,8 @@ export async function installSkillNode(
 
 	if (embVec && embVec.length > 0) {
 		const embId = crypto.randomUUID();
-		const hash = contentHash(embeddingText);
 		const blob = vectorToBlob(embVec);
+		const embHash = skillEmbeddingHash(entityId, input.frontmatter);
 
 		accessor.withWriteTx((db) => {
 			// Remove any old skill embeddings
@@ -280,11 +307,11 @@ export async function installSkillNode(
 				   dimensions = excluded.dimensions,
 				   source_id = excluded.source_id,
 				   chunk_text = excluded.chunk_text`,
-			).run(embId, hash, blob, embVec.length, entityId, embeddingText, now);
+			).run(embId, embHash, blob, embVec.length, entityId, embeddingText, now);
 
 			// Query back the actual row id — on conflict SQLite keeps the
 			// existing id, not the one we generated above.
-			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(hash) as { id: string };
+			const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embHash) as { id: string };
 			syncVecInsert(db, actualRow.id, embVec);
 		});
 

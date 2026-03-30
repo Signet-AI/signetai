@@ -4,12 +4,15 @@
  * OllamaProvider uses the Ollama HTTP API, so we mock global fetch.
  */
 
-import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	DEFAULT_OLLAMA_FALLBACK_MAX_CONTEXT_TOKENS,
-	createOllamaProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
+	createOllamaProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
 	resolveDefaultOllamaFallbackMaxContextTokens,
@@ -305,8 +308,10 @@ describe("createCodexProvider", () => {
 
 	it("generateWithUsage() parses JSONL agent output and usage", async () => {
 		let capturedArgs: string[] = [];
-		Bun.spawn = mock((args: string[]) => {
+		let capturedEnv: Record<string, string | undefined> | undefined;
+		Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
 			capturedArgs = args;
+			capturedEnv = opts?.env;
 			return {
 				stdout: streamFromString(
 					'{"type":"thread.started","thread_id":"abc"}\n{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n{"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":5,"output_tokens":7}}\n',
@@ -324,6 +329,113 @@ describe("createCodexProvider", () => {
 		expect(result.usage?.cacheReadTokens).toBe(5);
 		expect(result.usage?.outputTokens).toBe(7);
 		expect(capturedArgs).not.toContain("-a");
+		expect(capturedArgs).toContain("--ephemeral");
+		expect(capturedArgs).toContain("mcp_servers.signet.enabled=false");
+		expect(typeof capturedEnv?.HOME).toBe("string");
+		expect(capturedEnv?.HOME).not.toBe(process.env.HOME);
+		expect(typeof capturedEnv?.CODEX_HOME).toBe("string");
+	});
+
+	it("spawns Codex with a sterile temp home and readonly copied auth", async () => {
+		const root = join(tmpdir(), `signet-codex-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const home = join(root, "home");
+		const liveCodex = join(root, "live-codex");
+		mkdirSync(liveCodex, { recursive: true });
+		writeFileSync(join(liveCodex, "auth.json"), '{"provider":"test"}');
+		writeFileSync(join(liveCodex, "version.json"), '{"version":"1"}');
+
+		const prevHome = process.env.HOME;
+		const prevCodexHome = process.env.CODEX_HOME;
+		process.env.HOME = home;
+		process.env.CODEX_HOME = liveCodex;
+
+		let capturedEnv: Record<string, string | undefined> | undefined;
+		Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
+			capturedEnv = opts?.env;
+			const srcAuth = join(liveCodex, "auth.json");
+			const srcVersion = join(liveCodex, "version.json");
+			const dstAuth = join(capturedEnv?.CODEX_HOME ?? "", "auth.json");
+			expect(capturedEnv?.CODEX_HOME).toBe(join(capturedEnv?.HOME ?? "", ".codex"));
+			expect(capturedEnv?.HOME?.startsWith(tmpdir())).toBe(true);
+			expect(existsSync(dstAuth)).toBe(existsSync(srcAuth));
+			if (existsSync(srcAuth)) {
+				expect(lstatSync(dstAuth).isSymbolicLink()).toBe(false);
+				expect(readFileSync(dstAuth, "utf8")).toBe(readFileSync(srcAuth, "utf8"));
+				expect(lstatSync(dstAuth).mode & 0o200).toBe(0);
+			}
+			expect(existsSync(join(capturedEnv?.CODEX_HOME ?? "", "version.json"))).toBe(existsSync(srcVersion));
+			return {
+				stdout: streamFromString(
+					'{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+				),
+				stderr: streamFromString(""),
+				exited: Promise.resolve(0),
+				kill() {},
+			};
+		}) as typeof Bun.spawn;
+
+		try {
+			const provider = createCodexProvider({ model: "gpt-5.3-codex" });
+			if (!provider.generateWithUsage) {
+				throw new Error("expected generateWithUsage on Codex provider");
+			}
+
+			await provider.generateWithUsage("test");
+
+			expect(capturedEnv?.HOME).toBeDefined();
+			expect(capturedEnv?.HOME).not.toBe(home);
+			expect(capturedEnv?.CODEX_HOME).toBe(join(capturedEnv?.HOME ?? "", ".codex"));
+			expect(capturedEnv?.XDG_CONFIG_HOME).toBe(join(capturedEnv?.HOME ?? "", ".config"));
+		} finally {
+			if (prevHome === undefined) {
+				delete process.env.HOME;
+			} else {
+				process.env.HOME = prevHome;
+			}
+			if (prevCodexHome === undefined) {
+				delete process.env.CODEX_HOME;
+			} else {
+				process.env.CODEX_HOME = prevCodexHome;
+			}
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not delete sibling sterile homes while Codex is running", async () => {
+		const root = join(tmpdir(), "signet-codex-home");
+		mkdirSync(root, { recursive: true });
+		const sibling = join(root, `home-sibling-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const marker = join(sibling, "marker.txt");
+		mkdirSync(sibling, { recursive: true });
+		writeFileSync(marker, "keep");
+
+		let capturedEnv: Record<string, string | undefined> | undefined;
+		Bun.spawn = mock((args: string[], opts?: { env?: Record<string, string | undefined> }) => {
+			capturedEnv = opts?.env;
+			expect(existsSync(marker)).toBe(true);
+			expect(capturedEnv?.HOME).not.toBe(sibling);
+			return {
+				stdout: streamFromString(
+					'{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+				),
+				stderr: streamFromString(""),
+				exited: Promise.resolve(0),
+				kill() {},
+			};
+		}) as typeof Bun.spawn;
+
+		try {
+			const provider = createCodexProvider({ model: "gpt-5.3-codex" });
+			if (!provider.generateWithUsage) {
+				throw new Error("expected generateWithUsage on Codex provider");
+			}
+
+			await provider.generateWithUsage("test");
+
+			expect(existsSync(marker)).toBe(true);
+		} finally {
+			rmSync(sibling, { recursive: true, force: true });
+		}
 	});
 
 	it("generate() throws on non-zero exit", async () => {
