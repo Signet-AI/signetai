@@ -151,13 +151,15 @@ export function mountSkillAnalyticsRoutes(app: Hono, authMode: AuthMode = "local
 					)
 					.all(...params) as { source: string; count: number }[];
 
+				const timelineCutoff = since ? "datetime(?)" : "datetime('now', '-7 days')";
+				const timelineParams = since ? [...params, since] : [...params];
 				const timeline = db
 					.prepare(
 						`SELECT DATE(created_at) as date, COUNT(*) as count
-					 FROM skill_invocations WHERE ${where} AND created_at >= datetime('now', '-7 days')
+					 FROM skill_invocations WHERE ${where} AND created_at >= ${timelineCutoff}
 					 GROUP BY DATE(created_at) ORDER BY date`,
 					)
-					.all(...params) as { date: string; count: number }[];
+					.all(...timelineParams) as { date: string; count: number }[];
 
 				const latencies = db
 					.prepare(`SELECT latency_ms FROM skill_invocations WHERE ${where} ORDER BY latency_ms`)
