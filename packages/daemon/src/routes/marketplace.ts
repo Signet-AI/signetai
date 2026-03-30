@@ -1110,8 +1110,9 @@ function rankMarketplaceTools(tools: readonly MarketplaceMcpTool[], query: strin
 // CLI Generation via mcporter
 // ---------------------------------------------------------------------------
 
-/** Convert an installed server config to the mcporter servers-file format. */
-function buildMcporterConfigEntry(server: InstalledMarketplaceMcpServer): Record<string, unknown> {
+/** Convert an installed server config to the mcporter servers-file format.
+ *  Resolves secret:// references so the compiled binary receives real credentials. */
+async function buildMcporterConfigEntry(server: InstalledMarketplaceMcpServer): Promise<Record<string, unknown>> {
 	const { config } = server;
 	if (config.transport === "stdio") {
 		const entry: Record<string, unknown> = {
@@ -1119,7 +1120,7 @@ function buildMcporterConfigEntry(server: InstalledMarketplaceMcpServer): Record
 			args: config.args,
 		};
 		if (Object.keys(config.env).length > 0) {
-			entry.env = config.env;
+			entry.env = await resolveSecretReferences(config.env);
 		}
 		if (config.cwd) {
 			entry.cwd = config.cwd;
@@ -1129,7 +1130,7 @@ function buildMcporterConfigEntry(server: InstalledMarketplaceMcpServer): Record
 	// HTTP transport
 	const entry: Record<string, unknown> = { url: config.url };
 	if (Object.keys(config.headers).length > 0) {
-		entry.headers = config.headers;
+		entry.headers = await resolveSecretReferences(config.headers);
 	}
 	return entry;
 }
@@ -1183,10 +1184,11 @@ function getMcporterSpawnTarget(): { cmd: string; leadingArgs: readonly string[]
 }
 
 async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Promise<GenerateCliResult> {
-	// Sanitize binary name to prevent path traversal
-	const binaryName = sanitizeBinaryName(server.name);
+	// Use sanitized server ID as binary name — IDs are unique per installed
+	// server, so two servers with similar display names won't collide.
+	const binaryName = sanitizeBinaryName(server.id);
 	if (!binaryName) {
-		return { success: false, error: `Server name "${server.name}" cannot be used as a binary name` };
+		return { success: false, error: `Server ID "${server.id}" cannot be used as a binary name` };
 	}
 
 	const binsDir = getMcpBinsDir();
@@ -1194,7 +1196,7 @@ async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Pr
 		mkdirSync(binsDir, { recursive: true });
 	}
 
-	const configEntry = buildMcporterConfigEntry(server);
+	const configEntry = await buildMcporterConfigEntry(server);
 	const configPayload = { mcpServers: { [binaryName]: configEntry } };
 	const tmpConfig = join(tmpdir(), `mcporter-${server.id}-${Date.now()}.json`);
 
