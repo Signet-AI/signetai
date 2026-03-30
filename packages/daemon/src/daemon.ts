@@ -929,6 +929,9 @@ app.get("/api/features", (c) => {
 import { mountMcpRoute } from "./mcp/route.js";
 mountMcpRoute(app);
 
+import { mountMcpServersRoutes } from "./routes/mcp-servers.js";
+mountMcpServersRoutes(app, getDbAccessor());
+
 // ============================================================================
 // Auth API
 // ============================================================================
@@ -7793,6 +7796,13 @@ async function main() {
 
 	// Start scheduled task worker
 	const schedulerHandle = startSchedulerWorker(getDbAccessor());
+
+	// Initialize mcporter proxy runtime for installed MCP servers
+	void import("./mcp/proxy-runtime.js").then(({ initProxyRuntime }) => {
+		initProxyRuntime(getDbAccessor()).catch((err: unknown) => {
+			logger.warn("mcp-proxy", `Proxy runtime init failed: ${err instanceof Error ? err.message : String(err)}`);
+		});
+	});
 
 	// Start git sync timer (if enabled and has token)
 	startGitSyncTimer();

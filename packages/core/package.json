@@ -27,7 +27,7 @@
     "yaml": "^2.6.0"
   },
   "optionalDependencies": {
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "11.10.0",
     "sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
     "sqlite-vec-darwin-x64": "^0.1.7-alpha.2",
     "sqlite-vec-linux-arm64": "^0.1.7-alpha.2",

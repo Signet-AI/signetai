@@ -8,6 +8,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { Runtime } from "mcporter";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,6 +19,17 @@ interface McpServerOptions {
 	readonly daemonUrl?: string;
 	/** Server version string */
 	readonly version?: string;
+	/**
+	 * Live mcporter Runtime — when provided, tools from all connected servers
+	 * are registered with the prefix `mcp__{serverName}__{toolName}`.
+	 * The corresponding tool cache must already be populated (see proxy-runtime.ts).
+	 */
+	readonly proxyRuntime?: Runtime;
+	/**
+	 * Pre-built tool cache from proxy-runtime.getProxyToolCache().
+	 * Passed separately so registration stays synchronous.
+	 */
+	readonly proxyToolCache?: ReadonlyMap<string, readonly { name: string; description?: string; inputSchema?: unknown }[]>;
 }
 
 interface DaemonResponse<T> {
@@ -345,6 +357,45 @@ export function createMcpServer(opts?: McpServerOptions): McpServer {
 		}
 		return textResult(result.data);
 	});
+
+	// ------------------------------------------------------------------
+	// Proxy tools from installed MCP servers
+	// ------------------------------------------------------------------
+	if (opts?.proxyRuntime !== undefined && opts.proxyToolCache !== undefined) {
+		const runtime = opts.proxyRuntime;
+		for (const [serverName, tools] of opts.proxyToolCache) {
+			for (const tool of tools) {
+				const prefixedName = `mcp__${serverName}__${tool.name}`;
+				// Build a zod schema from the JSON Schema inputSchema, or fall
+				// back to an empty object. We pass the raw schema through as
+				// a passthrough object rather than trying to reconstruct the
+				// full zod graph — the MCP SDK accepts raw JSON Schema here.
+				const inputSchema =
+					tool.inputSchema !== undefined &&
+					typeof tool.inputSchema === "object" &&
+					tool.inputSchema !== null
+						? (tool.inputSchema as Parameters<typeof server.registerTool>[1]["inputSchema"])
+						: z.object({});
+
+				server.registerTool(
+					prefixedName,
+					{
+						title: tool.description ?? tool.name,
+						description: tool.description,
+						inputSchema,
+					},
+					async (args) => {
+						try {
+							const result = await runtime.callTool(serverName, tool.name, { args: args as Record<string, unknown> });
+							return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result) }] };
+						} catch (err) {
+							return { content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+						}
+					},
+				);
+			}
+		}
+	}
 
 	return server;
 }

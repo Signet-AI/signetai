@@ -40,6 +40,8 @@ export type LogCategory =
 	| "pipeline" // Extraction/decision pipeline
 	| "summary-worker" // Session summary worker
 	| "session-memories" // Session memory tracking
+	| "mcp-servers" // MCP server registry
+	| "mcp-proxy" // MCP proxy runtime (mcporter)
 	| "system"; // System events
 
 export interface LogEntry {

@@ -697,6 +697,135 @@ export async function uninstallSkill(
 }
 
 // ============================================================================
+// MCP Servers API
+// ============================================================================
+
+export interface McpServer {
+	id: string;
+	name: string;
+	transport: "stdio" | "http";
+	config: string;
+	enabled: boolean;
+	cli_path: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface McpTool {
+	name: string;
+	description?: string;
+	inputSchema?: unknown;
+}
+
+export interface DiscoveredServer {
+	name: string;
+	importKind: string;
+	sourcePath: string;
+	alreadyInstalled: boolean;
+	rawConfig: Record<string, unknown>;
+}
+
+export async function getMcpServers(): Promise<McpServer[]> {
+	try {
+		const response = await fetch(`${API_BASE}/api/mcp-servers`);
+		if (!response.ok) throw new Error("Failed to fetch MCP servers");
+		const data = await response.json();
+		return (data.servers ?? []).map((s: McpServer) => ({
+			...s,
+			enabled: Boolean(s.enabled),
+		}));
+	} catch {
+		return [];
+	}
+}
+
+export async function getMcpServerTools(id: string): Promise<McpTool[]> {
+	try {
+		const response = await fetch(`${API_BASE}/api/mcp-servers/${encodeURIComponent(id)}/tools`);
+		if (!response.ok) return [];
+		const data = await response.json();
+		return data.tools ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function discoverMcpServers(): Promise<DiscoveredServer[]> {
+	try {
+		const response = await fetch(`${API_BASE}/api/mcp-servers/discover`);
+		if (!response.ok) throw new Error("Discovery failed");
+		const data = await response.json();
+		return data.servers ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function importMcpServer(
+	name: string,
+	rawConfig: Record<string, unknown>,
+): Promise<{ success: boolean; error?: string }> {
+	try {
+		const response = await fetch(`${API_BASE}/api/mcp-servers/import`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name, rawConfig }),
+		});
+		if (!response.ok) {
+			const data = await response.json().catch(() => ({}));
+			return { success: false, error: (data as { error?: string }).error ?? "Import failed" };
+		}
+		return { success: true };
+	} catch (e) {
+		return { success: false, error: String(e) };
+	}
+}
+
+export async function toggleMcpServer(
+	id: string,
+	enabled: boolean,
+): Promise<McpServer | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/mcp-servers/${encodeURIComponent(id)}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ enabled }),
+		});
+		if (!response.ok) return null;
+		const data = await response.json();
+		const s = data.server as McpServer;
+		return { ...s, enabled: Boolean(s.enabled) };
+	} catch {
+		return null;
+	}
+}
+
+export async function removeMcpServer(id: string): Promise<boolean> {
+	try {
+		const response = await fetch(`${API_BASE}/api/mcp-servers/${encodeURIComponent(id)}`, {
+			method: "DELETE",
+		});
+		return response.ok;
+	} catch {
+		return false;
+	}
+}
+
+export async function generateMcpCli(
+	id: string,
+): Promise<{ success: boolean; path?: string; error?: string }> {
+	try {
+		const response = await fetch(`${API_BASE}/api/mcp-servers/${encodeURIComponent(id)}/generate-cli`, {
+			method: "POST",
+		});
+		const data = await response.json();
+		return data as { success: boolean; path?: string; error?: string };
+	} catch (e) {
+		return { success: false, error: String(e) };
+	}
+}
+
+// ============================================================================
 // Scheduled Tasks API
 // ============================================================================
 

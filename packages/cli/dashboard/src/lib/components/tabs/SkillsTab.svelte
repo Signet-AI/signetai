@@ -17,7 +17,11 @@ import {
 } from "$lib/stores/skills.svelte";
 import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
 import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
+import McpServersSection from "$lib/components/skills/McpServersSection.svelte";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
+
+type Section = "skills" | "mcp";
+let section = $state<Section>("skills");
 
 let searchInput = $state<HTMLInputElement | null>(null);
 
@@ -84,6 +88,30 @@ onMount(() => {
 <svelte:window onkeydown={handleGlobalKey} />
 
 <div class="h-full flex flex-col overflow-hidden">
+	<!-- Section toggle: Skills | MCP Servers -->
+	<div class="section-toggle shrink-0 border-b border-[var(--sig-border)] flex items-center px-[var(--space-md)]">
+		<button
+			type="button"
+			class="filter-chip"
+			class:active={section === "skills"}
+			onclick={() => { section = "skills"; }}
+		>
+			Skills
+		</button>
+		<button
+			type="button"
+			class="filter-chip"
+			class:active={section === "mcp"}
+			onclick={() => { section = "mcp"; }}
+		>
+			MCP Servers
+		</button>
+	</div>
+
+	{#if section === "mcp"}
+		<McpServersSection />
+	{:else}
+
 	<!-- Hero header -->
 	<div
 		class="shrink-0 px-[var(--space-md)] pt-[var(--space-md)]
@@ -275,12 +303,20 @@ onMount(() => {
 			onuninstall={(name) => doUninstall(name)}
 		/>
 	{/if}
+
+	{/if}<!-- end section === "skills" -->
 </div>
 
 <!-- Detail sheet -->
 <SkillDetail />
 
 <style>
+	.section-toggle {
+		gap: 0;
+		padding-top: 2px;
+		padding-bottom: 2px;
+	}
+
 	.stats-bar {
 		font-family: var(--font-mono);
 		font-size: 10px;
