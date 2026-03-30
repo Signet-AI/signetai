@@ -7629,7 +7629,9 @@ app.post("/api/tasks/:id/run", async (c) => {
 					 WHERE id = ?`,
 					).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
 
-					// Record skill invocation for manual API-triggered runs
+					// Record skill invocation for manual API-triggered runs.
+					// scheduled_tasks does not have agent_id — uses "default" for now.
+					// Phase 2: add agent_id column to scheduled_tasks for multi-agent support.
 					if (taskSkillName) {
 						const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
 						const success = status === "completed";
