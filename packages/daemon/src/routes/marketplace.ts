@@ -829,7 +829,7 @@ function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | n
 		enabled: value.enabled,
 		scope: normalizeScope(value.scope),
 		config,
-		cliPath: typeof value.cliPath === "string" ? value.cliPath : undefined,
+		cliPath: typeof value.cliPath === "string" && existsSync(value.cliPath) ? value.cliPath : undefined,
 		installedAt: value.installedAt,
 		updatedAt: value.updatedAt,
 	};
@@ -1290,6 +1290,9 @@ async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Pr
 		});
 	});
 }
+
+/** Per-server single-flight guard for CLI generation. */
+const cliGenerationInFlight = new Set<string>();
 
 export function mountMarketplaceRoutes(app: Hono): void {
 	app.get("/api/marketplace/mcp", (c) => {
@@ -1819,24 +1822,32 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		if (server.config.transport !== "stdio") {
 			return c.json({ error: "CLI generation is only supported for stdio servers" }, 400);
 		}
-
-		logger.info("skills", "Generating standalone CLI binary", { serverId: id, name: server.name });
-		const result = await runMcporterGenerateCli(server);
-
-		if (!result.success) {
-			logger.warn("skills", "CLI generation failed", { serverId: id, error: result.error });
-			return c.json({ success: false, error: result.error }, 500);
+		if (cliGenerationInFlight.has(id)) {
+			return c.json({ error: "CLI generation already in progress for this server" }, 409);
 		}
 
-		// Persist the binary path on the server record
-		const updated: InstalledMarketplaceMcpServer = {
-			...server,
-			cliPath: result.path,
-			updatedAt: new Date().toISOString(),
-		};
-		writeInstalledServers(installed.map((s) => (s.id === id ? updated : s)));
-		logger.info("skills", "CLI binary generated", { serverId: id, path: result.path });
-		return c.json({ success: true, path: result.path, server: updated });
+		cliGenerationInFlight.add(id);
+		try {
+			logger.info("skills", "Generating standalone CLI binary", { serverId: id, name: server.name });
+			const result = await runMcporterGenerateCli(server);
+
+			if (!result.success) {
+				logger.warn("skills", "CLI generation failed", { serverId: id, error: result.error });
+				return c.json({ success: false, error: result.error }, 500);
+			}
+
+			// Persist the binary path on the server record
+			const updated: InstalledMarketplaceMcpServer = {
+				...server,
+				cliPath: result.path,
+				updatedAt: new Date().toISOString(),
+			};
+			writeInstalledServers(installed.map((s) => (s.id === id ? updated : s)));
+			logger.info("skills", "CLI binary generated", { serverId: id, path: result.path });
+			return c.json({ success: true, path: result.path, server: updated });
+		} finally {
+			cliGenerationInFlight.delete(id);
+		}
 	});
 
 	app.delete("/api/marketplace/mcp/:id", (c) => {
