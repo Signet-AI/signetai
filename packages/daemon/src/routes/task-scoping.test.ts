@@ -173,6 +173,32 @@ describe("task agent-scoping", () => {
 		expect(row.agent_id).toBe("default");
 	});
 
+	// -- PATCH reassignment SQL pattern --
+	it("patch: can reassign task from one agent to another", () => {
+		createTask("t1", "default");
+
+		// Lookup scoped by current owner
+		const existing = db
+			.prepare("SELECT * FROM scheduled_tasks WHERE id = ? AND agent_id = ?")
+			.get("t1", "default");
+		expect(existing).toBeTruthy();
+
+		// Reassign to new agent
+		db.prepare("UPDATE scheduled_tasks SET agent_id = ? WHERE id = ?").run("agent-a", "t1");
+
+		// Now visible to agent-a, not default
+		const afterReassign = db
+			.prepare("SELECT agent_id FROM scheduled_tasks WHERE id = ? AND agent_id = ?")
+			.get("t1", "agent-a") as { agent_id: string } | null;
+		expect(afterReassign).toBeTruthy();
+		expect(afterReassign!.agent_id).toBe("agent-a");
+
+		const oldOwner = db
+			.prepare("SELECT 1 FROM scheduled_tasks WHERE id = ? AND agent_id = ?")
+			.get("t1", "default");
+		expect(oldOwner).toBeNull();
+	});
+
 	it("migration: agent_id column is NOT NULL", () => {
 		const cols = db.prepare("PRAGMA table_info(scheduled_tasks)").all() as ReadonlyArray<Record<string, unknown>>;
 		const agentIdCol = cols.find((c) => c.name === "agent_id");

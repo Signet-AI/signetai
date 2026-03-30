@@ -12,9 +12,9 @@
  * deployments are unaffected.
  *
  * Multi-agent upgrade path:
- *   UPDATE scheduled_tasks SET agent_id = '<target>' WHERE id = '<task>';
- * The PATCH endpoint cannot move tasks between agents because it scopes
- * the lookup by the caller's agent_id.
+ *   PATCH /api/tasks/:id?agent_id=default  body: { agentId: "<target>" }
+ * The PATCH endpoint scopes the lookup by the current owner (query param)
+ * and allows reassignment via body.agentId.
  */
 
 import type { MigrationDb } from "./index";

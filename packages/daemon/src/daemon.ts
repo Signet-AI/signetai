@@ -7485,7 +7485,8 @@ app.get("/api/tasks/:id", (c) => {
 app.patch("/api/tasks/:id", async (c) => {
 	const taskId = c.req.param("id");
 	const body = await c.req.json();
-	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, body.agentId);
+	// Scope lookup by current owner (query param), not the target agent
+	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
 	if (scoped.error) return c.json({ error: scoped.error }, 403);
 
 	const existing = getDbAccessor().withReadDb((db) =>
@@ -7521,12 +7522,15 @@ app.patch("/api/tasks/:id", async (c) => {
 		return c.json({ error: "skillMode must be 'inject' or 'slash' when skillName is set" }, 400);
 	}
 
+	// Resolve target agent_id: body.agentId allows reassignment, otherwise keep current
+	const targetAgentId = body.agentId ?? existing.agent_id;
+
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`UPDATE scheduled_tasks SET
 			 name = ?, prompt = ?, cron_expression = ?, harness = ?,
 			 working_directory = ?, enabled = ?, next_run_at = ?,
-			 skill_name = ?, skill_mode = ?, updated_at = ?
+			 skill_name = ?, skill_mode = ?, agent_id = ?, updated_at = ?
 			 WHERE id = ?`,
 		).run(
 			body.name ?? existing.name,
@@ -7538,6 +7542,7 @@ app.patch("/api/tasks/:id", async (c) => {
 			nextRunAt,
 			skillName,
 			skillMode,
+			targetAgentId,
 			now,
 			taskId,
 		);
