@@ -4,11 +4,14 @@
  * Allows skill invocation analytics to attribute task runs
  * to the correct agent instead of hardcoding 'default'.
  *
- * Existing rows receive agent_id = 'default' because pre-migration
- * tasks had no agent ownership column — there is no prior data to
- * infer the correct agent. In single-agent (local) deployments this
- * is accurate. In multi-agent deployments that predate this migration,
- * operators should reassign tasks directly in the database:
+ * BREAKING for multi-agent deployments: all existing rows are set to
+ * agent_id = 'default' because the pre-migration schema had no ownership
+ * column — there is no prior data to infer the correct agent. After this
+ * migration, task endpoints scope by agent_id in SQL, so tasks assigned
+ * to 'default' are only visible to the default agent. Single-agent (local)
+ * deployments are unaffected.
+ *
+ * Multi-agent upgrade path:
  *   UPDATE scheduled_tasks SET agent_id = '<target>' WHERE id = '<task>';
  * The PATCH endpoint cannot move tasks between agents because it scopes
  * the lookup by the caller's agent_id.
