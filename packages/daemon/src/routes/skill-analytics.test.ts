@@ -168,4 +168,53 @@ describe("skill-analytics queries", () => {
 		expect(isValidIsoDate("March 15, 2025")).toBe(false);
 		expect(isValidIsoDate("15/03/2025")).toBe(false);
 	});
+
+	it("write path: records invocation with correct agent_id and normalized skill", () => {
+		// Simulate the write path from worker.ts / daemon.ts
+		const skillName = "Recall"; // mixed case — should be lowercased
+		const agentId = "agent-x";
+		const normalizedSkill = skillName.toLowerCase();
+		const completedAt = new Date().toISOString();
+
+		db.prepare(
+			`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
+			 VALUES (?, ?, ?, 'scheduled-task', ?, ?, ?, ?, datetime(?))`,
+		).run("sinv-write-1", normalizedSkill, agentId, "task-abc", 150, 1, null, completedAt);
+
+		const row = db.prepare("SELECT * FROM skill_invocations WHERE id = 'sinv-write-1'").get() as Record<string, unknown>;
+		expect(row.skill_name).toBe("recall");
+		expect(row.agent_id).toBe("agent-x");
+		expect(row.source).toBe("scheduled-task");
+		expect(row.task_id).toBe("task-abc");
+		expect(row.latency_ms).toBe(150);
+		expect(row.success).toBe(1);
+	});
+
+	it("write path: agent-scoped reads match agent-scoped writes", () => {
+		// Write under two different agents
+		db.prepare(
+			`INSERT INTO skill_invocations (id, skill_name, agent_id, source, latency_ms, success, created_at)
+			 VALUES (?, ?, ?, 'api', 100, 1, datetime('now'))`,
+		).run("sinv-a1", "recall", "agent-a");
+		db.prepare(
+			`INSERT INTO skill_invocations (id, skill_name, agent_id, source, latency_ms, success, created_at)
+			 VALUES (?, ?, ?, 'api', 100, 1, datetime('now'))`,
+		).run("sinv-b1", "recall", "agent-b");
+		db.prepare(
+			`INSERT INTO skill_invocations (id, skill_name, agent_id, source, latency_ms, success, created_at)
+			 VALUES (?, ?, ?, 'api', 100, 1, datetime('now'))`,
+		).run("sinv-b2", "recall", "agent-b");
+
+		// Read scoped to agent-b should only see 2
+		const result = db.prepare(
+			"SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = ? AND skill_name = ?",
+		).get("agent-b", "recall") as { c: number };
+		expect(result.c).toBe(2);
+
+		// Read scoped to agent-a should only see 1
+		const resultA = db.prepare(
+			"SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = ? AND skill_name = ?",
+		).get("agent-a", "recall") as { c: number };
+		expect(resultA.c).toBe(1);
+	});
 });

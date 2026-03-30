@@ -277,8 +277,9 @@ export function registerSkillCommands(program: Command, deps: SkillDeps): void {
 		.description("Show skill usage analytics")
 		.option("--skill <name>", "Filter by skill name")
 		.option("--since <iso>", "Only include invocations after this ISO date")
+		.option("--agent <id>", "Agent ID to scope analytics (default: 'default')")
 		.option("--json", "Output as JSON")
-		.action(async (options: { skill?: string; since?: string; json?: boolean }) => {
+		.action(async (options: { skill?: string; since?: string; agent?: string; json?: boolean }) => {
 			if (!(await deps.isDaemonRunning())) {
 				console.error(chalk.red("Daemon is not running. Start it with: signet daemon start"));
 				return;
@@ -287,6 +288,7 @@ export function registerSkillCommands(program: Command, deps: SkillDeps): void {
 			const params = new URLSearchParams();
 			if (options.skill) params.set("skill", options.skill);
 			if (options.since) params.set("since", options.since);
+			if (options.agent) params.set("agent_id", options.agent);
 
 			const qs = params.toString();
 			const path = `/api/skills/analytics${qs ? `?${qs}` : ""}`;
