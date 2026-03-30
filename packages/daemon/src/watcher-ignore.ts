@@ -23,7 +23,18 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 		resolvePredictorCheckpointPath(loadMemoryConfig(agentsDir).pipelineV2.predictor),
 	);
 	const agentRoot = resolveForComparison(join(agentsDir, "agents"));
-	const ignoredPaths = new Set([defaultPredictorCheckpoint, configuredPredictorCheckpoint]);
+	const memoriesDb = resolveForComparison(join(agentsDir, "memory", "memories.db"));
+	const memoriesDbWal = resolveForComparison(join(agentsDir, "memory", "memories.db-wal"));
+	const memoriesDbShm = resolveForComparison(join(agentsDir, "memory", "memories.db-shm"));
+	const memoriesDbJournal = resolveForComparison(join(agentsDir, "memory", "memories.db-journal"));
+	const ignoredPaths = new Set([
+		defaultPredictorCheckpoint,
+		configuredPredictorCheckpoint,
+		memoriesDb,
+		memoriesDbWal,
+		memoriesDbShm,
+		memoriesDbJournal,
+	]);
 
 	return (path: string): boolean => {
 		const normalizedPath = resolveForComparison(path);
@@ -31,13 +42,6 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 		const agentSegments = relativeToAgentsRoot === null ? [] : relativeToAgentsRoot.split(/[\\/]+/).filter(Boolean);
 		const isGeneratedWorkspacePath =
 			agentSegments.length === 3 && agentSegments[1] === "workspace" && agentSegments[2] === "AGENTS.md";
-		return (
-			isGeneratedWorkspacePath ||
-			ignoredPaths.has(normalizedPath) ||
-			normalizedPath.endsWith("/memories.db") ||
-			normalizedPath.endsWith("/memories.db-wal") ||
-			normalizedPath.endsWith("/memories.db-shm") ||
-			normalizedPath.endsWith("/memories.db-journal")
-		);
+		return isGeneratedWorkspacePath || ignoredPaths.has(normalizedPath);
 	};
 }

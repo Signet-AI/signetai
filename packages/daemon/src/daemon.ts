@@ -12496,6 +12496,7 @@ async function main() {
 		createServer: () =>
 			createAdaptorServer({
 				fetch: app.fetch,
+				hostname: BIND_HOST,
 				createServer: createBoundedServer,
 			}),
 		onBound: (server) => {
