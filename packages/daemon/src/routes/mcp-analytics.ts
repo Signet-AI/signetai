@@ -2,12 +2,15 @@
  * MCP invocation analytics API.
  *
  * Queries the mcp_invocations table to surface per-server, per-tool,
- * and per-agent usage statistics. All queries scope by agent_id.
+ * and per-agent usage statistics. All queries scope by agent_id
+ * using auth-aware resolution (resolveScopedAgent).
  */
 
 import type { Hono } from "hono";
+import type { AuthMode } from "../auth/index.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
+import { resolveScopedAgent } from "../request-scope.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,10 +66,16 @@ function computePercentile(sorted: readonly number[], p: number): number {
 // Route mounting
 // ---------------------------------------------------------------------------
 
-export function mountMcpAnalyticsRoutes(app: Hono): void {
+export function mountMcpAnalyticsRoutes(app: Hono, authMode: AuthMode = "local"): void {
 	// GET /api/mcp/analytics — aggregated stats across all servers
 	app.get("/api/mcp/analytics", (c) => {
-		const agentId = c.req.query("agent_id") ?? "default";
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			authMode,
+			c.req.query("agent_id"),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const agentId = scoped.agentId;
 		const server = c.req.query("server");
 		const since = c.req.query("since");
 		const limit = clampPositiveInt(c.req.query("limit"), 10, 1, 100);
@@ -81,7 +90,7 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 					params.push(server);
 				}
 				if (since) {
-					conditions.push("created_at >= ?");
+					conditions.push("created_at >= datetime(?)");
 					params.push(since);
 				}
 				const where = conditions.join(" AND ");
@@ -147,7 +156,13 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 	// GET /api/mcp/analytics/:server — per-server breakdown
 	app.get("/api/mcp/analytics/:server", (c) => {
 		const serverId = c.req.param("server");
-		const agentId = c.req.query("agent_id") ?? "default";
+		const scoped = resolveScopedAgent(
+			c.get("auth")?.claims ?? null,
+			authMode,
+			c.req.query("agent_id"),
+		);
+		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		const agentId = scoped.agentId;
 		const since = c.req.query("since");
 
 		try {
@@ -155,7 +170,7 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 				const conditions: string[] = ["agent_id = ?", "server_id = ?"];
 				const params: unknown[] = [agentId, serverId];
 				if (since) {
-					conditions.push("created_at >= ?");
+					conditions.push("created_at >= datetime(?)");
 					params.push(since);
 				}
 				const where = conditions.join(" AND ");

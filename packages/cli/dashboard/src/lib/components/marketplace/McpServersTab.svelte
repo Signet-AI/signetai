@@ -82,6 +82,7 @@ let selectedCatalogEntry = $state<MarketplaceMcpCatalogEntry | null>(null);
 let detailOpen = $state(false);
 let detailItem = $state<McpDetailItem | null>(null);
 let view = $state<"browse" | "installed">("browse");
+// Enabled as part of MCP CLI bridge — install UI is now functional
 const MCP_INSTALLS_ENABLED = true;
 const activeSourceLabel = $derived(mcpMarket.source === "all" ? "All sources" : formatSourceLabel(mcpMarket.source));
 const activeSortLabel = $derived.by(() => {

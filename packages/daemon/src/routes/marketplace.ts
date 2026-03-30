@@ -1551,7 +1551,7 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		}
 
 		const source = c.req.header("x-signet-mcp-source") ?? "mcp";
-		const agentId = c.req.header("x-signet-agent-id") ?? c.req.header("x-signet-actor") ?? "default";
+		const agentId = c.req.header("x-signet-agent-id") ?? "default";
 		const start = Date.now();
 
 		try {

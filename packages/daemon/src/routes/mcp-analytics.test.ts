@@ -164,6 +164,20 @@ describe("mcp-analytics routes", () => {
 		expect(tools[1].count).toBe(1);
 	});
 
+	it("since filter handles ISO timestamps correctly", () => {
+		seedInvocations(db, [
+			{ id: "inv-old", serverId: "srv-a", toolName: "tool-1", latencyMs: 100, createdAt: "2025-01-01T00:00:00Z" },
+			{ id: "inv-new", serverId: "srv-a", toolName: "tool-1", latencyMs: 200, createdAt: "2025-06-15T12:00:00Z" },
+		]);
+
+		const filtered = db
+			.prepare(
+				"SELECT COUNT(*) as c FROM mcp_invocations WHERE agent_id = 'default' AND created_at >= datetime(?)",
+			)
+			.get("2025-06-01T00:00:00Z") as { c: number };
+		expect(filtered.c).toBe(1);
+	});
+
 	it("source column correctly stored", () => {
 		seedInvocations(db, [
 			{ id: "inv-cli", serverId: "srv-a", toolName: "tool-1", source: "cli", latencyMs: 100 },
