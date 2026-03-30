@@ -30,11 +30,14 @@ export interface PreCompactionResult {
 // The upstream Oh My Pi package does not currently type-check cleanly as a
 // dependency in this monorepo. Model only the runtime surface this extension
 // actually consumes so `tsc --noEmit` still verifies our integration.
+export type OmpMessageAttribution = "user" | "agent";
+
 export interface OmpAgentMessage extends Record<string, unknown> {
 	readonly role?: string;
 	readonly customType?: string;
 	readonly display?: boolean;
 	readonly content?: unknown;
+	readonly attribution?: OmpMessageAttribution;
 	readonly timestamp?: number;
 }
 
@@ -77,6 +80,10 @@ export interface OmpBeforeAgentStartEvent {
 	readonly prompt: string;
 }
 
+export interface OmpBeforeAgentStartResult {
+	readonly message?: OmpAgentMessage;
+}
+
 export interface OmpContextEvent {
 	readonly messages: ReadonlyArray<OmpAgentMessage>;
 }
@@ -114,7 +121,10 @@ export interface OmpExtensionApi {
 	on(event: "input", handler: (event: OmpInputEvent, ctx: OmpExtensionContext) => unknown): void;
 	on(
 		event: "before_agent_start",
-		handler: (event: OmpBeforeAgentStartEvent, ctx: OmpExtensionContext) => unknown,
+		handler: (
+			event: OmpBeforeAgentStartEvent,
+			ctx: OmpExtensionContext,
+		) => OmpBeforeAgentStartResult | Promise<OmpBeforeAgentStartResult | undefined> | undefined,
 	): void;
 	on(
 		event: "context",
