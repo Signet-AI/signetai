@@ -694,7 +694,7 @@ Legend:
 | `remember-recall-skill-parity` | planning | `docs/specs/planning/remember-recall-skill-parity.md` | `procedural-memory-plan` | - | Stub: /remember and /recall architecture/schema parity |
 | `rust-daemon-parity-cutover` | planning | `docs/specs/planning/rust-daemon-parity-cutover.md` | `daemon-rust-rewrite`, `memory-pipeline-v2` | - | Stub: rust daemon parity and primary-runtime cutover |
 | `deep-memory-search` | planning | `docs/specs/planning/deep-memory-search.md` | `desire-paths-epic`, `ssm-foundation-evaluation` | - | Stub: optional supermemory-style deep memory escalation |
-| `mcp-cli-bridge-and-usage-analytics` | approved | `docs/specs/planning/mcp-cli-bridge-and-usage-analytics.md` | `signet-runtime` | - | Phase 1: CLI bridge, invocation tracking, analytics API, dashboard panel |
+| `mcp-cli-bridge-and-usage-analytics` | approved | `docs/specs/planning/mcp-cli-bridge-and-usage-analytics.md` | `signet-runtime` | `skill-usage-analytics` | Phase 1: CLI bridge, invocation tracking, analytics API, dashboard panel |
 | `skill-usage-analytics` | approved | `docs/specs/planning/skill-usage-analytics.md` | - | - | Phase 1: Skill invocation tracking, analytics API, CLI command, dashboard constellation panel |
 | `git-marketplace-monorepo` | planning | `docs/specs/planning/git-marketplace-monorepo.md` | `predictor-agent-feedback` | - | Stub: GitHub-authenticated PR marketplace for skills and MCP servers |
 | `adaptive-skill-lifecycle` | planning | `docs/specs/planning/adaptive-skill-lifecycle.md` | `procedural-memory-plan`, `predictor-agent-feedback` | - | Stub: passive continuous skill creation/maintenance loop |

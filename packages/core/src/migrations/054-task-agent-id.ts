@@ -8,7 +8,10 @@
  * tasks had no agent ownership column — there is no prior data to
  * infer the correct agent. In single-agent (local) deployments this
  * is accurate. In multi-agent deployments that predate this migration,
- * operators should reassign tasks via the PATCH endpoint after upgrade.
+ * operators should reassign tasks directly in the database:
+ *   UPDATE scheduled_tasks SET agent_id = '<target>' WHERE id = '<task>';
+ * The PATCH endpoint cannot move tasks between agents because it scopes
+ * the lookup by the caller's agent_id.
  */
 
 import type { MigrationDb } from "./index";
