@@ -28,7 +28,8 @@ skills agents rely on, how often they run, or whether they succeed.
 
 ### Migration 053: skill_invocations table
 - Tracks: skill_name, agent_id, source, task_id, latency_ms, success, error_text
-- Sources: scheduled-task, slash-command, cli, api
+- Sources tracked in Phase 1: scheduled-task, api
+- Additional sources (slash-command, cli) deferred to Phase 2
 
 ### Scheduler instrumentation
 - `worker.ts` records invocations when scheduled tasks with `skill_name` complete

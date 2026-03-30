@@ -311,8 +311,8 @@ export async function executeTask(
 	});
 
 	// Record skill invocation if this task uses a skill.
-	// scheduled_tasks does not have agent_id — uses "default" for now.
-	// Phase 2: add agent_id column to scheduled_tasks for multi-agent support.
+	// scheduled_tasks has no agent_id column — falls back to "default".
+	// Phase 2: add agent_id to scheduled_tasks for multi-agent attribution.
 	if (task.skill_name) {
 		const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
 		const success = status === "completed";

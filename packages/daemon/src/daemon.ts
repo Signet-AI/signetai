@@ -7587,6 +7587,7 @@ app.post("/api/tasks/:id/run", async (c) => {
 	const taskSkillName = typeof task.skill_name === "string" ? task.skill_name : null;
 	const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 	const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
+	const taskAgentId = resolveAgentId({ agentId: c.req.query("agent_id") });
 
 	// Resolve skill content into prompt
 	const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
@@ -7630,18 +7631,17 @@ app.post("/api/tasks/:id/run", async (c) => {
 					).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
 
 					// Record skill invocation for manual API-triggered runs.
-					// scheduled_tasks does not have agent_id — uses "default" for now.
-					// Phase 2: add agent_id column to scheduled_tasks for multi-agent support.
 					if (taskSkillName) {
 						const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
 						const success = status === "completed";
 						try {
 							db.prepare(
 								`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
-								 VALUES (?, ?, 'default', 'api', ?, ?, ?, ?, datetime(?))`,
+								 VALUES (?, ?, ?, 'api', ?, ?, ?, ?, datetime(?))`,
 							).run(
 								`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
 								taskSkillName,
+								taskAgentId,
 								taskId,
 								latencyMs,
 								success ? 1 : 0,
@@ -7652,9 +7652,9 @@ app.post("/api/tasks/:id/run", async (c) => {
 								`UPDATE skill_meta SET use_count = use_count + 1, last_used_at = datetime(?)
 								 WHERE entity_id IN (
 									SELECT id FROM entities
-									WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = 'default'
+									WHERE canonical_name = ? AND entity_type = 'skill' AND agent_id = ?
 								 )`,
-							).run(completedAt, taskSkillName.toLowerCase());
+							).run(completedAt, taskSkillName.toLowerCase(), taskAgentId);
 						} catch (err) {
 							logger.warn("skill-analytics", "Failed to record skill invocation", err instanceof Error ? err : undefined);
 						}

@@ -40,6 +40,11 @@ function clampPositiveInt(value: unknown, fallback: number, min: number, max: nu
 	return Math.max(min, Math.min(max, Math.round(n)));
 }
 
+function isValidIsoDate(value: string): boolean {
+	const d = new Date(value);
+	return !Number.isNaN(d.getTime());
+}
+
 function computePercentile(sorted: readonly number[], p: number): number {
 	if (sorted.length === 0) return 0;
 	const idx = Math.ceil((p / 100) * sorted.length) - 1;
@@ -56,7 +61,11 @@ export function mountSkillAnalyticsRoutes(app: Hono, authMode: AuthMode = "local
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		const agentId = scoped.agentId;
 		const skill = c.req.query("skill");
-		const since = c.req.query("since");
+		const sinceRaw = c.req.query("since");
+		if (sinceRaw && !isValidIsoDate(sinceRaw)) {
+			return c.json({ error: "Invalid 'since' parameter — expected ISO 8601 date" }, 400);
+		}
+		const since = sinceRaw;
 		const limit = clampPositiveInt(c.req.query("limit"), 10, 1, 100);
 
 		try {
@@ -123,7 +132,11 @@ export function mountSkillAnalyticsRoutes(app: Hono, authMode: AuthMode = "local
 		);
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
 		const agentId = scoped.agentId;
-		const since = c.req.query("since");
+		const sinceRaw = c.req.query("since");
+		if (sinceRaw && !isValidIsoDate(sinceRaw)) {
+			return c.json({ error: "Invalid 'since' parameter — expected ISO 8601 date" }, 400);
+		}
+		const since = sinceRaw;
 
 		try {
 			const result = getDbAccessor().withReadDb((db) => {
