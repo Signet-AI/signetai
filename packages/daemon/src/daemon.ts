@@ -7723,7 +7723,9 @@ app.post("/api/tasks/:id/run", async (c) => {
 	return c.json({ runId, status: "running" }, 202);
 });
 
-// Get paginated run history for a task
+// Get paginated run history for a task.
+// Runs are scoped to the task, not the agent — on reassignment the full
+// history transfers with the task (intentional: runs are task-owned data).
 app.get("/api/tasks/:id/runs", (c) => {
 	const taskId = c.req.param("id");
 	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
