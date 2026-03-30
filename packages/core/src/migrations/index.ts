@@ -57,6 +57,7 @@ import { up as threadHeads } from "./048-thread-heads";
 import { up as sessionExtractCursors } from "./049-session-extract-cursors";
 import { up as relatedToAudit } from "./050-related-to-audit";
 import { up as memoryMdRollingWindowLineage } from "./051-memory-md-rolling-window-lineage";
+import { up as mcpInvocations } from "./052-mcp-invocations";
 
 // -- Public interface consumed by Database.init() --
 
@@ -496,6 +497,14 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "summary_jobs", column: "started_at" },
 				{ table: "summary_jobs", column: "ended_at" },
 			],
+		},
+	},
+	{
+		version: 52,
+		name: "mcp-invocations",
+		up: mcpInvocations,
+		artifacts: {
+			tables: ["mcp_invocations"],
 		},
 	},
 ];
