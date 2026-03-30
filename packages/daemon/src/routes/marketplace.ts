@@ -1140,14 +1140,62 @@ interface GenerateCliResult {
 	readonly error?: string;
 }
 
+/**
+ * Sanitize a server name for use as a filesystem binary name.
+ * Reuses the same character set as sanitizeServerId so names are consistent.
+ * Returns null when the name cannot be reduced to a valid identifier.
+ */
+function sanitizeBinaryName(name: string): string | null {
+	const sanitized = sanitizeServerId(name);
+	// Reject anything that looks like a path after sanitization
+	if (sanitized.includes("/") || sanitized.includes("\\") || sanitized === ".." || sanitized === ".") {
+		return null;
+	}
+	return sanitized.length > 0 ? sanitized : null;
+}
+
+/**
+ * Resolve the mcporter executable.
+ * Prefers the workspace-local binary so the feature works regardless of
+ * whether the daemon is running under Bun or Node.
+ * Falls back to `bun x` (Bun runtime) or `npx --yes` (Node runtime).
+ */
+function getMcporterSpawnTarget(): { cmd: string; leadingArgs: readonly string[] } {
+	// Walk up from this file to find workspace node_modules/.bin/mcporter.
+	// Source: packages/daemon/src/routes/ (4 up) → workspace root (5 up total).
+	// Compiled: dist/ (3 up) → workspace root (4 up total).
+	for (const depth of [5, 4, 3]) {
+		const prefix = "../".repeat(depth);
+		try {
+			const binPath = join(new URL(prefix, import.meta.url).pathname, "node_modules", ".bin", "mcporter");
+			if (existsSync(binPath)) {
+				return { cmd: binPath, leadingArgs: [] };
+			}
+		} catch {
+			// Ignore URL resolution errors
+		}
+	}
+	// Runtime fallback
+	const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
+	return isBun
+		? { cmd: process.execPath, leadingArgs: ["x", "mcporter"] }
+		: { cmd: "npx", leadingArgs: ["--yes", "mcporter"] };
+}
+
 async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Promise<GenerateCliResult> {
+	// Sanitize binary name to prevent path traversal
+	const binaryName = sanitizeBinaryName(server.name);
+	if (!binaryName) {
+		return { success: false, error: `Server name "${server.name}" cannot be used as a binary name` };
+	}
+
 	const binsDir = getMcpBinsDir();
 	if (!existsSync(binsDir)) {
 		mkdirSync(binsDir, { recursive: true });
 	}
 
 	const configEntry = buildMcporterConfigEntry(server);
-	const configPayload = { mcpServers: { [server.name]: configEntry } };
+	const configPayload = { mcpServers: { [binaryName]: configEntry } };
 	const tmpConfig = join(tmpdir(), `mcporter-${server.id}-${Date.now()}.json`);
 
 	try {
@@ -1157,20 +1205,11 @@ async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Pr
 		return { success: false, error: `Failed to write temp config: ${msg}` };
 	}
 
-	return new Promise<GenerateCliResult>((resolve) => {
-		const args = [
-			"x",
-			"mcporter",
-			"generate-cli",
-			server.name,
-			"--config",
-			tmpConfig,
-			"--compile",
-			"--output",
-			binsDir,
-		];
+	const { cmd, leadingArgs } = getMcporterSpawnTarget();
+	const mcporterArgs = ["generate-cli", binaryName, "--config", tmpConfig, "--compile", "--output", binsDir];
 
-		const proc = spawn(process.execPath, args, {
+	return new Promise<GenerateCliResult>((resolve) => {
+		const proc = spawn(cmd, [...leadingArgs, ...mcporterArgs], {
 			stdio: "pipe",
 			windowsHide: true,
 			timeout: 120_000,
@@ -1195,7 +1234,7 @@ async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Pr
 				});
 				return;
 			}
-			resolve({ success: true, path: join(binsDir, server.name) });
+			resolve({ success: true, path: join(binsDir, binaryName) });
 		});
 
 		proc.on("error", (err) => {
