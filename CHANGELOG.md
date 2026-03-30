@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.86.3] - 2026-03-30
+
+### Bug Fixes
+
+- **oh-my-pi**: persist hidden Signet recall as agent messages (#404)
+
+
 ## [0.86.2] - 2026-03-29
 
 ### Bug Fixes

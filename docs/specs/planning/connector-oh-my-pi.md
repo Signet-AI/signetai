@@ -9,6 +9,7 @@ depends_on:
 success_criteria:
   - "Oh My Pi install writes a managed runtime extension into the agent extensions directory without requiring Oh My Pi-only dependencies for other Signet users"
   - "The extension forwards session-start, user-prompt-submit, pre-compaction, compaction-complete, and session-end lifecycle calls to the daemon with runtimePath=plugin"
+  - "Hidden session-context and recall injections persist as hidden session messages so memory-backed answers remain attributable on follow-up turns without polluting transcript reconstruction"
   - "Daemon/network failures remain fail-open so Oh My Pi prompt flow and shutdown continue even when Signet is unavailable"
 scope_boundary: "Covers the managed Oh My Pi runtime extension and CLI connector install path; does not add AGENTS.md sync or /remember and /recall tool wiring inside Oh My Pi"
 draft_quality: "implementation-aligned planning stub; expand if the integration surface grows"
@@ -66,8 +67,10 @@ The runtime extension forwards these daemon hooks through the plugin runtime:
 
 ### C) Hidden context injection
 
-The extension may inject hidden Signet messages for session context and prompt
-recall, but those messages stay out of transcript reconstruction.
+The extension injects hidden Signet messages for session context and prompt
+recall through `before_agent_start`, sets `attribution: "agent"` so Oh My Pi
+does not bill them as user-originated Copilot requests, and keeps them out of
+transcript reconstruction while preserving follow-up attribution.
 
 ## 4) Non-goals
 

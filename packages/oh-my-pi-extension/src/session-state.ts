@@ -23,8 +23,17 @@ function createHiddenInjectMessage(customType: string, inject: string): OmpAgent
 		customType,
 		display: false,
 		content: `<signet-memory source="auto-recall">\n${sanitizeInject(inject)}\n</signet-memory>`,
+		attribution: "agent",
 		timestamp: Date.now(),
 	};
+}
+
+function combineHiddenInjects(sessionInject: string | undefined, recallInject: string | undefined): string | undefined {
+	const blocks = [readTrimmedString(sessionInject), readTrimmedString(recallInject)].filter(
+		(value): value is string => typeof value === "string" && value.length > 0,
+	);
+	if (blocks.length === 0) return undefined;
+	return blocks.join("\n\n");
 }
 
 function evictOldestKey<V>(map: Map<string, V>, maxSize: number): void {
@@ -49,7 +58,7 @@ export interface SessionState {
 	clearPendingSessionData(sessionId: string | undefined): void;
 	hasPendingRecall(sessionId: string | undefined): boolean;
 	consumePendingRecall(sessionId: string | undefined): string | undefined;
-	consumeHiddenInjectMessages(sessionId: string | undefined): OmpAgentMessage[];
+	consumePersistentHiddenInject(sessionId: string | undefined): OmpAgentMessage | undefined;
 	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void;
 	clearPendingSessionEnd(sessionId: string | undefined): void;
 	getPendingSessionEnds(): ReadonlyArray<PendingSessionEnd>;
@@ -159,22 +168,18 @@ class SessionStateStore implements SessionState {
 		return readTrimmedString(inject);
 	}
 
-	consumeHiddenInjectMessages(sessionId: string | undefined): OmpAgentMessage[] {
-		if (!sessionId) return [];
+	consumePersistentHiddenInject(sessionId: string | undefined): OmpAgentMessage | undefined {
+		if (!sessionId) return undefined;
 
-		const messages: OmpAgentMessage[] = [];
 		const sessionInject = readTrimmedString(this.pendingSessionContext.get(sessionId));
-		if (sessionInject) {
-			messages.push(createHiddenInjectMessage(HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE, sessionInject));
-		}
 		this.pendingSessionContext.delete(sessionId);
 
 		const recallInject = this.consumePendingRecall(sessionId);
-		if (recallInject) {
-			messages.push(createHiddenInjectMessage(HIDDEN_RECALL_CUSTOM_TYPE, recallInject));
-		}
+		const combined = combineHiddenInjects(sessionInject, recallInject);
+		if (!combined) return undefined;
 
-		return messages;
+		const customType = recallInject ? HIDDEN_RECALL_CUSTOM_TYPE : HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE;
+		return createHiddenInjectMessage(customType, combined);
 	}
 
 	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void {
