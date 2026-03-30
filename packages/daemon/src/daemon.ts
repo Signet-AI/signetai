@@ -5316,6 +5316,9 @@ setFetchEmbedding(fetchEmbedding);
 import { mountMarketplaceRoutes } from "./routes/marketplace.js";
 mountMarketplaceRoutes(app);
 
+import { mountMcpAnalyticsRoutes } from "./routes/mcp-analytics.js";
+mountMcpAnalyticsRoutes(app);
+
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 mountAppTrayRoutes(app);
 
