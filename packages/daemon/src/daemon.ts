@@ -5308,12 +5308,13 @@ app.get("/api/connectors/:id/health", (c) => {
 
 import { type ReconcilerHandle, startReconciler } from "./pipeline/skill-reconciler.js";
 // Skills routes (extracted to routes/skills.ts)
+// Skill analytics must mount before skills routes (which have /:name catch-all)
+import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
+mountSkillAnalyticsRoutes(app);
+
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 mountSkillsRoutes(app);
 setFetchEmbedding(fetchEmbedding);
-
-import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
-mountSkillAnalyticsRoutes(app);
 
 // Marketplace routes (MCP servers catalog + routing)
 import { mountMarketplaceRoutes } from "./routes/marketplace.js";
