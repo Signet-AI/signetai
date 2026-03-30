@@ -7485,7 +7485,8 @@ app.get("/api/tasks/:id", (c) => {
 app.patch("/api/tasks/:id", async (c) => {
 	const taskId = c.req.param("id");
 	const body = await c.req.json();
-	// Scope lookup by current owner (query param), not the target agent
+	// Scope lookup by current owner (query param). Callers that omit agent_id
+	// default to 'default' via resolveScopedAgent — no existing client breaks.
 	const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
 	if (scoped.error) return c.json({ error: scoped.error }, 403);
 

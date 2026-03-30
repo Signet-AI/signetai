@@ -11,10 +11,13 @@
  * to 'default' are only visible to the default agent. Single-agent (local)
  * deployments are unaffected.
  *
- * Multi-agent upgrade path:
+ * Multi-agent upgrade path (operator/admin action):
  *   PATCH /api/tasks/:id?agent_id=default  body: { agentId: "<target>" }
- * The PATCH endpoint scopes the lookup by the current owner (query param)
- * and allows reassignment via body.agentId.
+ * Done in local mode or with default-agent credentials. The PATCH endpoint
+ * scopes the lookup by the current owner (query param) and allows
+ * reassignment via body.agentId (validated through resolveScopedAgent).
+ * Callers that omit agent_id default to 'default' — no existing client
+ * breaks because all pre-migration callers were implicitly 'default'.
  */
 
 import type { MigrationDb } from "./index";
