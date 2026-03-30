@@ -14,10 +14,8 @@ const hasData = $derived(data !== null && data.totalCalls > 0);
 
 {#if mcpAnalytics.loading && !data}
 	<div class="panel-empty">Loading usage data...</div>
-{:else if mcpAnalytics.error}
-	<div class="panel-empty text-[var(--sig-text-muted)]">{mcpAnalytics.error}</div>
-{:else if !hasData}
-	<div class="panel-empty text-[var(--sig-text-muted)]">No tool invocations recorded yet.</div>
+{:else if mcpAnalytics.error || !hasData}
+	<div class="panel-empty text-[var(--sig-text-muted)]">Building analytics while you work... check back shortly.</div>
 {:else if data}
 	<div class="usage-panel">
 		<div class="usage-header">
