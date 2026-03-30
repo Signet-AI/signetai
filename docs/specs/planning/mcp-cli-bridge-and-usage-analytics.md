@@ -1,7 +1,7 @@
 ---
 title: "MCP CLI Bridge and Usage Analytics"
 id: mcp-cli-bridge-and-usage-analytics
-status: planning
+status: approved
 informed_by: []
 section: "CLI + Dashboard"
 depends_on:
@@ -9,7 +9,7 @@ depends_on:
 success_criteria:
   - "Installed MCP servers are invokable through Signet CLI with dashboard usage tracking"
 scope_boundary: "CLI bridge and analytics only. Does not implement MCP server discovery, installation, or marketplace integration (see git-marketplace-monorepo). Does not modify MCP protocol transport."
-draft_quality: "auto-generated, needs user validation before implementation"
+draft_quality: "Phase 1 implemented — CLI bridge, invocation tracking, analytics API, and dashboard panel shipped"
 ---
 
 # MCP CLI Bridge and Usage Analytics
