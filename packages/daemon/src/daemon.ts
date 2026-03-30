@@ -7376,7 +7376,16 @@ app.get("/api/tasks", (c) => {
 // Create a new task
 app.post("/api/tasks", async (c) => {
 	const body = await c.req.json();
-	const { name, prompt, cronExpression, harness, workingDirectory, skillName, skillMode, agentId } = body;
+	const { name, prompt, cronExpression, harness, workingDirectory, skillName, skillMode } = body;
+
+	// Resolve agent_id through auth-aware scoping — same as read-side analytics
+	const scoped = resolveScopedAgent(
+		c.get("auth")?.claims ?? null,
+		authConfig.mode,
+		body.agentId,
+	);
+	if (scoped.error) return c.json({ error: scoped.error }, 403);
+	const resolvedAgentId = scoped.agentId;
 
 	if (!name || !prompt || !cronExpression || !harness) {
 		return c.json({ error: "name, prompt, cronExpression, and harness are required" }, 400);
@@ -7428,7 +7437,7 @@ app.post("/api/tasks", async (c) => {
 			nextRunAt,
 			skillName || null,
 			skillMode || null,
-			typeof agentId === "string" && agentId.trim() ? agentId.trim() : "default",
+			resolvedAgentId,
 			now,
 			now,
 		);
