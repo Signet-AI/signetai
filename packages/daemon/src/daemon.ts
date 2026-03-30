@@ -7522,8 +7522,13 @@ app.patch("/api/tasks/:id", async (c) => {
 		return c.json({ error: "skillMode must be 'inject' or 'slash' when skillName is set" }, 400);
 	}
 
-	// Resolve target agent_id: body.agentId allows reassignment, otherwise keep current
-	const targetAgentId = body.agentId ?? existing.agent_id;
+	// Validate target agent through auth if reassigning
+	let targetAgentId = scoped.agentId;
+	if (body.agentId !== undefined && body.agentId !== scoped.agentId) {
+		const targetScoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, body.agentId);
+		if (targetScoped.error) return c.json({ error: targetScoped.error }, 403);
+		targetAgentId = targetScoped.agentId;
+	}
 
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
@@ -7531,7 +7536,7 @@ app.patch("/api/tasks/:id", async (c) => {
 			 name = ?, prompt = ?, cron_expression = ?, harness = ?,
 			 working_directory = ?, enabled = ?, next_run_at = ?,
 			 skill_name = ?, skill_mode = ?, agent_id = ?, updated_at = ?
-			 WHERE id = ?`,
+			 WHERE id = ? AND agent_id = ?`,
 		).run(
 			body.name ?? existing.name,
 			body.prompt ?? existing.prompt,
@@ -7545,6 +7550,7 @@ app.patch("/api/tasks/:id", async (c) => {
 			targetAgentId,
 			now,
 			taskId,
+			scoped.agentId,
 		);
 	});
 
