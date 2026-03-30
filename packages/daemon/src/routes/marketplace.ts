@@ -1110,17 +1110,26 @@ function rankMarketplaceTools(tools: readonly MarketplaceMcpTool[], query: strin
 // CLI Generation via mcporter
 // ---------------------------------------------------------------------------
 
+/** Check whether any values contain unresolved secret:// references. */
+function hasSecretReferences(values: Readonly<Record<string, string>>): boolean {
+	return Object.values(values).some((v) => v.startsWith(SECRET_REF_PREFIX));
+}
+
 /** Convert an installed server config to the mcporter servers-file format.
- *  Resolves secret:// references so the compiled binary receives real credentials. */
-async function buildMcporterConfigEntry(server: InstalledMarketplaceMcpServer): Promise<Record<string, unknown>> {
+ *  Returns null if the config contains secret:// references — those cannot
+ *  be embedded in a compiled binary without creating credentials at rest. */
+function buildMcporterConfigEntry(server: InstalledMarketplaceMcpServer): Record<string, unknown> | null {
 	const { config } = server;
 	if (config.transport === "stdio") {
+		if (Object.keys(config.env).length > 0 && hasSecretReferences(config.env)) {
+			return null;
+		}
 		const entry: Record<string, unknown> = {
 			command: config.command,
 			args: config.args,
 		};
 		if (Object.keys(config.env).length > 0) {
-			entry.env = await resolveSecretReferences(config.env);
+			entry.env = config.env;
 		}
 		if (config.cwd) {
 			entry.cwd = config.cwd;
@@ -1128,9 +1137,12 @@ async function buildMcporterConfigEntry(server: InstalledMarketplaceMcpServer): 
 		return entry;
 	}
 	// HTTP transport
+	if (Object.keys(config.headers).length > 0 && hasSecretReferences(config.headers)) {
+		return null;
+	}
 	const entry: Record<string, unknown> = { url: config.url };
 	if (Object.keys(config.headers).length > 0) {
-		entry.headers = await resolveSecretReferences(config.headers);
+		entry.headers = config.headers;
 	}
 	return entry;
 }
@@ -1196,7 +1208,14 @@ async function runMcporterGenerateCli(server: InstalledMarketplaceMcpServer): Pr
 		mkdirSync(binsDir, { recursive: true });
 	}
 
-	const configEntry = await buildMcporterConfigEntry(server);
+	const configEntry = buildMcporterConfigEntry(server);
+	if (!configEntry) {
+		return {
+			success: false,
+			error:
+				"Server config contains secret:// references which cannot be embedded in a compiled binary. Remove secret references from the server's env/headers before generating a CLI.",
+		};
+	}
 	const configPayload = { mcpServers: { [binaryName]: configEntry } };
 	const tmpConfig = join(tmpdir(), `mcporter-${server.id}-${Date.now()}.json`);
 

@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { extractStandardMcpConfig, mountMarketplaceRoutes, parseReferenceServersMarkdown } from "./marketplace.js";
+import {
+	type InstalledMarketplaceMcpServer,
+	extractStandardMcpConfig,
+	mountMarketplaceRoutes,
+	parseReferenceServersMarkdown,
+} from "./marketplace.js";
 
 describe("parseReferenceServersMarkdown", () => {
 	it("parses official reference server section", () => {
@@ -134,5 +139,68 @@ describe("marketplace routes", () => {
 		expect(body.query).toBe("time");
 		expect(body.count).toBe(0);
 		expect(body.results).toEqual([]);
+	});
+
+	it("POST /api/marketplace/mcp/:id/generate-cli returns 404 for unknown server", async () => {
+		const res = await app.request("/api/marketplace/mcp/nonexistent/generate-cli", { method: "POST" });
+		expect(res.status).toBe(404);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toBe("Server not found");
+	});
+
+	it("POST /api/marketplace/mcp/:id/generate-cli returns 400 for HTTP servers", async () => {
+		// Seed an HTTP server
+		const server: InstalledMarketplaceMcpServer = {
+			id: "test-http",
+			source: "manual",
+			name: "test-http-server",
+			description: "test",
+			category: "test",
+			official: false,
+			enabled: true,
+			scope: { harnesses: [], workspaces: [], channels: [] },
+			config: { transport: "http", url: "https://example.com/mcp", headers: {}, timeoutMs: 20000 },
+			installedAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		};
+		const mpDir = join(tmpAgentsDir, "marketplace");
+		mkdirSync(mpDir, { recursive: true });
+		writeFileSync(join(mpDir, "mcp-servers.json"), JSON.stringify([server]));
+
+		const res = await app.request("/api/marketplace/mcp/test-http/generate-cli", { method: "POST" });
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: string };
+		expect(body.error).toContain("stdio");
+	});
+
+	it("POST /api/marketplace/mcp/:id/generate-cli rejects servers with secret:// references", async () => {
+		const server: InstalledMarketplaceMcpServer = {
+			id: "test-secret",
+			source: "manual",
+			name: "test-secret-server",
+			description: "test",
+			category: "test",
+			official: false,
+			enabled: true,
+			scope: { harnesses: [], workspaces: [], channels: [] },
+			config: {
+				transport: "stdio",
+				command: "npx",
+				args: ["-y", "some-mcp-server"],
+				env: { API_KEY: "secret://MY_API_KEY" },
+				timeoutMs: 20000,
+			},
+			installedAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		};
+		const mpDir = join(tmpAgentsDir, "marketplace");
+		mkdirSync(mpDir, { recursive: true });
+		writeFileSync(join(mpDir, "mcp-servers.json"), JSON.stringify([server]));
+
+		const res = await app.request("/api/marketplace/mcp/test-secret/generate-cli", { method: "POST" });
+		expect(res.status).toBe(500);
+		const body = (await res.json()) as { success: boolean; error: string };
+		expect(body.success).toBe(false);
+		expect(body.error).toContain("secret://");
 	});
 });
