@@ -17,6 +17,11 @@ import { resolveSkillPrompt } from "./skill-resolver";
 import { type SpawnResult, spawnTask } from "./spawn";
 import { emitTaskStream } from "./task-stream";
 
+const POLL_INTERVAL_MS = 15_000;
+const MAX_CONCURRENT = 3;
+const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
+const TASK_MODEL_CACHE_TTL_MS = 5_000;
+
 interface TaskModelCacheEntry {
 	readonly model: string | undefined;
 	readonly expiresAt: number;
