@@ -77,7 +77,7 @@ impl WorkspacePolicy {
 
     pub fn ensure_path_allowed(&self, raw_path: &str) -> Result<PathBuf, String> {
         let abs = absolutize(raw_path, &self.workspace_root)?;
-        let normalized = normalize_path(&abs);
+        let normalized = normalize_with_ancestor_fallback(&abs);
 
         let in_workspace = path_within(&normalized, &self.workspace_root);
         let in_allowlist = self
@@ -136,6 +136,26 @@ fn normalize_path(path: &Path) -> PathBuf {
     out
 }
 
+fn normalize_with_ancestor_fallback(path: &Path) -> PathBuf {
+    // Best case: canonicalize full path (handles symlinks if target exists).
+    if let Ok(canon) = std::fs::canonicalize(path) {
+        return canon;
+    }
+
+    // Hardening: if leaf doesn't exist yet, canonicalize nearest existing parent
+    // so symlinked parent directories cannot escape workspace policy.
+    if let Some(parent) = path.parent() {
+        if let Ok(parent_canon) = std::fs::canonicalize(parent) {
+            if let Some(name) = path.file_name() {
+                return parent_canon.join(name);
+            }
+            return parent_canon;
+        }
+    }
+
+    normalize_path(path)
+}
+
 fn expand_home(path: &str) -> PathBuf {
     if path == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -173,5 +193,35 @@ mod tests {
         };
         assert!(policy.ensure_path_allowed("/tmp/work/a.txt").is_ok());
         assert!(policy.ensure_path_allowed("/etc/passwd").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_policy_blocks_symlink_parent_escape_for_new_files() {
+        use std::fs::{create_dir_all, remove_dir_all};
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("forge-policy-{}", std::process::id()));
+        let _ = remove_dir_all(&base);
+        let workspace = base.join("workspace");
+        let outside = base.join("outside");
+        create_dir_all(&workspace).unwrap();
+        create_dir_all(&outside).unwrap();
+
+        let link = workspace.join("escape");
+        symlink(&outside, &link).unwrap();
+
+        let policy = WorkspacePolicy {
+            workspace_only: true,
+            workspace_root: workspace.clone(),
+            allowed_paths: vec![],
+            allowed_commands: vec![],
+        };
+
+        // This path lexically looks inside workspace, but parent symlink points outside.
+        let escaped = link.join("new.txt");
+        assert!(policy.ensure_path_allowed(&escaped.display().to_string()).is_err());
+
+        let _ = remove_dir_all(&base);
     }
 }
