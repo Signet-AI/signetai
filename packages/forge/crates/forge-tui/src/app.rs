@@ -953,11 +953,8 @@ impl App {
         } else {
             self.theme.bg
         };
-        let status_bg = if transparent_bg {
-            Color::Reset
-        } else {
-            self.theme.status_bg
-        };
+        // Keep header tint even in transparent mode so blur + themed chrome both show.
+        let status_bg = self.theme.status_bg;
 
         // Fill the entire terminal with the theme background
         let bg_block = Block::default().style(Style::default().bg(canvas_bg));
