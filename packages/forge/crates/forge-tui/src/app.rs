@@ -25,7 +25,7 @@ use forge_signet::secrets::{
 use forge_signet::{ConfigEvent, ConfigWatcher, SignetClient};
 use ratatui::{
     layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
     DefaultTerminal, Frame,
@@ -947,12 +947,9 @@ impl App {
 
     fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
-        let transparent_bg = transparent_bg_enabled();
-        let canvas_bg = if transparent_bg {
-            Color::Reset
-        } else {
-            self.theme.bg
-        };
+        let _transparent_bg = transparent_bg_enabled();
+        // Keep themed canvas color even in transparent mode so blur + tint both remain visible.
+        let canvas_bg = self.theme.bg;
         // Keep header tint even in transparent mode so blur + themed chrome both show.
         let status_bg = self.theme.status_bg;
 
