@@ -20,6 +20,13 @@ enum ContextTier {
     Cold,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpCallOutcome {
+    Success,
+    TimedOut,
+    Failed,
+}
+
 /// Events sent from the agent loop to the TUI
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -637,6 +644,7 @@ impl AgentLoop {
                     .await;
                 debug!("Executing {} read-only tools in parallel", readonly_calls.len());
                 let mut joinset = tokio::task::JoinSet::new();
+                let mut completed_readonly_ids = std::collections::HashSet::new();
                 for tc in &readonly_calls {
                     let tc_owned = (*tc).clone();
                     let daemon_url = self.daemon_url.clone();
@@ -667,34 +675,43 @@ impl AgentLoop {
                                 ),
                             }
                         } else {
-                            let mut mcp_result = None;
-                            for client in &mcp_clients {
-                                if let Some(output) = tokio::time::timeout(
-                                    timeout,
-                                    client.call_tool(&tc_owned.name, tc_owned.input.clone()),
-                                )
-                                .await
-                                .ok()
-                                .and_then(Result::ok)
-                                {
-                                    mcp_result = Some(forge_core::ToolResult::success(&tc_owned.id, output));
-                                    break;
+                            let (outcome, output) = call_mcp_tool_with_timeout(
+                                &mcp_clients,
+                                &tc_owned.name,
+                                &tc_owned.input,
+                                timeout,
+                            )
+                            .await;
+                            match (outcome, output) {
+                                (McpCallOutcome::Success, Some(output)) => {
+                                    forge_core::ToolResult::success(&tc_owned.id, output)
                                 }
+                                (McpCallOutcome::TimedOut, _) => forge_core::ToolResult::error(
+                                    &tc_owned.id,
+                                    format!(
+                                        "Tool '{}' timed out after {}s",
+                                        tc_owned.name,
+                                        timeout.as_secs()
+                                    ),
+                                ),
+                                (McpCallOutcome::Failed, _) => {
+                                    if known_tool_names.iter().any(|t| t == &tc_owned.name) {
+                                        forge_core::ToolResult::error(
+                                            &tc_owned.id,
+                                            format!(
+                                                "Tool '{}' failed across all MCP routes",
+                                                tc_owned.name
+                                            ),
+                                        )
+                                    } else {
+                                        invalid_tool_call_result(&tc_owned, &known_tool_names)
+                                    }
+                                }
+                                (McpCallOutcome::Success, None) => forge_core::ToolResult::error(
+                                    &tc_owned.id,
+                                    format!("Tool '{}' returned no output", tc_owned.name),
+                                ),
                             }
-                            mcp_result.unwrap_or_else(|| {
-                                if known_tool_names.iter().any(|t| t == &tc_owned.name) {
-                                    forge_core::ToolResult::error(
-                                        &tc_owned.id,
-                                        format!(
-                                            "Tool '{}' timed out after {}s",
-                                            tc_owned.name,
-                                            timeout.as_secs()
-                                        ),
-                                    )
-                                } else {
-                                    invalid_tool_call_result(&tc_owned, &known_tool_names)
-                                }
-                            })
                         };
                         (tc_owned, result)
                     });
@@ -703,6 +720,7 @@ impl AgentLoop {
                 while let Some(outcome) = joinset.join_next().await {
                     match outcome {
                         Ok((tc, result)) => {
+                            completed_readonly_ids.insert(tc.id.clone());
                             let bounded_output = clamp_tool_content(&result.content);
                             let _ = self.event_tx.send(AgentEvent::ToolResult {
                                 id: tc.id.clone(),
@@ -720,6 +738,31 @@ impl AgentLoop {
                             warn!("Read-only tool task join failed: {join_err}");
                         }
                     }
+                }
+
+                for tc in &readonly_calls {
+                    if completed_readonly_ids.contains(&tc.id) {
+                        continue;
+                    }
+                    let fallback = forge_core::ToolResult::error(
+                        &tc.id,
+                        format!(
+                            "Tool '{}' did not complete due to internal task failure",
+                            tc.name
+                        ),
+                    );
+                    let bounded_output = clamp_tool_content(&fallback.content);
+                    let _ = self.event_tx.send(AgentEvent::ToolResult {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        output: bounded_output.clone(),
+                        is_error: true,
+                    }).await;
+                    tool_results_content.push(MessageContent::ToolResult {
+                        tool_use_id: fallback.tool_use_id,
+                        content: bounded_output,
+                        is_error: true,
+                    });
                 }
             }
 
@@ -822,30 +865,36 @@ impl AgentLoop {
                         ),
                     }
                 } else {
-                    let mut mcp_result = None;
-                    for client in &self.mcp_clients {
-                        if let Some(output) = tokio::time::timeout(
-                            timeout,
-                            client.call_tool(&tc.name, tc.input.clone()),
-                        )
-                        .await
-                        .ok()
-                        .and_then(Result::ok)
-                        {
-                            mcp_result = Some(forge_core::ToolResult::success(&tc.id, output));
-                            break;
+                    let (outcome, output) = call_mcp_tool_with_timeout(
+                        &self.mcp_clients,
+                        &tc.name,
+                        &tc.input,
+                        timeout,
+                    )
+                    .await;
+                    match (outcome, output) {
+                        (McpCallOutcome::Success, Some(output)) => {
+                            forge_core::ToolResult::success(&tc.id, output)
                         }
+                        (McpCallOutcome::TimedOut, _) => forge_core::ToolResult::error(
+                            &tc.id,
+                            format!("Tool '{}' timed out after {}s", tc.name, timeout.as_secs()),
+                        ),
+                        (McpCallOutcome::Failed, _) => {
+                            if known_tool_names.iter().any(|t| t == &tc.name) {
+                                forge_core::ToolResult::error(
+                                    &tc.id,
+                                    format!("Tool '{}' failed across all MCP routes", tc.name),
+                                )
+                            } else {
+                                self.invalid_tool_call_result(tc)
+                            }
+                        }
+                        (McpCallOutcome::Success, None) => forge_core::ToolResult::error(
+                            &tc.id,
+                            format!("Tool '{}' returned no output", tc.name),
+                        ),
                     }
-                    mcp_result.unwrap_or_else(|| {
-                        if known_tool_names.iter().any(|t| t == &tc.name) {
-                            forge_core::ToolResult::error(
-                                &tc.id,
-                                format!("Tool '{}' timed out after {}s", tc.name, timeout.as_secs()),
-                            )
-                        } else {
-                            self.invalid_tool_call_result(tc)
-                        }
-                    })
                 };
 
                 let bounded_output = clamp_tool_content(&result.content);
@@ -882,6 +931,27 @@ impl AgentLoop {
             // Loop back for the next LLM call with tool results
             memory_context.clear();
         }
+    }
+}
+
+async fn call_mcp_tool_with_timeout(
+    clients: &[Arc<forge_mcp::McpStdioClient>],
+    name: &str,
+    input: &serde_json::Value,
+    timeout: std::time::Duration,
+) -> (McpCallOutcome, Option<String>) {
+    let mut saw_timeout = false;
+    for client in clients {
+        match tokio::time::timeout(timeout, client.call_tool(name, input.clone())).await {
+            Ok(Ok(output)) => return (McpCallOutcome::Success, Some(output)),
+            Ok(Err(_)) => continue,
+            Err(_) => saw_timeout = true,
+        }
+    }
+    if saw_timeout {
+        (McpCallOutcome::TimedOut, None)
+    } else {
+        (McpCallOutcome::Failed, None)
     }
 }
 
@@ -1126,14 +1196,15 @@ fn compact_memory_context_by_tier(
                 if trimmed.is_empty() {
                     continue;
                 }
+                let lowered = trimmed.to_lowercase();
                 let salient = trimmed.starts_with('-')
                     || trimmed.starts_with('*')
                     || trimmed.starts_with('[')
                     || trimmed.starts_with('#')
-                    || trimmed.contains("decision")
-                    || trimmed.contains("next")
-                    || trimmed.contains("todo")
-                    || trimmed.contains("issue");
+                    || lowered.contains("decision")
+                    || lowered.contains("next")
+                    || lowered.contains("todo")
+                    || lowered.contains("issue");
                 if salient || selected.is_empty() {
                     if !selected.is_empty() {
                         selected.push('\n');
@@ -1293,7 +1364,8 @@ impl LoopDetector {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_memory_context, clamp_tool_content, context_tier, edit_distance_case_insensitive,
+        clamp_memory_context, clamp_tool_content, compact_memory_context_by_tier, context_tier,
+        edit_distance_case_insensitive,
         prepare_memory_context_for_turn, suggest_tool_names, tool_timeout_for_name, write_priority,
         ContextTier,
     };
@@ -1356,5 +1428,12 @@ mod tests {
         let fast = tool_timeout_for_name("Read", forge_core::ToolPermission::ReadOnly);
         let slow = tool_timeout_for_name("WebFetch", forge_core::ToolPermission::ReadOnly);
         assert!(fast < slow);
+    }
+
+    #[test]
+    fn cold_tier_compaction_keeps_salient_markers_case_insensitive() {
+        let ctx = "noise\nDECISION: keep this\nanother line".to_string();
+        let out = compact_memory_context_by_tier(ctx, 300, ContextTier::Cold);
+        assert!(out.to_lowercase().contains("decision"));
     }
 }
