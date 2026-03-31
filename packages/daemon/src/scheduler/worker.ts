@@ -297,6 +297,30 @@ export async function executeTask(
 			 WHERE id = ?`,
 			)
 			.run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
+
+		// Record skill invocation for analytics
+		if (task.skill_name) {
+			try {
+				const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
+				wdb
+					.prepare(
+						`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
+					 VALUES (?, ?, ?, 'scheduled-task', ?, ?, ?, ?, datetime(?))`,
+					)
+					.run(
+						`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+						task.skill_name.toLowerCase(),
+						"default",
+						task.id,
+						latencyMs,
+						status === "completed" ? 1 : 0,
+						result.error ?? null,
+						completedAt,
+					);
+			} catch (err) {
+				deps.logger.warn("scheduler", "Failed to record skill invocation", err instanceof Error ? err : undefined);
+			}
+		}
 	});
 
 	deps.emitTaskStream({

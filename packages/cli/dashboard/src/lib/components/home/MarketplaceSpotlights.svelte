@@ -1,15 +1,14 @@
 <script lang="ts">
-import type { MarketplaceMcpCatalogEntry, SkillSearchResult } from "$lib/api";
 import { getAvatarFromSource, getAvatarUrl, getMonogram, getMonogramBg } from "$lib/card-utils";
-import { fetchMarketplaceMcpCatalog, mcpMarket } from "$lib/stores/marketplace-mcp.svelte";
+import { fetchMcpAnalytics, mcpAnalytics } from "$lib/stores/mcp-analytics.svelte";
+import { fetchSkillAnalytics, skillAnalytics } from "$lib/stores/skill-analytics.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
-import { fetchCatalog, sk } from "$lib/stores/skills.svelte";
 import { onMount } from "svelte";
 import { SvelteSet } from "svelte/reactivity";
 
 type SpotlightEntry =
-	| { readonly kind: "skill"; readonly item: SkillSearchResult }
-	| { readonly kind: "mcp"; readonly item: MarketplaceMcpCatalogEntry };
+	| { readonly kind: "skill"; readonly name: string; readonly description: string; readonly count: number }
+	| { readonly kind: "mcp"; readonly name: string; readonly description: string; readonly count: number };
 
 const TOTAL = 6;
 
@@ -17,62 +16,52 @@ let loaded = $state(false);
 const avatarErrors = new SvelteSet<string>();
 
 onMount(async () => {
-	await Promise.allSettled([fetchCatalog(), fetchMarketplaceMcpCatalog(5)]);
+	await Promise.allSettled([fetchSkillAnalytics(), fetchMcpAnalytics()]);
 	loaded = true;
 });
 
 const spotlights = $derived.by((): SpotlightEntry[] => {
-	const skills: SpotlightEntry[] = sk.catalog.slice(0, 3).map((item) => ({ kind: "skill" as const, item }));
-	const mcps: SpotlightEntry[] = mcpMarket.catalog.slice(0, 3).map((item) => ({ kind: "mcp" as const, item }));
-	return [...skills, ...mcps].slice(0, TOTAL);
+	const skills: SpotlightEntry[] = (skillAnalytics.data?.topSkills ?? [])
+		.slice(0, 3)
+		.map((s) => ({ kind: "skill" as const, name: s.skillName, description: `${s.count} calls, ${s.avgLatencyMs}ms avg`, count: s.count }));
+	const mcps: SpotlightEntry[] = (mcpAnalytics.data?.topTools ?? [])
+		.slice(0, 3)
+		.map((t) => ({ kind: "mcp" as const, name: t.toolName, description: `${t.count} calls, ${t.avgLatencyMs}ms avg`, count: t.count }));
+	// Interleave by usage count
+	const all = [...skills, ...mcps].sort((a, b) => b.count - a.count);
+	return all.slice(0, TOTAL);
 });
 
 function spotlightId(entry: SpotlightEntry): string {
-	return entry.kind === "skill" ? `sk:${entry.item.name}` : `mcp:${entry.item.id}`;
-}
-
-function spotlightName(entry: SpotlightEntry): string {
-	return entry.item.name;
-}
-
-function spotlightDesc(entry: SpotlightEntry): string {
-	return entry.item.description;
+	return `${entry.kind}:${entry.name}`;
 }
 
 function spotlightBadge(entry: SpotlightEntry): string {
 	return entry.kind === "skill" ? "SKILL" : "MCP";
 }
 
-function spotlightAvatar(entry: SpotlightEntry): string | null {
-	if (entry.kind === "mcp") {
-		return getAvatarFromSource(entry.item.source, entry.item.catalogId) ?? getAvatarUrl(entry.item.sourceUrl);
-	}
-	const maintainer = entry.item.maintainer;
-	if (maintainer) return `https://github.com/${maintainer.split("/")[0]}.png?size=40`;
-	return null;
-}
-
 function handleClick(_entry: SpotlightEntry): void {
-	// Both skills and MCP servers live on the "skills" (Marketplace) tab
 	nav.activeTab = "skills";
 }
+
+const hasAnyData = $derived(spotlights.length > 0);
 </script>
 
 <div class="spotlights-panel sig-panel">
 	<div class="spotlights-header sig-panel-header">
 		<span class="spotlights-title">MOST USED SKILLS & SERVERS</span>
-		<span class="spotlights-count">{spotlights.length} TOP PICKS</span>
+		{#if hasAnyData}
+			<span class="spotlights-count">{spotlights.length} TOP PICKS</span>
+		{/if}
 	</div>
 
-	{#if !loaded && spotlights.length === 0}
-		<div class="empty-state">LOADING CATALOG...</div>
-	{:else if spotlights.length === 0}
-		<div class="empty-state">NO CATALOG DATA</div>
+	{#if !loaded && !hasAnyData}
+		<div class="empty-state">LOADING USAGE DATA...</div>
+	{:else if !hasAnyData}
+		<div class="empty-state">NO USAGE DATA YET</div>
 	{:else}
 		<div class="spotlights-grid">
 			{#each spotlights as entry (spotlightId(entry))}
-				{@const avatar = spotlightAvatar(entry)}
-				{@const id = spotlightId(entry)}
 				<button
 					type="button"
 					class="spotlight-card"
@@ -81,25 +70,16 @@ function handleClick(_entry: SpotlightEntry): void {
 					<div class="spotlight-top">
 						<div
 							class="spotlight-icon"
-							style="background: {avatar && !avatarErrors.has(id) ? 'transparent' : getMonogramBg(spotlightName(entry))};"
+							style="background: {getMonogramBg(entry.name)};"
 						>
-							{#if avatar && !avatarErrors.has(id)}
-								<img
-									src={avatar}
-									alt={spotlightName(entry)}
-									class="spotlight-avatar"
-									onerror={() => { avatarErrors.add(id); }}
-								/>
-							{:else}
-								{getMonogram(spotlightName(entry))}
-							{/if}
+							{getMonogram(entry.name)}
 						</div>
 						<div class="spotlight-meta">
-							<span class="spotlight-name">{spotlightName(entry)}</span>
+							<span class="spotlight-name">{entry.name}</span>
 							<span class="spotlight-badge">{spotlightBadge(entry)}</span>
 						</div>
 					</div>
-					<p class="spotlight-desc">{spotlightDesc(entry)}</p>
+					<p class="spotlight-desc">{entry.description}</p>
 				</button>
 			{/each}
 		</div>
@@ -192,12 +172,6 @@ function handleClick(_entry: SpotlightEntry): void {
 		text-transform: uppercase;
 		flex-shrink: 0;
 		overflow: hidden;
-	}
-
-	.spotlight-avatar {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
 	}
 
 	.spotlight-meta {

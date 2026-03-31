@@ -41,6 +41,7 @@ interface SkillMeta {
 	arg_hint?: string;
 	verified?: boolean;
 	permissions?: string[];
+	builtin?: boolean;
 }
 
 type CatalogEntry = {
@@ -145,6 +146,7 @@ export function parseSkillFrontmatter(content: string): SkillMeta {
 		arg_hint: get("arg_hint") || undefined,
 		verified: /^verified:\s*true$/m.test(fm) ? true : /^verified:\s*false$/m.test(fm) ? false : undefined,
 		permissions: getList("permissions"),
+		builtin: /^builtin:\s*true$/m.test(fm) || undefined,
 	};
 }
 
@@ -511,10 +513,10 @@ function onSkillUninstalling(skillName: string): void {
 }
 
 export function mountSkillsRoutes(app: Hono): void {
-	// GET /api/skills - list installed skills
+	// GET /api/skills - list installed skills (excludes builtin runtime skills)
 	app.get("/api/skills", (c) => {
 		try {
-			const skills = listInstalledSkills();
+			const skills = listInstalledSkills().filter((s) => !s.builtin);
 			return c.json({ skills, count: skills.length });
 		} catch (e) {
 			logger.error("skills", "Error listing skills", e as Error);

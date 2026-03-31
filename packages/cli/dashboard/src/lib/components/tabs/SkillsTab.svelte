@@ -2,6 +2,7 @@
 import type { SkillSearchResult } from "$lib/api";
 import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
 import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
+import SkillUsagePanel from "$lib/components/skills/SkillUsagePanel.svelte";
 import SkillsComparePanel from "$lib/components/skills/SkillsComparePanel.svelte";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
@@ -317,6 +318,9 @@ onMount(() => {
 			{sk.searching ? "Searching..." : "Loading..."}
 		</div>
 	{:else}
+		{#if displayMode === "installed" && sk.installed.length > 0}
+			<SkillUsagePanel />
+		{/if}
 		<SkillGrid
 			items={displayItems}
 			mode={displayMode}

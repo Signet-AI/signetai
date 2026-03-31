@@ -2626,6 +2626,39 @@ export async function getMcpAnalytics(params?: {
 	return response.json();
 }
 
+// ---------------------------------------------------------------------------
+// Skill Analytics
+// ---------------------------------------------------------------------------
+
+export interface SkillInvocationStats {
+	skillName: string;
+	count: number;
+	successCount: number;
+	avgLatencyMs: number;
+}
+
+export interface SkillAnalyticsSummary {
+	totalCalls: number;
+	successRate: number;
+	topSkills: SkillInvocationStats[];
+	latency: { p50: number; p95: number };
+}
+
+export async function getSkillAnalytics(params?: {
+	skill?: string;
+	since?: string;
+	agentId?: string;
+}): Promise<SkillAnalyticsSummary> {
+	const qs = new URLSearchParams();
+	if (params?.skill) qs.set("skill", params.skill);
+	if (params?.since) qs.set("since", params.since);
+	if (params?.agentId) qs.set("agent_id", params.agentId);
+	const query = qs.toString();
+	const response = await fetch(`${API_BASE}/api/skills/analytics${query ? `?${query}` : ""}`);
+	if (!response.ok) throw new Error("Failed to fetch skill analytics");
+	return response.json();
+}
+
 export async function getMcpServerAnalytics(
 	serverId: string,
 	params?: { since?: string; agentId?: string },

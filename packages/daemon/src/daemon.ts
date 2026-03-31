@@ -5309,6 +5309,10 @@ app.get("/api/connectors/:id/health", (c) => {
 });
 
 import { type ReconcilerHandle, startReconciler } from "./pipeline/skill-reconciler.js";
+// Skill analytics must mount before skills routes (avoids /api/skills/:name catch-all)
+import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
+mountSkillAnalyticsRoutes(app, authConfig.mode);
+
 // Skills routes (extracted to routes/skills.ts)
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 mountSkillsRoutes(app);
@@ -7626,6 +7630,28 @@ app.post("/api/tasks/:id/run", async (c) => {
 					     stdout = ?, stderr = ?, error = ?
 					 WHERE id = ?`,
 					).run(status, completedAt, result.exitCode, result.stdout, result.stderr, result.error, runId);
+
+					// Record skill invocation for analytics
+					if (taskSkillName) {
+						try {
+							const latencyMs = new Date(completedAt).getTime() - new Date(now).getTime();
+							db.prepare(
+								`INSERT INTO skill_invocations (id, skill_name, agent_id, source, task_id, latency_ms, success, error_text, created_at)
+								 VALUES (?, ?, ?, 'api', ?, ?, ?, ?, datetime(?))`,
+							).run(
+								`sinv-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+								taskSkillName.toLowerCase(),
+								"default",
+								taskId,
+								latencyMs,
+								status === "completed" ? 1 : 0,
+								result.error ?? null,
+								completedAt,
+							);
+						} catch {
+							// Non-critical — don't fail the task run
+						}
+					}
 				});
 
 				emitTaskStream({
