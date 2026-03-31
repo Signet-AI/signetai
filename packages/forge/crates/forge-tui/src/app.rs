@@ -286,6 +286,15 @@ impl App {
         self.input.chars().count()
     }
 
+    fn apply_terminal_theme_background(&self) {
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::style::SetBackgroundColor(self.theme.bg.into()),
+            crossterm::style::SetForegroundColor(self.theme.fg.into()),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+        );
+    }
+
     async fn refresh_connected_models(&mut self) {
         self.detected_clis = forge_provider::cli::detect_cli_tools().await;
         self.skills = forge_signet::skills::load_skills();
@@ -644,6 +653,7 @@ impl App {
 
         // Enable bracketed paste so we can detect drag-and-drop file paths
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
+        self.apply_terminal_theme_background();
 
         self.refresh_connected_models().await;
 
@@ -972,6 +982,7 @@ impl App {
             keybinds: &self.keybinds,
             status_bg: self.theme.status_bg,
             status_fg: self.theme.status_fg,
+            surface: self.theme.surface,
             accent: self.theme.accent,
             muted: self.theme.muted,
             success: self.theme.success,
@@ -1847,6 +1858,7 @@ impl App {
                                 )));
                             } else {
                                 self.theme = crate::theme::Theme::by_name(args);
+                                self.apply_terminal_theme_background();
                                 self.entries.push(ChatEntry::Status(format!(
                                     "Theme set to: {}", self.theme.name
                                 )));

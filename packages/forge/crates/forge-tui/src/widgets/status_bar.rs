@@ -24,6 +24,7 @@ pub struct StatusBar<'a> {
     pub keybinds: &'a crate::keybinds::KeyBindConfig,
     pub status_bg: Color,
     pub status_fg: Color,
+    pub surface: Color,
     pub accent: Color,
     pub muted: Color,
     pub success: Color,
@@ -35,13 +36,11 @@ pub struct StatusBar<'a> {
 impl<'a> Widget for StatusBar<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let sep = Style::default().fg(self.muted);
-        let label = Style::default().fg(self.muted);
         let value = Style::default().fg(self.status_fg);
         let chrome = Style::default().fg(self.accent);
+        let chip_bg = self.surface;
 
-
-        // ─── Line 1: The forge bar ──────────────────────────
-        //  ◆ Boogy                        0/200K │ 19/1672 │ ●
+        // ─── Line 1: identity + chips ───────────────────────
         if area.height >= 1 {
             let name = if self.agent_name != "Assistant" {
                 self.agent_name
@@ -53,31 +52,47 @@ impl<'a> Widget for StatusBar<'a> {
             let provider_short = truncate(self.provider, 12);
 
             let mut left = vec![
-                Span::styled(" ◆ ", Style::default().fg(self.spinner)),
+                Span::styled(" ◈ ", Style::default().fg(self.spinner)),
                 Span::styled(name, chrome.add_modifier(Modifier::BOLD)),
                 Span::styled("  ", sep),
-                Span::styled("mdl ", label),
-                Span::styled(model_short, value.add_modifier(Modifier::BOLD)),
-                Span::styled(" ", sep),
-                Span::styled(format!("[{provider_short}]"), label),
             ];
+
+            push_chip(
+                &mut left,
+                format!("model {model_short}"),
+                Style::default().fg(value.fg.unwrap_or(self.status_fg)).bg(chip_bg),
+            );
+            left.push(Span::styled(" ", sep));
+            push_chip(
+                &mut left,
+                provider_short,
+                Style::default().fg(self.muted).bg(chip_bg),
+            );
 
             let effort_color = match self.effort {
                 "high" => self.warning,
                 "low" => self.muted,
                 _ => self.accent,
             };
-            left.push(Span::styled("  ", sep));
-            left.push(Span::styled("eff ", label));
-            left.push(Span::styled(self.effort, Style::default().fg(effort_color).add_modifier(Modifier::BOLD)));
+            left.push(Span::styled(" ", sep));
+            push_chip(
+                &mut left,
+                format!("eff {}", self.effort),
+                Style::default()
+                    .fg(effort_color)
+                    .bg(chip_bg)
+                    .add_modifier(Modifier::BOLD),
+            );
 
             if let Some(agent) = self.active_agent {
-                left.push(Span::styled("  ", sep));
-                left.push(Span::styled("agt ", label));
-                left.push(Span::styled(truncate(&format!("@{agent}"), 16), chrome));
+                left.push(Span::styled(" ", sep));
+                push_chip(
+                    &mut left,
+                    format!("agt {}", truncate(&format!("@{agent}"), 16)),
+                    Style::default().fg(self.accent).bg(chip_bg),
+                );
             }
 
-            // Right: gauges — tokens │ memories │ health
             let health = if self.daemon_healthy { "●" } else { "○" };
             let health_color = if self.daemon_healthy { self.success } else { self.error };
 
@@ -89,21 +104,35 @@ impl<'a> Widget for StatusBar<'a> {
                 format!("{}", self.memories_injected)
             };
 
-            let right = vec![
-                Span::styled("tok ", label),
-                Span::styled(format!("{tokens}/{ctx}"), value),
-                Span::styled("  ", sep),
-                Span::styled("sec ", label),
-                Span::styled(
-                    format!("{}/{}", self.secrets_used, self.total_secrets),
-                    Style::default().fg(if self.secrets_used > 0 { self.success } else { self.muted }),
-                ),
-                Span::styled("  ", sep),
-                Span::styled("mem ", label),
-                Span::styled(mem, value),
-                Span::styled("  ", sep),
-                Span::styled(health, Style::default().fg(health_color).add_modifier(Modifier::BOLD)),
-            ];
+            let mut right = Vec::new();
+            push_chip(
+                &mut right,
+                format!("tok {tokens}/{ctx}"),
+                Style::default().fg(self.status_fg).bg(chip_bg),
+            );
+            right.push(Span::styled(" ", sep));
+            push_chip(
+                &mut right,
+                format!("mem {mem}"),
+                Style::default().fg(self.status_fg).bg(chip_bg),
+            );
+            right.push(Span::styled(" ", sep));
+            push_chip(
+                &mut right,
+                format!("sec {}/{}", self.secrets_used, self.total_secrets),
+                Style::default()
+                    .fg(if self.secrets_used > 0 { self.success } else { self.muted })
+                    .bg(chip_bg),
+            );
+            right.push(Span::styled(" ", sep));
+            push_chip(
+                &mut right,
+                format!("daemon {health}"),
+                Style::default()
+                    .fg(health_color)
+                    .bg(chip_bg)
+                    .add_modifier(Modifier::BOLD),
+            );
             let right_width: usize = right.iter().map(|s| s.content.len()).sum();
             let available = area.width as usize;
             if available > right_width + 1 {
@@ -122,8 +151,7 @@ impl<'a> Widget for StatusBar<'a> {
             }
         }
 
-        // ─── Line 2: Keybind hints ─────────────────────────
-        //  ^O model · ^K cmd · ^D dash · ^R voice · ^Q quit
+        // ─── Line 2: compact shortcuts ─────────────────────
         if area.height >= 2 {
             let key = Style::default().fg(self.accent);
             let label = Style::default().fg(self.muted);
@@ -142,17 +170,17 @@ impl<'a> Widget for StatusBar<'a> {
             let mut spans = vec![Span::styled(" ", sep)];
             let mut used = 1u16;
             for (i, (action, name)) in hints.iter().enumerate() {
-                let combo = self.keybinds.get(action);
+                let combo = pretty_combo(&self.keybinds.get(action));
                 let width = combo.len() as u16 + name.len() as u16 + 1;
                 if used + width + 3 > area.width {
                     break;
                 }
                 if i > 0 {
-                    spans.push(Span::styled(" · ", sep));
+                    spans.push(Span::styled("   ", sep));
                     used += 3;
                 }
                 spans.push(Span::styled(combo.to_string(), key));
-                spans.push(Span::styled(format!(" {name}"), label));
+                spans.push(Span::styled(format!(" {}", capitalize(name)), label));
                 used += width;
             }
 
@@ -207,4 +235,26 @@ fn fit_spans(spans: Vec<Span<'_>>, max_width: usize) -> Line<'_> {
         break;
     }
     Line::from(out)
+}
+
+fn push_chip(spans: &mut Vec<Span<'_>>, text: impl AsRef<str>, style: Style) {
+    spans.push(Span::styled(" ", style));
+    spans.push(Span::styled(text.as_ref().to_string(), style));
+    spans.push(Span::styled(" ", style));
+}
+
+fn pretty_combo(combo: &str) -> String {
+    combo
+        .replace("Ctrl+", "⌃")
+        .replace("Alt+", "⌥")
+        .replace("Shift+", "⇧")
+        .replace("Cmd+", "⌘")
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
 }
