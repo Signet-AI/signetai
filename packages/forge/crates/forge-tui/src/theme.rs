@@ -47,6 +47,41 @@ pub struct Theme {
 }
 
 impl Theme {
+    const GLOBAL_OPACITY_PCT: u8 = 85;
+    // Canvas/background should be more translucent than UI chrome/text colors.
+    const CANVAS_OPACITY_PCT: u8 = 62;
+    // Light mode looked better with stronger canvas tint.
+    const LIGHT_CANVAS_OPACITY_PCT: u8 = 85;
+    // Transparency theme is intentionally glassier.
+    const TRANSPARENCY_CANVAS_OPACITY_PCT: u8 = 56;
+
+    fn with_opacity(mut self, opacity_pct: u8, canvas_opacity_pct: u8) -> Self {
+        // Also tint the canvas/background itself so overall color density
+        // matches the configured global opacity in transparent terminals.
+        self.bg = apply_opacity(self.bg, Color::Rgb(0, 0, 0), canvas_opacity_pct);
+        let bg = self.bg;
+        self.status_bg = apply_opacity(self.status_bg, bg, opacity_pct);
+        self.status_fg = apply_opacity(self.status_fg, bg, opacity_pct);
+        self.fg = apply_opacity(self.fg, bg, opacity_pct);
+        self.fg_bright = apply_opacity(self.fg_bright, bg, opacity_pct);
+        self.user = apply_opacity(self.user, bg, opacity_pct);
+        self.assistant = apply_opacity(self.assistant, bg, opacity_pct);
+        self.tool = apply_opacity(self.tool, bg, opacity_pct);
+        self.success = apply_opacity(self.success, bg, opacity_pct);
+        self.error = apply_opacity(self.error, bg, opacity_pct);
+        self.warning = apply_opacity(self.warning, bg, opacity_pct);
+        self.muted = apply_opacity(self.muted, bg, opacity_pct);
+        self.accent = apply_opacity(self.accent, bg, opacity_pct);
+        self.code = apply_opacity(self.code, bg, opacity_pct);
+        self.border = apply_opacity(self.border, bg, opacity_pct);
+        self.dialog_bg = apply_opacity(self.dialog_bg, bg, opacity_pct);
+        self.surface = apply_opacity(self.surface, bg, opacity_pct);
+        self.selected_bg = apply_opacity(self.selected_bg, bg, opacity_pct);
+        self.selected_fg = apply_opacity(self.selected_fg, bg, opacity_pct);
+        self.spinner = apply_opacity(self.spinner, bg, opacity_pct);
+        self
+    }
+
     /// Signet Dark — industrial monochrome. Near-black with desaturated accents.
     /// Tokens from globals.css: --color-bg: #08080a, --color-surface: #0e0e12
     pub fn signet_dark() -> Self {
@@ -65,32 +100,65 @@ impl Theme {
             fg_bright: Color::Rgb(240, 240, 242),
             // --color-text-muted: #3e3e46
             muted: Color::Rgb(62, 62, 70),
-            // Signet yellow highlight token
-            accent: Color::Rgb(214, 189, 96),
+            // Signet green highlight token
+            accent: Color::Rgb(118, 176, 132),
             // User messages — slightly brighter than accent
             user: Color::Rgb(192, 192, 200),
             // Assistant streaming cursor — accent-hover: #c0c0c8
             assistant: Color::Rgb(192, 192, 200),
-            // Tool brackets — restrained chrome accent
-            tool: Color::Rgb(184, 168, 112),
+            // Tool brackets — restrained green accent
+            tool: Color::Rgb(96, 146, 112),
             // --color-success: #4a7a5e
             success: Color::Rgb(118, 176, 132),
             // --color-danger: #8a4a48
             error: Color::Rgb(210, 106, 102),
-            // Warning — yellow-leaning but darker than glow
+            // Warning — amber for semantic warning contrast
             warning: Color::Rgb(230, 188, 92),
             // Code blocks — bright text
             code: Color::Rgb(240, 240, 242),
-            // Dim Signet-yellow border for thinner-feeling chrome
-            border: Color::Rgb(88, 74, 36),
+            // Dim Signet-green border for thinner-feeling chrome
+            border: Color::Rgb(52, 84, 62),
             // Dialog background — surface
             dialog_bg: Color::Rgb(14, 14, 18),
             // Selected rows use the Signet highlight token
-            selected_bg: Color::Rgb(214, 189, 96),
+            selected_bg: Color::Rgb(118, 176, 132),
             selected_fg: Color::Rgb(8, 8, 10),
             // Signet glow token for motion/loading
-            spinner: Color::Rgb(244, 225, 129),
+            spinner: Color::Rgb(156, 218, 172),
         }
+        .with_opacity(Self::GLOBAL_OPACITY_PCT, Self::CANVAS_OPACITY_PCT)
+    }
+
+    /// Transparency — glass-like dark surface with Signet green accents.
+    pub fn transparency() -> Self {
+        Self {
+            name: "transparency",
+            // No background fill — let terminal transparency/blur show through.
+            bg: Color::Reset,
+            surface: Color::Reset,
+            status_bg: Color::Reset,
+            fg: Color::Rgb(212, 212, 216),
+            status_fg: Color::Rgb(212, 212, 216),
+            fg_bright: Color::Rgb(240, 240, 242),
+            muted: Color::Rgb(108, 118, 136),
+            accent: Color::Rgb(118, 176, 132),
+            user: Color::Rgb(198, 204, 214),
+            assistant: Color::Rgb(198, 204, 214),
+            tool: Color::Rgb(96, 146, 112),
+            success: Color::Rgb(118, 176, 132),
+            error: Color::Rgb(210, 106, 102),
+            warning: Color::Rgb(230, 188, 92),
+            code: Color::Rgb(240, 240, 242),
+            border: Color::Rgb(64, 98, 76),
+            dialog_bg: Color::Reset,
+            selected_bg: Color::Reset,
+            selected_fg: Color::Rgb(118, 176, 132),
+            spinner: Color::Rgb(156, 218, 172),
+        }
+        .with_opacity(
+            Self::GLOBAL_OPACITY_PCT,
+            Self::TRANSPARENCY_CANVAS_OPACITY_PCT,
+        )
     }
 
     /// Signet Light — warm beige. Never pure white.
@@ -111,32 +179,33 @@ impl Theme {
             fg_bright: Color::Rgb(10, 10, 12),
             // --color-text-muted: #7a756e
             muted: Color::Rgb(122, 117, 110),
-            // Signet yellow highlight token adapted for light theme
-            accent: Color::Rgb(145, 117, 32),
+            // Signet blue highlight token adapted for light theme
+            accent: Color::Rgb(62, 104, 176),
             // User messages — near-black for readability
             user: Color::Rgb(42, 42, 46),
             // Assistant — accent-hover: #3a3832
             assistant: Color::Rgb(58, 56, 50),
-            // Tool brackets — restrained chrome accent
-            tool: Color::Rgb(132, 112, 56),
+            // Tool brackets — restrained blue accent
+            tool: Color::Rgb(88, 116, 164),
             // Polished success tone for light theme
             success: Color::Rgb(58, 112, 72),
             // Polished error tone for light theme
             error: Color::Rgb(154, 66, 64),
             // Polished warning tone for light theme
-            warning: Color::Rgb(168, 118, 28),
+            warning: Color::Rgb(62, 112, 190),
             // Code — bright text (near-black)
             code: Color::Rgb(10, 10, 12),
-            // Dim Signet-yellow border for light theme surfaces
-            border: Color::Rgb(186, 168, 118),
+            // Dim Signet-blue border for light theme surfaces
+            border: Color::Rgb(150, 165, 196),
             // Dialog — surface
             dialog_bg: Color::Rgb(219, 213, 205),
             // Selected rows use the Signet highlight token
-            selected_bg: Color::Rgb(145, 117, 32),
+            selected_bg: Color::Rgb(62, 104, 176),
             selected_fg: Color::Rgb(228, 223, 216),
             // Signet glow token toned for light bg
-            spinner: Color::Rgb(166, 132, 38),
+            spinner: Color::Rgb(86, 124, 196),
         }
+        .with_opacity(Self::GLOBAL_OPACITY_PCT, Self::LIGHT_CANVAS_OPACITY_PCT)
     }
 
     /// Midnight — deep blue-black with cool accents.
@@ -164,6 +233,7 @@ impl Theme {
             selected_fg: Color::Rgb(10, 12, 22),
             spinner: Color::Rgb(244, 225, 129),
         }
+        .with_opacity(Self::GLOBAL_OPACITY_PCT, Self::CANVAS_OPACITY_PCT)
     }
 
     /// Amber — warm retro terminal.
@@ -191,24 +261,41 @@ impl Theme {
             selected_fg: Color::Rgb(15, 12, 5),
             spinner: Color::Rgb(244, 225, 129),
         }
+        .with_opacity(Self::GLOBAL_OPACITY_PCT, Self::CANVAS_OPACITY_PCT)
     }
 
     pub fn by_name(name: &str) -> Self {
         match name {
+            "signet-dark" | "dark" => Self::signet_dark(),
             "signet-light" | "light" => Self::signet_light(),
+            "transparency" | "glass" | "transparent" => Self::transparency(),
             "midnight" => Self::midnight(),
             "amber" => Self::amber(),
-            _ => Self::signet_dark(),
+            _ => Self::transparency(),
         }
     }
 
     pub fn all_names() -> &'static [&'static str] {
-        &["signet-dark", "signet-light", "midnight", "amber"]
+        &["transparency", "signet-dark", "signet-light", "midnight", "amber"]
     }
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::signet_dark()
+        Self::transparency()
+    }
+}
+
+fn apply_opacity(color: Color, bg: Color, opacity_pct: u8) -> Color {
+    let alpha = opacity_pct.min(100) as u16;
+    let inv = 100u16.saturating_sub(alpha);
+    match (color, bg) {
+        (Color::Rgb(r, g, b), Color::Rgb(br, bgc, bb)) => {
+            let blend = |fg: u8, bgv: u8| -> u8 {
+                (((fg as u16 * alpha) + (bgv as u16 * inv)) / 100) as u8
+            };
+            Color::Rgb(blend(r, br), blend(g, bgc), blend(b, bb))
+        }
+        _ => color,
     }
 }

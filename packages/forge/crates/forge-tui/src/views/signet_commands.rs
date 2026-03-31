@@ -76,10 +76,15 @@ pub fn built_in_commands() -> Vec<SignetCommand> {
             CommandKind::Internal("import-claude".into()),
         ),
         cmd("dashboard", "/dashboard", "Open Signet dashboard in browser", CommandKind::Internal("dashboard".into())),
-        cmd("theme", "/theme <name>", "Switch theme (signet-dark, signet-light, midnight, amber)", CommandKind::Internal("theme".into())),
+        cmd("theme", "/theme <name>", "Switch theme (transparency, signet-dark, signet-light, midnight, amber)", CommandKind::Internal("theme".into())),
         cmd("auth", "/auth", "Show provider auth setup instructions", CommandKind::Internal("auth".into())),
         cmd("effort", "/effort <level>", "Set reasoning effort (low, medium, high)", CommandKind::Internal("effort".into())),
-        cmd("forge-bypass", "/forge-bypass", "Toggle CLI permission bypass (skip all approval prompts)", CommandKind::Internal("forge-bypass".into())),
+        cmd(
+            "forge-bypass",
+            "/forge-bypass <status|off|once|on>",
+            "Manage dangerous CLI bypass mode (requires explicit confirmation flags)",
+            CommandKind::Internal("forge-bypass".into()),
+        ),
         cmd("keybinds", "/keybinds", "Show current key bindings (edit ~/.config/forge/keybinds.json)", CommandKind::Internal("keybinds".into())),
         cmd("extraction-model", "/extraction-model <model>", "View or change the Signet extraction pipeline model", CommandKind::Internal("extraction-model".into())),
         cmd("agent", "/agent", "Show current agent identity and ID", CommandKind::Internal("agent".into())),
@@ -396,7 +401,8 @@ const EFFORT_ARGS: &[ArgSuggestion] = &[
 ];
 
 const THEME_ARGS: &[ArgSuggestion] = &[
-    ArgSuggestion { value: "signet-dark", description: "Industrial monochrome (default)" },
+    ArgSuggestion { value: "transparency", description: "Glass dark (default)" },
+    ArgSuggestion { value: "signet-dark", description: "Industrial monochrome" },
     ArgSuggestion { value: "signet-light", description: "Warm beige, never pure white" },
     ArgSuggestion { value: "midnight", description: "Deep blue-black, cool accents" },
     ArgSuggestion { value: "amber", description: "Warm retro terminal" },

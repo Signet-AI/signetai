@@ -10,7 +10,11 @@ use crossterm::{
     terminal,
 };
 use forge_provider::create_provider;
-use forge_signet::config::{build_agent_identity_prompt, build_identity_prompt, load_agent_config};
+use forge_signet::config::{
+    agent_name_for, build_agent_identity_prompt, build_identity_prompt,
+    ensure_agent_workspace_scaffold, load_agent_config, normalize_agent_id, resolve_agent_workspace_path,
+    AgentExecutionPolicy,
+};
 use forge_signet::secrets::{
     apply_local_cli_auth_env, default_model_for_provider, discover_available_providers,
     refresh_daemon_model_registry, resolve_api_key, sync_local_api_keys_from_daemon,
@@ -69,21 +73,28 @@ struct Cli {
     #[arg(long)]
     auth_provider: Option<String>,
 
-    /// Color theme (signet-dark, signet-light, midnight, amber)
-    #[arg(long, default_value = "signet-dark")]
+    /// Color theme (transparency, signet-dark, signet-light, midnight, amber)
+    #[arg(long, default_value = "transparency")]
     theme: String,
 
     /// Agent name (uses per-agent identity files from ~/.agents/agents/<name>/)
     #[arg(long)]
     agent: Option<String>,
 
+    /// Print Forge capability manifest (human-readable) and exit
+    #[arg(long)]
+    capabilities: bool,
+
+    /// Print Forge capability manifest as JSON and exit
+    #[arg(long = "capabilities-json")]
+    capabilities_json: bool,
+
     /// Acknowledge Forge development warning and continue without prompt
     #[arg(short = 'y', long)]
     yes: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging — file for TUI mode, stderr for -p mode
@@ -113,6 +124,86 @@ async fn main() -> Result<()> {
             .init();
     }
 
+    // Load Signet agent config and resolve selected agent metadata.
+    // All set_var calls happen here before tokio's thread pool starts.
+    let agent_config = load_agent_config().unwrap_or_default();
+    let selected_agent = cli
+        .agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let selected_agent_id = selected_agent
+        .as_deref()
+        .map(normalize_agent_id);
+    let selected_profile = selected_agent
+        .as_deref()
+        .and_then(|name| agent_config.find_agent_profile(name))
+        .cloned();
+    let selected_policy = selected_profile
+        .as_ref()
+        .and_then(|p| p.policy.clone())
+        .unwrap_or_default();
+
+    // Phase A: create per-agent workspace scaffold and run Forge from that
+    // filesystem root for deterministic isolation.
+    if let Some(agent_name) = selected_agent.as_deref() {
+        let workspace = ensure_agent_workspace_scaffold(agent_name, Some(&agent_config))?;
+        std::env::set_current_dir(&workspace).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to switch to agent workspace {}: {e}",
+                workspace.display()
+            )
+        })?;
+        info!(
+            "Agent workspace active: {} -> {}",
+            agent_name,
+            workspace.display()
+        );
+    }
+
+    // Phase B policy propagation — set env vars before async runtime starts
+    // to avoid UB from set_var in multi-threaded context (Rust 1.81+).
+    std::env::set_var(
+        "FORGE_WORKSPACE_ONLY",
+        if selected_policy.workspace_only.unwrap_or(true) {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    if !selected_policy.allowed_paths.is_empty() {
+        std::env::set_var("FORGE_ALLOWED_PATHS", selected_policy.allowed_paths.join(":"));
+    }
+    if !selected_policy.allowed_commands.is_empty() {
+        std::env::set_var("FORGE_ALLOWED_COMMANDS", selected_policy.allowed_commands.join(","));
+    }
+
+    if let Some(token) = cli.signet_token.as_deref().filter(|v| !v.trim().is_empty()) {
+        std::env::set_var("FORGE_SIGNET_TOKEN", token);
+    }
+    if let Some(actor) = cli.signet_actor.as_deref().filter(|v| !v.trim().is_empty()) {
+        std::env::set_var("FORGE_SIGNET_ACTOR", actor);
+    } else if let Some(agent_id) = selected_agent_id.as_deref() {
+        std::env::set_var("FORGE_SIGNET_ACTOR", agent_id);
+    }
+    std::env::set_var("FORGE_SIGNET_ACTOR_TYPE", "agent");
+
+    // Now start the async runtime — all env mutations are done.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(cli, selected_agent, selected_agent_id, selected_profile, selected_policy, agent_config))
+}
+
+async fn run(
+    cli: Cli,
+    selected_agent: Option<String>,
+    selected_agent_id: Option<String>,
+    selected_profile: Option<forge_signet::config::AgentWorkspaceConfig>,
+    selected_policy: AgentExecutionPolicy,
+    agent_config: forge_signet::config::AgentConfig,
+) -> Result<()> {
     // Optional: provider auth setup (local Forge credentials + CLI browser login)
     if cli.auth || cli.auth_only || cli.auth_provider.is_some() {
         auth::run_auth_wizard(cli.auth_provider.as_deref()).await?;
@@ -131,19 +222,6 @@ async fn main() -> Result<()> {
         ensure_signet(&cli.daemon_url).await;
     }
 
-    if let Some(token) = cli.signet_token.as_deref().filter(|v| !v.trim().is_empty()) {
-        std::env::set_var("FORGE_SIGNET_TOKEN", token);
-    }
-    if let Some(actor) = cli.signet_actor.as_deref().filter(|v| !v.trim().is_empty()) {
-        std::env::set_var("FORGE_SIGNET_ACTOR", actor);
-    } else if let Some(agent_name) = cli.agent.as_deref().filter(|v| !v.trim().is_empty()) {
-        std::env::set_var("FORGE_SIGNET_ACTOR", agent_name.to_lowercase());
-    }
-    std::env::set_var("FORGE_SIGNET_ACTOR_TYPE", "agent");
-
-    // Load Signet agent config
-    let _agent_config = load_agent_config().unwrap_or_default();
-
     // Connect to Signet daemon
     let signet_client = if cli.no_daemon {
         warn!("Running without Signet daemon — memory and identity disabled");
@@ -155,15 +233,22 @@ async fn main() -> Result<()> {
         }
         if let Some(actor) = cli.signet_actor.as_deref() {
             client = client.with_actor(actor);
-        } else if let Some(agent_name) = cli.agent.as_deref() {
-            client = client.with_actor(agent_name.to_lowercase());
+        } else if let Some(agent_id) = selected_agent_id.as_deref() {
+            client = client.with_actor(agent_id);
         } else {
             client = client.with_actor("forge");
         }
         client = client.with_actor_type("agent");
-        if let Some(ref agent_name) = cli.agent {
-            client = client.with_agent(&agent_name.to_lowercase());
-            info!("Agent mode: {} (id: {})", agent_name, agent_name.to_lowercase());
+        if let Some(agent_name) = selected_agent.as_deref() {
+            let workspace = resolve_agent_workspace_path(agent_name, Some(&agent_config));
+            let agent_id = normalize_agent_id(agent_name);
+            client = client.with_agent(&agent_id);
+            info!(
+                "Agent mode: {} (id: {}, workspace: {})",
+                agent_name,
+                agent_id,
+                workspace.display()
+            );
         }
         if client.is_available().await {
             info!("Connected to Signet daemon at {}", cli.daemon_url);
@@ -222,19 +307,43 @@ async fn main() -> Result<()> {
     }
     let connected_providers: Vec<String> = available.iter().map(|p| p.provider.clone()).collect();
 
+    if cli.capabilities || cli.capabilities_json {
+        let capabilities = build_capability_manifest(
+            selected_agent.as_deref(),
+            selected_agent_id.as_deref(),
+            selected_profile.as_ref().and_then(|p| p.model.as_deref()),
+            &selected_policy,
+            &connected_providers,
+        );
+        if cli.capabilities_json {
+            println!("{}", serde_json::to_string_pretty(&capabilities)?);
+        } else {
+            print_capability_manifest_human(&capabilities);
+        }
+        return Ok(());
+    }
+
     // Load persistent settings (model, provider, effort from last session)
     let settings = forge_tui::settings::Settings::load();
 
     // Extract values before consuming cli in defaults
     let prompt_arg = cli.prompt.clone();
     let resume_arg = cli.resume;
-    let agent_arg = cli.agent.clone();
+    let agent_arg = selected_agent.clone();
 
     // Apply saved settings as defaults when CLI args not explicitly provided
+    let model_default = if cli.model.is_some() {
+        cli.model.clone()
+    } else if let Some(profile_model) = selected_profile.as_ref().and_then(|p| p.model.clone()) {
+        Some(profile_model)
+    } else {
+        settings.model.clone()
+    };
+
     let cli_with_defaults = Cli {
-        model: cli.model.clone().or(settings.model),
+        model: model_default,
         provider: cli.provider.clone().or(settings.provider),
-        theme: if cli.theme == "signet-dark" {
+        theme: if cli.theme == "transparency" {
             settings.theme.unwrap_or_else(|| cli.theme.clone())
         } else {
             cli.theme.clone()
@@ -317,6 +426,8 @@ async fn main() -> Result<()> {
         active_cli_path,
         &cli_with_defaults.theme,
         agent_arg,
+        agent_name_for(selected_agent.as_deref(), Some(&agent_config)),
+        selected_policy.auto_approve_write_tools.clone(),
         connected_providers,
     )
     .await;
@@ -529,26 +640,70 @@ fn confirm_forge_launch_warning(accepted_via_flag: bool) -> Result<bool> {
         anyhow::bail!("Non-interactive launch requires explicit acknowledgement. Re-run with: forge --yes");
     }
 
+    // Interactive left/right selector
+    terminal::enable_raw_mode()?;
+    let _raw_guard = RawModeGuard;
+
+    let mut select_yes = true;
     loop {
-        eprint!("  Continue to launch Forge? [yes/no]: ");
+        // Clear line and re-render selector
+        execute!(
+            std::io::stderr(),
+            cursor::MoveToColumn(0),
+            terminal::Clear(terminal::ClearType::CurrentLine)
+        )?;
+
+        let yes = if select_yes {
+            format!("[ {} ]", "YES".bold().green())
+        } else {
+            format!("[ {} ]", "yes".dark_grey())
+        };
+        let no = if !select_yes {
+            format!("[ {} ]", "NO".bold().yellow())
+        } else {
+            format!("[ {} ]", "no".dark_grey())
+        };
+
+        eprint!("  Continue to launch Forge?  {yes}  {no}  (←/→ + Enter)");
         let _ = std::io::stderr().flush();
 
-        let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_err() {
-            return Ok(false);
-        }
-
-        if let Some(accept) = parse_yes_no_answer(&input) {
-            if accept {
-                return Ok(true);
+        if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
             }
-            eprintln!("  Launch cancelled.");
-            return Ok(false);
+            match key.code {
+                KeyCode::Left | KeyCode::Char('h') => select_yes = true,
+                KeyCode::Right | KeyCode::Char('l') => select_yes = false,
+                KeyCode::Char('y') => select_yes = true,
+                KeyCode::Char('n') => select_yes = false,
+                KeyCode::Enter => {
+                    eprintln!();
+                    if select_yes {
+                        return Ok(true);
+                    }
+                    eprintln!("  Launch cancelled.");
+                    return Ok(false);
+                }
+                KeyCode::Esc => {
+                    eprintln!();
+                    eprintln!("  Launch cancelled.");
+                    return Ok(false);
+                }
+                _ => {}
+            }
         }
-        eprintln!("  Please answer yes or no.");
     }
 }
 
+struct RawModeGuard;
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+#[cfg(test)]
 fn parse_yes_no_answer(input: &str) -> Option<bool> {
     let normalized = input.trim().to_lowercase();
     if normalized == "yes" || normalized == "y" {
@@ -558,6 +713,74 @@ fn parse_yes_no_answer(input: &str) -> Option<bool> {
         return Some(false);
     }
     None
+}
+
+fn build_capability_manifest(
+    selected_agent: Option<&str>,
+    selected_agent_id: Option<&str>,
+    routed_model: Option<&str>,
+    policy: &AgentExecutionPolicy,
+    connected_providers: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "harness": "forge",
+        "runtime": {
+            "first_party": true,
+            "reference_runtime": true
+        },
+        "agent": {
+            "name": selected_agent.unwrap_or("default"),
+            "id": selected_agent_id.unwrap_or("default"),
+            "model_route": routed_model.unwrap_or("auto"),
+        },
+        "filesystem": {
+            "workspace_only": policy.workspace_only.unwrap_or(true),
+            "scaffold_files": ["AGENTS.md", "SOUL.md", "IDENTITY.md", "MEMORY.md"]
+        },
+        "policy": {
+            "approval_mode": policy.approval_mode.clone().unwrap_or_else(|| "balanced".to_string()),
+            "auto_approve_write_tools": policy.auto_approve_write_tools.clone(),
+            "allowed_commands": policy.allowed_commands.clone(),
+            "allowed_paths": policy.allowed_paths.clone()
+        },
+        "providers": {
+            "connected": connected_providers
+        },
+        "tools": {
+            "built_in": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"],
+            "signet": ["memory_search", "memory_store", "knowledge_expand", "secret_exec"]
+        }
+    })
+}
+
+fn print_capability_manifest_human(manifest: &serde_json::Value) {
+    println!("Forge Capability Manifest");
+    println!("------------------------");
+    println!("harness: forge (first-party, reference runtime)");
+    println!(
+        "agent: {} ({})",
+        manifest["agent"]["name"].as_str().unwrap_or("default"),
+        manifest["agent"]["id"].as_str().unwrap_or("default")
+    );
+    println!(
+        "model route: {}",
+        manifest["agent"]["model_route"].as_str().unwrap_or("auto")
+    );
+    println!(
+        "workspace_only: {}",
+        manifest["filesystem"]["workspace_only"].as_bool().unwrap_or(true)
+    );
+    if let Some(mode) = manifest["policy"]["approval_mode"].as_str() {
+        println!("approval mode: {mode}");
+    }
+    if let Some(arr) = manifest["providers"]["connected"].as_array() {
+        let names = arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("connected providers: {names}");
+    }
 }
 
 #[cfg(test)]
@@ -595,6 +818,16 @@ fn select_provider(cli: &Cli, available: &[DiscoveredProvider]) -> Result<(Strin
             .clone()
             .unwrap_or_else(|| default_model_for_provider(provider).to_string());
         return Ok((provider.clone(), model));
+    }
+
+    // Phase B routing: if a model is explicitly selected (CLI or agent profile)
+    // and provider is omitted, infer provider from model family.
+    if let Some(model) = cli.model.clone() {
+        let inferred = infer_provider_from_model(&model).to_string();
+        let has_inferred = available.iter().any(|p| p.provider == inferred);
+        if has_inferred {
+            return Ok((inferred, model));
+        }
     }
 
     // Usable providers: API keys (daemon/env), CLI tools, and ollama

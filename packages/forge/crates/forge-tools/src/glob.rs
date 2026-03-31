@@ -1,4 +1,5 @@
 use crate::Tool;
+use crate::policy::WorkspacePolicy;
 use async_trait::async_trait;
 use forge_core::{ToolCall, ToolDefinition, ToolPermission, ToolResult};
 use serde_json::json;
@@ -48,11 +49,16 @@ impl Tool for GlobTool {
             .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or(".");
+        let policy = WorkspacePolicy::from_env();
+        let base_path = match policy.ensure_path_allowed(base_path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error(&call.id, e),
+        };
 
         let full_pattern = if pattern.starts_with('/') {
             pattern.to_string()
         } else {
-            format!("{base_path}/{pattern}")
+            format!("{}/{pattern}", base_path.display())
         };
 
         debug!("Globbing: {full_pattern}");

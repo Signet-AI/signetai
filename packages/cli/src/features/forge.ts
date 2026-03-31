@@ -35,6 +35,21 @@ export interface ForgeInstallOptions {
 	yes?: boolean;
 }
 
+export interface ForgeServiceOptions {
+	json?: boolean;
+	path?: string;
+}
+
+interface ForgeDaemonStatus {
+	readonly running: boolean;
+	readonly pid: number | null;
+	readonly uptime: number | null;
+	readonly version: string | null;
+	readonly host: string | null;
+	readonly bindHost: string | null;
+	readonly networkMode: string | null;
+}
+
 interface ForgeRelease {
 	readonly tag: string;
 	readonly version: string;
@@ -80,8 +95,13 @@ interface ForgeStatusPayload {
 export interface ForgeDeps {
 	readonly agentsDir: string;
 	readonly defaultPort: number;
+	readonly extractPathOption: (value: unknown) => string | null;
+	readonly getDaemonStatus: () => Promise<ForgeDaemonStatus>;
 	readonly getTemplatesDir: () => string;
 	readonly isDaemonRunning: () => Promise<boolean>;
+	readonly normalizeAgentPath: (pathValue: string) => string;
+	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
+	readonly stopDaemon: (agentsDir?: string) => Promise<boolean>;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -750,4 +770,85 @@ export async function doctorForge(options: ForgeStatusOptions, deps: ForgeDeps):
 	if (status.installed && status.version) {
 		console.log(chalk.dim(`  Forge version: ${status.version}`));
 	}
+}
+
+function readForgeServicePath(options: ForgeServiceOptions, deps: ForgeDeps): string {
+	const raw = deps.extractPathOption(options.path);
+	return raw ? deps.normalizeAgentPath(raw) : deps.agentsDir;
+}
+
+// Note: isDaemonRunning() is path-agnostic because the Signet daemon is a
+// singleton process. startDaemon/stopDaemon accept a basePath for config
+// resolution but there is only ever one daemon instance.
+
+export async function startForgeService(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
+	const basePath = readForgeServicePath(options, deps);
+	const running = await deps.isDaemonRunning();
+	if (running) {
+		console.log(chalk.yellow("Forge service is already running."));
+		return;
+	}
+	const started = await deps.startDaemon(basePath);
+	if (!started) {
+		throw new Error("Failed to start Forge service daemon.");
+	}
+	console.log(chalk.green("✓ Forge service started"));
+}
+
+export async function stopForgeService(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
+	const basePath = readForgeServicePath(options, deps);
+	const running = await deps.isDaemonRunning();
+	if (!running) {
+		console.log(chalk.yellow("Forge service is not running."));
+		return;
+	}
+	const stopped = await deps.stopDaemon(basePath);
+	if (!stopped) {
+		throw new Error("Failed to stop Forge service daemon.");
+	}
+	console.log(chalk.green("✓ Forge service stopped"));
+}
+
+export async function restartForgeService(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
+	const basePath = readForgeServicePath(options, deps);
+	const running = await deps.isDaemonRunning();
+	if (running) {
+		const stopped = await deps.stopDaemon(basePath);
+		if (!stopped) {
+			throw new Error("Failed to stop Forge service daemon.");
+		}
+	}
+	const started = await deps.startDaemon(basePath);
+	if (!started) {
+		throw new Error("Failed to start Forge service daemon.");
+	}
+	console.log(chalk.green("✓ Forge service restarted"));
+}
+
+export async function showForgeServiceStatus(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
+	const basePath = readForgeServicePath(options, deps);
+	const daemon = await deps.getDaemonStatus();
+	const daemonRunning = daemon.pid != null;
+	const payload = {
+		running: daemonRunning,
+		pid: daemon.pid,
+		uptime: daemon.uptime,
+		version: daemon.version,
+		host: daemon.host,
+		bindHost: daemon.bindHost,
+		networkMode: daemon.networkMode,
+		basePath,
+	};
+	if (options.json) {
+		console.log(JSON.stringify(payload, null, 2));
+		return;
+	}
+	console.log(chalk.bold("Forge Service Status\n"));
+	console.log(`  ${chalk.dim("Running:")} ${daemonRunning ? chalk.green("yes") : chalk.yellow("no")}`);
+	console.log(`  ${chalk.dim("PID:")} ${payload.pid ?? chalk.dim("none")}`);
+	console.log(`  ${chalk.dim("Version:")} ${payload.version ?? chalk.dim("unknown")}`);
+	console.log(`  ${chalk.dim("Host:")} ${payload.host ?? chalk.dim("unknown")}`);
+	console.log(`  ${chalk.dim("Bind Host:")} ${payload.bindHost ?? chalk.dim("unknown")}`);
+	console.log(`  ${chalk.dim("Network:")} ${payload.networkMode ?? chalk.dim("unknown")}`);
+	console.log(`  ${chalk.dim("Base Path:")} ${basePath}`);
 }

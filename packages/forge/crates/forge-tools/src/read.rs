@@ -1,4 +1,5 @@
 use crate::Tool;
+use crate::policy::WorkspacePolicy;
 use async_trait::async_trait;
 use forge_core::{ToolCall, ToolDefinition, ToolPermission, ToolResult};
 use serde_json::json;
@@ -47,6 +48,11 @@ impl Tool for ReadTool {
             Some(p) => p,
             None => return ToolResult::error(&call.id, "Missing 'file_path' parameter"),
         };
+        let policy = WorkspacePolicy::from_env();
+        let file_path = match policy.ensure_path_allowed(file_path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error(&call.id, e),
+        };
 
         let offset = call
             .input
@@ -59,9 +65,9 @@ impl Tool for ReadTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(2000) as usize;
 
-        debug!("Reading file: {file_path} (offset={offset}, limit={limit})");
+        debug!("Reading file: {} (offset={offset}, limit={limit})", file_path.display());
 
-        match std::fs::read_to_string(file_path) {
+        match std::fs::read_to_string(&file_path) {
             Ok(content) => {
                 let lines: Vec<&str> = content.lines().collect();
                 let start = (offset.saturating_sub(1)).min(lines.len());
@@ -76,7 +82,7 @@ impl Tool for ReadTool {
 
                 ToolResult::success(&call.id, numbered)
             }
-            Err(e) => ToolResult::error(&call.id, format!("Failed to read {file_path}: {e}")),
+            Err(e) => ToolResult::error(&call.id, format!("Failed to read {}: {e}", file_path.display())),
         }
     }
 }

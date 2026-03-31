@@ -1,4 +1,5 @@
 use crate::Tool;
+use crate::policy::WorkspacePolicy;
 use async_trait::async_trait;
 use forge_core::{ToolCall, ToolDefinition, ToolPermission, ToolResult};
 use serde_json::json;
@@ -50,6 +51,11 @@ impl Tool for EditTool {
             Some(p) => p,
             None => return ToolResult::error(&call.id, "Missing 'file_path' parameter"),
         };
+        let policy = WorkspacePolicy::from_env();
+        let file_path = match policy.ensure_path_allowed(file_path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error(&call.id, e),
+        };
 
         let old_string = match call.input.get("old_string").and_then(|v| v.as_str()) {
             Some(s) => s,
@@ -67,17 +73,17 @@ impl Tool for EditTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        debug!("Editing file: {file_path}");
+        debug!("Editing file: {}", file_path.display());
 
-        let content = match std::fs::read_to_string(file_path) {
+        let content = match std::fs::read_to_string(&file_path) {
             Ok(c) => c,
-            Err(e) => return ToolResult::error(&call.id, format!("Failed to read {file_path}: {e}")),
+            Err(e) => return ToolResult::error(&call.id, format!("Failed to read {}: {e}", file_path.display())),
         };
 
         if !content.contains(old_string) {
             return ToolResult::error(
                 &call.id,
-                format!("old_string not found in {file_path}"),
+                format!("old_string not found in {}", file_path.display()),
             );
         }
 
@@ -87,7 +93,8 @@ impl Tool for EditTool {
                 return ToolResult::error(
                     &call.id,
                     format!(
-                        "old_string matches {count} times in {file_path}. Use replace_all=true or provide more context to make it unique."
+                        "old_string matches {count} times in {}. Use replace_all=true or provide more context to make it unique.",
+                        file_path.display()
                     ),
                 );
             }
@@ -99,9 +106,9 @@ impl Tool for EditTool {
             content.replacen(old_string, new_string, 1)
         };
 
-        match std::fs::write(file_path, &new_content) {
-            Ok(()) => ToolResult::success(&call.id, format!("Successfully edited {file_path}")),
-            Err(e) => ToolResult::error(&call.id, format!("Failed to write {file_path}: {e}")),
+        match std::fs::write(&file_path, &new_content) {
+            Ok(()) => ToolResult::success(&call.id, format!("Successfully edited {}", file_path.display())),
+            Err(e) => ToolResult::error(&call.id, format!("Failed to write {}: {e}", file_path.display())),
         }
     }
 }
