@@ -1219,12 +1219,18 @@ fn clamp_tool_content_with_dynamic_max(content: &str, dynamic_max_chars: usize) 
     const DEFAULT_MAX_CHARS: usize = 12_000;
     const MIN_MAX_CHARS: usize = 1_024;
     const ABSOLUTE_MAX_CHARS: usize = 100_000;
-    let max_chars = std::env::var("FORGE_TOOL_RESULT_MAX_CHARS")
+    let env_max_chars = std::env::var("FORGE_TOOL_RESULT_MAX_CHARS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .map(|v| v.clamp(MIN_MAX_CHARS, ABSOLUTE_MAX_CHARS))
-        .unwrap_or(DEFAULT_MAX_CHARS)
-        .min(dynamic_max_chars.max(MIN_MAX_CHARS));
+        .map(|v| v.clamp(MIN_MAX_CHARS, ABSOLUTE_MAX_CHARS));
+    let adaptive_max_chars = if dynamic_max_chars == 0 {
+        DEFAULT_MAX_CHARS
+    } else {
+        dynamic_max_chars.clamp(MIN_MAX_CHARS, ABSOLUTE_MAX_CHARS)
+    };
+    let max_chars = env_max_chars
+        .map(|cap| adaptive_max_chars.min(cap))
+        .unwrap_or(adaptive_max_chars);
     const DEFAULT_MAX_LINES: usize = 400;
     const MIN_MAX_LINES: usize = 40;
     const ABSOLUTE_MAX_LINES: usize = 4_000;
@@ -1242,12 +1248,14 @@ fn clamp_tool_content_with_dynamic_max(content: &str, dynamic_max_chars: usize) 
         .map(|v| v.clamp(MIN_MAX_LINE_CHARS, ABSOLUTE_MAX_LINE_CHARS))
         .unwrap_or(DEFAULT_MAX_LINE_CHARS);
 
+    let mut did_line_truncate = false;
     let per_line_clamped = content
         .lines()
         .map(|line| {
             if line.chars().count() <= max_line_chars {
                 return line.to_string();
             }
+            did_line_truncate = true;
             let cut = line
                 .char_indices()
                 .take_while(|(idx, _)| *idx < max_line_chars)
@@ -1262,7 +1270,9 @@ fn clamp_tool_content_with_dynamic_max(content: &str, dynamic_max_chars: usize) 
         .collect::<Vec<_>>()
         .join("\n");
 
+    let mut did_line_count_truncate = false;
     let normalized = if per_line_clamped.lines().count() > max_lines {
+        did_line_count_truncate = true;
         let keep_head = max_lines / 2;
         let keep_tail = max_lines.saturating_sub(keep_head);
         let lines: Vec<&str> = per_line_clamped.lines().collect();
@@ -1289,7 +1299,7 @@ fn clamp_tool_content_with_dynamic_max(content: &str, dynamic_max_chars: usize) 
         return ClampedToolOutput {
             content: normalized,
             original_len: content.len(),
-            truncated: false,
+            truncated: did_line_truncate || did_line_count_truncate,
         };
     }
     let cut = normalized
@@ -1676,6 +1686,13 @@ mod tests {
         let big = "x".repeat(20_000);
         let out = clamp_tool_content_with_dynamic_max(&big, 5_000);
         assert!(out.content.len() < 7_000);
+        assert!(out.truncated);
+    }
+
+    #[test]
+    fn truncation_flag_set_for_line_only_truncation() {
+        let long_line = "y".repeat(10_000);
+        let out = clamp_tool_content_with_dynamic_max(&long_line, 100_000);
         assert!(out.truncated);
     }
 
