@@ -52,9 +52,13 @@ export function bindWithRetry(opts: BindOptions, attempt = 0): void {
 				// Server may not have fully initialized — safe to ignore
 			}
 			if (opts.signal?.aborted) return;
-			const timer = schedule(() => bindWithRetry(opts, attempt + 1), delay);
+			const onAbort = (): void => clearTimeout(timer);
+			const timer = schedule(() => {
+				opts.signal?.removeEventListener("abort", onAbort);
+				bindWithRetry(opts, attempt + 1);
+			}, delay);
 			// Cancel the pending retry if shutdown is requested
-			opts.signal?.addEventListener("abort", () => clearTimeout(timer), { once: true });
+			opts.signal?.addEventListener("abort", onAbort, { once: true });
 		} else {
 			handleFatal(err);
 		}
