@@ -9,11 +9,12 @@ interface BindOptions {
 	readonly hostname: string;
 	readonly maxDelayMs?: number;
 	readonly baseDelayMs?: number;
+	readonly signal?: AbortSignal;
 	readonly createServer: () => Server;
 	readonly onListening: (info: { address: string; port: number }) => void;
 	readonly onBound: (server: Server) => void;
 	readonly onFatalError?: (err: Error) => void;
-	readonly schedule?: (fn: () => void, ms: number) => void;
+	readonly schedule?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -24,10 +25,13 @@ interface BindOptions {
  * EADDRINUSE retries forever in-process (delay caps at maxDelayMs).
  * Non-EADDRINUSE errors are forwarded to onFatalError (default: throw).
  *
+ * Pass an AbortSignal to cancel pending retries during shutdown.
  * The error handler is attached BEFORE listen() so EADDRINUSE is caught
  * before it becomes an uncaught exception.
  */
 export function bindWithRetry(opts: BindOptions, attempt = 0): void {
+	if (opts.signal?.aborted) return;
+
 	const maxDelay = opts.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
 	const baseDelay = opts.baseDelayMs ?? DEFAULT_BASE_MS;
 	const schedule = opts.schedule ?? setTimeout;
@@ -47,7 +51,10 @@ export function bindWithRetry(opts: BindOptions, attempt = 0): void {
 			} catch {
 				// Server may not have fully initialized — safe to ignore
 			}
-			schedule(() => bindWithRetry(opts, attempt + 1), delay);
+			if (opts.signal?.aborted) return;
+			const timer = schedule(() => bindWithRetry(opts, attempt + 1), delay);
+			// Cancel the pending retry if shutdown is requested
+			opts.signal?.addEventListener("abort", () => clearTimeout(timer), { once: true });
 		} else {
 			handleFatal(err);
 		}

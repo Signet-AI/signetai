@@ -207,4 +207,69 @@ describe("bindWithRetry", () => {
 		expect(fatalError).not.toBeNull();
 		expect((fatalError as NodeJS.ErrnoException).code).toBe("EACCES");
 	});
+
+	it("stops retrying when signal is aborted", async () => {
+		const port = await freePort();
+
+		const blocker = createServer();
+		await new Promise<void>((resolve) => {
+			blocker.listen(port, "127.0.0.1", () => resolve());
+		});
+
+		const controller = new AbortController();
+		let attempts = 0;
+
+		await new Promise<void>((resolve) => {
+			bindWithRetry({
+				port,
+				hostname: "127.0.0.1",
+				baseDelayMs: 10,
+				signal: controller.signal,
+				createServer: () => {
+					attempts++;
+					return createServer();
+				},
+				onBound: () => {},
+				onListening: () => {},
+				schedule: (fn, _ms) => {
+					// Abort after the first retry is scheduled
+					controller.abort();
+					// Still call fn — the guard inside bindWithRetry should bail
+					const timer = setTimeout(fn, 1);
+					return timer;
+				},
+			});
+
+			// Wait for the scheduled fn to fire and be guarded
+			setTimeout(() => resolve(), 100);
+		});
+
+		// First attempt fails (EADDRINUSE), schedules retry, abort fires,
+		// retry enters bindWithRetry but bails at the signal check.
+		// So we get exactly 2 createServer calls: attempt 0 + attempt 1 (bailed).
+		expect(attempts).toBeLessThanOrEqual(2);
+
+		blocker.close();
+	});
+
+	it("does not start if signal is already aborted", () => {
+		const controller = new AbortController();
+		controller.abort();
+
+		let attempts = 0;
+
+		bindWithRetry({
+			port: 0,
+			hostname: "127.0.0.1",
+			signal: controller.signal,
+			createServer: () => {
+				attempts++;
+				return createServer();
+			},
+			onBound: () => {},
+			onListening: () => {},
+		});
+
+		expect(attempts).toBe(0);
+	});
 });

@@ -505,6 +505,7 @@ let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
 let httpServer: ReturnType<typeof serve> | null = null;
 let shuttingDown = false;
+const bindAbort = new AbortController();
 let diagnosticsCache: {
 	readonly report: DiagnosticsReport;
 	readonly expiresAt: number;
@@ -11243,6 +11244,7 @@ async function importExistingMemoryFiles(): Promise<number> {
 
 async function cleanup() {
 	shuttingDown = true;
+	bindAbort.abort();
 	logger.info("daemon", "Shutting down");
 
 	// ------------------------------------------------------------------
@@ -12491,6 +12493,7 @@ async function main() {
 	bindWithRetry({
 		port: PORT,
 		hostname: BIND_HOST,
+		signal: bindAbort.signal,
 		maxDelayMs: BIND_MAX_DELAY_MS,
 		baseDelayMs: BIND_RETRY_BASE_MS,
 		createServer: () =>
