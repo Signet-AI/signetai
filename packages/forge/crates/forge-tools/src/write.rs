@@ -1,4 +1,5 @@
 use crate::Tool;
+use crate::policy::WorkspacePolicy;
 use async_trait::async_trait;
 use forge_core::{ToolCall, ToolDefinition, ToolPermission, ToolResult};
 use serde_json::json;
@@ -43,16 +44,21 @@ impl Tool for WriteTool {
             Some(p) => p,
             None => return ToolResult::error(&call.id, "Missing 'file_path' parameter"),
         };
+        let policy = WorkspacePolicy::from_env();
+        let file_path = match policy.ensure_path_allowed(file_path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error(&call.id, e),
+        };
 
         let content = match call.input.get("content").and_then(|v| v.as_str()) {
             Some(c) => c,
             None => return ToolResult::error(&call.id, "Missing 'content' parameter"),
         };
 
-        debug!("Writing file: {file_path} ({} bytes)", content.len());
+        debug!("Writing file: {} ({} bytes)", file_path.display(), content.len());
 
         // Create parent directories if needed
-        if let Some(parent) = Path::new(file_path).parent() {
+        if let Some(parent) = Path::new(&file_path).parent() {
             if !parent.exists() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     return ToolResult::error(
@@ -63,12 +69,12 @@ impl Tool for WriteTool {
             }
         }
 
-        match std::fs::write(file_path, content) {
+        match std::fs::write(&file_path, content) {
             Ok(()) => ToolResult::success(
                 &call.id,
-                format!("Successfully wrote {} bytes to {file_path}", content.len()),
+                format!("Successfully wrote {} bytes to {}", content.len(), file_path.display()),
             ),
-            Err(e) => ToolResult::error(&call.id, format!("Failed to write {file_path}: {e}")),
+            Err(e) => ToolResult::error(&call.id, format!("Failed to write {}: {e}", file_path.display())),
         }
     }
 }

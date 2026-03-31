@@ -3,6 +3,7 @@ pub mod edit;
 pub mod glob;
 pub mod grep;
 pub mod marketplace;
+pub mod policy;
 pub mod plugin;
 pub mod read;
 pub mod signet;
