@@ -83,7 +83,16 @@ import {
 	migrateSchema,
 	showLogs,
 } from "./features/daemon.js";
-import { doctorForge, installForge, showForgeStatus, updateForge } from "./features/forge.js";
+import {
+	doctorForge,
+	installForge,
+	restartForgeService,
+	showForgeServiceStatus,
+	showForgeStatus,
+	startForgeService,
+	stopForgeService,
+	updateForge,
+} from "./features/forge.js";
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
 import { importFromGitHub } from "./features/import.js";
 import { setupWizard } from "./features/setup.js";
@@ -1323,29 +1332,97 @@ registerForgeCommands(program, {
 		doctorForge(options, {
 			agentsDir: AGENTS_DIR,
 			defaultPort: DEFAULT_PORT,
+			extractPathOption,
+			getDaemonStatus,
 			getTemplatesDir,
 			isDaemonRunning,
+			normalizeAgentPath,
+			startDaemon,
+			stopDaemon,
 		}),
 	installForge: (options) =>
 		installForge(options, {
 			agentsDir: AGENTS_DIR,
 			defaultPort: DEFAULT_PORT,
+			extractPathOption,
+			getDaemonStatus,
 			getTemplatesDir,
 			isDaemonRunning,
+			normalizeAgentPath,
+			startDaemon,
+			stopDaemon,
+		}),
+	restartForgeService: (options) =>
+		restartForgeService(options, {
+			agentsDir: AGENTS_DIR,
+			defaultPort: DEFAULT_PORT,
+			extractPathOption,
+			getDaemonStatus,
+			getTemplatesDir,
+			isDaemonRunning,
+			normalizeAgentPath,
+			startDaemon,
+			stopDaemon,
 		}),
 	showForgeStatus: (options) =>
 		showForgeStatus(options, {
 			agentsDir: AGENTS_DIR,
 			defaultPort: DEFAULT_PORT,
+			extractPathOption,
+			getDaemonStatus,
 			getTemplatesDir,
 			isDaemonRunning,
+			normalizeAgentPath,
+			startDaemon,
+			stopDaemon,
+		}),
+	showForgeServiceStatus: (options) =>
+		showForgeServiceStatus(options, {
+			agentsDir: AGENTS_DIR,
+			defaultPort: DEFAULT_PORT,
+			extractPathOption,
+			getDaemonStatus,
+			getTemplatesDir,
+			isDaemonRunning,
+			normalizeAgentPath,
+			startDaemon,
+			stopDaemon,
+		}),
+	startForgeService: (options) =>
+		startForgeService(options, {
+			agentsDir: AGENTS_DIR,
+			defaultPort: DEFAULT_PORT,
+			extractPathOption,
+			getDaemonStatus,
+			getTemplatesDir,
+			isDaemonRunning,
+			normalizeAgentPath,
+			startDaemon,
+			stopDaemon,
+		}),
+	stopForgeService: (options) =>
+		stopForgeService(options, {
+			agentsDir: AGENTS_DIR,
+			defaultPort: DEFAULT_PORT,
+			extractPathOption,
+			getDaemonStatus,
+			getTemplatesDir,
+			isDaemonRunning,
+			normalizeAgentPath,
+			startDaemon,
+			stopDaemon,
 		}),
 	updateForge: (options) =>
 		updateForge(options, {
 			agentsDir: AGENTS_DIR,
 			defaultPort: DEFAULT_PORT,
+			extractPathOption,
+			getDaemonStatus,
 			getTemplatesDir,
 			isDaemonRunning,
+			normalizeAgentPath,
+			startDaemon,
+			stopDaemon,
 		}),
 });
 
