@@ -624,23 +624,66 @@ fn confirm_forge_launch_warning(accepted_via_flag: bool) -> Result<bool> {
         anyhow::bail!("Non-interactive launch requires explicit acknowledgement. Re-run with: forge --yes");
     }
 
+    // Interactive left/right selector
+    terminal::enable_raw_mode()?;
+    let _raw_guard = RawModeGuard;
+
+    let mut select_yes = true;
     loop {
-        eprint!("  Continue to launch Forge? [yes/no]: ");
+        // Clear line and re-render selector
+        execute!(
+            std::io::stderr(),
+            cursor::MoveToColumn(0),
+            terminal::Clear(terminal::ClearType::CurrentLine)
+        )?;
+
+        let yes = if select_yes {
+            format!("[ {} ]", "YES".bold().green())
+        } else {
+            format!("[ {} ]", "yes".dark_grey())
+        };
+        let no = if !select_yes {
+            format!("[ {} ]", "NO".bold().yellow())
+        } else {
+            format!("[ {} ]", "no".dark_grey())
+        };
+
+        eprint!("  Continue to launch Forge?  {yes}  {no}  (←/→ + Enter)");
         let _ = std::io::stderr().flush();
 
-        let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_err() {
-            return Ok(false);
-        }
-
-        if let Some(accept) = parse_yes_no_answer(&input) {
-            if accept {
-                return Ok(true);
+        if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
             }
-            eprintln!("  Launch cancelled.");
-            return Ok(false);
+            match key.code {
+                KeyCode::Left | KeyCode::Char('h') => select_yes = true,
+                KeyCode::Right | KeyCode::Char('l') => select_yes = false,
+                KeyCode::Char('y') => select_yes = true,
+                KeyCode::Char('n') => select_yes = false,
+                KeyCode::Enter => {
+                    eprintln!();
+                    if select_yes {
+                        return Ok(true);
+                    }
+                    eprintln!("  Launch cancelled.");
+                    return Ok(false);
+                }
+                KeyCode::Esc => {
+                    eprintln!();
+                    eprintln!("  Launch cancelled.");
+                    return Ok(false);
+                }
+                _ => {}
+            }
         }
-        eprintln!("  Please answer yes or no.");
+    }
+}
+
+struct RawModeGuard;
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
     }
 }
 
