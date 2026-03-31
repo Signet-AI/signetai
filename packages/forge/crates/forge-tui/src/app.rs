@@ -30,7 +30,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
     DefaultTerminal, Frame,
 };
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info};
@@ -241,8 +240,8 @@ pub struct App {
     voice_recorder: Option<voice::Recorder>,
     /// Whether voice recording is active
     voice_recording: bool,
-    /// Path to the downloaded whisper model
-    voice_model_path: Option<PathBuf>,
+    /// Prepared voice backend (Parakeet or Whisper)
+    voice_backend: Option<voice::VoiceBackend>,
     /// Interim transcription text (preview while recording)
     voice_interim_text: String,
     /// Whether voice model is currently being downloaded
@@ -263,8 +262,8 @@ enum VoiceResult {
     Interim(String),
     /// Final transcription (committed to input)
     Final(String),
-    /// Model downloaded successfully
-    ModelReady(PathBuf),
+    /// Voice backend is ready
+    ModelReady(voice::VoiceBackend),
     /// Error during voice operation
     Error(String),
 }
@@ -654,7 +653,7 @@ impl App {
             recall_cache,
             voice_recorder: None,
             voice_recording: false,
-            voice_model_path: None,
+            voice_backend: None,
             voice_interim_text: String::new(),
             voice_downloading: false,
             voice_last_interim: std::time::Instant::now(),
@@ -853,11 +852,12 @@ impl App {
                                 self.cursor += text.chars().count();
                             }
                         }
-                        VoiceResult::ModelReady(path) => {
-                            self.voice_model_path = Some(path);
+                        VoiceResult::ModelReady(backend) => {
+                            let backend_name = backend.display_name();
+                            self.voice_backend = Some(backend);
                             self.voice_downloading = false;
                             self.entries.push(ChatEntry::Status(
-                                "Voice model ready.".to_string(),
+                                format!("Voice backend ready: {backend_name}."),
                             ));
                             self.start_voice_recording();
                         }
@@ -1019,7 +1019,7 @@ impl App {
 
         // Chat area — render animated activity line when processing or recording
         let activity_line = if self.voice_downloading {
-            Some("  ◈ Downloading voice model (142MB)...".to_string())
+            Some("  ◈ Preparing voice backend...".to_string())
         } else if self.voice_recording {
             let dots = ".".repeat((self.tick / 4) % 4);
             Some(format!("  ● Recording{dots} (Ctrl+R to stop)"))
@@ -2830,36 +2830,23 @@ impl App {
             self.voice_recording = false;
             self.voice_recorder = None;
         } else {
-            // Start recording — ensure model is available first
-            if self.voice_model_path.is_none() {
-                // Check if model file already exists on disk
-                let model_path = dirs::config_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("forge")
-                    .join("models")
-                    .join("ggml-base.en.bin");
-
-                if model_path.exists() {
-                    self.voice_model_path = Some(model_path);
-                } else {
-                    // Need to download — kick off background task
-                    self.voice_downloading = true;
-                    self.entries.push(ChatEntry::Status(
-                        "Downloading voice model (142MB)...".to_string(),
-                    ));
-                    let tx = self.voice_result_tx.clone();
-                    tokio::spawn(async move {
-                        match voice::ensure_model().await {
-                            Ok(path) => {
-                                let _ = tx.send(VoiceResult::ModelReady(path)).await;
-                            }
-                            Err(e) => {
-                                let _ = tx.send(VoiceResult::Error(e)).await;
-                            }
+            // Start recording — ensure backend is available first
+            if self.voice_backend.is_none() {
+                self.voice_downloading = true;
+                self.entries
+                    .push(ChatEntry::Status("Preparing voice backend...".to_string()));
+                let tx = self.voice_result_tx.clone();
+                tokio::spawn(async move {
+                    match voice::ensure_model().await {
+                        Ok(backend) => {
+                            let _ = tx.send(VoiceResult::ModelReady(backend)).await;
                         }
-                    });
-                    return;
-                }
+                        Err(e) => {
+                            let _ = tx.send(VoiceResult::Error(e)).await;
+                        }
+                    }
+                });
+                return;
             }
 
             self.start_voice_recording();
@@ -2909,10 +2896,10 @@ impl App {
                 return;
             }
 
-            if let Some(model_path) = self.voice_model_path.clone() {
+            if let Some(backend) = self.voice_backend.clone() {
                 let tx = self.voice_result_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    match voice::transcribe(&model_path, &samples, sample_rate, channels) {
+                    match voice::transcribe(&backend, &samples, sample_rate, channels) {
                         Ok(text) => {
                             let _ = tx.blocking_send(VoiceResult::Final(text));
                         }
@@ -2939,7 +2926,7 @@ impl App {
         let Some(recorder) = &self.voice_recorder else {
             return;
         };
-        let Some(model_path) = self.voice_model_path.clone() else {
+        let Some(backend) = self.voice_backend.clone() else {
             return;
         };
 
@@ -2953,7 +2940,7 @@ impl App {
         let tx = self.voice_result_tx.clone();
 
         self.voice_interim_handle = Some(tokio::task::spawn_blocking(move || {
-            match voice::transcribe(&model_path, &samples, sample_rate, channels) {
+            match voice::transcribe(&backend, &samples, sample_rate, channels) {
                 Ok(text) => {
                     let _ = tx.blocking_send(VoiceResult::Interim(text));
                 }
