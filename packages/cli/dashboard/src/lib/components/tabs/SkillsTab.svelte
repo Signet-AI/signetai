@@ -4,6 +4,7 @@ import SkillDetail from "$lib/components/skills/SkillDetail.svelte";
 import SkillGrid from "$lib/components/skills/SkillGrid.svelte";
 import SkillUsagePanel from "$lib/components/skills/SkillUsagePanel.svelte";
 import SkillsComparePanel from "$lib/components/skills/SkillsComparePanel.svelte";
+import { getFeaturedOfficialSkills, omitFeaturedSkills } from "$lib/components/skills/featured-skills";
 import * as Select from "$lib/components/ui/select/index.js";
 import * as Tabs from "$lib/components/ui/tabs/index.js";
 import {
@@ -118,6 +119,19 @@ const displayItems = $derived.by(() => {
 const displayMode = $derived<"installed" | "browse">(
 	sk.view === "installed" && !sk.query.trim() ? "installed" : "browse",
 );
+
+const featuredItems = $derived.by(() => {
+	if (displayMode !== "browse") return [];
+	if (sk.query.trim()) return [];
+	return getFeaturedOfficialSkills(getFilteredCatalog());
+});
+
+const gridItems = $derived.by(() => {
+	if (displayMode !== "browse") return displayItems;
+	if (sk.query.trim()) return displayItems;
+	if (featuredItems.length === 0) return displayItems;
+	return omitFeaturedSkills(getFilteredCatalog(), featuredItems);
+});
 
 const emptyState = $derived<"installed" | "browse" | "search" | null>(
 	sk.query.trim() && displayItems.length === 0
@@ -322,8 +336,9 @@ onMount(() => {
 			<SkillUsagePanel />
 		{/if}
 		<SkillGrid
-			items={displayItems}
+			items={gridItems}
 			mode={displayMode}
+			featuredItems={featuredItems}
 			selectedName={sk.selectedName}
 			installing={sk.installing}
 			uninstalling={sk.uninstalling}

@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-03-29"
+updated_at: "2026-03-30"
 
 specs:
   - id: memory-pipeline-v2
@@ -720,6 +720,21 @@ specs:
     informed_by: []
     success_criteria:
       - "GitHub-authenticated pull-request workflow supports publishing and reviewing skills and MCP servers"
+    decision: null
+
+  - id: marketplace-official-skills
+    status: planning
+    path: docs/specs/planning/marketplace-official-skills.md
+    hard_depends_on:
+      - procedural-memory-plan
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-MARKETPLACE-OFFICIAL-SKILLS.md
+    success_criteria:
+      - "Dashboard marketplace browse view shows a dedicated featured section for official Signet skills when users are exploring the skills catalog"
+      - "Marketplace filter controls can explicitly narrow the skills catalog to the Signet provider"
+      - "Featured official skills do not render as duplicate cards again in the same initial catalog viewport"
     decision: null
 
 

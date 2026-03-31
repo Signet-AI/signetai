@@ -1245,6 +1245,9 @@ export interface SkillSearchResult {
 	installs: string;
 	installsRaw?: number;
 	popularityScore?: number;
+	useCount?: number;
+	lastUsedAt?: string;
+	featuredScore?: number;
 	description: string;
 	installed: boolean;
 	provider?: "skills.sh" | "clawhub" | "signet";

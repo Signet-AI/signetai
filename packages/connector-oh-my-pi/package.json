@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-oh-my-pi",
-  "version": "0.89.0",
+  "version": "0.90.0",
   "description": "Signet connector for Oh My Pi",
   "type": "module",
   "main": "./dist/index.js",

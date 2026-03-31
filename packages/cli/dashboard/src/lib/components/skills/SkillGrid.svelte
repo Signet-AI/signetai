@@ -8,6 +8,7 @@ type EmptyStateKind = "installed" | "browse" | "search";
 type Props = {
 	items: (Skill | SkillSearchResult)[];
 	mode: "installed" | "browse";
+	featuredItems?: SkillSearchResult[];
 	selectedName?: string | null;
 	installing?: string | null;
 	uninstalling?: string | null;
@@ -25,9 +26,10 @@ type Props = {
 	}) => void | Promise<void>;
 };
 
-let {
+const {
 	items,
 	mode,
+	featuredItems = [],
 	selectedName = null,
 	installing = null,
 	uninstalling = null,
@@ -86,6 +88,35 @@ const remainingCount = $derived(items.length - visibleCount);
 </script>
 
 <div class="grid-container">
+	{#if featuredItems.length > 0 && mode === "browse"}
+		<section class="featured-block">
+			<div class="featured-head">
+				<div>
+					<div class="featured-kicker">Official Signet Skills</div>
+					<h3 class="featured-title">Start with the first-party toolkit</h3>
+				</div>
+				<div class="featured-count">{featuredItems.length} featured</div>
+			</div>
+			<div class="grid featured-grid">
+				{#each featuredItems as item (skillKey(item))}
+					<SkillCard
+						{item}
+						{mode}
+						featured={true}
+						selected={selectedName === item.name}
+						installing={installing === item.name}
+						uninstalling={uninstalling === item.name}
+						compareSelected={compareSelectedKeys.includes(skillKey(item))}
+						onclick={() => onitemclick?.(item.name)}
+						oninstall={() => oninstall?.(item.name)}
+						onuninstall={() => onuninstall?.(item.name)}
+						oncomparetoggle={() => oncomparetoggle?.(skillKey(item))}
+					/>
+				{/each}
+			</div>
+		</section>
+	{/if}
+
 	{#if items.length > 0}
 		<!-- Main grid -->
 		<div class="grid">
@@ -114,7 +145,7 @@ const remainingCount = $derived(items.length - visibleCount);
 				Show more ({remainingCount} remaining)
 			</button>
 		{/if}
-	{:else}
+	{:else if featuredItems.length === 0}
 		{#if emptyState}
 			<SkillsEmptyState kind={emptyState} actions={emptyActions} />
 		{:else}
@@ -139,6 +170,46 @@ const remainingCount = $derived(items.length - visibleCount);
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
 		gap: var(--space-sm);
+	}
+
+	.featured-block {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-sm);
+		padding: var(--space-sm);
+		border: 1px solid var(--sig-border-strong);
+		border-radius: 10px;
+		background:
+			linear-gradient(180deg, color-mix(in srgb, var(--sig-accent) 8%, transparent), transparent 60%),
+			var(--sig-surface);
+	}
+
+	.featured-head {
+		display: flex;
+		align-items: end;
+		justify-content: space-between;
+		gap: var(--space-sm);
+	}
+
+	.featured-kicker,
+	.featured-count {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--sig-text-muted);
+	}
+
+	.featured-title {
+		margin: 2px 0 0;
+		font-family: var(--font-display);
+		font-size: 14px;
+		line-height: 1.1;
+		color: var(--sig-text-bright);
+	}
+
+	.featured-grid {
+		grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 	}
 
 	.show-more {

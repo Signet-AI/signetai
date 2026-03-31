@@ -139,6 +139,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `docker-self-hosting-stack` | RESEARCH-DOCKER-SELF-HOSTING | What deployment contract keeps Docker self-hosting reproducible, persistent, and secure by default? |
 | `openclaw-workspace-protection-plan`, `openclaw-workspace-protection` | RESEARCH-OPENCLAW-WORKSPACE-PROTECTION | How should Signet prevent data loss when OpenClaw uninstall deletes a workspace that points at `.agents`? |
 | `dogfood-hardening-2026-03-29` | RESEARCH-DOGFOOD-HARDENING-2026-03-29 | Which runtime, MCP, and knowledge-surface regressions from the March 29, 2026 dogfood run need durable hardening? |
+| `marketplace-official-skills` | RESEARCH-MARKETPLACE-OFFICIAL-SKILLS | How should the dashboard marketplace spotlight Signet official skills without hiding the broader community catalog? |
 
 ### Research Adoption Ledger (high-impact)
 
@@ -607,6 +608,8 @@ Phase ordering based on hard dependencies and integration contracts.
   - GitHub-authenticated PR workflow for skills/servers and JSON review artifacts
 - **Adaptive Skill Lifecycle** (`adaptive-skill-lifecycle`)
   - passive/continuous skill maintenance with outcome feedback loops
+- **Marketplace Official Skills Featuring** (`marketplace-official-skills`)
+  - dashboard browse UX that foregrounds Signet official skills without hiding the wider catalog
 - **Cryptographic Identity Roadmap** (`cryptographic-identity-roadmap`)
 - **Connector: Py Agent** (`connector-py-agent`)
 - **Connector: Hermes Agent** (`connector-hermes-agent`)
@@ -697,6 +700,7 @@ Legend:
 | `mcp-cli-bridge-and-usage-analytics` | approved | `docs/specs/planning/mcp-cli-bridge-and-usage-analytics.md` | `signet-runtime` | - | Phase 1: CLI bridge, invocation tracking, analytics API, dashboard panel |
 | `git-marketplace-monorepo` | planning | `docs/specs/planning/git-marketplace-monorepo.md` | `predictor-agent-feedback` | - | Stub: GitHub-authenticated PR marketplace for skills and MCP servers |
 | `adaptive-skill-lifecycle` | planning | `docs/specs/planning/adaptive-skill-lifecycle.md` | `procedural-memory-plan`, `predictor-agent-feedback` | - | Stub: passive continuous skill creation/maintenance loop |
+| `marketplace-official-skills` | planning | `docs/specs/planning/marketplace-official-skills.md` | `procedural-memory-plan` | - | Stub: feature Signet official skills prominently in the dashboard marketplace |
 | `cryptographic-identity-roadmap` | planning | `docs/specs/planning/cryptographic-identity-roadmap.md` | `multi-agent-support` | - | Stub: signed identity and artifact trust roadmap |
 | `connector-py-agent` | planning | `docs/specs/planning/connector-py-agent.md` | `signet-runtime` | - | Stub: Py Agent connector |
 | `connector-hermes-agent` | planning | `docs/specs/planning/connector-hermes-agent.md` | `signet-runtime` | - | Stub: Hermes Agent connector |
