@@ -609,14 +609,14 @@ impl AgentLoop {
             // Execute read-only tools in parallel
             if !readonly_calls.is_empty() {
                 debug!("Executing {} read-only tools in parallel", readonly_calls.len());
-                let mut handles = Vec::new();
+                let mut joinset = tokio::task::JoinSet::new();
                 for tc in &readonly_calls {
                     let tc_owned = (*tc).clone();
                     let daemon_url = self.daemon_url.clone();
                     let provider = Arc::clone(&self.provider);
                     let mcp_clients = self.mcp_clients.clone();
                     let known_tool_names = known_tool_names.clone();
-                    handles.push(tokio::spawn(async move {
+                    joinset.spawn(async move {
                         let tool = match &daemon_url {
                             Some(url) => forge_tools::find_tool_with_subagent(
                                 &tc_owned.name, url, provider,
@@ -636,20 +636,21 @@ impl AgentLoop {
                             mcp_result.unwrap_or_else(|| invalid_tool_call_result(&tc_owned, &known_tool_names))
                         };
                         (tc_owned, result)
-                    }));
+                    });
                 }
 
-                for handle in handles {
-                    if let Ok((tc, result)) = handle.await {
+                while let Some(outcome) = joinset.join_next().await {
+                    if let Ok((tc, result)) = outcome {
+                        let bounded_output = clamp_tool_content(&result.content);
                         let _ = self.event_tx.send(AgentEvent::ToolResult {
                             id: tc.id.clone(),
                             name: tc.name.clone(),
-                            output: result.content.clone(),
+                            output: bounded_output.clone(),
                             is_error: result.is_error,
                         }).await;
                         tool_results_content.push(MessageContent::ToolResult {
                             tool_use_id: result.tool_use_id,
-                            content: result.content,
+                            content: bounded_output,
                             is_error: result.is_error,
                         });
                     }
@@ -754,19 +755,20 @@ impl AgentLoop {
                     mcp_result.unwrap_or_else(|| self.invalid_tool_call_result(tc))
                 };
 
+                let bounded_output = clamp_tool_content(&result.content);
                 let _ = self
                     .event_tx
                     .send(AgentEvent::ToolResult {
                         id: tc.id.clone(),
                         name: tc.name.clone(),
-                        output: result.content.clone(),
+                        output: bounded_output.clone(),
                         is_error: result.is_error,
                     })
                     .await;
 
                 tool_results_content.push(MessageContent::ToolResult {
                     tool_use_id: result.tool_use_id,
-                    content: result.content,
+                    content: bounded_output,
                     is_error: result.is_error,
                 });
             }
@@ -840,6 +842,25 @@ fn invalid_tool_call_result(tc: &ToolCall, available_tools: &[String]) -> forge_
         tc.name, suggestion_text
     );
     forge_core::ToolResult::error(&tc.id, msg)
+}
+
+fn clamp_tool_content(content: &str) -> String {
+    // Guardrail: keep tool reinjection bounded to avoid runaway context growth.
+    // Tool-specific limits still apply earlier; this is the final safety net.
+    const MAX_CHARS: usize = 12_000;
+    if content.len() <= MAX_CHARS {
+        return content.to_string();
+    }
+    let cut = content
+        .char_indices()
+        .take_while(|(idx, _)| *idx < MAX_CHARS)
+        .last()
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .unwrap_or(0);
+    let head = &content[..cut];
+    format!(
+        "{head}\n\n[truncated: tool output exceeded {MAX_CHARS} chars; request a narrower query/path to continue]"
+    )
 }
 
 fn suggest_tool_names(target: &str, available: &[String], limit: usize) -> Vec<String> {
@@ -950,7 +971,7 @@ impl LoopDetector {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_distance_case_insensitive, suggest_tool_names};
+    use super::{clamp_tool_content, edit_distance_case_insensitive, suggest_tool_names};
 
     #[test]
     fn suggests_closest_tool_name() {
@@ -968,5 +989,13 @@ mod tests {
     fn edit_distance_is_case_insensitive() {
         assert_eq!(edit_distance_case_insensitive("BASH", "bash"), 0);
         assert!(edit_distance_case_insensitive("mcp_lsit", "mcp_list") > 0);
+    }
+
+    #[test]
+    fn clamp_tool_content_bounds_large_payloads() {
+        let big = "a".repeat(20_000);
+        let out = clamp_tool_content(&big);
+        assert!(out.len() < 13_000);
+        assert!(out.contains("[truncated: tool output exceeded"));
     }
 }

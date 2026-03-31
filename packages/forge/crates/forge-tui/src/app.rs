@@ -515,14 +515,26 @@ impl App {
         let skills = forge_signet::skills::load_skills();
         debug!("Loaded {} skills", skills.len());
 
-        // Fetch total memory and secrets count from daemon
+        // Fetch optional dashboard counts in parallel with short startup budget.
+        // These are non-critical and should not block app startup.
         let (total_memories, total_secrets) = if let Some(client) = &signet_client {
-            let mem = client.memory_count().await;
-            let sec = client.get("/api/secrets").await
+            let mem_fut = async {
+                tokio::time::timeout(std::time::Duration::from_millis(800), client.memory_count())
+                    .await
+                    .unwrap_or(0)
+            };
+            let sec_fut = async {
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(800),
+                    client.get("/api/secrets"),
+                )
+                .await
                 .ok()
+                .and_then(|resp| resp.ok())
                 .and_then(|v| v.get("secrets").and_then(|s| s.as_array()).map(|a| a.len()))
-                .unwrap_or(0);
-            (mem, sec)
+                .unwrap_or(0)
+            };
+            tokio::join!(mem_fut, sec_fut)
         } else {
             (0, 0)
         };
