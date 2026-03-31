@@ -56,76 +56,6 @@ enum ProcessingPhase {
     ExecutingTool(String),
 }
 
-impl ProcessingPhase {
-    /// Spinner frames — subtle technical sweep instead of chunky hops
-    const FRAMES: &[&str] = &["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"];
-    // Slightly faster than before (~6.25% vs old 80-tick cycle).
-    const VERB_CYCLE_TICKS: usize = 75;
-
-    /// Contextual verbs that cycle based on tick for each phase.
-    /// tick/75 ≈ 3.75 seconds per verb at 50ms frame rate.
-    fn label(&self, tick: usize) -> &'static str {
-        match self {
-            Self::Idle => "",
-            Self::Streaming => "Responding",
-            Self::RecallingMemories => {
-                const VERBS: &[&str] = &[
-                    "Remembering", "Recalling", "Tracing",
-                    "Searching", "Linking", "Surfacing",
-                    "Synapsing", "Weaving",
-                ];
-                VERBS[(tick / Self::VERB_CYCLE_TICKS) % VERBS.len()]
-            }
-            Self::Thinking => {
-                const VERBS: &[&str] = &[
-                    "Thinking", "Deliberating", "Reasoning",
-                    "Synthesizing", "Constructing", "Shaping",
-                    "Inferring", "Integrating", "Contextualizing",
-                ];
-                VERBS[(tick / Self::VERB_CYCLE_TICKS) % VERBS.len()]
-            }
-            Self::Planning => {
-                const VERBS: &[&str] = &[
-                    "Planning", "Structuring", "Mapping",
-                    "Sequencing", "Investigating", "Constructing",
-                    "Encoding",
-                ];
-                VERBS[(tick / Self::VERB_CYCLE_TICKS) % VERBS.len()]
-            }
-            Self::Writing => {
-                const VERBS: &[&str] = &[
-                    "Writing", "Composing", "Drafting",
-                    "Refining", "Building", "Editing",
-                    "Firing",
-                ];
-                VERBS[(tick / Self::VERB_CYCLE_TICKS) % VERBS.len()]
-            }
-            Self::ExecutingTool(_) => "Running",
-        }
-    }
-
-    fn render(&self, tick: usize) -> String {
-        let frame = Self::FRAMES[tick % Self::FRAMES.len()];
-        let trail = match (tick / 2) % 6 {
-            0 => "·    ",
-            1 => "··   ",
-            2 => "···  ",
-            3 => " ··· ",
-            4 => "  ···",
-            _ => "   ··",
-        };
-        match self {
-            Self::Idle => String::new(),
-            Self::ExecutingTool(name) => {
-                format!("  {frame} {} {name}  {trail}", self.label(tick))
-            }
-            _ => {
-                format!("  {frame} {}  {trail}", self.label(tick))
-            }
-        }
-    }
-}
-
 /// Application state
 pub struct App {
     /// Current input text
@@ -167,6 +97,8 @@ pub struct App {
     effort: Arc<Mutex<forge_provider::ReasoningEffort>>,
     /// CLI permission bypass — skips all approval prompts on next spawn
     bypass: Arc<Mutex<bool>>,
+    /// If true, bypass is automatically disabled after the next completed turn.
+    bypass_one_shot: bool,
     /// Memories recalled for current prompt
     memories_injected: usize,
     /// Total memories in database
@@ -730,6 +662,7 @@ impl App {
             connected_providers,
             effort,
             bypass,
+            bypass_one_shot: false,
             memories_injected,
             total_memories,
             total_secrets,
@@ -862,20 +795,10 @@ impl App {
             // Find the next word boundary (space/newline) after a minimum offset,
             // so text never cuts mid-word.
             if !self.pending_text.is_empty() {
-                // Min 4 chars, then extend to next word boundary
-                let min_chars = 4;
-                let min_byte = self
-                    .pending_text
-                    .char_indices()
-                    .nth(min_chars)
-                    .map(|(i, _)| i)
-                    .unwrap_or(self.pending_text.len());
-                // Find next space or newline after min_byte
-                let boundary = self.pending_text[min_byte..]
-                    .find([' ', '\n'])
-                    .map(|pos| min_byte + pos + 1) // include the space
-                    .unwrap_or(self.pending_text.len().min(min_byte + 20)); // cap at ~20 extra chars
-                let boundary = boundary.min(self.pending_text.len());
+                // Faster flush to match native harness feel across providers.
+                // If a provider emits chunked/full text (common with CLI backends),
+                // avoid artificial per-word delay.
+                let boundary = self.pending_text.len();
                 let chunk: String = self.pending_text.drain(..boundary).collect();
                 self.streaming_text.push_str(&chunk);
                 // Safety: prevent unbounded growth
@@ -1170,9 +1093,6 @@ impl App {
         } else if self.voice_recording {
             let dots = ".".repeat((self.tick / 4) % 4);
             Some(format!("  ● Recording{dots} (Ctrl+R to stop)"))
-        } else if self.processing {
-            let rendered = self.processing_phase.render(self.tick);
-            if rendered.is_empty() { None } else { Some(rendered) }
         } else {
             None
         };
@@ -1187,6 +1107,7 @@ impl App {
             total_memories: self.total_memories,
             tick: self.tick,
             theme: &self.theme,
+            processing: self.processing,
         };
         chat.render(chunks[1], frame.buffer_mut());
 
@@ -2160,22 +2081,84 @@ impl App {
                             }
                         }
                         "forge-bypass" => {
-                            let mut b = self.bypass.lock().await;
-                            *b = !*b;
-                            let state = if *b { "ON" } else { "OFF" };
-                            let detail = if *b {
-                                match self.provider_name.as_str() {
-                                    n if n.contains("claude") => " (--dangerously-skip-permissions)",
-                                    n if n.contains("codex") => " (--dangerously-bypass-approvals-and-sandbox)",
-                                    _ => "",
+                            let flag = match self.provider_name.as_str() {
+                                n if n.contains("claude") => Some("--dangerously-skip-permissions"),
+                                n if n.contains("codex") => {
+                                    Some("--dangerously-bypass-approvals-and-sandbox")
                                 }
-                            } else {
-                                ""
+                                _ => None,
                             };
-                            self.entries.push(ChatEntry::Status(format!(
-                                "Permission bypass: {state}{detail}"
-                            )));
-                            self.save_settings();
+
+                            if flag.is_none() {
+                                self.entries.push(ChatEntry::Error(format!(
+                                    "/forge-bypass only applies to claude-cli/codex-cli. Current provider: {}",
+                                    self.provider_name
+                                )));
+                                return;
+                            }
+
+                            let tokens: Vec<&str> = args.split_whitespace().collect();
+                            let mode = tokens.first().copied().unwrap_or("status");
+
+                            match mode {
+                                "status" => {
+                                    let enabled = *self.bypass.lock().await;
+                                    let armed = if enabled {
+                                        if self.bypass_one_shot { "ON (one-shot)" } else { "ON (persistent)" }
+                                    } else {
+                                        "OFF"
+                                    };
+                                    self.entries.push(ChatEntry::Status(format!(
+                                        "Bypass: {armed} [{}]. Usage: /forge-bypass once --yes | /forge-bypass on --persist --yes | /forge-bypass off",
+                                        flag.unwrap_or("")
+                                    )));
+                                }
+                                "off" => {
+                                    *self.bypass.lock().await = false;
+                                    self.bypass_one_shot = false;
+                                    self.entries
+                                        .push(ChatEntry::Status("Bypass: OFF".to_string()));
+                                }
+                                "once" => {
+                                    let acknowledged = tokens.iter().any(|t| *t == "--yes");
+                                    if !acknowledged {
+                                        self.entries.push(ChatEntry::Error(
+                                            "Confirmation required: /forge-bypass once --yes"
+                                                .to_string(),
+                                        ));
+                                        return;
+                                    }
+                                    *self.bypass.lock().await = true;
+                                    self.bypass_one_shot = true;
+                                    self.entries.push(ChatEntry::Status(format!(
+                                        "Bypass armed for next turn only [{}]",
+                                        flag.unwrap_or("")
+                                    )));
+                                }
+                                "on" => {
+                                    let acknowledged = tokens.iter().any(|t| *t == "--yes");
+                                    let persist = tokens.iter().any(|t| *t == "--persist");
+                                    if !acknowledged || !persist {
+                                        self.entries.push(ChatEntry::Error(
+                                            "Persistent bypass requires both flags: /forge-bypass on --persist --yes"
+                                                .to_string(),
+                                        ));
+                                        return;
+                                    }
+                                    *self.bypass.lock().await = true;
+                                    self.bypass_one_shot = false;
+                                    self.entries.push(ChatEntry::Status(format!(
+                                        "Bypass: ON (persistent) [{}]",
+                                        flag.unwrap_or("")
+                                    )));
+                                }
+                                _ => {
+                                    self.entries.push(ChatEntry::Error(
+                                        "Invalid usage. Try: /forge-bypass status|off|once|on"
+                                            .to_string(),
+                                    ));
+                                }
+                            }
                         }
                         "forge-usage" => {
                             self.forge_usage = Some(ForgeUsage::new());
@@ -2680,7 +2663,8 @@ impl App {
 
     fn save_settings(&self) {
         let effort = self.effort.try_lock().map(|e| e.as_str().to_string()).ok();
-        let bypass = self.bypass.try_lock().map(|b| *b).unwrap_or(false);
+        // Never persist bypass state across restarts (hardening).
+        let bypass = false;
         let settings = crate::settings::Settings {
             model: Some(self.model.clone()),
             provider: Some(self.provider_name.clone()),
@@ -2833,6 +2817,30 @@ impl App {
                     // Pending text still dripping — defer completion
                     self.turn_complete_pending = true;
                 }
+                if let Some(ChatEntry::Status(prev)) = self.entries.last() {
+                    let p = prev.trim().to_ascii_lowercase();
+                    let transient = p.contains("thinking")
+                        || p.contains("recalling")
+                        || p.contains("planning")
+                        || p.contains("writing")
+                        || p.contains("connecting")
+                        || p.contains("compacting")
+                        || p.contains("responding");
+                    if transient {
+                        let _ = self.entries.pop();
+                    }
+                }
+                if self.bypass_one_shot {
+                    if let Ok(mut b) = self.bypass.try_lock() {
+                        if *b {
+                            *b = false;
+                            self.entries.push(ChatEntry::Status(
+                                "Bypass auto-disabled after one turn.".to_string(),
+                            ));
+                        }
+                    }
+                    self.bypass_one_shot = false;
+                }
             }
             AgentEvent::Error(msg) => {
                 self.streaming_text.clear();
@@ -2841,10 +2849,21 @@ impl App {
                 self.entries.push(ChatEntry::Error(msg));
                 self.processing = false;
                 self.processing_phase = ProcessingPhase::Idle;
+                if self.bypass_one_shot {
+                    if let Ok(mut b) = self.bypass.try_lock() {
+                        *b = false;
+                    }
+                    self.bypass_one_shot = false;
+                }
             }
             AgentEvent::Status(msg) => {
                 // Update processing phase based on status message
                 let lower = msg.to_lowercase();
+                if lower.trim() == "thinking" {
+                    // Provider-emitted generic thinking often duplicates
+                    // local "Thinking..." status; skip to reduce noise.
+                    return;
+                }
                 if lower.contains("recalling") || lower.contains("searching") || lower.contains("memory") {
                     self.processing_phase = ProcessingPhase::RecallingMemories;
                 } else if lower.contains("thinking") || lower.contains("reasoning") {
@@ -2855,6 +2874,37 @@ impl App {
                     self.processing_phase = ProcessingPhase::Writing;
                 } else if lower.contains("compacting") {
                     self.processing_phase = ProcessingPhase::ExecutingTool("compaction".to_string());
+                }
+                let normalized = msg.trim().to_ascii_lowercase();
+                let is_transient = normalized.contains("thinking")
+                    || normalized.contains("recalling")
+                    || normalized.contains("planning")
+                    || normalized.contains("writing")
+                    || normalized.contains("connecting")
+                    || normalized.contains("compacting")
+                    || normalized.contains("responding");
+
+                if is_transient {
+                    if let Some(ChatEntry::Status(prev)) = self.entries.last_mut() {
+                        let prev_norm = prev.trim().to_ascii_lowercase();
+                        let prev_transient = prev_norm.contains("thinking")
+                            || prev_norm.contains("recalling")
+                            || prev_norm.contains("planning")
+                            || prev_norm.contains("writing")
+                            || prev_norm.contains("connecting")
+                            || prev_norm.contains("compacting")
+                            || prev_norm.contains("responding");
+                        if prev_transient {
+                            *prev = msg;
+                            return;
+                        }
+                    }
+                    self.entries.push(ChatEntry::Status(msg));
+                } else if !matches!(
+                    self.entries.last(),
+                    Some(ChatEntry::Status(prev)) if prev.trim().to_ascii_lowercase() == normalized
+                ) {
+                    self.entries.push(ChatEntry::Status(msg));
                 }
             }
             AgentEvent::ToolApproval(_, name, _) => {

@@ -408,13 +408,16 @@ impl AgentLoop {
             } else {
                 user_input.to_string()
             };
-            let recall_future = hooks.prompt_submit(&recall_query);
+            let recall_timeout =
+                timeout_from_env("FORGE_RECALL_TIMEOUT_MS", 1_000, 250, 15_000);
+            let recall_future =
+                tokio::time::timeout(recall_timeout, hooks.prompt_submit(&recall_query));
             let preconnect_future = self.provider.preconnect();
 
             let (recall_result, _) = tokio::join!(recall_future, preconnect_future);
 
             match recall_result {
-                Ok((injection, count)) if !injection.is_empty() => {
+                Ok(Ok((injection, count))) if !injection.is_empty() => {
                     debug!(
                         "Memory injection: {} bytes, {} memories",
                         injection.len(),
@@ -426,9 +429,12 @@ impl AgentLoop {
                         .await;
                     memory_context = injection;
                 }
-                Ok(_) => {}
-                Err(e) => {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
                     debug!("Prompt hook failed (non-fatal): {e}");
+                }
+                Err(_) => {
+                    debug!("Prompt hook timed out after {:?}", recall_timeout);
                 }
             }
         } else {
@@ -490,16 +496,25 @@ impl AgentLoop {
                 bypass: current_bypass,
                 ..Default::default()
             };
-            let _ = self
-                .event_tx
-                .send(AgentEvent::Status(format!(
-                    "Turn plan: {} (effort={}, max_tokens={}, tool_cap={})",
-                    turn_plan.label(),
-                    effective_effort.as_str(),
-                    turn_plan.max_tokens(),
-                    dynamic_tool_max_chars
-                )))
-                .await;
+            let show_turn_plan = std::env::var("FORGE_SHOW_TURN_PLAN")
+                .ok()
+                .map(|v| {
+                    let s = v.trim().to_ascii_lowercase();
+                    matches!(s.as_str(), "1" | "true" | "yes" | "on")
+                })
+                .unwrap_or(false);
+            if show_turn_plan {
+                let _ = self
+                    .event_tx
+                    .send(AgentEvent::Status(format!(
+                        "Turn plan: {} (effort={}, max_tokens={}, tool_cap={})",
+                        turn_plan.label(),
+                        effective_effort.as_str(),
+                        turn_plan.max_tokens(),
+                        dynamic_tool_max_chars
+                    )))
+                    .await;
+            }
 
             // Pre-sampling compaction: check token estimate BEFORE calling
             // the LLM. If we're approaching the context window limit, compact
@@ -557,6 +572,8 @@ impl AgentLoop {
 
             let mut assistant_text = String::new();
             let mut tool_calls: Vec<ToolCall> = Vec::new();
+            let provider_is_cli = self.provider.name().ends_with("-cli");
+
             let mut current_tool_id = String::new();
             let mut current_tool_name = String::new();
             let mut current_tool_input = String::new();
@@ -634,11 +651,16 @@ impl AgentLoop {
                                 }).await;
                             }
                         }
-                        tool_calls.push(ToolCall {
-                            id: current_tool_id.clone(),
-                            name: current_tool_name.clone(),
-                            input,
-                        });
+                        // CLI providers (codex/claude/gemini CLI) already execute their own
+                        // tools. Keep tool events for UI visibility, but do not enqueue
+                        // tool calls into Forge's tool runner.
+                        if !provider_is_cli {
+                            tool_calls.push(ToolCall {
+                                id: current_tool_id.clone(),
+                                name: current_tool_name.clone(),
+                                input,
+                            });
+                        }
                     }
                     StreamEvent::ToolResult { name, output, is_error } => {
                         let _ = self.event_tx.send(AgentEvent::ToolResult {

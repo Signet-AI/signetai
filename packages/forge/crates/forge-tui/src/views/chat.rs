@@ -51,6 +51,8 @@ pub struct ChatView<'a> {
     pub tick: usize,
     /// Active color theme
     pub theme: &'a Theme,
+    /// Whether the agent is currently processing a turn
+    pub processing: bool,
 }
 
 impl<'a> Widget for ChatView<'a> {
@@ -300,10 +302,31 @@ impl<'a> Widget for ChatView<'a> {
                     ]));
                 }
                 ChatEntry::Status(msg) => {
-                    lines.push(Line::from(Span::styled(
-                        format!("    {msg}"),
-                        Style::default().fg(t.muted),
-                    )));
+                    let lower = msg.to_ascii_lowercase();
+                    let is_phase_status =
+                        lower.contains("thinking") || lower.contains("recalling memories");
+
+                    if is_phase_status {
+                        let clean = msg
+                            .trim_start()
+                            .trim_start_matches(['◆', '◇', '•', '-', '*', ' '])
+                            .trim_start();
+                        let blink_on = !self.processing || (self.tick / 6) % 2 == 0;
+                        let marker = if blink_on { "◆" } else { " " };
+                        lines.push(Line::from(vec![
+                            Span::raw("    "),
+                            Span::styled(
+                                format!("{marker} "),
+                                Style::default().fg(t.success).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(clean.to_string(), Style::default().fg(t.muted)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(Span::styled(
+                            format!("    {msg}"),
+                            Style::default().fg(t.muted),
+                        )));
+                    }
                 }
             }
         }
