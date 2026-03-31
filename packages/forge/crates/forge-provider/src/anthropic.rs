@@ -34,34 +34,88 @@ impl AnthropicProvider {
     }
 
     fn build_messages(&self, messages: &[Message]) -> Vec<Value> {
-        messages
+        let non_system: Vec<&Message> = messages
             .iter()
             .filter(|m| m.role != Role::System)
-            .map(|m| {
+            .collect();
+        // Place cache_control breakpoints on the last content block of
+        // messages that precede the final 3 user turns. This lets Anthropic
+        // cache the stable prefix of the conversation and only re-process
+        // recent turns, reducing input token costs by ~90% on cache hits.
+        // We mark the 4th-from-last and 2nd-from-last user messages.
+        let mut user_indices: Vec<usize> = Vec::new();
+        for (i, m) in non_system.iter().enumerate() {
+            if m.role == Role::User {
+                user_indices.push(i);
+            }
+        }
+        let cache_indices: std::collections::HashSet<usize> = {
+            let mut set = std::collections::HashSet::new();
+            // Mark a breakpoint on the user message ~4 turns from end
+            if user_indices.len() >= 4 {
+                set.insert(user_indices[user_indices.len() - 4]);
+            }
+            // Mark a breakpoint on the user message ~2 turns from end
+            if user_indices.len() >= 2 {
+                set.insert(user_indices[user_indices.len() - 2]);
+            }
+            set
+        };
+
+        non_system
+            .iter()
+            .enumerate()
+            .map(|(idx, m)| {
+                let should_cache = cache_indices.contains(&idx);
+
                 let content: Vec<Value> = m
                     .content
                     .iter()
-                    .map(|c| match c {
-                        MessageContent::Text { text } => json!({
-                            "type": "text",
-                            "text": text,
-                        }),
-                        MessageContent::ToolUse { id, name, input } => json!({
-                            "type": "tool_use",
-                            "id": id,
-                            "name": name,
-                            "input": input,
-                        }),
-                        MessageContent::ToolResult {
-                            tool_use_id,
-                            content,
-                            is_error,
-                        } => json!({
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": content,
-                            "is_error": is_error,
-                        }),
+                    .enumerate()
+                    .map(|(ci, c)| {
+                        let is_last_block = ci == m.content.len() - 1;
+                        let add_cache = should_cache && is_last_block;
+
+                        match c {
+                            MessageContent::Text { text } => {
+                                let mut block = json!({
+                                    "type": "text",
+                                    "text": text,
+                                });
+                                if add_cache {
+                                    block["cache_control"] = json!({ "type": "ephemeral" });
+                                }
+                                block
+                            }
+                            MessageContent::ToolUse { id, name, input } => {
+                                let mut block = json!({
+                                    "type": "tool_use",
+                                    "id": id,
+                                    "name": name,
+                                    "input": input,
+                                });
+                                if add_cache {
+                                    block["cache_control"] = json!({ "type": "ephemeral" });
+                                }
+                                block
+                            }
+                            MessageContent::ToolResult {
+                                tool_use_id,
+                                content,
+                                is_error,
+                            } => {
+                                let mut block = json!({
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use_id,
+                                    "content": content,
+                                    "is_error": is_error,
+                                });
+                                if add_cache {
+                                    block["cache_control"] = json!({ "type": "ephemeral" });
+                                }
+                                block
+                            }
+                        }
                     })
                     .collect();
 
@@ -220,12 +274,13 @@ impl Provider for AnthropicProvider {
                 }
             }
 
-            // Send final usage + done
+            // Send final usage + done (cache tokens tracked in message_start)
             let _ = tx
                 .send(StreamEvent::Usage(TokenUsage {
                     input_tokens,
                     output_tokens,
-                    ..Default::default()
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                 }))
                 .await;
             let _ = tx.send(StreamEvent::Done).await;
@@ -294,6 +349,14 @@ fn parse_anthropic_event(
         AnthropicEvent::MessageStart { message } => {
             if let Some(usage) = message.usage {
                 *input_tokens = usage.input_tokens;
+                // Report cache statistics when present
+                if usage.cache_read_input_tokens > 0 || usage.cache_creation_input_tokens > 0 {
+                    debug!(
+                        "Prompt cache: {} read, {} creation tokens",
+                        usage.cache_read_input_tokens,
+                        usage.cache_creation_input_tokens
+                    );
+                }
             }
             None
         }

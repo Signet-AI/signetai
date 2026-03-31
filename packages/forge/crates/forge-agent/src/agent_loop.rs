@@ -1,8 +1,9 @@
 use crate::context::ContextManager;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
+use crate::retry::{RetryDecision, RetryState};
 use crate::session::SharedSession;
 use forge_core::{Message, MessageContent, ToolCall, ToolDefinition, TokenUsage};
-use forge_provider::{CompletionOpts, Provider, ReasoningEffort, StreamEvent};
+use forge_provider::{CompletionOpts, CompletionStream, Provider, ReasoningEffort, StreamEvent};
 use forge_signet::hooks::SessionHooks;
 use forge_tools::{self, Tool as _};
 use futures::StreamExt;
@@ -79,6 +80,20 @@ impl AgentLoop {
         mcp_clients: Vec<Arc<forge_mcp::McpStdioClient>>,
     ) -> Self {
         let context_window = provider.context_window();
+
+        // Try to use Ollama as a cheap compaction provider.
+        // Falls back to the primary model if Ollama isn't available.
+        let compaction_provider: Option<Arc<dyn Provider>> = {
+            let ollama = forge_provider::create_provider("ollama", "qwen3:4b", "ollama");
+            match ollama {
+                Ok(p) => {
+                    info!("Ollama available — using qwen3:4b for context compaction");
+                    Some(Arc::from(p))
+                }
+                Err(_) => None,
+            }
+        };
+
         let tool_definitions = match &daemon_url {
             Some(url) => forge_tools::all_definitions_with_subagent(url, Arc::clone(&provider)),
             None => {
@@ -95,13 +110,84 @@ impl AgentLoop {
             event_tx,
             permission_tx,
             permissions,
-            context_manager: ContextManager::new(context_window),
+            context_manager: {
+                let cm = ContextManager::new(context_window);
+                match compaction_provider {
+                    Some(p) => cm.with_compaction_provider(p),
+                    None => cm,
+                }
+            },
             system_prompt,
             tool_definitions,
             effort,
             bypass,
             daemon_url,
             mcp_clients,
+        }
+    }
+
+    /// Look up a tool's permission level by name
+    fn resolve_tool_permission(&self, name: &str) -> forge_core::ToolPermission {
+        match &self.daemon_url {
+            Some(url) => forge_tools::find_tool_with_signet(name, url),
+            None => forge_tools::find_tool(name),
+        }
+        .map(|t| t.permission())
+        .unwrap_or(forge_core::ToolPermission::Write)
+    }
+
+    /// Call the provider with retry logic for transient failures.
+    async fn call_provider_with_retry(
+        &self,
+        session: &SharedSession,
+        messages: &[Message],
+        opts: &CompletionOpts,
+    ) -> Result<CompletionStream, forge_core::ForgeError> {
+        let mut retry = RetryState::new();
+
+        // First attempt uses the messages as-is
+        let mut current_messages = messages.to_vec();
+
+        loop {
+            match self
+                .provider
+                .complete(&current_messages, &self.tool_definitions, opts)
+                .await
+            {
+                Ok(stream) => return Ok(stream),
+                Err(e) => match retry.decide(&e) {
+                    RetryDecision::Retry(delay) => {
+                        let _ = self
+                            .event_tx
+                            .send(AgentEvent::Status(format!(
+                                "Provider error, retrying in {}s...",
+                                delay.as_secs()
+                            )))
+                            .await;
+                        tokio::time::sleep(delay).await;
+                        // Re-read messages in case session was modified
+                        current_messages = session.lock().await.messages.clone();
+                    }
+                    RetryDecision::CompactAndRetry => {
+                        let _ = self
+                            .event_tx
+                            .send(AgentEvent::Status(
+                                "Context overflow — compacting and retrying...".to_string(),
+                            ))
+                            .await;
+                        if let Err(ce) = self
+                            .context_manager
+                            .compact(session, &self.provider, self.hooks.as_ref())
+                            .await
+                        {
+                            warn!("Compaction failed during retry: {ce}");
+                            return Err(e);
+                        }
+                        current_messages = session.lock().await.messages.clone();
+                    }
+                    RetryDecision::Fail => return Err(e),
+                },
+            }
         }
     }
 
@@ -191,36 +277,96 @@ impl AgentLoop {
                 ..Default::default()
             };
 
+            // Pre-sampling compaction: check token estimate BEFORE calling
+            // the LLM. If we're approaching the context window limit, compact
+            // first to avoid wasting an LLM call on an oversized prompt.
+            {
+                let estimated = {
+                    let s = session.lock().await;
+                    ContextManager::estimate_tokens(&s.messages)
+                };
+                if self.context_manager.should_compact_before_sampling(estimated) {
+                    info!(
+                        "Pre-sampling compaction: {} estimated tokens (~{}% of {})",
+                        estimated,
+                        (estimated as f64 / self.context_manager.max_tokens() as f64 * 100.0) as u32,
+                        self.context_manager.max_tokens()
+                    );
+                    let _ = self
+                        .event_tx
+                        .send(AgentEvent::Status("Compacting context before next call...".to_string()))
+                        .await;
+                    if let Err(e) = self
+                        .context_manager
+                        .compact(session, &self.provider, self.hooks.as_ref())
+                        .await
+                    {
+                        warn!("Pre-sampling compaction failed: {e}");
+                    }
+                }
+            }
+
             // Get current messages snapshot
             let messages = {
                 let s = session.lock().await;
                 s.messages.clone()
             };
 
-            // 4. Call the provider (using cached tool definitions)
+            // 4. Call the provider with retry logic
             let stream = match self
-                .provider
-                .complete(&messages, &self.tool_definitions, &opts)
+                .call_provider_with_retry(session, &messages, &opts)
                 .await
             {
                 Ok(s) => s,
                 Err(e) => {
-                    error!("Provider error: {e}");
+                    error!("Provider error (all retries exhausted): {e}");
                     let _ = self.event_tx.send(AgentEvent::Error(e.to_string())).await;
                     return;
                 }
             };
 
-            // 5. Process the stream
+            // 5. Process the stream with stale-stream detection.
+            // If no events arrive for STALE_STREAM_SECS, warn the user.
+            // If a second consecutive timeout occurs, cancel the stream.
+            const STALE_STREAM_SECS: u64 = 90;
+
             let mut assistant_text = String::new();
             let mut tool_calls: Vec<ToolCall> = Vec::new();
             let mut current_tool_id = String::new();
             let mut current_tool_name = String::new();
             let mut current_tool_input = String::new();
+            let mut stale_warnings: u32 = 0;
 
             let mut stream = std::pin::pin!(stream);
 
-            while let Some(event) = stream.next().await {
+            loop {
+                let event = tokio::select! {
+                    next = stream.next() => next,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(STALE_STREAM_SECS)) => {
+                        stale_warnings += 1;
+                        if stale_warnings >= 2 {
+                            warn!("Stream stale for {}s (2nd timeout) — cancelling", STALE_STREAM_SECS * 2);
+                            let _ = self.event_tx.send(AgentEvent::Error(
+                                format!("No response for {}s — connection appears dead", STALE_STREAM_SECS * 2)
+                            )).await;
+                            return;
+                        }
+                        warn!("Stream stale for {STALE_STREAM_SECS}s — warning user");
+                        let _ = self.event_tx.send(AgentEvent::Status(
+                            format!("No response for {STALE_STREAM_SECS}s — connection may be stale")
+                        )).await;
+                        continue;
+                    }
+                };
+
+                let event = match event {
+                    Some(e) => {
+                        stale_warnings = 0; // reset on any activity
+                        e
+                    }
+                    None => break, // stream ended
+                };
+
                 match event {
                     StreamEvent::TextDelta(text) => {
                         assistant_text.push_str(&text);
@@ -346,10 +492,45 @@ impl AgentLoop {
                 return;
             }
 
-            // 8. Execute tool calls with permission checks
+            // 8. Execute tool calls with permission checks.
+            // Read-only tools are parallelized; write tools run sequentially.
+            // Identical tool calls (same name + input) are deduplicated.
             let mut tool_results_content = Vec::new();
+
+            // Deduplicate tool calls by (name, input) hash
+            let mut seen_hashes = std::collections::HashSet::new();
+            let mut deduped_calls: Vec<&ToolCall> = Vec::new();
+            let mut dedup_map: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
             for tc in &tool_calls {
-                // Doom-loop detection: 3 identical consecutive calls → break
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                tc.name.hash(&mut hasher);
+                serde_json::to_string(&tc.input).unwrap_or_default().hash(&mut hasher);
+                let hash = hasher.finish();
+                if seen_hashes.insert(hash) {
+                    deduped_calls.push(tc);
+                } else {
+                    // Map duplicate tool call ID to the original's ID for result reuse
+                    if let Some(original_id) = dedup_map.get(&hash) {
+                        debug!("Deduplicating tool call: {} (duplicate of {})", tc.id, original_id);
+                    }
+                }
+                dedup_map.entry(hash).or_insert_with(|| tc.id.clone());
+            }
+
+            if deduped_calls.len() < tool_calls.len() {
+                info!(
+                    "Deduplicated {} → {} tool calls",
+                    tool_calls.len(),
+                    deduped_calls.len()
+                );
+            }
+
+            // Partition into read-only (parallelizable) and write (sequential)
+            let mut readonly_calls: Vec<&ToolCall> = Vec::new();
+            let mut write_calls: Vec<&ToolCall> = Vec::new();
+
+            for tc in &deduped_calls {
+                // Doom-loop detection
                 if loop_detector.record(&tc.name, &tc.input) {
                     let msg = format!(
                         "Loop detected: '{}' called 3 times with identical input. Breaking.",
@@ -366,14 +547,73 @@ impl AgentLoop {
                     let _ = self.event_tx.send(AgentEvent::TurnComplete).await;
                     return;
                 }
+
+                let permission = self.resolve_tool_permission(&tc.name);
+                if permission == forge_core::ToolPermission::ReadOnly {
+                    readonly_calls.push(tc);
+                } else {
+                    write_calls.push(tc);
+                }
+            }
+
+            // Execute read-only tools in parallel
+            if !readonly_calls.is_empty() {
+                debug!("Executing {} read-only tools in parallel", readonly_calls.len());
+                let mut handles = Vec::new();
+                for tc in &readonly_calls {
+                    let tc_owned = (*tc).clone();
+                    let daemon_url = self.daemon_url.clone();
+                    let provider = Arc::clone(&self.provider);
+                    let mcp_clients = self.mcp_clients.clone();
+                    handles.push(tokio::spawn(async move {
+                        let tool = match &daemon_url {
+                            Some(url) => forge_tools::find_tool_with_subagent(
+                                &tc_owned.name, url, provider,
+                            ),
+                            None => forge_tools::find_tool(&tc_owned.name),
+                        };
+                        let result = if let Some(tool) = tool {
+                            tool.execute(&tc_owned).await
+                        } else {
+                            let mut mcp_result = None;
+                            for client in &mcp_clients {
+                                if let Ok(output) = client.call_tool(&tc_owned.name, tc_owned.input.clone()).await {
+                                    mcp_result = Some(forge_core::ToolResult::success(&tc_owned.id, output));
+                                    break;
+                                }
+                            }
+                            mcp_result.unwrap_or_else(|| {
+                                forge_core::ToolResult::error(&tc_owned.id, format!("Unknown tool: {}", tc_owned.name))
+                            })
+                        };
+                        (tc_owned, result)
+                    }));
+                }
+
+                for handle in handles {
+                    if let Ok((tc, result)) = handle.await {
+                        let _ = self.event_tx.send(AgentEvent::ToolResult {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            output: result.content.clone(),
+                            is_error: result.is_error,
+                        }).await;
+                        tool_results_content.push(MessageContent::ToolResult {
+                            tool_use_id: result.tool_use_id,
+                            content: result.content,
+                            is_error: result.is_error,
+                        });
+                    }
+                }
+            }
+
+            // Execute write tools sequentially with permission checks
+            for tc in &write_calls {
                 let tool_impl = match &self.daemon_url {
                     Some(url) => forge_tools::find_tool_with_subagent(
-                        &tc.name,
-                        url,
-                        Arc::clone(&self.provider),
+                        &tc.name, url, Arc::clone(&self.provider),
                     ),
                     None => {
-                        // Check built-in tools first, then SubAgent
                         forge_tools::find_tool(&tc.name).or_else(|| {
                             if tc.name == "SubAgent" {
                                 Some(Box::new(forge_tools::subagent::SubAgentTool::new(
@@ -455,7 +695,6 @@ impl AgentLoop {
                 let result = if let Some(tool) = tool_impl {
                     tool.execute(tc).await
                 } else {
-                    // Try MCP clients for tools not in the built-in registry
                     let mut mcp_result = None;
                     for client in &self.mcp_clients {
                         if let Ok(output) = client.call_tool(&tc.name, tc.input.clone()).await {

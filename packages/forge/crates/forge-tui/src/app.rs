@@ -818,9 +818,10 @@ impl App {
                 self.trigger_interim_transcription();
             }
 
-            // Speculative pre-recall — fire after 500ms of no typing
+            // Speculative pre-recall — fire after 500ms of no typing.
+            // Minimum 10 chars to avoid wasting daemon calls on short prefixes.
             if !self.processing
-                && !self.input.is_empty()
+                && self.input.len() >= 10
                 && !self.input.starts_with('/')
                 && self.input != self.speculative_query
                 && self.last_keystroke.elapsed() > std::time::Duration::from_millis(500)

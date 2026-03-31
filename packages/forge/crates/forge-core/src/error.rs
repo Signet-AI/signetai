@@ -39,6 +39,21 @@ pub enum ForgeError {
     ApiKeyMissing(String),
 }
 
+/// Error category for retry decisions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// Transient server errors (5xx, timeouts) — retryable with backoff
+    Transient,
+    /// Rate limit (429) — retryable with longer backoff
+    RateLimit,
+    /// Context window exceeded — retryable after compaction
+    ContextOverflow,
+    /// Client errors (4xx except 429), auth failures — not retryable
+    Client,
+    /// Unknown or unclassifiable — not retryable
+    Fatal,
+}
+
 impl ForgeError {
     pub fn provider(msg: impl Into<String>) -> Self {
         Self::Provider(msg.into())
@@ -51,6 +66,43 @@ impl ForgeError {
     pub fn config(msg: impl Into<String>) -> Self {
         Self::Config(msg.into())
     }
+
+    /// Classify this error for retry decisions
+    pub fn category(&self) -> ErrorCategory {
+        match self {
+            Self::ContextOverflow { .. } => ErrorCategory::ContextOverflow,
+            Self::Provider(msg) if is_rate_limit(msg) => ErrorCategory::RateLimit,
+            Self::Provider(msg) if is_transient(msg) => ErrorCategory::Transient,
+            Self::Provider(msg) if is_client_error(msg) => ErrorCategory::Client,
+            Self::Http(e) if e.status().is_some_and(|s| s.as_u16() == 429) => {
+                ErrorCategory::RateLimit
+            }
+            Self::Http(e) if e.is_timeout() || e.is_connect() => ErrorCategory::Transient,
+            Self::Http(e) if e.status().is_some_and(|s| s.is_server_error()) => {
+                ErrorCategory::Transient
+            }
+            Self::ApiKeyMissing(_) | Self::Config(_) | Self::PermissionDenied(_) => {
+                ErrorCategory::Client
+            }
+            _ => ErrorCategory::Fatal,
+        }
+    }
+}
+
+fn is_rate_limit(msg: &str) -> bool {
+    msg.contains("429") || msg.contains("rate limit") || msg.contains("Rate limit")
+}
+
+fn is_transient(msg: &str) -> bool {
+    msg.contains("500") || msg.contains("502") || msg.contains("503")
+        || msg.contains("504") || msg.contains("timeout") || msg.contains("Timeout")
+        || msg.contains("connection") || msg.contains("Connection")
+        || msg.contains("ECONNREFUSED") || msg.contains("ECONNRESET")
+}
+
+fn is_client_error(msg: &str) -> bool {
+    msg.contains("400") || msg.contains("401") || msg.contains("403")
+        || msg.contains("404") || msg.contains("422")
 }
 
 pub type ForgeResult<T> = Result<T, ForgeError>;

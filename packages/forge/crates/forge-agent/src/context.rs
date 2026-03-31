@@ -10,8 +10,14 @@ use tracing::{debug, info, warn};
 pub struct ContextManager {
     /// Maximum tokens before triggering compaction
     max_tokens: usize,
-    /// Threshold percentage to trigger compaction (0.0 - 1.0)
+    /// Post-turn compaction threshold (0.0 - 1.0)
     compact_threshold: f64,
+    /// Pre-sampling compaction threshold — lower than post-turn to catch
+    /// approaching limits before wasting an LLM call (0.0 - 1.0)
+    pre_sample_threshold: f64,
+    /// Optional cheaper/faster provider for summarization.
+    /// Falls back to the primary provider if None.
+    compaction_provider: Option<Arc<dyn Provider>>,
 }
 
 impl ContextManager {
@@ -19,12 +25,27 @@ impl ContextManager {
         Self {
             max_tokens,
             compact_threshold: 0.9,
+            pre_sample_threshold: 0.8,
+            compaction_provider: None,
         }
     }
 
-    /// Check if we should compact the context
+    /// Set an auxiliary provider for compaction (e.g. local Ollama model).
+    /// When set, compaction uses this instead of the primary conversational model.
+    pub fn with_compaction_provider(mut self, provider: Arc<dyn Provider>) -> Self {
+        self.compaction_provider = Some(provider);
+        self
+    }
+
+    /// Check if we should compact the context (post-turn, 90% threshold)
     pub fn should_compact(&self, current_tokens: usize) -> bool {
         current_tokens as f64 > self.max_tokens as f64 * self.compact_threshold
+    }
+
+    /// Check if we should compact before calling the LLM (80% threshold).
+    /// Prevents wasted calls on prompts that will exceed the context window.
+    pub fn should_compact_before_sampling(&self, current_tokens: usize) -> bool {
+        current_tokens as f64 > self.max_tokens as f64 * self.pre_sample_threshold
     }
 
     /// Estimate token count for messages (rough heuristic: ~4 chars per token)
@@ -43,7 +64,9 @@ impl ContextManager {
         }).sum()
     }
 
-    /// Compact the session by summarizing older messages
+    /// Compact the session by summarizing older messages.
+    /// Uses the auxiliary compaction provider if configured, otherwise
+    /// falls back to the primary conversational model.
     pub async fn compact(
         &self,
         session: &SharedSession,
@@ -114,10 +137,38 @@ impl ContextManager {
             ..Default::default()
         };
 
-        let stream = provider
+        // Use auxiliary provider if available, otherwise fall back to primary.
+        // The auxiliary provider is typically a cheaper/faster local model
+        // (e.g. Ollama qwen3:4b) that produces adequate summaries without
+        // burning expensive API tokens on the primary model.
+        let summary_provider = self.compaction_provider.as_ref().unwrap_or(provider);
+        let provider_name = summary_provider.name();
+
+        debug!("Running compaction via {} provider", provider_name);
+
+        let stream = summary_provider
             .complete(&summary_messages, &[], &opts)
             .await
-            .map_err(|e| format!("Compaction LLM call failed: {e}"))?;
+            .map_err(|e| {
+                // If auxiliary provider fails, try primary as fallback
+                if self.compaction_provider.is_some() {
+                    warn!("Auxiliary compaction provider failed: {e}, falling back to primary");
+                }
+                format!("Compaction LLM call failed: {e}")
+            });
+
+        // Fallback: if auxiliary failed, try the primary provider
+        let stream = match stream {
+            Ok(s) => s,
+            Err(_) if self.compaction_provider.is_some() => {
+                info!("Falling back to primary provider for compaction");
+                provider
+                    .complete(&summary_messages, &[], &opts)
+                    .await
+                    .map_err(|e2| format!("Primary fallback also failed: {e2}"))?
+            }
+            Err(e) => return Err(e),
+        };
 
         let mut summary_text = String::new();
         let mut stream = std::pin::pin!(stream);
@@ -142,9 +193,10 @@ impl ContextManager {
             s.messages.push(summary_msg);
             s.messages.extend_from_slice(to_keep);
             info!(
-                "Compacted {} messages into summary + {} kept messages",
+                "Compacted {} messages into summary + {} kept messages (via {})",
                 to_summarize.len(),
-                to_keep.len()
+                to_keep.len(),
+                provider_name
             );
         }
 
