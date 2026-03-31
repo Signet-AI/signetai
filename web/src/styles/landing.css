@@ -1316,6 +1316,30 @@
 	color: var(--color-text);
 }
 
+.landing-page .discord-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: var(--space-sm);
+	padding: 10px 20px;
+	background: #7c3aed;
+	color: #fff;
+	font-family: var(--font-mono);
+	font-size: 13px;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	border-radius: 6px;
+	text-decoration: none;
+	transition: background 0.15s ease, transform 0.1s ease;
+}
+.landing-page .discord-btn:hover {
+	background: #6d28d9;
+	transform: translateY(-1px);
+}
+.landing-page .discord-btn:active {
+	transform: translateY(0);
+}
+
 .landing-page .hero-ascii {
 	font-family: var(--font-mono), "IBM Plex Mono", monospace;
 	font-size: clamp(0.36rem, 0.88vw, 0.62rem);
