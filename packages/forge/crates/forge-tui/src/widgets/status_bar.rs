@@ -39,6 +39,8 @@ impl<'a> Widget for StatusBar<'a> {
         let value = Style::default().fg(self.status_fg);
         let chrome = Style::default().fg(self.accent);
         let chip_bg = self.surface;
+        let border = Style::default().fg(self.muted);
+        let border_hot = Style::default().fg(self.accent);
 
         // ─── Line 1: identity + chips ───────────────────────
         if area.height >= 1 {
@@ -51,18 +53,21 @@ impl<'a> Widget for StatusBar<'a> {
             let model_short = truncate(self.model, 22);
             let provider_short = truncate(self.provider, 12);
 
-            let mut left = vec![
-                Span::styled(" ◈ ", Style::default().fg(self.spinner)),
-                Span::styled(name, chrome.add_modifier(Modifier::BOLD)),
-                Span::styled("  ", sep),
-            ];
+            let mut left = Vec::new();
+            push_section_open(&mut left, "forge", border_hot);
+            left.push(Span::styled("◈", Style::default().fg(self.spinner)));
+            left.push(Span::styled(" ", sep));
+            left.push(Span::styled(name, chrome.add_modifier(Modifier::BOLD)));
+            push_section_close(&mut left, border_hot);
+            left.push(Span::styled(" ", sep));
 
+            push_section_open(&mut left, "runtime", border);
             push_chip(
                 &mut left,
                 format!("model {model_short}"),
                 Style::default().fg(value.fg.unwrap_or(self.status_fg)).bg(chip_bg),
             );
-            left.push(Span::styled(" ", sep));
+            left.push(Span::styled("│", border));
             push_chip(
                 &mut left,
                 provider_short,
@@ -74,7 +79,7 @@ impl<'a> Widget for StatusBar<'a> {
                 "low" => self.muted,
                 _ => self.accent,
             };
-            left.push(Span::styled(" ", sep));
+            left.push(Span::styled("│", border));
             push_chip(
                 &mut left,
                 format!("eff {}", self.effort),
@@ -85,13 +90,14 @@ impl<'a> Widget for StatusBar<'a> {
             );
 
             if let Some(agent) = self.active_agent {
-                left.push(Span::styled(" ", sep));
+                left.push(Span::styled("│", border));
                 push_chip(
                     &mut left,
                     format!("agt {}", truncate(&format!("@{agent}"), 16)),
                     Style::default().fg(self.accent).bg(chip_bg),
                 );
             }
+            push_section_close(&mut left, border);
 
             let health = if self.daemon_healthy { "●" } else { "○" };
             let health_color = if self.daemon_healthy { self.success } else { self.error };
@@ -105,18 +111,19 @@ impl<'a> Widget for StatusBar<'a> {
             };
 
             let mut right = Vec::new();
+            push_section_open(&mut right, "telemetry", border);
             push_chip(
                 &mut right,
                 format!("tok {tokens}/{ctx}"),
                 Style::default().fg(self.status_fg).bg(chip_bg),
             );
-            right.push(Span::styled(" ", sep));
+            right.push(Span::styled("│", border));
             push_chip(
                 &mut right,
                 format!("mem {mem}"),
                 Style::default().fg(self.status_fg).bg(chip_bg),
             );
-            right.push(Span::styled(" ", sep));
+            right.push(Span::styled("│", border));
             push_chip(
                 &mut right,
                 format!("sec {}/{}", self.secrets_used, self.total_secrets),
@@ -124,7 +131,7 @@ impl<'a> Widget for StatusBar<'a> {
                     .fg(if self.secrets_used > 0 { self.success } else { self.muted })
                     .bg(chip_bg),
             );
-            right.push(Span::styled(" ", sep));
+            right.push(Span::styled("│", border));
             push_chip(
                 &mut right,
                 format!("daemon {health}"),
@@ -133,6 +140,7 @@ impl<'a> Widget for StatusBar<'a> {
                     .bg(chip_bg)
                     .add_modifier(Modifier::BOLD),
             );
+            push_section_close(&mut right, border);
             let right_width: usize = right.iter().map(|s| s.content.len()).sum();
             let available = area.width as usize;
             if available > right_width + 1 {
@@ -151,7 +159,7 @@ impl<'a> Widget for StatusBar<'a> {
             }
         }
 
-        // ─── Line 2: compact shortcuts ─────────────────────
+        // ─── Line 2: compact shortcuts in grouped sections ─
         if area.height >= 2 {
             let key = Style::default().fg(self.accent);
             let label = Style::default().fg(self.muted);
@@ -169,19 +177,45 @@ impl<'a> Widget for StatusBar<'a> {
 
             let mut spans = vec![Span::styled(" ", sep)];
             let mut used = 1u16;
+            let mut in_nav_section = false;
+            let mut in_ops_section = false;
             for (i, (action, name)) in hints.iter().enumerate() {
                 let combo = pretty_combo(&self.keybinds.get(action));
                 let width = combo.len() as u16 + name.len() as u16 + 1;
                 if used + width + 3 > area.width {
                     break;
                 }
-                if i > 0 {
-                    spans.push(Span::styled("   ", sep));
-                    used += 3;
+
+                let nav = i <= 3;
+                if nav && !in_nav_section {
+                    push_section_open(&mut spans, "nav", border);
+                    used += 8;
+                    in_nav_section = true;
+                }
+                if !nav && !in_ops_section {
+                    if in_nav_section {
+                        push_section_close(&mut spans, border);
+                        spans.push(Span::styled(" ", sep));
+                        used += 3;
+                    }
+                    push_section_open(&mut spans, "ops", border);
+                    used += 8;
+                    in_ops_section = true;
+                }
+
+                if (nav && i > 0) || (!nav && i > 4) {
+                    spans.push(Span::styled("│", border));
+                    used += 1;
                 }
                 spans.push(Span::styled(combo.to_string(), key));
                 spans.push(Span::styled(format!(" {}", capitalize(name)), label));
                 used += width;
+            }
+
+            if in_ops_section {
+                push_section_close(&mut spans, border);
+            } else if in_nav_section {
+                push_section_close(&mut spans, border);
             }
 
             buf.set_line(area.x, area.y + 1, &Line::from(spans), area.width);
@@ -241,6 +275,15 @@ fn push_chip(spans: &mut Vec<Span<'_>>, text: impl AsRef<str>, style: Style) {
     spans.push(Span::styled(" ", style));
     spans.push(Span::styled(text.as_ref().to_string(), style));
     spans.push(Span::styled(" ", style));
+}
+
+fn push_section_open(spans: &mut Vec<Span<'_>>, title: &str, style: Style) {
+    spans.push(Span::styled("⟦", style));
+    spans.push(Span::styled(format!("{title} "), style.add_modifier(Modifier::BOLD)));
+}
+
+fn push_section_close(spans: &mut Vec<Span<'_>>, style: Style) {
+    spans.push(Span::styled(" ⟧", style));
 }
 
 fn pretty_combo(combo: &str) -> String {
