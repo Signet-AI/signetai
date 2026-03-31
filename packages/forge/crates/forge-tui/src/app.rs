@@ -409,6 +409,7 @@ impl App {
         theme_name: &str,
         active_agent: Option<String>,
         agent_name: String,
+        auto_approve_write_tools: Vec<String>,
         connected_providers: Vec<String>,
     ) -> Self {
         let model = provider.model().to_string();
@@ -461,11 +462,9 @@ impl App {
             }
         }
 
-        let permissions = Arc::new(Mutex::new(PermissionManager::new(vec![
-            "Read".to_string(),
-            "Glob".to_string(),
-            "Grep".to_string(),
-        ])));
+        let permissions = Arc::new(Mutex::new(PermissionManager::new(
+            auto_approve_write_tools,
+        )));
 
         let effort = Arc::new(Mutex::new(forge_provider::ReasoningEffort::default()));
         let bypass = Arc::new(Mutex::new(false));

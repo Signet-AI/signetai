@@ -104,6 +104,27 @@ pub struct AgentWorkspaceConfig {
     pub workspace_path: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub policy: Option<AgentExecutionPolicy>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AgentExecutionPolicy {
+    /// Keep runtime scoped to the agent workspace.
+    #[serde(default, alias = "workspaceOnly")]
+    pub workspace_only: Option<bool>,
+    /// Optional write-tool allowlist auto-approved for this agent profile.
+    #[serde(default, alias = "autoApproveWriteTools")]
+    pub auto_approve_write_tools: Vec<String>,
+    /// Optional shell command allowlist metadata (surface + env propagation).
+    #[serde(default, alias = "allowedCommands")]
+    pub allowed_commands: Vec<String>,
+    /// Optional path allowlist metadata (surface + env propagation).
+    #[serde(default, alias = "allowedPaths")]
+    pub allowed_paths: Vec<String>,
+    /// Approval profile metadata (e.g. "strict", "balanced").
+    #[serde(default, alias = "approvalMode")]
+    pub approval_mode: Option<String>,
 }
 
 impl AgentConfig {
@@ -467,6 +488,7 @@ mod tests {
                     id: Some("Research".to_string()),
                     workspace_path: Some("agents/research-box".to_string()),
                     model: None,
+                    policy: None,
                 }],
             }),
             ..Default::default()
