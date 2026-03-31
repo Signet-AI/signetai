@@ -136,6 +136,15 @@ impl AgentLoop {
         .unwrap_or(forge_core::ToolPermission::Write)
     }
 
+    fn invalid_tool_call_result(&self, tc: &ToolCall) -> forge_core::ToolResult {
+        let available: Vec<String> = self
+            .tool_definitions
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        invalid_tool_call_result(tc, &available)
+    }
+
     /// Call the provider with retry logic for transient failures.
     async fn call_provider_with_retry(
         &self,
@@ -207,6 +216,31 @@ impl AgentLoop {
 
     /// Process a user message through the full agentic loop
     pub async fn process_message(&self, session: &SharedSession, user_input: &str) {
+        // 0. Detect model/provider switch before adding the new user message.
+        //    If switched, update session metadata and inject a compact handoff.
+        let switch_context = {
+            let mut s = session.lock().await;
+            if s.model != self.provider.model() || s.provider != self.provider.name() {
+                let previous = format!("{} ({})", s.model, s.provider);
+                let current = format!("{} ({})", self.provider.model(), self.provider.name());
+                let handoff = build_model_switch_handoff(&s.messages, &previous, &current);
+                s.model = self.provider.model().to_string();
+                s.provider = self.provider.name().to_string();
+                Some(handoff)
+            } else {
+                None
+            }
+        };
+
+        if switch_context.is_some() {
+            let _ = self
+                .event_tx
+                .send(AgentEvent::Status(
+                    "Model switch detected — reinjecting context handoff...".to_string(),
+                ))
+                .await;
+        }
+
         // 1. Add user message to session FIRST (independent of recall)
         {
             let mut s = session.lock().await;
@@ -222,7 +256,12 @@ impl AgentLoop {
                 .await;
 
             // Overlap: recall memories while warming the provider connection
-            let recall_future = hooks.prompt_submit(user_input);
+            let recall_query = if let Some(handoff) = &switch_context {
+                format!("{}\n\nUser prompt:\n{}", handoff, user_input)
+            } else {
+                user_input.to_string()
+            };
+            let recall_future = hooks.prompt_submit(&recall_query);
             let preconnect_future = self.provider.preconnect();
 
             let (recall_result, _) = tokio::join!(recall_future, preconnect_future);
@@ -248,6 +287,14 @@ impl AgentLoop {
         } else {
             // No daemon — still preconnect to provider
             self.provider.preconnect().await;
+        }
+
+        if let Some(handoff) = switch_context {
+            if memory_context.is_empty() {
+                memory_context = handoff;
+            } else {
+                memory_context = format!("{memory_context}\n\n{handoff}");
+            }
         }
 
         // Notify TUI that we're now waiting for the LLM
@@ -556,6 +603,9 @@ impl AgentLoop {
                 }
             }
 
+            let known_tool_names: Vec<String> =
+                self.tool_definitions.iter().map(|d| d.name.clone()).collect();
+
             // Execute read-only tools in parallel
             if !readonly_calls.is_empty() {
                 debug!("Executing {} read-only tools in parallel", readonly_calls.len());
@@ -565,6 +615,7 @@ impl AgentLoop {
                     let daemon_url = self.daemon_url.clone();
                     let provider = Arc::clone(&self.provider);
                     let mcp_clients = self.mcp_clients.clone();
+                    let known_tool_names = known_tool_names.clone();
                     handles.push(tokio::spawn(async move {
                         let tool = match &daemon_url {
                             Some(url) => forge_tools::find_tool_with_subagent(
@@ -582,9 +633,7 @@ impl AgentLoop {
                                     break;
                                 }
                             }
-                            mcp_result.unwrap_or_else(|| {
-                                forge_core::ToolResult::error(&tc_owned.id, format!("Unknown tool: {}", tc_owned.name))
-                            })
+                            mcp_result.unwrap_or_else(|| invalid_tool_call_result(&tc_owned, &known_tool_names))
                         };
                         (tc_owned, result)
                     }));
@@ -702,9 +751,7 @@ impl AgentLoop {
                             break;
                         }
                     }
-                    mcp_result.unwrap_or_else(|| {
-                        forge_core::ToolResult::error(&tc.id, format!("Unknown tool: {}", tc.name))
-                    })
+                    mcp_result.unwrap_or_else(|| self.invalid_tool_call_result(tc))
                 };
 
                 let _ = self
@@ -741,6 +788,95 @@ impl AgentLoop {
             memory_context.clear();
         }
     }
+}
+
+fn build_model_switch_handoff(messages: &[Message], previous: &str, current: &str) -> String {
+    let tail = messages
+        .iter()
+        .rev()
+        .take(6)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|m| {
+            let role = match m.role {
+                forge_core::Role::System => "System",
+                forge_core::Role::User => "User",
+                forge_core::Role::Assistant => "Assistant",
+            };
+            let text = m.text();
+            let clipped = if text.len() > 400 {
+                format!("{}...", &text[..397])
+            } else {
+                text
+            };
+            format!("{role}: {clipped}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "[Model Switch Handoff]\n\
+         Previous model: {previous}\n\
+         Current model: {current}\n\
+         Preserve continuity with this recent context:\n{tail}"
+    )
+}
+
+fn invalid_tool_call_result(tc: &ToolCall, available_tools: &[String]) -> forge_core::ToolResult {
+    let mut suggestions = suggest_tool_names(&tc.name, available_tools, 5);
+    if suggestions.is_empty() {
+        suggestions = available_tools.iter().take(5).cloned().collect();
+    }
+
+    let suggestion_text = if suggestions.is_empty() {
+        "No registered tools were available.".to_string()
+    } else {
+        format!("Try one of: {}", suggestions.join(", "))
+    };
+
+    let msg = format!(
+        "Invalid tool call: '{}'. {}. Correct the tool name and retry this step.",
+        tc.name, suggestion_text
+    );
+    forge_core::ToolResult::error(&tc.id, msg)
+}
+
+fn suggest_tool_names(target: &str, available: &[String], limit: usize) -> Vec<String> {
+    let mut scored: Vec<(usize, String)> = available
+        .iter()
+        .map(|name| (edit_distance_case_insensitive(target, name), name.clone()))
+        .collect();
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    scored.into_iter().take(limit).map(|(_, n)| n).collect()
+}
+
+fn edit_distance_case_insensitive(a: &str, b: &str) -> usize {
+    let a = a.to_lowercase();
+    let b = b.to_lowercase();
+    let ac: Vec<char> = a.chars().collect();
+    let bc: Vec<char> = b.chars().collect();
+
+    if ac.is_empty() {
+        return bc.len();
+    }
+    if bc.is_empty() {
+        return ac.len();
+    }
+
+    let mut prev: Vec<usize> = (0..=bc.len()).collect();
+    let mut curr: Vec<usize> = vec![0; bc.len() + 1];
+
+    for (i, ca) in ac.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in bc.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    prev[bc.len()]
 }
 
 /// Extract a human-readable detail string from a tool's input JSON.
@@ -809,5 +945,28 @@ impl LoopDetector {
             self.recent.pop_front();
         }
         self.recent.len() >= self.threshold && self.recent.iter().all(|&h| h == hash)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{edit_distance_case_insensitive, suggest_tool_names};
+
+    #[test]
+    fn suggests_closest_tool_name() {
+        let available = vec![
+            "memory_search".to_string(),
+            "memory_store".to_string(),
+            "memory_modify".to_string(),
+            "bash".to_string(),
+        ];
+        let out = suggest_tool_names("memory_serach", &available, 2);
+        assert_eq!(out.first().map(String::as_str), Some("memory_search"));
+    }
+
+    #[test]
+    fn edit_distance_is_case_insensitive() {
+        assert_eq!(edit_distance_case_insensitive("BASH", "bash"), 0);
+        assert!(edit_distance_case_insensitive("mcp_lsit", "mcp_list") > 0);
     }
 }

@@ -48,20 +48,33 @@ impl ContextManager {
         current_tokens as f64 > self.max_tokens as f64 * self.pre_sample_threshold
     }
 
-    /// Estimate token count for messages (rough heuristic: ~4 chars per token)
+    /// Estimate token count for messages using a lightweight tokenizer.
+    ///
+    /// This is intentionally deterministic and provider-agnostic:
+    /// - word-like runs are split into subword chunks
+    /// - punctuation/symbols count individually
+    /// - CJK characters count individually
+    /// - tool payloads get a small structural overhead to avoid undercounting
     pub fn estimate_tokens(messages: &[Message]) -> usize {
-        messages.iter().map(|m| {
-            let text_len: usize = m.content.iter().map(|c| match c {
-                forge_core::MessageContent::Text { text } => text.len(),
-                forge_core::MessageContent::ToolUse { input, .. } => {
-                    input.to_string().len()
-                }
-                forge_core::MessageContent::ToolResult { content, .. } => {
-                    content.len()
-                }
-            }).sum();
-            text_len / 4
-        }).sum()
+        messages
+            .iter()
+            .map(|m| {
+                m.content
+                    .iter()
+                    .map(|c| match c {
+                        forge_core::MessageContent::Text { text } => estimate_text_tokens(text),
+                        forge_core::MessageContent::ToolUse { name, input, .. } => {
+                            // Account for tool-call framing + JSON payload
+                            6 + estimate_text_tokens(name) + estimate_text_tokens(&input.to_string())
+                        }
+                        forge_core::MessageContent::ToolResult { content, .. } => {
+                            // Tool results often include structured output; add slight overhead.
+                            4 + estimate_text_tokens(content)
+                        }
+                    })
+                    .sum::<usize>()
+            })
+            .sum()
     }
 
     /// Compact the session by summarizing older messages.
@@ -205,5 +218,87 @@ impl ContextManager {
 
     pub fn max_tokens(&self) -> usize {
         self.max_tokens
+    }
+}
+
+fn estimate_text_tokens(text: &str) -> usize {
+    let mut tokens = 0usize;
+    let mut word_chars = 0usize;
+
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if word_chars > 0 {
+                tokens += subword_chunks(word_chars);
+                word_chars = 0;
+            }
+            continue;
+        }
+
+        if is_cjk(ch) {
+            if word_chars > 0 {
+                tokens += subword_chunks(word_chars);
+                word_chars = 0;
+            }
+            tokens += 1;
+            continue;
+        }
+
+        if ch.is_alphanumeric() || ch == '_' {
+            word_chars += 1;
+            continue;
+        }
+
+        // Punctuation/symbol
+        if word_chars > 0 {
+            tokens += subword_chunks(word_chars);
+            word_chars = 0;
+        }
+        tokens += 1;
+    }
+
+    if word_chars > 0 {
+        tokens += subword_chunks(word_chars);
+    }
+
+    tokens
+}
+
+fn subword_chunks(len_chars: usize) -> usize {
+    // Approximate BPE/wordpiece behavior:
+    // short words often map to 1 token, longer words fragment.
+    len_chars.div_ceil(4)
+}
+
+fn is_cjk(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x4E00..=0x9FFF   // CJK Unified Ideographs
+        | 0x3400..=0x4DBF // CJK Extension A
+        | 0x3040..=0x309F // Hiragana
+        | 0x30A0..=0x30FF // Katakana
+        | 0xAC00..=0xD7AF // Hangul
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::estimate_text_tokens;
+
+    #[test]
+    fn estimate_text_tokens_handles_words_punct_and_cjk() {
+        let english = estimate_text_tokens("hello world");
+        let punct = estimate_text_tokens("hello, world!");
+        let cjk = estimate_text_tokens("你好世界");
+
+        assert!(english >= 2);
+        assert!(punct > english);
+        assert_eq!(cjk, 4);
+    }
+
+    #[test]
+    fn estimate_text_tokens_scales_for_long_identifiers() {
+        let short = estimate_text_tokens("token");
+        let long = estimate_text_tokens("veryLongIdentifierWithManySegments");
+        assert!(long > short);
     }
 }
