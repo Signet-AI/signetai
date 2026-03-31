@@ -41,26 +41,70 @@ impl<'a> Widget for StatusBar<'a> {
         let chip_bg = self.surface;
         let border = Style::default().fg(self.muted);
         let border_hot = Style::default().fg(self.accent);
+        let name = if self.agent_name != "Assistant" {
+            self.agent_name
+        } else {
+            "Forge"
+        };
+        let health = if self.daemon_healthy { "●" } else { "○" };
+        let health_color = if self.daemon_healthy { self.success } else { self.error };
+        let model_short = truncate(self.model, 22);
+        let provider_short = truncate(self.provider, 12);
+        let tokens = format_tokens(self.input_tokens + self.output_tokens);
+        let ctx = format_tokens(self.context_window);
+        let mem = if self.total_memories > 0 {
+            format!("{}/{}", self.memories_injected, self.total_memories)
+        } else {
+            format!("{}", self.memories_injected)
+        };
+        let effort_color = match self.effort {
+            "high" => self.warning,
+            "low" => self.muted,
+            _ => self.accent,
+        };
 
-        // ─── Line 1: identity + chips ───────────────────────
         if area.height >= 1 {
-            let name = if self.agent_name != "Assistant" {
-                self.agent_name
+            let mut left = vec![
+                Span::styled(" ◈ ", Style::default().fg(self.spinner)),
+                Span::styled(name.to_uppercase(), chrome.add_modifier(Modifier::BOLD)),
+                Span::styled("  ", sep),
+                Span::styled("operator deck", Style::default().fg(self.muted)),
+            ];
+            if let Some(agent) = self.active_agent {
+                left.push(Span::styled("  ", sep));
+                left.push(Span::styled(
+                    format!("@{}", truncate(agent, 14)),
+                    Style::default().fg(self.accent),
+                ));
+            }
+
+            let mut right = Vec::new();
+            push_section_open(&mut right, "status", border_hot);
+            push_chip(
+                &mut right,
+                format!("daemon {health}"),
+                Style::default().fg(health_color).bg(chip_bg).add_modifier(Modifier::BOLD),
+            );
+            push_section_close(&mut right, border_hot);
+
+            let right_width: usize = right.iter().map(|s| s.content.len()).sum();
+            let available = area.width as usize;
+            if available > right_width + 1 {
+                let max_left = available.saturating_sub(right_width + 1);
+                let left_line = fit_spans(left, max_left);
+                buf.set_line(area.x, area.y, &left_line, max_left as u16);
+                let rx = area.x + area.width - right_width as u16;
+                buf.set_line(rx, area.y, &Line::from(right), right_width as u16);
             } else {
-                "Forge"
-            };
+                buf.set_line(area.x, area.y, &fit_spans(left, available), area.width);
+            }
+            for x in area.x..area.x + area.width {
+                buf[(x, area.y)].set_bg(self.status_bg);
+            }
+        }
 
-            let model_short = truncate(self.model, 22);
-            let provider_short = truncate(self.provider, 12);
-
+        if area.height >= 2 {
             let mut left = Vec::new();
-            push_section_open(&mut left, "forge", border_hot);
-            left.push(Span::styled("◈", Style::default().fg(self.spinner)));
-            left.push(Span::styled(" ", sep));
-            left.push(Span::styled(name, chrome.add_modifier(Modifier::BOLD)));
-            push_section_close(&mut left, border_hot);
-            left.push(Span::styled(" ", sep));
-
             push_section_open(&mut left, "runtime", border);
             push_chip(
                 &mut left,
@@ -68,27 +112,13 @@ impl<'a> Widget for StatusBar<'a> {
                 Style::default().fg(value.fg.unwrap_or(self.status_fg)).bg(chip_bg),
             );
             left.push(Span::styled("│", border));
-            push_chip(
-                &mut left,
-                provider_short,
-                Style::default().fg(self.muted).bg(chip_bg),
-            );
-
-            let effort_color = match self.effort {
-                "high" => self.warning,
-                "low" => self.muted,
-                _ => self.accent,
-            };
+            push_chip(&mut left, provider_short, Style::default().fg(self.muted).bg(chip_bg));
             left.push(Span::styled("│", border));
             push_chip(
                 &mut left,
                 format!("eff {}", self.effort),
-                Style::default()
-                    .fg(effort_color)
-                    .bg(chip_bg)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(effort_color).bg(chip_bg).add_modifier(Modifier::BOLD),
             );
-
             if let Some(agent) = self.active_agent {
                 left.push(Span::styled("│", border));
                 push_chip(
@@ -98,17 +128,6 @@ impl<'a> Widget for StatusBar<'a> {
                 );
             }
             push_section_close(&mut left, border);
-
-            let health = if self.daemon_healthy { "●" } else { "○" };
-            let health_color = if self.daemon_healthy { self.success } else { self.error };
-
-            let tokens = format_tokens(self.input_tokens + self.output_tokens);
-            let ctx = format_tokens(self.context_window);
-            let mem = if self.total_memories > 0 {
-                format!("{}/{}", self.memories_injected, self.total_memories)
-            } else {
-                format!("{}", self.memories_injected)
-            };
 
             let mut right = Vec::new();
             push_section_open(&mut right, "telemetry", border);
@@ -131,36 +150,25 @@ impl<'a> Widget for StatusBar<'a> {
                     .fg(if self.secrets_used > 0 { self.success } else { self.muted })
                     .bg(chip_bg),
             );
-            right.push(Span::styled("│", border));
-            push_chip(
-                &mut right,
-                format!("daemon {health}"),
-                Style::default()
-                    .fg(health_color)
-                    .bg(chip_bg)
-                    .add_modifier(Modifier::BOLD),
-            );
             push_section_close(&mut right, border);
+
             let right_width: usize = right.iter().map(|s| s.content.len()).sum();
             let available = area.width as usize;
             if available > right_width + 1 {
                 let max_left = available.saturating_sub(right_width + 1);
                 let left_line = fit_spans(left, max_left);
-                buf.set_line(area.x, area.y, &left_line, max_left as u16);
+                buf.set_line(area.x, area.y + 1, &left_line, max_left as u16);
                 let rx = area.x + area.width - right_width as u16;
-                buf.set_line(rx, area.y, &Line::from(right), right_width as u16);
+                buf.set_line(rx, area.y + 1, &Line::from(right), right_width as u16);
             } else {
-                let left_line = fit_spans(left, available);
-                buf.set_line(area.x, area.y, &left_line, area.width);
+                buf.set_line(area.x, area.y + 1, &fit_spans(left, available), area.width);
             }
-
             for x in area.x..area.x + area.width {
-                buf[(x, area.y)].set_bg(self.status_bg);
+                buf[(x, area.y + 1)].set_bg(self.status_bg);
             }
         }
 
-        // ─── Line 2: compact shortcuts in grouped sections ─
-        if area.height >= 2 {
+        if area.height >= 3 {
             let key = Style::default().fg(self.accent);
             let label = Style::default().fg(self.muted);
 
@@ -218,9 +226,9 @@ impl<'a> Widget for StatusBar<'a> {
                 push_section_close(&mut spans, border);
             }
 
-            buf.set_line(area.x, area.y + 1, &Line::from(spans), area.width);
+            buf.set_line(area.x, area.y + 2, &Line::from(spans), area.width);
             for x in area.x..area.x + area.width {
-                buf[(x, area.y + 1)].set_bg(self.status_bg);
+                buf[(x, area.y + 2)].set_bg(self.status_bg);
             }
         }
     }

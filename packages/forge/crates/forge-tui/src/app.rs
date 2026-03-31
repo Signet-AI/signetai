@@ -945,7 +945,7 @@ impl App {
         let max_input = (area.height / 3).max(3);
         let input_height = (input_lines + 2).min(max_input); // +2 for border + padding
         let chunks = Layout::vertical([
-            Constraint::Length(2),            // status bar
+            Constraint::Length(3),            // status bar
             Constraint::Min(5),              // chat area
             Constraint::Length(input_height), // input area
         ])
