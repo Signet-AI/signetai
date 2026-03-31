@@ -408,6 +408,7 @@ impl App {
         cli_path: Option<String>,
         theme_name: &str,
         active_agent: Option<String>,
+        agent_name: String,
         connected_providers: Vec<String>,
     ) -> Self {
         let model = provider.model().to_string();
@@ -583,7 +584,7 @@ impl App {
             config_rx,
             session_store,
             pipeline_info,
-            agent_name: forge_signet::config::agent_name(),
+            agent_name,
             active_agent,
             daemon_logs: Vec::new(),
             speculative_query: String::new(),

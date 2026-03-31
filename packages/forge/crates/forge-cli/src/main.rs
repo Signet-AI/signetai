@@ -10,7 +10,11 @@ use crossterm::{
     terminal,
 };
 use forge_provider::create_provider;
-use forge_signet::config::{build_agent_identity_prompt, build_identity_prompt, load_agent_config};
+use forge_signet::config::{
+    agent_name_for, build_agent_identity_prompt, build_identity_prompt,
+    ensure_agent_workspace_scaffold, load_agent_config, normalize_agent_id,
+    resolve_agent_workspace_path,
+};
 use forge_signet::secrets::{
     apply_local_cli_auth_env, default_model_for_provider, discover_available_providers,
     refresh_daemon_model_registry, resolve_api_key, sync_local_api_keys_from_daemon,
@@ -131,18 +135,44 @@ async fn main() -> Result<()> {
         ensure_signet(&cli.daemon_url).await;
     }
 
+    // Load Signet agent config and resolve selected agent metadata.
+    let agent_config = load_agent_config().unwrap_or_default();
+    let selected_agent = cli
+        .agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let selected_agent_id = selected_agent
+        .as_deref()
+        .map(normalize_agent_id);
+
+    // Phase A: create per-agent workspace scaffold and run Forge from that
+    // filesystem root for deterministic isolation.
+    if let Some(agent_name) = selected_agent.as_deref() {
+        let workspace = ensure_agent_workspace_scaffold(agent_name, Some(&agent_config))?;
+        std::env::set_current_dir(&workspace).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to switch to agent workspace {}: {e}",
+                workspace.display()
+            )
+        })?;
+        info!(
+            "Agent workspace active: {} -> {}",
+            agent_name,
+            workspace.display()
+        );
+    }
+
     if let Some(token) = cli.signet_token.as_deref().filter(|v| !v.trim().is_empty()) {
         std::env::set_var("FORGE_SIGNET_TOKEN", token);
     }
     if let Some(actor) = cli.signet_actor.as_deref().filter(|v| !v.trim().is_empty()) {
         std::env::set_var("FORGE_SIGNET_ACTOR", actor);
-    } else if let Some(agent_name) = cli.agent.as_deref().filter(|v| !v.trim().is_empty()) {
-        std::env::set_var("FORGE_SIGNET_ACTOR", agent_name.to_lowercase());
+    } else if let Some(agent_id) = selected_agent_id.as_deref() {
+        std::env::set_var("FORGE_SIGNET_ACTOR", agent_id);
     }
     std::env::set_var("FORGE_SIGNET_ACTOR_TYPE", "agent");
-
-    // Load Signet agent config
-    let _agent_config = load_agent_config().unwrap_or_default();
 
     // Connect to Signet daemon
     let signet_client = if cli.no_daemon {
@@ -155,15 +185,22 @@ async fn main() -> Result<()> {
         }
         if let Some(actor) = cli.signet_actor.as_deref() {
             client = client.with_actor(actor);
-        } else if let Some(agent_name) = cli.agent.as_deref() {
-            client = client.with_actor(agent_name.to_lowercase());
+        } else if let Some(agent_id) = selected_agent_id.as_deref() {
+            client = client.with_actor(agent_id);
         } else {
             client = client.with_actor("forge");
         }
         client = client.with_actor_type("agent");
-        if let Some(ref agent_name) = cli.agent {
-            client = client.with_agent(&agent_name.to_lowercase());
-            info!("Agent mode: {} (id: {})", agent_name, agent_name.to_lowercase());
+        if let Some(agent_name) = selected_agent.as_deref() {
+            let workspace = resolve_agent_workspace_path(agent_name, Some(&agent_config));
+            let agent_id = normalize_agent_id(agent_name);
+            client = client.with_agent(&agent_id);
+            info!(
+                "Agent mode: {} (id: {}, workspace: {})",
+                agent_name,
+                agent_id,
+                workspace.display()
+            );
         }
         if client.is_available().await {
             info!("Connected to Signet daemon at {}", cli.daemon_url);
@@ -228,7 +265,7 @@ async fn main() -> Result<()> {
     // Extract values before consuming cli in defaults
     let prompt_arg = cli.prompt.clone();
     let resume_arg = cli.resume;
-    let agent_arg = cli.agent.clone();
+    let agent_arg = selected_agent.clone();
 
     // Apply saved settings as defaults when CLI args not explicitly provided
     let cli_with_defaults = Cli {
@@ -317,6 +354,7 @@ async fn main() -> Result<()> {
         active_cli_path,
         &cli_with_defaults.theme,
         agent_arg,
+        agent_name_for(selected_agent.as_deref(), Some(&agent_config)),
         connected_providers,
     )
     .await;
