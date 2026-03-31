@@ -47,6 +47,8 @@ pub struct Theme {
 }
 
 impl Theme {
+    const GLOBAL_OPACITY_PCT: u8 = 98;
+
     fn with_opacity(mut self, opacity_pct: u8) -> Self {
         let bg = self.bg;
         self.status_bg = apply_opacity(self.status_bg, bg, opacity_pct);
@@ -115,7 +117,7 @@ impl Theme {
             // Signet glow token for motion/loading
             spinner: Color::Rgb(156, 218, 172),
         }
-        .with_opacity(95)
+        .with_opacity(Self::GLOBAL_OPACITY_PCT)
     }
 
     /// Signet Light — warm beige. Never pure white.
@@ -162,7 +164,7 @@ impl Theme {
             // Signet glow token toned for light bg
             spinner: Color::Rgb(166, 132, 38),
         }
-        .with_opacity(95)
+        .with_opacity(Self::GLOBAL_OPACITY_PCT)
     }
 
     /// Midnight — deep blue-black with cool accents.
@@ -190,7 +192,7 @@ impl Theme {
             selected_fg: Color::Rgb(10, 12, 22),
             spinner: Color::Rgb(244, 225, 129),
         }
-        .with_opacity(95)
+        .with_opacity(Self::GLOBAL_OPACITY_PCT)
     }
 
     /// Amber — warm retro terminal.
@@ -218,7 +220,7 @@ impl Theme {
             selected_fg: Color::Rgb(15, 12, 5),
             spinner: Color::Rgb(244, 225, 129),
         }
-        .with_opacity(95)
+        .with_opacity(Self::GLOBAL_OPACITY_PCT)
     }
 
     pub fn by_name(name: &str) -> Self {
