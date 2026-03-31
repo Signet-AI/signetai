@@ -47,9 +47,18 @@ pub struct Theme {
 }
 
 impl Theme {
-    const GLOBAL_OPACITY_PCT: u8 = 98;
+    const GLOBAL_OPACITY_PCT: u8 = 85;
+    // Canvas/background should be more translucent than UI chrome/text colors.
+    const CANVAS_OPACITY_PCT: u8 = 62;
+    // Light mode looked better with stronger canvas tint.
+    const LIGHT_CANVAS_OPACITY_PCT: u8 = 85;
+    // Transparency theme is intentionally glassier.
+    const TRANSPARENCY_CANVAS_OPACITY_PCT: u8 = 56;
 
-    fn with_opacity(mut self, opacity_pct: u8) -> Self {
+    fn with_opacity(mut self, opacity_pct: u8, canvas_opacity_pct: u8) -> Self {
+        // Also tint the canvas/background itself so overall color density
+        // matches the configured global opacity in transparent terminals.
+        self.bg = apply_opacity(self.bg, Color::Rgb(0, 0, 0), canvas_opacity_pct);
         let bg = self.bg;
         self.status_bg = apply_opacity(self.status_bg, bg, opacity_pct);
         self.status_fg = apply_opacity(self.status_fg, bg, opacity_pct);
@@ -117,7 +126,39 @@ impl Theme {
             // Signet glow token for motion/loading
             spinner: Color::Rgb(156, 218, 172),
         }
-        .with_opacity(Self::GLOBAL_OPACITY_PCT)
+        .with_opacity(Self::GLOBAL_OPACITY_PCT, Self::CANVAS_OPACITY_PCT)
+    }
+
+    /// Transparency — glass-like dark surface with Signet green accents.
+    pub fn transparency() -> Self {
+        Self {
+            name: "transparency",
+            // No background fill — let terminal transparency/blur show through.
+            bg: Color::Reset,
+            surface: Color::Reset,
+            status_bg: Color::Reset,
+            fg: Color::Rgb(212, 212, 216),
+            status_fg: Color::Rgb(212, 212, 216),
+            fg_bright: Color::Rgb(240, 240, 242),
+            muted: Color::Rgb(108, 118, 136),
+            accent: Color::Rgb(118, 176, 132),
+            user: Color::Rgb(198, 204, 214),
+            assistant: Color::Rgb(198, 204, 214),
+            tool: Color::Rgb(96, 146, 112),
+            success: Color::Rgb(118, 176, 132),
+            error: Color::Rgb(210, 106, 102),
+            warning: Color::Rgb(230, 188, 92),
+            code: Color::Rgb(240, 240, 242),
+            border: Color::Rgb(64, 98, 76),
+            dialog_bg: Color::Reset,
+            selected_bg: Color::Reset,
+            selected_fg: Color::Rgb(118, 176, 132),
+            spinner: Color::Rgb(156, 218, 172),
+        }
+        .with_opacity(
+            Self::GLOBAL_OPACITY_PCT,
+            Self::TRANSPARENCY_CANVAS_OPACITY_PCT,
+        )
     }
 
     /// Signet Light — warm beige. Never pure white.
@@ -164,7 +205,7 @@ impl Theme {
             // Signet glow token toned for light bg
             spinner: Color::Rgb(86, 124, 196),
         }
-        .with_opacity(Self::GLOBAL_OPACITY_PCT)
+        .with_opacity(Self::GLOBAL_OPACITY_PCT, Self::LIGHT_CANVAS_OPACITY_PCT)
     }
 
     /// Midnight — deep blue-black with cool accents.
@@ -192,7 +233,7 @@ impl Theme {
             selected_fg: Color::Rgb(10, 12, 22),
             spinner: Color::Rgb(244, 225, 129),
         }
-        .with_opacity(Self::GLOBAL_OPACITY_PCT)
+        .with_opacity(Self::GLOBAL_OPACITY_PCT, Self::CANVAS_OPACITY_PCT)
     }
 
     /// Amber — warm retro terminal.
@@ -220,26 +261,27 @@ impl Theme {
             selected_fg: Color::Rgb(15, 12, 5),
             spinner: Color::Rgb(244, 225, 129),
         }
-        .with_opacity(Self::GLOBAL_OPACITY_PCT)
+        .with_opacity(Self::GLOBAL_OPACITY_PCT, Self::CANVAS_OPACITY_PCT)
     }
 
     pub fn by_name(name: &str) -> Self {
         match name {
+            "transparency" | "glass" | "transparent" => Self::transparency(),
             "signet-light" | "light" => Self::signet_light(),
             "midnight" => Self::midnight(),
             "amber" => Self::amber(),
-            _ => Self::signet_dark(),
+            _ => Self::transparency(),
         }
     }
 
     pub fn all_names() -> &'static [&'static str] {
-        &["signet-dark", "signet-light", "midnight", "amber"]
+        &["transparency", "signet-dark", "signet-light", "midnight", "amber"]
     }
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::signet_dark()
+        Self::transparency()
     }
 }
 

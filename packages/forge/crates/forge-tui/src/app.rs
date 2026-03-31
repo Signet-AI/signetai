@@ -1,5 +1,6 @@
 use crate::input::Action;
 use crate::keybinds::KeyBindConfig;
+use crate::mcp_config::{connect_mcp_servers, McpConfig};
 use crate::views::chat::{ChatEntry, ChatView, ToolStatus};
 use crate::views::command_palette::{CommandKind as PaletteCommandKind, CommandPalette};
 use crate::views::dashboard_nav::DashboardNav;
@@ -30,6 +31,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
     DefaultTerminal, Frame,
 };
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info};
@@ -57,9 +59,11 @@ enum ProcessingPhase {
 impl ProcessingPhase {
     /// Spinner frames — subtle technical sweep instead of chunky hops
     const FRAMES: &[&str] = &["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"];
+    // Slightly faster than before (~6.25% vs old 80-tick cycle).
+    const VERB_CYCLE_TICKS: usize = 75;
 
     /// Contextual verbs that cycle based on tick for each phase.
-    /// tick/80 ≈ 4 seconds per verb at 50ms frame rate.
+    /// tick/75 ≈ 3.75 seconds per verb at 50ms frame rate.
     fn label(&self, tick: usize) -> &'static str {
         match self {
             Self::Idle => "",
@@ -68,29 +72,33 @@ impl ProcessingPhase {
                 const VERBS: &[&str] = &[
                     "Remembering", "Recalling", "Tracing",
                     "Searching", "Linking", "Surfacing",
+                    "Synapsing", "Weaving",
                 ];
-                VERBS[(tick / 80) % VERBS.len()]
+                VERBS[(tick / Self::VERB_CYCLE_TICKS) % VERBS.len()]
             }
             Self::Thinking => {
                 const VERBS: &[&str] = &[
                     "Thinking", "Deliberating", "Reasoning",
                     "Synthesizing", "Constructing", "Shaping",
+                    "Inferring", "Integrating", "Contextualizing",
                 ];
-                VERBS[(tick / 80) % VERBS.len()]
+                VERBS[(tick / Self::VERB_CYCLE_TICKS) % VERBS.len()]
             }
             Self::Planning => {
                 const VERBS: &[&str] = &[
                     "Planning", "Structuring", "Mapping",
                     "Sequencing", "Investigating", "Constructing",
+                    "Encoding",
                 ];
-                VERBS[(tick / 80) % VERBS.len()]
+                VERBS[(tick / Self::VERB_CYCLE_TICKS) % VERBS.len()]
             }
             Self::Writing => {
                 const VERBS: &[&str] = &[
                     "Writing", "Composing", "Drafting",
                     "Refining", "Building", "Editing",
+                    "Firing",
                 ];
-                VERBS[(tick / 80) % VERBS.len()]
+                VERBS[(tick / Self::VERB_CYCLE_TICKS) % VERBS.len()]
             }
             Self::ExecutingTool(_) => "Running",
         }
@@ -209,6 +217,8 @@ pub struct App {
     mcp_servers: Vec<signet_commands::McpServerCommand>,
     /// Installed Signet MCP tools exposed as slash commands
     mcp_tools: Vec<signet_commands::McpToolCommand>,
+    /// Connected local MCP stdio clients from ~/.config/forge/mcp.json
+    mcp_clients: Vec<Arc<forge_mcp::McpStdioClient>>,
     /// Active one-shot skill for next prompt
     pending_skill: Option<(String, String)>,
     /// Signet client for API key resolution on model switch
@@ -227,6 +237,7 @@ pub struct App {
     speculative_query: String,
     speculative_handle: Option<tokio::task::JoinHandle<()>>,
     last_keystroke: std::time::Instant,
+    speculative_last_fire: Option<std::time::Instant>,
     recall_cache: forge_signet::recall_cache::RecallCache,
     /// Pipeline summary (extraction + embedding models)
     pipeline_info: String,
@@ -283,6 +294,30 @@ impl App {
     /// Character count of the input (not byte length).
     fn input_char_len(&self) -> usize {
         self.input.chars().count()
+    }
+
+    fn attachment_tokens(&self) -> String {
+        if self.attached_images.is_empty() {
+            return String::new();
+        }
+        self.attached_images
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("[Image #{}]", i + 1))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn compose_input_with_attachments(&self, input: &str) -> String {
+        let tokens = self.attachment_tokens();
+        if tokens.is_empty() {
+            return input.to_string();
+        }
+        if input.trim().is_empty() {
+            tokens
+        } else {
+            format!("{tokens} {input}")
+        }
     }
 
     fn apply_terminal_theme_background(&self) {
@@ -440,6 +475,86 @@ impl App {
             &self.mcp_servers,
             &self.mcp_tools,
         );
+
+        // Merge local MCP stdio servers/tools as a compatibility fallback.
+        self.refresh_local_mcp_registry().await;
+
+        self.signet_commands = signet_commands::commands_with_dynamic(
+            &self.skills,
+            &self.mcp_servers,
+            &self.mcp_tools,
+        );
+    }
+
+    async fn refresh_local_mcp_registry(&mut self) {
+        if self.mcp_clients.is_empty() {
+            return;
+        }
+
+        let mut local_servers = Vec::new();
+        let mut local_tools = Vec::new();
+
+        for client in &self.mcp_clients {
+            let server_name = client.name().to_string();
+            let server_id = server_name
+                .to_ascii_lowercase()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect::<String>()
+                .trim_matches('-')
+                .to_string();
+
+            local_servers.push(signet_commands::McpServerCommand {
+                server_id: if server_id.is_empty() {
+                    "mcp".to_string()
+                } else {
+                    server_id.clone()
+                },
+                server_name: server_name.clone(),
+                description: "Local MCP server".to_string(),
+            });
+
+            if let Ok(tools) = client.list_tools().await {
+                for tool in tools {
+                    let prefixed = format!("{server_name}_");
+                    let tool_name = tool
+                        .name
+                        .strip_prefix(&prefixed)
+                        .unwrap_or(&tool.name)
+                        .to_string();
+                    local_tools.push(signet_commands::McpToolCommand {
+                        server_id: if server_id.is_empty() {
+                            "mcp".to_string()
+                        } else {
+                            server_id.clone()
+                        },
+                        server_name: server_name.clone(),
+                        tool_name,
+                        description: tool.description,
+                    });
+                }
+            }
+        }
+
+        let mut seen_servers: HashSet<String> =
+            self.mcp_servers.iter().map(|s| s.server_id.clone()).collect();
+        for server in local_servers {
+            if seen_servers.insert(server.server_id.clone()) {
+                self.mcp_servers.push(server);
+            }
+        }
+
+        let mut seen_tools: HashSet<(String, String)> = self
+            .mcp_tools
+            .iter()
+            .map(|t| (t.server_id.clone(), t.tool_name.clone()))
+            .collect();
+        for tool in local_tools {
+            let key = (tool.server_id.clone(), tool.tool_name.clone());
+            if seen_tools.insert(key) {
+                self.mcp_tools.push(tool);
+            }
+        }
     }
 
     fn open_model_picker(&mut self) {
@@ -518,8 +633,10 @@ impl App {
         let effort = Arc::new(Mutex::new(forge_provider::ReasoningEffort::default()));
         let bypass = Arc::new(Mutex::new(false));
 
+        let mcp_config = McpConfig::load();
+        let mcp_clients = connect_mcp_servers(&mcp_config).await;
         let daemon_url = signet_client.as_ref().map(|c| c.base_url().to_string());
-        let agent = Arc::new(AgentLoop::new(
+        let mut agent_loop = AgentLoop::new(
             provider,
             hooks,
             event_tx,
@@ -529,8 +646,10 @@ impl App {
             Arc::clone(&effort),
             Arc::clone(&bypass),
             daemon_url,
-            Vec::new(),
-        ));
+            mcp_clients.clone(),
+        );
+        agent_loop.refresh_mcp_tools().await;
+        let agent = Arc::new(agent_loop);
 
         // Start config watcher
         let config_rx = match ConfigWatcher::start() {
@@ -636,6 +755,7 @@ impl App {
             signet_commands: Vec::new(),
             mcp_servers: Vec::new(),
             mcp_tools: Vec::new(),
+            mcp_clients,
             pending_skill: None,
             signet_client,
             permissions,
@@ -650,6 +770,7 @@ impl App {
             speculative_query: String::new(),
             speculative_handle: None,
             last_keystroke: std::time::Instant::now(),
+            speculative_last_fire: None,
             recall_cache,
             voice_recorder: None,
             voice_recording: false,
@@ -786,8 +907,12 @@ impl App {
                         while let Ok(event) = self.event_rx.try_recv() {
                             self.handle_agent_event(event);
                         }
-                        // Still stuck? Force reset
-                        if self.processing {
+                        // If we are still actively drip-streaming, do NOT flush all at once.
+                        // Let pending_text drain naturally for smooth typewriter output.
+                        let still_dripping =
+                            !self.pending_text.is_empty() || self.turn_complete_pending;
+                        // Still stuck without pending stream state? Force reset.
+                        if self.processing && !still_dripping {
                             self.streaming_text.push_str(&self.pending_text);
                             self.pending_text.clear();
                             self.turn_complete_pending = false;
@@ -881,17 +1006,38 @@ impl App {
                 self.trigger_interim_transcription();
             }
 
-            // Speculative pre-recall — fire after 500ms of no typing.
-            // Minimum 10 chars to avoid wasting daemon calls on short prefixes.
+            // Speculative pre-recall — throttled to avoid noisy hook spam while typing.
+            // Debounce: wait for user to pause.
+            // Cooldown: max one speculative call every few seconds.
+            // Growth gate: only refresh when prompt meaningfully expanded.
+            let cooldown_ok = self
+                .speculative_last_fire
+                .map(|t| t.elapsed() > std::time::Duration::from_secs(3))
+                .unwrap_or(true);
+            let meaningful_growth = if self.speculative_query.is_empty() {
+                true
+            } else if self.input.starts_with(&self.speculative_query) {
+                self.input
+                    .chars()
+                    .count()
+                    .saturating_sub(self.speculative_query.chars().count())
+                    >= 12
+                    || self.input.ends_with(['.', '!', '?', '\n'])
+            } else {
+                true
+            };
             if !self.processing
-                && self.input.len() >= 10
+                && self.input.len() >= 12
                 && !self.input.starts_with('/')
                 && self.input != self.speculative_query
-                && self.last_keystroke.elapsed() > std::time::Duration::from_millis(500)
+                && meaningful_growth
+                && cooldown_ok
+                && self.last_keystroke.elapsed() > std::time::Duration::from_millis(900)
             {
                 if let Some(signet) = &self.signet_client {
                 let query = self.input.clone();
                 self.speculative_query = query.clone();
+                self.speculative_last_fire = Some(std::time::Instant::now());
 
                 // Cancel any in-flight speculative task
                 if let Some(handle) = self.speculative_handle.take() {
@@ -957,7 +1103,7 @@ impl App {
         let bg_block = Block::default().style(Style::default().bg(canvas_bg));
         frame.render_widget(bg_block, area);
 
-        // Layout: [status_bar(2)] [chat(flex)] [input(dynamic)]
+        // Layout: [status_bar(5)] [chat(flex)] [input(dynamic)]
         // Input expands based on content lines, capped at 1/3 of terminal height
         let input_width = area.width.saturating_sub(5) as usize; // account for " > " prefix + border
         let input_lines = if input_width == 0 || self.input.is_empty() {
@@ -970,7 +1116,7 @@ impl App {
         let max_input = (area.height / 3).max(3);
         let input_height = (input_lines + 2).min(max_input); // +2 for border + padding
         let chunks = Layout::vertical([
-            Constraint::Length(3),            // status bar
+            Constraint::Length(5),            // status bar
             Constraint::Min(5),              // chat area
             Constraint::Length(input_height), // input area
         ])
@@ -1014,6 +1160,7 @@ impl App {
             error: self.theme.error,
             warning: self.theme.warning,
             spinner: self.theme.spinner,
+            border: self.theme.border,
         };
         status.render(chunks[0], frame.buffer_mut());
 
@@ -1050,7 +1197,15 @@ impl App {
             .borders(Borders::TOP)
             .border_style(Style::default().fg(self.theme.accent));
 
-        let input_text = if self.input.is_empty() && self.voice_interim_text.is_empty() {
+        let attachment_tokens = self.attachment_tokens();
+        let has_attachments = !attachment_tokens.is_empty();
+        let attachment_prefix = if has_attachments {
+            format!("{attachment_tokens} ")
+        } else {
+            String::new()
+        };
+
+        let input_text = if self.input.is_empty() && self.voice_interim_text.is_empty() && !has_attachments {
             let placeholder = if self.voice_recording {
                 " Listening..."
             } else {
@@ -1064,10 +1219,15 @@ impl App {
         } else if !self.voice_interim_text.is_empty() {
             // Show committed input + grayed interim preview
             let mut spans = vec![];
+            spans.push(Span::styled(" > ", input_style));
+            if has_attachments {
+                spans.push(Span::styled(
+                    attachment_prefix.clone(),
+                    Style::default().fg(self.theme.accent),
+                ));
+            }
             if !self.input.is_empty() {
-                spans.push(Span::styled(format!(" > {}", &self.input), input_style));
-            } else {
-                spans.push(Span::styled(" > ", input_style));
+                spans.push(Span::styled(self.input.clone(), input_style));
             }
             spans.push(Span::styled(
                 &self.voice_interim_text,
@@ -1075,13 +1235,21 @@ impl App {
             ));
             Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false })
         } else {
-            Paragraph::new(Span::styled(format!(" > {}", &self.input), input_style))
-                .wrap(Wrap { trim: false })
+            let mut spans = vec![Span::styled(" > ", input_style)];
+            if has_attachments {
+                spans.push(Span::styled(
+                    attachment_prefix.clone(),
+                    Style::default().fg(self.theme.accent),
+                ));
+            }
+            spans.push(Span::styled(self.input.clone(), input_style));
+            Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false })
         };
 
         // Scroll input to keep cursor visible when text exceeds max height
         let visible_content = input_height.saturating_sub(2); // minus border + padding
-        let cursor_offset = self.cursor as u16 + 3; // " > " prefix
+        let attachment_chars = attachment_prefix.chars().count() as u16;
+        let cursor_offset = self.cursor as u16 + 3 + attachment_chars; // " > " + token prefix
         let iw = chunks[2].width.saturating_sub(1).max(1);
         let cursor_line = cursor_offset / iw;
         let input_scroll = cursor_line.saturating_sub(visible_content.saturating_sub(1));
@@ -1315,7 +1483,9 @@ impl App {
         };
 
         match action {
-            Action::Submit if !self.processing && !self.input.is_empty() => {
+            Action::Submit if !self.processing
+                && (!self.input.is_empty() || !self.attached_images.is_empty()) =>
+            {
                 // Stop voice recording if active (auto-stop on send)
                 if self.voice_recording {
                     self.stop_voice_recording();
@@ -1324,6 +1494,8 @@ impl App {
                 let input = self.input.clone();
                 self.input.clear();
                 self.cursor = 0;
+                let user_input_with_attachments = self.compose_input_with_attachments(&input);
+                self.attached_images.clear();
 
                 // Always reset scroll to bottom when user submits
                 self.scroll_offset = 0;
@@ -1343,11 +1515,14 @@ impl App {
                             "Applying skill /{} to this prompt.",
                             skill_name
                         )));
-                        format!("<skill name=\"{skill_name}\">\n{skill_content}\n</skill>\n\n{input}")
+                        format!(
+                            "<skill name=\"{skill_name}\">\n{skill_content}\n</skill>\n\n{user_input_with_attachments}"
+                        )
                     } else {
-                        input.clone()
+                        user_input_with_attachments.clone()
                     };
-                    self.entries.push(ChatEntry::UserMessage(input.clone()));
+                    self.entries
+                        .push(ChatEntry::UserMessage(user_input_with_attachments));
 
                     let agent = Arc::clone(&self.agent);
                     let session = Arc::clone(&self.session);
@@ -1371,6 +1546,10 @@ impl App {
                 self.cursor -= 1;
                 let byte_pos = self.cursor_byte_pos();
                 self.input.remove(byte_pos);
+            }
+            Action::Backspace if self.cursor == 0 && !self.attached_images.is_empty() => {
+                self.attached_images.pop();
+                self.last_keystroke = std::time::Instant::now();
             }
             Action::Delete if self.cursor < self.input_char_len() => {
                 let byte_pos = self.cursor_byte_pos();
@@ -1757,10 +1936,7 @@ impl App {
 
         // Check if it's an image file path (dragged into terminal)
         if is_image_path(trimmed) {
-            let path = trimmed
-                .trim_matches('\'')
-                .trim_matches('"')
-                .to_string();
+            let path = normalize_image_path(trimmed);
 
             if std::path::Path::new(&path).exists() {
                 self.attached_images.push(path.clone());
@@ -2470,7 +2646,7 @@ impl App {
         let (permission_tx, permission_rx) = mpsc::channel::<PermissionRequest>(8);
 
         let daemon_url = self.signet_client.as_ref().map(|c| c.base_url().to_string());
-        self.agent = Arc::new(AgentLoop::new(
+        let mut agent_loop = AgentLoop::new(
             new_provider,
             hooks,
             event_tx,
@@ -2480,8 +2656,10 @@ impl App {
             Arc::clone(&self.effort),
             Arc::clone(&self.bypass),
             daemon_url,
-            Vec::new(),
-        ));
+            self.mcp_clients.clone(),
+        );
+        agent_loop.refresh_mcp_tools().await;
+        self.agent = Arc::new(agent_loop);
 
         self.event_rx = event_rx;
         self.permission_rx = permission_rx;
@@ -2726,11 +2904,19 @@ impl App {
         }
 
         let transcript = s.transcript();
+        if transcript.trim().is_empty() {
+            return;
+        }
         let session_id = s.id.clone();
         let project = s.project.clone();
         drop(s); // Release lock before async call
 
         if let Some(client) = &self.signet_client {
+            info!(
+                "Submitting session-end hook: session={} transcript_chars={}",
+                session_id,
+                transcript.chars().count()
+            );
             let hooks = SessionHooks::new(client.clone(), session_id, project);
             if let Err(e) = hooks.session_end(&transcript).await {
                 info!("Session-end hook failed (non-fatal): {e}");
@@ -2964,10 +3150,10 @@ fn transparent_bg_enabled() -> bool {
 
 /// Check if a path looks like an image file
 fn is_image_path(text: &str) -> bool {
-    let path = text
-        .trim()
-        .trim_matches('\'')
-        .trim_matches('"');
+    let path = normalize_image_path(text);
+    if path.is_empty() {
+        return false;
+    }
     let lower = path.to_lowercase();
     lower.ends_with(".png")
         || lower.ends_with(".jpg")
@@ -2976,6 +3162,21 @@ fn is_image_path(text: &str) -> bool {
         || lower.ends_with(".webp")
         || lower.ends_with(".bmp")
         || lower.ends_with(".svg")
+}
+
+/// Normalize common drag/drop image path formats from terminals.
+/// Handles:
+/// - quoted paths
+/// - shell-escaped spaces (`\ `)
+/// - file:// URLs
+/// - `%20` path spaces
+fn normalize_image_path(text: &str) -> String {
+    let mut s = text.trim().trim_matches('\'').trim_matches('"').to_string();
+    if let Some(rest) = s.strip_prefix("file://") {
+        s = rest.to_string();
+    }
+    s = s.replace("\\ ", " ");
+    s.replace("%20", " ")
 }
 
 /// Save an arboard clipboard image to a PNG file

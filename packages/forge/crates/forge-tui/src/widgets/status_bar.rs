@@ -31,6 +31,7 @@ pub struct StatusBar<'a> {
     pub error: Color,
     pub warning: Color,
     pub spinner: Color,
+    pub border: Color,
 }
 
 impl<'a> Widget for StatusBar<'a> {
@@ -40,7 +41,7 @@ impl<'a> Widget for StatusBar<'a> {
         let value = Style::default().fg(self.status_fg);
         let chrome = Style::default().fg(self.accent);
         let chip_bg = self.surface;
-        let border = Style::default().fg(muted_hi);
+        let border = Style::default().fg(self.border);
         let border_hot = Style::default().fg(self.accent);
         let name = if self.agent_name != "Assistant" {
             self.agent_name
@@ -230,6 +231,24 @@ impl<'a> Widget for StatusBar<'a> {
             buf.set_line(area.x, area.y + 2, &Line::from(spans), area.width);
             for x in area.x..area.x + area.width {
                 buf[(x, area.y + 2)].set_bg(self.status_bg);
+            }
+        }
+
+        if area.height >= 4 {
+            // Padding row to keep keybind row from feeling cramped against divider
+            let y = area.y + 3;
+            for x in area.x..area.x + area.width {
+                buf[(x, y)].set_bg(self.status_bg).set_char(' ');
+            }
+        }
+
+        if area.height >= 5 {
+            let y = area.y + 4;
+            for x in area.x..area.x + area.width {
+                buf[(x, y)]
+                    .set_bg(self.status_bg)
+                    .set_fg(self.border)
+                    .set_char('─');
             }
         }
     }

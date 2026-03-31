@@ -76,7 +76,7 @@ pub fn built_in_commands() -> Vec<SignetCommand> {
             CommandKind::Internal("import-claude".into()),
         ),
         cmd("dashboard", "/dashboard", "Open Signet dashboard in browser", CommandKind::Internal("dashboard".into())),
-        cmd("theme", "/theme <name>", "Switch theme (signet-dark, signet-light, midnight, amber)", CommandKind::Internal("theme".into())),
+        cmd("theme", "/theme <name>", "Switch theme (transparency, signet-dark, signet-light, midnight, amber)", CommandKind::Internal("theme".into())),
         cmd("auth", "/auth", "Show provider auth setup instructions", CommandKind::Internal("auth".into())),
         cmd("effort", "/effort <level>", "Set reasoning effort (low, medium, high)", CommandKind::Internal("effort".into())),
         cmd("forge-bypass", "/forge-bypass", "Toggle CLI permission bypass (skip all approval prompts)", CommandKind::Internal("forge-bypass".into())),
@@ -396,7 +396,8 @@ const EFFORT_ARGS: &[ArgSuggestion] = &[
 ];
 
 const THEME_ARGS: &[ArgSuggestion] = &[
-    ArgSuggestion { value: "signet-dark", description: "Industrial monochrome (default)" },
+    ArgSuggestion { value: "transparency", description: "Glass dark (default)" },
+    ArgSuggestion { value: "signet-dark", description: "Industrial monochrome" },
     ArgSuggestion { value: "signet-light", description: "Warm beige, never pure white" },
     ArgSuggestion { value: "midnight", description: "Deep blue-black, cool accents" },
     ArgSuggestion { value: "amber", description: "Warm retro terminal" },

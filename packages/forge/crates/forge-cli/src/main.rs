@@ -73,8 +73,8 @@ struct Cli {
     #[arg(long)]
     auth_provider: Option<String>,
 
-    /// Color theme (signet-dark, signet-light, midnight, amber)
-    #[arg(long, default_value = "signet-dark")]
+    /// Color theme (transparency, signet-dark, signet-light, midnight, amber)
+    #[arg(long, default_value = "transparency")]
     theme: String,
 
     /// Agent name (uses per-agent identity files from ~/.agents/agents/<name>/)
@@ -327,7 +327,7 @@ async fn main() -> Result<()> {
     let cli_with_defaults = Cli {
         model: model_default,
         provider: cli.provider.clone().or(settings.provider),
-        theme: if cli.theme == "signet-dark" {
+        theme: if cli.theme == "transparency" {
             settings.theme.unwrap_or_else(|| cli.theme.clone())
         } else {
             cli.theme.clone()

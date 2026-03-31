@@ -265,9 +265,8 @@ impl SessionHooks {
             transcript.len()
         );
 
-        // Don't submit tiny transcripts — daemon ignores < 500 chars anyway
-        if transcript.len() < 500 {
-            debug!("Transcript too short ({} bytes), skipping session-end hook", transcript.len());
+        if transcript.trim().is_empty() {
+            debug!("Transcript empty, skipping session-end hook");
             return Ok(());
         }
 

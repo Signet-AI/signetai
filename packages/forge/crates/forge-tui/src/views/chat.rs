@@ -194,7 +194,7 @@ impl<'a> Widget for ChatView<'a> {
                             self.agent_name,
                             Style::default()
                                 .fg(t.accent)
-                                .add_modifier(Modifier::BOLD),
+                            .add_modifier(Modifier::BOLD),
                         ),
                     ]));
                     let md_lines = render_markdown(text, t);
@@ -352,9 +352,10 @@ impl<'a> Widget for ChatView<'a> {
             }
         }
 
-        // Bottom padding — breathing room between content and input box
-        lines.push(Line::from(""));
-        lines.push(Line::from(""));
+        // Bottom padding — keep consistent space between chat feed and input box
+        for _ in 0..4 {
+            lines.push(Line::from(""));
+        }
 
         // Measure actual wrapped height by rendering to a hidden buffer.
         // This gives the exact line count ratatui produces — no estimation.
