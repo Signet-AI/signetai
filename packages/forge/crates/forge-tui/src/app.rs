@@ -295,6 +295,18 @@ impl App {
         );
     }
 
+    fn display_agent_name(&self) -> String {
+        if self.signet_client.is_none() {
+            return "Forge".to_string();
+        }
+        let name = self.agent_name.trim();
+        if name.is_empty() {
+            "Forge".to_string()
+        } else {
+            name.to_string()
+        }
+    }
+
     async fn refresh_connected_models(&mut self) {
         self.detected_clis = forge_provider::cli::detect_cli_tools().await;
         self.skills = forge_signet::skills::load_skills();
@@ -1005,12 +1017,13 @@ impl App {
             None
         };
 
+        let display_agent_name = self.display_agent_name();
         let chat = ChatView {
             entries: &self.entries,
             streaming_text: &self.streaming_text,
             scroll_offset: self.scroll_offset,
             activity_line,
-            agent_name: &self.agent_name,
+            agent_name: &display_agent_name,
             total_memories: self.total_memories,
             tick: self.tick,
             theme: &self.theme,
