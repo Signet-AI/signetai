@@ -27,6 +27,101 @@ enum McpCallOutcome {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnPlan {
+    Short,
+    Normal,
+    Deep,
+}
+
+impl TurnPlan {
+    fn max_tokens(self) -> usize {
+        match self {
+            Self::Short => 4_096,
+            Self::Normal => 8_192,
+            Self::Deep => 12_288,
+        }
+    }
+
+    fn effort(self) -> ReasoningEffort {
+        match self {
+            Self::Short => ReasoningEffort::Low,
+            Self::Normal => ReasoningEffort::Medium,
+            Self::Deep => ReasoningEffort::High,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Short => "short",
+            Self::Normal => "normal",
+            Self::Deep => "deep",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct AdaptiveTuning {
+    llm_latency_ms: VecDeque<u64>,
+    tool_result_sizes: VecDeque<usize>,
+    tool_truncations: VecDeque<bool>,
+}
+
+impl AdaptiveTuning {
+    const MAX_POINTS: usize = 32;
+
+    fn record_llm_latency(&mut self, ms: u64) {
+        self.llm_latency_ms.push_back(ms);
+        if self.llm_latency_ms.len() > Self::MAX_POINTS {
+            self.llm_latency_ms.pop_front();
+        }
+    }
+
+    fn record_tool_result(&mut self, original_chars: usize, truncated: bool) {
+        self.tool_result_sizes.push_back(original_chars);
+        if self.tool_result_sizes.len() > Self::MAX_POINTS {
+            self.tool_result_sizes.pop_front();
+        }
+        self.tool_truncations.push_back(truncated);
+        if self.tool_truncations.len() > Self::MAX_POINTS {
+            self.tool_truncations.pop_front();
+        }
+    }
+
+    fn p95_llm_ms(&self) -> Option<u64> {
+        percentile_u64(&self.llm_latency_ms, 0.95)
+    }
+
+    fn truncation_rate(&self) -> f64 {
+        if self.tool_truncations.is_empty() {
+            return 0.0;
+        }
+        let trues = self.tool_truncations.iter().filter(|&&v| v).count() as f64;
+        trues / self.tool_truncations.len() as f64
+    }
+
+    fn recommended_tool_chars(&self) -> usize {
+        let p95 = self.p95_llm_ms().unwrap_or(0);
+        let trunc = self.truncation_rate();
+        if p95 > 12_000 {
+            8_000
+        } else if trunc > 0.40 {
+            14_000
+        } else if p95 < 4_000 && trunc < 0.10 {
+            13_000
+        } else {
+            12_000
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ClampedToolOutput {
+    content: String,
+    original_len: usize,
+    truncated: bool,
+}
+
 /// Events sent from the agent loop to the TUI
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -77,6 +172,8 @@ pub struct AgentLoop {
     daemon_url: Option<String>,
     /// Connected MCP servers (for external tool routing)
     mcp_clients: Vec<Arc<forge_mcp::McpStdioClient>>,
+    /// Rolling performance telemetry for adaptive phase-3 tuning
+    tuning: Arc<Mutex<AdaptiveTuning>>,
 }
 
 impl AgentLoop {
@@ -137,6 +234,7 @@ impl AgentLoop {
             bypass,
             daemon_url,
             mcp_clients,
+            tuning: Arc::new(Mutex::new(AdaptiveTuning::default())),
         }
     }
 
@@ -157,6 +255,41 @@ impl AgentLoop {
             .map(|d| d.name.clone())
             .collect();
         invalid_tool_call_result(tc, &available)
+    }
+
+    async fn choose_turn_plan(
+        &self,
+        user_input: &str,
+        estimated_message_tokens: usize,
+    ) -> TurnPlan {
+        let context_pressure = if self.context_manager.max_tokens() == 0 {
+            0.0
+        } else {
+            estimated_message_tokens as f64 / self.context_manager.max_tokens() as f64
+        };
+        let input_len = user_input.chars().count();
+        let lower = user_input.to_lowercase();
+        let deep_signal = lower.contains("analyze")
+            || lower.contains("design")
+            || lower.contains("compare")
+            || lower.contains("root cause")
+            || input_len > 700;
+        let short_signal = input_len < 120
+            && !deep_signal
+            && !lower.contains("step")
+            && !lower.contains("plan");
+
+        let latency_p95 = self.tuning.lock().await.p95_llm_ms().unwrap_or(0);
+        if context_pressure > 0.75 || latency_p95 > 14_000 {
+            return TurnPlan::Short;
+        }
+        if deep_signal && context_pressure < 0.60 && latency_p95 < 10_000 {
+            return TurnPlan::Deep;
+        }
+        if short_signal && latency_p95 > 8_000 {
+            return TurnPlan::Short;
+        }
+        TurnPlan::Normal
     }
 
     /// Call the provider with retry logic for transient failures.
@@ -320,10 +453,18 @@ impl AgentLoop {
         // 3. Run the agentic loop
         let mut loop_detector = LoopDetector::new(3);
         loop {
-            let estimated_messages_tokens = {
+            let raw_estimated_messages_tokens = {
                 let s = session.lock().await;
                 ContextManager::estimate_tokens(&s.messages)
             };
+            let estimated_messages_tokens = adjust_estimate_for_model(
+                raw_estimated_messages_tokens,
+                self.provider.name(),
+                self.provider.model(),
+            );
+            let turn_plan = self
+                .choose_turn_plan(user_input, estimated_messages_tokens)
+                .await;
             let turn_memory_context = prepare_memory_context_for_turn(
                 memory_context.clone(),
                 self.context_manager.max_tokens(),
@@ -337,16 +478,28 @@ impl AgentLoop {
                 format!("{}\n\n{}", self.system_prompt, turn_memory_context)
             };
 
-            let current_effort = *self.effort.lock().await;
+            let user_effort = *self.effort.lock().await;
+            let effective_effort = max_effort(user_effort, turn_plan.effort());
             let current_bypass = *self.bypass.lock().await;
 
+            let dynamic_tool_max_chars = self.tuning.lock().await.recommended_tool_chars();
             let opts = CompletionOpts {
                 system_prompt: Some(full_system),
-                max_tokens: Some(8192),
-                effort: current_effort,
+                max_tokens: Some(turn_plan.max_tokens()),
+                effort: effective_effort,
                 bypass: current_bypass,
                 ..Default::default()
             };
+            let _ = self
+                .event_tx
+                .send(AgentEvent::Status(format!(
+                    "Turn plan: {} (effort={}, max_tokens={}, tool_cap={})",
+                    turn_plan.label(),
+                    effective_effort.as_str(),
+                    turn_plan.max_tokens(),
+                    dynamic_tool_max_chars
+                )))
+                .await;
 
             // Pre-sampling compaction: check token estimate BEFORE calling
             // the LLM. If we're approaching the context window limit, compact
@@ -384,6 +537,7 @@ impl AgentLoop {
             };
 
             // 4. Call the provider with retry logic
+            let llm_started = std::time::Instant::now();
             let stream = match self
                 .call_provider_with_retry(session, &messages, &opts)
                 .await
@@ -511,6 +665,11 @@ impl AgentLoop {
                         return;
                     }
                 }
+            }
+            let llm_elapsed_ms = llm_started.elapsed().as_millis() as u64;
+            {
+                let mut tuning = self.tuning.lock().await;
+                tuning.record_llm_latency(llm_elapsed_ms);
             }
 
             // 6. Build assistant message with all content blocks
@@ -721,16 +880,23 @@ impl AgentLoop {
                     match outcome {
                         Ok((tc, result)) => {
                             completed_readonly_ids.insert(tc.id.clone());
-                            let bounded_output = clamp_tool_content(&result.content);
+                            let bounded = clamp_tool_content_with_dynamic_max(
+                                &result.content,
+                                dynamic_tool_max_chars,
+                            );
+                            {
+                                let mut tuning = self.tuning.lock().await;
+                                tuning.record_tool_result(bounded.original_len, bounded.truncated);
+                            }
                             let _ = self.event_tx.send(AgentEvent::ToolResult {
                                 id: tc.id.clone(),
                                 name: tc.name.clone(),
-                                output: bounded_output.clone(),
+                                output: bounded.content.clone(),
                                 is_error: result.is_error,
                             }).await;
                             tool_results_content.push(MessageContent::ToolResult {
                                 tool_use_id: result.tool_use_id,
-                                content: bounded_output,
+                                content: bounded.content,
                                 is_error: result.is_error,
                             });
                         }
@@ -751,16 +917,21 @@ impl AgentLoop {
                             tc.name
                         ),
                     );
-                    let bounded_output = clamp_tool_content(&fallback.content);
+                    let bounded =
+                        clamp_tool_content_with_dynamic_max(&fallback.content, dynamic_tool_max_chars);
+                    {
+                        let mut tuning = self.tuning.lock().await;
+                        tuning.record_tool_result(bounded.original_len, bounded.truncated);
+                    }
                     let _ = self.event_tx.send(AgentEvent::ToolResult {
                         id: tc.id.clone(),
                         name: tc.name.clone(),
-                        output: bounded_output.clone(),
+                        output: bounded.content.clone(),
                         is_error: true,
                     }).await;
                     tool_results_content.push(MessageContent::ToolResult {
                         tool_use_id: fallback.tool_use_id,
-                        content: bounded_output,
+                        content: bounded.content,
                         is_error: true,
                     });
                 }
@@ -897,20 +1068,25 @@ impl AgentLoop {
                     }
                 };
 
-                let bounded_output = clamp_tool_content(&result.content);
+                let bounded =
+                    clamp_tool_content_with_dynamic_max(&result.content, dynamic_tool_max_chars);
+                {
+                    let mut tuning = self.tuning.lock().await;
+                    tuning.record_tool_result(bounded.original_len, bounded.truncated);
+                }
                 let _ = self
                     .event_tx
                     .send(AgentEvent::ToolResult {
                         id: tc.id.clone(),
                         name: tc.name.clone(),
-                        output: bounded_output.clone(),
+                        output: bounded.content.clone(),
                         is_error: result.is_error,
                     })
                     .await;
 
                 tool_results_content.push(MessageContent::ToolResult {
                     tool_use_id: result.tool_use_id,
-                    content: bounded_output,
+                    content: bounded.content,
                     is_error: result.is_error,
                 });
             }
@@ -1007,7 +1183,37 @@ fn invalid_tool_call_result(tc: &ToolCall, available_tools: &[String]) -> forge_
     forge_core::ToolResult::error(&tc.id, msg)
 }
 
-fn clamp_tool_content(content: &str) -> String {
+fn max_effort(a: ReasoningEffort, b: ReasoningEffort) -> ReasoningEffort {
+    match (a, b) {
+        (ReasoningEffort::High, _) | (_, ReasoningEffort::High) => ReasoningEffort::High,
+        (ReasoningEffort::Medium, _) | (_, ReasoningEffort::Medium) => ReasoningEffort::Medium,
+        _ => ReasoningEffort::Low,
+    }
+}
+
+fn provider_chars_per_token(provider: &str, model: &str) -> f64 {
+    let p = provider.to_lowercase();
+    let m = model.to_lowercase();
+    if p.contains("anthropic") || m.contains("claude") {
+        3.7
+    } else if p.contains("openai") || m.contains("gpt") || p.contains("xai") {
+        3.8
+    } else if p.contains("gemini") || p.contains("google") {
+        4.2
+    } else if m.contains("qwen") || m.contains("llama") || p.contains("ollama") {
+        3.5
+    } else {
+        4.0
+    }
+}
+
+fn adjust_estimate_for_model(raw_tokens: usize, provider: &str, model: &str) -> usize {
+    let chars_per_token = provider_chars_per_token(provider, model);
+    let factor = 4.0 / chars_per_token;
+    ((raw_tokens as f64) * factor).ceil() as usize
+}
+
+fn clamp_tool_content_with_dynamic_max(content: &str, dynamic_max_chars: usize) -> ClampedToolOutput {
     // Guardrail: keep tool reinjection bounded to avoid runaway context growth.
     // Tool-specific limits still apply earlier; this is the final safety net.
     const DEFAULT_MAX_CHARS: usize = 12_000;
@@ -1017,7 +1223,8 @@ fn clamp_tool_content(content: &str) -> String {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .map(|v| v.clamp(MIN_MAX_CHARS, ABSOLUTE_MAX_CHARS))
-        .unwrap_or(DEFAULT_MAX_CHARS);
+        .unwrap_or(DEFAULT_MAX_CHARS)
+        .min(dynamic_max_chars.max(MIN_MAX_CHARS));
     const DEFAULT_MAX_LINES: usize = 400;
     const MIN_MAX_LINES: usize = 40;
     const ABSOLUTE_MAX_LINES: usize = 4_000;
@@ -1079,7 +1286,11 @@ fn clamp_tool_content(content: &str) -> String {
     };
 
     if normalized.len() <= max_chars {
-        return normalized;
+        return ClampedToolOutput {
+            content: normalized,
+            original_len: content.len(),
+            truncated: false,
+        };
     }
     let cut = normalized
         .char_indices()
@@ -1088,10 +1299,15 @@ fn clamp_tool_content(content: &str) -> String {
         .map(|(idx, ch)| idx + ch.len_utf8())
         .unwrap_or(0);
     let head = &normalized[..cut];
-    format!(
+    let bounded = format!(
         "{head}\n\n[truncated: tool output exceeded {max_chars} chars (original: {} chars); request a narrower query/path to continue]",
         normalized.len()
-    )
+    );
+    ClampedToolOutput {
+        content: bounded,
+        original_len: content.len(),
+        truncated: true,
+    }
 }
 
 fn readonly_priority(name: &str) -> u8 {
@@ -1255,6 +1471,17 @@ fn tool_timeout_for_name(name: &str, permission: forge_core::ToolPermission) -> 
     }
 }
 
+fn percentile_u64(values: &VecDeque<u64>, p: f64) -> Option<u64> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted: Vec<u64> = values.iter().copied().collect();
+    sorted.sort_unstable();
+    let max_idx = sorted.len().saturating_sub(1);
+    let rank = ((max_idx as f64) * p.clamp(0.0, 1.0)).round() as usize;
+    sorted.get(rank.min(max_idx)).copied()
+}
+
 fn suggest_tool_names(target: &str, available: &[String], limit: usize) -> Vec<String> {
     let mut scored: Vec<(usize, String)> = available
         .iter()
@@ -1364,10 +1591,10 @@ impl LoopDetector {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_memory_context, clamp_tool_content, compact_memory_context_by_tier, context_tier,
-        edit_distance_case_insensitive,
-        prepare_memory_context_for_turn, suggest_tool_names, tool_timeout_for_name, write_priority,
-        ContextTier,
+        adjust_estimate_for_model, clamp_memory_context, clamp_tool_content_with_dynamic_max,
+        compact_memory_context_by_tier, context_tier,
+        edit_distance_case_insensitive, max_effort, prepare_memory_context_for_turn,
+        suggest_tool_names, tool_timeout_for_name, write_priority, ContextTier,
     };
 
     #[test]
@@ -1391,9 +1618,9 @@ mod tests {
     #[test]
     fn clamp_tool_content_bounds_large_payloads() {
         let big = "a".repeat(20_000);
-        let out = clamp_tool_content(&big);
-        assert!(out.len() < 13_000);
-        assert!(out.contains("[truncated: tool output exceeded"));
+        let out = clamp_tool_content_with_dynamic_max(&big, 12_000);
+        assert!(out.content.len() < 13_000);
+        assert!(out.content.contains("[truncated: tool output exceeded"));
     }
 
     #[test]
@@ -1435,5 +1662,28 @@ mod tests {
         let ctx = "noise\nDECISION: keep this\nanother line".to_string();
         let out = compact_memory_context_by_tier(ctx, 300, ContextTier::Cold);
         assert!(out.to_lowercase().contains("decision"));
+    }
+
+    #[test]
+    fn model_adjustment_changes_estimate_for_providers() {
+        let openai = adjust_estimate_for_model(1_000, "openai", "gpt-5");
+        let gemini = adjust_estimate_for_model(1_000, "gemini", "gemini-2.5-pro");
+        assert!(openai > gemini);
+    }
+
+    #[test]
+    fn dynamic_tool_cap_applies() {
+        let big = "x".repeat(20_000);
+        let out = clamp_tool_content_with_dynamic_max(&big, 5_000);
+        assert!(out.content.len() < 7_000);
+        assert!(out.truncated);
+    }
+
+    #[test]
+    fn max_effort_respects_user_override() {
+        assert_eq!(
+            max_effort(forge_provider::ReasoningEffort::High, forge_provider::ReasoningEffort::Low),
+            forge_provider::ReasoningEffort::High
+        );
     }
 }

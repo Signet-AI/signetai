@@ -33,6 +33,7 @@ Improve Forge runtime quality across three dimensions:
 - Budget-aware planner (short/normal/deep)
 - Provider/model-specific tokenizer accounting
 - Telemetry-driven threshold auto-tuning
+  - Status: implemented in `forge-agent` on branch `feat/forge-agent-loop-improvements`
 
 ---
 
@@ -56,6 +57,7 @@ Improve Forge runtime quality across three dimensions:
 - Latency-aware model routing
 - Optional provider hedging for first-token speed
 - Continuous p50/p95 threshold tuning
+  - Status: p95-aware adaptive tuning implemented; provider hedging remains future
 
 ---
 
@@ -78,4 +80,4 @@ Improve Forge runtime quality across three dimensions:
 - Prelaunch warmers (optional service mode)
 - Snapshot/restore recent runtime state
 - Startup SLO tracking with CI regression gates
-
+  - Status: startup SLO gate is future; this phase focused on runtime adaptive loop tuning
