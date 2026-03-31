@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.91.1] - 2026-03-31
+
+### Bug Fixes
+
+- **codex**: repair stale MCP config on setup instead of skipping (#421)
+
+
 ## [0.91.0] - 2026-03-31
 
 ### Bug Fixes

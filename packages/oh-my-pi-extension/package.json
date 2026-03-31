@@ -1,6 +1,6 @@
 {
   "name": "@signet/oh-my-pi-extension",
-  "version": "0.91.1",
+  "version": "0.91.2",
   "description": "Signet runtime extension for Oh My Pi — session lifecycle hooks and memory recall",
   "type": "module",
   "main": "dist/signet-oh-my-pi.mjs",

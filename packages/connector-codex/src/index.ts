@@ -146,7 +146,7 @@ function tomlInlineArray(items: string[]): string {
 	return `[${items.map(tomlQuote).join(", ")}]`;
 }
 
-function buildMcpBlock(mcp: { command: string; args: string[] }): string {
+export function buildMcpBlock(mcp: { command: string; args: string[] }): string {
 	let block = `# Signet MCP server\n[mcp_servers.signet]\ncommand = ${tomlQuote(mcp.command)}\n`;
 	if (mcp.args.length > 0) {
 		block += `args = ${tomlInlineArray(mcp.args)}\n`;
@@ -158,16 +158,26 @@ function patchConfigToml(path: string, mcp: { command: string; args: string[] })
 	const dir = join(path, "..");
 	mkdirSync(dir, { recursive: true });
 
+	const block = buildMcpBlock(mcp);
+
 	if (!existsSync(path)) {
-		writeFileSync(path, buildMcpBlock(mcp));
+		writeFileSync(path, block);
 		return true;
 	}
 
 	const content = readFileSync(path, "utf-8");
-	if (content.includes("[mcp_servers.signet]")) return false;
 
-	const appended = content.trimEnd() + "\n\n" + buildMcpBlock(mcp);
-	writeFileSync(path, appended);
+	if (!content.includes("[mcp_servers.signet]")) {
+		writeFileSync(path, content.trimEnd() + "\n\n" + block);
+		return true;
+	}
+
+	// Section exists but may be stale (e.g. old array-format command).
+	// Remove and re-add with correct format.
+	unpatchConfigToml(path);
+	const updated = existsSync(path) ? readFileSync(path, "utf-8").trim() : "";
+	const prefix = updated.length > 0 ? updated + "\n\n" : "";
+	writeFileSync(path, prefix + block);
 	return true;
 }
 
@@ -186,10 +196,10 @@ function unpatchConfigToml(path: string): boolean {
 			inSection = true;
 			continue;
 		}
-		// Skip key=value lines belonging to the signet section
+		// Skip all lines belonging to the signet section until next header
 		if (inSection) {
-			if (line.match(/^\s*\w+\s*=/) || line.trim() === "") continue;
-			inSection = false;
+			if (line.match(/^\[/)) inSection = false;
+			else continue;
 		}
 		filtered.push(line);
 	}
@@ -211,7 +221,7 @@ export class CodexConnector extends BaseConnector {
 	readonly name = "Codex";
 	readonly harnessId = "codex";
 
-	private getCodexHome(): string {
+	protected getCodexHome(): string {
 		return join(homedir(), ".codex");
 	}
 
