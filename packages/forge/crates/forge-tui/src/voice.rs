@@ -1,138 +1,42 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 
 /// Voice backend used for transcription.
 #[derive(Clone, Debug)]
 pub enum VoiceBackend {
-    /// Local Parakeet command invocation.
-    Parakeet { command: Vec<String> },
-    /// Local whisper.cpp model via whisper-rs.
-    Whisper { model_path: PathBuf },
+    /// Local TranscriptionSuite server (OpenAI-compatible endpoint).
+    TranscriptionSuite {
+        base_url: String,
+        bearer_token: Option<String>,
+    },
 }
 
 impl VoiceBackend {
     pub fn display_name(&self) -> &'static str {
         match self {
-            Self::Parakeet { .. } => "Parakeet",
-            Self::Whisper { .. } => "Whisper",
+            Self::TranscriptionSuite { .. } => "TranscriptionSuite",
         }
     }
-}
-
-/// Model storage location
-fn model_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("forge")
-        .join("models")
-}
-
-fn model_path() -> PathBuf {
-    model_dir().join("ggml-base.en.bin")
-}
-
-fn command_exists(bin: &str) -> bool {
-    if bin.contains(std::path::MAIN_SEPARATOR) {
-        return Path::new(bin).exists();
-    }
-
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| {
-        let candidate = dir.join(bin);
-        if candidate.exists() {
-            return true;
-        }
-        #[cfg(windows)]
-        {
-            let candidate_exe = dir.join(format!("{bin}.exe"));
-            candidate_exe.exists()
-        }
-        #[cfg(not(windows))]
-        {
-            false
-        }
-    })
-}
-
-fn parse_shell_words(input: &str) -> Vec<String> {
-    input
-        .split_whitespace()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-fn resolve_parakeet_command() -> Option<Vec<String>> {
-    if let Ok(raw) = std::env::var("FORGE_PARAKEET_COMMAND") {
-        let mut cmd = parse_shell_words(raw.trim());
-        if cmd.is_empty() {
-            return None;
-        }
-        if !cmd.iter().any(|arg| arg == "{input}") {
-            cmd.push("{input}".to_string());
-        }
-        return Some(cmd);
-    }
-
-    let candidates: &[&[&str]] = &[
-        &["parakeet-mlx", "{input}"],
-        &["parakeet", "{input}"],
-    ];
-
-    for candidate in candidates {
-        if let Some((first, _rest)) = candidate.split_first() {
-            if command_exists(first) {
-                return Some(candidate.iter().map(|s| (*s).to_string()).collect());
-            }
-        }
-    }
-
-    None
-}
-
-fn preferred_backend() -> String {
-    std::env::var("FORGE_VOICE_BACKEND")
-        .map(|v| v.trim().to_ascii_lowercase())
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "parakeet".to_string())
 }
 
 /// Prepare a transcription backend.
 ///
-/// Default behavior prefers Parakeet CLI if present, then falls back to Whisper.
+/// Default behavior targets a local TranscriptionSuite server.
 pub async fn ensure_model() -> Result<VoiceBackend, String> {
-    let prefer = preferred_backend();
-
-    if prefer != "whisper" {
-        if let Some(command) = resolve_parakeet_command() {
-            return Ok(VoiceBackend::Parakeet { command });
-        }
-    }
-
-    // Whisper fallback
-    let dir = model_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Create dir: {e}"))?;
-
-    let model_path = model_path();
-    if !model_path.exists() {
-        // Download from Hugging Face
-        let url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
-        let resp = reqwest::get(url).await.map_err(|e| format!("Download: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("Download failed: HTTP {}", resp.status()));
-        }
-        let bytes = resp.bytes().await.map_err(|e| format!("Read: {e}"))?;
-        std::fs::write(&model_path, &bytes).map_err(|e| format!("Write: {e}"))?;
-    }
-
-    Ok(VoiceBackend::Whisper { model_path })
+    let base_url = std::env::var("FORGE_TRANSCRIPTIONSUITE_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:9786".to_string());
+    let bearer_token = std::env::var("FORGE_TRANSCRIPTIONSUITE_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Ok(VoiceBackend::TranscriptionSuite {
+        base_url,
+        bearer_token,
+    })
 }
 
 /// Audio recorder using cpal
@@ -294,13 +198,13 @@ fn write_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), Strin
     std::fs::write(path, out).map_err(|e| format!("Write WAV: {e}"))
 }
 
-fn run_parakeet(command_template: &[String], audio: &[f32]) -> Result<String, String> {
-    if command_template.is_empty() {
-        return Err("Parakeet command is empty".to_string());
-    }
-
+fn transcribe_transcriptionsuite(
+    base_url: &str,
+    bearer_token: Option<&str>,
+    audio: &[f32],
+) -> Result<String, String> {
     let temp_path = std::env::temp_dir().join(format!(
-        "forge-parakeet-{}.wav",
+        "forge-transcribe-{}.wav",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| format!("Clock: {e}"))?
@@ -308,144 +212,42 @@ fn run_parakeet(command_template: &[String], audio: &[f32]) -> Result<String, St
     ));
     write_wav(&temp_path, audio, 16_000)?;
 
-    let mut args = Vec::with_capacity(command_template.len());
-    for token in command_template {
-        if token == "{input}" {
-            args.push(temp_path.to_string_lossy().to_string());
-        } else {
-            args.push(token.clone());
-        }
-    }
-
-    let (program, rest) = args
-        .split_first()
-        .ok_or_else(|| "Invalid parakeet command".to_string())?;
-
-    let output = Command::new(OsStr::new(program))
-        .args(rest)
-        .output()
-        .map_err(|e| format!("Run parakeet: {e}"))?;
-
+    let bytes = std::fs::read(&temp_path).map_err(|e| format!("Read temp WAV: {e}"))?;
     let _ = std::fs::remove_file(&temp_path);
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let reason = if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else {
-            format!("exit status {}", output.status)
-        };
-        return Err(format!("Parakeet transcription failed: {reason}"));
-    }
+    let endpoint = format!("{}/v1/audio/transcriptions", base_url.trim_end_matches('/'));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Build runtime: {e}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        return Err("Parakeet returned empty output".to_string());
-    }
+    rt.block_on(async move {
+        let client = reqwest::Client::new();
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name("dictation.wav")
+            .mime_str("audio/wav")
+            .map_err(|e| format!("MIME: {e}"))?;
+        let form = reqwest::multipart::Form::new()
+            .part("file", part)
+            .text("model", "transcriptionsuite-1")
+            .text("response_format", "text");
 
-    // Keep the most meaningful final line if command emits logs.
-    let text = stdout
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-
-    Ok(text)
-}
-
-fn transcribe_whisper(
-    model_path: &Path,
-    audio: &[f32],
-) -> Result<String, String> {
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
-
-    // Suppress ALL whisper.cpp output (stdout + stderr) during the entire
-    // transcription. GGML/Metal init, state creation, and inference all dump
-    // verbose logs that flood the TUI.
-    #[cfg(unix)]
-    let (stdout_guard, stderr_guard) = {
-        use std::os::unix::io::AsRawFd;
-        let old_out = unsafe { libc::dup(1) };
-        let old_err = unsafe { libc::dup(2) };
-        if let Ok(devnull) = std::fs::File::open("/dev/null") {
-            let fd = devnull.as_raw_fd();
-            unsafe {
-                libc::dup2(fd, 1);
-                libc::dup2(fd, 2);
-            }
+        let mut req = client.post(endpoint).multipart(form);
+        if let Some(token) = bearer_token {
+            req = req.bearer_auth(token);
         }
-        (old_out, old_err)
-    };
 
-    let result = (|| -> Result<(WhisperContext, _), String> {
-        let ctx = WhisperContext::new_with_params(
-            model_path.to_str().unwrap_or(""),
-            WhisperContextParameters::default(),
-        )
-        .map_err(|e| format!("Load model: {e}"))?;
+        let resp = req.send().await.map_err(|e| format!("Send request: {e}"))?;
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| format!("Read response: {e}"))?;
 
-        let state = ctx
-            .create_state()
-            .map_err(|e| format!("Create state: {e}"))?;
-
-        Ok((ctx, state))
-    })();
-
-    let (_ctx, mut state) = match result {
-        Ok(v) => v,
-        Err(e) => {
-            #[cfg(unix)]
-            unsafe {
-                libc::dup2(stdout_guard, 1);
-                libc::close(stdout_guard);
-                libc::dup2(stderr_guard, 2);
-                libc::close(stderr_guard);
-            }
-            return Err(e);
+        if !status.is_success() {
+            let snippet = body.chars().take(220).collect::<String>();
+            return Err(format!("TranscriptionSuite HTTP {status}: {snippet}"));
         }
-    };
 
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_language(Some("en"));
-    params.set_print_special(false);
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_timestamps(false);
-    params.set_single_segment(false);
-    params.set_no_context(true);
-    params.set_n_threads(4);
-
-    state
-        .full(params, audio)
-        .map_err(|e| format!("Transcribe: {e}"))?;
-
-    let mut text = String::new();
-    let n = state
-        .full_n_segments()
-        .map_err(|e| format!("Segments: {e}"))?;
-    for i in 0..n {
-        if let Ok(seg) = state.full_get_segment_text(i) {
-            text.push_str(&seg);
-        }
-    }
-
-    drop(state);
-    drop(_ctx);
-
-    #[cfg(unix)]
-    unsafe {
-        libc::dup2(stdout_guard, 1);
-        libc::close(stdout_guard);
-        libc::dup2(stderr_guard, 2);
-        libc::close(stderr_guard);
-    }
-
-    Ok(text.trim().to_string())
+        Ok(body.trim().to_string())
+    })
 }
 
 /// Transcribe PCM audio using the selected backend.
@@ -462,7 +264,9 @@ pub fn transcribe(
     }
 
     match backend {
-        VoiceBackend::Parakeet { command } => run_parakeet(command, &audio),
-        VoiceBackend::Whisper { model_path } => transcribe_whisper(model_path, &audio),
+        VoiceBackend::TranscriptionSuite {
+            base_url,
+            bearer_token,
+        } => transcribe_transcriptionsuite(base_url, bearer_token.as_deref(), &audio),
     }
 }

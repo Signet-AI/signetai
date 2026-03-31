@@ -13,7 +13,7 @@ pub mod voice {
     // Stubs when voice feature is disabled
     #[derive(Clone, Debug)]
     pub enum VoiceBackend {
-        Whisper { model_path: std::path::PathBuf },
+        TranscriptionSuite { base_url: String, bearer_token: Option<String> },
     }
     impl VoiceBackend {
         pub fn display_name(&self) -> &'static str { "Disabled" }
