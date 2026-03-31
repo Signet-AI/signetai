@@ -138,31 +138,31 @@ impl Theme {
             fg_bright: Color::Rgb(10, 10, 12),
             // --color-text-muted: #7a756e
             muted: Color::Rgb(122, 117, 110),
-            // Signet yellow highlight token adapted for light theme
-            accent: Color::Rgb(145, 117, 32),
+            // Signet blue highlight token adapted for light theme
+            accent: Color::Rgb(62, 104, 176),
             // User messages — near-black for readability
             user: Color::Rgb(42, 42, 46),
             // Assistant — accent-hover: #3a3832
             assistant: Color::Rgb(58, 56, 50),
-            // Tool brackets — restrained chrome accent
-            tool: Color::Rgb(132, 112, 56),
+            // Tool brackets — restrained blue accent
+            tool: Color::Rgb(88, 116, 164),
             // Polished success tone for light theme
             success: Color::Rgb(58, 112, 72),
             // Polished error tone for light theme
             error: Color::Rgb(154, 66, 64),
             // Polished warning tone for light theme
-            warning: Color::Rgb(168, 118, 28),
+            warning: Color::Rgb(62, 112, 190),
             // Code — bright text (near-black)
             code: Color::Rgb(10, 10, 12),
-            // Dim Signet-yellow border for light theme surfaces
-            border: Color::Rgb(186, 168, 118),
+            // Dim Signet-blue border for light theme surfaces
+            border: Color::Rgb(150, 165, 196),
             // Dialog — surface
             dialog_bg: Color::Rgb(219, 213, 205),
             // Selected rows use the Signet highlight token
-            selected_bg: Color::Rgb(145, 117, 32),
+            selected_bg: Color::Rgb(62, 104, 176),
             selected_fg: Color::Rgb(228, 223, 216),
             // Signet glow token toned for light bg
-            spinner: Color::Rgb(166, 132, 38),
+            spinner: Color::Rgb(86, 124, 196),
         }
         .with_opacity(Self::GLOBAL_OPACITY_PCT)
     }
