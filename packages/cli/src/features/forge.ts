@@ -777,6 +777,10 @@ function readForgeServicePath(options: ForgeServiceOptions, deps: ForgeDeps): st
 	return raw ? deps.normalizeAgentPath(raw) : deps.agentsDir;
 }
 
+// Note: isDaemonRunning() is path-agnostic because the Signet daemon is a
+// singleton process. startDaemon/stopDaemon accept a basePath for config
+// resolution but there is only ever one daemon instance.
+
 export async function startForgeService(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
 	const basePath = readForgeServicePath(options, deps);
 	const running = await deps.isDaemonRunning();

@@ -727,10 +727,13 @@ impl AgentLoop {
             // Identical tool calls (same name + input) are deduplicated.
             let mut tool_results_content = Vec::new();
 
-            // Deduplicate tool calls by (name, input) hash
+            // Deduplicate tool calls by (name, input) hash.
+            // duplicate_to_original maps each skipped call's ID → the original call's ID
+            // so we can copy results after execution to satisfy the API contract.
             let mut seen_hashes = std::collections::HashSet::new();
             let mut deduped_calls: Vec<&ToolCall> = Vec::new();
-            let mut dedup_map: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+            let mut hash_to_original: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+            let mut duplicate_to_original: Vec<(String, String)> = Vec::new();
             for tc in &tool_calls {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 tc.name.hash(&mut hasher);
@@ -738,13 +741,11 @@ impl AgentLoop {
                 let hash = hasher.finish();
                 if seen_hashes.insert(hash) {
                     deduped_calls.push(tc);
-                } else {
-                    // Map duplicate tool call ID to the original's ID for result reuse
-                    if let Some(original_id) = dedup_map.get(&hash) {
-                        debug!("Deduplicating tool call: {} (duplicate of {})", tc.id, original_id);
-                    }
+                    hash_to_original.insert(hash, tc.id.clone());
+                } else if let Some(original_id) = hash_to_original.get(&hash) {
+                    debug!("Deduplicating tool call: {} (duplicate of {})", tc.id, original_id);
+                    duplicate_to_original.push((tc.id.clone(), original_id.clone()));
                 }
-                dedup_map.entry(hash).or_insert_with(|| tc.id.clone());
             }
 
             if deduped_calls.len() < tool_calls.len() {
@@ -1089,6 +1090,29 @@ impl AgentLoop {
                     content: bounded.content,
                     is_error: result.is_error,
                 });
+            }
+
+            // Reuse results for deduplicated tool calls so every tool_use gets a tool_result.
+            if !duplicate_to_original.is_empty() {
+                let results_by_id: std::collections::HashMap<String, (String, bool)> =
+                    tool_results_content
+                        .iter()
+                        .filter_map(|c| match c {
+                            MessageContent::ToolResult { tool_use_id, content, is_error } => {
+                                Some((tool_use_id.clone(), (content.clone(), *is_error)))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                for (dup_id, orig_id) in &duplicate_to_original {
+                    if let Some((content, is_error)) = results_by_id.get(orig_id) {
+                        tool_results_content.push(MessageContent::ToolResult {
+                            tool_use_id: dup_id.clone(),
+                            content: content.clone(),
+                            is_error: *is_error,
+                        });
+                    }
+                }
             }
 
             // Add tool results as a user message (Anthropic convention)

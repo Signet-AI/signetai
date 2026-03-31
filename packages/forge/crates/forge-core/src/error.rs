@@ -90,19 +90,54 @@ impl ForgeError {
 }
 
 fn is_rate_limit(msg: &str) -> bool {
-    msg.contains("429") || msg.contains("rate limit") || msg.contains("Rate limit")
+    msg.contains("HTTP 429")
+        || msg.contains("status 429")
+        || msg.contains("status: 429")
+        || msg.contains("rate limit")
+        || msg.contains("Rate limit")
+        || msg.contains("rate_limit")
 }
 
 fn is_transient(msg: &str) -> bool {
-    msg.contains("500") || msg.contains("502") || msg.contains("503")
-        || msg.contains("504") || msg.contains("timeout") || msg.contains("Timeout")
-        || msg.contains("connection") || msg.contains("Connection")
-        || msg.contains("ECONNREFUSED") || msg.contains("ECONNRESET")
+    msg.contains("HTTP 500")
+        || msg.contains("HTTP 502")
+        || msg.contains("HTTP 503")
+        || msg.contains("HTTP 504")
+        || msg.contains("status 500")
+        || msg.contains("status 502")
+        || msg.contains("status 503")
+        || msg.contains("status 504")
+        || msg.contains("status: 500")
+        || msg.contains("status: 502")
+        || msg.contains("status: 503")
+        || msg.contains("status: 504")
+        || msg.contains("timeout")
+        || msg.contains("Timeout")
+        || msg.contains("ECONNREFUSED")
+        || msg.contains("ECONNRESET")
+        || msg.contains("ETIMEDOUT")
+        || msg.contains("connection reset")
+        || msg.contains("Connection reset")
+        || msg.contains("connection refused")
+        || msg.contains("Connection refused")
 }
 
 fn is_client_error(msg: &str) -> bool {
-    msg.contains("400") || msg.contains("401") || msg.contains("403")
-        || msg.contains("404") || msg.contains("422")
+    msg.contains("HTTP 400")
+        || msg.contains("HTTP 401")
+        || msg.contains("HTTP 403")
+        || msg.contains("HTTP 404")
+        || msg.contains("HTTP 422")
+        || msg.contains("status 400")
+        || msg.contains("status 401")
+        || msg.contains("status 403")
+        || msg.contains("status 404")
+        || msg.contains("status 422")
+        || msg.contains("status: 400")
+        || msg.contains("status: 401")
+        || msg.contains("status: 403")
+        || msg.contains("status: 404")
+        || msg.contains("status: 422")
 }
 
 pub type ForgeResult<T> = Result<T, ForgeError>;

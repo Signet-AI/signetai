@@ -94,8 +94,7 @@ struct Cli {
     yes: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging — file for TUI mode, stderr for -p mode
@@ -125,25 +124,8 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    // Optional: provider auth setup (local Forge credentials + CLI browser login)
-    if cli.auth || cli.auth_only || cli.auth_provider.is_some() {
-        auth::run_auth_wizard(cli.auth_provider.as_deref()).await?;
-        if cli.auth_only {
-            return Ok(());
-        }
-    }
-
-    // Safety warning gate for entering the interactive harness.
-    if cli.prompt.is_none() && !confirm_forge_launch_warning(cli.yes)? {
-        return Ok(());
-    }
-
-    // Signet onboarding — check install, run setup, start daemon
-    if !cli.no_daemon {
-        ensure_signet(&cli.daemon_url).await;
-    }
-
     // Load Signet agent config and resolve selected agent metadata.
+    // All set_var calls happen here before tokio's thread pool starts.
     let agent_config = load_agent_config().unwrap_or_default();
     let selected_agent = cli
         .agent
@@ -180,7 +162,8 @@ async fn main() -> Result<()> {
         );
     }
 
-    // Phase B policy propagation (metadata + downstream hooks/tools).
+    // Phase B policy propagation — set env vars before async runtime starts
+    // to avoid UB from set_var in multi-threaded context (Rust 1.81+).
     std::env::set_var(
         "FORGE_WORKSPACE_ONLY",
         if selected_policy.workspace_only.unwrap_or(true) {
@@ -205,6 +188,39 @@ async fn main() -> Result<()> {
         std::env::set_var("FORGE_SIGNET_ACTOR", agent_id);
     }
     std::env::set_var("FORGE_SIGNET_ACTOR_TYPE", "agent");
+
+    // Now start the async runtime — all env mutations are done.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(cli, selected_agent, selected_agent_id, selected_profile, selected_policy, agent_config))
+}
+
+async fn run(
+    cli: Cli,
+    selected_agent: Option<String>,
+    selected_agent_id: Option<String>,
+    selected_profile: Option<forge_signet::config::AgentWorkspaceConfig>,
+    selected_policy: AgentExecutionPolicy,
+    agent_config: forge_signet::config::AgentConfig,
+) -> Result<()> {
+    // Optional: provider auth setup (local Forge credentials + CLI browser login)
+    if cli.auth || cli.auth_only || cli.auth_provider.is_some() {
+        auth::run_auth_wizard(cli.auth_provider.as_deref()).await?;
+        if cli.auth_only {
+            return Ok(());
+        }
+    }
+
+    // Safety warning gate for entering the interactive harness.
+    if cli.prompt.is_none() && !confirm_forge_launch_warning(cli.yes)? {
+        return Ok(());
+    }
+
+    // Signet onboarding — check install, run setup, start daemon
+    if !cli.no_daemon {
+        ensure_signet(&cli.daemon_url).await;
+    }
 
     // Connect to Signet daemon
     let signet_client = if cli.no_daemon {

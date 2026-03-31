@@ -62,7 +62,7 @@ impl Session {
             let role = match m.role {
                 forge_core::Role::User => "User",
                 forge_core::Role::Assistant => "Assistant",
-                forge_core::Role::System => "System",
+                forge_core::Role::System => unreachable!(),
             };
 
             let mut text = m.text().replace("\r\n", "\n").replace('\r', "\n");

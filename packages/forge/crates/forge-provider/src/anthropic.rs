@@ -38,11 +38,11 @@ impl AnthropicProvider {
             .iter()
             .filter(|m| m.role != Role::System)
             .collect();
-        // Place cache_control breakpoints on the last content block of
-        // messages that precede the final 3 user turns. This lets Anthropic
-        // cache the stable prefix of the conversation and only re-process
-        // recent turns, reducing input token costs by ~90% on cache hits.
-        // We mark the 4th-from-last and 2nd-from-last user messages.
+        // Place cache_control breakpoints at *fixed* positions so the cached
+        // prefix is byte-identical across turns (Anthropic uses prefix caching).
+        // Breakpoint 1: the first user message (stable for the session lifetime).
+        // Breakpoint 2: the second user message (captures initial context injection).
+        // These never move as new turns are appended, so cache hits accumulate.
         let mut user_indices: Vec<usize> = Vec::new();
         for (i, m) in non_system.iter().enumerate() {
             if m.role == Role::User {
@@ -51,13 +51,11 @@ impl AnthropicProvider {
         }
         let cache_indices: std::collections::HashSet<usize> = {
             let mut set = std::collections::HashSet::new();
-            // Mark a breakpoint on the user message ~4 turns from end
-            if user_indices.len() >= 4 {
-                set.insert(user_indices[user_indices.len() - 4]);
+            if !user_indices.is_empty() {
+                set.insert(user_indices[0]);
             }
-            // Mark a breakpoint on the user message ~2 turns from end
             if user_indices.len() >= 2 {
-                set.insert(user_indices[user_indices.len() - 2]);
+                set.insert(user_indices[1]);
             }
             set
         };

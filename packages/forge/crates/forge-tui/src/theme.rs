@@ -266,8 +266,9 @@ impl Theme {
 
     pub fn by_name(name: &str) -> Self {
         match name {
-            "transparency" | "glass" | "transparent" => Self::transparency(),
+            "signet-dark" | "dark" => Self::signet_dark(),
             "signet-light" | "light" => Self::signet_light(),
+            "transparency" | "glass" | "transparent" => Self::transparency(),
             "midnight" => Self::midnight(),
             "amber" => Self::amber(),
             _ => Self::transparency(),
