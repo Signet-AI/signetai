@@ -243,19 +243,7 @@ pub fn load_identity_file(name: &str) -> Option<String> {
 /// Extract the agent name from IDENTITY.md (looks for **name:** or name: field)
 pub fn agent_name() -> String {
     load_identity_file("IDENTITY.md")
-        .and_then(|content| {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                // Match "**name:** Boogy" or "name: Boogy"
-                if let Some(rest) = trimmed.strip_prefix("**name:**") {
-                    return Some(rest.trim().to_string());
-                }
-                if let Some(rest) = trimmed.strip_prefix("name:") {
-                    return Some(rest.trim().to_string());
-                }
-            }
-            None
-        })
+        .and_then(|content| extract_identity_name(&content))
         .unwrap_or_else(|| "Assistant".to_string())
 }
 
@@ -456,12 +444,20 @@ fn expand_home(path: &str) -> PathBuf {
 
 fn extract_identity_name(content: &str) -> Option<String> {
     for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("**name:**") {
-            return Some(rest.trim().to_string());
+        let mut trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("- ") {
+            trimmed = rest.trim_start();
+        } else if let Some(rest) = trimmed.strip_prefix("* ") {
+            trimmed = rest.trim_start();
         }
-        if let Some(rest) = trimmed.strip_prefix("name:") {
-            return Some(rest.trim().to_string());
+        if let Some((key, value)) = trimmed.split_once(':') {
+            let normalized_key = key.trim().trim_matches('*').to_ascii_lowercase();
+            if normalized_key == "name" {
+                let parsed = value.trim().trim_matches('"').trim_matches('\'').trim();
+                if !parsed.is_empty() {
+                    return Some(parsed.to_string());
+                }
+            }
         }
     }
     None
@@ -470,8 +466,8 @@ fn extract_identity_name(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_agent_id, resolve_agent_workspace_path, AgentConfig, AgentsConfig,
-        AgentWorkspaceConfig,
+        extract_identity_name, normalize_agent_id, resolve_agent_workspace_path, AgentConfig,
+        AgentWorkspaceConfig, AgentsConfig,
     };
 
     #[test]
@@ -496,5 +492,11 @@ mod tests {
 
         let path = resolve_agent_workspace_path("research", Some(&cfg));
         assert!(path.ends_with("agents/research-box"));
+    }
+
+    #[test]
+    fn extract_identity_name_accepts_bulleted_yaml_style() {
+        let content = "identity\n===\n\n- name: Flint\n- role: assistant\n";
+        assert_eq!(extract_identity_name(content).as_deref(), Some("Flint"));
     }
 }
