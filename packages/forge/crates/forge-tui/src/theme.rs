@@ -47,6 +47,30 @@ pub struct Theme {
 }
 
 impl Theme {
+    fn with_opacity(mut self, opacity_pct: u8) -> Self {
+        let bg = self.bg;
+        self.status_bg = apply_opacity(self.status_bg, bg, opacity_pct);
+        self.status_fg = apply_opacity(self.status_fg, bg, opacity_pct);
+        self.fg = apply_opacity(self.fg, bg, opacity_pct);
+        self.fg_bright = apply_opacity(self.fg_bright, bg, opacity_pct);
+        self.user = apply_opacity(self.user, bg, opacity_pct);
+        self.assistant = apply_opacity(self.assistant, bg, opacity_pct);
+        self.tool = apply_opacity(self.tool, bg, opacity_pct);
+        self.success = apply_opacity(self.success, bg, opacity_pct);
+        self.error = apply_opacity(self.error, bg, opacity_pct);
+        self.warning = apply_opacity(self.warning, bg, opacity_pct);
+        self.muted = apply_opacity(self.muted, bg, opacity_pct);
+        self.accent = apply_opacity(self.accent, bg, opacity_pct);
+        self.code = apply_opacity(self.code, bg, opacity_pct);
+        self.border = apply_opacity(self.border, bg, opacity_pct);
+        self.dialog_bg = apply_opacity(self.dialog_bg, bg, opacity_pct);
+        self.surface = apply_opacity(self.surface, bg, opacity_pct);
+        self.selected_bg = apply_opacity(self.selected_bg, bg, opacity_pct);
+        self.selected_fg = apply_opacity(self.selected_fg, bg, opacity_pct);
+        self.spinner = apply_opacity(self.spinner, bg, opacity_pct);
+        self
+    }
+
     /// Signet Dark — industrial monochrome. Near-black with desaturated accents.
     /// Tokens from globals.css: --color-bg: #08080a, --color-surface: #0e0e12
     pub fn signet_dark() -> Self {
@@ -91,6 +115,7 @@ impl Theme {
             // Signet glow token for motion/loading
             spinner: Color::Rgb(156, 218, 172),
         }
+        .with_opacity(95)
     }
 
     /// Signet Light — warm beige. Never pure white.
@@ -137,6 +162,7 @@ impl Theme {
             // Signet glow token toned for light bg
             spinner: Color::Rgb(166, 132, 38),
         }
+        .with_opacity(95)
     }
 
     /// Midnight — deep blue-black with cool accents.
@@ -164,6 +190,7 @@ impl Theme {
             selected_fg: Color::Rgb(10, 12, 22),
             spinner: Color::Rgb(244, 225, 129),
         }
+        .with_opacity(95)
     }
 
     /// Amber — warm retro terminal.
@@ -191,6 +218,7 @@ impl Theme {
             selected_fg: Color::Rgb(15, 12, 5),
             spinner: Color::Rgb(244, 225, 129),
         }
+        .with_opacity(95)
     }
 
     pub fn by_name(name: &str) -> Self {
@@ -210,5 +238,19 @@ impl Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self::signet_dark()
+    }
+}
+
+fn apply_opacity(color: Color, bg: Color, opacity_pct: u8) -> Color {
+    let alpha = opacity_pct.min(100) as u16;
+    let inv = 100u16.saturating_sub(alpha);
+    match (color, bg) {
+        (Color::Rgb(r, g, b), Color::Rgb(br, bgc, bb)) => {
+            let blend = |fg: u8, bgv: u8| -> u8 {
+                (((fg as u16 * alpha) + (bgv as u16 * inv)) / 100) as u8
+            };
+            Color::Rgb(blend(r, br), blend(g, bgc), blend(b, bb))
+        }
+        _ => color,
     }
 }
