@@ -117,3 +117,88 @@ impl RetryState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn transient_err() -> ForgeError {
+        ForgeError::Provider("HTTP 500 internal server error".to_string())
+    }
+
+    fn rate_limit_err() -> ForgeError {
+        ForgeError::Provider("429 rate limit exceeded".to_string())
+    }
+
+    fn overflow_err() -> ForgeError {
+        ForgeError::ContextOverflow { used: 200_000, limit: 128_000 }
+    }
+
+    fn client_err() -> ForgeError {
+        ForgeError::ApiKeyMissing("anthropic".to_string())
+    }
+
+    fn fatal_err() -> ForgeError {
+        ForgeError::Session("corrupted state".to_string())
+    }
+
+    #[test]
+    fn transient_retries_up_to_limit_then_fails() {
+        let mut state = RetryState::with_policy(RetryPolicy {
+            transient_retries: 2,
+            ..Default::default()
+        });
+        assert!(matches!(state.decide(&transient_err()), RetryDecision::Retry(_)));
+        assert!(matches!(state.decide(&transient_err()), RetryDecision::Retry(_)));
+        assert!(matches!(state.decide(&transient_err()), RetryDecision::Fail));
+    }
+
+    #[test]
+    fn exponential_backoff_doubles() {
+        let mut state = RetryState::with_policy(RetryPolicy {
+            transient_retries: 3,
+            transient_base: Duration::from_secs(1),
+            ..Default::default()
+        });
+        match state.decide(&transient_err()) {
+            RetryDecision::Retry(d) => assert_eq!(d, Duration::from_secs(1)),
+            other => panic!("expected Retry, got {:?}", std::mem::discriminant(&other)),
+        }
+        match state.decide(&transient_err()) {
+            RetryDecision::Retry(d) => assert_eq!(d, Duration::from_secs(2)),
+            other => panic!("expected Retry, got {:?}", std::mem::discriminant(&other)),
+        }
+        match state.decide(&transient_err()) {
+            RetryDecision::Retry(d) => assert_eq!(d, Duration::from_secs(4)),
+            other => panic!("expected Retry, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn overflow_compacts_once_then_fails() {
+        let mut state = RetryState::with_policy(RetryPolicy {
+            overflow_retries: 1,
+            ..Default::default()
+        });
+        assert!(matches!(state.decide(&overflow_err()), RetryDecision::CompactAndRetry));
+        assert!(matches!(state.decide(&overflow_err()), RetryDecision::Fail));
+    }
+
+    #[test]
+    fn client_and_fatal_never_retry() {
+        let mut state = RetryState::new();
+        assert!(matches!(state.decide(&client_err()), RetryDecision::Fail));
+        assert!(matches!(state.decide(&fatal_err()), RetryDecision::Fail));
+    }
+
+    #[test]
+    fn rate_limit_retries_up_to_limit_then_fails() {
+        let mut state = RetryState::with_policy(RetryPolicy {
+            rate_limit_retries: 2,
+            ..Default::default()
+        });
+        assert!(matches!(state.decide(&rate_limit_err()), RetryDecision::Retry(_)));
+        assert!(matches!(state.decide(&rate_limit_err()), RetryDecision::Retry(_)));
+        assert!(matches!(state.decide(&rate_limit_err()), RetryDecision::Fail));
+    }
+}

@@ -825,7 +825,7 @@ fn select_provider(cli: &Cli, available: &[DiscoveredProvider]) -> Result<(Strin
     if let Some(model) = cli.model.clone() {
         let inferred = infer_provider_from_model(&model).to_string();
         let has_inferred = available.iter().any(|p| p.provider == inferred);
-        if has_inferred || inferred == "ollama" {
+        if has_inferred {
             return Ok((inferred, model));
         }
     }

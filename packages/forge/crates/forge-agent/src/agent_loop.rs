@@ -198,7 +198,7 @@ impl AgentLoop {
             let ollama = forge_provider::create_provider("ollama", "qwen3:4b", "ollama");
             match ollama {
                 Ok(p) => {
-                    info!("Ollama available — using qwen3:4b for context compaction");
+                    info!("Ollama endpoint configured for compaction (availability unverified)");
                     Some(Arc::from(p))
                 }
                 Err(_) => None,
@@ -519,11 +519,10 @@ impl AgentLoop {
             // Pre-sampling compaction: check token estimate BEFORE calling
             // the LLM. If we're approaching the context window limit, compact
             // first to avoid wasting an LLM call on an oversized prompt.
+            // Uses the already-adjusted estimate so the compaction gate is
+            // consistent with the turn plan's view of token pressure.
             {
-                let estimated = {
-                    let s = session.lock().await;
-                    ContextManager::estimate_tokens(&s.messages)
-                };
+                let estimated = estimated_messages_tokens;
                 if self.context_manager.should_compact_before_sampling(estimated) {
                     info!(
                         "Pre-sampling compaction: {} estimated tokens (~{}% of {})",
@@ -1388,8 +1387,17 @@ fn compute_available_injection_tokens(
     max_tokens: usize,
     estimated_message_tokens: usize,
 ) -> usize {
-    let soft_cap = max_tokens.saturating_mul(18) / 100;
-    let remaining = max_tokens.saturating_mul(78) / 100;
+    // When context window is unknown (0), use a sensible default so memory
+    // injection is not silently disabled — matches prior unconditional behavior.
+    const DEFAULT_CONTEXT_WINDOW: usize = 8_000;
+    let effective = if max_tokens == 0 {
+        warn!("Provider context window is 0 (unknown); defaulting to {DEFAULT_CONTEXT_WINDOW} for memory budget");
+        DEFAULT_CONTEXT_WINDOW
+    } else {
+        max_tokens
+    };
+    let soft_cap = effective.saturating_mul(18) / 100;
+    let remaining = effective.saturating_mul(78) / 100;
     let budget_after_messages = remaining.saturating_sub(estimated_message_tokens);
     budget_after_messages.min(soft_cap)
 }

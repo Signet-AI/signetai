@@ -827,8 +827,8 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 
 export async function showForgeServiceStatus(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
 	const basePath = readForgeServicePath(options, deps);
-	const daemonRunning = await deps.isDaemonRunning();
 	const daemon = await deps.getDaemonStatus();
+	const daemonRunning = daemon.pid != null;
 	const payload = {
 		running: daemonRunning,
 		pid: daemon.pid,
