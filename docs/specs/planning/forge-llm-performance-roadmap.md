@@ -33,7 +33,7 @@ Improve Forge runtime quality across three dimensions:
 - Budget-aware planner (short/normal/deep)
 - Provider/model-specific tokenizer accounting
 - Telemetry-driven threshold auto-tuning
-  - Status: implemented in `forge-agent` on branch `feat/forge-agent-loop-improvements`
+  - Status: implemented in `forge-agent` (PR #424)
 
 ---
 

@@ -1191,8 +1191,9 @@ fn build_model_switch_handoff(messages: &[Message], previous: &str, current: &st
                 forge_core::Role::Assistant => "Assistant",
             };
             let text = m.text();
-            let clipped = if text.len() > 400 {
-                format!("{}...", &text[..397])
+            let clipped = if text.chars().count() > 400 {
+                let cut: String = text.chars().take(397).collect();
+                format!("{cut}...")
             } else {
                 text
             };

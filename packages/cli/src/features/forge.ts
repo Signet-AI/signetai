@@ -783,7 +783,7 @@ function readForgeServicePath(options: ForgeServiceOptions, deps: ForgeDeps): st
 
 export async function startForgeService(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
 	const basePath = readForgeServicePath(options, deps);
-	const running = await deps.isDaemonRunning();
+	const { running } = await deps.getDaemonStatus();
 	if (running) {
 		console.log(chalk.yellow("Forge service is already running."));
 		return;
@@ -797,7 +797,7 @@ export async function startForgeService(options: ForgeServiceOptions, deps: Forg
 
 export async function stopForgeService(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
 	const basePath = readForgeServicePath(options, deps);
-	const running = await deps.isDaemonRunning();
+	const { running } = await deps.getDaemonStatus();
 	if (!running) {
 		console.log(chalk.yellow("Forge service is not running."));
 		return;
@@ -811,7 +811,7 @@ export async function stopForgeService(options: ForgeServiceOptions, deps: Forge
 
 export async function restartForgeService(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
 	const basePath = readForgeServicePath(options, deps);
-	const running = await deps.isDaemonRunning();
+	const { running } = await deps.getDaemonStatus();
 	if (running) {
 		const stopped = await deps.stopDaemon(basePath);
 		if (!stopped) {
@@ -828,7 +828,7 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 export async function showForgeServiceStatus(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
 	const basePath = readForgeServicePath(options, deps);
 	const daemon = await deps.getDaemonStatus();
-	const daemonRunning = daemon.pid != null;
+	const daemonRunning = daemon.running;
 	const payload = {
 		running: daemonRunning,
 		pid: daemon.pid,
