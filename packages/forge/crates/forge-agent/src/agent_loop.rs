@@ -13,6 +13,13 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContextTier {
+    Hot,
+    Warm,
+    Cold,
+}
+
 /// Events sent from the agent loop to the TUI
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -613,12 +620,21 @@ impl AgentLoop {
                 }
             }
             readonly_calls.sort_by_key(|tc| readonly_priority(&tc.name));
+            write_calls.sort_by_key(|tc| write_priority(&tc.name));
 
             let known_tool_names: Vec<String> =
                 self.tool_definitions.iter().map(|d| d.name.clone()).collect();
 
             // Execute read-only tools in parallel
             if !readonly_calls.is_empty() {
+                let _ = self
+                    .event_tx
+                    .send(AgentEvent::Status(format!(
+                        "Executing {} read-only tool{}...",
+                        readonly_calls.len(),
+                        if readonly_calls.len() == 1 { "" } else { "s" }
+                    )))
+                    .await;
                 debug!("Executing {} read-only tools in parallel", readonly_calls.len());
                 let mut joinset = tokio::task::JoinSet::new();
                 for tc in &readonly_calls {
@@ -628,6 +644,10 @@ impl AgentLoop {
                     let mcp_clients = self.mcp_clients.clone();
                     let known_tool_names = known_tool_names.clone();
                     joinset.spawn(async move {
+                        let timeout = tool_timeout_for_name(
+                            &tc_owned.name,
+                            forge_core::ToolPermission::ReadOnly,
+                        );
                         let tool = match &daemon_url {
                             Some(url) => forge_tools::find_tool_with_subagent(
                                 &tc_owned.name, url, provider,
@@ -635,16 +655,46 @@ impl AgentLoop {
                             None => forge_tools::find_tool(&tc_owned.name),
                         };
                         let result = if let Some(tool) = tool {
-                            tool.execute(&tc_owned).await
+                            match tokio::time::timeout(timeout, tool.execute(&tc_owned)).await {
+                                Ok(result) => result,
+                                Err(_) => forge_core::ToolResult::error(
+                                    &tc_owned.id,
+                                    format!(
+                                        "Tool '{}' timed out after {}s",
+                                        tc_owned.name,
+                                        timeout.as_secs()
+                                    ),
+                                ),
+                            }
                         } else {
                             let mut mcp_result = None;
                             for client in &mcp_clients {
-                                if let Ok(output) = client.call_tool(&tc_owned.name, tc_owned.input.clone()).await {
+                                if let Some(output) = tokio::time::timeout(
+                                    timeout,
+                                    client.call_tool(&tc_owned.name, tc_owned.input.clone()),
+                                )
+                                .await
+                                .ok()
+                                .and_then(Result::ok)
+                                {
                                     mcp_result = Some(forge_core::ToolResult::success(&tc_owned.id, output));
                                     break;
                                 }
                             }
-                            mcp_result.unwrap_or_else(|| invalid_tool_call_result(&tc_owned, &known_tool_names))
+                            mcp_result.unwrap_or_else(|| {
+                                if known_tool_names.iter().any(|t| t == &tc_owned.name) {
+                                    forge_core::ToolResult::error(
+                                        &tc_owned.id,
+                                        format!(
+                                            "Tool '{}' timed out after {}s",
+                                            tc_owned.name,
+                                            timeout.as_secs()
+                                        ),
+                                    )
+                                } else {
+                                    invalid_tool_call_result(&tc_owned, &known_tool_names)
+                                }
+                            })
                         };
                         (tc_owned, result)
                     });
@@ -675,6 +725,10 @@ impl AgentLoop {
 
             // Execute write tools sequentially with permission checks
             for tc in &write_calls {
+                let _ = self
+                    .event_tx
+                    .send(AgentEvent::Status(format!("Executing tool: {}", tc.name)))
+                    .await;
                 let tool_impl = match &self.daemon_url {
                     Some(url) => forge_tools::find_tool_with_subagent(
                         &tc.name, url, Arc::clone(&self.provider),
@@ -757,18 +811,41 @@ impl AgentLoop {
                 }
 
                 info!("Executing tool: {} (id: {})", tc.name, tc.id);
+                let timeout = tool_timeout_for_name(&tc.name, forge_core::ToolPermission::Write);
 
                 let result = if let Some(tool) = tool_impl {
-                    tool.execute(tc).await
+                    match tokio::time::timeout(timeout, tool.execute(tc)).await {
+                        Ok(result) => result,
+                        Err(_) => forge_core::ToolResult::error(
+                            &tc.id,
+                            format!("Tool '{}' timed out after {}s", tc.name, timeout.as_secs()),
+                        ),
+                    }
                 } else {
                     let mut mcp_result = None;
                     for client in &self.mcp_clients {
-                        if let Ok(output) = client.call_tool(&tc.name, tc.input.clone()).await {
+                        if let Some(output) = tokio::time::timeout(
+                            timeout,
+                            client.call_tool(&tc.name, tc.input.clone()),
+                        )
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        {
                             mcp_result = Some(forge_core::ToolResult::success(&tc.id, output));
                             break;
                         }
                     }
-                    mcp_result.unwrap_or_else(|| self.invalid_tool_call_result(tc))
+                    mcp_result.unwrap_or_else(|| {
+                        if known_tool_names.iter().any(|t| t == &tc.name) {
+                            forge_core::ToolResult::error(
+                                &tc.id,
+                                format!("Tool '{}' timed out after {}s", tc.name, timeout.as_secs()),
+                            )
+                        } else {
+                            self.invalid_tool_call_result(tc)
+                        }
+                    })
                 };
 
                 let bounded_output = clamp_tool_content(&result.content);
@@ -879,11 +956,39 @@ fn clamp_tool_content(content: &str) -> String {
         .and_then(|v| v.parse::<usize>().ok())
         .map(|v| v.clamp(MIN_MAX_LINES, ABSOLUTE_MAX_LINES))
         .unwrap_or(DEFAULT_MAX_LINES);
+    const DEFAULT_MAX_LINE_CHARS: usize = 640;
+    const MIN_MAX_LINE_CHARS: usize = 120;
+    const ABSOLUTE_MAX_LINE_CHARS: usize = 8_192;
+    let max_line_chars = std::env::var("FORGE_TOOL_RESULT_MAX_LINE_CHARS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|v| v.clamp(MIN_MAX_LINE_CHARS, ABSOLUTE_MAX_LINE_CHARS))
+        .unwrap_or(DEFAULT_MAX_LINE_CHARS);
 
-    let normalized = if content.lines().count() > max_lines {
+    let per_line_clamped = content
+        .lines()
+        .map(|line| {
+            if line.chars().count() <= max_line_chars {
+                return line.to_string();
+            }
+            let cut = line
+                .char_indices()
+                .take_while(|(idx, _)| *idx < max_line_chars)
+                .last()
+                .map(|(idx, ch)| idx + ch.len_utf8())
+                .unwrap_or(0);
+            format!(
+                "{}… [line truncated at {} chars]",
+                &line[..cut], max_line_chars
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let normalized = if per_line_clamped.lines().count() > max_lines {
         let keep_head = max_lines / 2;
         let keep_tail = max_lines.saturating_sub(keep_head);
-        let lines: Vec<&str> = content.lines().collect();
+        let lines: Vec<&str> = per_line_clamped.lines().collect();
         let head = lines.iter().take(keep_head).copied().collect::<Vec<_>>().join("\n");
         let tail = lines
             .iter()
@@ -928,6 +1033,15 @@ fn readonly_priority(name: &str) -> u8 {
     }
 }
 
+fn write_priority(name: &str) -> u8 {
+    match name {
+        "Write" | "Edit" => 0,
+        "memory_store" | "memory_modify" | "memory_forget" => 1,
+        "Bash" | "secret_exec" | "SubAgent" => 2,
+        _ => 1,
+    }
+}
+
 fn compute_available_injection_tokens(
     max_tokens: usize,
     estimated_message_tokens: usize,
@@ -936,6 +1050,25 @@ fn compute_available_injection_tokens(
     let remaining = max_tokens.saturating_mul(78) / 100;
     let budget_after_messages = remaining.saturating_sub(estimated_message_tokens);
     budget_after_messages.min(soft_cap)
+}
+
+fn context_tier(max_tokens: usize, estimated_message_tokens: usize) -> ContextTier {
+    let remaining = max_tokens
+        .saturating_mul(78)
+        .saturating_div(100)
+        .saturating_sub(estimated_message_tokens);
+    let ratio_pct = if max_tokens == 0 {
+        0
+    } else {
+        remaining.saturating_mul(100).saturating_div(max_tokens)
+    };
+    if ratio_pct >= 16 {
+        ContextTier::Hot
+    } else if ratio_pct >= 8 {
+        ContextTier::Warm
+    } else {
+        ContextTier::Cold
+    }
 }
 
 fn clamp_memory_context(memory_context: String, available_tokens: usize) -> String {
@@ -959,13 +1092,96 @@ fn clamp_memory_context(memory_context: String, available_tokens: usize) -> Stri
     )
 }
 
+fn compact_memory_context_by_tier(
+    memory_context: String,
+    available_tokens: usize,
+    tier: ContextTier,
+) -> String {
+    if memory_context.is_empty() || available_tokens == 0 {
+        return String::new();
+    }
+
+    let max_chars = available_tokens.saturating_mul(4).max(256);
+    match tier {
+        ContextTier::Hot => clamp_memory_context(memory_context, available_tokens),
+        ContextTier::Warm => {
+            let current_chars = memory_context.chars().count();
+            if current_chars <= max_chars {
+                return memory_context;
+            }
+            let head_chars = max_chars.saturating_mul(3) / 5;
+            let tail_chars = max_chars.saturating_sub(head_chars);
+
+            let head: String = memory_context.chars().take(head_chars).collect();
+            let tail_rev: String = memory_context.chars().rev().take(tail_chars).collect();
+            let tail: String = tail_rev.chars().rev().collect();
+            format!(
+                "{head}\n\n[adaptive compaction (warm tier): middle context omitted]\n\n{tail}"
+            )
+        }
+        ContextTier::Cold => {
+            let mut selected = String::new();
+            for line in memory_context.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let salient = trimmed.starts_with('-')
+                    || trimmed.starts_with('*')
+                    || trimmed.starts_with('[')
+                    || trimmed.starts_with('#')
+                    || trimmed.contains("decision")
+                    || trimmed.contains("next")
+                    || trimmed.contains("todo")
+                    || trimmed.contains("issue");
+                if salient || selected.is_empty() {
+                    if !selected.is_empty() {
+                        selected.push('\n');
+                    }
+                    selected.push_str(trimmed);
+                }
+                if selected.len() >= max_chars {
+                    break;
+                }
+            }
+            clamp_memory_context(selected, available_tokens)
+        }
+    }
+}
+
 fn prepare_memory_context_for_turn(
     memory_context: String,
     max_tokens: usize,
     estimated_message_tokens: usize,
 ) -> String {
     let available = compute_available_injection_tokens(max_tokens, estimated_message_tokens);
-    clamp_memory_context(memory_context, available)
+    compact_memory_context_by_tier(
+        memory_context,
+        available,
+        context_tier(max_tokens, estimated_message_tokens),
+    )
+}
+
+fn timeout_from_env(name: &str, default_ms: u64, min_ms: u64, max_ms: u64) -> std::time::Duration {
+    let ms = std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|v| v.clamp(min_ms, max_ms))
+        .unwrap_or(default_ms);
+    std::time::Duration::from_millis(ms)
+}
+
+fn tool_timeout_for_name(name: &str, permission: forge_core::ToolPermission) -> std::time::Duration {
+    let fast = timeout_from_env("FORGE_TOOL_TIMEOUT_MS_FAST", 8_000, 1_000, 120_000);
+    let normal = timeout_from_env("FORGE_TOOL_TIMEOUT_MS_NORMAL", 15_000, 1_000, 180_000);
+    let slow = timeout_from_env("FORGE_TOOL_TIMEOUT_MS_SLOW", 30_000, 1_000, 300_000);
+
+    match (permission, name) {
+        (forge_core::ToolPermission::ReadOnly, "Read" | "Glob" | "Grep")
+        | (_, "memory_get" | "memory_list" | "memory_search" | "knowledge_expand") => fast,
+        (_, "WebFetch" | "WebSearch" | "Bash" | "SubAgent" | "secret_exec") => slow,
+        _ => normal,
+    }
 }
 
 fn suggest_tool_names(target: &str, available: &[String], limit: usize) -> Vec<String> {
@@ -1077,8 +1293,9 @@ impl LoopDetector {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_memory_context, clamp_tool_content, edit_distance_case_insensitive,
-        prepare_memory_context_for_turn, suggest_tool_names,
+        clamp_memory_context, clamp_tool_content, context_tier, edit_distance_case_insensitive,
+        prepare_memory_context_for_turn, suggest_tool_names, tool_timeout_for_name, write_priority,
+        ContextTier,
     };
 
     #[test]
@@ -1120,5 +1337,24 @@ mod tests {
         let ctx = "small-context".to_string();
         let out = prepare_memory_context_for_turn(ctx.clone(), 200_000, 1_000);
         assert_eq!(out, ctx);
+    }
+
+    #[test]
+    fn context_tier_degrades_with_higher_usage() {
+        assert_eq!(context_tier(200_000, 10_000), ContextTier::Hot);
+        assert_eq!(context_tier(200_000, 130_000), ContextTier::Warm);
+        assert_eq!(context_tier(200_000, 170_000), ContextTier::Cold);
+    }
+
+    #[test]
+    fn write_priority_runs_edit_before_bash() {
+        assert!(write_priority("Edit") < write_priority("Bash"));
+    }
+
+    #[test]
+    fn tool_timeout_prioritizes_fast_vs_slow_classes() {
+        let fast = tool_timeout_for_name("Read", forge_core::ToolPermission::ReadOnly);
+        let slow = tool_timeout_for_name("WebFetch", forge_core::ToolPermission::ReadOnly);
+        assert!(fast < slow);
     }
 }

@@ -289,19 +289,35 @@ impl App {
     async fn refresh_connected_models(&mut self) {
         self.detected_clis = forge_provider::cli::detect_cli_tools().await;
         self.skills = forge_signet::skills::load_skills();
+        self.signet_commands =
+            signet_commands::commands_with_dynamic(&self.skills, &self.mcp_servers, &self.mcp_tools);
 
-        if let Some(client) = &self.signet_client {
-            let _ = tokio::time::timeout(
+        if let Some(client) = self.signet_client.clone() {
+            let registry_refresh = tokio::time::timeout(
                 std::time::Duration::from_millis(1500),
-                refresh_daemon_model_registry(client),
-            )
-            .await;
-            if let Ok(Ok(resp)) = tokio::time::timeout(
+                refresh_daemon_model_registry(&client),
+            );
+            let pipeline_models = tokio::time::timeout(
                 std::time::Duration::from_millis(1600),
                 client.get("/api/pipeline/models"),
-            )
-            .await
-            {
+            );
+            let providers = tokio::time::timeout(
+                std::time::Duration::from_millis(1600),
+                discover_available_providers(Some(&client)),
+            );
+            let mcp_servers = tokio::time::timeout(
+                std::time::Duration::from_millis(1400),
+                client.get("/api/marketplace/mcp"),
+            );
+            let mcp_tools = tokio::time::timeout(
+                std::time::Duration::from_millis(1400),
+                client.get("/api/marketplace/mcp/tools?refresh=1"),
+            );
+
+            let (_refresh_res, models_res, providers_res, mcp_servers_res, mcp_tools_res) =
+                tokio::join!(registry_refresh, pipeline_models, providers, mcp_servers, mcp_tools);
+
+            if let Ok(Ok(resp)) = models_res {
                 if let Some(models) = resp.get("models").and_then(|v| v.as_array()) {
                     self.registry_models = models
                         .iter()
@@ -326,20 +342,11 @@ impl App {
                 }
             }
 
-            if let Ok(available) = tokio::time::timeout(
-                std::time::Duration::from_millis(1600),
-                discover_available_providers(Some(client)),
-            )
-            .await
-            {
+            if let Ok(available) = providers_res {
                 self.connected_providers = available.into_iter().map(|p| p.provider).collect();
             }
 
-            self.mcp_servers = tokio::time::timeout(
-                std::time::Duration::from_millis(1600),
-                client.get("/api/marketplace/mcp"),
-            )
-                .await
+            self.mcp_servers = mcp_servers_res
                 .ok()
                 .and_then(|r| r.ok())
                 .and_then(|resp| resp.get("servers").and_then(|v| v.as_array()).cloned())
@@ -372,11 +379,7 @@ impl App {
                 })
                 .unwrap_or_default();
 
-            self.mcp_tools = tokio::time::timeout(
-                std::time::Duration::from_millis(1600),
-                client.get("/api/marketplace/mcp/tools?refresh=1"),
-            )
-                .await
+            self.mcp_tools = mcp_tools_res
                 .ok()
                 .and_then(|r| r.ok())
                 .and_then(|resp| resp.get("tools").and_then(|v| v.as_array()).cloned())
