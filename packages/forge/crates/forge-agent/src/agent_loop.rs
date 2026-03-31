@@ -306,11 +306,21 @@ impl AgentLoop {
         // 3. Run the agentic loop
         let mut loop_detector = LoopDetector::new(3);
         loop {
+            let estimated_messages_tokens = {
+                let s = session.lock().await;
+                ContextManager::estimate_tokens(&s.messages)
+            };
+            let turn_memory_context = prepare_memory_context_for_turn(
+                memory_context.clone(),
+                self.context_manager.max_tokens(),
+                estimated_messages_tokens,
+            );
+
             // Build system prompt with memory context
-            let full_system = if memory_context.is_empty() {
+            let full_system = if turn_memory_context.is_empty() {
                 self.system_prompt.clone()
             } else {
-                format!("{}\n\n{}", self.system_prompt, memory_context)
+                format!("{}\n\n{}", self.system_prompt, turn_memory_context)
             };
 
             let current_effort = *self.effort.lock().await;
@@ -602,6 +612,7 @@ impl AgentLoop {
                     write_calls.push(tc);
                 }
             }
+            readonly_calls.sort_by_key(|tc| readonly_priority(&tc.name));
 
             let known_tool_names: Vec<String> =
                 self.tool_definitions.iter().map(|d| d.name.clone()).collect();
@@ -860,20 +871,101 @@ fn clamp_tool_content(content: &str) -> String {
         .and_then(|v| v.parse::<usize>().ok())
         .map(|v| v.clamp(MIN_MAX_CHARS, ABSOLUTE_MAX_CHARS))
         .unwrap_or(DEFAULT_MAX_CHARS);
-    if content.len() <= max_chars {
-        return content.to_string();
+    const DEFAULT_MAX_LINES: usize = 400;
+    const MIN_MAX_LINES: usize = 40;
+    const ABSOLUTE_MAX_LINES: usize = 4_000;
+    let max_lines = std::env::var("FORGE_TOOL_RESULT_MAX_LINES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|v| v.clamp(MIN_MAX_LINES, ABSOLUTE_MAX_LINES))
+        .unwrap_or(DEFAULT_MAX_LINES);
+
+    let normalized = if content.lines().count() > max_lines {
+        let keep_head = max_lines / 2;
+        let keep_tail = max_lines.saturating_sub(keep_head);
+        let lines: Vec<&str> = content.lines().collect();
+        let head = lines.iter().take(keep_head).copied().collect::<Vec<_>>().join("\n");
+        let tail = lines
+            .iter()
+            .rev()
+            .take(keep_tail)
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "{head}\n\n[truncated: {} lines omitted]\n\n{tail}",
+            lines.len().saturating_sub(max_lines)
+        )
+    } else {
+        content.to_string()
+    };
+
+    if normalized.len() <= max_chars {
+        return normalized;
     }
-    let cut = content
+    let cut = normalized
         .char_indices()
         .take_while(|(idx, _)| *idx < max_chars)
         .last()
         .map(|(idx, ch)| idx + ch.len_utf8())
         .unwrap_or(0);
-    let head = &content[..cut];
+    let head = &normalized[..cut];
     format!(
         "{head}\n\n[truncated: tool output exceeded {max_chars} chars (original: {} chars); request a narrower query/path to continue]",
-        content.len()
+        normalized.len()
     )
+}
+
+fn readonly_priority(name: &str) -> u8 {
+    match name {
+        "Read" | "Glob" | "Grep" => 0,
+        "memory_search" | "memory_get" | "memory_list" | "knowledge_expand" => 1,
+        "WebFetch" | "WebSearch" => 2,
+        _ => 3,
+    }
+}
+
+fn compute_available_injection_tokens(
+    max_tokens: usize,
+    estimated_message_tokens: usize,
+) -> usize {
+    let soft_cap = max_tokens.saturating_mul(18) / 100;
+    let remaining = max_tokens.saturating_mul(78) / 100;
+    let budget_after_messages = remaining.saturating_sub(estimated_message_tokens);
+    budget_after_messages.min(soft_cap)
+}
+
+fn clamp_memory_context(memory_context: String, available_tokens: usize) -> String {
+    if available_tokens == 0 || memory_context.is_empty() {
+        return String::new();
+    }
+    let estimated_tokens = memory_context.len() / 4;
+    if estimated_tokens <= available_tokens {
+        return memory_context;
+    }
+    let max_chars = available_tokens.saturating_mul(4).max(256);
+    let cut = memory_context
+        .char_indices()
+        .take_while(|(idx, _)| *idx < max_chars)
+        .last()
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .unwrap_or(0);
+    let head = &memory_context[..cut];
+    format!(
+        "{head}\n\n[truncated: memory context reduced to fit token budget ({available_tokens} tokens)]"
+    )
+}
+
+fn prepare_memory_context_for_turn(
+    memory_context: String,
+    max_tokens: usize,
+    estimated_message_tokens: usize,
+) -> String {
+    let available = compute_available_injection_tokens(max_tokens, estimated_message_tokens);
+    clamp_memory_context(memory_context, available)
 }
 
 fn suggest_tool_names(target: &str, available: &[String], limit: usize) -> Vec<String> {
@@ -984,7 +1076,10 @@ impl LoopDetector {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_tool_content, edit_distance_case_insensitive, suggest_tool_names};
+    use super::{
+        clamp_memory_context, clamp_tool_content, edit_distance_case_insensitive,
+        prepare_memory_context_for_turn, suggest_tool_names,
+    };
 
     #[test]
     fn suggests_closest_tool_name() {
@@ -1010,5 +1105,20 @@ mod tests {
         let out = clamp_tool_content(&big);
         assert!(out.len() < 13_000);
         assert!(out.contains("[truncated: tool output exceeded"));
+    }
+
+    #[test]
+    fn clamp_memory_context_respects_budget() {
+        let ctx = "m".repeat(10_000);
+        let out = clamp_memory_context(ctx, 200);
+        assert!(out.len() <= 1_200);
+        assert!(out.contains("memory context reduced to fit token budget"));
+    }
+
+    #[test]
+    fn prepare_memory_context_noop_when_small() {
+        let ctx = "small-context".to_string();
+        let out = prepare_memory_context_for_turn(ctx.clone(), 200_000, 1_000);
+        assert_eq!(out, ctx);
     }
 }
