@@ -687,6 +687,7 @@ impl Drop for RawModeGuard {
     }
 }
 
+#[cfg(test)]
 fn parse_yes_no_answer(input: &str) -> Option<bool> {
     let normalized = input.trim().to_lowercase();
     if normalized == "yes" || normalized == "y" {
