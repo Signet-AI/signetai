@@ -25,7 +25,7 @@ use forge_signet::secrets::{
 use forge_signet::{ConfigEvent, ConfigWatcher, SignetClient};
 use ratatui::{
     layout::{Constraint, Layout},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
     DefaultTerminal, Frame,
@@ -287,6 +287,14 @@ impl App {
     }
 
     fn apply_terminal_theme_background(&self) {
+        if transparent_bg_enabled() {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::style::ResetColor,
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+            );
+            return;
+        }
         let _ = crossterm::execute!(
             std::io::stdout(),
             crossterm::style::SetBackgroundColor(self.theme.bg.into()),
@@ -939,9 +947,20 @@ impl App {
 
     fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
+        let transparent_bg = transparent_bg_enabled();
+        let canvas_bg = if transparent_bg {
+            Color::Reset
+        } else {
+            self.theme.bg
+        };
+        let status_bg = if transparent_bg {
+            Color::Reset
+        } else {
+            self.theme.status_bg
+        };
 
         // Fill the entire terminal with the theme background
-        let bg_block = Block::default().style(Style::default().bg(self.theme.bg));
+        let bg_block = Block::default().style(Style::default().bg(canvas_bg));
         frame.render_widget(bg_block, area);
 
         // Layout: [status_bar(2)] [chat(flex)] [input(dynamic)]
@@ -992,7 +1011,7 @@ impl App {
             active_agent: self.active_agent.as_deref(),
             agent_name: &self.agent_name,
             keybinds: &self.keybinds,
-            status_bg: self.theme.status_bg,
+            status_bg,
             status_fg: self.theme.status_fg,
             surface: self.theme.surface,
             accent: self.theme.accent,
@@ -2949,6 +2968,16 @@ impl App {
                 }
             }
         }));
+    }
+}
+
+fn transparent_bg_enabled() -> bool {
+    match std::env::var("FORGE_TRANSPARENT_BG") {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            v == "1" || v == "true" || v == "yes" || v == "on"
+        }
+        Err(_) => true,
     }
 }
 
