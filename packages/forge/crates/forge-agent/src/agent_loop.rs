@@ -640,19 +640,24 @@ impl AgentLoop {
                 }
 
                 while let Some(outcome) = joinset.join_next().await {
-                    if let Ok((tc, result)) = outcome {
-                        let bounded_output = clamp_tool_content(&result.content);
-                        let _ = self.event_tx.send(AgentEvent::ToolResult {
-                            id: tc.id.clone(),
-                            name: tc.name.clone(),
-                            output: bounded_output.clone(),
-                            is_error: result.is_error,
-                        }).await;
-                        tool_results_content.push(MessageContent::ToolResult {
-                            tool_use_id: result.tool_use_id,
-                            content: bounded_output,
-                            is_error: result.is_error,
-                        });
+                    match outcome {
+                        Ok((tc, result)) => {
+                            let bounded_output = clamp_tool_content(&result.content);
+                            let _ = self.event_tx.send(AgentEvent::ToolResult {
+                                id: tc.id.clone(),
+                                name: tc.name.clone(),
+                                output: bounded_output.clone(),
+                                is_error: result.is_error,
+                            }).await;
+                            tool_results_content.push(MessageContent::ToolResult {
+                                tool_use_id: result.tool_use_id,
+                                content: bounded_output,
+                                is_error: result.is_error,
+                            });
+                        }
+                        Err(join_err) => {
+                            warn!("Read-only tool task join failed: {join_err}");
+                        }
                     }
                 }
             }
@@ -847,19 +852,27 @@ fn invalid_tool_call_result(tc: &ToolCall, available_tools: &[String]) -> forge_
 fn clamp_tool_content(content: &str) -> String {
     // Guardrail: keep tool reinjection bounded to avoid runaway context growth.
     // Tool-specific limits still apply earlier; this is the final safety net.
-    const MAX_CHARS: usize = 12_000;
-    if content.len() <= MAX_CHARS {
+    const DEFAULT_MAX_CHARS: usize = 12_000;
+    const MIN_MAX_CHARS: usize = 1_024;
+    const ABSOLUTE_MAX_CHARS: usize = 100_000;
+    let max_chars = std::env::var("FORGE_TOOL_RESULT_MAX_CHARS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|v| v.clamp(MIN_MAX_CHARS, ABSOLUTE_MAX_CHARS))
+        .unwrap_or(DEFAULT_MAX_CHARS);
+    if content.len() <= max_chars {
         return content.to_string();
     }
     let cut = content
         .char_indices()
-        .take_while(|(idx, _)| *idx < MAX_CHARS)
+        .take_while(|(idx, _)| *idx < max_chars)
         .last()
         .map(|(idx, ch)| idx + ch.len_utf8())
         .unwrap_or(0);
     let head = &content[..cut];
     format!(
-        "{head}\n\n[truncated: tool output exceeded {MAX_CHARS} chars; request a narrower query/path to continue]"
+        "{head}\n\n[truncated: tool output exceeded {max_chars} chars (original: {} chars); request a narrower query/path to continue]",
+        content.len()
     )
 }
 
