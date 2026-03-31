@@ -1,8 +1,8 @@
 <script lang="ts">
 import { getAvatarFromSource, getAvatarUrl, getMonogram, getMonogramBg } from "$lib/card-utils";
 import { fetchMcpAnalytics, mcpAnalytics } from "$lib/stores/mcp-analytics.svelte";
-import { fetchSkillAnalytics, skillAnalytics } from "$lib/stores/skill-analytics.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
+import { fetchSkillAnalytics, skillAnalytics } from "$lib/stores/skill-analytics.svelte";
 import { onMount } from "svelte";
 import { SvelteSet } from "svelte/reactivity";
 
@@ -21,12 +21,18 @@ onMount(async () => {
 });
 
 const spotlights = $derived.by((): SpotlightEntry[] => {
-	const skills: SpotlightEntry[] = (skillAnalytics.data?.topSkills ?? [])
-		.slice(0, 3)
-		.map((s) => ({ kind: "skill" as const, name: s.skillName, description: `${s.count} calls, ${s.avgLatencyMs}ms avg`, count: s.count }));
-	const mcps: SpotlightEntry[] = (mcpAnalytics.data?.topTools ?? [])
-		.slice(0, 3)
-		.map((t) => ({ kind: "mcp" as const, name: t.toolName, description: `${t.count} calls, ${t.avgLatencyMs}ms avg`, count: t.count }));
+	const skills: SpotlightEntry[] = (skillAnalytics.data?.topSkills ?? []).slice(0, 3).map((s) => ({
+		kind: "skill" as const,
+		name: s.skillName,
+		description: `${s.count} calls, ${s.avgLatencyMs}ms avg`,
+		count: s.count,
+	}));
+	const mcps: SpotlightEntry[] = (mcpAnalytics.data?.topTools ?? []).slice(0, 3).map((t) => ({
+		kind: "mcp" as const,
+		name: t.toolName,
+		description: `${t.count} calls, ${t.avgLatencyMs}ms avg`,
+		count: t.count,
+	}));
 	// Interleave by usage count
 	const all = [...skills, ...mcps].sort((a, b) => b.count - a.count);
 	return all.slice(0, TOTAL);

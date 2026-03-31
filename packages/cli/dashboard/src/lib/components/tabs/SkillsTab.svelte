@@ -35,7 +35,7 @@ interface Props {
 	}) => void | Promise<void>;
 }
 
-let { embedded = false, showViewTabs = true, onreviewrequest }: Props = $props();
+const { embedded = false, showViewTabs = true, onreviewrequest }: Props = $props();
 
 const searchInputId = "skills-search-input";
 

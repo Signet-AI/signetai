@@ -67,9 +67,9 @@ describe("skill analytics SQL patterns", () => {
 			{ id: "s3", skillName: "signet-design", latencyMs: 500, success: false },
 		]);
 
-		const total = db
-			.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'default'")
-			.get() as { c: number };
+		const total = db.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'default'").get() as {
+			c: number;
+		};
 		expect(total.c).toBe(3);
 
 		const topSkills = db
@@ -140,9 +140,7 @@ describe("skill analytics SQL patterns", () => {
 		]);
 
 		const recent = db
-			.prepare(
-				"SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'default' AND created_at >= datetime(?)",
-			)
+			.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'default' AND created_at >= datetime(?)")
 			.get("2026-03-28T00:00:00Z") as { c: number };
 
 		expect(recent.c).toBe(1);
@@ -155,14 +153,14 @@ describe("skill analytics SQL patterns", () => {
 			{ id: "s3", skillName: "copilot", latencyMs: 300, agentId: "agent-a" },
 		]);
 
-		const agentA = db
-			.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'agent-a'")
-			.get() as { c: number };
+		const agentA = db.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'agent-a'").get() as {
+			c: number;
+		};
 		expect(agentA.c).toBe(2);
 
-		const agentB = db
-			.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'agent-b'")
-			.get() as { c: number };
+		const agentB = db.prepare("SELECT COUNT(*) as c FROM skill_invocations WHERE agent_id = 'agent-b'").get() as {
+			c: number;
+		};
 		expect(agentB.c).toBe(1);
 	});
 });
