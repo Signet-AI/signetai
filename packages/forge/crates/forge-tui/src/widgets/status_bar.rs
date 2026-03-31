@@ -35,11 +35,12 @@ pub struct StatusBar<'a> {
 
 impl<'a> Widget for StatusBar<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let sep = Style::default().fg(self.muted);
+        let muted_hi = brighten(self.muted, 34);
+        let sep = Style::default().fg(muted_hi);
         let value = Style::default().fg(self.status_fg);
         let chrome = Style::default().fg(self.accent);
         let chip_bg = self.surface;
-        let border = Style::default().fg(self.muted);
+        let border = Style::default().fg(muted_hi);
         let border_hot = Style::default().fg(self.accent);
         let name = if self.agent_name != "Assistant" {
             self.agent_name
@@ -59,7 +60,7 @@ impl<'a> Widget for StatusBar<'a> {
         };
         let effort_color = match self.effort {
             "high" => self.warning,
-            "low" => self.muted,
+            "low" => muted_hi,
             _ => self.accent,
         };
 
@@ -68,7 +69,7 @@ impl<'a> Widget for StatusBar<'a> {
                 Span::styled(" ◈ ", Style::default().fg(self.spinner)),
                 Span::styled(name.to_uppercase(), chrome.add_modifier(Modifier::BOLD)),
                 Span::styled("  ", sep),
-                Span::styled("operator deck", Style::default().fg(self.muted)),
+                Span::styled("operator deck", Style::default().fg(muted_hi)),
             ];
             if let Some(agent) = self.active_agent {
                 left.push(Span::styled("  ", sep));
@@ -112,7 +113,7 @@ impl<'a> Widget for StatusBar<'a> {
                 Style::default().fg(value.fg.unwrap_or(self.status_fg)).bg(chip_bg),
             );
             left.push(Span::styled("│", border));
-            push_chip(&mut left, provider_short, Style::default().fg(self.muted).bg(chip_bg));
+            push_chip(&mut left, provider_short, Style::default().fg(muted_hi).bg(chip_bg));
             left.push(Span::styled("│", border));
             push_chip(
                 &mut left,
@@ -147,7 +148,7 @@ impl<'a> Widget for StatusBar<'a> {
                 &mut right,
                 format!("sec {}/{}", self.secrets_used, self.total_secrets),
                 Style::default()
-                    .fg(if self.secrets_used > 0 { self.success } else { self.muted })
+                    .fg(if self.secrets_used > 0 { self.success } else { muted_hi })
                     .bg(chip_bg),
             );
             push_section_close(&mut right, border);
@@ -170,7 +171,7 @@ impl<'a> Widget for StatusBar<'a> {
 
         if area.height >= 3 {
             let key = Style::default().fg(self.accent);
-            let label = Style::default().fg(self.muted);
+            let label = Style::default().fg(muted_hi);
 
             let hints: &[(&str, &str)] = &[
                 ("model_picker", "model"),
@@ -307,5 +308,16 @@ fn capitalize(s: &str) -> String {
     match chars.next() {
         Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
         None => String::new(),
+    }
+}
+
+fn brighten(color: Color, amount: u8) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => Color::Rgb(
+            r.saturating_add(amount),
+            g.saturating_add(amount),
+            b.saturating_add(amount),
+        ),
+        other => other,
     }
 }
