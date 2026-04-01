@@ -363,11 +363,7 @@ const taskCount = $derived(ts.tasks.length);
 				<div class="forge-telemetry-meta forge-telemetry-error">{forgeError}</div>
 			{:else if forgeTelemetry}
 				<div class="forge-telemetry-meta">
-					{#if forgeTelemetry.count !== forgeLoadedCount}
-						showing {forgeLoadedCount} of {forgeTelemetry.count} events • source {forgeTelemetry.schema}
-					{:else}
-						{forgeTelemetry.count} events • source {forgeTelemetry.schema}
-					{/if}
+					{forgeLoadedCount} events • source {forgeTelemetry.schema}
 				</div>
 				<div class="forge-telemetry-events">
 					{#if forgeEvents.length === 0}

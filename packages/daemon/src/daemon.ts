@@ -6483,6 +6483,8 @@ app.get("/api/forge/tasks/:sessionKey", (c) => {
 	return c.json({
 		schema: "forge.tasks.stream.v1",
 		sessionKey,
+		// `count` reflects the returned window size for this filtered query, not
+		// a global session total across all telemetry rows.
 		count: events.length,
 		filters: {
 			agentId: scopedAgent.agentId,
