@@ -147,7 +147,12 @@ const compareItems = $derived.by(() => {
 	return available.filter((item) => sk.compareSelected.includes(item.fullName));
 });
 
-const loadError = $derived.by(() => sk.installedLoadError ?? sk.catalogLoadError);
+const loadError = $derived.by(() => {
+	const errors: string[] = [];
+	if (sk.installedLoadError) errors.push(sk.installedLoadError);
+	if (sk.catalogLoadError) errors.push(sk.catalogLoadError);
+	return errors.length > 0 ? errors.join(" • ") : null;
+});
 
 function handleEmptyAction(action: "primary" | "secondary") {
 	if (emptyState === "installed") {

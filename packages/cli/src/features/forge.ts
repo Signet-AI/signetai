@@ -827,10 +827,17 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 		// previous process while it is still exiting and releasing the port.
 		const STOP_WAIT_ATTEMPTS = 10;
 		const STOP_WAIT_INTERVAL_MS = 100;
+		let daemonStillRunning = true;
 		for (let attempt = 0; attempt < STOP_WAIT_ATTEMPTS; attempt += 1) {
 			const status = await deps.getDaemonStatus();
-			if (!status.running) break;
+			if (!status.running) {
+				daemonStillRunning = false;
+				break;
+			}
 			await sleep(STOP_WAIT_INTERVAL_MS);
+		}
+		if (daemonStillRunning) {
+			console.warn(chalk.yellow("Daemon still running after stop wait; attempting start anyway."));
 		}
 	}
 	const started = await deps.startDaemon(basePath);
