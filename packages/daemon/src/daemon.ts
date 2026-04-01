@@ -6115,6 +6115,7 @@ app.post("/api/hooks/recall", async (c) => {
 			sessionKey: body.sessionKey,
 		});
 		const agentScope = getAgentScope(agentId);
+		const memoryCfg = loadMemoryConfig(AGENTS_DIR);
 		const result = await hybridRecall(
 			{
 				query: body.query,
@@ -6124,7 +6125,7 @@ app.post("/api/hooks/recall", async (c) => {
 				readPolicy: agentScope.readPolicy,
 				policyGroup: agentScope.policyGroup,
 			},
-			cfg,
+			memoryCfg,
 			fetchEmbedding,
 		);
 		return c.json(result);
