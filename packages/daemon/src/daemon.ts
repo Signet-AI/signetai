@@ -6447,6 +6447,8 @@ app.post("/api/hooks/task-telemetry", async (c) => {
 });
 
 app.get("/api/forge/tasks/:sessionKey", (c) => {
+	// Route implementation intentionally stays in daemon.ts so middleware and
+	// handler scoping logic remain visible together in PR diffs.
 	const sessionKey = normalizeSessionKey(c.req.param("sessionKey"));
 	// Scope reads by requested agent_id + active session ownership to prevent
 	// cross-agent telemetry access.
