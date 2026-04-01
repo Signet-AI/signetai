@@ -191,10 +191,12 @@ onMount(() => {
 
 	const stuckGuard = setTimeout(() => {
 		// Fail-safe: never leave Marketplace Skills in permanent loading state.
-		if (sk.loading || sk.catalogLoading) {
+		if (sk.loading) {
 			sk.installedLoadError = sk.installedLoadError ?? "Skills timed out loading. Try refreshing the page.";
-			sk.catalogLoadError = sk.catalogLoadError ?? "Skills catalog timed out loading. Try refreshing the page.";
 			sk.loading = false;
+		}
+		if (sk.catalogLoading) {
+			sk.catalogLoadError = sk.catalogLoadError ?? "Skills catalog timed out loading. Try refreshing the page.";
 			sk.catalogLoading = false;
 		}
 	}, 12000);

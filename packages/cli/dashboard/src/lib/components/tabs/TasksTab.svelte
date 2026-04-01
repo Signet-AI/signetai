@@ -23,7 +23,7 @@ interface Props {
 	agentId?: string;
 }
 
-let { agentId = "default" }: Props = $props();
+let { agentId }: Props = $props();
 
 // Track position as [columnIndex, taskIndex]
 let selectedColumn = $state(0);
@@ -230,9 +230,17 @@ let forgeTelemetryLoading = $state(false);
 let forgeTelemetryEnabled = $state(false);
 let forgeError = $state<string | null>(null);
 const forgeLoadedCount = $derived(forgeTelemetry?.events.length ?? 0);
+const forgeEvents = $derived(forgeTelemetry?.events ?? []);
 const isoTimestampPattern = /^\d{4}-\d{2}-\d{2}T.+$/;
+const forgeTelemetryPanelAllowed = import.meta.env.DEV;
 
 async function refreshForgeTelemetry() {
+	if (forgeTelemetryLoading) return;
+	if (!agentId?.trim()) {
+		forgeTelemetry = null;
+		forgeError = "No active agent selected for telemetry scope.";
+		return;
+	}
 	if (!forgeSessionKey.trim()) {
 		forgeTelemetry = null;
 		forgeError = "Enter a Forge session key to fetch telemetry.";
@@ -296,13 +304,15 @@ const taskCount = $derived(ts.tasks.length);
 		</button>
 	</div>
 
-	<div class="forge-telemetry-toggle-row">
-		<button class="forge-fetch-btn" onclick={() => (forgeTelemetryEnabled = !forgeTelemetryEnabled)}>
-			{forgeTelemetryEnabled ? "HIDE FORGE TELEMETRY" : "SHOW FORGE TELEMETRY"}
-		</button>
-	</div>
+	{#if forgeTelemetryPanelAllowed}
+		<div class="forge-telemetry-toggle-row">
+			<button class="forge-fetch-btn" onclick={() => (forgeTelemetryEnabled = !forgeTelemetryEnabled)}>
+				{forgeTelemetryEnabled ? "HIDE FORGE TELEMETRY" : "SHOW FORGE TELEMETRY"}
+			</button>
+		</div>
+	{/if}
 
-	{#if forgeTelemetryEnabled}
+	{#if forgeTelemetryPanelAllowed && forgeTelemetryEnabled}
 		<div class="forge-telemetry-panel">
 			<div class="forge-telemetry-row">
 				<input class="forge-input session" placeholder="Forge session key" bind:value={forgeSessionKey} />
@@ -326,6 +336,15 @@ const taskCount = $derived(ts.tasks.length);
 						showing {forgeLoadedCount} of {forgeTelemetry.count} events • source {forgeTelemetry.schema}
 					{:else}
 						{forgeTelemetry.count} events • source {forgeTelemetry.schema}
+					{/if}
+				</div>
+				<div class="forge-telemetry-events">
+					{#if forgeEvents.length === 0}
+						<div class="forge-telemetry-meta">No events in current window.</div>
+					{:else}
+						{#each forgeEvents as event}
+							<pre class="forge-telemetry-event">{JSON.stringify(event, null, 2)}</pre>
+						{/each}
 					{/if}
 				</div>
 			{:else}
@@ -547,6 +566,29 @@ const taskCount = $derived(ts.tasks.length);
 
 	.forge-telemetry-error {
 		color: var(--sig-danger);
+	}
+
+	.forge-telemetry-events {
+		max-height: 220px;
+		overflow: auto;
+		border: 1px solid var(--sig-border);
+		background: var(--sig-surface-1);
+	}
+
+	.forge-telemetry-event {
+		margin: 0;
+		padding: 8px;
+		font-family: var(--font-mono);
+		font-size: 9px;
+		line-height: 1.4;
+		color: var(--sig-text);
+		white-space: pre-wrap;
+		word-break: break-word;
+		border-bottom: 1px solid var(--sig-border);
+	}
+
+	.forge-telemetry-event:last-child {
+		border-bottom: 0;
 	}
 
 	@media (max-width: 1023px) {
