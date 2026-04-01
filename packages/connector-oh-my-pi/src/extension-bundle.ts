@@ -1725,7 +1725,7 @@ $&\`).replace(/(?:^|\\n)([\\t ].*)(?:([\\n\\t ]*)\\n(?![\\n\\t ]))?/g,"$1$2").re
 	\`)}function I6(Z){Z.exec(\`
 		CREATE TABLE IF NOT EXISTS task_scope_hints (
 			task_id     TEXT PRIMARY KEY REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
-			agent_id    TEXT NOT NULL DEFAULT 'default',
+			agent_id    TEXT NOT NULL,
 			created_at  TEXT NOT NULL DEFAULT (datetime('now')),
 			updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 		);

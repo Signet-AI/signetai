@@ -2,7 +2,7 @@
 import TaskBoard from "$lib/components/tasks/TaskBoard.svelte";
 import TaskDetail from "$lib/components/tasks/TaskDetail.svelte";
 import TaskForm from "$lib/components/tasks/TaskForm.svelte";
-import { getForgeTaskTelemetry, type ForgeTaskTelemetryResponse } from "$lib/api";
+import { getForgeTaskTelemetryResult, type ForgeTaskTelemetryResponse } from "$lib/api";
 import { returnToSidebar, setFocusZone } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
 import {
@@ -221,15 +221,18 @@ let forgeSince = $state("");
 let forgePolicyDeniedOnly = $state(false);
 let forgeTelemetry = $state<ForgeTaskTelemetryResponse | null>(null);
 let forgeTelemetryLoading = $state(false);
+let forgeTelemetryEnabled = $state(false);
+let forgeError = $state<string | null>(null);
 
 async function refreshForgeTelemetry() {
 	if (!forgeSessionKey.trim()) {
 		forgeTelemetry = null;
+		forgeError = "Enter a Forge session key to fetch telemetry.";
 		return;
 	}
 	forgeTelemetryLoading = true;
 	try {
-		forgeTelemetry = await getForgeTaskTelemetry(forgeSessionKey.trim(), {
+		const result = await getForgeTaskTelemetryResult(forgeSessionKey.trim(), {
 			limit: 100,
 			kind: forgeKind.trim() || undefined,
 			phase: forgePhase.trim() || undefined,
@@ -237,6 +240,8 @@ async function refreshForgeTelemetry() {
 			since: forgeSince.trim() || undefined,
 			policyDeniedOnly: forgePolicyDeniedOnly,
 		});
+		forgeTelemetry = result.data;
+		forgeError = result.error;
 	} finally {
 		forgeTelemetryLoading = false;
 	}
@@ -268,27 +273,39 @@ const taskCount = $derived(ts.tasks.length);
 		</button>
 	</div>
 
-	<div class="forge-telemetry-panel">
-		<div class="forge-telemetry-row">
-			<input class="forge-input session" placeholder="Forge session key" bind:value={forgeSessionKey} />
-			<input class="forge-input" placeholder="kind" bind:value={forgeKind} />
-			<input class="forge-input" placeholder="phase" bind:value={forgePhase} />
-			<input class="forge-input" placeholder="name" bind:value={forgeName} />
-			<input class="forge-input since" placeholder="since (ISO)" bind:value={forgeSince} />
-			<label class="forge-checkbox">
-				<input type="checkbox" bind:checked={forgePolicyDeniedOnly} />
-				<span>policy denied</span>
-			</label>
-			<button class="forge-fetch-btn" onclick={refreshForgeTelemetry}>FETCH</button>
-		</div>
-		{#if forgeTelemetryLoading}
-			<div class="forge-telemetry-meta">loading telemetry...</div>
-		{:else if forgeTelemetry}
-			<div class="forge-telemetry-meta">
-				{forgeTelemetry.count} events • source {forgeTelemetry.schema}
-			</div>
-		{/if}
+	<div class="forge-telemetry-toggle-row">
+		<button class="forge-fetch-btn" onclick={() => (forgeTelemetryEnabled = !forgeTelemetryEnabled)}>
+			{forgeTelemetryEnabled ? "HIDE FORGE TELEMETRY" : "SHOW FORGE TELEMETRY"}
+		</button>
 	</div>
+
+	{#if forgeTelemetryEnabled}
+		<div class="forge-telemetry-panel">
+			<div class="forge-telemetry-row">
+				<input class="forge-input session" placeholder="Forge session key" bind:value={forgeSessionKey} />
+				<input class="forge-input" placeholder="kind" bind:value={forgeKind} />
+				<input class="forge-input" placeholder="phase" bind:value={forgePhase} />
+				<input class="forge-input" placeholder="name" bind:value={forgeName} />
+				<input class="forge-input since" placeholder="since (ISO)" bind:value={forgeSince} />
+				<label class="forge-checkbox">
+					<input type="checkbox" bind:checked={forgePolicyDeniedOnly} />
+					<span>policy denied</span>
+				</label>
+				<button class="forge-fetch-btn" onclick={refreshForgeTelemetry}>FETCH</button>
+			</div>
+			{#if forgeTelemetryLoading}
+				<div class="forge-telemetry-meta">loading telemetry...</div>
+			{:else if forgeError}
+				<div class="forge-telemetry-meta forge-telemetry-error">{forgeError}</div>
+			{:else if forgeTelemetry}
+				<div class="forge-telemetry-meta">
+					{forgeTelemetry.count} events • source {forgeTelemetry.schema}
+				</div>
+			{:else}
+				<div class="forge-telemetry-meta">No telemetry events loaded.</div>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Board -->
 	<div class="flex flex-col flex-1 min-h-0 overflow-auto">
@@ -438,6 +455,14 @@ const taskCount = $derived(ts.tasks.length);
 		background: var(--sig-surface-0);
 	}
 
+	.forge-telemetry-toggle-row {
+		display: flex;
+		justify-content: flex-start;
+		padding: 8px 12px;
+		border-bottom: 1px solid var(--sig-border);
+		background: var(--sig-surface-0);
+	}
+
 	.forge-telemetry-row {
 		display: flex;
 		gap: 6px;
@@ -491,6 +516,10 @@ const taskCount = $derived(ts.tasks.length);
 		font-family: var(--font-mono);
 		font-size: 9px;
 		color: var(--sig-text-muted);
+	}
+
+	.forge-telemetry-error {
+		color: var(--sig-danger);
 	}
 
 	@media (max-width: 1023px) {

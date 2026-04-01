@@ -1783,6 +1783,11 @@ export interface ForgeTaskTelemetryResponse {
 	events: ForgeTaskTelemetryEnvelope[];
 }
 
+export interface ForgeTaskTelemetryResult {
+	data: ForgeTaskTelemetryResponse | null;
+	error: string | null;
+}
+
 export async function getTasks(): Promise<{
 	tasks: ScheduledTask[];
 	presets: CronPreset[];
@@ -1902,6 +1907,56 @@ export async function getForgeTaskTelemetry(
 		policyDeniedOnly?: boolean;
 	},
 ): Promise<ForgeTaskTelemetryResponse | null> {
+	const result = await getForgeTaskTelemetryResult(sessionKey, options);
+	return result.data;
+}
+
+function isForgeTaskTelemetryEnvelope(value: unknown): value is ForgeTaskTelemetryEnvelope {
+	if (!isObject(value)) return false;
+	return (
+		typeof value.sessionKey === "string" &&
+		typeof value.harness === "string" &&
+		Object.prototype.hasOwnProperty.call(value, "event") &&
+		typeof value.receivedAt === "string" &&
+		(value.cursor === undefined || typeof value.cursor === "number") &&
+		(value.sequence === undefined || typeof value.sequence === "number")
+	);
+}
+
+function readForgeTaskTelemetryResponse(value: unknown): ForgeTaskTelemetryResponse | null {
+	if (!isObject(value)) return null;
+	if (
+		typeof value.schema !== "string" ||
+		typeof value.sessionKey !== "string" ||
+		typeof value.count !== "number" ||
+		!Array.isArray(value.events) ||
+		!value.events.every((event) => isForgeTaskTelemetryEnvelope(event))
+	) {
+		return null;
+	}
+
+	const filters = isObject(value.filters) ? value.filters : undefined;
+	return {
+		schema: value.schema,
+		sessionKey: value.sessionKey,
+		count: value.count,
+		filters,
+		events: value.events,
+	};
+}
+
+export async function getForgeTaskTelemetryResult(
+	sessionKey: string,
+	options?: {
+		limit?: number;
+		kind?: string;
+		phase?: string;
+		name?: string;
+		since?: string;
+		afterCursor?: number;
+		policyDeniedOnly?: boolean;
+	},
+): Promise<ForgeTaskTelemetryResult> {
 	try {
 		const params = new URLSearchParams();
 		if (options?.limit) params.set("limit", String(options.limit));
@@ -1914,10 +1969,17 @@ export async function getForgeTaskTelemetry(
 		const qs = params.toString();
 		const url = `${API_BASE}/api/forge/tasks/${encodeURIComponent(sessionKey)}${qs ? `?${qs}` : ""}`;
 		const response = await fetch(url);
-		if (!response.ok) return null;
-		return (await response.json()) as ForgeTaskTelemetryResponse;
-	} catch {
-		return null;
+		if (!response.ok) {
+			return { data: null, error: `HTTP ${response.status} while fetching Forge telemetry` };
+		}
+		const body = await response.json().catch(() => null);
+		const parsed = readForgeTaskTelemetryResponse(body);
+		if (!parsed) {
+			return { data: null, error: "Forge telemetry response was malformed" };
+		}
+		return { data: parsed, error: null };
+	} catch (error) {
+		return { data: null, error: String(error) };
 	}
 }
 

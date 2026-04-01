@@ -115,12 +115,19 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null;
 const REQUEST_TIMEOUT_MS = 8000;
 
 async function withTimeout<T>(promise: Promise<T>, ms = REQUEST_TIMEOUT_MS): Promise<T> {
-	return await Promise.race([
-		promise,
-		new Promise<T>((_, reject) => {
-			setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
-		}),
-	]);
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<T>((_, reject) => {
+				timeoutId = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+			}),
+		]);
+	} finally {
+		if (timeoutId) {
+			clearTimeout(timeoutId);
+		}
+	}
 }
 
 function sortItems(items: readonly SkillSearchResult[], sortBy: SortBy): SkillSearchResult[] {

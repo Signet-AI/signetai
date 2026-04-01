@@ -238,6 +238,20 @@ specs:
       - "Regression tests fail when `npm pack --dry-run` for `@signet/daemon` or `signetai` omits `dashboard/index.html`"
     decision: null
 
+  - id: forge-llm-performance-roadmap
+    status: planning
+    path: docs/specs/planning/forge-llm-performance-roadmap.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "Forge behaves as a harness-grade runtime for multi-turn sessions with deterministic tool orchestration and failure handling"
+      - "Forge task and policy telemetry is visible in daemon and dashboard surfaces with filterable session-level diagnostics"
+      - "Provider/memory compaction paths maintain continuity without hidden regressions under model switches and stale-stream conditions"
+    decision: null
+
   - id: dogfood-hardening-2026-03-29
     status: planning
     path: docs/specs/planning/dogfood-hardening-2026-03-29.md

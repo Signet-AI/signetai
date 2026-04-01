@@ -335,12 +335,12 @@ onMount(() => {
 		/>
 	{/if}
 
-	{#if sk.searching}
+	{#if sk.searching || sk.catalogLoading || sk.loading}
 		<div
 			class="flex-1 flex items-center justify-center
 				text-[var(--sig-text-muted)] text-[12px]"
 		>
-			Searching...
+			{sk.searching ? "Searching..." : "Loading..."}
 		</div>
 	{:else}
 		<SkillGrid

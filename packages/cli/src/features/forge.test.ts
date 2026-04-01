@@ -3,13 +3,18 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	type ForgeDeps,
 	isSignetManagedForgeRecord,
 	loadForgeManifest,
 	managedForgeAssetNameForPlatform,
 	managedForgeInstallSupportedForPlatform,
 	parseYesNoAnswer,
 	readForgeVersionFromBinaryMetadata,
+	restartForgeService,
 	selectLatestStableForgeRelease,
+	showForgeServiceStatus,
+	startForgeService,
+	stopForgeService,
 	withManagedForgeInstallLock,
 } from "./forge.js";
 
@@ -257,6 +262,120 @@ describe("Forge version metadata parsing", () => {
 		} finally {
 			rmSync(tempHome, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("Forge service commands", () => {
+	function createForgeDeps(overrides: Partial<ForgeDeps> = {}): ForgeDeps {
+		return {
+			agentsDir: "/tmp/.agents",
+			defaultPort: 3850,
+			extractPathOption: () => null,
+			getTemplatesDir: () => "/tmp/templates",
+			normalizeAgentPath: (pathValue) => pathValue,
+			isDaemonRunning: async () => false,
+			getDaemonStatus: async () => ({
+				running: false,
+				pid: null,
+				uptime: null,
+				version: "0.0.0-test",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "localhost",
+			}),
+			startDaemon: async () => true,
+			stopDaemon: async () => true,
+			...overrides,
+		};
+	}
+
+	it("startForgeService skips start when daemon is already running", async () => {
+		let startCalled = false;
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 123,
+				uptime: 50,
+				version: "1.0.0",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "localhost",
+			}),
+			startDaemon: async () => {
+				startCalled = true;
+				return true;
+			},
+		});
+		await startForgeService({}, deps);
+		expect(startCalled).toBe(false);
+	});
+
+	it("stopForgeService skips stop when daemon is not running", async () => {
+		let stopCalled = false;
+		const deps = createForgeDeps({
+			stopDaemon: async () => {
+				stopCalled = true;
+				return true;
+			},
+		});
+		await stopForgeService({}, deps);
+		expect(stopCalled).toBe(false);
+	});
+
+	it("restartForgeService stops then starts when daemon is running", async () => {
+		const sequence: string[] = [];
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 321,
+				uptime: 50,
+				version: "1.0.0",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "localhost",
+			}),
+			stopDaemon: async () => {
+				sequence.push("stop");
+				return true;
+			},
+			startDaemon: async () => {
+				sequence.push("start");
+				return true;
+			},
+		});
+		await restartForgeService({}, deps);
+		expect(sequence).toEqual(["stop", "start"]);
+	});
+
+	it("showForgeServiceStatus prints json payload when --json is set", async () => {
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 999,
+				uptime: 1234,
+				version: "9.9.9",
+				host: "localhost",
+				bindHost: "0.0.0.0",
+				networkMode: "localhost",
+			}),
+		});
+
+		const originalLog = console.log;
+		const lines: string[] = [];
+		console.log = (...args: unknown[]) => {
+			lines.push(args.map((arg) => String(arg)).join(" "));
+		};
+		try {
+			await showForgeServiceStatus({ json: true }, deps);
+		} finally {
+			console.log = originalLog;
+		}
+
+		expect(lines.length).toBe(1);
+		const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
+		expect(parsed.running).toBe(true);
+		expect(parsed.pid).toBe(999);
+		expect(parsed.basePath).toBe("/tmp/.agents");
 	});
 });
 
