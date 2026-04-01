@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { readSessionFileSnapshot } from "@signet/extension-base";
 import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE } from "./src/types.js";
 
+const EXCLUDED_CUSTOM_TYPES: ReadonlySet<string> = new Set([
+	HIDDEN_RECALL_CUSTOM_TYPE,
+	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
+]);
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -15,7 +20,7 @@ afterEach(() => {
 
 describe("readSessionFileSnapshot", () => {
 	it("reconstructs transcript while excluding hidden Signet custom messages", () => {
-		const dir = mkdtempSync(join(tmpdir(), "omp-session-"));
+		const dir = mkdtempSync(join(tmpdir(), "pi-session-"));
 		tempDirs.push(dir);
 		const sessionFile = join(dir, "session.jsonl");
 
@@ -29,12 +34,12 @@ describe("readSessionFileSnapshot", () => {
 				}),
 				JSON.stringify({
 					type: "custom_message",
-					customType: "signet-oh-my-pi-session-context",
+					customType: "signet-pi-session-context",
 					content: "should stay hidden",
 				}),
 				JSON.stringify({
 					type: "custom_message",
-					customType: "signet-oh-my-pi-hidden-recall",
+					customType: "signet-pi-hidden-recall",
 					content: "should stay hidden too",
 				}),
 				JSON.stringify({
@@ -44,10 +49,7 @@ describe("readSessionFileSnapshot", () => {
 			].join("\n"),
 		);
 
-		const snapshot = readSessionFileSnapshot(
-			sessionFile,
-			new Set([HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE]),
-		);
+		const snapshot = readSessionFileSnapshot(sessionFile, EXCLUDED_CUSTOM_TYPES);
 		expect(snapshot).toEqual({
 			loaded: true,
 			sessionId: "session-123",

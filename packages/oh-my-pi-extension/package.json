@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "@oh-my-pi/pi-coding-agent": "^13.16.4",
-    "@signet/core": "workspace:*"
+    "@signet/core": "workspace:*",
+    "@signet/extension-base": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

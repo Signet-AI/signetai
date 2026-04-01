@@ -403,7 +403,7 @@ Connector Framework
 
 The connector framework manages external data source integrations that
 push documents and memories into the [[pipeline]]. It is distinct from the
-[[harnesses|harness connector packages]] (claude-code, opencode, openclaw) — those
+[[harnesses|harness connector packages]] (claude-code, opencode, openclaw, oh-my-pi, pi) — those
 handle platform hook installation; this framework handles ongoing sync.
 
 **Registry** (`connectors/registry.ts`): CRUD operations on the

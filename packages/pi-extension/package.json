@@ -1,0 +1,31 @@
+{
+	"name": "@signet/pi-extension",
+	"version": "0.91.4",
+	"description": "Signet runtime extension for pi — session lifecycle hooks and memory recall",
+	"type": "module",
+	"main": "dist/signet-pi.mjs",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": "./dist/signet-pi.mjs"
+	},
+	"files": ["dist"],
+	"scripts": {
+		"build": "bun build src/index.ts --outfile dist/signet-pi.mjs --target node --minify --format esm --external better-sqlite3 && bun run build:types",
+		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+		"typecheck": "tsc --noEmit",
+		"dev": "bun --watch src/index.ts"
+	},
+	"dependencies": {
+		"@mariozechner/pi-coding-agent": "^0.54.1",
+		"@signet/core": "workspace:*",
+		"@signet/extension-base": "workspace:*",
+		"@sinclair/typebox": "^0.34.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"bun-types": "latest",
+		"typescript": "^5.7.0"
+	},
+	"keywords": ["signet", "pi", "extension", "ai-memory"],
+	"license": "Apache-2.0"
+}

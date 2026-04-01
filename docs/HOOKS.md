@@ -394,6 +394,22 @@ Install is handled automatically by `signet setup` or `signet connect opencode`.
 
 ---
 
+## pi Integration
+
+pi uses a bundled extension installed by `@signet/connector-pi` at
+`~/.pi/agent/extensions/signet-pi.js` (or `$PI_CODING_AGENT_DIR/extensions/signet-pi.js`).
+The extension calls the daemon API at session lifecycle events (session-start,
+user-prompt-submit, session-end, compaction) and exposes `/recall`, `/remember`,
+and `/signet-status` commands plus `signet_recall` and `signet_remember`
+LLM-callable tools.
+
+Install is handled automatically by `signet setup` or `signet connector install pi`.
+
+Configuration is optional via `~/.pi/agent/extensions/signet.json`. Set
+`SIGNET_ENABLED=false` to disable for a single session.
+
+---
+
 ## Implementing a Custom Hook Client
 
 If you're building a new harness integration, call the hooks directly:

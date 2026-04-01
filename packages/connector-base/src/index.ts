@@ -32,7 +32,8 @@
  * ```
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -237,6 +238,102 @@ export function atomicWriteJson(path: string, data: unknown, indent: number | st
 		} catch {}
 		throw err;
 	}
+}
+
+// ============================================================================
+// Shared managed-extension utilities (used by connector-pi, connector-oh-my-pi)
+// ============================================================================
+
+export const MANAGED_DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
+export const MANAGED_AGENT_ID_DEFAULT = "default";
+
+export function readManagedTrimmedEnv(name: string): string | undefined {
+	const value = process.env[name];
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function resolveSignetWorkspacePath(home = homedir()): string {
+	const configured = readManagedTrimmedEnv("SIGNET_PATH");
+	if (configured) return configured;
+
+	const configHome = readManagedTrimmedEnv("XDG_CONFIG_HOME") ?? join(home, ".config");
+	const workspaceConfigPath = join(configHome, "signet", "workspace.json");
+	if (!existsSync(workspaceConfigPath)) return join(home, ".agents");
+
+	try {
+		const raw = JSON.parse(readFileSync(workspaceConfigPath, "utf8")) as { workspace?: unknown };
+		return typeof raw.workspace === "string" && raw.workspace.trim().length > 0
+			? raw.workspace.trim()
+			: join(home, ".agents");
+	} catch {
+		return join(home, ".agents");
+	}
+}
+
+export function resolveSignetDaemonUrl(): string {
+	const explicit = readManagedTrimmedEnv("SIGNET_DAEMON_URL");
+	if (explicit) return explicit;
+
+	const host = readManagedTrimmedEnv("SIGNET_HOST") ?? "127.0.0.1";
+	const port = readManagedTrimmedEnv("SIGNET_PORT") ?? "3850";
+	return `http://${host}:${port}`;
+}
+
+export function resolveSignetAgentId(): string {
+	return readManagedTrimmedEnv("SIGNET_AGENT_ID") ?? MANAGED_AGENT_ID_DEFAULT;
+}
+
+export function buildManagedExtensionEnvBootstrap(env: {
+	readonly signetPath: string;
+	readonly daemonUrl: string;
+	readonly agentId: string;
+}): string {
+	const workspace = JSON.stringify(env.signetPath);
+	const daemonUrl = JSON.stringify(env.daemonUrl);
+	const agentId = JSON.stringify(env.agentId);
+
+	return `const __signetRuntimeProcess = Reflect.get(globalThis, "process");
+if (__signetRuntimeProcess && typeof __signetRuntimeProcess === "object") {
+	const __signetRuntimeEnv = Reflect.get(__signetRuntimeProcess, "env");
+	const __signetReadEnv = (key) => {
+		if (!__signetRuntimeEnv || typeof __signetRuntimeEnv !== "object") return undefined;
+		const value = Reflect.get(__signetRuntimeEnv, key);
+		return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+	};
+	if (__signetRuntimeEnv && typeof __signetRuntimeEnv === "object") {
+		if (!__signetReadEnv("SIGNET_PATH")) {
+			Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${workspace});
+		}
+		if (!__signetReadEnv("SIGNET_DAEMON_URL")) {
+			Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", ${daemonUrl});
+		}
+		if (!__signetReadEnv("SIGNET_AGENT_ID")) {
+			Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", ${agentId});
+		}
+	}
+}`;
+}
+
+export function managedExtensionFilePath(agentDir: string, filename: string): string {
+	return join(agentDir, "extensions", filename);
+}
+
+export function isManagedExtensionFile(filePath: string, marker: string): boolean {
+	if (!existsSync(filePath)) return false;
+	try {
+		const content = readFileSync(filePath, "utf8");
+		return content.includes(marker);
+	} catch {
+		return false;
+	}
+}
+
+export function removeManagedExtensionFile(filePath: string, marker: string): boolean {
+	if (!existsSync(filePath) || !isManagedExtensionFile(filePath, marker)) return false;
+	rmSync(filePath, { force: true });
+	return true;
 }
 
 // ============================================================================

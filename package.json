@@ -16,13 +16,15 @@
     "web"
   ],
   "scripts": {
-    "build": "bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:native && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:deps && bun run build:signetai",
+    "build": "bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:native && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps && bun run build:signetai",
     "build:native": "bun scripts/build-native.ts",
     "build:core": "cd packages/core && bun run build",
     "build:connector-base": "cd packages/connector-base && bun run build",
     "build:connector-oh-my-pi": "cd packages/connector-oh-my-pi && bun run build",
     "build:opencode-plugin": "cd packages/opencode-plugin && bun run build",
     "build:oh-my-pi-extension": "cd packages/oh-my-pi-extension && bun run build",
+    "build:pi-extension": "cd packages/pi-extension && bun run build",
+    "build:connector-pi": "cd packages/connector-pi && bun run build",
     "build:deps": "bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-forge' --filter '@signet/connector-hermes-agent' --filter '@signet/connector-opencode' --filter '@signet/connector-openclaw' --filter '@signet/adapter-*' --filter '@signetai/*' --filter '@signet/daemon' --filter '@signet/sdk' build",
     "build:signetai": "cd packages/signetai && bun run build",
     "build:publish": "bun run build:dashboard && bun run build:signetai",

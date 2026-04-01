@@ -210,6 +210,16 @@ export {
 	writeConfiguredOhMyPiAgentDir,
 } from "./oh-my-pi";
 
+export {
+	clearConfiguredPiAgentDir,
+	getPiConfigPath,
+	listPiAgentDirCandidates,
+	readConfiguredPiAgentDir,
+	resolvePiAgentDir,
+	resolvePiExtensionsDir,
+	writeConfiguredPiAgentDir,
+} from "./pi";
+
 // Multi-agent support
 export {
 	discoverAgents,

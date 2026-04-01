@@ -33,6 +33,7 @@ import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
+import { PiConnector } from "@signet/connector-pi";
 import {
 	IDENTITY_FILES,
 	type ImportResult,
@@ -259,6 +260,11 @@ async function configureHarnessHooks(
 		}
 		case "oh-my-pi": {
 			const connector = new OhMyPiConnector();
+			await connector.install(basePath);
+			break;
+		}
+		case "pi": {
+			const connector = new PiConnector();
 			await connector.install(basePath);
 			break;
 		}
@@ -1424,6 +1430,7 @@ registerUpdateCommands(program, {
 	getTemplatesDir,
 	isOpenClawInstalled: () => new OpenClawConnector().isInstalled(),
 	isOhMyPiInstalled: () => new OhMyPiConnector().isInstalled(),
+	isPiInstalled: () => new PiConnector().isInstalled(),
 	syncBuiltinSkills,
 	syncWorkspaceSourceRepo,
 });

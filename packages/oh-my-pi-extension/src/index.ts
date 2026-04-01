@@ -1,5 +1,5 @@
 import { createDaemonClient } from "./daemon-client.js";
-import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "./helpers.js";
+import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/extension-base";
 import {
 	type LifecycleDeps,
 	currentSessionRef,

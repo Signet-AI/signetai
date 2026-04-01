@@ -1,25 +1,19 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-	readStaticIdentity,
-	resolveSessionStartTimeoutMs,
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
-} from "@signet/core";
+import { readStaticIdentity } from "@signet/core";
 import { readTrimmedRuntimeEnv, readTrimmedString, buildTranscriptFromEntries, readSessionFileSnapshot } from "@signet/extension-base";
 import type { DaemonClient } from "./daemon-client.js";
 import type { SessionState } from "./session-state.js";
 import {
 	HARNESS,
-	FETCH_TIMEOUT_ENV,
 	HIDDEN_RECALL_CUSTOM_TYPE,
 	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
-	type OmpExtensionContext,
-	type OmpSessionEntry,
-	type OmpSessionSwitchEvent,
+	type PiExtensionContext,
+	type PiSessionEntry,
+	type PiSessionSwitchEvent,
 	PROMPT_SUBMIT_TIMEOUT,
 	READ_TIMEOUT,
 	RUNTIME_PATH,
-	SESSION_START_TIMEOUT_ENV,
 	type SessionStartResult,
 	type UserPromptSubmitResult,
 	WRITE_TIMEOUT,
@@ -50,21 +44,12 @@ const EXCLUDED_CUSTOM_TYPES: ReadonlySet<string> = new Set([
 	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
 ]);
 
-function staticFallback(reason: "offline" | "timeout" = "offline"): string {
+function staticFallback(): string {
 	const signetPath = readTrimmedRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
-	if (reason === "timeout") {
-		return readStaticIdentity(signetPath, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS) ?? "";
-	}
 	return readStaticIdentity(signetPath) ?? "";
 }
 
-function sessionStartTimeout(): number {
-	return resolveSessionStartTimeoutMs(
-		readTrimmedRuntimeEnv(SESSION_START_TIMEOUT_ENV) ?? readTrimmedRuntimeEnv(FETCH_TIMEOUT_ENV),
-	);
-}
-
-function getSessionEntries(ctx: OmpExtensionContext): ReadonlyArray<OmpSessionEntry> {
+function getSessionEntries(ctx: PiExtensionContext): ReadonlyArray<PiSessionEntry> {
 	const fromBranch = ctx.sessionManager.getBranch();
 	if (Array.isArray(fromBranch) && fromBranch.length > 0) {
 		return fromBranch;
@@ -73,7 +58,7 @@ function getSessionEntries(ctx: OmpExtensionContext): ReadonlyArray<OmpSessionEn
 	return Array.isArray(allEntries) ? allEntries : [];
 }
 
-export function currentSessionRef(ctx: OmpExtensionContext): SessionRef {
+export function currentSessionRef(ctx: PiExtensionContext): SessionRef {
 	const header = ctx.sessionManager.getHeader();
 	const sessionId = readTrimmedString(ctx.sessionManager.getSessionId()) ?? readTrimmedString(header?.id);
 	const sessionFile = readTrimmedString(ctx.sessionManager.getSessionFile());
@@ -128,14 +113,14 @@ export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<void
 	}
 }
 
-export async function refreshSessionStart(deps: LifecycleDeps, ctx: OmpExtensionContext): Promise<void> {
+export async function refreshSessionStart(deps: LifecycleDeps, ctx: PiExtensionContext): Promise<void> {
 	await flushPendingSessionEnds(deps);
 
 	const session = currentSessionRef(ctx);
 	deps.state.setActiveSession(session.sessionId, session.sessionFile);
 	deps.state.clearSessionEnded(session.sessionId);
 
-	const result = await deps.client.postResult<SessionStartResult>(
+	const result = await deps.client.post<SessionStartResult>(
 		"/api/hooks/session-start",
 		{
 			harness: HARNESS,
@@ -144,19 +129,15 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: OmpExtension
 			sessionKey: session.sessionId,
 			runtimePath: RUNTIME_PATH,
 		},
-		sessionStartTimeout(),
+		READ_TIMEOUT,
 	);
 
-	const sessionContext = result.ok
-		? (result.data.inject ?? result.data.recentContext ?? "")
-		: result.reason === "timeout"
-			? staticFallback("timeout")
-			: staticFallback();
+	const sessionContext = result === null ? staticFallback() : (result.inject ?? result.recentContext ?? "");
 	deps.state.setSessionContext(sessionContext);
 	deps.state.setPendingSessionContext(session.sessionId, sessionContext);
 }
 
-export async function ensureSessionContext(deps: LifecycleDeps, ctx: OmpExtensionContext): Promise<void> {
+export async function ensureSessionContext(deps: LifecycleDeps, ctx: PiExtensionContext): Promise<void> {
 	await flushPendingSessionEnds(deps);
 
 	const current = currentSessionRef(ctx);
@@ -170,7 +151,7 @@ export async function ensureSessionContext(deps: LifecycleDeps, ctx: OmpExtensio
 	await refreshSessionStart(deps, ctx);
 }
 
-export async function endCurrentSession(deps: LifecycleDeps, ctx: OmpExtensionContext, reason: string): Promise<void> {
+export async function endCurrentSession(deps: LifecycleDeps, ctx: PiExtensionContext, reason: string): Promise<void> {
 	await flushPendingSessionEnds(deps);
 
 	const session = currentSessionRef(ctx);
@@ -191,7 +172,7 @@ export async function endCurrentSession(deps: LifecycleDeps, ctx: OmpExtensionCo
 
 export async function endPreviousSession(
 	deps: LifecycleDeps,
-	event: OmpSessionSwitchEvent | { previousSessionFile?: string },
+	event: PiSessionSwitchEvent | { previousSessionFile?: string },
 	reason: string,
 ): Promise<void> {
 	const previousSessionFile = readTrimmedString(event.previousSessionFile) ?? deps.state.getActiveSessionFile();
@@ -226,7 +207,7 @@ export async function endPreviousSession(
 
 export async function requestRecallForPrompt(
 	deps: LifecycleDeps,
-	ctx: OmpExtensionContext,
+	ctx: PiExtensionContext,
 	userText: string,
 ): Promise<void> {
 	await flushPendingSessionEnds(deps);

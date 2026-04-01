@@ -123,7 +123,7 @@ Options:
 | `--name <name>` | Agent name in non-interactive mode |
 | `--description <description>` | Agent description in non-interactive mode |
 | `--deployment-type <type>` | Deployment context (`local`, `vps`, `server`) used for interactive guidance and non-interactive inferred defaults |
-| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `codex`) |
+| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `oh-my-pi`, `pi`, `codex`, `forge`) |
 | `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) |
 | `--embedding-model <model>` | Non-interactive embedding model |
 | `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) |

@@ -1,0 +1,32 @@
+{
+	"name": "@signet/connector-pi",
+	"version": "0.91.4",
+	"description": "Signet connector for pi",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"files": ["dist"],
+	"scripts": {
+		"build": "bun run build:bundle",
+		"build:bundle": "bun scripts/embed-extension.ts && bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
+		"build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+		"dev": "bun --watch src/index.ts",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@signet/connector-base": "workspace:*",
+		"@signet/core": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"typescript": "^5.7.0"
+	},
+	"keywords": ["signet", "pi", "connector", "lifecycle", "agent"],
+	"license": "Apache-2.0"
+}

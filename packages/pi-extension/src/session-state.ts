@@ -1,5 +1,5 @@
 import { readTrimmedString } from "@signet/extension-base";
-import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE, type OmpAgentMessage } from "./types.js";
+import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE, type PiAgentMessage } from "./types.js";
 
 const MAX_PENDING_SESSIONS = 64;
 const MAX_PENDING_PER_SESSION = 4;
@@ -17,23 +17,14 @@ function sanitizeInject(inject: string): string {
 	return inject.replace(/<\/signet-memory>/gi, "<\\/signet-memory>");
 }
 
-function createHiddenInjectMessage(customType: string, inject: string): OmpAgentMessage {
+function createHiddenInjectMessage(customType: string, inject: string): PiAgentMessage {
 	return {
 		role: "custom",
 		customType,
 		display: false,
 		content: `<signet-memory source="auto-recall">\n${sanitizeInject(inject)}\n</signet-memory>`,
-		attribution: "agent",
 		timestamp: Date.now(),
 	};
-}
-
-function combineHiddenInjects(sessionInject: string | undefined, recallInject: string | undefined): string | undefined {
-	const blocks = [readTrimmedString(sessionInject), readTrimmedString(recallInject)].filter(
-		(value): value is string => typeof value === "string" && value.length > 0,
-	);
-	if (blocks.length === 0) return undefined;
-	return blocks.join("\n\n");
 }
 
 function evictOldestKey<V>(map: Map<string, V>, maxSize: number): void {
@@ -58,7 +49,7 @@ export interface SessionState {
 	clearPendingSessionData(sessionId: string | undefined): void;
 	hasPendingRecall(sessionId: string | undefined): boolean;
 	consumePendingRecall(sessionId: string | undefined): string | undefined;
-	consumePersistentHiddenInject(sessionId: string | undefined): OmpAgentMessage | undefined;
+	consumeHiddenInjectMessages(sessionId: string | undefined): PiAgentMessage[];
 	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void;
 	clearPendingSessionEnd(sessionId: string | undefined): void;
 	getPendingSessionEnds(): ReadonlyArray<PendingSessionEnd>;
@@ -168,18 +159,22 @@ class SessionStateStore implements SessionState {
 		return readTrimmedString(inject);
 	}
 
-	consumePersistentHiddenInject(sessionId: string | undefined): OmpAgentMessage | undefined {
-		if (!sessionId) return undefined;
+	consumeHiddenInjectMessages(sessionId: string | undefined): PiAgentMessage[] {
+		if (!sessionId) return [];
 
+		const messages: PiAgentMessage[] = [];
 		const sessionInject = readTrimmedString(this.pendingSessionContext.get(sessionId));
+		if (sessionInject) {
+			messages.push(createHiddenInjectMessage(HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE, sessionInject));
+		}
 		this.pendingSessionContext.delete(sessionId);
 
 		const recallInject = this.consumePendingRecall(sessionId);
-		const combined = combineHiddenInjects(sessionInject, recallInject);
-		if (!combined) return undefined;
+		if (recallInject) {
+			messages.push(createHiddenInjectMessage(HIDDEN_RECALL_CUSTOM_TYPE, recallInject));
+		}
 
-		const customType = recallInject ? HIDDEN_RECALL_CUSTOM_TYPE : HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE;
-		return createHiddenInjectMessage(customType, combined);
+		return messages;
 	}
 
 	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void {
