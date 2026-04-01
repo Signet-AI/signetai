@@ -1939,6 +1939,7 @@ function readForgeTaskTelemetryResponse(value: unknown): ForgeTaskTelemetryRespo
 		typeof value.schema !== "string" ||
 		typeof value.sessionKey !== "string" ||
 		typeof value.count !== "number" ||
+		!Number.isFinite(value.count) ||
 		!Array.isArray(value.events) ||
 		!value.events.every((event) => isForgeTaskTelemetryEnvelope(event))
 	) {

@@ -817,6 +817,7 @@ export async function stopForgeService(options: ForgeServiceOptions, deps: Forge
 export async function restartForgeService(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
 	const basePath = readForgeServicePath(options, deps);
 	const { running } = await deps.getDaemonStatus();
+	let daemonStillRunning = false;
 	// Intentional ensure-running semantics: if the daemon is currently offline,
 	// restart behaves as start; when online, restart performs stop-then-start.
 	if (running) {
@@ -828,9 +829,17 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 		// previous process while it is still exiting and releasing the port.
 		const STOP_WAIT_ATTEMPTS = 50;
 		const STOP_WAIT_INTERVAL_MS = 100;
-		let daemonStillRunning = true;
+		daemonStillRunning = true;
 		for (let attempt = 0; attempt < STOP_WAIT_ATTEMPTS; attempt += 1) {
-			const status = await deps.getDaemonStatus();
+			let status: Awaited<ReturnType<ForgeDeps["getDaemonStatus"]>>;
+			try {
+				status = await deps.getDaemonStatus();
+			} catch {
+				// If status probing fails while waiting for shutdown, treat it as
+				// daemon no longer reachable and proceed to start.
+				daemonStillRunning = false;
+				break;
+			}
 			if (!status.running) {
 				daemonStillRunning = false;
 				break;
@@ -843,6 +852,11 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 	}
 	const started = await deps.startDaemon(basePath);
 	if (!started) {
+		if (daemonStillRunning) {
+			throw new Error(
+				`Failed to start Forge service daemon. Existing daemon may still be holding port ${deps.defaultPort}.`,
+			);
+		}
 		throw new Error("Failed to start Forge service daemon.");
 	}
 	console.log(chalk.green("✓ Forge service restarted"));

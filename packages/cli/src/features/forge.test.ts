@@ -495,6 +495,68 @@ describe("Forge service commands", () => {
 		expect(warned.some((line) => line.includes("Daemon still running after stop wait"))).toBe(true);
 	});
 
+	it("restartForgeService treats status probe errors during stop-wait as daemon offline", async () => {
+		let startCalls = 0;
+		let stopCalls = 0;
+		let statusCalls = 0;
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => {
+				statusCalls += 1;
+				if (statusCalls === 1) {
+					return {
+						running: true,
+						pid: 321,
+						uptime: 50,
+						version: "1.0.0",
+						host: "127.0.0.1",
+						bindHost: "127.0.0.1",
+						networkMode: "localhost",
+					};
+				}
+				throw new Error("status probe failed");
+			},
+			stopDaemon: async () => {
+				stopCalls += 1;
+				return true;
+			},
+			startDaemon: async () => {
+				startCalls += 1;
+				return true;
+			},
+			sleep: async () => {},
+		});
+
+		await restartForgeService({}, deps);
+		expect(stopCalls).toBe(1);
+		expect(startCalls).toBe(1);
+		expect(statusCalls).toBe(2);
+	});
+
+	it("restartForgeService includes port hint when start fails after daemon stays running", async () => {
+		let statusCalls = 0;
+		const deps = createForgeDeps({
+			defaultPort: 3850,
+			getDaemonStatus: async () => {
+				statusCalls += 1;
+				return {
+					running: true,
+					pid: 321,
+					uptime: 50,
+					version: "1.0.0",
+					host: "127.0.0.1",
+					bindHost: "127.0.0.1",
+					networkMode: "localhost",
+				};
+			},
+			stopDaemon: async () => true,
+			startDaemon: async () => false,
+			sleep: async () => {},
+		});
+
+		await expect(restartForgeService({}, deps)).rejects.toThrow("holding port 3850");
+		expect(statusCalls).toBeGreaterThan(1);
+	});
+
 	it("showForgeServiceStatus prints json payload when --json is set", async () => {
 		const deps = createForgeDeps({
 			getDaemonStatus: async () => ({
