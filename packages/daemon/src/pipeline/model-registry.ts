@@ -89,6 +89,28 @@ const KNOWN_MODELS: Record<string, ModelRegistryEntry[]> = {
 			deprecated: false,
 		},
 		{ id: "google/gemini-2.5-flash", provider: "opencode", label: "Gemini 2.5 Flash", tier: "low", deprecated: false },
+		{ id: "github-copilot/gpt-4o", provider: "opencode", label: "GPT-4o (Copilot)", tier: "mid", deprecated: false },
+		{
+			id: "github-copilot/gpt-4o-mini",
+			provider: "opencode",
+			label: "GPT-4o Mini (Copilot)",
+			tier: "low",
+			deprecated: false,
+		},
+		{
+			id: "github-copilot/o3-mini",
+			provider: "opencode",
+			label: "O3 Mini (Copilot)",
+			tier: "mid",
+			deprecated: false,
+		},
+		{
+			id: "github-copilot/claude-sonnet-4",
+			provider: "opencode",
+			label: "Claude Sonnet 4 (Copilot)",
+			tier: "mid",
+			deprecated: false,
+		},
 	],
 	openrouter: [
 		// Keep these slugs valid for no-discovery fallback mode.

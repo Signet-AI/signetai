@@ -100,7 +100,15 @@ export function stripFences(raw: string): string {
 	const arr = extractBalancedJsonArray(stripped);
 	if (arr) return arr;
 
-	return stripped.trim();
+	// Strip leading non-JSON text before the first '{'.
+	// Handles models (Copilot, GPT) that prefix JSON with explanatory prose.
+	const trimmed = stripped.trim();
+	const brace = trimmed.indexOf("{");
+	if (brace > 0) {
+		return trimmed.slice(brace);
+	}
+
+	return trimmed;
 }
 
 export function tryParseJson(candidate: string): unknown | null {
@@ -382,7 +390,8 @@ export function parseRawExtractionOutput(rawOutput: string): ExtractionResult {
 	if (parsed === null) {
 		const jsonStr = stripFences(rawOutput);
 		logger.warn("pipeline", "Failed to parse extraction JSON", {
-			preview: jsonStr.slice(0, 200),
+			preview: jsonStr.slice(0, 500),
+			length: rawOutput.length,
 		});
 		return { facts: [], entities: [], warnings: ["Failed to parse LLM output as JSON"] };
 	}

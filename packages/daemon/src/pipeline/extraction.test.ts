@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { extractFactsAndEntities } from "./extraction";
+import { extractFactsAndEntities, stripFences } from "./extraction";
 import type { LlmProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
@@ -320,5 +320,47 @@ ${VALID_RESPONSE}
 
 		expect(result.facts).toHaveLength(0);
 		expect(result.entities).toHaveLength(0);
+	});
+
+	it("parses JSON when Copilot model prefixes with explanation text", async () => {
+		const copilotStyle = `Sure, here is the extracted data from the text:\n\n${VALID_RESPONSE}`;
+		const provider = mockProvider([copilotStyle]);
+		const result = await extractFactsAndEntities("User prefers dark mode and uses vim keybindings", provider);
+
+		expect(result.facts).toHaveLength(2);
+		expect(result.entities).toHaveLength(1);
+		expect(result.warnings).toHaveLength(0);
+	});
+
+	it("parses JSON when model adds verbose preamble without code fence", async () => {
+		const verbose = `I've analyzed the text and extracted the following facts and entities. Here is the result:\n${VALID_RESPONSE}`;
+		const provider = mockProvider([verbose]);
+		const result = await extractFactsAndEntities("User prefers dark mode and uses vim keybindings", provider);
+
+		expect(result.facts).toHaveLength(2);
+		expect(result.entities).toHaveLength(1);
+	});
+});
+
+describe("stripFences", () => {
+	it("strips leading non-JSON text before first brace", () => {
+		const input = 'Here is the JSON output:\n{"key": "value"}';
+		const result = stripFences(input);
+		expect(result).toBe('{"key": "value"}');
+	});
+
+	it("returns input unchanged when it starts with a brace", () => {
+		const input = '{"key": "value"}';
+		expect(stripFences(input)).toBe('{"key": "value"}');
+	});
+
+	it("still prefers code fence extraction over leading-text stripping", () => {
+		const input = 'explanation\n```json\n{"fenced": true}\n```\nmore text';
+		expect(stripFences(input)).toBe('{"fenced": true}');
+	});
+
+	it("strips think blocks from reasoning models", () => {
+		const input = '<think>reasoning here</think>{"key": "value"}';
+		expect(stripFences(input)).toBe('{"key": "value"}');
 	});
 });

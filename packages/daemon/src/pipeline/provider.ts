@@ -1507,6 +1507,7 @@ interface OpenCodeAssistantMessage {
 	readonly role?: string;
 	readonly cost?: number;
 	readonly tokens?: OpenCodeTokens;
+	readonly structured?: unknown;
 }
 
 interface OpenCodeMessageResponse {
@@ -1515,6 +1516,17 @@ interface OpenCodeMessageResponse {
 }
 
 const OPENCODE_EXTRACTION_FALLBACK = '{"facts":[],"entities":[]}';
+
+/**
+ * Permissive JSON schema for OpenCode's structured output.
+ * Accepts any JSON object — the pipeline's own validation handles
+ * schema enforcement. The value here is forcing the model to use
+ * OpenCode's StructuredOutput tool rather than free-text responding.
+ */
+const OPENCODE_JSON_SCHEMA: Record<string, unknown> = {
+	type: "object",
+	additionalProperties: true,
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -1557,6 +1569,7 @@ function parseOpenCodeMessageResponse(value: unknown): OpenCodeMessageResponse |
 		...(typeof infoRecord.role === "string" ? { role: infoRecord.role } : {}),
 		...(typeof infoRecord.cost === "number" ? { cost: infoRecord.cost } : {}),
 		...(parseOpenCodeTokens(infoRecord.tokens) ? { tokens: parseOpenCodeTokens(infoRecord.tokens) } : {}),
+		...(infoRecord.structured !== undefined ? { structured: infoRecord.structured } : {}),
 	};
 
 	return { info, parts };
@@ -1598,6 +1611,7 @@ function buildOpenCodeFallbackResponse(): OpenCodeMessageResponse {
 }
 
 function hasUsableOpenCodeText(data: OpenCodeMessageResponse): boolean {
+	if (data.info.structured !== undefined) return true;
 	for (const part of data.parts) {
 		if (part.type !== "text") continue;
 		if (typeof part.text !== "string") continue;
@@ -1608,10 +1622,13 @@ function hasUsableOpenCodeText(data: OpenCodeMessageResponse): boolean {
 
 /**
  * Extract assistant text from an OpenCode message response.
- * Response shape: `{ info: AssistantMessage, parts: Part[] }`
- * Text lives in parts where `type === "text"`.
+ * Prefers `info.structured` (set when json_schema format is used),
+ * falls back to concatenating `type === "text"` parts.
  */
 function extractOpenCodeText(data: OpenCodeMessageResponse): string {
+	if (data.info.structured !== undefined) {
+		return typeof data.info.structured === "string" ? data.info.structured : JSON.stringify(data.info.structured);
+	}
 	const textParts: string[] = [];
 	for (const part of data.parts) {
 		if (part.type === "text" && typeof part.text === "string") {
@@ -1741,9 +1758,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		}
 	}
 
-	async function getOrCreateSession(): Promise<string> {
-		if (sessionId) return sessionId;
-
+	async function createSession(): Promise<string> {
 		const res = await fetch(`${cfg.baseUrl}/session`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -1761,16 +1776,33 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		if (typeof id !== "string") {
 			throw new Error("OpenCode session response missing 'id' field");
 		}
-		sessionId = id;
 		logger.debug("pipeline", "OpenCode session created", { id });
 		return id;
 	}
 
-	function buildMessageBody(prompt: string): string {
-		return JSON.stringify({
+	async function getOrCreateSession(): Promise<string> {
+		if (sessionId) return sessionId;
+		sessionId = await createSession();
+		return sessionId;
+	}
+
+	let structuredOutputSupported = true;
+
+	function buildMessageBody(prompt: string, structured?: boolean): string {
+		const body: Record<string, unknown> = {
 			parts: [{ type: "text", text: prompt }],
 			model: { providerID, modelID },
-		});
+		};
+		if (structured && structuredOutputSupported) {
+			body.system =
+				"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";
+			body.format = {
+				type: "json_schema",
+				schema: OPENCODE_JSON_SCHEMA,
+				retryCount: 1,
+			};
+		}
+		return JSON.stringify(body);
 	}
 
 	async function sendMessage(
@@ -1788,7 +1820,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				fetch(`${cfg.baseUrl}/session/${sid}/message`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: buildMessageBody(prompt),
+					body: buildMessageBody(prompt, true),
 					signal: controller.signal,
 				});
 
@@ -1867,10 +1899,58 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				return pollForAssistantMessage(forSessionId);
 			};
 
-			const res = await postMessage(sid);
+			let res = await postMessage(sid);
+			let consumedBody: string | null = null;
+
+			// Older OpenCode versions may not support the format field.
+			// 422 is the Hono/Zod schema validation rejection for unknown fields.
+			// Check status/body before reading structuredOutputSupported so that
+			// concurrent callers both hitting 422 both retry correctly — if A sets
+			// structuredOutputSupported=false first, B must still retry rather than
+			// fall through to the throw path.
+			if (!res.ok && res.status === 422) {
+				consumedBody = await res.text().catch(() => "");
+				// Parse the Hono/Zod rejection body to check whether "format" is the
+				// offending field. Unambiguous vs. substring matching and immune to
+				// future body shape changes that happen to contain "format" elsewhere.
+				const isFormatRejection = (() => {
+					try {
+						const parsed: unknown = JSON.parse(consumedBody);
+						if (!isRecord(parsed)) return false;
+						const issues = Array.isArray(parsed.issues) ? parsed.issues : [];
+						return issues.some((i): boolean => isRecord(i) && Array.isArray(i.path) && i.path[0] === "format");
+					} catch {
+						return false;
+					}
+				})();
+				if (isFormatRejection) {
+					if (structuredOutputSupported) {
+						logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
+							status: res.status,
+						});
+						structuredOutputSupported = false;
+					}
+					consumedBody = null;
+					// Use createSession() (not getOrCreateSession()) so concurrent callers
+					// each get their own session, preventing message ordering issues from
+					// two callers POSTing to the same session ID simultaneously.
+					const retrySid = await createSession();
+					// Known: concurrent callers both writing sessionId here is a benign
+					// last-writer-wins race — each caller uses its own retrySid local for
+					// the fetch below, so both retries are safe. The losing session is
+					// abandoned on the server (resource waste, not a correctness issue).
+					sessionId = retrySid;
+					res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: buildMessageBody(prompt, false),
+						signal: controller.signal,
+					});
+				}
+			}
 
 			if (!res.ok) {
-				const body = await res.text().catch(() => "");
+				const body = consumedBody ?? (await res.text().catch(() => ""));
 				// Session expired/invalid — reset and retry once
 				if (res.status === 404 || res.status === 410) {
 					sessionId = null;

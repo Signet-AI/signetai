@@ -706,6 +706,13 @@ describe("createOpenCodeProvider", () => {
 
 		expect(capturedBody.parts).toEqual([{ type: "text", text: "my prompt" }]);
 		expect(capturedBody.model).toEqual({ providerID: "google", modelID: "gemini-2.5-flash" });
+		// Structured output fields are included by default
+		expect(capturedBody.format).toEqual({
+			type: "json_schema",
+			schema: { type: "object", additionalProperties: true },
+			retryCount: 1,
+		});
+		expect(typeof capturedBody.system).toBe("string");
 	});
 
 	it("generate() joins multiple text parts", async () => {
@@ -865,6 +872,154 @@ describe("createOpenCodeProvider", () => {
 		expect(seenUrls).toContain("http://172.17.0.1:11434/api/generate");
 		const fallbackOptions = fallbackBody ? getObjectField(fallbackBody, "options") : undefined;
 		expect(fallbackOptions ? getNumberField(fallbackOptions, "num_ctx") : undefined).toBe(2048);
+	});
+
+	it("generate() prefers info.structured over text parts", async () => {
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_structured",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			return Response.json({
+				info: {
+					role: "assistant",
+					id: "msg_s",
+					sessionID: "ses_structured",
+					cost: 0,
+					tokens: { input: 10, output: 5 },
+					structured: { facts: [{ content: "from structured", type: "fact", confidence: 0.9 }], entities: [] },
+				},
+				parts: [
+					{ type: "text", text: "ignore this text", id: "p1", sessionID: "ses_structured", messageID: "msg_s" },
+				],
+			});
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		const result = await provider.generate("test");
+		const parsed = JSON.parse(result);
+		expect(parsed.facts[0].content).toBe("from structured");
+	});
+
+	it("generate() returns info.structured as string when it is a string", async () => {
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_str",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			return Response.json({
+				info: {
+					role: "assistant",
+					id: "msg_str",
+					sessionID: "ses_str",
+					cost: 0,
+					tokens: { input: 0, output: 0 },
+					structured: '{"description":"test skill","triggers":["run tests"],"tags":["testing"]}',
+				},
+				parts: [],
+			});
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		const result = await provider.generate("test");
+		expect(JSON.parse(result).description).toBe("test skill");
+	});
+
+	it("generate() disables structured output on 422 and retries without format", async () => {
+		let attempts = 0;
+		const bodies: Record<string, unknown>[] = [];
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_compat_${attempts}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			attempts++;
+			bodies.push(JSON.parse(init?.body as string));
+			if (attempts === 1) {
+				// 422 with "format" JSON key — signals structured output unsupported
+				return new Response('{"issues":[{"path":["format"],"message":"Unrecognized key"}]}', { status: 422 });
+			}
+			return Response.json(openCodeResponse("fallback works"));
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		const first = await provider.generate("test");
+		expect(first).toBe("fallback works");
+		// The retry within the same call should omit format
+		expect(bodies[1]?.format).toBeUndefined();
+
+		// A subsequent call should also omit format (structured output stays disabled)
+		await provider.generate("second call");
+		expect(bodies[2]?.format).toBeUndefined();
+	});
+
+	it("generate() does not disable structured output on an unrelated 400", async () => {
+		let attempts = 0;
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_unrelated_${attempts}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			attempts++;
+			if (attempts === 1) {
+				// 400 with "format" word but not a structured-output rejection
+				return new Response('{"error":"Invalid request format: parts array is missing"}', { status: 400 });
+			}
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		// Should throw, not silently disable structured output and retry
+		await expect(provider.generate("test")).rejects.toThrow(/OpenCode HTTP 400/);
+		expect(attempts).toBe(1);
+	});
+
+	it("generate() preserves error body on non-format 400", async () => {
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_400",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			return new Response("bad request: missing required field", { status: 400 });
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		await expect(provider.generate("test")).rejects.toThrow(/bad request: missing required field/);
+	});
+
+	it("generate() parses github-copilot provider/model format", () => {
+		const provider = createOpenCodeProvider({ model: "github-copilot/gpt-4o" });
+		expect(provider.name).toBe("opencode:github-copilot/gpt-4o");
 	});
 });
 

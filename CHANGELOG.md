@@ -2,6 +2,13 @@
 
 All notable changes to Signet are documented here.
 
+## [0.91.3] - 2026-04-01
+
+### Bug Fixes
+
+- **pipeline**: support Copilot models via OpenCode structured output (#425)
+
+
 ## [0.91.2] - 2026-03-31
 
 ### Bug Fixes
