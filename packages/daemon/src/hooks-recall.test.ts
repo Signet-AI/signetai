@@ -29,7 +29,7 @@ describe("/api/hooks/recall", () => {
 
 	afterAll(() => {
 		if (prev === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 		} else {
 			process.env.SIGNET_PATH = prev;
 		}
@@ -38,23 +38,6 @@ describe("/api/hooks/recall", () => {
 		} catch {
 			// cleanup best-effort
 		}
-	});
-
-	it("does not throw ReferenceError for cfg", async () => {
-		const resp = await app.request("/api/hooks/recall", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				harness: "openclaw",
-				query: "test query",
-				limit: 5,
-			}),
-		});
-
-		// Should not return 500 with "Hook execution failed"
-		expect(resp.status).not.toBe(500);
-		const body = await resp.json();
-		expect(body.error).not.toBe("Hook execution failed");
 	});
 
 	it("returns 200 on valid recall request", async () => {
@@ -68,9 +51,11 @@ describe("/api/hooks/recall", () => {
 			}),
 		});
 
-		// The route should resolve without crashing, even if the DB
-		// isn't fully initialized — the key contract is no 500 error.
+		// The route should resolve without crashing (no cfg ReferenceError),
+		// even if the DB isn't fully initialized — the key contract is no 500.
 		expect(resp.status).toBe(200);
+		const body = await resp.json();
+		expect(body.error).not.toBe("Hook execution failed");
 	});
 
 	it("rejects requests missing harness", async () => {
