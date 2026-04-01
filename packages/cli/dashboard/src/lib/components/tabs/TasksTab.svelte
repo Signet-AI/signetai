@@ -19,6 +19,12 @@ import {
 import Plus from "@lucide/svelte/icons/plus";
 import { onMount } from "svelte";
 
+interface Props {
+	agentId?: string;
+}
+
+let { agentId = "default" }: Props = $props();
+
 // Track position as [columnIndex, taskIndex]
 let selectedColumn = $state(0);
 let selectedTaskInColumn = $state(0);
@@ -255,6 +261,7 @@ async function refreshForgeTelemetry() {
 			name: forgeName.trim() || undefined,
 			since: trimmedSince || undefined,
 			policyDeniedOnly: forgePolicyDeniedOnly,
+			agentId,
 		});
 		forgeTelemetry = result.data;
 		forgeError = result.error;

@@ -1905,6 +1905,7 @@ export async function getForgeTaskTelemetry(
 		since?: string;
 		afterCursor?: number;
 		policyDeniedOnly?: boolean;
+		agentId?: string;
 	},
 ): Promise<ForgeTaskTelemetryResponse> {
 	const result = await getForgeTaskTelemetryResult(sessionKey, options);
@@ -1958,6 +1959,7 @@ export async function getForgeTaskTelemetryResult(
 		since?: string;
 		afterCursor?: number;
 		policyDeniedOnly?: boolean;
+		agentId?: string;
 	},
 ): Promise<ForgeTaskTelemetryResult> {
 	try {
@@ -1969,6 +1971,9 @@ export async function getForgeTaskTelemetryResult(
 		if (options?.since) params.set("since", options.since);
 		if (Number.isFinite(options?.afterCursor)) params.set("afterCursor", String(options?.afterCursor));
 		if (options?.policyDeniedOnly) params.set("policyDeniedOnly", "true");
+		if (typeof options?.agentId === "string" && options.agentId.trim().length > 0) {
+			params.set("agent_id", options.agentId.trim());
+		}
 		const qs = params.toString();
 		const url = `${API_BASE}/api/forge/tasks/${encodeURIComponent(sessionKey)}${qs ? `?${qs}` : ""}`;
 		const response = await fetch(url);

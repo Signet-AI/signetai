@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	type ForgeDeps,
 	isSignetManagedForgeRecord,
 	loadForgeManifest,
 	managedForgeAssetNameForPlatform,
@@ -17,6 +16,7 @@ import {
 	stopForgeService,
 	withManagedForgeInstallLock,
 } from "./forge.js";
+type ForgeDeps = Parameters<typeof startForgeService>[1];
 
 const originalHome = process.env.HOME;
 

@@ -92,7 +92,7 @@ interface ForgeStatusPayload {
 	readonly workspaceConfigured: boolean;
 }
 
-export interface ForgeDeps {
+interface ForgeDeps {
 	readonly agentsDir: string;
 	readonly defaultPort: number;
 	readonly extractPathOption: (value: unknown) => string | null;

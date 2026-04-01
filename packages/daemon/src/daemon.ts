@@ -6431,6 +6431,18 @@ app.post("/api/hooks/task-telemetry", async (c) => {
 
 app.get("/api/forge/tasks/:sessionKey", (c) => {
 	const sessionKey = normalizeSessionKey(c.req.param("sessionKey"));
+	const requestedAgentId = parseOptionalString(c.req.query("agent_id"));
+	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+	if (scopedAgent.error) {
+		return c.json({ error: scopedAgent.error }, 403);
+	}
+	const bindingError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+		requireExisting: false,
+		context: "sessionKey",
+	});
+	if (bindingError) {
+		return c.json({ error: bindingError }, 403);
+	}
 	const limitRaw = Number.parseInt(c.req.query("limit") ?? "200", 10);
 	const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 2_000) : 200;
 	const kind = parseOptionalString(c.req.query("kind"));
@@ -6458,6 +6470,7 @@ app.get("/api/forge/tasks/:sessionKey", (c) => {
 		sessionKey,
 		count: events.length,
 		filters: {
+			agentId: scopedAgent.agentId,
 			kind: kind ?? null,
 			phase: phase ?? null,
 			name: name ?? null,
@@ -6472,6 +6485,18 @@ app.get("/api/forge/tasks/:sessionKey", (c) => {
 
 app.get("/api/forge/tasks/:sessionKey/stream", (c) => {
 	const sessionKey = normalizeSessionKey(c.req.param("sessionKey"));
+	const requestedAgentId = parseOptionalString(c.req.query("agent_id"));
+	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+	if (scopedAgent.error) {
+		return c.json({ error: scopedAgent.error }, 403);
+	}
+	const bindingError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+		requireExisting: false,
+		context: "sessionKey",
+	});
+	if (bindingError) {
+		return c.json({ error: bindingError }, 403);
+	}
 	const kind = parseOptionalString(c.req.query("kind"));
 	const phase = parseOptionalString(c.req.query("phase"));
 	const name = parseOptionalString(c.req.query("name"));
