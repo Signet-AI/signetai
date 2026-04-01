@@ -276,6 +276,9 @@ async function refreshForgeTelemetry() {
 			return;
 		}
 	}
+	// Dual increment sites are intentional:
+	// - $effect(agentId) bump cancels/invalidates on scope switch
+	// - this pre-increment invalidates prior manual fetch attempts
 	const requestGeneration = ++forgeTelemetryRequestGeneration;
 	forgeTelemetryRequestController?.abort();
 	const controller = new AbortController();

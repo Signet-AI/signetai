@@ -98,6 +98,8 @@ export interface ForgeDeps {
 	readonly extractPathOption: (value: unknown) => string | null;
 	readonly getDaemonStatus: () => Promise<ForgeDaemonStatus>;
 	readonly getTemplatesDir: () => string;
+	// Kept for legacy install/doctor code paths; service subcommands use
+	// getDaemonStatus() for richer status + pid metadata.
 	readonly isDaemonRunning: () => Promise<boolean>;
 	readonly normalizeAgentPath: (pathValue: string) => string;
 	readonly sleep?: (ms: number) => Promise<void>;
@@ -818,6 +820,8 @@ export async function stopForgeService(options: ForgeServiceOptions, deps: Forge
 	if (!stopped) {
 		throw new Error("Failed to stop Forge service daemon.");
 	}
+	// Intentionally one-shot probe (no polling): stop should report "signal sent"
+	// vs "confirmed down" quickly, while restart owns the longer stop-wait loop.
 	let daemonStillRunning = false;
 	try {
 		const statusAfterStop = await deps.getDaemonStatus();

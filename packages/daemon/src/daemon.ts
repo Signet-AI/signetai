@@ -1724,6 +1724,8 @@ app.use("/api/skills/analytics/*", async (c, next) => {
 // Forge task telemetry routes (`/api/forge/tasks` + `/api/forge/tasks/*`) are
 // guarded here for both auth and abuse control. Keep these middleware mounts
 // adjacent so review diff context always shows permission + rate-limit pairing.
+// Note: route handlers are defined later in this same file (no separate
+// `routes/forge.ts` module in the current daemon layout).
 const requireForgeTelemetryAccess = async (c: Context, next: () => Promise<void>) => {
 	const perm = requirePermission("analytics", authConfig);
 	const rate = requireRateLimit("analytics", authForgeTelemetryLimiter, authConfig);

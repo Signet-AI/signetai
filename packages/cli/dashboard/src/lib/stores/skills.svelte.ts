@@ -120,6 +120,8 @@ async function withAbortTimeout<T>(
 	run: (signal: AbortSignal) => Promise<T>,
 	ms = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
+	// Timeout-only cancellation helper. It does not merge external abort signals;
+	// callers needing composed cancellation should wrap/compose upstream.
 	const controller = new AbortController();
 	let timeoutId: ReturnType<typeof setTimeout> | null = null;
 	let timedOut = false;
