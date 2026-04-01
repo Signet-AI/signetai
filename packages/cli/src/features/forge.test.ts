@@ -310,6 +310,18 @@ describe("Forge service commands", () => {
 		expect(startCalled).toBe(false);
 	});
 
+	it("startForgeService calls startDaemon when daemon is not running", async () => {
+		let startCalledWith: string | null = null;
+		const deps = createForgeDeps({
+			startDaemon: async (basePath) => {
+				startCalledWith = basePath ?? null;
+				return true;
+			},
+		});
+		await startForgeService({}, deps);
+		expect(startCalledWith).toBe("/tmp/.agents");
+	});
+
 	it("stopForgeService skips stop when daemon is not running", async () => {
 		let stopCalled = false;
 		const deps = createForgeDeps({
@@ -320,6 +332,27 @@ describe("Forge service commands", () => {
 		});
 		await stopForgeService({}, deps);
 		expect(stopCalled).toBe(false);
+	});
+
+	it("stopForgeService calls stopDaemon when daemon is running", async () => {
+		let stopCalledWith: string | null = null;
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 456,
+				uptime: 50,
+				version: "1.0.0",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "localhost",
+			}),
+			stopDaemon: async (basePath) => {
+				stopCalledWith = basePath ?? null;
+				return true;
+			},
+		});
+		await stopForgeService({}, deps);
+		expect(stopCalledWith).toBe("/tmp/.agents");
 	});
 
 	it("restartForgeService stops then starts when daemon is running", async () => {
