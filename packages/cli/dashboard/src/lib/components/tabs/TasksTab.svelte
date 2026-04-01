@@ -223,12 +223,22 @@ let forgeTelemetry = $state<ForgeTaskTelemetryResponse | null>(null);
 let forgeTelemetryLoading = $state(false);
 let forgeTelemetryEnabled = $state(false);
 let forgeError = $state<string | null>(null);
+const forgeLoadedCount = $derived(forgeTelemetry?.events.length ?? 0);
 
 async function refreshForgeTelemetry() {
 	if (!forgeSessionKey.trim()) {
 		forgeTelemetry = null;
 		forgeError = "Enter a Forge session key to fetch telemetry.";
 		return;
+	}
+	const trimmedSince = forgeSince.trim();
+	if (trimmedSince) {
+		const parsed = new Date(trimmedSince).getTime();
+		if (!Number.isFinite(parsed)) {
+			forgeTelemetry = null;
+			forgeError = "Invalid 'since' filter. Use an ISO timestamp like 2026-03-31T00:00:00Z.";
+			return;
+		}
 	}
 	forgeTelemetryLoading = true;
 	try {
@@ -237,7 +247,7 @@ async function refreshForgeTelemetry() {
 			kind: forgeKind.trim() || undefined,
 			phase: forgePhase.trim() || undefined,
 			name: forgeName.trim() || undefined,
-			since: forgeSince.trim() || undefined,
+			since: trimmedSince || undefined,
 			policyDeniedOnly: forgePolicyDeniedOnly,
 		});
 		forgeTelemetry = result.data;
@@ -299,7 +309,11 @@ const taskCount = $derived(ts.tasks.length);
 				<div class="forge-telemetry-meta forge-telemetry-error">{forgeError}</div>
 			{:else if forgeTelemetry}
 				<div class="forge-telemetry-meta">
-					{forgeTelemetry.count} events • source {forgeTelemetry.schema}
+					{#if forgeTelemetry.count !== forgeLoadedCount}
+						showing {forgeLoadedCount} of {forgeTelemetry.count} events • source {forgeTelemetry.schema}
+					{:else}
+						{forgeTelemetry.count} events • source {forgeTelemetry.schema}
+					{/if}
 				</div>
 			{:else}
 				<div class="forge-telemetry-meta">No telemetry events loaded.</div>

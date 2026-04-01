@@ -777,6 +777,10 @@ function readForgeServicePath(options: ForgeServiceOptions, deps: ForgeDeps): st
 	return raw ? deps.normalizeAgentPath(raw) : deps.agentsDir;
 }
 
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // Note: isDaemonRunning() is path-agnostic because the Signet daemon is a
 // singleton process. startDaemon/stopDaemon accept a basePath for config
 // resolution but there is only ever one daemon instance.
@@ -818,6 +822,15 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 		const stopped = await deps.stopDaemon(basePath);
 		if (!stopped) {
 			throw new Error("Failed to stop Forge service daemon.");
+		}
+		// stopDaemon reports initiation; poll briefly so start does not race the
+		// previous process while it is still exiting and releasing the port.
+		const STOP_WAIT_ATTEMPTS = 10;
+		const STOP_WAIT_INTERVAL_MS = 100;
+		for (let attempt = 0; attempt < STOP_WAIT_ATTEMPTS; attempt += 1) {
+			const status = await deps.getDaemonStatus();
+			if (!status.running) break;
+			await sleep(STOP_WAIT_INTERVAL_MS);
 		}
 	}
 	const started = await deps.startDaemon(basePath);

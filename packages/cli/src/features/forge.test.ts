@@ -357,11 +357,12 @@ describe("Forge service commands", () => {
 
 	it("restartForgeService stops then starts when daemon is running", async () => {
 		const sequence: string[] = [];
+		let running = true;
 		const deps = createForgeDeps({
 			getDaemonStatus: async () => ({
-				running: true,
-				pid: 321,
-				uptime: 50,
+				running,
+				pid: running ? 321 : null,
+				uptime: running ? 50 : null,
 				version: "1.0.0",
 				host: "127.0.0.1",
 				bindHost: "127.0.0.1",
@@ -369,6 +370,7 @@ describe("Forge service commands", () => {
 			}),
 			stopDaemon: async () => {
 				sequence.push("stop");
+				running = false;
 				return true;
 			},
 			startDaemon: async () => {
