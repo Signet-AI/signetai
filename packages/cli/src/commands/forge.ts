@@ -15,7 +15,7 @@ interface ForgeServiceOptions {
 	path?: string;
 }
 
-interface ForgeDeps {
+interface ForgeCommandHandlers {
 	readonly doctorForge: (options: ForgeStatusOptions) => Promise<void>;
 	readonly installForge: (options: ForgeInstallOptions) => Promise<void>;
 	readonly restartForgeService: (options: ForgeServiceOptions) => Promise<void>;
@@ -26,7 +26,7 @@ interface ForgeDeps {
 	readonly updateForge: (options: ForgeInstallOptions) => Promise<void>;
 }
 
-export function registerForgeCommands(program: Command, deps: ForgeDeps): void {
+export function registerForgeCommands(program: Command, deps: ForgeCommandHandlers): void {
 	const forgeCmd = program.command("forge").description("Manage the first-party Forge harness");
 
 	forgeCmd

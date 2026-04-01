@@ -229,12 +229,14 @@ let forgeTelemetry = $state<ForgeTaskTelemetryResponse | null>(null);
 let forgeTelemetryLoading = $state(false);
 let forgeTelemetryEnabled = $state(false);
 let forgeError = $state<string | null>(null);
+let forgeTelemetryRequestGeneration = 0;
 const forgeLoadedCount = $derived(forgeTelemetry?.events.length ?? 0);
 const forgeEvents = $derived(forgeTelemetry?.events ?? []);
 const forgeTelemetryPanelAllowed = $derived.by(() => typeof agentId === "string" && agentId.trim().length > 0);
 
 $effect(() => {
 	agentId;
+	forgeTelemetryRequestGeneration += 1;
 	forgeTelemetry = null;
 	forgeError = null;
 	forgeTelemetryLoading = false;
@@ -262,6 +264,8 @@ async function refreshForgeTelemetry() {
 			return;
 		}
 	}
+	const requestGeneration = forgeTelemetryRequestGeneration + 1;
+	forgeTelemetryRequestGeneration = requestGeneration;
 	forgeTelemetryLoading = true;
 	try {
 		const result = await getForgeTaskTelemetryResult(forgeSessionKey.trim(), {
@@ -273,10 +277,15 @@ async function refreshForgeTelemetry() {
 			policyDeniedOnly: forgePolicyDeniedOnly,
 			agentId,
 		});
+		if (requestGeneration !== forgeTelemetryRequestGeneration) {
+			return;
+		}
 		forgeTelemetry = result.data;
 		forgeError = result.error;
 	} finally {
-		forgeTelemetryLoading = false;
+		if (requestGeneration === forgeTelemetryRequestGeneration) {
+			forgeTelemetryLoading = false;
+		}
 	}
 }
 
