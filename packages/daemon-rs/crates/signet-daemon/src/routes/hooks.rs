@@ -1709,14 +1709,26 @@ pub async fn recall(
         return conflict_response(claimed_by);
     }
 
-    let limit = body.limit.unwrap_or(10).min(50);
+    // Load search config — parity with TS `const cfg = loadMemoryConfig(AGENTS_DIR)`.
+    // Previously the handler used a hardcoded default of 10 and applied no min_score
+    // filter; the TS endpoint was updated to pass cfg through hybridRecall which
+    // uses cfg.search.top_k and cfg.search.min_score.  Mirror those semantics here.
+    let search_cfg = state
+        .config
+        .manifest
+        .search
+        .clone()
+        .unwrap_or_default();
+    let limit = body.limit.unwrap_or(search_cfg.top_k).min(50);
+    let min_score = search_cfg.min_score;
     let query = query.to_string();
     let project = body.project.clone();
 
     let result = state
         .pool
         .read(move |conn| {
-            // FTS search
+            // FTS search — fetch up to `limit` candidates ordered by importance,
+            // then apply the configured min_score threshold before returning.
             let mut sql = String::from(
                 "SELECT id, content, type, importance, tags, created_at FROM memories
                  WHERE deleted = 0",
@@ -1751,7 +1763,17 @@ pub async fn recall(
                         }))
                     });
                     match rows {
-                        Ok(rows) => rows.filter_map(|r| r.ok()).collect::<Vec<_>>(),
+                        Ok(rows) => rows
+                            .filter_map(|r| r.ok())
+                            // Apply min_score filter (importance is the FTS-path
+                            // proxy for relevance score, matching TS cfg.search.min_score).
+                            .filter(|m| {
+                                m.get("importance")
+                                    .and_then(|v| v.as_f64())
+                                    .map(|imp| imp >= min_score)
+                                    .unwrap_or(true)
+                            })
+                            .collect::<Vec<_>>(),
                         Err(_) => vec![],
                     }
                 }
