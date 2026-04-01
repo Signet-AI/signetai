@@ -34,34 +34,86 @@ impl AnthropicProvider {
     }
 
     fn build_messages(&self, messages: &[Message]) -> Vec<Value> {
-        messages
+        let non_system: Vec<&Message> = messages
             .iter()
             .filter(|m| m.role != Role::System)
-            .map(|m| {
+            .collect();
+        // Place cache_control breakpoints at *fixed* positions so the cached
+        // prefix is byte-identical across turns (Anthropic uses prefix caching).
+        // Breakpoint 1: the first user message (stable for the session lifetime).
+        // Breakpoint 2: the second user message (captures initial context injection).
+        // These never move as new turns are appended, so cache hits accumulate.
+        let mut user_indices: Vec<usize> = Vec::new();
+        for (i, m) in non_system.iter().enumerate() {
+            if m.role == Role::User {
+                user_indices.push(i);
+            }
+        }
+        let cache_indices: std::collections::HashSet<usize> = {
+            let mut set = std::collections::HashSet::new();
+            if !user_indices.is_empty() {
+                set.insert(user_indices[0]);
+            }
+            if user_indices.len() >= 2 {
+                set.insert(user_indices[1]);
+            }
+            set
+        };
+
+        non_system
+            .iter()
+            .enumerate()
+            .map(|(idx, m)| {
+                let should_cache = cache_indices.contains(&idx);
+
                 let content: Vec<Value> = m
                     .content
                     .iter()
-                    .map(|c| match c {
-                        MessageContent::Text { text } => json!({
-                            "type": "text",
-                            "text": text,
-                        }),
-                        MessageContent::ToolUse { id, name, input } => json!({
-                            "type": "tool_use",
-                            "id": id,
-                            "name": name,
-                            "input": input,
-                        }),
-                        MessageContent::ToolResult {
-                            tool_use_id,
-                            content,
-                            is_error,
-                        } => json!({
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": content,
-                            "is_error": is_error,
-                        }),
+                    .enumerate()
+                    .map(|(ci, c)| {
+                        let is_last_block = ci == m.content.len() - 1;
+                        let add_cache = should_cache && is_last_block;
+
+                        match c {
+                            MessageContent::Text { text } => {
+                                let mut block = json!({
+                                    "type": "text",
+                                    "text": text,
+                                });
+                                if add_cache {
+                                    block["cache_control"] = json!({ "type": "ephemeral" });
+                                }
+                                block
+                            }
+                            MessageContent::ToolUse { id, name, input } => {
+                                let mut block = json!({
+                                    "type": "tool_use",
+                                    "id": id,
+                                    "name": name,
+                                    "input": input,
+                                });
+                                if add_cache {
+                                    block["cache_control"] = json!({ "type": "ephemeral" });
+                                }
+                                block
+                            }
+                            MessageContent::ToolResult {
+                                tool_use_id,
+                                content,
+                                is_error,
+                            } => {
+                                let mut block = json!({
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use_id,
+                                    "content": content,
+                                    "is_error": is_error,
+                                });
+                                if add_cache {
+                                    block["cache_control"] = json!({ "type": "ephemeral" });
+                                }
+                                block
+                            }
+                        }
                     })
                     .collect();
 
@@ -220,12 +272,13 @@ impl Provider for AnthropicProvider {
                 }
             }
 
-            // Send final usage + done
+            // Send final usage + done (cache tokens tracked in message_start)
             let _ = tx
                 .send(StreamEvent::Usage(TokenUsage {
                     input_tokens,
                     output_tokens,
-                    ..Default::default()
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                 }))
                 .await;
             let _ = tx.send(StreamEvent::Done).await;
@@ -294,6 +347,14 @@ fn parse_anthropic_event(
         AnthropicEvent::MessageStart { message } => {
             if let Some(usage) = message.usage {
                 *input_tokens = usage.input_tokens;
+                // Report cache statistics when present
+                if usage.cache_read_input_tokens > 0 || usage.cache_creation_input_tokens > 0 {
+                    debug!(
+                        "Prompt cache: {} read, {} creation tokens",
+                        usage.cache_read_input_tokens,
+                        usage.cache_creation_input_tokens
+                    );
+                }
             }
             None
         }

@@ -1,5 +1,6 @@
 use crate::input::Action;
 use crate::keybinds::KeyBindConfig;
+use crate::mcp_config::{connect_mcp_servers, McpConfig};
 use crate::views::chat::{ChatEntry, ChatView, ToolStatus};
 use crate::views::command_palette::{CommandKind as PaletteCommandKind, CommandPalette};
 use crate::views::dashboard_nav::DashboardNav;
@@ -7,16 +8,22 @@ use crate::views::forge_usage::ForgeUsage;
 use crate::views::keybind_editor::KeybindEditor;
 use crate::views::dashboard_panel::DashboardPanel;
 use crate::views::model_picker::ModelPicker;
+use crate::views::policy_panel::PolicyPanel;
 use crate::views::session_browser::SessionBrowser;
 use crate::views::signet_commands::{self, CommandKind as SlashCommandKind, CommandPicker};
 use crate::voice;
 use crate::widgets::status_bar::StatusBar;
 use crossterm::event::{self, Event, KeyEventKind};
+use forge_core::{
+    PolicyBlockReason, absolutize_path, classify_command_block_reason, classify_path_block_reason,
+    normalize_with_ancestor_fallback,
+};
 use forge_agent::{
     AgentEvent, AgentLoop, PermissionManager, PermissionRequest, PermissionResponse, Session,
     SessionStore, SharedSession,
 };
 use forge_provider::{self, Provider};
+use forge_signet::config::AgentExecutionPolicy;
 use forge_signet::hooks::SessionHooks;
 use forge_signet::secrets::{
     apply_local_cli_auth_env, discover_available_providers, refresh_daemon_model_registry,
@@ -30,7 +37,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
     DefaultTerminal, Frame,
 };
-use std::path::PathBuf;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info};
@@ -53,70 +60,6 @@ enum ProcessingPhase {
     Writing,
     Streaming,
     ExecutingTool(String),
-}
-
-impl ProcessingPhase {
-    /// Spinner frames — subtle technical sweep instead of chunky hops
-    const FRAMES: &[&str] = &["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"];
-
-    /// Contextual verbs that cycle based on tick for each phase.
-    /// tick/80 ≈ 4 seconds per verb at 50ms frame rate.
-    fn label(&self, tick: usize) -> &'static str {
-        match self {
-            Self::Idle => "",
-            Self::Streaming => "Responding",
-            Self::RecallingMemories => {
-                const VERBS: &[&str] = &[
-                    "Remembering", "Recalling", "Tracing",
-                    "Searching", "Linking", "Surfacing",
-                ];
-                VERBS[(tick / 80) % VERBS.len()]
-            }
-            Self::Thinking => {
-                const VERBS: &[&str] = &[
-                    "Thinking", "Deliberating", "Reasoning",
-                    "Synthesizing", "Constructing", "Shaping",
-                ];
-                VERBS[(tick / 80) % VERBS.len()]
-            }
-            Self::Planning => {
-                const VERBS: &[&str] = &[
-                    "Planning", "Structuring", "Mapping",
-                    "Sequencing", "Investigating", "Constructing",
-                ];
-                VERBS[(tick / 80) % VERBS.len()]
-            }
-            Self::Writing => {
-                const VERBS: &[&str] = &[
-                    "Writing", "Composing", "Drafting",
-                    "Refining", "Building", "Editing",
-                ];
-                VERBS[(tick / 80) % VERBS.len()]
-            }
-            Self::ExecutingTool(_) => "Running",
-        }
-    }
-
-    fn render(&self, tick: usize) -> String {
-        let frame = Self::FRAMES[tick % Self::FRAMES.len()];
-        let trail = match (tick / 2) % 6 {
-            0 => "·    ",
-            1 => "··   ",
-            2 => "···  ",
-            3 => " ··· ",
-            4 => "  ···",
-            _ => "   ··",
-        };
-        match self {
-            Self::Idle => String::new(),
-            Self::ExecutingTool(name) => {
-                format!("  {frame} {} {name}  {trail}", self.label(tick))
-            }
-            _ => {
-                format!("  {frame} {}  {trail}", self.label(tick))
-            }
-        }
-    }
 }
 
 /// Application state
@@ -160,6 +103,8 @@ pub struct App {
     effort: Arc<Mutex<forge_provider::ReasoningEffort>>,
     /// CLI permission bypass — skips all approval prompts on next spawn
     bypass: Arc<Mutex<bool>>,
+    /// If true, bypass is automatically disabled after the next completed turn.
+    bypass_one_shot: bool,
     /// Memories recalled for current prompt
     memories_injected: usize,
     /// Total memories in database
@@ -200,6 +145,8 @@ pub struct App {
     session_browser: Option<SessionBrowser>,
     /// Dashboard panel overlay (F2)
     dashboard_panel: Option<DashboardPanel>,
+    /// Policy diagnostics overlay (/policy)
+    policy_panel: Option<PolicyPanel>,
     /// Usage overlay (/forge-usage)
     forge_usage: Option<ForgeUsage>,
     /// Loaded skills
@@ -210,6 +157,8 @@ pub struct App {
     mcp_servers: Vec<signet_commands::McpServerCommand>,
     /// Installed Signet MCP tools exposed as slash commands
     mcp_tools: Vec<signet_commands::McpToolCommand>,
+    /// Connected local MCP stdio clients from ~/.config/forge/mcp.json
+    mcp_clients: Vec<Arc<forge_mcp::McpStdioClient>>,
     /// Active one-shot skill for next prompt
     pending_skill: Option<(String, String)>,
     /// Signet client for API key resolution on model switch
@@ -228,6 +177,7 @@ pub struct App {
     speculative_query: String,
     speculative_handle: Option<tokio::task::JoinHandle<()>>,
     last_keystroke: std::time::Instant,
+    speculative_last_fire: Option<std::time::Instant>,
     recall_cache: forge_signet::recall_cache::RecallCache,
     /// Pipeline summary (extraction + embedding models)
     pipeline_info: String,
@@ -237,12 +187,21 @@ pub struct App {
     active_agent: Option<String>,
     /// Live daemon log lines (ring buffer, max 100)
     daemon_logs: Vec<String>,
+    /// Daemon-backed task telemetry events (ring buffer, max 1000)
+    daemon_task_events: VecDeque<forge_core::TaskEventEnvelope>,
+    /// Effective policy metadata (for diagnostics + status chrome)
+    policy_workspace_only: bool,
+    policy_allowed_paths: Vec<String>,
+    policy_allowed_commands: Vec<String>,
+    policy_approval_mode: Option<String>,
+    /// Structured task lifecycle telemetry (ring buffer, max 200)
+    task_events: VecDeque<forge_core::TaskEventEnvelope>,
     /// Voice input: microphone recorder (present while recording)
     voice_recorder: Option<voice::Recorder>,
     /// Whether voice recording is active
     voice_recording: bool,
-    /// Path to the downloaded whisper model
-    voice_model_path: Option<PathBuf>,
+    /// Prepared voice backend (Parakeet or Whisper)
+    voice_backend: Option<voice::VoiceBackend>,
     /// Interim transcription text (preview while recording)
     voice_interim_text: String,
     /// Whether voice model is currently being downloaded
@@ -263,8 +222,8 @@ enum VoiceResult {
     Interim(String),
     /// Final transcription (committed to input)
     Final(String),
-    /// Model downloaded successfully
-    ModelReady(PathBuf),
+    /// Voice backend is ready
+    ModelReady(voice::VoiceBackend),
     /// Error during voice operation
     Error(String),
 }
@@ -286,13 +245,423 @@ impl App {
         self.input.chars().count()
     }
 
+    fn attachment_tokens(&self) -> String {
+        if self.attached_images.is_empty() {
+            return String::new();
+        }
+        self.attached_images
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("[Image #{}]", i + 1))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn compose_input_with_attachments(&self, input: &str) -> String {
+        let tokens = self.attachment_tokens();
+        if tokens.is_empty() {
+            return input.to_string();
+        }
+        if input.trim().is_empty() {
+            tokens
+        } else {
+            format!("{tokens} {input}")
+        }
+    }
+
+    fn apply_terminal_theme_background(&self) {
+        if transparent_bg_enabled() {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::style::ResetColor,
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+            );
+            return;
+        }
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::style::SetBackgroundColor(self.theme.bg.into()),
+            crossterm::style::SetForegroundColor(self.theme.fg.into()),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+        );
+    }
+
+    fn policy_hints_for_tool(&self, tool_name: &str, tool_input: &serde_json::Value) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let label = Style::default().fg(self.theme.muted);
+        let warn = Style::default().fg(self.theme.warning);
+        let ok = Style::default().fg(self.theme.success);
+        let neutral = Style::default().fg(self.theme.fg);
+
+        let lock_text = if self.policy_workspace_only {
+            "workspace lock: enabled"
+        } else {
+            "workspace lock: disabled"
+        };
+        lines.push(Line::from(vec![
+            Span::styled("  Policy: ", label),
+            Span::styled(lock_text, if self.policy_workspace_only { warn } else { neutral }),
+        ]));
+
+        if let Some(mode) = &self.policy_approval_mode {
+            lines.push(Line::from(vec![
+                Span::styled("  Approval mode: ", label),
+                Span::styled(mode.clone(), Style::default().fg(self.theme.accent)),
+            ]));
+        }
+
+        if !self.policy_allowed_commands.is_empty() {
+            if tool_name.eq_ignore_ascii_case("Bash") {
+                if let Some(command) = tool_input.get("command").and_then(|v| v.as_str()) {
+                    let blocked = classify_command_block_reason(command, &self.policy_allowed_commands);
+                    lines.push(Line::from(vec![
+                        Span::styled("  Command policy: ", label),
+                        Span::styled(
+                            match blocked {
+                                None => "allowed by command allowlist".to_string(),
+                                Some(PolicyBlockReason::CommandHasShellOperators) => {
+                                    "blocked_reason: shell_operators_disallowed".to_string()
+                                }
+                                Some(PolicyBlockReason::CommandEmpty) => {
+                                    "blocked_reason: empty_command".to_string()
+                                }
+                                Some(PolicyBlockReason::CommandNotAllowlisted) => {
+                                    "blocked_reason: command_not_allowlisted".to_string()
+                                }
+                                Some(_) => "blocked_reason: command_policy".to_string(),
+                            },
+                            if blocked.is_none() { ok } else { warn },
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled("  Command policy: ", label),
+                        Span::styled(
+                            format!("allowlist active ({} entries)", self.policy_allowed_commands.len()),
+                            warn,
+                        ),
+                    ]));
+                }
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("  Command policy: ", label),
+                    Span::styled(
+                        format!("allowlist active ({} entries)", self.policy_allowed_commands.len()),
+                        warn,
+                    ),
+                ]));
+            }
+        }
+
+        if !self.policy_allowed_paths.is_empty() {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let paths = Self::extract_paths(tool_input);
+            if paths.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("  Path policy: ", label),
+                    Span::styled(
+                        format!("allowlist active ({} roots)", self.policy_allowed_paths.len()),
+                        warn,
+                    ),
+                ]));
+            } else {
+                let normalized_allowed_paths = self
+                    .policy_allowed_paths
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .map(|p| normalize_with_ancestor_fallback(&p))
+                    .collect::<Vec<_>>();
+                for path in paths.into_iter().take(3) {
+                    let abs_path = absolutize_path(&path, &cwd);
+                    let normalized = normalize_with_ancestor_fallback(&abs_path);
+                    let blocked = classify_path_block_reason(
+                        &normalized,
+                        &normalize_with_ancestor_fallback(&cwd),
+                        self.policy_workspace_only,
+                        &normalized_allowed_paths,
+                    );
+                    lines.push(Line::from(vec![
+                        Span::styled("  Path check: ", label),
+                        Span::styled(
+                            match blocked {
+                                None => format!("{} (allowed)", normalized.display()),
+                                Some(PolicyBlockReason::PathOutsideWorkspace) => {
+                                    format!(
+                                        "{} (blocked_reason: outside_workspace)",
+                                        normalized.display()
+                                    )
+                                }
+                                Some(PolicyBlockReason::PathOutsideAllowlist) => {
+                                    format!(
+                                        "{} (blocked_reason: outside_allowed_paths)",
+                                        normalized.display()
+                                    )
+                                }
+                                Some(reason) => format!(
+                                    "{} (blocked_reason: {})",
+                                    normalized.display(),
+                                    reason.code()
+                                ),
+                            },
+                            if blocked.is_none() { ok } else { warn },
+                        ),
+                    ]));
+                }
+            }
+        }
+
+        lines
+    }
+
+    fn extract_paths(tool_input: &serde_json::Value) -> Vec<String> {
+        let mut out = Vec::new();
+        let keys = ["path", "file_path", "filepath", "target", "from", "to", "cwd"];
+        for key in keys {
+            if let Some(v) = tool_input.get(key).and_then(|v| v.as_str()) {
+                let val = v.trim();
+                if !val.is_empty() {
+                    out.push(val.to_string());
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn effective_task_events(&self) -> Vec<&forge_core::TaskEventEnvelope> {
+        if !self.daemon_task_events.is_empty() {
+            self.daemon_task_events.iter().collect()
+        } else {
+            self.task_events.iter().collect()
+        }
+    }
+
+    fn push_local_task_event(&mut self, evt: forge_core::TaskEventEnvelope) {
+        self.task_events.push_back(evt);
+        const TASK_EVENT_RING_CAP: usize = 200;
+        while self.task_events.len() > TASK_EVENT_RING_CAP {
+            let _ = self.task_events.pop_front();
+        }
+    }
+
+    fn push_daemon_task_event(&mut self, evt: forge_core::TaskEventEnvelope) {
+        let already_seen = self
+            .daemon_task_events
+            .iter()
+            .rev()
+            .take(300)
+            .any(|e| {
+                e.task_id == evt.task_id
+                    && std::mem::discriminant(&e.phase) == std::mem::discriminant(&evt.phase)
+            });
+        if already_seen {
+            return;
+        }
+        self.daemon_task_events.push_back(evt);
+        const DAEMON_TASK_EVENT_RING_CAP: usize = 1000;
+        while self.daemon_task_events.len() > DAEMON_TASK_EVENT_RING_CAP {
+            let _ = self.daemon_task_events.pop_front();
+        }
+    }
+
+    fn policy_denied_counts(&self) -> (usize, std::collections::BTreeMap<String, usize>) {
+        let events = self.effective_task_events();
+        Self::policy_denied_counts_for_events(&events)
+    }
+
+    fn policy_denied_counts_for_events(
+        events: &[&forge_core::TaskEventEnvelope],
+    ) -> (usize, std::collections::BTreeMap<String, usize>) {
+        let mut total = 0usize;
+        let mut by_reason: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for evt in events {
+            let Some(meta) = evt.meta.as_ref() else {
+                continue;
+            };
+            let denied = meta
+                .get("policy_denied")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !denied {
+                continue;
+            }
+            total += 1;
+            let reason = meta
+                .get("policy_reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            *by_reason.entry(reason).or_insert(0) += 1;
+        }
+        (total, by_reason)
+    }
+
+    fn build_tasks_view_payload(&self, window: usize) -> serde_json::Value {
+        let all_events = self.effective_task_events();
+        let ring_len = all_events.len();
+        let window = if ring_len == 0 {
+            0
+        } else {
+            window.clamp(1, ring_len)
+        };
+        let selected_events: Vec<&forge_core::TaskEventEnvelope> = all_events
+            .iter()
+            .rev()
+            .take(window)
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let (policy_denied_total, policy_denied_by_reason_total) =
+            Self::policy_denied_counts_for_events(&all_events);
+        let (policy_denied_window, policy_denied_by_reason_window) =
+            Self::policy_denied_counts_for_events(&selected_events);
+
+        let trend = [10usize, 30usize, 100usize]
+            .into_iter()
+            .map(|n| {
+                let window_events: Vec<&forge_core::TaskEventEnvelope> = all_events
+                    .iter()
+                    .rev()
+                    .take(n)
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                let (denied, by_reason) = Self::policy_denied_counts_for_events(&window_events);
+                serde_json::json!({
+                    "window": n,
+                    "events": window_events.len(),
+                    "policy_denied_total": denied,
+                    "policy_denied_by_reason": by_reason,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let events_json: Vec<serde_json::Value> = selected_events
+            .iter()
+            .map(|evt| {
+                serde_json::json!({
+                    "schema": evt.schema,
+                    "task_id": evt.task_id,
+                    "parent_task_id": evt.parent_task_id,
+                    "kind": evt.kind,
+                    "phase": evt.phase,
+                    "name": evt.name,
+                    "duration_ms": evt.duration_ms,
+                    "attempt": evt.attempt,
+                    "error": evt.error,
+                    "meta": evt.meta,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "schema": "forge.tasks.view.v1",
+            "summary": {
+                "events_total": ring_len,
+                "events_shown": events_json.len(),
+                "window": window,
+                "policy_denied_total": policy_denied_total,
+                "policy_denied_by_reason_total": policy_denied_by_reason_total,
+                "policy_denied_window": policy_denied_window,
+                "policy_denied_by_reason_window": policy_denied_by_reason_window,
+            },
+            "trend": trend,
+            "events": events_json,
+        })
+    }
+
+    fn export_tasks_payload(
+        &self,
+        payload: &serde_json::Value,
+        export_path: &std::path::Path,
+        as_jsonl: bool,
+    ) -> std::io::Result<()> {
+        if as_jsonl {
+            let mut out = String::new();
+            if let Some(summary) = payload.get("summary") {
+                out.push_str(
+                    &serde_json::json!({
+                        "schema": "forge.tasks.export.v1",
+                        "type": "summary",
+                        "summary": summary,
+                        "trend": payload.get("trend"),
+                    })
+                    .to_string(),
+                );
+                out.push('\n');
+            }
+            if let Some(events) = payload.get("events").and_then(|v| v.as_array()) {
+                for evt in events {
+                    out.push_str(
+                        &serde_json::json!({
+                            "schema": "forge.tasks.export.v1",
+                            "type": "event",
+                            "event": evt,
+                        })
+                        .to_string(),
+                    );
+                    out.push('\n');
+                }
+            }
+            std::fs::write(export_path, out)
+        } else {
+            let formatted =
+                serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".to_string());
+            std::fs::write(export_path, formatted)
+        }
+    }
+
+
+    fn display_agent_name(&self) -> String {
+        if self.signet_client.is_none() {
+            return "Forge".to_string();
+        }
+        let name = self.agent_name.trim();
+        if name.is_empty() {
+            "Forge".to_string()
+        } else {
+            name.to_string()
+        }
+    }
+
     async fn refresh_connected_models(&mut self) {
         self.detected_clis = forge_provider::cli::detect_cli_tools().await;
         self.skills = forge_signet::skills::load_skills();
+        self.signet_commands =
+            signet_commands::commands_with_dynamic(&self.skills, &self.mcp_servers, &self.mcp_tools);
 
-        if let Some(client) = &self.signet_client {
-            let _ = refresh_daemon_model_registry(client).await;
-            if let Ok(resp) = client.get("/api/pipeline/models").await {
+        if let Some(client) = self.signet_client.clone() {
+            let registry_refresh = tokio::time::timeout(
+                std::time::Duration::from_millis(1500),
+                refresh_daemon_model_registry(&client),
+            );
+            let pipeline_models = tokio::time::timeout(
+                std::time::Duration::from_millis(1600),
+                client.get("/api/pipeline/models"),
+            );
+            let providers = tokio::time::timeout(
+                std::time::Duration::from_millis(1600),
+                discover_available_providers(Some(&client)),
+            );
+            let mcp_servers = tokio::time::timeout(
+                std::time::Duration::from_millis(1400),
+                client.get("/api/marketplace/mcp"),
+            );
+            let mcp_tools = tokio::time::timeout(
+                std::time::Duration::from_millis(1400),
+                client.get("/api/marketplace/mcp/tools?refresh=1"),
+            );
+
+            let (_refresh_res, models_res, providers_res, mcp_servers_res, mcp_tools_res) =
+                tokio::join!(registry_refresh, pipeline_models, providers, mcp_servers, mcp_tools);
+
+            if let Ok(Ok(resp)) = models_res {
                 if let Some(models) = resp.get("models").and_then(|v| v.as_array()) {
                     self.registry_models = models
                         .iter()
@@ -317,16 +686,13 @@ impl App {
                 }
             }
 
-            self.connected_providers = discover_available_providers(Some(client))
-                .await
-                .into_iter()
-                .map(|p| p.provider)
-                .collect();
+            if let Ok(available) = providers_res {
+                self.connected_providers = available.into_iter().map(|p| p.provider).collect();
+            }
 
-            self.mcp_servers = client
-                .get("/api/marketplace/mcp")
-                .await
+            self.mcp_servers = mcp_servers_res
                 .ok()
+                .and_then(|r| r.ok())
                 .and_then(|resp| resp.get("servers").and_then(|v| v.as_array()).cloned())
                 .map(|servers| {
                     servers
@@ -357,10 +723,9 @@ impl App {
                 })
                 .unwrap_or_default();
 
-            self.mcp_tools = client
-                .get("/api/marketplace/mcp/tools?refresh=1")
-                .await
+            self.mcp_tools = mcp_tools_res
                 .ok()
+                .and_then(|r| r.ok())
                 .and_then(|resp| resp.get("tools").and_then(|v| v.as_array()).cloned())
                 .map(|tools| {
                     tools
@@ -391,6 +756,86 @@ impl App {
             &self.mcp_servers,
             &self.mcp_tools,
         );
+
+        // Merge local MCP stdio servers/tools as a compatibility fallback.
+        self.refresh_local_mcp_registry().await;
+
+        self.signet_commands = signet_commands::commands_with_dynamic(
+            &self.skills,
+            &self.mcp_servers,
+            &self.mcp_tools,
+        );
+    }
+
+    async fn refresh_local_mcp_registry(&mut self) {
+        if self.mcp_clients.is_empty() {
+            return;
+        }
+
+        let mut local_servers = Vec::new();
+        let mut local_tools = Vec::new();
+
+        for client in &self.mcp_clients {
+            let server_name = client.name().to_string();
+            let server_id = server_name
+                .to_ascii_lowercase()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect::<String>()
+                .trim_matches('-')
+                .to_string();
+
+            local_servers.push(signet_commands::McpServerCommand {
+                server_id: if server_id.is_empty() {
+                    "mcp".to_string()
+                } else {
+                    server_id.clone()
+                },
+                server_name: server_name.clone(),
+                description: "Local MCP server".to_string(),
+            });
+
+            if let Ok(tools) = client.list_tools().await {
+                for tool in tools {
+                    let prefixed = format!("{server_name}_");
+                    let tool_name = tool
+                        .name
+                        .strip_prefix(&prefixed)
+                        .unwrap_or(&tool.name)
+                        .to_string();
+                    local_tools.push(signet_commands::McpToolCommand {
+                        server_id: if server_id.is_empty() {
+                            "mcp".to_string()
+                        } else {
+                            server_id.clone()
+                        },
+                        server_name: server_name.clone(),
+                        tool_name,
+                        description: tool.description,
+                    });
+                }
+            }
+        }
+
+        let mut seen_servers: HashSet<String> =
+            self.mcp_servers.iter().map(|s| s.server_id.clone()).collect();
+        for server in local_servers {
+            if seen_servers.insert(server.server_id.clone()) {
+                self.mcp_servers.push(server);
+            }
+        }
+
+        let mut seen_tools: HashSet<(String, String)> = self
+            .mcp_tools
+            .iter()
+            .map(|t| (t.server_id.clone(), t.tool_name.clone()))
+            .collect();
+        for tool in local_tools {
+            let key = (tool.server_id.clone(), tool.tool_name.clone());
+            if seen_tools.insert(key) {
+                self.mcp_tools.push(tool);
+            }
+        }
     }
 
     fn open_model_picker(&mut self) {
@@ -408,6 +853,9 @@ impl App {
         cli_path: Option<String>,
         theme_name: &str,
         active_agent: Option<String>,
+        agent_name: String,
+        selected_policy: AgentExecutionPolicy,
+        auto_approve_write_tools: Vec<String>,
         connected_providers: Vec<String>,
     ) -> Self {
         let model = provider.model().to_string();
@@ -460,17 +908,17 @@ impl App {
             }
         }
 
-        let permissions = Arc::new(Mutex::new(PermissionManager::new(vec![
-            "Read".to_string(),
-            "Glob".to_string(),
-            "Grep".to_string(),
-        ])));
+        let permissions = Arc::new(Mutex::new(PermissionManager::new(
+            auto_approve_write_tools,
+        )));
 
         let effort = Arc::new(Mutex::new(forge_provider::ReasoningEffort::default()));
         let bypass = Arc::new(Mutex::new(false));
 
+        let mcp_config = McpConfig::load();
+        let mcp_clients = connect_mcp_servers(&mcp_config).await;
         let daemon_url = signet_client.as_ref().map(|c| c.base_url().to_string());
-        let agent = Arc::new(AgentLoop::new(
+        let mut agent_loop = AgentLoop::new(
             provider,
             hooks,
             event_tx,
@@ -480,8 +928,10 @@ impl App {
             Arc::clone(&effort),
             Arc::clone(&bypass),
             daemon_url,
-            Vec::new(),
-        ));
+            mcp_clients.clone(),
+        );
+        agent_loop.refresh_mcp_tools().await;
+        let agent = Arc::new(agent_loop);
 
         // Start config watcher
         let config_rx = match ConfigWatcher::start() {
@@ -515,14 +965,26 @@ impl App {
         let skills = forge_signet::skills::load_skills();
         debug!("Loaded {} skills", skills.len());
 
-        // Fetch total memory and secrets count from daemon
+        // Fetch optional dashboard counts in parallel with short startup budget.
+        // These are non-critical and should not block app startup.
         let (total_memories, total_secrets) = if let Some(client) = &signet_client {
-            let mem = client.memory_count().await;
-            let sec = client.get("/api/secrets").await
+            let mem_fut = async {
+                tokio::time::timeout(std::time::Duration::from_millis(800), client.memory_count())
+                    .await
+                    .unwrap_or(0)
+            };
+            let sec_fut = async {
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(800),
+                    client.get("/api/secrets"),
+                )
+                .await
                 .ok()
+                .and_then(|resp| resp.ok())
                 .and_then(|v| v.get("secrets").and_then(|s| s.as_array()).map(|a| a.len()))
-                .unwrap_or(0);
-            (mem, sec)
+                .unwrap_or(0)
+            };
+            tokio::join!(mem_fut, sec_fut)
         } else {
             (0, 0)
         };
@@ -550,6 +1012,7 @@ impl App {
             connected_providers,
             effort,
             bypass,
+            bypass_one_shot: false,
             memories_injected,
             total_memories,
             total_secrets,
@@ -570,11 +1033,13 @@ impl App {
             keybind_editor: None,
             session_browser: None,
             dashboard_panel: None,
+            policy_panel: None,
             forge_usage: None,
             skills,
             signet_commands: Vec::new(),
             mcp_servers: Vec::new(),
             mcp_tools: Vec::new(),
+            mcp_clients,
             pending_skill: None,
             signet_client,
             permissions,
@@ -583,16 +1048,23 @@ impl App {
             config_rx,
             session_store,
             pipeline_info,
-            agent_name: forge_signet::config::agent_name(),
+            agent_name,
             active_agent,
             daemon_logs: Vec::new(),
+            daemon_task_events: VecDeque::new(),
+            policy_workspace_only: selected_policy.workspace_only.unwrap_or(true),
+            policy_allowed_paths: selected_policy.allowed_paths,
+            policy_allowed_commands: selected_policy.allowed_commands,
+            policy_approval_mode: selected_policy.approval_mode,
+            task_events: VecDeque::new(),
             speculative_query: String::new(),
             speculative_handle: None,
             last_keystroke: std::time::Instant::now(),
+            speculative_last_fire: None,
             recall_cache,
             voice_recorder: None,
             voice_recording: false,
-            voice_model_path: None,
+            voice_backend: None,
             voice_interim_text: String::new(),
             voice_downloading: false,
             voice_last_interim: std::time::Instant::now(),
@@ -611,11 +1083,14 @@ impl App {
 
         // Enable bracketed paste so we can detect drag-and-drop file paths
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
+        self.apply_terminal_theme_background();
 
         self.refresh_connected_models().await;
 
         // Start SSE log stream from daemon (background task)
         let (log_tx, mut log_rx) = tokio::sync::mpsc::channel::<String>(64);
+        let (task_stream_tx, mut task_stream_rx) =
+            tokio::sync::mpsc::channel::<forge_core::TaskEventEnvelope>(256);
         if let Some(client) = &self.signet_client {
             let url = format!("{}/api/logs/stream", client.base_url());
             tokio::spawn(async move {
@@ -635,6 +1110,41 @@ impl App {
                     }
                 }
             });
+
+            let session_id = self.session.lock().await.id.clone();
+            let task_url = format!("{}/api/forge/tasks/{}/stream", client.base_url(), session_id);
+            tokio::spawn(async move {
+                use futures::StreamExt;
+                use reqwest_eventsource::{Event as SseEvent, EventSource};
+                loop {
+                    let mut es = EventSource::get(&task_url);
+                    while let Some(event) = es.next().await {
+                        match event {
+                            Ok(SseEvent::Message(msg)) => {
+                                let parsed = serde_json::from_str::<serde_json::Value>(&msg.data);
+                                let Ok(v) = parsed else {
+                                    continue;
+                                };
+                                if v.get("type").and_then(|t| t.as_str()) != Some("telemetry") {
+                                    continue;
+                                }
+                                let maybe_evt = v
+                                    .get("event")
+                                    .cloned()
+                                    .and_then(|e| serde_json::from_value::<forge_core::TaskEventEnvelope>(e).ok());
+                                if let Some(evt) = maybe_evt {
+                                    let _ = task_stream_tx.try_send(evt);
+                                }
+                            }
+                            Err(_) => {
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+            });
         }
 
         loop {
@@ -644,6 +1154,9 @@ impl App {
                 if self.daemon_logs.len() > 100 {
                     self.daemon_logs.remove(0);
                 }
+            }
+            while let Ok(evt) = task_stream_rx.try_recv() {
+                self.push_daemon_task_event(evt);
             }
 
             // Increment animation tick
@@ -679,20 +1192,10 @@ impl App {
             // Find the next word boundary (space/newline) after a minimum offset,
             // so text never cuts mid-word.
             if !self.pending_text.is_empty() {
-                // Min 4 chars, then extend to next word boundary
-                let min_chars = 4;
-                let min_byte = self
-                    .pending_text
-                    .char_indices()
-                    .nth(min_chars)
-                    .map(|(i, _)| i)
-                    .unwrap_or(self.pending_text.len());
-                // Find next space or newline after min_byte
-                let boundary = self.pending_text[min_byte..]
-                    .find([' ', '\n'])
-                    .map(|pos| min_byte + pos + 1) // include the space
-                    .unwrap_or(self.pending_text.len().min(min_byte + 20)); // cap at ~20 extra chars
-                let boundary = boundary.min(self.pending_text.len());
+                // Faster flush to match native harness feel across providers.
+                // If a provider emits chunked/full text (common with CLI backends),
+                // avoid artificial per-word delay.
+                let boundary = self.pending_text.len();
                 let chunk: String = self.pending_text.drain(..boundary).collect();
                 self.streaming_text.push_str(&chunk);
                 // Safety: prevent unbounded growth
@@ -724,8 +1227,12 @@ impl App {
                         while let Ok(event) = self.event_rx.try_recv() {
                             self.handle_agent_event(event);
                         }
-                        // Still stuck? Force reset
-                        if self.processing {
+                        // If we are still actively drip-streaming, do NOT flush all at once.
+                        // Let pending_text drain naturally for smooth typewriter output.
+                        let still_dripping =
+                            !self.pending_text.is_empty() || self.turn_complete_pending;
+                        // Still stuck without pending stream state? Force reset.
+                        if self.processing && !still_dripping {
                             self.streaming_text.push_str(&self.pending_text);
                             self.pending_text.clear();
                             self.turn_complete_pending = false;
@@ -790,11 +1297,12 @@ impl App {
                                 self.cursor += text.chars().count();
                             }
                         }
-                        VoiceResult::ModelReady(path) => {
-                            self.voice_model_path = Some(path);
+                        VoiceResult::ModelReady(backend) => {
+                            let backend_name = backend.display_name();
+                            self.voice_backend = Some(backend);
                             self.voice_downloading = false;
                             self.entries.push(ChatEntry::Status(
-                                "Voice model ready.".to_string(),
+                                format!("Voice backend ready: {backend_name}."),
                             ));
                             self.start_voice_recording();
                         }
@@ -818,16 +1326,38 @@ impl App {
                 self.trigger_interim_transcription();
             }
 
-            // Speculative pre-recall — fire after 500ms of no typing
+            // Speculative pre-recall — throttled to avoid noisy hook spam while typing.
+            // Debounce: wait for user to pause.
+            // Cooldown: max one speculative call every few seconds.
+            // Growth gate: only refresh when prompt meaningfully expanded.
+            let cooldown_ok = self
+                .speculative_last_fire
+                .map(|t| t.elapsed() > std::time::Duration::from_secs(3))
+                .unwrap_or(true);
+            let meaningful_growth = if self.speculative_query.is_empty() {
+                true
+            } else if self.input.starts_with(&self.speculative_query) {
+                self.input
+                    .chars()
+                    .count()
+                    .saturating_sub(self.speculative_query.chars().count())
+                    >= 12
+                    || self.input.ends_with(['.', '!', '?', '\n'])
+            } else {
+                true
+            };
             if !self.processing
-                && !self.input.is_empty()
+                && self.input.len() >= 12
                 && !self.input.starts_with('/')
                 && self.input != self.speculative_query
-                && self.last_keystroke.elapsed() > std::time::Duration::from_millis(500)
+                && meaningful_growth
+                && cooldown_ok
+                && self.last_keystroke.elapsed() > std::time::Duration::from_millis(900)
             {
                 if let Some(signet) = &self.signet_client {
                 let query = self.input.clone();
                 self.speculative_query = query.clone();
+                self.speculative_last_fire = Some(std::time::Instant::now());
 
                 // Cancel any in-flight speculative task
                 if let Some(handle) = self.speculative_handle.take() {
@@ -883,12 +1413,17 @@ impl App {
 
     fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
+        let _transparent_bg = transparent_bg_enabled();
+        // Keep themed canvas color even in transparent mode so blur + tint both remain visible.
+        let canvas_bg = self.theme.bg;
+        // Keep header tint even in transparent mode so blur + themed chrome both show.
+        let status_bg = self.theme.status_bg;
 
         // Fill the entire terminal with the theme background
-        let bg_block = Block::default().style(Style::default().bg(self.theme.bg));
+        let bg_block = Block::default().style(Style::default().bg(canvas_bg));
         frame.render_widget(bg_block, area);
 
-        // Layout: [status_bar(2)] [chat(flex)] [input(dynamic)]
+        // Layout: [status_bar(5)] [chat(flex)] [input(dynamic)]
         // Input expands based on content lines, capped at 1/3 of terminal height
         let input_width = area.width.saturating_sub(5) as usize; // account for " > " prefix + border
         let input_lines = if input_width == 0 || self.input.is_empty() {
@@ -901,7 +1436,7 @@ impl App {
         let max_input = (area.height / 3).max(3);
         let input_height = (input_lines + 2).min(max_input); // +2 for border + padding
         let chunks = Layout::vertical([
-            Constraint::Length(2),            // status bar
+            Constraint::Length(5),            // status bar
             Constraint::Min(5),              // chat area
             Constraint::Length(input_height), // input area
         ])
@@ -920,6 +1455,7 @@ impl App {
             .try_lock()
             .map(|e| e.as_str().to_string())
             .unwrap_or_else(|_| "medium".to_string());
+        let (policy_denied_count, _) = self.policy_denied_counts();
 
         let status = StatusBar {
             model: &self.model,
@@ -931,44 +1467,50 @@ impl App {
             total_memories: self.total_memories,
             total_secrets: self.total_secrets,
             secrets_used: self.secrets_used,
+            policy_denied_count,
             effort: &effort_str,
             daemon_healthy: self.daemon_healthy,
             active_agent: self.active_agent.as_deref(),
             agent_name: &self.agent_name,
+            policy_workspace_only: self.policy_workspace_only,
+            policy_paths_count: self.policy_allowed_paths.len(),
+            policy_commands_count: self.policy_allowed_commands.len(),
+            policy_approval_mode: self.policy_approval_mode.as_deref(),
             keybinds: &self.keybinds,
-            status_bg: self.theme.status_bg,
+            status_bg,
             status_fg: self.theme.status_fg,
+            surface: self.theme.surface,
             accent: self.theme.accent,
             muted: self.theme.muted,
             success: self.theme.success,
             error: self.theme.error,
             warning: self.theme.warning,
             spinner: self.theme.spinner,
+            border: self.theme.border,
         };
         status.render(chunks[0], frame.buffer_mut());
 
         // Chat area — render animated activity line when processing or recording
         let activity_line = if self.voice_downloading {
-            Some("  ◈ Downloading voice model (142MB)...".to_string())
+            Some("  ◈ Preparing voice backend...".to_string())
         } else if self.voice_recording {
             let dots = ".".repeat((self.tick / 4) % 4);
             Some(format!("  ● Recording{dots} (Ctrl+R to stop)"))
-        } else if self.processing {
-            let rendered = self.processing_phase.render(self.tick);
-            if rendered.is_empty() { None } else { Some(rendered) }
         } else {
             None
         };
 
+        let display_agent_name = self.display_agent_name();
         let chat = ChatView {
             entries: &self.entries,
             streaming_text: &self.streaming_text,
             scroll_offset: self.scroll_offset,
             activity_line,
-            agent_name: &self.agent_name,
+            agent_name: &display_agent_name,
             total_memories: self.total_memories,
             tick: self.tick,
             theme: &self.theme,
+            processing: self.processing,
         };
         chat.render(chunks[1], frame.buffer_mut());
 
@@ -979,7 +1521,15 @@ impl App {
             .borders(Borders::TOP)
             .border_style(Style::default().fg(self.theme.accent));
 
-        let input_text = if self.input.is_empty() && self.voice_interim_text.is_empty() {
+        let attachment_tokens = self.attachment_tokens();
+        let has_attachments = !attachment_tokens.is_empty();
+        let attachment_prefix = if has_attachments {
+            format!("{attachment_tokens} ")
+        } else {
+            String::new()
+        };
+
+        let input_text = if self.input.is_empty() && self.voice_interim_text.is_empty() && !has_attachments {
             let placeholder = if self.voice_recording {
                 " Listening..."
             } else {
@@ -993,10 +1543,15 @@ impl App {
         } else if !self.voice_interim_text.is_empty() {
             // Show committed input + grayed interim preview
             let mut spans = vec![];
+            spans.push(Span::styled(" > ", input_style));
+            if has_attachments {
+                spans.push(Span::styled(
+                    attachment_prefix.clone(),
+                    Style::default().fg(self.theme.accent),
+                ));
+            }
             if !self.input.is_empty() {
-                spans.push(Span::styled(format!(" > {}", &self.input), input_style));
-            } else {
-                spans.push(Span::styled(" > ", input_style));
+                spans.push(Span::styled(self.input.clone(), input_style));
             }
             spans.push(Span::styled(
                 &self.voice_interim_text,
@@ -1004,13 +1559,21 @@ impl App {
             ));
             Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false })
         } else {
-            Paragraph::new(Span::styled(format!(" > {}", &self.input), input_style))
-                .wrap(Wrap { trim: false })
+            let mut spans = vec![Span::styled(" > ", input_style)];
+            if has_attachments {
+                spans.push(Span::styled(
+                    attachment_prefix.clone(),
+                    Style::default().fg(self.theme.accent),
+                ));
+            }
+            spans.push(Span::styled(self.input.clone(), input_style));
+            Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false })
         };
 
         // Scroll input to keep cursor visible when text exceeds max height
         let visible_content = input_height.saturating_sub(2); // minus border + padding
-        let cursor_offset = self.cursor as u16 + 3; // " > " prefix
+        let attachment_chars = attachment_prefix.chars().count() as u16;
+        let cursor_offset = self.cursor as u16 + 3 + attachment_chars; // " > " + token prefix
         let iw = chunks[2].width.saturating_sub(1).max(1);
         let cursor_line = cursor_offset / iw;
         let input_scroll = cursor_line.saturating_sub(visible_content.saturating_sub(1));
@@ -1081,6 +1644,12 @@ impl App {
             panel.render_themed(area, frame.buffer_mut(), &self.theme);
         }
 
+        // Policy diagnostics overlay
+        if let Some(panel) = &self.policy_panel {
+            let area = frame.area();
+            panel.render_themed(area, frame.buffer_mut(), &self.theme);
+        }
+
         // Usage overlay
         if let Some(usage) = &self.forge_usage {
             let area = frame.area();
@@ -1090,10 +1659,13 @@ impl App {
 
     fn draw_permission_dialog(&self, frame: &mut Frame, dialog: &PermissionDialog) {
         let area = frame.area();
+        let policy_hints = self.policy_hints_for_tool(&dialog.tool_name, &dialog.tool_input);
+        let policy_hint_count = policy_hints.len() as u16;
 
         // Center the dialog
         let dialog_width = 60u16.min(area.width.saturating_sub(4));
-        let dialog_height = 10u16.min(area.height.saturating_sub(4));
+        let base_height = 10u16.saturating_add(policy_hint_count.min(4));
+        let dialog_height = base_height.min(area.height.saturating_sub(4));
         let x = (area.width.saturating_sub(dialog_width)) / 2;
         let y = (area.height.saturating_sub(dialog_height)) / 2;
         let dialog_area = ratatui::layout::Rect::new(x, y, dialog_width, dialog_height);
@@ -1133,6 +1705,11 @@ impl App {
             )));
         }
 
+        if !policy_hints.is_empty() {
+            lines.push(Line::from(""));
+            lines.extend(policy_hints);
+        }
+
         lines.push(Line::from(""));
 
         let mut option_spans = vec![Span::styled("  ", Style::default().fg(t.fg))];
@@ -1163,6 +1740,12 @@ impl App {
     }
 
     async fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
+        // If policy panel is open, handle its keys
+        if self.policy_panel.is_some() {
+            self.handle_policy_panel_key(key);
+            return;
+        }
+
         // If usage overlay is open, handle its keys
         if self.forge_usage.is_some() {
             self.handle_forge_usage_key(key);
@@ -1244,7 +1827,9 @@ impl App {
         };
 
         match action {
-            Action::Submit if !self.processing && !self.input.is_empty() => {
+            Action::Submit if !self.processing
+                && (!self.input.is_empty() || !self.attached_images.is_empty()) =>
+            {
                 // Stop voice recording if active (auto-stop on send)
                 if self.voice_recording {
                     self.stop_voice_recording();
@@ -1253,6 +1838,8 @@ impl App {
                 let input = self.input.clone();
                 self.input.clear();
                 self.cursor = 0;
+                let user_input_with_attachments = self.compose_input_with_attachments(&input);
+                self.attached_images.clear();
 
                 // Always reset scroll to bottom when user submits
                 self.scroll_offset = 0;
@@ -1272,11 +1859,14 @@ impl App {
                             "Applying skill /{} to this prompt.",
                             skill_name
                         )));
-                        format!("<skill name=\"{skill_name}\">\n{skill_content}\n</skill>\n\n{input}")
+                        format!(
+                            "<skill name=\"{skill_name}\">\n{skill_content}\n</skill>\n\n{user_input_with_attachments}"
+                        )
                     } else {
-                        input.clone()
+                        user_input_with_attachments.clone()
                     };
-                    self.entries.push(ChatEntry::UserMessage(input.clone()));
+                    self.entries
+                        .push(ChatEntry::UserMessage(user_input_with_attachments));
 
                     let agent = Arc::clone(&self.agent);
                     let session = Arc::clone(&self.session);
@@ -1300,6 +1890,10 @@ impl App {
                 self.cursor -= 1;
                 let byte_pos = self.cursor_byte_pos();
                 self.input.remove(byte_pos);
+            }
+            Action::Backspace if self.cursor == 0 && !self.attached_images.is_empty() => {
+                self.attached_images.pop();
+                self.last_keystroke = std::time::Instant::now();
             }
             Action::Delete if self.cursor < self.input_char_len() => {
                 let byte_pos = self.cursor_byte_pos();
@@ -1441,6 +2035,26 @@ impl App {
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 // Refresh
                 self.open_dashboard_panel().await;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_policy_panel_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc => {
+                self.policy_panel = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(panel) = &mut self.policy_panel {
+                    panel.scroll_up();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(panel) = &mut self.policy_panel {
+                    panel.scroll_down();
+                }
             }
             _ => {}
         }
@@ -1686,10 +2300,7 @@ impl App {
 
         // Check if it's an image file path (dragged into terminal)
         if is_image_path(trimmed) {
-            let path = trimmed
-                .trim_matches('\'')
-                .trim_matches('"')
-                .to_string();
+            let path = normalize_image_path(trimmed);
 
             if std::path::Path::new(&path).exists() {
                 self.attached_images.push(path.clone());
@@ -1813,6 +2424,7 @@ impl App {
                                 )));
                             } else {
                                 self.theme = crate::theme::Theme::by_name(args);
+                                self.apply_terminal_theme_background();
                                 self.entries.push(ChatEntry::Status(format!(
                                     "Theme set to: {}", self.theme.name
                                 )));
@@ -1912,25 +2524,227 @@ impl App {
                             }
                         }
                         "forge-bypass" => {
-                            let mut b = self.bypass.lock().await;
-                            *b = !*b;
-                            let state = if *b { "ON" } else { "OFF" };
-                            let detail = if *b {
-                                match self.provider_name.as_str() {
-                                    n if n.contains("claude") => " (--dangerously-skip-permissions)",
-                                    n if n.contains("codex") => " (--dangerously-bypass-approvals-and-sandbox)",
-                                    _ => "",
+                            let flag = match self.provider_name.as_str() {
+                                n if n.contains("claude") => Some("--dangerously-skip-permissions"),
+                                n if n.contains("codex") => {
+                                    Some("--dangerously-bypass-approvals-and-sandbox")
                                 }
-                            } else {
-                                ""
+                                _ => None,
                             };
-                            self.entries.push(ChatEntry::Status(format!(
-                                "Permission bypass: {state}{detail}"
-                            )));
-                            self.save_settings();
+
+                            if flag.is_none() {
+                                self.entries.push(ChatEntry::Error(format!(
+                                    "/forge-bypass only applies to claude-cli/codex-cli. Current provider: {}",
+                                    self.provider_name
+                                )));
+                                return;
+                            }
+
+                            let tokens: Vec<&str> = args.split_whitespace().collect();
+                            let mode = tokens.first().copied().unwrap_or("status");
+
+                            match mode {
+                                "status" => {
+                                    let enabled = *self.bypass.lock().await;
+                                    let armed = if enabled {
+                                        if self.bypass_one_shot { "ON (one-shot)" } else { "ON (persistent)" }
+                                    } else {
+                                        "OFF"
+                                    };
+                                    self.entries.push(ChatEntry::Status(format!(
+                                        "Bypass: {armed} [{}]. Usage: /forge-bypass once --yes | /forge-bypass on --persist --yes | /forge-bypass off",
+                                        flag.unwrap_or("")
+                                    )));
+                                }
+                                "off" => {
+                                    *self.bypass.lock().await = false;
+                                    self.bypass_one_shot = false;
+                                    self.entries
+                                        .push(ChatEntry::Status("Bypass: OFF".to_string()));
+                                }
+                                "once" => {
+                                    let acknowledged = tokens.iter().any(|t| *t == "--yes");
+                                    if !acknowledged {
+                                        self.entries.push(ChatEntry::Error(
+                                            "Confirmation required: /forge-bypass once --yes"
+                                                .to_string(),
+                                        ));
+                                        return;
+                                    }
+                                    *self.bypass.lock().await = true;
+                                    self.bypass_one_shot = true;
+                                    self.entries.push(ChatEntry::Status(format!(
+                                        "Bypass armed for next turn only [{}]",
+                                        flag.unwrap_or("")
+                                    )));
+                                }
+                                "on" => {
+                                    let acknowledged = tokens.iter().any(|t| *t == "--yes");
+                                    let persist = tokens.iter().any(|t| *t == "--persist");
+                                    if !acknowledged || !persist {
+                                        self.entries.push(ChatEntry::Error(
+                                            "Persistent bypass requires both flags: /forge-bypass on --persist --yes"
+                                                .to_string(),
+                                        ));
+                                        return;
+                                    }
+                                    *self.bypass.lock().await = true;
+                                    self.bypass_one_shot = false;
+                                    self.entries.push(ChatEntry::Status(format!(
+                                        "Bypass: ON (persistent) [{}]",
+                                        flag.unwrap_or("")
+                                    )));
+                                }
+                                _ => {
+                                    self.entries.push(ChatEntry::Error(
+                                        "Invalid usage. Try: /forge-bypass status|off|once|on"
+                                            .to_string(),
+                                    ));
+                                }
+                            }
                         }
                         "forge-usage" => {
                             self.forge_usage = Some(ForgeUsage::new());
+                        }
+                        "tasks" => {
+                            let tokens: Vec<&str> = args.split_whitespace().collect();
+                            let mut window = 30usize;
+                            let mut export_path: Option<std::path::PathBuf> = None;
+                            let mut export_jsonl = false;
+                            let mut filter_kind: Option<String> = None;
+                            let mut filter_phase: Option<String> = None;
+                            let mut filter_name: Option<String> = None;
+                            let mut filter_since: Option<String> = None;
+                            let mut filter_policy_denied = false;
+                            let mut i = 0usize;
+                            while i < tokens.len() {
+                                let t = tokens[i];
+                                if t == "--jsonl" {
+                                    export_jsonl = true;
+                                    i += 1;
+                                    continue;
+                                }
+                                if t == "--policy-denied" {
+                                    filter_policy_denied = true;
+                                    i += 1;
+                                    continue;
+                                }
+                                if (t == "--export" || t == "-o") && i + 1 < tokens.len() {
+                                    export_path = Some(std::path::PathBuf::from(tokens[i + 1]));
+                                    i += 2;
+                                    continue;
+                                }
+                                if t == "--kind" && i + 1 < tokens.len() {
+                                    filter_kind = Some(tokens[i + 1].to_string());
+                                    i += 2;
+                                    continue;
+                                }
+                                if t == "--phase" && i + 1 < tokens.len() {
+                                    filter_phase = Some(tokens[i + 1].to_string());
+                                    i += 2;
+                                    continue;
+                                }
+                                if t == "--name" && i + 1 < tokens.len() {
+                                    filter_name = Some(tokens[i + 1].to_string());
+                                    i += 2;
+                                    continue;
+                                }
+                                if t == "--since" && i + 1 < tokens.len() {
+                                    filter_since = Some(tokens[i + 1].to_string());
+                                    i += 2;
+                                    continue;
+                                }
+                                if let Ok(n) = t.parse::<usize>() {
+                                    window = n;
+                                }
+                                i += 1;
+                            }
+
+                            let mut payload: Option<serde_json::Value> = None;
+                            if let Some(client) = &self.signet_client {
+                                let session_id = self.session.lock().await.id.clone();
+                                let mut url = format!(
+                                    "/api/forge/tasks/{}?limit={}",
+                                    session_id,
+                                    window.clamp(1, 2000)
+                                );
+                                if let Some(kind) = &filter_kind {
+                                    url.push_str(&format!("&kind={}", kind));
+                                }
+                                if let Some(phase) = &filter_phase {
+                                    url.push_str(&format!("&phase={}", phase));
+                                }
+                                if let Some(name) = &filter_name {
+                                    url.push_str(&format!("&name={}", name));
+                                }
+                                if let Some(since) = &filter_since {
+                                    url.push_str(&format!("&since={}", since));
+                                }
+                                if filter_policy_denied {
+                                    url.push_str("&policyDeniedOnly=true");
+                                }
+                                if let Ok(v) = client.get(&url).await {
+                                    payload = Some(serde_json::json!({
+                                        "schema": "forge.tasks.view.v1",
+                                        "source": "daemon",
+                                        "filters": {
+                                            "kind": filter_kind,
+                                            "phase": filter_phase,
+                                            "name": filter_name,
+                                            "since": filter_since,
+                                            "policyDeniedOnly": filter_policy_denied,
+                                        },
+                                        "daemon": v,
+                                    }));
+                                }
+                            }
+
+                            let payload =
+                                payload.unwrap_or_else(|| self.build_tasks_view_payload(window));
+                            if payload
+                                .get("daemon")
+                                .is_none()
+                                && self.effective_task_events().is_empty()
+                            {
+                                self.entries
+                                    .push(ChatEntry::Ephemeral("No task telemetry yet.".to_string()));
+                                return;
+                            }
+
+                            if let Some(path) = export_path {
+                                match self.export_tasks_payload(&payload, &path, export_jsonl) {
+                                    Ok(_) => {
+                                        self.entries.push(ChatEntry::Status(format!(
+                                            "Task telemetry exported to {} ({})",
+                                            path.display(),
+                                            if export_jsonl { "jsonl" } else { "json" }
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        self.entries.push(ChatEntry::Error(format!(
+                                            "Failed to export task telemetry: {e}"
+                                        )));
+                                    }
+                                }
+                            }
+                            let formatted = serde_json::to_string_pretty(&payload)
+                                .unwrap_or_else(|_| "[]".to_string());
+                            self.entries
+                                .push(ChatEntry::Ephemeral(format!("```json\n{formatted}\n```")));
+                        }
+                        "policy" => {
+                            let current_dir = std::env::current_dir()
+                                .ok()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_else(|| "<unknown>".to_string());
+                            self.policy_panel = Some(PolicyPanel::new(
+                                self.policy_workspace_only,
+                                self.policy_allowed_paths.clone(),
+                                self.policy_allowed_commands.clone(),
+                                self.policy_approval_mode.clone(),
+                                current_dir,
+                                self.active_agent.clone(),
+                            ));
                         }
                         "mcp-help" => {
                             let mut help = String::from("◆ MCP Commands\n\n");
@@ -2398,7 +3212,7 @@ impl App {
         let (permission_tx, permission_rx) = mpsc::channel::<PermissionRequest>(8);
 
         let daemon_url = self.signet_client.as_ref().map(|c| c.base_url().to_string());
-        self.agent = Arc::new(AgentLoop::new(
+        let mut agent_loop = AgentLoop::new(
             new_provider,
             hooks,
             event_tx,
@@ -2408,8 +3222,10 @@ impl App {
             Arc::clone(&self.effort),
             Arc::clone(&self.bypass),
             daemon_url,
-            Vec::new(),
-        ));
+            self.mcp_clients.clone(),
+        );
+        agent_loop.refresh_mcp_tools().await;
+        self.agent = Arc::new(agent_loop);
 
         self.event_rx = event_rx;
         self.permission_rx = permission_rx;
@@ -2430,7 +3246,8 @@ impl App {
 
     fn save_settings(&self) {
         let effort = self.effort.try_lock().map(|e| e.as_str().to_string()).ok();
-        let bypass = self.bypass.try_lock().map(|b| *b).unwrap_or(false);
+        // Never persist bypass state across restarts (hardening).
+        let bypass = false;
         let settings = crate::settings::Settings {
             model: Some(self.model.clone()),
             provider: Some(self.provider_name.clone()),
@@ -2583,6 +3400,30 @@ impl App {
                     // Pending text still dripping — defer completion
                     self.turn_complete_pending = true;
                 }
+                if let Some(ChatEntry::Status(prev)) = self.entries.last() {
+                    let p = prev.trim().to_ascii_lowercase();
+                    let transient = p.contains("thinking")
+                        || p.contains("recalling")
+                        || p.contains("planning")
+                        || p.contains("writing")
+                        || p.contains("connecting")
+                        || p.contains("compacting")
+                        || p.contains("responding");
+                    if transient {
+                        let _ = self.entries.pop();
+                    }
+                }
+                if self.bypass_one_shot {
+                    if let Ok(mut b) = self.bypass.try_lock() {
+                        if *b {
+                            *b = false;
+                            self.entries.push(ChatEntry::Status(
+                                "Bypass auto-disabled after one turn.".to_string(),
+                            ));
+                        }
+                    }
+                    self.bypass_one_shot = false;
+                }
             }
             AgentEvent::Error(msg) => {
                 self.streaming_text.clear();
@@ -2591,10 +3432,21 @@ impl App {
                 self.entries.push(ChatEntry::Error(msg));
                 self.processing = false;
                 self.processing_phase = ProcessingPhase::Idle;
+                if self.bypass_one_shot {
+                    if let Ok(mut b) = self.bypass.try_lock() {
+                        *b = false;
+                    }
+                    self.bypass_one_shot = false;
+                }
             }
             AgentEvent::Status(msg) => {
                 // Update processing phase based on status message
                 let lower = msg.to_lowercase();
+                if lower.trim() == "thinking" {
+                    // Provider-emitted generic thinking often duplicates
+                    // local "Thinking..." status; skip to reduce noise.
+                    return;
+                }
                 if lower.contains("recalling") || lower.contains("searching") || lower.contains("memory") {
                     self.processing_phase = ProcessingPhase::RecallingMemories;
                 } else if lower.contains("thinking") || lower.contains("reasoning") {
@@ -2606,6 +3458,37 @@ impl App {
                 } else if lower.contains("compacting") {
                     self.processing_phase = ProcessingPhase::ExecutingTool("compaction".to_string());
                 }
+                let normalized = msg.trim().to_ascii_lowercase();
+                let is_transient = normalized.contains("thinking")
+                    || normalized.contains("recalling")
+                    || normalized.contains("planning")
+                    || normalized.contains("writing")
+                    || normalized.contains("connecting")
+                    || normalized.contains("compacting")
+                    || normalized.contains("responding");
+
+                if is_transient {
+                    if let Some(ChatEntry::Status(prev)) = self.entries.last_mut() {
+                        let prev_norm = prev.trim().to_ascii_lowercase();
+                        let prev_transient = prev_norm.contains("thinking")
+                            || prev_norm.contains("recalling")
+                            || prev_norm.contains("planning")
+                            || prev_norm.contains("writing")
+                            || prev_norm.contains("connecting")
+                            || prev_norm.contains("compacting")
+                            || prev_norm.contains("responding");
+                        if prev_transient {
+                            *prev = msg;
+                            return;
+                        }
+                    }
+                    self.entries.push(ChatEntry::Status(msg));
+                } else if !matches!(
+                    self.entries.last(),
+                    Some(ChatEntry::Status(prev)) if prev.trim().to_ascii_lowercase() == normalized
+                ) {
+                    self.entries.push(ChatEntry::Status(msg));
+                }
             }
             AgentEvent::ToolApproval(_, name, _) => {
                 self.entries.push(ChatEntry::Status(format!(
@@ -2614,6 +3497,9 @@ impl App {
             }
             AgentEvent::MemoryCount(count) => {
                 self.memories_injected = count;
+            }
+            AgentEvent::TaskTelemetry(evt) => {
+                self.push_local_task_event(evt);
             }
         }
     }
@@ -2654,11 +3540,19 @@ impl App {
         }
 
         let transcript = s.transcript();
+        if transcript.trim().is_empty() {
+            return;
+        }
         let session_id = s.id.clone();
         let project = s.project.clone();
         drop(s); // Release lock before async call
 
         if let Some(client) = &self.signet_client {
+            info!(
+                "Submitting session-end hook: session={} transcript_chars={}",
+                session_id,
+                transcript.chars().count()
+            );
             let hooks = SessionHooks::new(client.clone(), session_id, project);
             if let Err(e) = hooks.session_end(&transcript).await {
                 info!("Session-end hook failed (non-fatal): {e}");
@@ -2758,36 +3652,23 @@ impl App {
             self.voice_recording = false;
             self.voice_recorder = None;
         } else {
-            // Start recording — ensure model is available first
-            if self.voice_model_path.is_none() {
-                // Check if model file already exists on disk
-                let model_path = dirs::config_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("forge")
-                    .join("models")
-                    .join("ggml-base.en.bin");
-
-                if model_path.exists() {
-                    self.voice_model_path = Some(model_path);
-                } else {
-                    // Need to download — kick off background task
-                    self.voice_downloading = true;
-                    self.entries.push(ChatEntry::Status(
-                        "Downloading voice model (142MB)...".to_string(),
-                    ));
-                    let tx = self.voice_result_tx.clone();
-                    tokio::spawn(async move {
-                        match voice::ensure_model().await {
-                            Ok(path) => {
-                                let _ = tx.send(VoiceResult::ModelReady(path)).await;
-                            }
-                            Err(e) => {
-                                let _ = tx.send(VoiceResult::Error(e)).await;
-                            }
+            // Start recording — ensure backend is available first
+            if self.voice_backend.is_none() {
+                self.voice_downloading = true;
+                self.entries
+                    .push(ChatEntry::Status("Preparing voice backend...".to_string()));
+                let tx = self.voice_result_tx.clone();
+                tokio::spawn(async move {
+                    match voice::ensure_model().await {
+                        Ok(backend) => {
+                            let _ = tx.send(VoiceResult::ModelReady(backend)).await;
                         }
-                    });
-                    return;
-                }
+                        Err(e) => {
+                            let _ = tx.send(VoiceResult::Error(e)).await;
+                        }
+                    }
+                });
+                return;
             }
 
             self.start_voice_recording();
@@ -2837,10 +3718,10 @@ impl App {
                 return;
             }
 
-            if let Some(model_path) = self.voice_model_path.clone() {
+            if let Some(backend) = self.voice_backend.clone() {
                 let tx = self.voice_result_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    match voice::transcribe(&model_path, &samples, sample_rate, channels) {
+                    match voice::transcribe(&backend, &samples, sample_rate, channels) {
                         Ok(text) => {
                             let _ = tx.blocking_send(VoiceResult::Final(text));
                         }
@@ -2867,7 +3748,7 @@ impl App {
         let Some(recorder) = &self.voice_recorder else {
             return;
         };
-        let Some(model_path) = self.voice_model_path.clone() else {
+        let Some(backend) = self.voice_backend.clone() else {
             return;
         };
 
@@ -2881,7 +3762,7 @@ impl App {
         let tx = self.voice_result_tx.clone();
 
         self.voice_interim_handle = Some(tokio::task::spawn_blocking(move || {
-            match voice::transcribe(&model_path, &samples, sample_rate, channels) {
+            match voice::transcribe(&backend, &samples, sample_rate, channels) {
                 Ok(text) => {
                     let _ = tx.blocking_send(VoiceResult::Interim(text));
                 }
@@ -2893,12 +3774,22 @@ impl App {
     }
 }
 
+fn transparent_bg_enabled() -> bool {
+    match std::env::var("FORGE_TRANSPARENT_BG") {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            v == "1" || v == "true" || v == "yes" || v == "on"
+        }
+        Err(_) => true,
+    }
+}
+
 /// Check if a path looks like an image file
 fn is_image_path(text: &str) -> bool {
-    let path = text
-        .trim()
-        .trim_matches('\'')
-        .trim_matches('"');
+    let path = normalize_image_path(text);
+    if path.is_empty() {
+        return false;
+    }
     let lower = path.to_lowercase();
     lower.ends_with(".png")
         || lower.ends_with(".jpg")
@@ -2907,6 +3798,21 @@ fn is_image_path(text: &str) -> bool {
         || lower.ends_with(".webp")
         || lower.ends_with(".bmp")
         || lower.ends_with(".svg")
+}
+
+/// Normalize common drag/drop image path formats from terminals.
+/// Handles:
+/// - quoted paths
+/// - shell-escaped spaces (`\ `)
+/// - file:// URLs
+/// - `%20` path spaces
+fn normalize_image_path(text: &str) -> String {
+    let mut s = text.trim().trim_matches('\'').trim_matches('"').to_string();
+    if let Some(rest) = s.strip_prefix("file://") {
+        s = rest.to_string();
+    }
+    s = s.replace("\\ ", " ");
+    s.replace("%20", " ")
 }
 
 /// Save an arboard clipboard image to a PNG file

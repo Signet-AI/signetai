@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+		<link rel="manifest" href="/manifest.json">
+		<meta name="theme-color" content="#0a0a0b">
+		<meta name="apple-mobile-web-app-capable" content="yes">
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+		<meta name="apple-mobile-web-app-title" content="Signet">
+		<link rel="apple-touch-icon" href="/icon-192.png">
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="preconnect" href="https://fonts.googleapis.com">
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+		<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+		<script>
+			// Set theme before first paint to prevent flash
+			(function() {
+				var t = localStorage.getItem('signet-theme');
+				if (!t) {
+					t = window.matchMedia('(prefers-color-scheme: light)').matches
+						? 'light' : 'dark';
+				}
+				document.documentElement.dataset.theme = t;
+			})();
+		</script>
+		<link href="/_app/immutable/entry/start.Y65YrTiJ.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/CpgYvGBi.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/DWL0Gd-e.js" rel="modulepreload">
+		<link href="/_app/immutable/entry/app.DnREq87C.js" rel="modulepreload">
+		<link href="/_app/immutable/chunks/PPVm8Dsz.js" rel="modulepreload">
+		
+		<link href="/_app/immutable/assets/vendor-ui.BHIBfuhK.css" rel="stylesheet">
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">
+			<script>
+				{
+					__sveltekit_10cvety = {
+						base: ""
+					};
+
+					const element = document.currentScript.parentElement;
+
+					Promise.all([
+						import("/_app/immutable/entry/start.Y65YrTiJ.js"),
+						import("/_app/immutable/entry/app.DnREq87C.js")
+					]).then(([kit, app]) => {
+						kit.start(app, element);
+					});
+				}
+			</script>
+		</div>
+	</body>
+</html>

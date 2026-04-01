@@ -1,8 +1,8 @@
 use crate::client::SignetClient;
 use crate::recall_cache::RecallCache;
-use forge_core::ForgeError;
+use forge_core::{ForgeError, TaskEventEnvelope};
 use serde::Serialize;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Manages Signet session lifecycle hooks.
 ///
@@ -15,6 +15,7 @@ use tracing::debug;
 /// Forge's conversational model (the one the user talks to) is completely
 /// separate. Changing the conversational model via the model picker does
 /// NOT affect extraction or embedding.
+#[derive(Clone)]
 pub struct SessionHooks {
     client: SignetClient,
     session_id: String,
@@ -76,6 +77,87 @@ struct PreCompactionPayload {
     session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
+    #[serde(rename = "runtimePath")]
+    runtime_path: String,
+}
+
+/// Payload sent to pre-turn lifecycle hook
+#[derive(Serialize)]
+struct PreTurnPayload {
+    harness: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(rename = "userMessage")]
+    user_message: String,
+    #[serde(rename = "runtimePath")]
+    runtime_path: String,
+}
+
+/// Payload sent to pre-tool lifecycle hook
+#[derive(Serialize)]
+struct PreToolPayload {
+    harness: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(rename = "toolName")]
+    tool_name: String,
+    #[serde(rename = "toolInput")]
+    tool_input: serde_json::Value,
+    #[serde(rename = "runtimePath")]
+    runtime_path: String,
+}
+
+/// Payload sent to post-tool lifecycle hook
+#[derive(Serialize)]
+struct PostToolPayload {
+    harness: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(rename = "toolName")]
+    tool_name: String,
+    #[serde(rename = "toolInput")]
+    tool_input: serde_json::Value,
+    #[serde(rename = "isError")]
+    is_error: bool,
+    #[serde(rename = "outputSize")]
+    output_size: usize,
+    #[serde(rename = "runtimePath")]
+    runtime_path: String,
+}
+
+/// Payload sent to post-turn lifecycle hook
+#[derive(Serialize)]
+struct PostTurnPayload {
+    harness: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(rename = "assistantTextSize")]
+    assistant_text_size: usize,
+    #[serde(rename = "toolCallCount")]
+    tool_call_count: usize,
+    #[serde(rename = "runtimePath")]
+    runtime_path: String,
+}
+
+/// Payload sent to task-telemetry hook
+#[derive(Serialize)]
+struct TaskTelemetryPayload {
+    harness: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    event: TaskEventEnvelope,
     #[serde(rename = "runtimePath")]
     runtime_path: String,
 }
@@ -265,9 +347,8 @@ impl SessionHooks {
             transcript.len()
         );
 
-        // Don't submit tiny transcripts — daemon ignores < 500 chars anyway
-        if transcript.len() < 500 {
-            debug!("Transcript too short ({} bytes), skipping session-end hook", transcript.len());
+        if transcript.trim().is_empty() {
+            debug!("Transcript empty, skipping session-end hook");
             return Ok(());
         }
 
@@ -290,6 +371,105 @@ impl SessionHooks {
 
         debug!("Session end hook completed — extraction pipeline queued");
         Ok(())
+    }
+
+    /// Optional lifecycle hook called before each user turn is processed.
+    pub async fn pre_turn(&self, user_message: &str) -> Result<(), ForgeError> {
+        let payload = PreTurnPayload {
+            harness: HARNESS_NAME.to_string(),
+            session_id: self.session_id.clone(),
+            cwd: self.project.clone(),
+            user_message: user_message.to_string(),
+            runtime_path: RUNTIME_PATH.to_string(),
+        };
+        self.call_optional_hook("/api/hooks/pre-turn", &payload).await
+    }
+
+    /// Optional lifecycle hook called before each tool execution.
+    pub async fn pre_tool(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+    ) -> Result<(), ForgeError> {
+        let payload = PreToolPayload {
+            harness: HARNESS_NAME.to_string(),
+            session_id: self.session_id.clone(),
+            cwd: self.project.clone(),
+            tool_name: tool_name.to_string(),
+            tool_input: tool_input.clone(),
+            runtime_path: RUNTIME_PATH.to_string(),
+        };
+        self.call_optional_hook("/api/hooks/pre-tool", &payload).await
+    }
+
+    /// Optional lifecycle hook called after each tool execution.
+    pub async fn post_tool(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        is_error: bool,
+        output_size: usize,
+    ) -> Result<(), ForgeError> {
+        let payload = PostToolPayload {
+            harness: HARNESS_NAME.to_string(),
+            session_id: self.session_id.clone(),
+            cwd: self.project.clone(),
+            tool_name: tool_name.to_string(),
+            tool_input: tool_input.clone(),
+            is_error,
+            output_size,
+            runtime_path: RUNTIME_PATH.to_string(),
+        };
+        self.call_optional_hook("/api/hooks/post-tool", &payload).await
+    }
+
+    /// Optional lifecycle hook called after a model turn completes.
+    pub async fn post_turn(
+        &self,
+        assistant_text_size: usize,
+        tool_call_count: usize,
+    ) -> Result<(), ForgeError> {
+        let payload = PostTurnPayload {
+            harness: HARNESS_NAME.to_string(),
+            session_id: self.session_id.clone(),
+            cwd: self.project.clone(),
+            assistant_text_size,
+            tool_call_count,
+            runtime_path: RUNTIME_PATH.to_string(),
+        };
+        self.call_optional_hook("/api/hooks/post-turn", &payload).await
+    }
+
+    /// Optional hook to ingest structured task telemetry into daemon stream APIs.
+    pub async fn task_telemetry(&self, event: &TaskEventEnvelope) -> Result<(), ForgeError> {
+        let payload = TaskTelemetryPayload {
+            harness: HARNESS_NAME.to_string(),
+            session_id: self.session_id.clone(),
+            session_key: Some(self.session_id.clone()),
+            cwd: self.project.clone(),
+            event: event.clone(),
+            runtime_path: RUNTIME_PATH.to_string(),
+        };
+        self.call_optional_hook("/api/hooks/task-telemetry", &payload)
+            .await
+    }
+
+    async fn call_optional_hook<T: Serialize>(
+        &self,
+        path: &str,
+        payload: &T,
+    ) -> Result<(), ForgeError> {
+        let body = serde_json::to_value(payload)
+            .map_err(|e| ForgeError::daemon(format!("Failed to serialize payload: {e}")))?;
+        match self.client.post(path, &body).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Optional hooks should not break the harness if daemon
+                // does not implement them yet.
+                warn!("Optional hook {} failed: {}", path, e);
+                Err(e)
+            }
+        }
     }
 
     pub fn session_id(&self) -> &str {

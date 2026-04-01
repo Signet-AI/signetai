@@ -1766,6 +1766,23 @@ export interface CronPreset {
 	expression: string;
 }
 
+export interface ForgeTaskTelemetryEnvelope {
+	sessionKey: string;
+	harness: string;
+	event: unknown;
+	receivedAt: string;
+	cursor?: number;
+	sequence?: number;
+}
+
+export interface ForgeTaskTelemetryResponse {
+	schema: string;
+	sessionKey: string;
+	count: number;
+	filters?: Record<string, unknown>;
+	events: ForgeTaskTelemetryEnvelope[];
+}
+
 export async function getTasks(): Promise<{
 	tasks: ScheduledTask[];
 	presets: CronPreset[];
@@ -1870,6 +1887,37 @@ export async function getTaskRuns(
 		return await response.json();
 	} catch {
 		return { runs: [], total: 0, hasMore: false };
+	}
+}
+
+export async function getForgeTaskTelemetry(
+	sessionKey: string,
+	options?: {
+		limit?: number;
+		kind?: string;
+		phase?: string;
+		name?: string;
+		since?: string;
+		afterCursor?: number;
+		policyDeniedOnly?: boolean;
+	},
+): Promise<ForgeTaskTelemetryResponse | null> {
+	try {
+		const params = new URLSearchParams();
+		if (options?.limit) params.set("limit", String(options.limit));
+		if (options?.kind) params.set("kind", options.kind);
+		if (options?.phase) params.set("phase", options.phase);
+		if (options?.name) params.set("name", options.name);
+		if (options?.since) params.set("since", options.since);
+		if (Number.isFinite(options?.afterCursor)) params.set("afterCursor", String(options?.afterCursor));
+		if (options?.policyDeniedOnly) params.set("policyDeniedOnly", "true");
+		const qs = params.toString();
+		const url = `${API_BASE}/api/forge/tasks/${encodeURIComponent(sessionKey)}${qs ? `?${qs}` : ""}`;
+		const response = await fetch(url);
+		if (!response.ok) return null;
+		return (await response.json()) as ForgeTaskTelemetryResponse;
+	} catch {
+		return null;
 	}
 }
 

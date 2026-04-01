@@ -1,35 +1,42 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 
-/// Model storage location
-fn model_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("forge")
-        .join("models")
+/// Voice backend used for transcription.
+#[derive(Clone, Debug)]
+pub enum VoiceBackend {
+    /// Local TranscriptionSuite server (OpenAI-compatible endpoint).
+    TranscriptionSuite {
+        base_url: String,
+        bearer_token: Option<String>,
+    },
 }
 
-/// Download whisper model if not present. Returns path to model file.
-pub async fn ensure_model() -> Result<PathBuf, String> {
-    let dir = model_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Create dir: {e}"))?;
-
-    let model_path = dir.join("ggml-base.en.bin");
-    if model_path.exists() {
-        return Ok(model_path);
+impl VoiceBackend {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::TranscriptionSuite { .. } => "TranscriptionSuite",
+        }
     }
+}
 
-    // Download from Hugging Face
-    let url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
-    let resp = reqwest::get(url).await.map_err(|e| format!("Download: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("Download failed: HTTP {}", resp.status()));
-    }
-    let bytes = resp.bytes().await.map_err(|e| format!("Read: {e}"))?;
-    std::fs::write(&model_path, &bytes).map_err(|e| format!("Write: {e}"))?;
-
-    Ok(model_path)
+/// Prepare a transcription backend.
+///
+/// Default behavior targets a local TranscriptionSuite server.
+pub async fn ensure_model() -> Result<VoiceBackend, String> {
+    let base_url = std::env::var("FORGE_TRANSCRIPTIONSUITE_URL")
+        .ok()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:9786".to_string());
+    let bearer_token = std::env::var("FORGE_TRANSCRIPTIONSUITE_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Ok(VoiceBackend::TranscriptionSuite {
+        base_url,
+        bearer_token,
+    })
 }
 
 /// Audio recorder using cpal
@@ -69,14 +76,19 @@ impl Recorder {
 
         self.sample_rate = config.sample_rate().0;
         self.channels = config.channels();
-        self.samples.lock().unwrap().clear();
+        self.samples
+            .lock()
+            .map_err(|_| "Audio lock poisoned".to_string())?
+            .clear();
         let samples = Arc::clone(&self.samples);
 
         let stream = device
             .build_input_stream(
                 &config.into(),
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    samples.lock().unwrap().extend_from_slice(data);
+                    if let Ok(mut guard) = samples.lock() {
+                        guard.extend_from_slice(data);
+                    }
                 },
                 |err| tracing::warn!("Audio capture error: {err}"),
                 None,
@@ -90,8 +102,10 @@ impl Recorder {
 
     pub fn stop(&mut self) -> Vec<f32> {
         self.stream = None; // Drop stops the stream
-        let samples = self.samples.lock().unwrap().clone();
-        samples
+        self.samples
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default()
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -104,7 +118,10 @@ impl Recorder {
 
     /// Get current samples for interim transcription (non-destructive)
     pub fn current_samples(&self) -> Vec<f32> {
-        self.samples.lock().unwrap().clone()
+        self.samples
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -144,108 +161,112 @@ fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
     out
 }
 
-/// Prepare raw audio for whisper: convert to mono and resample to 16kHz
+/// Prepare raw audio: convert to mono and resample to 16kHz
 pub fn prepare_audio(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<f32> {
     let mono = to_mono(samples, channels);
     resample(&mono, sample_rate, 16000)
 }
 
-/// Transcribe PCM audio using whisper-rs (fully local)
+fn write_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
+    let mut out = Vec::with_capacity(44 + samples.len() * 2);
+    let bytes_per_sample = 2u16;
+    let channels = 1u16;
+    let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
+    let block_align = channels * bytes_per_sample;
+    let data_len = (samples.len() * bytes_per_sample as usize) as u32;
+
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes()); // PCM header size
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&channels.to_le_bytes());
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&byte_rate.to_le_bytes());
+    out.extend_from_slice(&block_align.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits/sample
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+
+    for &sample in samples {
+        let clamped = sample.clamp(-1.0, 1.0);
+        let v = (clamped * i16::MAX as f32) as i16;
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+
+    std::fs::write(path, out).map_err(|e| format!("Write WAV: {e}"))
+}
+
+fn transcribe_transcriptionsuite(
+    base_url: &str,
+    bearer_token: Option<&str>,
+    audio: &[f32],
+) -> Result<String, String> {
+    let temp_path = std::env::temp_dir().join(format!(
+        "forge-transcribe-{}.wav",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("Clock: {e}"))?
+            .as_millis()
+    ));
+    write_wav(&temp_path, audio, 16_000)?;
+
+    let bytes = std::fs::read(&temp_path).map_err(|e| format!("Read temp WAV: {e}"))?;
+    let _ = std::fs::remove_file(&temp_path);
+
+    let endpoint = format!("{}/v1/audio/transcriptions", base_url.trim_end_matches('/'));
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Build runtime: {e}"))?;
+
+    rt.block_on(async move {
+        let client = reqwest::Client::new();
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name("dictation.wav")
+            .mime_str("audio/wav")
+            .map_err(|e| format!("MIME: {e}"))?;
+        let form = reqwest::multipart::Form::new()
+            .part("file", part)
+            .text("model", "transcriptionsuite-1")
+            .text("response_format", "text");
+
+        let mut req = client.post(endpoint).multipart(form);
+        if let Some(token) = bearer_token {
+            req = req.bearer_auth(token);
+        }
+
+        let resp = req.send().await.map_err(|e| format!("Send request: {e}"))?;
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| format!("Read response: {e}"))?;
+
+        if !status.is_success() {
+            let snippet = body.chars().take(220).collect::<String>();
+            return Err(format!("TranscriptionSuite HTTP {status}: {snippet}"));
+        }
+
+        Ok(body.trim().to_string())
+    })
+}
+
+/// Transcribe PCM audio using the selected backend.
 pub fn transcribe(
-    model_path: &std::path::Path,
+    backend: &VoiceBackend,
     samples: &[f32],
     sample_rate: u32,
     channels: u16,
 ) -> Result<String, String> {
-    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
-
     let audio = prepare_audio(samples, sample_rate, channels);
 
     if audio.is_empty() {
         return Ok(String::new());
     }
 
-    // Suppress ALL whisper.cpp output (stdout + stderr) during the entire
-    // transcription. GGML/Metal init, state creation, and inference all dump
-    // verbose logs that flood the TUI.
-    #[cfg(unix)]
-    let (stdout_guard, stderr_guard) = {
-        use std::os::unix::io::AsRawFd;
-        let old_out = unsafe { libc::dup(1) };
-        let old_err = unsafe { libc::dup(2) };
-        if let Ok(devnull) = std::fs::File::open("/dev/null") {
-            let fd = devnull.as_raw_fd();
-            unsafe {
-                libc::dup2(fd, 1);
-                libc::dup2(fd, 2);
-            }
-        }
-        (old_out, old_err)
-    };
-
-    let result = (|| -> Result<(WhisperContext, _), String> {
-        let ctx = WhisperContext::new_with_params(
-            model_path.to_str().unwrap_or(""),
-            WhisperContextParameters::default(),
-        )
-        .map_err(|e| format!("Load model: {e}"))?;
-
-        let state = ctx
-            .create_state()
-            .map_err(|e| format!("Create state: {e}"))?;
-
-        Ok((ctx, state))
-    })();
-
-    let (_ctx, mut state) = match result {
-        Ok(v) => v,
-        Err(e) => {
-            // Restore before returning error
-            #[cfg(unix)]
-            unsafe {
-                libc::dup2(stdout_guard, 1); libc::close(stdout_guard);
-                libc::dup2(stderr_guard, 2); libc::close(stderr_guard);
-            }
-            return Err(e);
-        }
-    };
-
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_language(Some("en"));
-    params.set_print_special(false);
-    params.set_print_progress(false);
-    params.set_print_realtime(false);
-    params.set_print_timestamps(false);
-    params.set_single_segment(false);
-    params.set_no_context(true);
-    // Speed optimizations for real-time
-    params.set_n_threads(4);
-
-    state
-        .full(params, &audio)
-        .map_err(|e| format!("Transcribe: {e}"))?;
-
-    let mut text = String::new();
-    let n = state
-        .full_n_segments()
-        .map_err(|e| format!("Segments: {e}"))?;
-    for i in 0..n {
-        if let Ok(seg) = state.full_get_segment_text(i) {
-            text.push_str(&seg);
-        }
+    match backend {
+        VoiceBackend::TranscriptionSuite {
+            base_url,
+            bearer_token,
+        } => transcribe_transcriptionsuite(base_url, bearer_token.as_deref(), &audio),
     }
-
-    // Drop whisper state and context BEFORE restoring stdout/stderr.
-    // Metal cleanup (ggml_metal_free) logs on drop, so keep fd suppressed.
-    drop(state);
-    drop(_ctx);
-
-    // NOW restore stdout + stderr
-    #[cfg(unix)]
-    unsafe {
-        libc::dup2(stdout_guard, 1); libc::close(stdout_guard);
-        libc::dup2(stderr_guard, 2); libc::close(stderr_guard);
-    }
-
-    Ok(text.trim().to_string())
 }

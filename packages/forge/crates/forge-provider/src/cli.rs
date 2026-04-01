@@ -12,6 +12,10 @@ pub struct CliProvider {
     cli_kind: CliKind,
     cli_path: String,
     model: String,
+    /// Persistent Codex thread id for `codex exec resume` across turns.
+    codex_session_id: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// Persistent Claude session id captured from stream-json (`session_id`).
+    claude_session_id: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -22,11 +26,25 @@ pub enum CliKind {
 }
 
 impl CliProvider {
+    fn clamp_cli_output(s: &str, max_chars: usize) -> String {
+        let mut out = String::new();
+        for (i, ch) in s.chars().enumerate() {
+            if i >= max_chars {
+                out.push_str("\n... [truncated]");
+                break;
+            }
+            out.push(ch);
+        }
+        out
+    }
+
     pub fn new(kind: CliKind, cli_path: String, model: String) -> Self {
         Self {
             cli_kind: kind,
             cli_path,
             model,
+            codex_session_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            claude_session_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -39,6 +57,7 @@ impl CliProvider {
                     prompt.to_string(),
                     "--output-format".to_string(),
                     "stream-json".to_string(),
+                    "--include-partial-messages".to_string(),
                     "--verbose".to_string(),
                 ];
                 if !self.model.is_empty() {
@@ -51,11 +70,7 @@ impl CliProvider {
                 args
             }
             CliKind::Codex => {
-                let mut args = vec![
-                    "exec".to_string(),
-                    "--json".to_string(),
-                    "--skip-git-repo-check".to_string(),
-                ];
+                let mut args = vec!["exec".to_string(), "--json".to_string()];
                 if !self.model.is_empty() {
                     args.push("--model".to_string());
                     args.push(self.model.clone());
@@ -66,6 +81,7 @@ impl CliProvider {
                     // full-auto avoids interactive approval prompts
                     args.push("--full-auto".to_string());
                 }
+                args.push("--skip-git-repo-check".to_string());
                 args.push(prompt.to_string());
                 args
             }
@@ -82,79 +98,120 @@ impl CliProvider {
     }
 
     /// Build prompt for CLI providers.
-    /// Sends system prompt (identity) + latest user message only.
-    /// Skips conversation history — CLI manages its own context.
+    /// Includes system prompt + bounded conversation history + latest user message.
+    /// CLI invocations are one-shot processes, so we must replay prior context.
     fn build_prompt(messages: &[Message], opts: &CompletionOpts) -> String {
+        fn truncate_chars(s: &str, max_chars: usize) -> String {
+            let mut out = String::new();
+            for (i, ch) in s.chars().enumerate() {
+                if i >= max_chars {
+                    out.push_str("... (truncated)");
+                    break;
+                }
+                out.push(ch);
+            }
+            out
+        }
+
+        const MAX_HISTORY_MESSAGES: usize = 24;
+        const MAX_TOOL_RESULT_CHARS: usize = 2_000;
+        const MAX_HISTORY_CHARS: usize = 32_000;
+
         let mut parts = Vec::new();
 
         // System prompt carries identity (SOUL.md, IDENTITY.md, etc.)
         if let Some(system) = &opts.system_prompt {
-            parts.push(format!("<system>\n{system}\n</system>"));
-        }
-
-        // Only the latest user message — no conversation history replay
-        if let Some(last) = messages.iter().rev().find(|m| m.role == Role::User) {
-            for content in &last.content {
-                if let MessageContent::Text { text } = content {
-                    parts.push(text.clone());
-                }
+            if !system.trim().is_empty() {
+                parts.push(format!("<system>\n{system}\n</system>"));
             }
         }
 
-        if !parts.is_empty() {
-            return parts.join("\n\n");
-        }
+        let history_msgs: Vec<&Message> = messages.iter().filter(|m| m.role != Role::System).collect();
+        let latest_user_idx = history_msgs.iter().rposition(|m| m.role == Role::User);
 
-        // Fallback: build full prompt if nothing else worked
-        let mut parts = Vec::new();
-        let history_msgs: Vec<&Message> = messages
-            .iter()
-            .filter(|m| m.role != Role::System)
-            .collect();
+        if let Some(last_idx) = latest_user_idx {
+            let start = last_idx.saturating_sub(MAX_HISTORY_MESSAGES);
+            let mut history_lines = Vec::new();
+            let mut history_chars = 0usize;
 
-        if history_msgs.len() > 1 {
-            parts.push("<conversation_history>".to_string());
-            for msg in &history_msgs[..history_msgs.len() - 1] {
+            for msg in &history_msgs[start..last_idx] {
                 let role_label = match msg.role {
                     Role::User => "User",
                     Role::Assistant => "Assistant",
                     Role::System => continue,
                 };
                 for content in &msg.content {
-                    match content {
-                        MessageContent::Text { text } => {
-                            parts.push(format!("{role_label}: {text}"));
-                        }
-                        MessageContent::ToolUse { name, input, .. } => {
-                            parts.push(format!(
-                                "Assistant [tool: {name}]: {}",
-                                serde_json::to_string(input).unwrap_or_default()
-                            ));
-                        }
+                    let line = match content {
+                        MessageContent::Text { text } => format!("{role_label}: {text}"),
+                        MessageContent::ToolUse { name, input, .. } => format!(
+                            "Assistant [tool: {name}]: {}",
+                            serde_json::to_string(input).unwrap_or_default()
+                        ),
                         MessageContent::ToolResult { content, .. } => {
-                            let truncated = if content.len() > 2000 {
-                                format!("{}... (truncated)", &content[..2000])
-                            } else {
-                                content.clone()
-                            };
-                            parts.push(format!("Tool result: {truncated}"));
+                            format!(
+                                "Tool result: {}",
+                                truncate_chars(content, MAX_TOOL_RESULT_CHARS)
+                            )
                         }
+                    };
+
+                    let next_len = history_chars.saturating_add(line.chars().count());
+                    if next_len > MAX_HISTORY_CHARS {
+                        history_lines.push("... older conversation truncated ...".to_string());
+                        break;
                     }
+                    history_chars = next_len;
+                    history_lines.push(line);
+                }
+
+                if history_chars > MAX_HISTORY_CHARS {
+                    break;
                 }
             }
-            parts.push("</conversation_history>".to_string());
-        }
 
-        // Latest user message
-        if let Some(last) = history_msgs.last() {
-            for content in &last.content {
+            if !history_lines.is_empty() {
+                parts.push("<conversation_history>".to_string());
+                parts.extend(history_lines);
+                parts.push("</conversation_history>".to_string());
+            }
+
+            // Latest user prompt
+            for content in &history_msgs[last_idx].content {
                 if let MessageContent::Text { text } = content {
                     parts.push(text.clone());
+                }
+            }
+        } else {
+            // Fallback: no user message found, include any text content.
+            for msg in &history_msgs {
+                for content in &msg.content {
+                    if let MessageContent::Text { text } = content {
+                        parts.push(text.clone());
+                    }
                 }
             }
         }
 
         parts.join("\n\n")
+    }
+
+    /// Latest user text only (for resumed Codex threads).
+    fn latest_user_prompt(messages: &[Message]) -> String {
+        messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::User)
+            .map(|m| {
+                m.content
+                    .iter()
+                    .filter_map(|c| match c {
+                        MessageContent::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -195,7 +252,74 @@ impl Provider for CliProvider {
         opts: &CompletionOpts,
     ) -> Result<CompletionStream, ForgeError> {
         let prompt = Self::build_prompt(messages, opts);
-        let args = self.build_args(&prompt, opts);
+        let args = match self.cli_kind {
+            CliKind::Codex => {
+                let session_id = self
+                    .codex_session_id
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.clone());
+                let is_resume = session_id.is_some();
+
+                let mut args = vec!["exec".to_string()];
+                if let Some(id) = session_id {
+                    args.push("resume".to_string());
+                    args.push(id);
+                }
+                args.push("--json".to_string());
+                if !self.model.is_empty() {
+                    args.push("--model".to_string());
+                    args.push(self.model.clone());
+                }
+                if opts.bypass {
+                    args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+                } else {
+                    // full-auto avoids interactive approval prompts
+                    args.push("--full-auto".to_string());
+                }
+                args.push("--skip-git-repo-check".to_string());
+                if is_resume {
+                    args.push(Self::latest_user_prompt(messages));
+                } else {
+                    args.push(prompt.clone());
+                }
+                args
+            }
+            CliKind::Claude => {
+                let session_id = self
+                    .claude_session_id
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.clone());
+                let is_resume = session_id.is_some();
+
+                let mut args = vec![
+                    "-p".to_string(),
+                    if is_resume {
+                        Self::latest_user_prompt(messages)
+                    } else {
+                        prompt.clone()
+                    },
+                    "--output-format".to_string(),
+                    "stream-json".to_string(),
+                    "--include-partial-messages".to_string(),
+                    "--verbose".to_string(),
+                ];
+                if let Some(id) = session_id {
+                    args.push("--resume".to_string());
+                    args.push(id);
+                }
+                if !self.model.is_empty() {
+                    args.push("--model".to_string());
+                    args.push(self.model.clone());
+                }
+                if opts.bypass {
+                    args.push("--dangerously-skip-permissions".to_string());
+                }
+                args
+            }
+            CliKind::Gemini => self.build_args(&prompt, opts),
+        };
 
         debug!(
             "Spawning CLI via PTY: {} {}",
@@ -241,6 +365,8 @@ impl Provider for CliProvider {
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(256);
         let cli_kind = self.cli_kind;
+        let codex_session_id = self.codex_session_id.clone();
+        let claude_session_id = self.claude_session_id.clone();
 
         // Spawn a watcher thread: when the child exits, drop the PTY master
         // to send EOF to the reader thread (prevents hanging on macOS).
@@ -340,11 +466,17 @@ impl Provider for CliProvider {
                     CliKind::Claude => {
                         let parsed: serde_json::Value = match serde_json::from_str(&line) {
                             Ok(v) => v,
-                            Err(_) => {
+                            Err(err) => {
+                                debug!("Claude CLI emitted non-JSON line (passing through): {err}; line={line}");
                                 send!(StreamEvent::TextDelta(format!("{line}\n")));
                                 continue;
                             }
                         };
+                        if let Some(id) = parsed.get("session_id").and_then(|v| v.as_str()) {
+                            if let Ok(mut guard) = claude_session_id.lock() {
+                                *guard = Some(id.to_string());
+                            }
+                        }
 
                         let event_type = parsed
                             .get("type")
@@ -370,6 +502,13 @@ impl Provider for CliProvider {
                                             }
                                         }
                                     }
+                                }
+                                let stop_reason = parsed
+                                    .pointer("/message/stop_reason")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                if stop_reason == "end_turn" {
+                                    break 'outer;
                                 }
                             }
                             "content_block_start" => {
@@ -436,6 +575,7 @@ impl Provider for CliProvider {
                                         else { v.to_string() }
                                     })
                                     .unwrap_or_default();
+                                let output = Self::clamp_cli_output(&output, 20_000);
                                 let is_error = parsed.get("is_error")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
@@ -460,6 +600,19 @@ impl Provider for CliProvider {
                                 }
                             }
                             "result" => {
+                                let is_error = parsed
+                                    .get("is_error")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                if is_error {
+                                    let err = parsed
+                                        .get("result")
+                                        .and_then(|v| v.as_str())
+                                        .or_else(|| parsed.get("error").and_then(|v| v.as_str()))
+                                        .unwrap_or("Claude CLI returned an error");
+                                    send!(StreamEvent::Error(err.to_string()));
+                                    break 'outer;
+                                }
                                 // Only send text if not already sent via assistant event
                                 if !claude_text_sent {
                                     if let Some(result) = parsed.get("result").and_then(|v| v.as_str()) {
@@ -476,7 +629,8 @@ impl Provider for CliProvider {
                     CliKind::Codex => {
                         let parsed: serde_json::Value = match serde_json::from_str(&line) {
                             Ok(v) => v,
-                            Err(_) => {
+                            Err(err) => {
+                                debug!("Codex CLI emitted non-JSON line (passing through): {err}; line={line}");
                                 let _ = tx.blocking_send(StreamEvent::TextDelta(format!("{line}\n")));
                                 continue;
                             }
@@ -488,6 +642,44 @@ impl Provider for CliProvider {
                             .unwrap_or("");
 
                         match event_type {
+                            "thread.started" => {
+                                if let Some(id) = parsed.get("thread_id").and_then(|v| v.as_str()) {
+                                    if let Ok(mut guard) = codex_session_id.lock() {
+                                        *guard = Some(id.to_string());
+                                    }
+                                }
+                                send!(StreamEvent::Status("connecting".to_string()));
+                            }
+                            "turn.started" => {
+                                send!(StreamEvent::Status("thinking".to_string()));
+                            }
+                            "item.started" => {
+                                if let Some(item) = parsed.get("item") {
+                                    let item_type =
+                                        item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                                    if item_type == "command_execution" {
+                                        let item_id = item
+                                            .get("id")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let command = item
+                                            .get("command")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        if !command.is_empty() {
+                                            send!(StreamEvent::ToolUseStart {
+                                                id: item_id.to_string(),
+                                                name: "shell".to_string(),
+                                            });
+                                            send!(StreamEvent::ToolUseInput(
+                                                serde_json::json!({ "command": command }).to_string()
+                                            ));
+                                            send!(StreamEvent::ToolUseEnd);
+                                        }
+                                    }
+                                }
+                            }
                             // Early notification — tool is starting
                             "item.created" => {
                                 if let Some(item) = parsed.get("item") {
@@ -511,6 +703,25 @@ impl Provider for CliProvider {
                                 if let Some(item) = parsed.get("item") {
                                     let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
                                     match item_type {
+                                        "command_execution" => {
+                                            let output = item
+                                                .get("aggregated_output")
+                                                .or_else(|| item.get("output"))
+                                                .and_then(|o| o.as_str())
+                                                .unwrap_or("")
+                                            .to_string();
+                                            let exit_code = item
+                                                .get("exit_code")
+                                                .and_then(|v| v.as_i64())
+                                                .unwrap_or(0);
+                                            let is_error = exit_code != 0;
+                                            let output = Self::clamp_cli_output(&output, 20_000);
+                                            send!(StreamEvent::ToolResult {
+                                                name: "shell".to_string(),
+                                                output,
+                                                is_error,
+                                            });
+                                        }
                                         "message" => {
                                             // Extract text from content array
                                             if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
@@ -547,9 +758,10 @@ impl Provider for CliProvider {
                                                 .cloned()
                                                 .unwrap_or_else(|| "tool".to_string());
                                             let output = item.get("output").and_then(|o| o.as_str()).unwrap_or("");
+                                            let output = Self::clamp_cli_output(output, 20_000);
                                             send!(StreamEvent::ToolResult {
                                                 name,
-                                                output: output.to_string(),
+                                                output,
                                                 is_error: false,
                                             });
                                         }
@@ -651,6 +863,82 @@ impl Provider for CliProvider {
                 }
                 } // end while let Some(nl) — line splitting
             } // end 'outer loop — chunk reading
+
+            // Process any non-newline-terminated trailing line to avoid
+            // dropping terminal JSON events at EOF.
+            let trailing = strip_ansi(leftover.trim());
+            if !trailing.is_empty() {
+                match cli_kind {
+                    CliKind::Claude => {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&trailing) {
+                            if let Some(id) = parsed.get("session_id").and_then(|v| v.as_str()) {
+                                if let Ok(mut guard) = claude_session_id.lock() {
+                                    *guard = Some(id.to_string());
+                                }
+                            }
+                            let event_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            if event_type == "assistant" {
+                                if let Some(content) = parsed.pointer("/message/content").and_then(|v| v.as_array())
+                                {
+                                    for block in content {
+                                        if block.get("type").and_then(|v| v.as_str()) == Some("text") {
+                                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                                if !text.is_empty() {
+                                                    let _ = tx.blocking_send(StreamEvent::TextDelta(text.to_string()));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if event_type == "result" {
+                                let is_error =
+                                    parsed.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+                                if is_error {
+                                    let err = parsed
+                                        .get("result")
+                                        .and_then(|v| v.as_str())
+                                        .or_else(|| parsed.get("error").and_then(|v| v.as_str()))
+                                        .unwrap_or("Claude CLI returned an error");
+                                    let _ = tx.blocking_send(StreamEvent::Error(err.to_string()));
+                                } else if let Some(result) =
+                                    parsed.get("result").and_then(|v| v.as_str())
+                                {
+                                    if !result.is_empty() {
+                                        let _ = tx.blocking_send(StreamEvent::TextDelta(result.to_string()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    CliKind::Codex => {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&trailing) {
+                            let event_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            if event_type == "turn.completed" {
+                                if let Some(usage) = parsed.get("usage") {
+                                    let input = usage
+                                        .get("input_tokens")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0) as usize;
+                                    let output = usage
+                                        .get("output_tokens")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0) as usize;
+                                    let _ = tx.blocking_send(StreamEvent::Usage(TokenUsage {
+                                        input_tokens: input,
+                                        output_tokens: output,
+                                        ..Default::default()
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    CliKind::Gemini => {
+                        if !trailing.is_empty() {
+                            let _ = tx.blocking_send(StreamEvent::TextDelta(format!("{trailing}\n")));
+                        }
+                    }
+                }
+            }
 
             // Reader loop exited (EOF from master drop or process exit)
             let _ = tx.blocking_send(StreamEvent::Done);

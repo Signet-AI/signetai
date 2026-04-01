@@ -2,6 +2,7 @@
 import TaskBoard from "$lib/components/tasks/TaskBoard.svelte";
 import TaskDetail from "$lib/components/tasks/TaskDetail.svelte";
 import TaskForm from "$lib/components/tasks/TaskForm.svelte";
+import { getForgeTaskTelemetry, type ForgeTaskTelemetryResponse } from "$lib/api";
 import { returnToSidebar, setFocusZone } from "$lib/stores/focus.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
 import {
@@ -212,6 +213,34 @@ function focusTaskCard(columnIndex: number, taskIndex: number): void {
 
 // Auto-refresh every 15s while tab is visible
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
+let forgeSessionKey = $state("");
+let forgeKind = $state("");
+let forgePhase = $state("");
+let forgeName = $state("");
+let forgeSince = $state("");
+let forgePolicyDeniedOnly = $state(false);
+let forgeTelemetry = $state<ForgeTaskTelemetryResponse | null>(null);
+let forgeTelemetryLoading = $state(false);
+
+async function refreshForgeTelemetry() {
+	if (!forgeSessionKey.trim()) {
+		forgeTelemetry = null;
+		return;
+	}
+	forgeTelemetryLoading = true;
+	try {
+		forgeTelemetry = await getForgeTaskTelemetry(forgeSessionKey.trim(), {
+			limit: 100,
+			kind: forgeKind.trim() || undefined,
+			phase: forgePhase.trim() || undefined,
+			name: forgeName.trim() || undefined,
+			since: forgeSince.trim() || undefined,
+			policyDeniedOnly: forgePolicyDeniedOnly,
+		});
+	} finally {
+		forgeTelemetryLoading = false;
+	}
+}
 
 onMount(() => {
 	fetchTasks();
@@ -237,6 +266,28 @@ const taskCount = $derived(ts.tasks.length);
 			<Plus class="size-3" />
 			<span>NEW TASK</span>
 		</button>
+	</div>
+
+	<div class="forge-telemetry-panel">
+		<div class="forge-telemetry-row">
+			<input class="forge-input session" placeholder="Forge session key" bind:value={forgeSessionKey} />
+			<input class="forge-input" placeholder="kind" bind:value={forgeKind} />
+			<input class="forge-input" placeholder="phase" bind:value={forgePhase} />
+			<input class="forge-input" placeholder="name" bind:value={forgeName} />
+			<input class="forge-input since" placeholder="since (ISO)" bind:value={forgeSince} />
+			<label class="forge-checkbox">
+				<input type="checkbox" bind:checked={forgePolicyDeniedOnly} />
+				<span>policy denied</span>
+			</label>
+			<button class="forge-fetch-btn" onclick={refreshForgeTelemetry}>FETCH</button>
+		</div>
+		{#if forgeTelemetryLoading}
+			<div class="forge-telemetry-meta">loading telemetry...</div>
+		{:else if forgeTelemetry}
+			<div class="forge-telemetry-meta">
+				{forgeTelemetry.count} events • source {forgeTelemetry.schema}
+			</div>
+		{/if}
 	</div>
 
 	<!-- Board -->
@@ -375,6 +426,70 @@ const taskCount = $derived(ts.tasks.length);
 		background: var(--sig-surface-raised);
 		border: 1px solid var(--sig-border);
 		border-radius: 2px;
+		color: var(--sig-text-muted);
+	}
+
+	.forge-telemetry-panel {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 8px 12px;
+		border-bottom: 1px solid var(--sig-border);
+		background: var(--sig-surface-0);
+	}
+
+	.forge-telemetry-row {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+
+	.forge-input {
+		height: 24px;
+		padding: 0 8px;
+		border: 1px solid var(--sig-border);
+		background: var(--sig-surface-1);
+		color: var(--sig-text);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		min-width: 70px;
+	}
+	.forge-input.session {
+		min-width: 180px;
+	}
+	.forge-input.since {
+		min-width: 180px;
+	}
+
+	.forge-checkbox {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-family: var(--font-mono);
+		font-size: 9px;
+		color: var(--sig-text-muted);
+	}
+
+	.forge-fetch-btn {
+		height: 24px;
+		padding: 0 10px;
+		background: transparent;
+		border: 1px solid var(--sig-border-strong);
+		color: var(--sig-text-muted);
+		font-family: var(--font-mono);
+		font-size: 9px;
+		letter-spacing: 0.06em;
+		cursor: pointer;
+	}
+	.forge-fetch-btn:hover {
+		color: var(--sig-highlight);
+		border-color: var(--sig-highlight);
+	}
+
+	.forge-telemetry-meta {
+		font-family: var(--font-mono);
+		font-size: 9px;
 		color: var(--sig-text-muted);
 	}
 

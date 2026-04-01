@@ -5,5 +5,6 @@ pub mod dashboard_panel;
 pub mod forge_usage;
 pub mod keybind_editor;
 pub mod model_picker;
+pub mod policy_panel;
 pub mod session_browser;
 pub mod signet_commands;

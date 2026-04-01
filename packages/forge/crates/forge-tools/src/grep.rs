@@ -1,4 +1,5 @@
 use crate::Tool;
+use crate::policy::WorkspacePolicy;
 use async_trait::async_trait;
 use forge_core::{ToolCall, ToolDefinition, ToolPermission, ToolResult};
 use serde_json::json;
@@ -53,10 +54,15 @@ impl Tool for GrepTool {
             .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or(".");
+        let policy = WorkspacePolicy::from_env();
+        let path = match policy.ensure_path_allowed(path) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error(&call.id, e),
+        };
 
         let file_glob = call.input.get("glob").and_then(|v| v.as_str());
 
-        debug!("Grepping: pattern={pattern}, path={path}");
+        debug!("Grepping: pattern={pattern}, path={}", path.display());
 
         // Try ripgrep first, fall back to grep
         let mut cmd = if which_exists("rg") {
@@ -68,14 +74,14 @@ impl Tool for GrepTool {
             if let Some(g) = file_glob {
                 c.arg("--glob").arg(g);
             }
-            c.arg(pattern).arg(path);
+            c.arg(pattern).arg(&path);
             c
         } else {
             let mut c = Command::new("grep");
             c.arg("-rn")
                 .arg("--max-count=100")
                 .arg(pattern)
-                .arg(path);
+                .arg(&path);
             c
         };
 

@@ -1,4 +1,5 @@
 use crate::Tool;
+use crate::policy::WorkspacePolicy;
 use async_trait::async_trait;
 use forge_core::{ToolCall, ToolDefinition, ToolPermission, ToolResult};
 use serde_json::json;
@@ -50,12 +51,17 @@ impl Tool for BashTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(120_000)
             .min(600_000);
+        let policy = WorkspacePolicy::from_env();
+        if let Err(e) = policy.is_command_allowed(command) {
+            return ToolResult::error(&call.id, e);
+        }
 
         debug!("Executing bash command: {command}");
 
         let child = match Command::new("bash")
             .arg("-c")
             .arg(command)
+            .current_dir(&policy.workspace_root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()

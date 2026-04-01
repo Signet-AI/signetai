@@ -112,6 +112,12 @@ import { buildEmbeddingHealth } from "./embedding-health";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
+import {
+	getForgeTaskTelemetrySnapshot,
+	ingestForgeTaskTelemetry,
+	listForgeTaskTelemetry,
+	subscribeForgeTaskTelemetry,
+} from "./forge-task-telemetry";
 import { walkImpact } from "./graph-impact";
 import { syncAgentWorkspaces } from "./identity-sync";
 import { linkMemoryToEntities } from "./inline-entity-linker";
@@ -5322,6 +5328,11 @@ app.get("/api/connectors/:id/health", (c) => {
 });
 
 import { type ReconcilerHandle, startReconciler } from "./pipeline/skill-reconciler.js";
+// Skill analytics routes must mount before skills routes so that
+// /api/skills/analytics is matched before the /api/skills/:name wildcard.
+import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
+mountSkillAnalyticsRoutes(app, authConfig.mode);
+
 // Skills routes (extracted to routes/skills.ts)
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 mountSkillsRoutes(app, authConfig.mode);
@@ -5333,9 +5344,6 @@ mountMarketplaceRoutes(app, authConfig.mode);
 
 import { mountMcpAnalyticsRoutes } from "./routes/mcp-analytics.js";
 mountMcpAnalyticsRoutes(app, authConfig.mode);
-
-import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
-mountSkillAnalyticsRoutes(app, authConfig.mode);
 
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 mountAppTrayRoutes(app);
@@ -6371,6 +6379,180 @@ app.post("/api/hooks/compaction-complete", async (c) => {
 		logger.error("hooks", "Compaction complete failed", e as Error);
 		return c.json({ error: "Failed to save summary" }, 500);
 	}
+});
+
+// Forge task telemetry hook (optional, non-blocking ingest for harness events)
+app.post("/api/hooks/task-telemetry", async (c) => {
+	if (isInternalCall(c)) {
+		return c.json({ ok: true, skipped: true });
+	}
+	try {
+		const body = (await c.req.json()) as {
+			harness?: string;
+			sessionId?: string;
+			sessionKey?: string;
+			event?: unknown;
+			runtimePath?: "plugin" | "legacy";
+		};
+		if (
+			typeof body.harness !== "string" ||
+			body.harness.length === 0 ||
+			typeof body.sessionId !== "string" ||
+			body.sessionId.length === 0 ||
+			body.event == null
+		) {
+			return c.json({ error: "harness, sessionId, and event are required" }, 400);
+		}
+
+		const runtimePath = resolveRuntimePath(c, body);
+		if (runtimePath) body.runtimePath = runtimePath;
+
+		const sessionKey = parseOptionalString(body.sessionKey) ?? body.sessionId;
+		const conflict = checkSessionClaim(c, sessionKey, runtimePath);
+		if (conflict) return conflict;
+
+		stampHarness(body.harness);
+		if (checkBypass({ sessionKey, sessionId: body.sessionId })) {
+			return c.json({ ok: true, bypassed: true });
+		}
+
+		ingestForgeTaskTelemetry({
+			sessionKey: normalizeSessionKey(sessionKey),
+			harness: body.harness,
+			event: body.event,
+			receivedAt: new Date().toISOString(),
+		});
+		return c.json({ ok: true });
+	} catch (e) {
+		logger.error("hooks", "Task telemetry hook failed", e as Error);
+		return c.json({ error: "Hook execution failed" }, 500);
+	}
+});
+
+app.get("/api/forge/tasks/:sessionKey", (c) => {
+	const sessionKey = normalizeSessionKey(c.req.param("sessionKey"));
+	const limitRaw = Number.parseInt(c.req.query("limit") ?? "200", 10);
+	const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 2_000) : 200;
+	const kind = parseOptionalString(c.req.query("kind"));
+	const phase = parseOptionalString(c.req.query("phase"));
+	const name = parseOptionalString(c.req.query("name"));
+	const since = parseOptionalString(c.req.query("since"));
+	const afterCursorRaw = parseOptionalString(c.req.query("afterCursor"));
+	const afterCursor =
+		afterCursorRaw && Number.isFinite(Number(afterCursorRaw))
+			? Number(afterCursorRaw)
+			: undefined;
+	const policyDeniedOnly = c.req.query("policyDeniedOnly") === "1" || c.req.query("policyDeniedOnly") === "true";
+	const events = listForgeTaskTelemetry({
+		sessionKey,
+		limit,
+		kind: kind ?? undefined,
+		phase: phase ?? undefined,
+		name: name ?? undefined,
+		since: since ?? undefined,
+		afterCursor,
+		policyDeniedOnly,
+	});
+	return c.json({
+		schema: "forge.tasks.stream.v1",
+		sessionKey,
+		count: events.length,
+		filters: {
+			kind: kind ?? null,
+			phase: phase ?? null,
+			name: name ?? null,
+			since: since ?? null,
+			afterCursor: afterCursor ?? null,
+			policyDeniedOnly,
+			limit,
+		},
+		events,
+	});
+});
+
+app.get("/api/forge/tasks/:sessionKey/stream", (c) => {
+	const sessionKey = normalizeSessionKey(c.req.param("sessionKey"));
+	const kind = parseOptionalString(c.req.query("kind"));
+	const phase = parseOptionalString(c.req.query("phase"));
+	const name = parseOptionalString(c.req.query("name"));
+	const policyDeniedOnly = c.req.query("policyDeniedOnly") === "1" || c.req.query("policyDeniedOnly") === "true";
+	const encoder = new TextEncoder();
+	const matches = (event: { event: unknown }) => {
+		const raw = event.event;
+		if (!raw || typeof raw !== "object") return true;
+		const obj = raw as Record<string, unknown>;
+		if (kind && obj.kind !== kind) return false;
+		if (phase && obj.phase !== phase) return false;
+		if (name && obj.name !== name) return false;
+		if (policyDeniedOnly) {
+			const meta = obj.meta && typeof obj.meta === "object" ? (obj.meta as Record<string, unknown>) : null;
+			if (meta?.policy_denied !== true) return false;
+		}
+		return true;
+	};
+
+	const stream = new ReadableStream({
+		start(controller) {
+			let dead = false;
+			const cleanup = () => {
+				if (dead) return;
+				dead = true;
+				clearInterval(keepAlive);
+				unsubscribe();
+			};
+
+			const writeEvent = (event: unknown) => {
+				if (dead) return;
+				try {
+					const data = `data: ${JSON.stringify(event)}\n\n`;
+					controller.enqueue(encoder.encode(data));
+				} catch {
+					cleanup();
+				}
+			};
+
+			writeEvent({
+				type: "connected",
+				sessionKey,
+				filters: {
+					kind: kind ?? null,
+					phase: phase ?? null,
+					name: name ?? null,
+					policyDeniedOnly,
+				},
+				timestamp: new Date().toISOString(),
+			});
+
+			for (const event of getForgeTaskTelemetrySnapshot(sessionKey, 200)) {
+				if (!matches(event)) continue;
+				writeEvent({ type: "telemetry", ...event });
+			}
+
+			const unsubscribe = subscribeForgeTaskTelemetry(sessionKey, (event) => {
+				if (!matches(event)) return;
+				writeEvent({ type: "telemetry", ...event });
+			});
+
+			const keepAlive = setInterval(() => {
+				if (dead) return;
+				try {
+					controller.enqueue(encoder.encode(": keepalive\n\n"));
+				} catch {
+					cleanup();
+				}
+			}, 15_000);
+
+			c.req.raw.signal.addEventListener("abort", cleanup);
+		},
+	});
+
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+		},
+	});
 });
 
 const AGENT_MESSAGE_TYPES: readonly AgentMessageType[] = ["assist_request", "decision_update", "info", "question"];

@@ -112,6 +112,17 @@ export function getCatalogByName(): Map<string, SkillSearchResult> {
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
+const REQUEST_TIMEOUT_MS = 8000;
+
+async function withTimeout<T>(promise: Promise<T>, ms = REQUEST_TIMEOUT_MS): Promise<T> {
+	return await Promise.race([
+		promise,
+		new Promise<T>((_, reject) => {
+			setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+		}),
+	]);
+}
+
 function sortItems(items: readonly SkillSearchResult[], sortBy: SortBy): SkillSearchResult[] {
 	const sorted = [...items];
 	switch (sortBy) {
@@ -185,8 +196,13 @@ export function toggleCompare(skillKey: string): void {
 
 export async function fetchInstalled(): Promise<void> {
 	sk.loading = true;
-	sk.installed = await getSkills();
-	sk.loading = false;
+	try {
+		sk.installed = await withTimeout(getSkills());
+	} catch {
+		sk.installed = [];
+	} finally {
+		sk.loading = false;
+	}
 }
 
 export async function fetchCatalog(): Promise<void> {
@@ -208,12 +224,19 @@ export async function fetchCatalog(): Promise<void> {
 
 	// Cold load — no cache yet, show spinner and wait
 	sk.catalogLoading = true;
-	const data = await browseSkills();
-	sk.catalog = data.results;
-	sk.catalogTotal = data.total;
-	sk.catalogLoaded = true;
-	sk.catalogLoading = false;
-	saveCatalogCache(data.results, data.total);
+	try {
+		const data = await withTimeout(browseSkills());
+		sk.catalog = data.results;
+		sk.catalogTotal = data.total;
+		sk.catalogLoaded = true;
+		saveCatalogCache(data.results, data.total);
+	} catch {
+		sk.catalog = [];
+		sk.catalogTotal = 0;
+		sk.catalogLoaded = true;
+	} finally {
+		sk.catalogLoading = false;
+	}
 }
 
 export function setQuery(q: string): void {

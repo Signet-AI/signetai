@@ -31,6 +31,8 @@ pub struct AgentConfig {
     pub extraction_provider_flat: Option<String>,
     #[serde(default, rename = "extractionModel")]
     pub extraction_model_flat: Option<String>,
+    #[serde(default)]
+    pub agents: Option<AgentsConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -88,6 +90,43 @@ pub struct EmbeddingConfig {
     pub dimensions: Option<usize>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AgentsConfig {
+    #[serde(default)]
+    pub list: Vec<AgentWorkspaceConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AgentWorkspaceConfig {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default, alias = "workspacePath")]
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub policy: Option<AgentExecutionPolicy>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AgentExecutionPolicy {
+    /// Keep runtime scoped to the agent workspace.
+    #[serde(default, alias = "workspaceOnly")]
+    pub workspace_only: Option<bool>,
+    /// Optional write-tool allowlist auto-approved for this agent profile.
+    #[serde(default, alias = "autoApproveWriteTools")]
+    pub auto_approve_write_tools: Vec<String>,
+    /// Optional shell command allowlist metadata (surface + env propagation).
+    #[serde(default, alias = "allowedCommands")]
+    pub allowed_commands: Vec<String>,
+    /// Optional path allowlist metadata (surface + env propagation).
+    #[serde(default, alias = "allowedPaths")]
+    pub allowed_paths: Vec<String>,
+    /// Approval profile metadata (e.g. "strict", "balanced").
+    #[serde(default, alias = "approvalMode")]
+    pub approval_mode: Option<String>,
+}
+
 impl AgentConfig {
     /// Get the effective extraction provider (flat key takes precedence)
     pub fn extraction_provider(&self) -> Option<&str> {
@@ -142,11 +181,26 @@ impl AgentConfig {
             "extraction: {ext_model} ({ext_provider}) | embedding: {emb_model} ({emb_provider})"
         )
     }
+
+    /// Resolve a configured agent profile by CLI name/ID (case-insensitive).
+    pub fn find_agent_profile(&self, agent_name: &str) -> Option<&AgentWorkspaceConfig> {
+        self.agents
+            .as_ref()?
+            .list
+            .iter()
+            .find(|entry| {
+                entry
+                    .id
+                    .as_deref()
+                    .map(|id| normalize_agent_id(id) == normalize_agent_id(agent_name))
+                    .unwrap_or(false)
+            })
+    }
 }
 
 /// Load agent.yaml from the standard Signet location
 pub fn load_agent_config() -> Result<AgentConfig, ForgeError> {
-    let path = agent_yaml_path();
+    let path = home_dir_checked()?.join(".agents").join("agent.yaml");
     debug!("Loading agent config from {}", path.display());
 
     if !path.exists() {
@@ -189,19 +243,7 @@ pub fn load_identity_file(name: &str) -> Option<String> {
 /// Extract the agent name from IDENTITY.md (looks for **name:** or name: field)
 pub fn agent_name() -> String {
     load_identity_file("IDENTITY.md")
-        .and_then(|content| {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                // Match "**name:** Boogy" or "name: Boogy"
-                if let Some(rest) = trimmed.strip_prefix("**name:**") {
-                    return Some(rest.trim().to_string());
-                }
-                if let Some(rest) = trimmed.strip_prefix("name:") {
-                    return Some(rest.trim().to_string());
-                }
-            }
-            None
-        })
+        .and_then(|content| extract_identity_name(&content))
         .unwrap_or_else(|| "Assistant".to_string())
 }
 
@@ -219,7 +261,8 @@ pub fn agent_id() -> String {
 /// Load identity files for a specific named agent.
 /// Checks `~/.agents/agents/{name}/` first, falls back to root `~/.agents/`.
 pub fn load_agent_identity_files(agent_name: &str) -> Vec<(String, String)> {
-    let agent_dir = agents_dir().join("agents").join(agent_name);
+    let cfg = load_agent_config().ok();
+    let agent_dir = resolve_agent_workspace_path(agent_name, cfg.as_ref());
     let root_dir = agents_dir();
     let files = ["SOUL.md", "IDENTITY.md", "USER.md", "AGENTS.md"];
     let mut loaded = Vec::new();
@@ -294,6 +337,75 @@ pub fn build_identity_prompt() -> String {
     parts.join("\n\n")
 }
 
+/// Normalize user-supplied agent IDs into stable daemon keys.
+pub fn normalize_agent_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "default".to_string();
+    }
+    trimmed.to_lowercase()
+}
+
+/// Resolve the workspace path for a named agent.
+///
+/// Priority:
+/// 1) `agent.yaml -> agents.list[].workspace_path` (matching id)
+/// 2) default `~/.agents/agents/<agent>`
+pub fn resolve_agent_workspace_path(agent_name: &str, cfg: Option<&AgentConfig>) -> PathBuf {
+    if let Some(profile) = cfg.and_then(|c| c.find_agent_profile(agent_name)) {
+        if let Some(raw) = profile.workspace_path.as_deref() {
+            let expanded = expand_home(raw);
+            return if expanded.is_absolute() {
+                expanded
+            } else {
+                agents_dir().join(expanded)
+            };
+        }
+    }
+    agents_dir().join("agents").join(agent_name)
+}
+
+/// Ensure a named-agent workspace exists and contains Phase A scaffold files.
+///
+/// Files created if missing:
+/// - AGENTS.md
+/// - SOUL.md
+/// - IDENTITY.md
+/// - MEMORY.md
+pub fn ensure_agent_workspace_scaffold(
+    agent_name: &str,
+    cfg: Option<&AgentConfig>,
+) -> Result<PathBuf, ForgeError> {
+    let dir = resolve_agent_workspace_path(agent_name, cfg);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| ForgeError::config(format!("Failed to create agent workspace {}: {e}", dir.display())))?;
+
+    ensure_scaffold_file(&dir, "AGENTS.md", "## Agent Instructions\n\n")?;
+    ensure_scaffold_file(&dir, "SOUL.md", "## Soul\n\n")?;
+    ensure_scaffold_file(
+        &dir,
+        "IDENTITY.md",
+        &format!("name: {agent_name}\nrole: assistant\n"),
+    )?;
+    ensure_scaffold_file(&dir, "MEMORY.md", "# Working Memory\n\n")?;
+
+    Ok(dir)
+}
+
+/// Extract display name from IDENTITY.md in the named-agent workspace,
+/// falling back to root workspace, then "Assistant".
+pub fn agent_name_for(selected_agent: Option<&str>, cfg: Option<&AgentConfig>) -> String {
+    if let Some(agent_name) = selected_agent {
+        let dir = resolve_agent_workspace_path(agent_name, cfg);
+        if let Some(identity) = std::fs::read_to_string(dir.join("IDENTITY.md")).ok() {
+            if let Some(name) = extract_identity_name(&identity) {
+                return name;
+            }
+        }
+    }
+    agent_name()
+}
+
 /// Path to ~/.agents/agent.yaml
 pub fn agent_yaml_path() -> PathBuf {
     agents_dir().join("agent.yaml")
@@ -302,6 +414,95 @@ pub fn agent_yaml_path() -> PathBuf {
 /// Path to ~/.agents/
 pub fn agents_dir() -> PathBuf {
     dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(|| PathBuf::from(".agents-home-missing"))
         .join(".agents")
+}
+
+fn home_dir_checked() -> Result<PathBuf, ForgeError> {
+    dirs::home_dir().ok_or_else(|| {
+        ForgeError::config("HOME is not set; cannot resolve ~/.agents/agent.yaml")
+    })
+}
+
+fn ensure_scaffold_file(dir: &std::path::Path, name: &str, fallback_content: &str) -> Result<(), ForgeError> {
+    let path = dir.join(name);
+    if path.exists() {
+        return Ok(());
+    }
+
+    let root_fallback = agents_dir().join(name);
+    let content = std::fs::read_to_string(&root_fallback).unwrap_or_else(|_| fallback_content.to_string());
+    std::fs::write(&path, content)
+        .map_err(|e| ForgeError::config(format!("Failed to write scaffold file {}: {e}", path.display())))
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    if path == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(".agents-home-missing"));
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        return dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from(".agents-home-missing"))
+            .join(rest);
+    }
+    PathBuf::from(path)
+}
+
+fn extract_identity_name(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let mut trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("- ") {
+            trimmed = rest.trim_start();
+        } else if let Some(rest) = trimmed.strip_prefix("* ") {
+            trimmed = rest.trim_start();
+        }
+        if let Some((key, value)) = trimmed.split_once(':') {
+            let normalized_key = key.trim().trim_matches('*').to_ascii_lowercase();
+            if normalized_key == "name" {
+                let parsed = value.trim().trim_matches('"').trim_matches('\'').trim();
+                if !parsed.is_empty() {
+                    return Some(parsed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        extract_identity_name, normalize_agent_id, resolve_agent_workspace_path, AgentConfig,
+        AgentWorkspaceConfig, AgentsConfig,
+    };
+
+    #[test]
+    fn normalize_agent_id_trims_and_lowercases() {
+        assert_eq!(normalize_agent_id("  RESEARCH "), "research");
+        assert_eq!(normalize_agent_id(""), "default");
+    }
+
+    #[test]
+    fn resolve_workspace_prefers_configured_path() {
+        let cfg = AgentConfig {
+            agents: Some(AgentsConfig {
+                list: vec![AgentWorkspaceConfig {
+                    id: Some("Research".to_string()),
+                    workspace_path: Some("agents/research-box".to_string()),
+                    model: None,
+                    policy: None,
+                }],
+            }),
+            ..Default::default()
+        };
+
+        let path = resolve_agent_workspace_path("research", Some(&cfg));
+        assert!(path.ends_with("agents/research-box"));
+    }
+
+    #[test]
+    fn extract_identity_name_accepts_bulleted_yaml_style() {
+        let content = "identity\n===\n\n- name: Flint\n- role: assistant\n";
+        assert_eq!(extract_identity_name(content).as_deref(), Some("Flint"));
+    }
 }

@@ -181,6 +181,18 @@ function handleEmptyAction(action: "primary" | "secondary") {
 onMount(() => {
 	fetchInstalled();
 	fetchCatalog();
+
+	const stuckGuard = setTimeout(() => {
+		// Fail-safe: never leave Marketplace Skills in permanent loading state.
+		if (sk.loading || sk.catalogLoading) {
+			sk.loading = false;
+			sk.catalogLoading = false;
+		}
+	}, 12000);
+
+	return () => {
+		clearTimeout(stuckGuard);
+	};
 });
 </script>
 
@@ -323,12 +335,12 @@ onMount(() => {
 		/>
 	{/if}
 
-	{#if sk.searching || sk.catalogLoading || sk.loading}
+	{#if sk.searching}
 		<div
 			class="flex-1 flex items-center justify-center
 				text-[var(--sig-text-muted)] text-[12px]"
 		>
-			{sk.searching ? "Searching..." : "Loading..."}
+			Searching...
 		</div>
 	{:else}
 		<SkillGrid
