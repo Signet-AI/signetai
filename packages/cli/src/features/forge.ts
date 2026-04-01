@@ -824,6 +824,8 @@ export async function stopForgeService(options: ForgeServiceOptions, deps: Forge
 				`Forge service stop initiated; daemon may still be shutting down (port ${deps.defaultPort}).`,
 			),
 		);
+		console.log(chalk.yellow("Stop signal sent; daemon may still be shutting down."));
+		return;
 	}
 	console.log(chalk.green("✓ Forge service stopped"));
 }
@@ -872,6 +874,10 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 			);
 		}
 		throw new Error("Failed to start Forge service daemon.");
+	}
+	if (daemonStillRunning) {
+		console.log(chalk.yellow("✓ Forge service start issued; previous daemon may still be exiting."));
+		return;
 	}
 	console.log(chalk.green("✓ Forge service restarted"));
 }

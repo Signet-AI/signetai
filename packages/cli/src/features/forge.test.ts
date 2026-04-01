@@ -381,16 +381,24 @@ describe("Forge service commands", () => {
 		});
 
 		const originalWarn = console.warn;
+		const originalLog = console.log;
 		const warned: string[] = [];
+		const logged: string[] = [];
 		console.warn = (...args: unknown[]) => {
 			warned.push(args.map((arg) => String(arg)).join(" "));
+		};
+		console.log = (...args: unknown[]) => {
+			logged.push(args.map((arg) => String(arg)).join(" "));
 		};
 		try {
 			await stopForgeService({}, deps);
 		} finally {
 			console.warn = originalWarn;
+			console.log = originalLog;
 		}
 		expect(warned.some((line) => line.includes("stop initiated"))).toBe(true);
+		expect(logged.some((line) => line.includes("✓ Forge service stopped"))).toBe(false);
+		expect(logged.some((line) => line.includes("Stop signal sent"))).toBe(true);
 	});
 
 	it("stopForgeService throws when stopDaemon fails", async () => {
@@ -510,20 +518,27 @@ describe("Forge service commands", () => {
 		});
 
 		const originalWarn = console.warn;
+		const originalLog = console.log;
 		const warned: string[] = [];
+		const logged: string[] = [];
 		console.warn = (...args: unknown[]) => {
 			warned.push(args.map((arg) => String(arg)).join(" "));
+		};
+		console.log = (...args: unknown[]) => {
+			logged.push(args.map((arg) => String(arg)).join(" "));
 		};
 		try {
 			await restartForgeService({}, deps);
 		} finally {
 			console.warn = originalWarn;
+			console.log = originalLog;
 		}
 
 		expect(stopCalls).toBe(1);
 		expect(startCalls).toBe(1);
 		expect(statusCalls).toBeGreaterThan(1);
 		expect(warned.some((line) => line.includes("Daemon still running after stop wait"))).toBe(true);
+		expect(logged.some((line) => line.includes("previous daemon may still be exiting"))).toBe(true);
 	});
 
 	it("restartForgeService treats status probe errors during stop-wait as daemon offline", async () => {

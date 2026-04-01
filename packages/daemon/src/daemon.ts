@@ -1724,20 +1724,15 @@ app.use("/api/skills/analytics/*", async (c, next) => {
 // Forge task telemetry routes (`/api/forge/tasks` + `/api/forge/tasks/*`) are
 // guarded here for both auth and abuse control. Keep these middleware mounts
 // adjacent so review diff context always shows permission + rate-limit pairing.
-app.use("/api/forge/tasks", async (c, next) => {
+const requireForgeTelemetryAccess = async (c: Context, next: () => Promise<void>) => {
 	const perm = requirePermission("analytics", authConfig);
 	const rate = requireRateLimit("analytics", authForgeTelemetryLimiter, authConfig);
 	await perm(c, async () => {
 		await rate(c, next);
 	});
-});
-app.use("/api/forge/tasks/*", async (c, next) => {
-	const perm = requirePermission("analytics", authConfig);
-	const rate = requireRateLimit("analytics", authForgeTelemetryLimiter, authConfig);
-	await perm(c, async () => {
-		await rate(c, next);
-	});
-});
+};
+app.use("/api/forge/tasks", requireForgeTelemetryAccess);
+app.use("/api/forge/tasks/*", requireForgeTelemetryAccess);
 
 // Cross-agent collaboration: read inbox/presence with recall, mutate with remember
 app.use("/api/cross-agent", async (c, next) => {
