@@ -229,11 +229,16 @@ let forgeTelemetry = $state<ForgeTaskTelemetryResponse | null>(null);
 let forgeTelemetryLoading = $state(false);
 let forgeTelemetryEnabled = $state(false);
 let forgeError = $state<string | null>(null);
+let forgeShowAllEvents = $state(false);
 // Intentionally non-reactive cancellation counter; do not convert to $state.
 let forgeTelemetryRequestGeneration = 0;
 let forgeTelemetryRequestController: AbortController | null = null;
 const forgeLoadedCount = $derived(forgeTelemetry?.events.length ?? 0);
 const forgeEvents = $derived(forgeTelemetry?.events ?? []);
+const FORGE_EVENT_RENDER_LIMIT = 50;
+const forgeDisplayedEvents = $derived(
+	forgeShowAllEvents ? forgeEvents : forgeEvents.slice(0, FORGE_EVENT_RENDER_LIMIT),
+);
 const forgeTelemetryPanelAllowed = $derived.by(() => typeof agentId === "string" && agentId.trim().length > 0);
 
 $effect(() => {
@@ -248,6 +253,7 @@ $effect(() => {
 	forgeError = null;
 	forgeTelemetryLoading = false;
 	forgeTelemetryEnabled = false;
+	forgeShowAllEvents = false;
 });
 
 function formatForgeTelemetryEvent(event: unknown): string {
@@ -303,6 +309,7 @@ async function refreshForgeTelemetry() {
 		}
 		forgeTelemetry = result.data;
 		forgeError = result.error;
+		forgeShowAllEvents = false;
 	} finally {
 		if (forgeTelemetryRequestController === controller) {
 			forgeTelemetryRequestController = null;
@@ -375,7 +382,13 @@ const taskCount = $derived(ts.tasks.length);
 					{#if forgeEvents.length === 0}
 						<div class="forge-telemetry-meta">No events in current window.</div>
 					{:else}
-						{#each forgeEvents as event}
+						{#if !forgeShowAllEvents && forgeEvents.length > FORGE_EVENT_RENDER_LIMIT}
+							<div class="forge-telemetry-meta">
+								Rendering first {FORGE_EVENT_RENDER_LIMIT} of {forgeEvents.length} loaded events.
+								<button class="forge-fetch-btn" onclick={() => (forgeShowAllEvents = true)}>SHOW ALL</button>
+							</div>
+						{/if}
+						{#each forgeDisplayedEvents as event}
 							<pre class="forge-telemetry-event">{formatForgeTelemetryEvent(event)}</pre>
 						{/each}
 					{/if}
