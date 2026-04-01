@@ -4,13 +4,14 @@
 
 CREATE TABLE IF NOT EXISTS task_scope_hints (
     task_id     TEXT PRIMARY KEY REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
-    agent_id    TEXT NOT NULL DEFAULT 'default',
+    agent_id    TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 INSERT INTO task_scope_hints (task_id, agent_id, created_at, updated_at)
 SELECT st.id,
+       -- MIN(agent_id) is safe here because HAVING enforces exactly one distinct owner.
        MIN(sm.agent_id),
        datetime('now'),
        datetime('now')

@@ -12,7 +12,7 @@ export function up(db: MigrationDb): void {
 		CREATE TABLE IF NOT EXISTS skill_invocations (
 			id          TEXT PRIMARY KEY,
 			skill_name  TEXT NOT NULL,
-			agent_id    TEXT NOT NULL DEFAULT 'default',
+			agent_id    TEXT NOT NULL,
 			source      TEXT NOT NULL CHECK(source IN ('agent','scheduler','api')),
 			latency_ms  INTEGER NOT NULL,
 			success     INTEGER NOT NULL DEFAULT 1,

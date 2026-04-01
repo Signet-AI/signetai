@@ -6431,6 +6431,8 @@ app.post("/api/hooks/task-telemetry", async (c) => {
 
 app.get("/api/forge/tasks/:sessionKey", (c) => {
 	const sessionKey = normalizeSessionKey(c.req.param("sessionKey"));
+	// Scope reads by requested agent_id + active session ownership to prevent
+	// cross-agent telemetry access.
 	const requestedAgentId = parseOptionalString(c.req.query("agent_id"));
 	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
 	if (scopedAgent.error) {

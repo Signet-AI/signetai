@@ -231,7 +231,6 @@ let forgeTelemetryEnabled = $state(false);
 let forgeError = $state<string | null>(null);
 const forgeLoadedCount = $derived(forgeTelemetry?.events.length ?? 0);
 const forgeEvents = $derived(forgeTelemetry?.events ?? []);
-const isoTimestampPattern = /^\d{4}-\d{2}-\d{2}T.+$/;
 const forgeTelemetryPanelAllowed = $derived.by(() => typeof agentId === "string" && agentId.trim().length > 0);
 
 async function refreshForgeTelemetry() {
@@ -248,15 +247,10 @@ async function refreshForgeTelemetry() {
 	}
 	const trimmedSince = forgeSince.trim();
 	if (trimmedSince) {
-		if (!isoTimestampPattern.test(trimmedSince)) {
-			forgeTelemetry = null;
-			forgeError = "Invalid 'since' filter. Use ISO format like 2026-03-31T00:00:00Z.";
-			return;
-		}
 		const parsed = new Date(trimmedSince).getTime();
 		if (!Number.isFinite(parsed)) {
 			forgeTelemetry = null;
-			forgeError = "Invalid 'since' filter. Use ISO format like 2026-03-31T00:00:00Z.";
+			forgeError = "Invalid 'since' timestamp. Use ISO format like 2026-03-31T00:00:00Z.";
 			return;
 		}
 	}

@@ -1732,6 +1732,7 @@ $&\`).replace(/(?:^|\\n)([\\t ].*)(?:([\\n\\t ]*)\\n(?![\\n\\t ]))?/g,"$1$2").re
 
 		INSERT INTO task_scope_hints (task_id, agent_id, created_at, updated_at)
 		SELECT st.id,
+		       -- MIN(agent_id) is safe here because HAVING enforces exactly one distinct owner.
 		       MIN(sm.agent_id),
 		       datetime('now'),
 		       datetime('now')
