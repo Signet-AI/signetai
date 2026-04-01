@@ -1281,13 +1281,16 @@ export interface SkillAnalyticsSummary {
 	latency: { p50: number; p95: number };
 }
 
-export async function getSkills(): Promise<Skill[]> {
+export async function getSkills(options?: { signal?: AbortSignal }): Promise<Skill[]> {
 	try {
-		const response = await fetch(`${API_BASE}/api/skills`);
+		const response = await fetch(`${API_BASE}/api/skills`, {
+			signal: options?.signal,
+		});
 		if (!response.ok) throw new Error("Failed to fetch skills");
 		const data = await response.json();
 		return data.skills || [];
-	} catch {
+	} catch (error) {
+		if (options?.signal?.aborted) throw error;
 		return [];
 	}
 }
@@ -1314,15 +1317,18 @@ export async function searchSkills(query: string): Promise<SkillSearchResult[]> 
 	}
 }
 
-export async function browseSkills(): Promise<{
+export async function browseSkills(options?: { signal?: AbortSignal }): Promise<{
 	results: SkillSearchResult[];
 	total: number;
 }> {
 	try {
-		const response = await fetch(`${API_BASE}/api/skills/browse`);
+		const response = await fetch(`${API_BASE}/api/skills/browse`, {
+			signal: options?.signal,
+		});
 		if (!response.ok) throw new Error("Browse failed");
 		return await response.json();
-	} catch {
+	} catch (error) {
+		if (options?.signal?.aborted) throw error;
 		return { results: [], total: 0 };
 	}
 }
