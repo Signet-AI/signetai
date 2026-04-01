@@ -820,14 +820,23 @@ export async function stopForgeService(options: ForgeServiceOptions, deps: Forge
 	if (!stopped) {
 		throw new Error("Failed to stop Forge service daemon.");
 	}
-	// Intentionally one-shot probe (no polling): stop should report "signal sent"
-	// vs "confirmed down" quickly, while restart owns the longer stop-wait loop.
+	// stopDaemon reports initiation; poll briefly to reduce false "still
+	// shutting down" messages from an immediate post-stop probe.
+	const STOP_CONFIRM_ATTEMPTS = readPositiveInt(deps.stopWaitAttempts, 5);
+	const STOP_CONFIRM_INTERVAL_MS = readPositiveInt(deps.stopWaitIntervalMs, 100);
 	let daemonStillRunning = false;
-	try {
-		const statusAfterStop = await deps.getDaemonStatus();
-		daemonStillRunning = statusAfterStop.running;
-	} catch {
-		daemonStillRunning = false;
+	for (let attempt = 0; attempt < STOP_CONFIRM_ATTEMPTS; attempt += 1) {
+		try {
+			const statusAfterStop = await deps.getDaemonStatus();
+			daemonStillRunning = statusAfterStop.running;
+		} catch {
+			daemonStillRunning = false;
+			break;
+		}
+		if (!daemonStillRunning) break;
+		if (attempt < STOP_CONFIRM_ATTEMPTS - 1) {
+			await (deps.sleep ? deps.sleep(STOP_CONFIRM_INTERVAL_MS) : sleep(STOP_CONFIRM_INTERVAL_MS));
+		}
 	}
 	if (daemonStillRunning) {
 		console.warn(

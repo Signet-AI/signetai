@@ -1733,8 +1733,10 @@ const requireForgeTelemetryAccess = async (c: Context, next: () => Promise<void>
 		await rate(c, next);
 	});
 };
-app.use("/api/forge/tasks", requireForgeTelemetryAccess);
-app.use("/api/forge/tasks/*", requireForgeTelemetryAccess);
+const forgeTelemetryRoutePrefixes = ["/api/forge/tasks", "/api/forge/tasks/*"] as const;
+for (const routePrefix of forgeTelemetryRoutePrefixes) {
+	app.use(routePrefix, requireForgeTelemetryAccess);
+}
 
 // Cross-agent collaboration: read inbox/presence with recall, mutate with remember
 app.use("/api/cross-agent", async (c, next) => {

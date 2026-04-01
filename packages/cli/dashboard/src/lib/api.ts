@@ -1901,6 +1901,10 @@ export async function getTaskRuns(
 	}
 }
 
+/**
+ * Convenience wrapper for non-UI callers that prefer exception flow.
+ * UI surfaces should use getForgeTaskTelemetryResult() and render typed errors.
+ */
 export async function getForgeTaskTelemetry(
 	sessionKey: string,
 	options?: {

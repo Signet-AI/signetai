@@ -238,6 +238,9 @@ const forgeTelemetryPanelAllowed = $derived.by(() => typeof agentId === "string"
 
 $effect(() => {
 	agentId;
+	// Runs after initial mount and each agent switch. First run bumps 0 -> 1;
+	// refresh fetches then bump again (1 -> 2). This off-by-one is intentional
+	// because equality checks only compare request-local vs latest generation.
 	forgeTelemetryRequestGeneration += 1;
 	forgeTelemetryRequestController?.abort();
 	forgeTelemetryRequestController = null;

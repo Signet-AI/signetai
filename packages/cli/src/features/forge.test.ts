@@ -378,6 +378,8 @@ describe("Forge service commands", () => {
 				void basePath;
 				return true;
 			},
+			stopWaitAttempts: 1,
+			sleep: async () => {},
 		});
 
 		const originalWarn = console.warn;
