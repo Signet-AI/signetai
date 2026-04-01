@@ -229,7 +229,9 @@ let forgeTelemetry = $state<ForgeTaskTelemetryResponse | null>(null);
 let forgeTelemetryLoading = $state(false);
 let forgeTelemetryEnabled = $state(false);
 let forgeError = $state<string | null>(null);
+// Intentionally non-reactive cancellation counter; do not convert to $state.
 let forgeTelemetryRequestGeneration = 0;
+let forgeTelemetryRequestController: AbortController | null = null;
 const forgeLoadedCount = $derived(forgeTelemetry?.events.length ?? 0);
 const forgeEvents = $derived(forgeTelemetry?.events ?? []);
 const forgeTelemetryPanelAllowed = $derived.by(() => typeof agentId === "string" && agentId.trim().length > 0);
@@ -237,11 +239,21 @@ const forgeTelemetryPanelAllowed = $derived.by(() => typeof agentId === "string"
 $effect(() => {
 	agentId;
 	forgeTelemetryRequestGeneration += 1;
+	forgeTelemetryRequestController?.abort();
+	forgeTelemetryRequestController = null;
 	forgeTelemetry = null;
 	forgeError = null;
 	forgeTelemetryLoading = false;
 	forgeTelemetryEnabled = false;
 });
+
+function formatForgeTelemetryEvent(event: unknown): string {
+	try {
+		return JSON.stringify(event, null, 2);
+	} catch {
+		return "[unserializable telemetry payload]";
+	}
+}
 
 async function refreshForgeTelemetry() {
 	if (forgeTelemetryLoading) return;
@@ -265,6 +277,9 @@ async function refreshForgeTelemetry() {
 		}
 	}
 	const requestGeneration = ++forgeTelemetryRequestGeneration;
+	forgeTelemetryRequestController?.abort();
+	const controller = new AbortController();
+	forgeTelemetryRequestController = controller;
 	forgeTelemetryLoading = true;
 	try {
 		const result = await getForgeTaskTelemetryResult(forgeSessionKey.trim(), {
@@ -275,13 +290,17 @@ async function refreshForgeTelemetry() {
 			since: trimmedSince || undefined,
 			policyDeniedOnly: forgePolicyDeniedOnly,
 			agentId,
+			signal: controller.signal,
 		});
-		if (requestGeneration !== forgeTelemetryRequestGeneration) {
+		if (requestGeneration !== forgeTelemetryRequestGeneration || forgeTelemetryRequestController !== controller) {
 			return;
 		}
 		forgeTelemetry = result.data;
 		forgeError = result.error;
 	} finally {
+		if (forgeTelemetryRequestController === controller) {
+			forgeTelemetryRequestController = null;
+		}
 		if (requestGeneration === forgeTelemetryRequestGeneration) {
 			forgeTelemetryLoading = false;
 		}
@@ -353,7 +372,7 @@ const taskCount = $derived(ts.tasks.length);
 						<div class="forge-telemetry-meta">No events in current window.</div>
 					{:else}
 						{#each forgeEvents as event}
-							<pre class="forge-telemetry-event">{JSON.stringify(event, null, 2)}</pre>
+							<pre class="forge-telemetry-event">{formatForgeTelemetryEvent(event)}</pre>
 						{/each}
 					{/if}
 				</div>

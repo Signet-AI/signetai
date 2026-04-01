@@ -1721,8 +1721,9 @@ app.use("/api/skills/analytics", async (c, next) => {
 app.use("/api/skills/analytics/*", async (c, next) => {
 	return requirePermission("analytics", authConfig)(c, next);
 });
-// Forge task telemetry is read-only observability data. Require analytics
-// permission explicitly so route protection is visible at middleware level.
+// Forge task telemetry routes (`/api/forge/tasks` + `/api/forge/tasks/*`) are
+// guarded here for both auth and abuse control. Keep these middleware mounts
+// adjacent so review diff context always shows permission + rate-limit pairing.
 app.use("/api/forge/tasks", async (c, next) => {
 	const perm = requirePermission("analytics", authConfig);
 	const rate = requireRateLimit("analytics", authForgeTelemetryLimiter, authConfig);

@@ -1967,6 +1967,7 @@ export async function getForgeTaskTelemetryResult(
 		afterCursor?: number;
 		policyDeniedOnly?: boolean;
 		agentId?: string;
+		signal?: AbortSignal;
 	},
 ): Promise<ForgeTaskTelemetryResult> {
 	try {
@@ -1983,7 +1984,9 @@ export async function getForgeTaskTelemetryResult(
 		}
 		const qs = params.toString();
 		const url = `${API_BASE}/api/forge/tasks/${encodeURIComponent(sessionKey)}${qs ? `?${qs}` : ""}`;
-		const response = await fetch(url);
+		const response = await fetch(url, {
+			signal: options?.signal,
+		});
 		if (!response.ok) {
 			if (response.status === 404) {
 				return {
@@ -2000,6 +2003,9 @@ export async function getForgeTaskTelemetryResult(
 		}
 		return { data: parsed, error: null };
 	} catch (error) {
+		if (options?.signal?.aborted) {
+			return { data: null, error: "Forge telemetry request canceled." };
+		}
 		return { data: null, error: String(error) };
 	}
 }

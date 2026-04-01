@@ -811,6 +811,20 @@ export async function stopForgeService(options: ForgeServiceOptions, deps: Forge
 	if (!stopped) {
 		throw new Error("Failed to stop Forge service daemon.");
 	}
+	let daemonStillRunning = false;
+	try {
+		const statusAfterStop = await deps.getDaemonStatus();
+		daemonStillRunning = statusAfterStop.running;
+	} catch {
+		daemonStillRunning = false;
+	}
+	if (daemonStillRunning) {
+		console.warn(
+			chalk.yellow(
+				`Forge service stop initiated; daemon may still be shutting down (port ${deps.defaultPort}).`,
+			),
+		);
+	}
 	console.log(chalk.green("✓ Forge service stopped"));
 }
 

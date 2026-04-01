@@ -343,9 +343,10 @@ describe("Forge service commands", () => {
 
 	it("stopForgeService calls stopDaemon when daemon is running", async () => {
 		let stopCalledWith: string | null = null;
+		let statusCalls = 0;
 		const deps = createForgeDeps({
 			getDaemonStatus: async () => ({
-				running: true,
+				running: (statusCalls += 1) === 1,
 				pid: 456,
 				uptime: 50,
 				version: "1.0.0",
@@ -360,6 +361,36 @@ describe("Forge service commands", () => {
 		});
 		await stopForgeService({}, deps);
 		expect(stopCalledWith).toBe("/tmp/.agents");
+	});
+
+	it("stopForgeService warns when daemon remains running after stop signal", async () => {
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 456,
+				uptime: 50,
+				version: "1.0.0",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "localhost",
+			}),
+			stopDaemon: async (basePath) => {
+				void basePath;
+				return true;
+			},
+		});
+
+		const originalWarn = console.warn;
+		const warned: string[] = [];
+		console.warn = (...args: unknown[]) => {
+			warned.push(args.map((arg) => String(arg)).join(" "));
+		};
+		try {
+			await stopForgeService({}, deps);
+		} finally {
+			console.warn = originalWarn;
+		}
+		expect(warned.some((line) => line.includes("stop initiated"))).toBe(true);
 	});
 
 	it("stopForgeService throws when stopDaemon fails", async () => {
