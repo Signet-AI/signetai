@@ -122,11 +122,15 @@ async function withAbortTimeout<T>(
 ): Promise<T> {
 	const controller = new AbortController();
 	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+	let timedOut = false;
 	try {
-		timeoutId = setTimeout(() => controller.abort(), ms);
+		timeoutId = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, ms);
 		return await run(controller.signal);
 	} catch (error) {
-		if (controller.signal.aborted) {
+		if (timedOut) {
 			throw new Error(`Timed out after ${ms}ms`);
 		}
 		throw error;

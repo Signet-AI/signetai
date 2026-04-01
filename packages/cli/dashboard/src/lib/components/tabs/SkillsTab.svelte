@@ -190,7 +190,8 @@ onMount(() => {
 	const initialCatalogLoad = fetchCatalog();
 
 	const stuckGuard = setTimeout(() => {
-		// Fail-safe: never leave Marketplace Skills in permanent loading state.
+		// Secondary fail-safe only: timeout logic in skills store fires first (8s).
+		// This guard exists for rare cases where a fetch ignores aborts and hangs.
 		if (sk.loading) {
 			sk.installedLoadError = sk.installedLoadError ?? "Skills timed out loading. Try refreshing the page.";
 			sk.loading = false;

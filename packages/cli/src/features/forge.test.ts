@@ -514,6 +514,8 @@ describe("Forge service commands", () => {
 				startCalls += 1;
 				return true;
 			},
+			stopWaitAttempts: 3,
+			stopWaitIntervalMs: 1,
 			sleep: async () => {},
 		});
 
@@ -536,7 +538,7 @@ describe("Forge service commands", () => {
 
 		expect(stopCalls).toBe(1);
 		expect(startCalls).toBe(1);
-		expect(statusCalls).toBeGreaterThan(1);
+		expect(statusCalls).toBe(4);
 		expect(warned.some((line) => line.includes("Daemon still running after stop wait"))).toBe(true);
 		expect(logged.some((line) => line.includes("previous daemon may still be exiting"))).toBe(true);
 	});

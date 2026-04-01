@@ -467,6 +467,8 @@ pub async fn trigger(
             let now = now.clone();
             let scoped_agent = scoped_agent.clone();
             move |conn| {
+                // LEFT JOIN keeps tasks visible even when no scope hint row
+                // exists yet; COALESCE provides explicit fallback semantics.
                 let sql = "SELECT t.skill_name, COALESCE(h.agent_id, 'default') AS agent_id
                            FROM scheduled_tasks t
                            LEFT JOIN task_scope_hints h ON h.task_id = t.id

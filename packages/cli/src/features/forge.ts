@@ -101,6 +101,8 @@ export interface ForgeDeps {
 	readonly isDaemonRunning: () => Promise<boolean>;
 	readonly normalizeAgentPath: (pathValue: string) => string;
 	readonly sleep?: (ms: number) => Promise<void>;
+	readonly stopWaitAttempts?: number;
+	readonly stopWaitIntervalMs?: number;
 	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly stopDaemon: (agentsDir?: string) => Promise<boolean>;
 }
@@ -782,6 +784,11 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function readPositiveInt(value: unknown, fallback: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return fallback;
+	return Math.floor(value);
+}
+
 // Note: isDaemonRunning() is path-agnostic because the Signet daemon is a
 // singleton process. startDaemon/stopDaemon accept a basePath for config
 // resolution but there is only ever one daemon instance.
@@ -843,8 +850,8 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 		}
 		// stopDaemon reports initiation; poll briefly so start does not race the
 		// previous process while it is still exiting and releasing the port.
-		const STOP_WAIT_ATTEMPTS = 50;
-		const STOP_WAIT_INTERVAL_MS = 100;
+		const STOP_WAIT_ATTEMPTS = readPositiveInt(deps.stopWaitAttempts, 50);
+		const STOP_WAIT_INTERVAL_MS = readPositiveInt(deps.stopWaitIntervalMs, 100);
 		daemonStillRunning = true;
 		for (let attempt = 0; attempt < STOP_WAIT_ATTEMPTS; attempt += 1) {
 			let status: Awaited<ReturnType<ForgeDeps["getDaemonStatus"]>>;

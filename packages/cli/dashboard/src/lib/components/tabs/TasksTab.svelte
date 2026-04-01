@@ -301,6 +301,8 @@ async function refreshForgeTelemetry() {
 		if (forgeTelemetryRequestController === controller) {
 			forgeTelemetryRequestController = null;
 		}
+		// Keep non-reactive generation guard here to avoid stale async finally
+		// blocks mutating loading state after agent/session switches.
 		if (requestGeneration === forgeTelemetryRequestGeneration) {
 			forgeTelemetryLoading = false;
 		}

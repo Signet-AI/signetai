@@ -10,6 +10,9 @@ export function readScopedTask(
 	agentId: string,
 	enforceScope: boolean,
 ): ScopedTaskRow | undefined {
+	// LEFT JOIN intentionally preserves tasks that do not yet have a scope hint
+	// row (e.g., missing or deleted skill metadata). Scope fallback remains
+	// explicit via COALESCE.
 	const sql =
 		"SELECT t.*, COALESCE(h.agent_id, 'default') AS scoped_agent_id FROM scheduled_tasks t LEFT JOIN task_scope_hints h ON h.task_id = t.id WHERE t.id = ?";
 	if (!enforceScope) {
