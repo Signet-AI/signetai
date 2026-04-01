@@ -549,6 +549,7 @@ let authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
 let authAdminLimiter = new AuthRateLimiter(60_000, 10);
 let authRecallLlmLimiter = new AuthRateLimiter(60_000, 60);
 const authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
+const authForgeTelemetryLimiter = new AuthRateLimiter(60_000, 120);
 
 function hasMemoriesSessionIdColumn(db: Database): boolean {
 	if (hasMemoriesSessionIdColumnCache !== null) {
@@ -1723,10 +1724,18 @@ app.use("/api/skills/analytics/*", async (c, next) => {
 // Forge task telemetry is read-only observability data. Require analytics
 // permission explicitly so route protection is visible at middleware level.
 app.use("/api/forge/tasks", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
+	const perm = requirePermission("analytics", authConfig);
+	const rate = requireRateLimit("analytics", authForgeTelemetryLimiter, authConfig);
+	await perm(c, async () => {
+		await rate(c, next);
+	});
 });
 app.use("/api/forge/tasks/*", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
+	const perm = requirePermission("analytics", authConfig);
+	const rate = requireRateLimit("analytics", authForgeTelemetryLimiter, authConfig);
+	await perm(c, async () => {
+		await rate(c, next);
+	});
 });
 
 // Cross-agent collaboration: read inbox/presence with recall, mutate with remember

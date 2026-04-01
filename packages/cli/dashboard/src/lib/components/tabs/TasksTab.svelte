@@ -264,8 +264,7 @@ async function refreshForgeTelemetry() {
 			return;
 		}
 	}
-	const requestGeneration = forgeTelemetryRequestGeneration + 1;
-	forgeTelemetryRequestGeneration = requestGeneration;
+	const requestGeneration = ++forgeTelemetryRequestGeneration;
 	forgeTelemetryLoading = true;
 	try {
 		const result = await getForgeTaskTelemetryResult(forgeSessionKey.trim(), {
