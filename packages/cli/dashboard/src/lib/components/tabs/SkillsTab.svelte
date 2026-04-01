@@ -326,6 +326,10 @@ onMount(() => {
 	</Tabs.Root>
 	{/if}
 
+	{#if sk.loadError}
+		<div class="skills-load-error">{sk.loadError}</div>
+	{/if}
+
 	<!-- Content -->
 	{#if compareItems.length > 0}
 		<SkillsComparePanel
@@ -366,6 +370,16 @@ onMount(() => {
 <SkillDetail />
 
 <style>
+	.skills-load-error {
+		margin: 0.5rem 0.75rem;
+		padding: 0.5rem 0.625rem;
+		border: 1px solid var(--sig-danger);
+		background: color-mix(in srgb, var(--sig-danger) 10%, transparent);
+		color: var(--sig-danger);
+		font-family: var(--font-mono);
+		font-size: 10px;
+	}
+
 	:global(.sort-select) {
 		font-family: var(--font-mono);
 		font-size: 10px;

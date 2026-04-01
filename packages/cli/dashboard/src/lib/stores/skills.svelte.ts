@@ -77,6 +77,7 @@ export const sk = $state({
 	catalogTotal: 0,
 	catalogLoading: false,
 	catalogLoaded: false,
+	loadError: null as string | null,
 
 	// Search
 	query: "",
@@ -205,8 +206,11 @@ export async function fetchInstalled(): Promise<void> {
 	sk.loading = true;
 	try {
 		sk.installed = await withTimeout(getSkills());
-	} catch {
+		sk.loadError = null;
+	} catch (error) {
+		console.warn("[skills] fetchInstalled failed", error);
 		sk.installed = [];
+		sk.loadError = `Failed to load installed skills: ${String(error)}`;
 	} finally {
 		sk.loading = false;
 	}
@@ -236,11 +240,14 @@ export async function fetchCatalog(): Promise<void> {
 		sk.catalog = data.results;
 		sk.catalogTotal = data.total;
 		sk.catalogLoaded = true;
+		sk.loadError = null;
 		saveCatalogCache(data.results, data.total);
-	} catch {
+	} catch (error) {
+		console.warn("[skills] fetchCatalog failed", error);
 		sk.catalog = [];
 		sk.catalogTotal = 0;
 		sk.catalogLoaded = true;
+		sk.loadError = `Failed to load skills catalog: ${String(error)}`;
 	} finally {
 		sk.catalogLoading = false;
 	}

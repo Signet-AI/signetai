@@ -812,6 +812,8 @@ export async function stopForgeService(options: ForgeServiceOptions, deps: Forge
 export async function restartForgeService(options: ForgeServiceOptions, deps: ForgeDeps): Promise<void> {
 	const basePath = readForgeServicePath(options, deps);
 	const { running } = await deps.getDaemonStatus();
+	// Intentional ensure-running semantics: if the daemon is currently offline,
+	// restart behaves as start; when online, restart performs stop-then-start.
 	if (running) {
 		const stopped = await deps.stopDaemon(basePath);
 		if (!stopped) {

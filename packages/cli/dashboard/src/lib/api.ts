@@ -1906,8 +1906,11 @@ export async function getForgeTaskTelemetry(
 		afterCursor?: number;
 		policyDeniedOnly?: boolean;
 	},
-): Promise<ForgeTaskTelemetryResponse | null> {
+): Promise<ForgeTaskTelemetryResponse> {
 	const result = await getForgeTaskTelemetryResult(sessionKey, options);
+	if (result.error || !result.data) {
+		throw new Error(result.error ?? "Failed to fetch Forge telemetry");
+	}
 	return result.data;
 }
 
@@ -1970,6 +1973,12 @@ export async function getForgeTaskTelemetryResult(
 		const url = `${API_BASE}/api/forge/tasks/${encodeURIComponent(sessionKey)}${qs ? `?${qs}` : ""}`;
 		const response = await fetch(url);
 		if (!response.ok) {
+			if (response.status === 404) {
+				return {
+					data: null,
+					error: "Forge telemetry endpoint is unavailable in this daemon build (HTTP 404).",
+				};
+			}
 			return { data: null, error: `HTTP ${response.status} while fetching Forge telemetry` };
 		}
 		const body = await response.json().catch(() => null);
