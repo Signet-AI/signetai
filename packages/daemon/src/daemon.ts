@@ -1720,6 +1720,14 @@ app.use("/api/skills/analytics", async (c, next) => {
 app.use("/api/skills/analytics/*", async (c, next) => {
 	return requirePermission("analytics", authConfig)(c, next);
 });
+// Forge task telemetry is read-only observability data. Require analytics
+// permission explicitly so route protection is visible at middleware level.
+app.use("/api/forge/tasks", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
+});
+app.use("/api/forge/tasks/*", async (c, next) => {
+	return requirePermission("analytics", authConfig)(c, next);
+});
 
 // Cross-agent collaboration: read inbox/presence with recall, mutate with remember
 app.use("/api/cross-agent", async (c, next) => {
