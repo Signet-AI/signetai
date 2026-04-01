@@ -232,7 +232,7 @@ let forgeError = $state<string | null>(null);
 const forgeLoadedCount = $derived(forgeTelemetry?.events.length ?? 0);
 const forgeEvents = $derived(forgeTelemetry?.events ?? []);
 const isoTimestampPattern = /^\d{4}-\d{2}-\d{2}T.+$/;
-const forgeTelemetryPanelAllowed = import.meta.env.DEV;
+const forgeTelemetryPanelAllowed = $derived.by(() => typeof agentId === "string" && agentId.trim().length > 0);
 
 async function refreshForgeTelemetry() {
 	if (forgeTelemetryLoading) return;

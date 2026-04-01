@@ -322,6 +322,13 @@ describe("Forge service commands", () => {
 		expect(startCalledWith).toBe("/tmp/.agents");
 	});
 
+	it("startForgeService throws when startDaemon fails", async () => {
+		const deps = createForgeDeps({
+			startDaemon: async () => false,
+		});
+		await expect(startForgeService({}, deps)).rejects.toThrow("Failed to start Forge service daemon.");
+	});
+
 	it("stopForgeService skips stop when daemon is not running", async () => {
 		let stopCalled = false;
 		const deps = createForgeDeps({
@@ -353,6 +360,22 @@ describe("Forge service commands", () => {
 		});
 		await stopForgeService({}, deps);
 		expect(stopCalledWith).toBe("/tmp/.agents");
+	});
+
+	it("stopForgeService throws when stopDaemon fails", async () => {
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 456,
+				uptime: 50,
+				version: "1.0.0",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "localhost",
+			}),
+			stopDaemon: async () => false,
+		});
+		await expect(stopForgeService({}, deps)).rejects.toThrow("Failed to stop Forge service daemon.");
 	});
 
 	it("restartForgeService stops then starts when daemon is running", async () => {
@@ -408,6 +431,68 @@ describe("Forge service commands", () => {
 		await restartForgeService({}, deps);
 		expect(stopCalls).toBe(0);
 		expect(startCalls).toBe(1);
+	});
+
+	it("restartForgeService throws when stopDaemon fails", async () => {
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 321,
+				uptime: 50,
+				version: "1.0.0",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "localhost",
+			}),
+			stopDaemon: async () => false,
+			startDaemon: async () => true,
+		});
+		await expect(restartForgeService({}, deps)).rejects.toThrow("Failed to stop Forge service daemon.");
+	});
+
+	it("restartForgeService warns and proceeds when daemon remains running after stop-wait", async () => {
+		let startCalls = 0;
+		let stopCalls = 0;
+		let statusCalls = 0;
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => {
+				statusCalls += 1;
+				return {
+					running: true,
+					pid: 321,
+					uptime: 50,
+					version: "1.0.0",
+					host: "127.0.0.1",
+					bindHost: "127.0.0.1",
+					networkMode: "localhost",
+				};
+			},
+			stopDaemon: async () => {
+				stopCalls += 1;
+				return true;
+			},
+			startDaemon: async () => {
+				startCalls += 1;
+				return true;
+			},
+			sleep: async () => {},
+		});
+
+		const originalWarn = console.warn;
+		const warned: string[] = [];
+		console.warn = (...args: unknown[]) => {
+			warned.push(args.map((arg) => String(arg)).join(" "));
+		};
+		try {
+			await restartForgeService({}, deps);
+		} finally {
+			console.warn = originalWarn;
+		}
+
+		expect(stopCalls).toBe(1);
+		expect(startCalls).toBe(1);
+		expect(statusCalls).toBeGreaterThan(1);
+		expect(warned.some((line) => line.includes("Daemon still running after stop wait"))).toBe(true);
 	});
 
 	it("showForgeServiceStatus prints json payload when --json is set", async () => {

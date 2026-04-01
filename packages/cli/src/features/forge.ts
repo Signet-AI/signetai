@@ -100,6 +100,7 @@ interface ForgeDeps {
 	readonly getTemplatesDir: () => string;
 	readonly isDaemonRunning: () => Promise<boolean>;
 	readonly normalizeAgentPath: (pathValue: string) => string;
+	readonly sleep?: (ms: number) => Promise<void>;
 	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly stopDaemon: (agentsDir?: string) => Promise<boolean>;
 }
@@ -825,7 +826,7 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 		}
 		// stopDaemon reports initiation; poll briefly so start does not race the
 		// previous process while it is still exiting and releasing the port.
-		const STOP_WAIT_ATTEMPTS = 10;
+		const STOP_WAIT_ATTEMPTS = 50;
 		const STOP_WAIT_INTERVAL_MS = 100;
 		let daemonStillRunning = true;
 		for (let attempt = 0; attempt < STOP_WAIT_ATTEMPTS; attempt += 1) {
@@ -834,7 +835,7 @@ export async function restartForgeService(options: ForgeServiceOptions, deps: Fo
 				daemonStillRunning = false;
 				break;
 			}
-			await sleep(STOP_WAIT_INTERVAL_MS);
+			await (deps.sleep ? deps.sleep(STOP_WAIT_INTERVAL_MS) : sleep(STOP_WAIT_INTERVAL_MS));
 		}
 		if (daemonStillRunning) {
 			console.warn(chalk.yellow("Daemon still running after stop wait; attempting start anyway."));
