@@ -1710,6 +1710,8 @@ pub async fn recall(
     }
 
     // Load search config — parity with TS `const cfg = loadMemoryConfig(AGENTS_DIR)`.
+    // NOTE: TS reads from disk per-request (always fresh); Rust reads from
+    // startup-populated state.config (requires daemon restart for changes).
     // Previously the handler used a hardcoded default of 10 and applied no min_score
     // filter; the TS endpoint was updated to pass cfg through hybridRecall which
     // uses cfg.search.top_k and cfg.search.min_score.  Mirror those semantics here.
@@ -1771,6 +1773,8 @@ pub async fn recall(
                                 m.get("importance")
                                     .and_then(|v| v.as_f64())
                                     .map(|imp| imp >= min_score)
+                                    // Include memories with missing/null importance
+                                    // so older unscored records are not silently excluded.
                                     .unwrap_or(true)
                             })
                             .collect::<Vec<_>>(),
