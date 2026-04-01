@@ -147,6 +147,8 @@ const compareItems = $derived.by(() => {
 	return available.filter((item) => sk.compareSelected.includes(item.fullName));
 });
 
+const loadError = $derived.by(() => sk.installedLoadError ?? sk.catalogLoadError);
+
 function handleEmptyAction(action: "primary" | "secondary") {
 	if (emptyState === "installed") {
 		if (action === "primary") {
@@ -326,8 +328,8 @@ onMount(() => {
 	</Tabs.Root>
 	{/if}
 
-	{#if sk.loadError}
-		<div class="skills-load-error">{sk.loadError}</div>
+	{#if loadError}
+		<div class="skills-load-error">{loadError}</div>
 	{/if}
 
 	<!-- Content -->

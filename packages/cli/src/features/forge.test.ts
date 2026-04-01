@@ -380,6 +380,34 @@ describe("Forge service commands", () => {
 		expect(sequence).toEqual(["stop", "start"]);
 	});
 
+	it("restartForgeService starts without stop when daemon is not running", async () => {
+		let stopCalls = 0;
+		let startCalls = 0;
+		const deps = createForgeDeps({
+			getDaemonStatus: async () => ({
+				running: false,
+				pid: null,
+				uptime: null,
+				version: "1.0.0",
+				host: "127.0.0.1",
+				bindHost: "127.0.0.1",
+				networkMode: "localhost",
+			}),
+			stopDaemon: async () => {
+				stopCalls += 1;
+				return true;
+			},
+			startDaemon: async () => {
+				startCalls += 1;
+				return true;
+			},
+		});
+
+		await restartForgeService({}, deps);
+		expect(stopCalls).toBe(0);
+		expect(startCalls).toBe(1);
+	});
+
 	it("showForgeServiceStatus prints json payload when --json is set", async () => {
 		const deps = createForgeDeps({
 			getDaemonStatus: async () => ({

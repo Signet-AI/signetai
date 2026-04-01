@@ -1962,7 +1962,7 @@ export async function getForgeTaskTelemetryResult(
 ): Promise<ForgeTaskTelemetryResult> {
 	try {
 		const params = new URLSearchParams();
-		if (options?.limit) params.set("limit", String(options.limit));
+		if (options?.limit !== undefined) params.set("limit", String(options.limit));
 		if (options?.kind) params.set("kind", options.kind);
 		if (options?.phase) params.set("phase", options.phase);
 		if (options?.name) params.set("name", options.name);
