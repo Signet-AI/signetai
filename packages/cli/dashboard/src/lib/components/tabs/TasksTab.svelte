@@ -233,6 +233,14 @@ const forgeLoadedCount = $derived(forgeTelemetry?.events.length ?? 0);
 const forgeEvents = $derived(forgeTelemetry?.events ?? []);
 const forgeTelemetryPanelAllowed = $derived.by(() => typeof agentId === "string" && agentId.trim().length > 0);
 
+$effect(() => {
+	agentId;
+	forgeTelemetry = null;
+	forgeError = null;
+	forgeTelemetryLoading = false;
+	forgeTelemetryEnabled = false;
+});
+
 async function refreshForgeTelemetry() {
 	if (forgeTelemetryLoading) return;
 	if (!agentId?.trim()) {

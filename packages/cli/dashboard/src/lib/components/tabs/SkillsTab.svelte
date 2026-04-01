@@ -186,8 +186,8 @@ function handleEmptyAction(action: "primary" | "secondary") {
 }
 
 onMount(() => {
-	fetchInstalled();
-	fetchCatalog();
+	const initialInstalledLoad = fetchInstalled();
+	const initialCatalogLoad = fetchCatalog();
 
 	const stuckGuard = setTimeout(() => {
 		// Fail-safe: never leave Marketplace Skills in permanent loading state.
@@ -200,6 +200,9 @@ onMount(() => {
 			sk.catalogLoading = false;
 		}
 	}, 12000);
+	void Promise.allSettled([initialInstalledLoad, initialCatalogLoad]).then(() => {
+		clearTimeout(stuckGuard);
+	});
 
 	return () => {
 		clearTimeout(stuckGuard);
