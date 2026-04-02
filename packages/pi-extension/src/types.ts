@@ -17,17 +17,6 @@ export const PROMPT_SUBMIT_TIMEOUT = READ_TIMEOUT;
 export const HIDDEN_RECALL_CUSTOM_TYPE = "signet-pi-hidden-recall";
 export const HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE = "signet-pi-session-context";
 
-export interface SessionStartResult {
-	readonly inject?: string;
-	readonly recentContext?: string;
-}
-
-export interface UserPromptSubmitResult {
-	readonly inject?: string;
-	readonly memoryCount?: number;
-	readonly sessionKnown?: boolean;
-}
-
 export interface PreCompactionResult {
 	readonly guidelines?: string;
 	readonly summaryPrompt?: string;

@@ -5,6 +5,7 @@ import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { PiConnector } from "@signet/connector-pi";
+import { resolveOhMyPiAgentDir, resolvePiAgentDir } from "@signet/core";
 import type { WorkspaceSourceRepoSyncResult } from "@signet/core";
 import chalk from "chalk";
 
@@ -197,13 +198,13 @@ function detectHarnesses(): string[] {
 	if (new OpenClawConnector().isInstalled()) {
 		found.push("openclaw");
 	}
-	if (new OhMyPiConnector().isInstalled()) {
+	if (new OhMyPiConnector().isInstalled() || existsSync(resolveOhMyPiAgentDir())) {
 		found.push("oh-my-pi");
 	}
 	if (new HermesAgentConnector().isInstalled()) {
 		found.push("hermes-agent");
 	}
-	if (new PiConnector().isInstalled()) {
+	if (new PiConnector().isInstalled() || existsSync(resolvePiAgentDir())) {
 		found.push("pi");
 	}
 

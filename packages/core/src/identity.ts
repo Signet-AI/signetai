@@ -10,8 +10,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { listOhMyPiAgentDirCandidates } from "./oh-my-pi";
-import { listPiAgentDirCandidates } from "./pi";
+import { listOhMyPiAgentDirCandidates, resolveOhMyPiAgentDir } from "./oh-my-pi";
+import { listPiAgentDirCandidates, resolvePiAgentDir } from "./pi";
 
 const FORGE_BINARY_NAME = "forge";
 const SIGNET_FORGE_PRIMARY_MARKER = "Signet's native AI terminal";
@@ -462,8 +462,8 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			opencode: existsSync(join(home, ".config", "opencode", "config.json")),
 			codex:
 				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
-			ohMyPi: isSignetManagedOhMyPiInstall(),
-			pi: isSignetManagedPiInstall(),
+			ohMyPi: isSignetManagedOhMyPiInstall() || existsSync(resolveOhMyPiAgentDir()),
+			pi: isSignetManagedPiInstall() || existsSync(resolvePiAgentDir()),
 			forge: isForgeInstalled(basePath, home),
 			hermesAgent: resolveHermesRepoPluginPath() !== null,
 		},

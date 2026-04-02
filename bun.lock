@@ -274,6 +274,9 @@
     "packages/extension-base": {
       "name": "@signet/extension-base",
       "version": "0.91.4",
+      "dependencies": {
+        "@signet/core": "workspace:*",
+      },
     },
     "packages/native": {
       "name": "@signet/native",

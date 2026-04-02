@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type LifecycleDeps, endCurrentSession, endPreviousSession, flushPendingSessionEnds } from "./src/lifecycle.js";
+import { type LifecycleDeps, OMP_LIFECYCLE_CONFIG, endCurrentSession, endPreviousSession, flushPendingSessionEnds } from "./src/lifecycle.js";
 import { createSessionState } from "./src/session-state.js";
 
 const tempDirs: string[] = [];
@@ -37,8 +37,12 @@ describe("Oh My Pi lifecycle session-end handling", () => {
 					calls.push({ path, body });
 					return shouldSucceed ? { ok: true } : null;
 				},
+				async postResult() {
+					return { ok: false as const, reason: "offline" as const };
+				},
 			},
 			state: createSessionState(),
+			config: OMP_LIFECYCLE_CONFIG,
 		};
 
 		const dir = mkdtempSync(join(tmpdir(), "omp-lifecycle-"));
@@ -87,8 +91,12 @@ describe("Oh My Pi lifecycle session-end handling", () => {
 				async post() {
 					return null;
 				},
+				async postResult() {
+					return { ok: false as const, reason: "offline" as const };
+				},
 			},
 			state: createSessionState(),
+			config: OMP_LIFECYCLE_CONFIG,
 		};
 
 		await endCurrentSession(deps, createTestContext("current-session") as never, "session_shutdown");

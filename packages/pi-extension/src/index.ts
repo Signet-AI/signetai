@@ -6,6 +6,7 @@ import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signe
 import { createDaemonClient } from "./daemon-client.js";
 import {
 	type LifecycleDeps,
+	PI_LIFECYCLE_CONFIG,
 	currentSessionRef,
 	endCurrentSession,
 	endPreviousSession,
@@ -13,7 +14,7 @@ import {
 	refreshSessionStart,
 	requestRecallForPrompt,
 } from "./lifecycle.js";
-import { createSessionState } from "./session-state.js";
+import { createSessionState, type PiSessionState } from "./session-state.js";
 import {
 	DAEMON_URL_DEFAULT,
 	HARNESS,
@@ -235,7 +236,11 @@ function registerPromptHandlers(pi: PiExtensionApi, deps: LifecycleDeps): void {
 	);
 }
 
-function registerContextHandlers(pi: PiExtensionApi, deps: LifecycleDeps): void {
+interface PiDeps extends LifecycleDeps {
+	readonly state: PiSessionState;
+}
+
+function registerContextHandlers(pi: PiExtensionApi, deps: PiDeps): void {
 	pi.on("context", async (event: PiContextEvent, ctx): Promise<PiContextEventResult | undefined> => {
 		const session = currentSessionRef(ctx);
 		const hiddenMessages = deps.state.consumeHiddenInjectMessages(session.sessionId);
@@ -566,10 +571,11 @@ const SignetPiExtension: PiExtensionFactory = (pi): void => {
 	const daemonUrl = readTrimmedRuntimeEnv("SIGNET_DAEMON_URL") ?? DAEMON_URL_DEFAULT;
 	const agentId = readTrimmedRuntimeEnv("SIGNET_AGENT_ID");
 
-	const deps: LifecycleDeps = {
+	const deps: PiDeps = {
 		agentId,
 		client: createDaemonClient(daemonUrl),
 		state: createSessionState(),
+		config: PI_LIFECYCLE_CONFIG,
 	};
 
 	registerSessionLifecycleHandlers(pi, deps, daemonUrl);

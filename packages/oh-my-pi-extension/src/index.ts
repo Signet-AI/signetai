@@ -2,6 +2,7 @@ import { createDaemonClient } from "./daemon-client.js";
 import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/extension-base";
 import {
 	type LifecycleDeps,
+	OMP_LIFECYCLE_CONFIG,
 	currentSessionRef,
 	endCurrentSession,
 	endPreviousSession,
@@ -9,7 +10,7 @@ import {
 	refreshSessionStart,
 	requestRecallForPrompt,
 } from "./lifecycle.js";
-import { createSessionState } from "./session-state.js";
+import { createSessionState, type OmpSessionState } from "./session-state.js";
 import {
 	DAEMON_URL_DEFAULT,
 	HARNESS,
@@ -46,7 +47,11 @@ function registerSessionLifecycleHandlers(pi: OmpExtensionApi, deps: LifecycleDe
 	});
 }
 
-function registerPromptHandlers(pi: OmpExtensionApi, deps: LifecycleDeps): void {
+interface OmpDeps extends LifecycleDeps {
+	readonly state: OmpSessionState;
+}
+
+function registerPromptHandlers(pi: OmpExtensionApi, deps: OmpDeps): void {
 	pi.on("input", async (event: OmpInputEvent, ctx) => {
 		const session = currentSessionRef(ctx);
 		deps.state.clearPendingRecall(session.sessionId);
@@ -123,10 +128,11 @@ const SignetOhMyPiExtension: OmpExtensionFactory = (pi): void => {
 		return;
 	}
 
-	const deps: LifecycleDeps = {
+	const deps: OmpDeps = {
 		agentId: readTrimmedRuntimeEnv("SIGNET_AGENT_ID"),
 		client: createDaemonClient(readTrimmedRuntimeEnv("SIGNET_DAEMON_URL") ?? DAEMON_URL_DEFAULT),
 		state: createSessionState(),
+		config: OMP_LIFECYCLE_CONFIG,
 	};
 
 	registerSessionLifecycleHandlers(pi, deps);

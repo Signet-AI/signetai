@@ -150,6 +150,17 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				createLocalBackup: options.createLocalBackup === true,
 			});
 
+			const requestedHarnesses = normalizeHarnessList(options.harness, deps);
+			if (requestedHarnesses.length > 0) {
+				for (const harness of requestedHarnesses) {
+					try {
+						await deps.configureHarnessHooks(harness, basePath);
+					} catch {
+						// best-effort — non-interactive should not fail on hook errors
+					}
+				}
+			}
+
 			const running = await deps.isDaemonRunning();
 			if (!running) {
 				const spinner = ora("Starting daemon...").start();
