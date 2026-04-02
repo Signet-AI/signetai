@@ -28,7 +28,6 @@ import { EXTENSION_BUNDLE } from "./extension-bundle.js";
 const PI_EXTENSION_PACKAGE = "@signet/pi-extension";
 const PI_EXTENSION_ENTRY = "dist/signet-pi.mjs";
 const PI_MANAGED_FILENAME = "signet-pi.js";
-const PI_LEGACY_MANAGED_FILENAME = "signet-pi.mjs";
 const PI_MANAGED_MARKER = "SIGNET_MANAGED_PI_EXTENSION";
 
 function bundledExtensionContent(): string {
@@ -65,12 +64,8 @@ export class PiConnector extends BaseConnector {
 		return join(resolvePiExtensionsDir(), PI_MANAGED_FILENAME);
 	}
 
-	private getLegacyManagedExtensionPath(): string {
-		return join(resolvePiExtensionsDir(), PI_LEGACY_MANAGED_FILENAME);
-	}
-
-	private getManagedCandidatePaths(filename: string): readonly string[] {
-		return listPiAgentDirCandidates().map((agentDir) => managedExtensionFilePath(agentDir, filename));
+	private getManagedCandidatePaths(): readonly string[] {
+		return listPiAgentDirCandidates().map((agentDir) => managedExtensionFilePath(agentDir, PI_MANAGED_FILENAME));
 	}
 
 	getConfigPath(): string {
@@ -81,7 +76,6 @@ export class PiConnector extends BaseConnector {
 		const filesWritten: string[] = [];
 		const agentDir = resolvePiAgentDir();
 		const targetPath = managedExtensionFilePath(agentDir, PI_MANAGED_FILENAME);
-		const legacyPath = managedExtensionFilePath(agentDir, PI_LEGACY_MANAGED_FILENAME);
 
 		if (existsSync(targetPath) && !isManagedExtensionFile(targetPath, PI_MANAGED_MARKER)) {
 			throw new Error(
@@ -89,12 +83,8 @@ export class PiConnector extends BaseConnector {
 			);
 		}
 
-		for (const filePath of this.getManagedCandidatePaths(PI_MANAGED_FILENAME)) {
+		for (const filePath of this.getManagedCandidatePaths()) {
 			if (filePath === targetPath) continue;
-			removeManagedExtensionFile(filePath, PI_MANAGED_MARKER);
-		}
-		for (const filePath of this.getManagedCandidatePaths(PI_LEGACY_MANAGED_FILENAME)) {
-			if (filePath === legacyPath) continue;
 			removeManagedExtensionFile(filePath, PI_MANAGED_MARKER);
 		}
 
@@ -109,8 +99,6 @@ export class PiConnector extends BaseConnector {
 			writeFileSync(targetPath, managedContent, "utf8");
 			filesWritten.push(targetPath);
 		}
-
-		removeManagedExtensionFile(legacyPath, PI_MANAGED_MARKER);
 
 		const configPath = getPiConfigPath();
 		const previousConfig = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
@@ -129,10 +117,7 @@ export class PiConnector extends BaseConnector {
 
 	async uninstall(): Promise<UninstallResult> {
 		const filesRemoved: string[] = [];
-		for (const path of [
-			...this.getManagedCandidatePaths(PI_MANAGED_FILENAME),
-			...this.getManagedCandidatePaths(PI_LEGACY_MANAGED_FILENAME),
-		]) {
+		for (const path of this.getManagedCandidatePaths()) {
 			if (removeManagedExtensionFile(path, PI_MANAGED_MARKER)) {
 				filesRemoved.push(path);
 			}
@@ -150,9 +135,6 @@ export class PiConnector extends BaseConnector {
 	}
 
 	isInstalled(): boolean {
-		return [
-			...this.getManagedCandidatePaths(PI_MANAGED_FILENAME),
-			...this.getManagedCandidatePaths(PI_LEGACY_MANAGED_FILENAME),
-		].some((path) => isManagedExtensionFile(path, PI_MANAGED_MARKER));
+		return this.getManagedCandidatePaths().some((path) => isManagedExtensionFile(path, PI_MANAGED_MARKER));
 	}
 }
