@@ -431,8 +431,10 @@ Otherwise it writes to `~/.pi/agent/extensions/`.
 - Existing unrelated pi extensions are left untouched.
 - Signet refuses to overwrite a colliding unmanaged `signet-pi.js`.
 - Daemon or network failures are fail-open, so prompt handling, compaction, session switches, and shutdown continue even if Signet is unavailable.
-- The extension creates hidden Signet messages with `display: false` for session-context and recall injections, keeping them out of transcript reconstruction.
-- Provides manual `/recall`, `/remember`, and `/signet-status` commands plus LLM-callable `signet_recall` and `signet_remember` tools.
+- **Automatic recall**: On every user prompt, the extension automatically fetches relevant memories from the daemon and injects them as hidden messages (`display: false`) into the agent's context. These injections are kept out of transcript reconstruction.
+- **Manual commands**: `/recall <query>` and `/remember <content>` let users explicitly search and store memories. The `/recall` command **displays results in the UI only** — it does not inject them into the conversation context. `/signet-status` shows connection and memory stats.
+- **Agent tools**: `signet_recall` and `signet_remember` are registered as LLM-callable tools. When the agent calls `signet_recall`, the results **are** returned into the conversation context via the tool response.
+- Hidden inject messages use `display: false` and `role: "custom"`. Pi converts custom messages to `role: "user"` for the LLM, so the `X-Initiator` header (which determines Copilot billing attribution) is set based on the last message's role — extensions cannot override it via an `attribution` field as Oh My Pi can.
 - Does not sync `AGENTS.md` into pi.
 
 ### Configuration
