@@ -1,8 +1,8 @@
-import { Type } from "@sinclair/typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolvePiAgentDir } from "@signet/core";
 import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/extension-base";
+import { Type } from "@sinclair/typebox";
 import { createDaemonClient } from "./daemon-client.js";
 import {
 	type LifecycleDeps,
@@ -14,7 +14,7 @@ import {
 	refreshSessionStart,
 	requestRecallForPrompt,
 } from "./lifecycle.js";
-import { createSessionState, type PiSessionState } from "./session-state.js";
+import { type PiSessionState, createSessionState } from "./session-state.js";
 import {
 	DAEMON_URL_DEFAULT,
 	HARNESS,
@@ -28,11 +28,10 @@ import {
 	type PiInputEvent,
 	type PiSessionBeforeCompactEvent,
 	type PiSessionCompactEvent,
-	type PiSessionSwitchEvent,
+	type PreCompactionResult,
 	READ_TIMEOUT,
 	RUNTIME_PATH,
 	WRITE_TIMEOUT,
-	type PreCompactionResult,
 } from "./types.js";
 
 // ============================================================================
@@ -139,11 +138,19 @@ export async function recallMemories(
 		throw new Error(`Recall failed: ${error}`);
 	}
 
-	const data = (await response.json()) as { results?: Array<{ content: string; importance?: number; tags?: string | null }> };
+	const data = (await response.json()) as {
+		results?: Array<{ content: string; importance?: number; tags?: string | null }>;
+	};
 	return (data.results ?? []).map((r) => ({
 		content: r.content,
 		importance: r.importance,
-		tags: typeof r.tags === "string" ? r.tags.split(",").map((t) => t.trim()).filter(Boolean) : undefined,
+		tags:
+			typeof r.tags === "string"
+				? r.tags
+						.split(",")
+						.map((t) => t.trim())
+						.filter(Boolean)
+				: undefined,
 	}));
 }
 
@@ -253,27 +260,24 @@ function registerContextHandlers(pi: PiExtensionApi, deps: PiDeps): void {
 }
 
 function registerCompactionHandlers(pi: PiExtensionApi, deps: LifecycleDeps): void {
-	pi.on(
-		"session_before_compact",
-		async (event: PiSessionBeforeCompactEvent, ctx): Promise<undefined> => {
-			await ensureSessionContext(deps, ctx);
-			const session = currentSessionRef(ctx);
-			await deps.client.post<PreCompactionResult>(
-				"/api/hooks/pre-compaction",
-				{
-					harness: HARNESS,
-					sessionKey: session.sessionId,
-					messageCount: Array.isArray(event.preparation?.messagesToSummarize)
-						? event.preparation.messagesToSummarize.length
-						: undefined,
-					runtimePath: RUNTIME_PATH,
-				},
-				READ_TIMEOUT,
-			);
-			// Pi handles compaction itself; we fire the hook for our own side effects only.
-			return undefined;
-		},
-	);
+	pi.on("session_before_compact", async (event: PiSessionBeforeCompactEvent, ctx): Promise<undefined> => {
+		await ensureSessionContext(deps, ctx);
+		const session = currentSessionRef(ctx);
+		await deps.client.post<PreCompactionResult>(
+			"/api/hooks/pre-compaction",
+			{
+				harness: HARNESS,
+				sessionKey: session.sessionId,
+				messageCount: Array.isArray(event.preparation?.messagesToSummarize)
+					? event.preparation.messagesToSummarize.length
+					: undefined,
+				runtimePath: RUNTIME_PATH,
+			},
+			READ_TIMEOUT,
+		);
+		// Pi handles compaction itself; we fire the hook for our own side effects only.
+		return undefined;
+	});
 
 	pi.on("session_compact", async (event: PiSessionCompactEvent, ctx) => {
 		const summary = readTrimmedString(event.compactionEntry?.summary);
@@ -325,7 +329,6 @@ export function parseRememberArgs(raw: string): RememberArgs {
 // ============================================================================
 
 function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId: string | undefined): void {
-
 	// /recall command
 	pi.registerCommand("recall", {
 		description: "Search SignetAI memories",

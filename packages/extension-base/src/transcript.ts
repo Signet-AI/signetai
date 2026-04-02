@@ -58,10 +58,7 @@ function buildMessageLine(role: string | undefined, content: unknown): string | 
 	return `${roleLabel(role)}: ${text}`;
 }
 
-function entryToTranscriptLine(
-	entry: BaseSessionEntry,
-	excludeCustomTypes: ReadonlySet<string>,
-): string | undefined {
+function entryToTranscriptLine(entry: BaseSessionEntry, excludeCustomTypes: ReadonlySet<string>): string | undefined {
 	if (!isRecord(entry) || typeof entry.type !== "string") return undefined;
 
 	if (entry.type === "custom_message") {

@@ -1,7 +1,9 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	readStaticIdentity,
 	resolveSessionStartTimeoutMs,
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 } from "@signet/core";
 import {
 	type LifecycleConfig,
@@ -15,8 +17,6 @@ import {
 	requestRecallForPrompt,
 } from "@signet/extension-base";
 import { readTrimmedRuntimeEnv } from "@signet/extension-base";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
 	FETCH_TIMEOUT_ENV,
 	HARNESS,
@@ -29,7 +29,15 @@ import {
 } from "./types.js";
 
 export type { LifecycleDeps };
-export { currentSessionRef, endCurrentSession, endPreviousSession, ensureSessionContext, flushPendingSessionEnds, refreshSessionStart, requestRecallForPrompt };
+export {
+	currentSessionRef,
+	endCurrentSession,
+	endPreviousSession,
+	ensureSessionContext,
+	flushPendingSessionEnds,
+	refreshSessionStart,
+	requestRecallForPrompt,
+};
 
 const EXCLUDED_CUSTOM_TYPES: ReadonlySet<string> = new Set([
 	HIDDEN_RECALL_CUSTOM_TYPE,

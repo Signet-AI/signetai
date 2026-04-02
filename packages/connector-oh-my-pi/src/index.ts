@@ -3,17 +3,17 @@ import { dirname, join } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
-	type UninstallResult,
-	MANAGED_DAEMON_URL_DEFAULT,
 	MANAGED_AGENT_ID_DEFAULT,
-	readManagedTrimmedEnv,
-	resolveSignetWorkspacePath,
-	resolveSignetDaemonUrl,
-	resolveSignetAgentId,
+	MANAGED_DAEMON_URL_DEFAULT,
+	type UninstallResult,
 	buildManagedExtensionEnvBootstrap,
-	managedExtensionFilePath,
 	isManagedExtensionFile,
+	managedExtensionFilePath,
+	readManagedTrimmedEnv,
 	removeManagedExtensionFile,
+	resolveSignetAgentId,
+	resolveSignetDaemonUrl,
+	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
 import {
 	clearConfiguredOhMyPiAgentDir,
@@ -80,7 +80,7 @@ export class OhMyPiConnector extends BaseConnector {
 
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
-		const expandedBasePath = expandHome(basePath || resolveWorkspacePath());
+		const expandedBasePath = expandHome(basePath || resolveSignetWorkspacePath());
 		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
 		if (strippedAgentsPath !== null) {
 			filesWritten.push(strippedAgentsPath);
@@ -107,8 +107,8 @@ export class OhMyPiConnector extends BaseConnector {
 		mkdirSync(dirname(targetPath), { recursive: true });
 		const managedContent = buildManagedExtensionContent({
 			signetPath: expandedBasePath,
-			daemonUrl: resolveDaemonUrl() || DAEMON_URL_DEFAULT,
-			agentId: resolveAgentId(),
+			daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
+			agentId: resolveSignetAgentId(),
 		});
 		const previous = existsSync(targetPath) ? readFileSync(targetPath, "utf8") : null;
 		if (previous !== managedContent) {

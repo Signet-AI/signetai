@@ -1,6 +1,5 @@
 import type {
 	BaseAgentMessage,
-	BaseExtensionContext,
 	BaseReadonlySessionManager,
 	BaseSessionEntry,
 	BaseSessionHeader,
@@ -150,10 +149,7 @@ export interface PiExtensionApi {
 	): void;
 	on(
 		event: "session_before_compact",
-		handler: (
-			event: PiSessionBeforeCompactEvent,
-			ctx: PiExtensionContext,
-		) => undefined | Promise<undefined>,
+		handler: (event: PiSessionBeforeCompactEvent, ctx: PiExtensionContext) => undefined | Promise<undefined>,
 	): void;
 	on(event: "session_compact", handler: (event: PiSessionCompactEvent, ctx: PiExtensionContext) => unknown): void;
 	registerCommand(name: string, definition: PiCommandHandler): void;

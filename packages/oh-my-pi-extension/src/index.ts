@@ -1,5 +1,5 @@
-import { createDaemonClient } from "./daemon-client.js";
 import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/extension-base";
+import { createDaemonClient } from "./daemon-client.js";
 import {
 	type LifecycleDeps,
 	OMP_LIFECYCLE_CONFIG,
@@ -10,7 +10,7 @@ import {
 	refreshSessionStart,
 	requestRecallForPrompt,
 } from "./lifecycle.js";
-import { createSessionState, type OmpSessionState } from "./session-state.js";
+import { type OmpSessionState, createSessionState } from "./session-state.js";
 import {
 	DAEMON_URL_DEFAULT,
 	HARNESS,

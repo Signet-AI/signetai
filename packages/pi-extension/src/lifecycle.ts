@@ -1,8 +1,8 @@
 import {
 	type LifecycleConfig,
 	type LifecycleDeps,
-	defaultStaticFallback,
 	currentSessionRef,
+	defaultStaticFallback,
 	endCurrentSession,
 	endPreviousSession,
 	ensureSessionContext,
@@ -21,7 +21,15 @@ import {
 } from "./types.js";
 
 export type { LifecycleDeps };
-export { currentSessionRef, endCurrentSession, endPreviousSession, ensureSessionContext, flushPendingSessionEnds, refreshSessionStart, requestRecallForPrompt };
+export {
+	currentSessionRef,
+	endCurrentSession,
+	endPreviousSession,
+	ensureSessionContext,
+	flushPendingSessionEnds,
+	refreshSessionStart,
+	requestRecallForPrompt,
+};
 
 const EXCLUDED_CUSTOM_TYPES: ReadonlySet<string> = new Set([
 	HIDDEN_RECALL_CUSTOM_TYPE,

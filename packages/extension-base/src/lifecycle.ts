@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { readStaticIdentity } from "@signet/core";
 import type { DaemonClient } from "./daemon-client.js";
 import { readTrimmedRuntimeEnv, readTrimmedString } from "./helpers.js";
-import type { BaseSessionState, PendingSessionEnd } from "./session-state.js";
+import type { BaseSessionState } from "./session-state.js";
 import { buildTranscriptFromEntries, readSessionFileSnapshot } from "./transcript.js";
 import type { BaseExtensionContext, BaseSessionEntry } from "./types.js";
 
