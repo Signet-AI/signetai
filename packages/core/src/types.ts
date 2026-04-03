@@ -196,6 +196,12 @@ export interface ProviderRateLimitConfig {
 	readonly waitTimeoutMs: number;
 }
 
+export const DEFAULT_PROVIDER_RATE_LIMIT: ProviderRateLimitConfig = {
+	maxCallsPerHour: 200,
+	burstSize: 20,
+	waitTimeoutMs: 5000,
+};
+
 export interface PipelineExtractionConfig {
 	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
 	readonly fallbackProvider?: "ollama" | "none";

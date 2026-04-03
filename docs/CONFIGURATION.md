@@ -316,9 +316,9 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
 | `command` | — | — | Command provider config (`bin`, `args[]`, optional `cwd`, optional `env`) — required when `provider: "command"` |
-| `rateLimit.maxCallsPerHour` | `200` | 0-10000 | Max extraction-provider calls per hour; set `0` to disable rate limiting |
-| `rateLimit.burstSize` | `20` | 1-1000 | Max burst size before throttling begins |
-| `rateLimit.waitTimeoutMs` | `5000` | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
+| `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max extraction-provider calls per hour; set `0` to disable rate limiting |
+| `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |
+| `rateLimit.waitTimeoutMs` | `5000` when `rateLimit` is set | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
 
 For safety, the intended extraction setups are:
 
@@ -335,9 +335,11 @@ pipeline runs continuously in the background. Use `anthropic`,
 `openrouter`, or remote OpenCode routes only when you explicitly want
 that billing behavior.
 
-`rateLimit` applies only to remote or paid providers (`claude-code`,
-`anthropic`, `openrouter`, `codex`, `opencode`). Ollama is always
-exempt.
+`rateLimit` is opt-in. If the stanza is omitted, Signet preserves the
+provider's existing behavior with no throughput throttling. When
+configured, it applies only to remote or paid providers
+(`claude-code`, `anthropic`, `openrouter`, `codex`, `opencode`).
+Ollama is always exempt.
 
 When using `ollama`, the model must be available locally. When using
 `claude-code`, the Claude Code CLI must be on PATH. `codex` uses the
@@ -406,9 +408,9 @@ defaults (`ollama` + default synthesis model/timeout) instead.
 | `model` | inherited from extraction when omitted | — | Model name for the configured provider |
 | `endpoint` | inherited from extraction when omitted | — | Optional base URL override for Ollama, OpenCode, or OpenRouter |
 | `timeout` | inherited from extraction when omitted | 5000-300000 ms | Summary generation timeout |
-| `rateLimit.maxCallsPerHour` | `200` | 0-10000 | Max synthesis-provider calls per hour; set `0` to disable rate limiting |
-| `rateLimit.burstSize` | `20` | 1-1000 | Max burst size before throttling begins |
-| `rateLimit.waitTimeoutMs` | `5000` | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
+| `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max synthesis-provider calls per hour; set `0` to disable rate limiting |
+| `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |
+| `rateLimit.waitTimeoutMs` | `5000` when `rateLimit` is set | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
 
 Set `provider: none` or `enabled: false` to disable background session
 summary synthesis entirely.

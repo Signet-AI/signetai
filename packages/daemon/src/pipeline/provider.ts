@@ -13,6 +13,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { LlmGenerateResult, LlmProvider, ProviderRateLimitConfig } from "@signet/core";
+import { DEFAULT_PROVIDER_RATE_LIMIT } from "../../../core/src/types";
 import { logger } from "../logger";
 import { trimTrailingSlash } from "./url";
 
@@ -144,6 +145,7 @@ export class TokenBucketRateLimiter {
 		return false;
 	}
 
+	// Stats are reported against the current wall clock, so reading them refills first.
 	get stats(): { readonly remaining: number; readonly totalConsumed: number; readonly totalThrottled: number } {
 		this.refill();
 		return {
@@ -153,12 +155,6 @@ export class TokenBucketRateLimiter {
 		};
 	}
 }
-
-const DEFAULT_RATE_LIMIT: ProviderRateLimitConfig = {
-	maxCallsPerHour: 200,
-	burstSize: 20,
-	waitTimeoutMs: 5000,
-};
 
 const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 	"claude-code",
@@ -174,11 +170,11 @@ function shouldRateLimit(providerName: string): boolean {
 }
 
 export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRateLimitConfig>): LlmProvider {
-	const cfg = { ...DEFAULT_RATE_LIMIT, ...config };
+	if (config === undefined) return provider;
+	const cfg = { ...DEFAULT_PROVIDER_RATE_LIMIT, ...config };
 	if (cfg.maxCallsPerHour <= 0) return provider;
 
-	const base = provider.name.split(":")[0];
-	if (!shouldRateLimit(base)) return provider;
+	if (!shouldRateLimit(provider.name)) return provider;
 
 	const bucket = new TokenBucketRateLimiter(cfg.maxCallsPerHour, cfg.burstSize);
 

@@ -10,6 +10,7 @@ import {
 	isPipelineProvider,
 	parseSimpleYaml,
 } from "@signet/core";
+import { DEFAULT_PROVIDER_RATE_LIMIT } from "../../core/src/types";
 import { type AuthConfig, parseAuthConfig } from "./auth/config";
 import { logger } from "./logger";
 
@@ -300,9 +301,9 @@ function parseRateLimitConfig(raw: unknown): PipelineV2Config["extraction"]["rat
 	const waitTimeoutMs = parseOptionalPositive(raw.waitTimeoutMs, 0, 60000);
 	if (maxCallsPerHour === undefined && burstSize === undefined && waitTimeoutMs === undefined) return undefined;
 	return {
-		maxCallsPerHour: maxCallsPerHour ?? 200,
-		burstSize: burstSize ?? 20,
-		waitTimeoutMs: waitTimeoutMs ?? 5000,
+		maxCallsPerHour: maxCallsPerHour ?? DEFAULT_PROVIDER_RATE_LIMIT.maxCallsPerHour,
+		burstSize: burstSize ?? DEFAULT_PROVIDER_RATE_LIMIT.burstSize,
+		waitTimeoutMs: waitTimeoutMs ?? DEFAULT_PROVIDER_RATE_LIMIT.waitTimeoutMs,
 	};
 }
 
