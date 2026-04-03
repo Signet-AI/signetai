@@ -7,30 +7,29 @@
  * controlled-write mode it applies ADD/NONE decisions with safety gates.
  */
 
-import type { DbAccessor, WriteDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
-import type { DecisionConfig, FactDecisionProposal } from "./decision";
 import { cpus, loadavg } from "node:os";
+import type { AnalyticsCollector } from "../analytics";
+import { normalizeAndHashContent } from "../content-normalization";
+import type { DbAccessor, WriteDb } from "../db-accessor";
+import { countChanges, syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
+import type { TelemetryCollector } from "../telemetry";
+import { txForgetMemory, txIngestEnvelope, txModifyMemory } from "../transactions";
+import { PROSPECTIVE_ANTONYM_PAIRS, hasAntonymConflict, hasNegation, overlapCount, tokenize } from "./antonyms";
+import { detectSemanticContradiction } from "./contradiction";
+import type { DecisionConfig, FactDecisionProposal } from "./decision";
+import { runShadowDecisions } from "./decision";
 import { extractFactsAndEntities } from "./extraction";
 import { escalate } from "./extraction-escalation";
-import { detectSemanticContradiction } from "./contradiction";
-import { runShadowDecisions } from "./decision";
-import { logger } from "../logger";
-import { assessSignificance, type SignificanceConfig } from "./significance-gate";
-import { txIngestEnvelope, txModifyMemory, txForgetMemory } from "../transactions";
-import { archiveToCold } from "./retention-worker";
-import { normalizeAndHashContent } from "../content-normalization";
-import { vectorToBlob, countChanges, syncVecInsert, syncVecDeleteBySourceExceptHash } from "../db-helpers";
 import { txPersistEntities } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
 import { enqueueHintsJob } from "./prospective-index";
-import type { AnalyticsCollector } from "../analytics";
-import type { TelemetryCollector } from "../telemetry";
-import { generateWithTracking } from "./provider";
-import { recoverStaleLeases, type StaleLeaseRecovery } from "./stale-leases";
-import { assessWriteGate, type WriteGateConfig } from "./write-gate";
-import { PROSPECTIVE_ANTONYM_PAIRS, tokenize, hasNegation, overlapCount, hasAntonymConflict } from "./antonyms";
+import { archiveToCold } from "./retention-worker";
+import { generateWithTracking, type LlmProvider, RateLimitExceededError } from "./provider";
+import { type SignificanceConfig, assessSignificance } from "./significance-gate";
+import { type StaleLeaseRecovery, recoverStaleLeases } from "./stale-leases";
+import { type WriteGateConfig, assessWriteGate } from "./write-gate";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1534,27 +1533,37 @@ export function startWorker(
 				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
+				const nonRetryable = e instanceof RateLimitExceededError;
 				logger.warn("pipeline", "Job failed", {
 					jobId: job.id,
 					error: msg,
 					attempt: job.attempts,
+					nonRetryable,
 				});
 				analytics?.recordLatency("jobs", runtime.now() - jobStart);
 				analytics?.recordError({
 					timestamp: new Date().toISOString(),
 					stage: "extraction",
-					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
+					code: nonRetryable
+						? "EXTRACTION_RATE_LIMIT"
+						: msg.includes("timeout")
+							? "EXTRACTION_TIMEOUT"
+							: "EXTRACTION_PARSE_FAIL",
 					message: msg,
 					memoryId: job.memory_id,
 				});
 				telemetry?.record("pipeline.error", {
 					stage: "extraction",
-					code: msg.includes("timeout") ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL",
+					code: nonRetryable
+						? "EXTRACTION_RATE_LIMIT"
+						: msg.includes("timeout")
+							? "EXTRACTION_TIMEOUT"
+							: "EXTRACTION_PARSE_FAIL",
 					durationMs: runtime.now() - jobStart,
 				});
 				accessor.withWriteTx((db) => {
-					failJob(db, job.id, msg, job.attempts, job.max_attempts);
-					if (job.attempts >= job.max_attempts) {
+					failJob(db, job.id, msg, nonRetryable ? job.max_attempts : job.attempts, job.max_attempts);
+					if (nonRetryable || job.attempts >= job.max_attempts) {
 						updateExtractionStatus(db, job.memory_id, "failed", pipelineCfg.extraction.model);
 					}
 				});

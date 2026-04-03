@@ -2,9 +2,9 @@
  * Tests for the extraction pipeline module.
  */
 
-import { describe, it, expect } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { extractFactsAndEntities, stripFences } from "./extraction";
-import type { LlmProvider } from "./provider";
+import { type LlmProvider, RateLimitExceededError } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Test helper
@@ -29,7 +29,11 @@ const INPUT_GENERIC = "Some content that is long enough to pass the extraction i
 
 const VALID_RESPONSE = JSON.stringify({
 	facts: [
-		{ content: "User prefers dark mode for their terminal, editor, and all development tool interfaces", type: "preference", confidence: 0.9 },
+		{
+			content: "User prefers dark mode for their terminal, editor, and all development tool interfaces",
+			type: "preference",
+			confidence: 0.9,
+		},
 		{
 			content: "User uses vim keybindings in VS Code and has customized their keybinding configuration extensively",
 			type: "preference",
@@ -74,7 +78,9 @@ describe("extractFactsAndEntities", () => {
 		const result = await extractFactsAndEntities(INPUT, provider);
 
 		expect(result.facts).toHaveLength(2);
-		expect(result.facts[0].content).toBe("User prefers dark mode for their terminal, editor, and all development tool interfaces");
+		expect(result.facts[0].content).toBe(
+			"User prefers dark mode for their terminal, editor, and all development tool interfaces",
+		);
 		expect(result.facts[0].type).toBe("preference");
 		expect(result.facts[0].confidence).toBe(0.9);
 		expect(result.entities).toHaveLength(1);
@@ -153,7 +159,8 @@ ${VALID_RESPONSE}
 			facts: [
 				{ content: "short fact that is under the minimum length threshold", type: "fact", confidence: 0.9 },
 				{
-					content: "This fact contains enough detail about the user's development environment preferences to pass validation",
+					content:
+						"This fact contains enough detail about the user's development environment preferences to pass validation",
 					type: "fact",
 					confidence: 0.8,
 				},
@@ -165,7 +172,9 @@ ${VALID_RESPONSE}
 
 		// Only the long fact should survive
 		expect(result.facts).toHaveLength(1);
-		expect(result.facts[0].content).toBe("This fact contains enough detail about the user's development environment preferences to pass validation");
+		expect(result.facts[0].content).toBe(
+			"This fact contains enough detail about the user's development environment preferences to pass validation",
+		);
 		expect(result.warnings.some((w) => w.includes("too short"))).toBe(true);
 	});
 
@@ -173,7 +182,8 @@ ${VALID_RESPONSE}
 		const response = JSON.stringify({
 			facts: [
 				{
-					content: "Some fact about the user's project configuration that is definitely long enough to pass the validation gate",
+					content:
+						"Some fact about the user's project configuration that is definitely long enough to pass the validation gate",
 					type: "bogustype",
 					confidence: 0.7,
 				},
@@ -201,12 +211,14 @@ ${VALID_RESPONSE}
 		const response = JSON.stringify({
 			facts: [
 				{
-					content: "Fact with confidence above one point zero and enough detail about the project to satisfy the length gate",
+					content:
+						"Fact with confidence above one point zero and enough detail about the project to satisfy the length gate",
 					type: "fact",
 					confidence: 1.5,
 				},
 				{
-					content: "Fact with negative confidence value here and enough additional context to satisfy the minimum length gate",
+					content:
+						"Fact with negative confidence value here and enough additional context to satisfy the minimum length gate",
 					type: "fact",
 					confidence: -0.3,
 				},
@@ -233,7 +245,12 @@ ${VALID_RESPONSE}
 			facts: [
 				{ content: "User prefers dark mode in the editor", type: "preference", confidence: 0.9 },
 				{ content: "The daemon runs on port 3850 by default for HTTP serving", type: "fact", confidence: 0.85 },
-				{ content: "User's development environment runs Hyprland window manager on Arch Linux with custom keybindings configured", type: "fact", confidence: 0.8 },
+				{
+					content:
+						"User's development environment runs Hyprland window manager on Arch Linux with custom keybindings configured",
+					type: "fact",
+					confidence: 0.8,
+				},
 			],
 			entities: [],
 		});
@@ -314,6 +331,22 @@ ${VALID_RESPONSE}
 
 		await expect(extractFactsAndEntities(INPUT_GENERIC, errorProvider)).rejects.toThrow(
 			"LLM extraction failed: connection refused",
+		);
+	});
+
+	it("rethrows provider rate-limit errors without wrapping them", async () => {
+		const rateLimitedProvider: LlmProvider = {
+			name: "claude-code:haiku",
+			async generate() {
+				throw new RateLimitExceededError("claude-code:haiku", 200);
+			},
+			async available() {
+				return true;
+			},
+		};
+
+		await expect(extractFactsAndEntities(INPUT_GENERIC, rateLimitedProvider)).rejects.toBeInstanceOf(
+			RateLimitExceededError,
 		);
 	});
 

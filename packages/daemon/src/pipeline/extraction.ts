@@ -13,7 +13,7 @@ import {
 	type MemoryType,
 } from "@signet/core";
 import { logger } from "../logger";
-import type { LlmProvider } from "./provider";
+import { type LlmProvider, RateLimitExceededError } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -454,6 +454,14 @@ export async function extractFactsAndEntities(
 			maxTokens: opts?.maxTokens,
 		});
 	} catch (e) {
+		if (e instanceof RateLimitExceededError) {
+			logger.warn("pipeline", "Extraction LLM call rate limited", {
+				error: e.message,
+				provider: e.providerName,
+				maxCallsPerHour: e.maxCallsPerHour,
+			});
+			throw e;
+		}
 		const msg = e instanceof Error ? e.message : String(e);
 		logger.warn("pipeline", "Extraction LLM call failed", { error: msg });
 		throw new Error(`LLM extraction failed: ${msg}`);

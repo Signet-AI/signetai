@@ -13,7 +13,7 @@ import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { syncVecInsert, vectorToBlob } from "../db-helpers";
 import type { PipelineV2Config } from "../memory-config";
 import type { DecisionConfig } from "./decision";
-import type { LlmProvider } from "./provider";
+import { type LlmProvider, RateLimitExceededError } from "./provider";
 import { enqueueExtractionJob, recoverMemoryJobs, startWorker } from "./worker";
 
 // ---------------------------------------------------------------------------
@@ -218,6 +218,18 @@ function failThenSucceedProvider(failures: number): LlmProvider {
 			calls++;
 			if (calls <= failures) throw new Error("Transient LLM failure");
 			return good;
+		},
+		async available() {
+			return true;
+		},
+	};
+}
+
+function rateLimitedProvider(): LlmProvider {
+	return {
+		name: "mock-rate-limited",
+		async generate() {
+			throw new RateLimitExceededError("claude-code:haiku", 200);
 		},
 		async available() {
 			return true;
@@ -534,6 +546,25 @@ describe("Worker processing", () => {
 		expect(job?.status).toBe("pending");
 		expect(job?.attempts).toBeGreaterThanOrEqual(1);
 		expect(job?.error).toContain("LLM extraction failed");
+	});
+
+	it("marks job dead without retry when provider rate limit is exceeded", async () => {
+		insertMemory(
+			db,
+			"mem-rate-limit",
+			"User prefers a carefully tuned editor setup with dark mode, vim keybindings, project-specific tasks, and long-running remote LLM workflows for coding assistance.",
+		);
+		enqueueExtractionJob(accessor, "mem-rate-limit");
+
+		const worker = startWorker(accessor, rateLimitedProvider(), PIPELINE_CFG, DECISION_CFG);
+
+		await Bun.sleep(200);
+		await worker.stop();
+
+		const job = getJob(db, "mem-rate-limit");
+		expect(job?.status).toBe("dead");
+		expect(job?.attempts).toBe(1);
+		expect(job?.error).toContain("Rate limit exceeded");
 	});
 
 	it("worker stop() waits for in-flight job", async () => {

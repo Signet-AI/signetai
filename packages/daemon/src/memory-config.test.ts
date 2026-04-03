@@ -888,6 +888,61 @@ describe("loadPipelineConfig", () => {
 		expect(result.extraction.minConfidence).toBe(0.55);
 	});
 
+	it("treats empty rateLimit objects as unconfigured", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: { rateLimit: {} },
+					synthesis: { rateLimit: {} },
+				},
+			},
+		});
+
+		expect(result.extraction.rateLimit).toBeUndefined();
+		expect(result.synthesis.rateLimit).toBeUndefined();
+	});
+
+	it("preserves explicit maxCallsPerHour disable in rateLimit config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						rateLimit: {
+							maxCallsPerHour: 0,
+						},
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.rateLimit).toEqual({
+			maxCallsPerHour: 0,
+			burstSize: 20,
+			waitTimeoutMs: 5000,
+		});
+	});
+
+	it("clamps burstSize to 1 in parsed rateLimit config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						rateLimit: {
+							maxCallsPerHour: 100,
+							burstSize: 0,
+						},
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.rateLimit).toEqual({
+			maxCallsPerHour: 100,
+			burstSize: 1,
+			waitTimeoutMs: 5000,
+		});
+	});
+
 	it("loads adaptive write-gate config from flat keys", () => {
 		const result = loadPipelineConfig({
 			memory: {
