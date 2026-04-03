@@ -163,6 +163,12 @@ describe("withRateLimit", () => {
 		expect(wrapped).toBe(provider);
 	});
 
+	it("returns provider unwrapped when rate limiting config is empty", () => {
+		const provider = mockProvider("claude-code:haiku");
+		const wrapped = withRateLimit(provider, {});
+		expect(wrapped).toBe(provider);
+	});
+
 	it("returns provider unwrapped when maxCallsPerHour is 0", () => {
 		const provider = mockProvider("claude-code:haiku");
 		const wrapped = withRateLimit(provider, { maxCallsPerHour: 0 });
