@@ -11,7 +11,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -2482,7 +2482,7 @@ export async function handleUserPromptSubmit(
 // Session keys can be shared across distinct harness runs (for example
 // recurring heartbeat sessions), so artifact lineage needs a more specific
 // fallback identifier when the harness does not supply sessionId.
-function deriveSessionEndFallbackId(
+export function deriveSessionEndFallbackId(
 	sessionKey: string | undefined,
 	transcriptPath: string | undefined,
 	transcript: string,
@@ -2497,7 +2497,7 @@ function deriveSessionEndFallbackId(
 		const digest = createHash("sha256").update(transcript).digest("hex").slice(0, 16);
 		return `session-end:${scopedKey}:${digest}`;
 	}
-	return `session-end:${scopedKey}:${endedAt}`;
+	return `session-end:${scopedKey}:${endedAt}:${randomUUID()}`;
 }
 
 export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {

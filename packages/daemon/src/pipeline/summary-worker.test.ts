@@ -6,8 +6,10 @@ import { join } from "node:path";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { loadMemoryConfig } from "../memory-config";
+import { IMMUTABLE_ARTIFACT_ERROR_PREFIX } from "../memory-lineage";
 import {
 	SUMMARY_WORKER_UPDATED_BY,
+	type SummaryWorkerHandle,
 	clearCommandStageRunning,
 	getCommandStageStatus,
 	hasCommandStageCompleted,
@@ -16,6 +18,7 @@ import {
 	markCommandStageCompleted,
 	markCommandStageRunning,
 	recoverSummaryJobs,
+	resolveFailedSummaryJobStatus,
 	resolveSummaryHeadingDate,
 	resolveSummaryProvider,
 	runSummaryCommandProvider,
@@ -62,6 +65,25 @@ function makeAgentsDir(content: string): string {
 	tmpDirs.push(dir);
 	writeFileSync(join(dir, "agent.yaml"), content);
 	return dir;
+}
+
+async function waitForJobStatus(
+	db: Database,
+	id: string,
+	status: string,
+	timeoutMs = 8_000,
+): Promise<{ status: string; attempts: number; max_attempts: number; error: string | null }> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const row = db.prepare("SELECT status, attempts, max_attempts, error FROM summary_jobs WHERE id = ?").get(id) as
+			| { status: string; attempts: number; max_attempts: number; error: string | null }
+			| undefined;
+		if (row?.status === status) {
+			return row;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	throw new Error(`Timed out waiting for summary job ${id} to reach ${status}`);
 }
 
 describe("insertSummaryFacts", () => {
@@ -276,10 +298,22 @@ describe("summary job helpers", () => {
 	it("classifies immutable artifact conflicts as terminal failures", () => {
 		expect(
 			isTerminalSummaryJobError(
-				"Refusing to mutate immutable artifact /tmp/.agents/memory/2026-04-03T14-08-11.982Z--token--summary.md",
+				`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} /tmp/.agents/memory/2026-04-03T14-08-11.982Z--token--summary.md`,
 			),
 		).toBe(true);
 		expect(isTerminalSummaryJobError("summary command timed out after 5000ms")).toBe(false);
+	});
+
+	it("marks immutable artifact conflicts dead without consuming retry budget", () => {
+		expect(
+			resolveFailedSummaryJobStatus(
+				`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} /tmp/.agents/memory/2026-04-03T14-08-11.982Z--token--summary.md`,
+				1,
+				3,
+			),
+		).toBe("dead");
+		expect(resolveFailedSummaryJobStatus("summary command timed out after 5000ms", 1, 3)).toBe("pending");
+		expect(resolveFailedSummaryJobStatus("summary command timed out after 5000ms", 3, 3)).toBe("dead");
 	});
 });
 

@@ -17,6 +17,7 @@ function getMemoryDir(): string {
 const HASH_SCOPE = "body-normalized-v1";
 const SANITIZER_VERSION = "sanitize_transcript_v1";
 const SENTENCE_VERSION = "memory_sentence_v1";
+export const IMMUTABLE_ARTIFACT_ERROR_PREFIX = "Refusing to mutate immutable artifact";
 const LEDGER_HEADING = "Session Ledger (Last 30 Days)";
 const LOW_SIGNAL_SENTENCES = new Set(["Investigated issue.", "Worked on task.", "Reviewed code."]);
 
@@ -408,7 +409,7 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 		const existingHash = existing.frontmatter.content_sha256;
 		const nextHash = frontmatter.content_sha256;
 		if (existingHash === nextHash) return path;
-		throw new Error(`Refusing to mutate immutable artifact ${path}`);
+		throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path}`);
 	}
 
 	writeAtomic(path, content);
@@ -638,6 +639,9 @@ function findExistingManifest(agentId: string, sessionKey: string | null, sessio
 				)
 				.get(agentId, sessionId) as { source_path: string } | undefined;
 			if (bySessionId) return bySessionId;
+			// Legacy fallback only applies to pre-fix rows where session_id was
+			// persisted verbatim from the caller and therefore still equals the
+			// shared session_key value.
 			if (!sessionKey || sessionKey !== sessionId) return undefined;
 			return db
 				.prepare(

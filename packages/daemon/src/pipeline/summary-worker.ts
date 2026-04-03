@@ -22,7 +22,7 @@ import { countChanges } from "../db-helpers";
 import { inferType, isDuplicate } from "../hooks";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
-import { writeSummaryArtifact } from "../memory-lineage";
+import { IMMUTABLE_ARTIFACT_ERROR_PREFIX, writeSummaryArtifact } from "../memory-lineage";
 import { getSecret } from "../secrets";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
@@ -95,7 +95,15 @@ export function resolveSummaryHeadingDate(job: Pick<SummaryJobRow, "ended_at" | 
 }
 
 export function isTerminalSummaryJobError(errorMessage: string): boolean {
-	return errorMessage.includes("Refusing to mutate immutable artifact");
+	return errorMessage.includes(IMMUTABLE_ARTIFACT_ERROR_PREFIX);
+}
+
+export function resolveFailedSummaryJobStatus(
+	errorMessage: string,
+	attempts: number,
+	maxAttempts: number,
+): "dead" | "pending" {
+	return isTerminalSummaryJobError(errorMessage) || attempts >= maxAttempts ? "dead" : "pending";
 }
 
 // ---------------------------------------------------------------------------
@@ -1577,7 +1585,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 
 						if (!row) return;
 
-						const status = terminal || row.attempts >= row.max_attempts ? "dead" : "pending";
+						const status = resolveFailedSummaryJobStatus(errorMessage, row.attempts, row.max_attempts);
 
 						db.prepare(
 							`UPDATE summary_jobs
