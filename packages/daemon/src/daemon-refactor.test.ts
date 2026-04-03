@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSessionCleanupRunning, stopSessionCleanup } from "./session-tracker";
 
 describe("daemon route extraction refactor", () => {
-	afterEach(() => {
+	beforeEach(() => {
 		stopSessionCleanup();
 	});
 

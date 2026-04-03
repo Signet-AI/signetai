@@ -1358,7 +1358,9 @@ async function stopPipelineRuntime(): Promise<void> {
 	clearStructuralBackfillTimer();
 
 	if (skillReconcilerHandle) {
-		skillReconcilerHandle.stop();
+		try {
+			await skillReconcilerHandle.stop();
+		} catch {}
 		skillReconcilerHandle = null;
 	}
 
