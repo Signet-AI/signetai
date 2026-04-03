@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { serve } from "@hono/node-server";
 import { networkModeFromBindHost, parseSimpleYaml, readNetworkMode, resolveNetworkBinding } from "@signet/core";
 import { type AnalyticsCollector, createAnalyticsCollector } from "../analytics";
-import { type AuthConfig, AuthRateLimiter, parseAuthConfig } from "../auth";
+import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig } from "../auth";
 import {
 	type DiagnosticsReport,
 	type PredictorHealthParams,
@@ -16,6 +16,7 @@ import {
 	getPredictorHealth,
 } from "../diagnostics";
 import type { EmbeddingTrackerHandle } from "../embedding-tracker";
+import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import type { DreamingWorkerHandle } from "../pipeline/dreaming-worker";
 import type { PredictorClient } from "../predictor-client";
 import { createRateLimiter } from "../repair-actions";
@@ -429,26 +430,28 @@ export function setShuttingDown(value: boolean): void {
 	shuttingDown = value;
 }
 
-export function setAuthConfig(value: AuthConfig): void {
-	authConfig = value;
-}
+export function reloadAuthState(agentsDir: string): void {
+	const cfg = loadMemoryConfig(agentsDir);
+	if (!cfg.auth) throw new Error("Missing auth section in agent.yaml");
+	if (!cfg.auth.rateLimits) throw new Error("Missing rateLimits in auth config");
 
-export function setAuthSecret(value: Buffer | null): void {
-	authSecret = value;
-}
+	authConfig = cfg.auth;
+	authSecret = authConfig.mode !== "local" ? loadOrCreateSecret(authConfig.secretPath) : null;
 
-export function setAuthRateLimiters(value: {
-	forget: AuthRateLimiter;
-	modify: AuthRateLimiter;
-	batchForget: AuthRateLimiter;
-	admin: AuthRateLimiter;
-	recallLlm: AuthRateLimiter;
-}): void {
-	authForgetLimiter = value.forget;
-	authModifyLimiter = value.modify;
-	authBatchForgetLimiter = value.batchForget;
-	authAdminLimiter = value.admin;
-	authRecallLlmLimiter = value.recallLlm;
+	const rl = authConfig.rateLimits;
+	authForgetLimiter = rl.forget
+		? new AuthRateLimiter(rl.forget.windowMs, rl.forget.max)
+		: new AuthRateLimiter(60_000, 30);
+	authModifyLimiter = rl.modify
+		? new AuthRateLimiter(rl.modify.windowMs, rl.modify.max)
+		: new AuthRateLimiter(60_000, 60);
+	authBatchForgetLimiter = rl.batchForget
+		? new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max)
+		: new AuthRateLimiter(60_000, 5);
+	authAdminLimiter = rl.admin ? new AuthRateLimiter(rl.admin.windowMs, rl.admin.max) : new AuthRateLimiter(60_000, 10);
+	authRecallLlmLimiter = rl.recallLlm
+		? new AuthRateLimiter(rl.recallLlm.windowMs, rl.recallLlm.max)
+		: new AuthRateLimiter(60_000, 60);
 }
 
 export function setOpenClawHeartbeat(value: { timestamp: string; data: OpenClawHeartbeatData } | null): void {
@@ -457,8 +460,6 @@ export function setOpenClawHeartbeat(value: { timestamp: string; data: OpenClawH
 
 // Feature flag and session helpers that use AGENTS_DIR
 export { AGENTS_DIR as default };
-
-import type { ResolvedMemoryConfig } from "../memory-config";
 
 export { getUpdateState };
 

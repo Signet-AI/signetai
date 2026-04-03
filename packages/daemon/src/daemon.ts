@@ -26,15 +26,11 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { resolveAgentId } from "./agent-id";
 import {
-	type AuthConfig,
-	AuthRateLimiter,
 	type TokenRole,
 	type TokenScope,
 	checkScope,
 	createAuthMiddleware,
 	createToken,
-	loadOrCreateSecret,
-	parseAuthConfig,
 	requirePermission,
 	requireRateLimit,
 } from "./auth";
@@ -112,7 +108,13 @@ import {
 	PID_FILE,
 	PORT,
 	analyticsCollector,
+	authAdminLimiter,
+	authBatchForgetLimiter,
+	authConfig,
 	authCrossAgentMessageLimiter,
+	authForgetLimiter,
+	authModifyLimiter,
+	authSecret,
 	bindAbort,
 	invalidateDiagnosticsCache,
 	isAllowedOrigin,
@@ -123,10 +125,8 @@ import {
 	queueExtractionJob,
 	readEnvTrimmed,
 	redactUrlForLogs,
+	reloadAuthState,
 	repairLimiter,
-	setAuthConfig,
-	setAuthRateLimiters,
-	setAuthSecret,
 	setCheckpointPruneTimer,
 	setHeartbeatTimer,
 	setPredictorClientRef,
@@ -155,7 +155,7 @@ import { registerRepairRoutes } from "./routes/repair-routes.js";
 import { registerSecretRoutes } from "./routes/secrets-routes.js";
 import { registerSessionRoutes } from "./routes/session-routes.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
-import { blobToVector, chunkBySentence, getConfiguredProviderHints, parseOptionalString } from "./routes/utils.js";
+import { getConfiguredProviderHints } from "./routes/utils.js";
 import {
 	MAX_UPDATE_INTERVAL_SECONDS,
 	MIN_UPDATE_INTERVAL_SECONDS,
@@ -171,13 +171,6 @@ import {
 	stopUpdateTimer,
 } from "./update-system";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
-let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
-let authSecret: Buffer | null = null;
-let authForgetLimiter = new AuthRateLimiter(60_000, 30);
-let authModifyLimiter = new AuthRateLimiter(60_000, 60);
-let authBatchForgetLimiter = new AuthRateLimiter(60_000, 5);
-let authAdminLimiter = new AuthRateLimiter(60_000, 10);
-let authRecallLlmLimiter = new AuthRateLimiter(60_000, 60);
 
 let shuttingDown = false;
 let httpServer: ReturnType<typeof createAdaptorServer> | null = null;
@@ -1231,36 +1224,7 @@ function startFileWatcher() {
 		const base = basename(path);
 		if (base === "agent.yaml" || base === "AGENT.yaml") {
 			try {
-				const cfg = loadMemoryConfig(AGENTS_DIR);
-				if (!cfg.auth) throw new Error("Missing auth section in agent.yaml");
-				if (!cfg.auth.rateLimits) throw new Error("Missing rateLimits in auth config");
-				authConfig = cfg.auth;
-				authSecret = authConfig.mode !== "local" ? loadOrCreateSecret(authConfig.secretPath) : null;
-				const rl = authConfig.rateLimits;
-				authForgetLimiter = rl.forget
-					? new AuthRateLimiter(rl.forget.windowMs, rl.forget.max)
-					: new AuthRateLimiter(60_000, 30);
-				authModifyLimiter = rl.modify
-					? new AuthRateLimiter(rl.modify.windowMs, rl.modify.max)
-					: new AuthRateLimiter(60_000, 60);
-				authBatchForgetLimiter = rl.batchForget
-					? new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max)
-					: new AuthRateLimiter(60_000, 5);
-				authAdminLimiter = rl.admin
-					? new AuthRateLimiter(rl.admin.windowMs, rl.admin.max)
-					: new AuthRateLimiter(60_000, 10);
-				authRecallLlmLimiter = rl.recallLlm
-					? new AuthRateLimiter(rl.recallLlm.windowMs, rl.recallLlm.max)
-					: new AuthRateLimiter(60_000, 60);
-				setAuthConfig(authConfig);
-				setAuthSecret(authSecret);
-				setAuthRateLimiters({
-					forget: authForgetLimiter,
-					modify: authModifyLimiter,
-					batchForget: authBatchForgetLimiter,
-					admin: authAdminLimiter,
-					recallLlm: authRecallLlmLimiter,
-				});
+				reloadAuthState(AGENTS_DIR);
 				logger.info("config", "Auth config reloaded from disk");
 			} catch (e) {
 				logger.error("config", "Failed to reload auth config", e as Error);
@@ -1503,31 +1467,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		dimensions: memoryCfg.embedding.dimensions,
 	});
 
-	authConfig = memoryCfg.auth;
-	if (authConfig.mode !== "local") {
-		authSecret = loadOrCreateSecret(authConfig.secretPath);
-		setAuthSecret(authSecret);
-		logger.info("auth", "Auth initialized", { mode: authConfig.mode });
-	} else {
-		authSecret = null;
-		setAuthSecret(null);
-		logger.info("auth", "Running in local mode (no auth)");
-	}
-
-	const rl = authConfig.rateLimits;
-	if (rl.forget) authForgetLimiter = new AuthRateLimiter(rl.forget.windowMs, rl.forget.max);
-	if (rl.modify) authModifyLimiter = new AuthRateLimiter(rl.modify.windowMs, rl.modify.max);
-	if (rl.batchForget) authBatchForgetLimiter = new AuthRateLimiter(rl.batchForget.windowMs, rl.batchForget.max);
-	if (rl.admin) authAdminLimiter = new AuthRateLimiter(rl.admin.windowMs, rl.admin.max);
-	if (rl.recallLlm) authRecallLlmLimiter = new AuthRateLimiter(rl.recallLlm.windowMs, rl.recallLlm.max);
-	setAuthConfig(authConfig);
-	setAuthRateLimiters({
-		forget: authForgetLimiter,
-		modify: authModifyLimiter,
-		batchForget: authBatchForgetLimiter,
-		admin: authAdminLimiter,
-		recallLlm: authRecallLlmLimiter,
-	});
+	reloadAuthState(AGENTS_DIR);
 
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
 	const validExtractionProviders = new Set([
