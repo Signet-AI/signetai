@@ -341,6 +341,10 @@ configured, it applies only to remote or paid providers
 (`claude-code`, `anthropic`, `openrouter`, `codex`, `opencode`).
 Ollama is always exempt.
 
+An empty `rateLimit: {}` block is treated as disabled. Set at least one
+sub-field to opt in, or omit the stanza entirely to leave rate limiting
+off.
+
 When using `ollama`, the model must be available locally. When using
 `claude-code`, the Claude Code CLI must be on PATH. `codex` uses the
 Codex CLI as the extraction provider. Lower `minConfidence` to capture
@@ -420,6 +424,9 @@ summary synthesis entirely.
 Widget HTML generation uses a separate provider instance by default, so
 widget traffic does not consume the synthesis pipeline's `rateLimit`
 bucket.
+
+As with extraction, an empty `rateLimit: {}` block is treated as
+disabled. Set at least one sub-field to opt in.
 
 
 ### Worker (`worker`)

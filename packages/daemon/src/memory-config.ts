@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
+	DEFAULT_PROVIDER_RATE_LIMIT,
 	type DreamingConfig,
 	PIPELINE_FLAGS,
 	type PipelineFlag,
@@ -10,7 +11,6 @@ import {
 	isPipelineProvider,
 	parseSimpleYaml,
 } from "@signet/core";
-import { DEFAULT_PROVIDER_RATE_LIMIT } from "../../core/src/types";
 import { type AuthConfig, parseAuthConfig } from "./auth/config";
 import { logger } from "./logger";
 
