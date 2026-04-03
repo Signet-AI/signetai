@@ -26,7 +26,7 @@ describe("daemon route extraction refactor", () => {
 		const secret2 = state.authSecret;
 
 		expect(mode2).toBe(mode1);
-		expect(secret2).toBe(secret1);
+		expect(secret2?.toString("hex")).toBe(secret1?.toString("hex"));
 
 		// authSecret must be consistent with mode after every reload.
 		if (state.authConfig.mode !== "local") {
