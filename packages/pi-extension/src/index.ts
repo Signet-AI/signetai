@@ -407,9 +407,12 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 		description: "Check SignetAI daemon status",
 		handler: async (_args, ctx) => {
 			const healthy = await checkDaemonHealth(daemonUrl);
+			const sessionId = ctx.sessionManager.getSessionId();
 
 			if (healthy) {
-				ctx.ui.notify(`Signet daemon is running on ${daemonUrl}`, "success");
+				const parts = [`Signet daemon is running on ${daemonUrl}`];
+				if (sessionId) parts.push(`Session: ${sessionId}`);
+				ctx.ui.notify(parts.join("\n"), "success");
 
 				// Try to get memory count
 				try {
