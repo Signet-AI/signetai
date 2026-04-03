@@ -574,17 +574,21 @@ const SignetPiExtension: PiExtensionFactory = (pi): void => {
 	const daemonUrl = readTrimmedRuntimeEnv("SIGNET_DAEMON_URL") ?? DAEMON_URL_DEFAULT;
 	const agentId = readTrimmedRuntimeEnv("SIGNET_AGENT_ID");
 
-	const deps: PiDeps = {
-		agentId,
-		client: createDaemonClient(daemonUrl),
-		state: createSessionState(),
-		config: PI_LIFECYCLE_CONFIG,
-	};
+	// Bypass mode: skip automatic hooks but keep commands and tools
+	if (readRuntimeEnv("SIGNET_BYPASS") !== "1") {
+		const deps: PiDeps = {
+			agentId,
+			client: createDaemonClient(daemonUrl),
+			state: createSessionState(),
+			config: PI_LIFECYCLE_CONFIG,
+		};
 
-	registerSessionLifecycleHandlers(pi, deps, daemonUrl);
-	registerPromptHandlers(pi, deps);
-	registerContextHandlers(pi, deps);
-	registerCompactionHandlers(pi, deps);
+		registerSessionLifecycleHandlers(pi, deps, daemonUrl);
+		registerPromptHandlers(pi, deps);
+		registerContextHandlers(pi, deps);
+		registerCompactionHandlers(pi, deps);
+	}
+
 	registerCommandsAndTools(pi, daemonUrl, agentId);
 };
 

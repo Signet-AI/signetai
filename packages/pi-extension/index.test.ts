@@ -116,6 +116,17 @@ describe("loadConfig", () => {
 
 		expect(loadConfig().enabled).toBe(false);
 	});
+
+	it("SIGNET_BYPASS=1 is not part of loadConfig (read at runtime)", () => {
+		saveEnv("SIGNET_ENABLED", "SIGNET_BYPASS", "PI_CODING_AGENT_DIR");
+		delete process.env.SIGNET_ENABLED;
+		delete process.env.PI_CODING_AGENT_DIR;
+		process.env.SIGNET_BYPASS = "1";
+		// loadConfig does not include bypass — it's checked at factory call time
+		const config = loadConfig();
+		expect(config.enabled).toBe(true);
+		expect(config).not.toHaveProperty("bypass");
+	});
 });
 
 // ============================================================================
@@ -315,6 +326,7 @@ describe("SignetPiExtension", () => {
 		delete process.env.SIGNET_ENABLED;
 		delete process.env.SIGNET_AGENT_ID;
 		delete process.env.SIGNET_DAEMON_URL;
+		delete process.env.SIGNET_BYPASS;
 	});
 
 	it("registers handlers for Pi lifecycle, prompt, context, and compaction events", () => {
@@ -331,6 +343,37 @@ describe("SignetPiExtension", () => {
 		expect(registered.has("before_agent_start")).toBe(true);
 		expect(registered.has("context")).toBe(true);
 		expect(registered.has("session_before_compact")).toBe(true);
+	});
+
+	it("bypass mode skips automatic hooks but keeps commands and tools", () => {
+		process.env.SIGNET_BYPASS = "1";
+
+		const events = new Set<string>();
+		let commandCount = 0;
+		let toolCount = 0;
+		const pi = {
+			on(event: string, _handler: unknown) {
+				events.add(event);
+			},
+			registerCommand(_name: string, _opts: unknown) {
+				commandCount++;
+			},
+			registerTool(_opts: unknown) {
+				toolCount++;
+			},
+		};
+
+		SignetPiExtension(pi as never);
+
+		// Automatic hooks should NOT be registered
+		expect(events.has("session_start")).toBe(false);
+		expect(events.has("before_agent_start")).toBe(false);
+		expect(events.has("context")).toBe(false);
+		expect(events.has("session_before_compact")).toBe(false);
+
+		// Commands and tools should still be registered
+		expect(commandCount).toBeGreaterThan(0);
+		expect(toolCount).toBeGreaterThan(0);
 	});
 
 	it("context injection end-to-end: session context and recall are delivered via context event", async () => {

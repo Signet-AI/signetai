@@ -128,6 +128,11 @@ const SignetOhMyPiExtension: OmpExtensionFactory = (pi): void => {
 		return;
 	}
 
+	// Per-session bypass: skip all automatic hooks (Oh My Pi has no commands/tools)
+	if (readRuntimeEnv("SIGNET_BYPASS") === "1") {
+		return;
+	}
+
 	const deps: OmpDeps = {
 		agentId: readTrimmedRuntimeEnv("SIGNET_AGENT_ID"),
 		client: createDaemonClient(readTrimmedRuntimeEnv("SIGNET_DAEMON_URL") ?? DAEMON_URL_DEFAULT),

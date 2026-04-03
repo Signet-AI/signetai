@@ -12,6 +12,7 @@ afterEach(() => {
 	delete process.env.SIGNET_ENABLED;
 	delete process.env.SIGNET_AGENT_ID;
 	delete process.env.SIGNET_DAEMON_URL;
+	delete process.env.SIGNET_BYPASS;
 });
 
 describe("SignetOhMyPiExtension", () => {
@@ -62,5 +63,20 @@ describe("SignetOhMyPiExtension", () => {
 		});
 		expect((result as { message: { content: string } }).message.content).toContain("session context");
 		expect((result as { message: { content: string } }).message.content).toContain("Favorite color is blue");
+	});
+
+	it("bypass mode skips all handler registration", () => {
+		process.env.SIGNET_BYPASS = "1";
+
+		const events = new Set<string>();
+		const pi = {
+			on(event: string, _handler: unknown) {
+				events.add(event);
+			},
+		};
+
+		SignetOhMyPiExtension(pi as never);
+
+		expect(events.size).toBe(0);
 	});
 });
