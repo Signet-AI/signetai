@@ -129,12 +129,12 @@ import {
 	setCheckpointPruneTimer,
 	setHeartbeatTimer,
 	setPredictorClientRef,
+	setRestartPipelineRuntime,
 	setShuttingDown,
 	setTelemetryRef,
 	shuttingDown,
 } from "./routes/state.js";
-import { isHarnessAvailable } from "./scheduler";
-import { startSchedulerWorker } from "./scheduler/index.js";
+import { isHarnessAvailable, startSchedulerWorker } from "./scheduler/index.js";
 import { getSecret, hasSecret } from "./secrets.js";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
 import { releaseAllSessions, startSessionCleanup, stopSessionCleanup } from "./session-tracker";
@@ -2180,6 +2180,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	invalidateDiagnosticsCache();
 }
+
+setRestartPipelineRuntime(startPipelineRuntime);
 
 // ============================================================================
 // Shutdown
