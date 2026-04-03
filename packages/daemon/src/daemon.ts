@@ -12279,10 +12279,12 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 												}
 											: {}),
 									});
+		const widgetProvider = synthesisProvider;
 		synthesisProvider = withRateLimit(synthesisProvider, memoryCfg.pipelineV2.synthesis.rateLimit);
 		initSynthesisProvider(synthesisProvider);
-		// Widget provider defaults to synthesis provider (needs smart model for HTML gen)
-		initWidgetProvider(synthesisProvider);
+		// Widget generation uses the same model family by default, but should not
+		// consume the background synthesis rate-limit budget.
+		initWidgetProvider(widgetProvider);
 	} else {
 		providerRuntimeResolution.synthesis = {
 			configured: providerHints.synthesis,
