@@ -67,25 +67,6 @@ function makeAgentsDir(content: string): string {
 	return dir;
 }
 
-async function waitForJobStatus(
-	db: Database,
-	id: string,
-	status: string,
-	timeoutMs = 8_000,
-): Promise<{ status: string; attempts: number; max_attempts: number; error: string | null }> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const row = db.prepare("SELECT status, attempts, max_attempts, error FROM summary_jobs WHERE id = ?").get(id) as
-			| { status: string; attempts: number; max_attempts: number; error: string | null }
-			| undefined;
-		if (row?.status === status) {
-			return row;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 50));
-	}
-	throw new Error(`Timed out waiting for summary job ${id} to reach ${status}`);
-}
-
 describe("insertSummaryFacts", () => {
 	let db: Database;
 	let accessor: DbAccessor;
@@ -305,15 +286,12 @@ describe("summary job helpers", () => {
 	});
 
 	it("marks immutable artifact conflicts dead without consuming retry budget", () => {
-		expect(
-			resolveFailedSummaryJobStatus(
-				`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} /tmp/.agents/memory/2026-04-03T14-08-11.982Z--token--summary.md`,
-				1,
-				3,
-			),
-		).toBe("dead");
-		expect(resolveFailedSummaryJobStatus("summary command timed out after 5000ms", 1, 3)).toBe("pending");
-		expect(resolveFailedSummaryJobStatus("summary command timed out after 5000ms", 3, 3)).toBe("dead");
+		// terminal=true (immutable artifact conflict) -> dead regardless of attempts
+		expect(resolveFailedSummaryJobStatus(true, 1, 3)).toBe("dead");
+		// terminal=false, attempts < maxAttempts -> pending (retryable)
+		expect(resolveFailedSummaryJobStatus(false, 1, 3)).toBe("pending");
+		// terminal=false, attempts >= maxAttempts -> dead (exhausted)
+		expect(resolveFailedSummaryJobStatus(false, 3, 3)).toBe("dead");
 	});
 });
 

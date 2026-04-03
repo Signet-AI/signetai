@@ -99,11 +99,11 @@ export function isTerminalSummaryJobError(errorMessage: string): boolean {
 }
 
 export function resolveFailedSummaryJobStatus(
-	errorMessage: string,
+	terminal: boolean,
 	attempts: number,
 	maxAttempts: number,
 ): "dead" | "pending" {
-	return isTerminalSummaryJobError(errorMessage) || attempts >= maxAttempts ? "dead" : "pending";
+	return terminal || attempts >= maxAttempts ? "dead" : "pending";
 }
 
 // ---------------------------------------------------------------------------
@@ -1585,7 +1585,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 
 						if (!row) return;
 
-						const status = resolveFailedSummaryJobStatus(errorMessage, row.attempts, row.max_attempts);
+						const status = resolveFailedSummaryJobStatus(terminal, row.attempts, row.max_attempts);
 
 						db.prepare(
 							`UPDATE summary_jobs

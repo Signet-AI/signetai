@@ -1796,8 +1796,15 @@ describe("handleSessionEnd", () => {
 					session_id: string | null;
 				}>;
 				expect(sessionIds).toHaveLength(2);
-				expect(sessionIds[0]?.session_id).toBe(`session-end:path:${transcriptAPath}`);
-				expect(sessionIds[1]?.session_id).toBe(`session-end:path:${transcriptBPath}`);
+				// Path-based fallback IDs include a content digest suffix so
+				// rotating log files that reuse the same path produce distinct IDs.
+				expect(sessionIds[0]?.session_id).toMatch(
+					new RegExp(`^session-end:path:${transcriptAPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+				);
+				expect(sessionIds[1]?.session_id).toMatch(
+					new RegExp(`^session-end:path:${transcriptBPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:[0-9a-f]{16}$`),
+				);
+				expect(sessionIds[0]?.session_id).not.toBe(sessionIds[1]?.session_id);
 			} finally {
 				db.close();
 			}

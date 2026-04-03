@@ -2490,11 +2490,18 @@ export function deriveSessionEndFallbackId(
 ): string {
 	const scopedKey = sessionKey?.trim() || "anonymous";
 	const path = transcriptPath?.trim();
+	const body = transcript.trim();
 	if (path) {
-		return `session-end:path:${path}`;
+		// Include a content digest so rotating log files that reuse the same
+		// path across distinct sessions produce different IDs.
+		if (body.length > 0) {
+			const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
+			return `session-end:path:${path}:${digest}`;
+		}
+		return `session-end:path:${path}:${randomUUID()}`;
 	}
-	if (transcript.trim().length > 0) {
-		const digest = createHash("sha256").update(transcript).digest("hex").slice(0, 16);
+	if (body.length > 0) {
+		const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
 		return `session-end:${scopedKey}:${digest}`;
 	}
 	return `session-end:${scopedKey}:${endedAt}:${randomUUID()}`;

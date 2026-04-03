@@ -639,9 +639,12 @@ function findExistingManifest(agentId: string, sessionKey: string | null, sessio
 				)
 				.get(agentId, sessionId) as { source_path: string } | undefined;
 			if (bySessionId) return bySessionId;
-			// Legacy fallback only applies to pre-fix rows where session_id was
+			// Legacy fallback: only applies to pre-fix rows where session_id was
 			// persisted verbatim from the caller and therefore still equals the
-			// shared session_key value.
+			// shared session_key value. For new rows with derived IDs (e.g.
+			// "session-end:path:…") sessionKey !== sessionId, so this branch is
+			// skipped. It also does not fire when a caller explicitly sets both
+			// fields to the same value, because step 1 above already returns.
 			if (!sessionKey || sessionKey !== sessionId) return undefined;
 			return db
 				.prepare(
