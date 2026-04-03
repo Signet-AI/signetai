@@ -2181,7 +2181,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	invalidateDiagnosticsCache();
 }
 
-setRestartPipelineRuntime(startPipelineRuntime);
+setRestartPipelineRuntime(restartPipelineRuntime);
 
 // ============================================================================
 // Shutdown

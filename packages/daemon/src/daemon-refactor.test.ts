@@ -33,10 +33,13 @@ describe("daemon route extraction refactor", () => {
 		expect(mode2).toBe(mode1);
 		expect(secret2?.toString("hex")).toBe(secret1?.toString("hex"));
 
-		if (state.authConfig.mode !== "local") {
-			expect(state.authSecret).not.toBeNull();
-		} else {
+		// In local mode (the test environment default), authSecret is always
+		// null. Make this invariant explicit rather than relying on the
+		// trivially-true toString comparison above.
+		if (state.authConfig.mode === "local") {
 			expect(state.authSecret).toBeNull();
+		} else {
+			expect(state.authSecret).not.toBeNull();
 		}
 	});
 
