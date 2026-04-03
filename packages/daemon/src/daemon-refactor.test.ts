@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isSessionCleanupRunning, stopSessionCleanup } from "./session-tracker";
@@ -9,6 +9,10 @@ describe("daemon route extraction refactor", () => {
 		stopSessionCleanup();
 	});
 
+	// NOTE: This test is only meaningful on the first run in a process —
+	// Bun/Node cache ES modules, so subsequent imports are no-ops. It
+	// guards against module-level side effects at import time (e.g.
+	// calling startSessionCleanup() during top-level evaluation).
 	it("does not start session cleanup when daemon is imported for route registration", async () => {
 		expect(isSessionCleanupRunning()).toBe(false);
 		await import("./daemon");
@@ -36,7 +40,20 @@ describe("daemon route extraction refactor", () => {
 		}
 	});
 
-	it("reloadAuthState reads on-disk config and populates authSecret in token mode", async () => {
+	// Exercises the non-local auth path (token mode) end-to-end:
+	// reloadAuthState reads agent.yaml, parses mode=token, and calls
+	// loadOrCreateSecret to populate authSecret. A regression where
+	// reloadAuthState silently swallowed an error would leave authSecret
+	// null in token mode, causing the auth middleware to 503 all requests.
+	//
+	// Limitation: Bun's ES module live bindings don't reliably propagate
+	// export let reassignments from function calls in the test runner,
+	// so we assert the function completes without error (a throw would
+	// indicate a parsing or secret-loading failure). At runtime in the
+	// daemon process, reloadAuthState is called from the file watcher
+	// and startPipelineRuntime where live bindings propagate correctly
+	// because state.ts and daemon.ts share the same module instance.
+	it("reloadAuthState completes without error in token mode", async () => {
 		const { reloadAuthState } = await import("./routes/state.js");
 
 		const tmpDir = join(tmpdir(), `signet-test-auth-${Date.now()}`);
@@ -68,16 +85,7 @@ describe("daemon route extraction refactor", () => {
 		);
 
 		try {
-			// reloadAuthState should not throw when given a valid token-mode config.
-			// It reads the YAML, parses auth, and loads the secret from disk.
 			reloadAuthState(tmpDir);
-
-			// Verify the function actually ran: if it silently caught an error
-			// and left state unchanged (mode still "local" from the test env),
-			// that's a regression. Since Bun's ES module live bindings don't
-			// reliably propagate export let reassignments from function calls,
-			// we verify the function executed without error rather than checking
-			// the mutated export values.
 		} finally {
 			rmSync(tmpDir, { recursive: true, force: true });
 		}
