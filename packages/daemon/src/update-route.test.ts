@@ -8,7 +8,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const DAEMON_SRC = readFileSync(join(__dirname, "daemon.ts"), "utf-8");
+const DAEMON_SRC = readFileSync(join(__dirname, "routes/misc-routes.ts"), "utf-8");
 
 // Read the update command source, where the daemon call now lives.
 const CLI_SRC = readFileSync(join(__dirname, "../../cli/src/commands/update.ts"), "utf-8");
@@ -24,8 +24,7 @@ function mustMatch(src: string, pattern: RegExp): string {
 
 describe("Bug 7: /api/update/run accepts targetVersion in body", () => {
 	it("reads targetVersion from request body", () => {
-		// Find the route handler
-		const routeBody = mustMatch(DAEMON_SRC, /app\.post\("\/api\/update\/run"[\s\S]*?\n\}\);/);
+		const routeBody = mustMatch(DAEMON_SRC, /app\.post\("\/api\/update\/run"[\s\S]*?\}\);/);
 
 		// Should parse targetVersion from body
 		expect(routeBody).toContain("targetVersion");
@@ -33,7 +32,7 @@ describe("Bug 7: /api/update/run accepts targetVersion in body", () => {
 	});
 
 	it("skips checkForUpdatesImpl when targetVersion is provided", () => {
-		const routeBody = mustMatch(DAEMON_SRC, /app\.post\("\/api\/update\/run"[\s\S]*?\n\}\);/);
+		const routeBody = mustMatch(DAEMON_SRC, /app\.post\("\/api\/update\/run"[\s\S]*?\}\);/);
 
 		// The check should be conditional on !targetVersion
 		expect(routeBody).toContain("if (!targetVersion)");
