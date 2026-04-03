@@ -177,7 +177,7 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 	if (config === undefined) return provider;
 	if (Object.keys(config).length === 0) return provider;
 	const cfg = { ...DEFAULT_PROVIDER_RATE_LIMIT, ...config };
-	if (cfg.maxCallsPerHour <= 0) return provider;
+	if (cfg.maxCallsPerHour <= 0 || cfg.burstSize <= 0) return provider;
 
 	if (!shouldRateLimit(provider.name)) return provider;
 

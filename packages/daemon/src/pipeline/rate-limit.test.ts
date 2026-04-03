@@ -175,6 +175,12 @@ describe("withRateLimit", () => {
 		expect(wrapped).toBe(provider);
 	});
 
+	it("returns provider unwrapped when burstSize is 0", () => {
+		const provider = mockProvider("claude-code:haiku");
+		const wrapped = withRateLimit(provider, { burstSize: 0, maxCallsPerHour: 100 });
+		expect(wrapped).toBe(provider);
+	});
+
 	it("returns provider unwrapped for ollama provider", () => {
 		const provider = mockProvider("ollama");
 		const wrapped = withRateLimit(provider, { maxCallsPerHour: 100 });
