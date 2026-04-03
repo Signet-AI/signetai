@@ -12,9 +12,11 @@ import {
 	getCommandStageStatus,
 	hasCommandStageCompleted,
 	insertSummaryFacts,
+	isTerminalSummaryJobError,
 	markCommandStageCompleted,
 	markCommandStageRunning,
 	recoverSummaryJobs,
+	resolveSummaryHeadingDate,
 	resolveSummaryProvider,
 	runSummaryCommandProvider,
 	shouldRunSignificanceGateForJob,
@@ -250,6 +252,34 @@ describe("recoverSummaryJobs", () => {
 
 		const after = db.prepare("SELECT status FROM summary_jobs WHERE id = 'job-startup'").get() as { status: string };
 		expect(after.status).toBe("pending");
+	});
+});
+
+describe("summary job helpers", () => {
+	it("derives the summary heading date from persisted session timing instead of wall clock", () => {
+		expect(
+			resolveSummaryHeadingDate({
+				ended_at: "2026-04-03T17:07:08.000Z",
+				captured_at: "2026-04-03T17:06:55.000Z",
+				created_at: "2026-04-03T17:06:55.000Z",
+			}),
+		).toBe("2026-04-03");
+		expect(
+			resolveSummaryHeadingDate({
+				ended_at: null,
+				captured_at: "2026-04-02T23:59:59.000Z",
+				created_at: "2026-04-03T00:00:01.000Z",
+			}),
+		).toBe("2026-04-02");
+	});
+
+	it("classifies immutable artifact conflicts as terminal failures", () => {
+		expect(
+			isTerminalSummaryJobError(
+				"Refusing to mutate immutable artifact /tmp/.agents/memory/2026-04-03T14-08-11.982Z--token--summary.md",
+			),
+		).toBe(true);
+		expect(isTerminalSummaryJobError("summary command timed out after 5000ms")).toBe(false);
 	});
 });
 

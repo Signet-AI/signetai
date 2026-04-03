@@ -11,6 +11,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -2478,10 +2479,30 @@ export async function handleUserPromptSubmit(
 // Session End
 // ============================================================================
 
+// Session keys can be shared across distinct harness runs (for example
+// recurring heartbeat sessions), so artifact lineage needs a more specific
+// fallback identifier when the harness does not supply sessionId.
+function deriveSessionEndFallbackId(
+	sessionKey: string | undefined,
+	transcriptPath: string | undefined,
+	transcript: string,
+	endedAt: string,
+): string {
+	const scopedKey = sessionKey?.trim() || "anonymous";
+	const path = transcriptPath?.trim();
+	if (path) {
+		return `session-end:path:${path}`;
+	}
+	if (transcript.trim().length > 0) {
+		const digest = createHash("sha256").update(transcript).digest("hex").slice(0, 16);
+		return `session-end:${scopedKey}:${digest}`;
+	}
+	return `session-end:${scopedKey}:${endedAt}`;
+}
+
 export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
-	const sessionId = req.sessionId ?? sessionKey ?? `session-end:${new Date().toISOString()}`;
 	const endedAt = new Date().toISOString();
 
 	// Clear hook dedup state for this session
@@ -2561,6 +2582,8 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	} else if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	}
+	const sessionId =
+		req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, transcript, endedAt);
 
 	// Lossless retention: write transcript immediately regardless of length
 	// or whether the summary worker succeeds later.

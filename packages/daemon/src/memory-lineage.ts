@@ -628,18 +628,7 @@ function saveManifest(path: string, frontmatter: Record<string, unknown>, body: 
 function findExistingManifest(agentId: string, sessionKey: string | null, sessionId: string): ManifestState | null {
 	try {
 		const row = getDbAccessor().withReadDb((db) => {
-			if (sessionKey) {
-				return db
-					.prepare(
-						`SELECT source_path
-						 FROM memory_artifacts
-						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_key = ?
-						 ORDER BY captured_at ASC
-						 LIMIT 1`,
-					)
-					.get(agentId, sessionKey) as { source_path: string } | undefined;
-			}
-			return db
+			const bySessionId = db
 				.prepare(
 					`SELECT source_path
 					 FROM memory_artifacts
@@ -648,6 +637,17 @@ function findExistingManifest(agentId: string, sessionKey: string | null, sessio
 					 LIMIT 1`,
 				)
 				.get(agentId, sessionId) as { source_path: string } | undefined;
+			if (bySessionId) return bySessionId;
+			if (!sessionKey || sessionKey !== sessionId) return undefined;
+			return db
+				.prepare(
+					`SELECT source_path
+					 FROM memory_artifacts
+					 WHERE agent_id = ? AND source_kind = 'manifest' AND session_key = ?
+					 ORDER BY captured_at ASC
+					 LIMIT 1`,
+				)
+				.get(agentId, sessionKey) as { source_path: string } | undefined;
 		});
 		if (!row) return null;
 		return loadManifest(join(getAgentsDir(), row.source_path));

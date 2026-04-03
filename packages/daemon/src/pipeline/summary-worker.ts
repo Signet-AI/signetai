@@ -89,6 +89,15 @@ const COMMAND_STAGE_RUNNING_RESULT = "command-stage-running";
 const COMMAND_STAGE_COMPLETED_RESULT = "command-stage-complete";
 type CommandStageStatus = "none" | "running" | "complete";
 
+export function resolveSummaryHeadingDate(job: Pick<SummaryJobRow, "ended_at" | "captured_at" | "created_at">): string {
+	const basis = job.ended_at ?? job.captured_at ?? job.created_at;
+	return basis.slice(0, 10);
+}
+
+export function isTerminalSummaryJobError(errorMessage: string): boolean {
+	return errorMessage.includes("Refusing to mutate immutable artifact");
+}
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -525,7 +534,7 @@ async function processJob(
 	}
 
 	if (provider) {
-		const today = new Date().toISOString().slice(0, 10);
+		const today = resolveSummaryHeadingDate(job);
 		const genOpts = {
 			timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 			maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
@@ -1555,6 +1564,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 			scheduleTick(500);
 		} catch (e) {
 			const errorMessage = e instanceof Error ? e.message : String(e);
+			const terminal = isTerminalSummaryJobError(errorMessage);
 			logger.error("summary-worker", "Job failed", e instanceof Error ? e : undefined, { error: errorMessage });
 
 			// Try to mark the job as failed/pending for retry
@@ -1567,7 +1577,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 
 						if (!row) return;
 
-						const status = row.attempts >= row.max_attempts ? "dead" : "pending";
+						const status = terminal || row.attempts >= row.max_attempts ? "dead" : "pending";
 
 						db.prepare(
 							`UPDATE summary_jobs
@@ -1580,8 +1590,7 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				// DB error during error handling — just log and move on
 			}
 
-			// Back off after failure
-			scheduleTick(POLL_INTERVAL_MS * 3);
+			scheduleTick(terminal ? 500 : POLL_INTERVAL_MS * 3);
 		}
 	}
 

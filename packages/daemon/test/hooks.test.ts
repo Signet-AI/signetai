@@ -1749,6 +1749,59 @@ describe("handleSessionEnd", () => {
 		expect(manifest).toContain('summary_path: "memory/');
 		expect(manifest).toContain('transcript_path: "memory/');
 	});
+
+	test.serial(
+		"creates fresh canonical artifacts when distinct session-end events reuse the same sessionKey",
+		async () => {
+			createMemoryDb([]);
+			const transcriptAPath = join(TEST_DIR, "transcript-a.txt");
+			const transcriptBPath = join(TEST_DIR, "transcript-b.txt");
+			writeFileSync(
+				transcriptAPath,
+				"User: keep the periodic heartbeat summary separate from prior runs.\nAssistant: confirmed the first heartbeat transcript should get its own immutable artifact set.\n".repeat(
+					8,
+				),
+			);
+			writeFileSync(
+				transcriptBPath,
+				"User: make sure the second heartbeat session does not overwrite the first one.\nAssistant: confirmed the second heartbeat transcript should produce fresh artifacts even with the same shared session key.\n".repeat(
+					8,
+				),
+			);
+
+			const first = await handleSessionEnd({
+				harness: "test",
+				transcriptPath: transcriptAPath,
+				sessionKey: "agent:main:main",
+				cwd: "/tmp/signetai",
+			});
+			const second = await handleSessionEnd({
+				harness: "test",
+				transcriptPath: transcriptBPath,
+				sessionKey: "agent:main:main",
+				cwd: "/tmp/signetai",
+			});
+
+			expect(first.queued).toBe(true);
+			expect(second.queued).toBe(true);
+
+			const files = readdirSync(join(TEST_DIR, "memory")).sort();
+			expect(files.filter((name) => name.endsWith("--transcript.md"))).toHaveLength(2);
+			expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
+
+			const db = openTestDb();
+			try {
+				const sessionIds = db.prepare("SELECT session_id FROM summary_jobs ORDER BY created_at ASC").all() as Array<{
+					session_id: string | null;
+				}>;
+				expect(sessionIds).toHaveLength(2);
+				expect(sessionIds[0]?.session_id).toBe(`session-end:path:${transcriptAPath}`);
+				expect(sessionIds[1]?.session_id).toBe(`session-end:path:${transcriptBPath}`);
+			} finally {
+				db.close();
+			}
+		},
+	);
 });
 
 // ============================================================================
