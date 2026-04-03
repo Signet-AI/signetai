@@ -288,6 +288,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function parseRateLimitConfig(raw: unknown): PipelineV2Config["extraction"]["rateLimit"] | undefined {
+	if (!isRecord(raw)) return undefined;
+	const maxCallsPerHour = clampPositive(raw.maxCallsPerHour, 0, 10000, undefined);
+	const burstSize = clampPositive(raw.burstSize, 1, 1000, undefined);
+	const waitTimeoutMs = clampPositive(raw.waitTimeoutMs, 0, 60000, undefined);
+	if (maxCallsPerHour === undefined && burstSize === undefined && waitTimeoutMs === undefined) return undefined;
+	return {
+		maxCallsPerHour: maxCallsPerHour ?? 200,
+		burstSize: burstSize ?? 20,
+		waitTimeoutMs: waitTimeoutMs ?? 5000,
+	};
+}
+
 function parseCommandArgv(raw: string): { bin: string; args: string[] } | null {
 	const tokens = raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g);
 	if (!tokens || tokens.length === 0) return null;
@@ -544,6 +557,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 					d.extraction.escalation?.level2MaxEntities ?? 5,
 				),
 			},
+			rateLimit: parseRateLimitConfig(extractionRaw?.rateLimit),
 		},
 
 		worker: {
@@ -777,6 +791,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 			timeout: resolvedSynthesisTimeout,
 			maxTokens: clampPositive(synthesisRaw?.maxTokens ?? synthesisRaw?.max_tokens, 1000, 32000, d.synthesis.maxTokens),
 			idleGapMinutes: clampPositive(synthesisRaw?.idleGapMinutes, 1, 1440, d.synthesis.idleGapMinutes),
+			rateLimit: parseRateLimitConfig(synthesisRaw?.rateLimit),
 		},
 		procedural: {
 			enabled: resolveBool(proceduralRaw?.enabled, undefined, d.procedural.enabled),

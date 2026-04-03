@@ -190,6 +190,12 @@ export interface PipelineCommandConfig {
 	readonly env?: Readonly<Record<string, string>>;
 }
 
+export interface ProviderRateLimitConfig {
+	readonly maxCallsPerHour: number;
+	readonly burstSize: number;
+	readonly waitTimeoutMs: number;
+}
+
 export interface PipelineExtractionConfig {
 	readonly provider: "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command";
 	readonly fallbackProvider?: "ollama" | "none";
@@ -200,6 +206,7 @@ export interface PipelineExtractionConfig {
 	readonly minConfidence: number;
 	readonly command?: PipelineCommandConfig;
 	readonly escalation?: PipelineEscalationConfig;
+	readonly rateLimit?: ProviderRateLimitConfig;
 }
 
 export interface PipelineWorkerConfig {
@@ -377,6 +384,7 @@ export interface PipelineSynthesisConfig {
 	readonly timeout: number;
 	readonly maxTokens: number;
 	readonly idleGapMinutes: number;
+	readonly rateLimit?: ProviderRateLimitConfig;
 }
 
 export interface PipelineProceduralConfig {

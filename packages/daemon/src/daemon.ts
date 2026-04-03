@@ -151,9 +151,9 @@ import {
 	startPipeline,
 	stopPipeline,
 } from "./pipeline";
-import { AlreadyRunningError, type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { getFeedbackTelemetry } from "./pipeline/aspect-feedback";
 import { clusterEntities } from "./pipeline/community-detection";
+import { AlreadyRunningError, type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { deadLetterExtractionJob, deadLetterPendingExtractionJobs } from "./pipeline/extraction-fallback";
 import { getGraphBoostIds } from "./pipeline/graph-search";
 import {
@@ -181,6 +181,7 @@ import {
 	ensureOpenCodeServer,
 	resolveDefaultOllamaFallbackMaxContextTokens,
 	stopOpenCodeServer,
+	withRateLimit,
 } from "./pipeline/provider";
 import { resolveRuntimeModel } from "./pipeline/provider-resolution";
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
@@ -11285,9 +11286,10 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 		// Skip chunks with insufficient non-header content.
 		// chunk.text is always constructed as `${header}\n\n${body}` when a
 		// header exists (see chunkMarkdownHierarchically), so startsWith holds.
-		const body = chunk.header && chunk.text.startsWith(chunk.header)
-			? chunk.text.slice(chunk.header.length).trim()
-			: chunk.text.trim();
+		const body =
+			chunk.header && chunk.text.startsWith(chunk.header)
+				? chunk.text.slice(chunk.header.length).trim()
+				: chunk.text.trim();
 		if (body.length < 80) continue;
 
 		const chunkKey = `openclaw:${filename}:${createHash("sha256").update(chunk.text).digest("hex").slice(0, 16)}`;
@@ -12080,6 +12082,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		}
 	}
 	if (llmProvider) {
+		llmProvider = withRateLimit(llmProvider, memoryCfg.pipelineV2.extraction.rateLimit);
 		initLlmProvider(llmProvider);
 	}
 
@@ -12232,7 +12235,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		const usingSynthesisOllamaFallback =
 			effectiveSynthesisProvider === "ollama" && memoryCfg.pipelineV2.synthesis.provider !== "ollama";
 
-		const synthesisProvider =
+		let synthesisProvider =
 			effectiveSynthesisProvider === "anthropic" && anthropicApiKey
 				? createAnthropicProvider({
 						model: effectiveSynthesisModel || "haiku",
@@ -12276,6 +12279,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 												}
 											: {}),
 									});
+		synthesisProvider = withRateLimit(synthesisProvider, memoryCfg.pipelineV2.synthesis.rateLimit);
 		initSynthesisProvider(synthesisProvider);
 		// Widget provider defaults to synthesis provider (needs smart model for HTML gen)
 		initWidgetProvider(synthesisProvider);
@@ -12325,12 +12329,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	// per agent (Phase 2 / dreaming-as-session work).
 	if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 		try {
-			dreamingWorkerHandle = startDreamingWorker(
-				getDbAccessor(),
-				memoryCfg.dreaming,
-				AGENTS_DIR,
-				resolveAgentId({}),
-			);
+			dreamingWorkerHandle = startDreamingWorker(getDbAccessor(), memoryCfg.dreaming, AGENTS_DIR, resolveAgentId({}));
 			setDreamingWorker(dreamingWorkerHandle);
 		} catch (err) {
 			logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
