@@ -41,7 +41,6 @@ import { normalizeAndHashContent } from "./content-normalization";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert } from "./db-helpers";
-import { type DiagnosticsReport, createProviderTracker } from "./diagnostics";
 import { fetchEmbedding, setNativeFallbackToOllama } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
@@ -132,6 +131,7 @@ import {
 	setPredictorClientRef,
 	setShuttingDown,
 	setTelemetryRef,
+	shuttingDown,
 } from "./routes/state.js";
 import { isHarnessAvailable } from "./scheduler";
 import { startSchedulerWorker } from "./scheduler/index.js";
@@ -172,13 +172,13 @@ import {
 } from "./update-system";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
 
-let shuttingDown = false;
 let httpServer: ReturnType<typeof createAdaptorServer> | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let shadowProcess: ChildProcess | null = null;
 let predictorClientRef: PredictorClient | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
+let schedulerHandle: { stop(): Promise<void> } | null = null;
 let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -1394,6 +1394,11 @@ async function stopPipelineRuntime(): Promise<void> {
 		setDreamingWorker(null);
 	}
 
+	if (schedulerHandle) {
+		schedulerHandle.stop();
+		schedulerHandle = null;
+	}
+
 	try {
 		await stopPipeline();
 	} catch {}
@@ -2177,7 +2182,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 // ============================================================================
 
 async function cleanup() {
-	shuttingDown = true;
 	setShuttingDown(true);
 	bindAbort.abort();
 	logger.info("daemon", "Shutting down");
@@ -2358,7 +2362,7 @@ async function main() {
 
 	initCheckpointFlush(getDbAccessor());
 
-	const schedulerHandle = startSchedulerWorker(getDbAccessor());
+	schedulerHandle = startSchedulerWorker(getDbAccessor());
 
 	checkpointPruneTimer = setInterval(() => {
 		try {
