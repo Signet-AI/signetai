@@ -266,7 +266,7 @@ describe("rememberContent", () => {
 		expect(capturedBody.harness).toBe("pi");
 	});
 
-	it("sends content, critical, and tags in the request body", async () => {
+	it("sends content, pinned, and tags in the request body", async () => {
 		let capturedBody: Record<string, unknown> = {};
 		const server = Bun.serve({
 			port: 0,
@@ -282,7 +282,7 @@ describe("rememberContent", () => {
 			tags: ["tag1", "tag2"],
 		});
 		expect(capturedBody.content).toBe("test memory");
-		expect(capturedBody.critical).toBe(true);
+		expect(capturedBody.pinned).toBe(true);
 		expect(capturedBody.tags).toEqual(["tag1", "tag2"]);
 	});
 

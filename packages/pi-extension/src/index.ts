@@ -171,7 +171,7 @@ export async function rememberContent(
 		body: JSON.stringify({
 			harness: HARNESS,
 			content,
-			critical,
+			pinned: critical,
 			tags,
 			agentId,
 			source: "pi-extension",
