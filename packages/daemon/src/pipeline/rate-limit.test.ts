@@ -153,7 +153,7 @@ describe("withRateLimit", () => {
 
 	it("preserves provider name", () => {
 		const provider = mockProvider("claude-code:haiku");
-		const wrapped = withRateLimit(provider);
+		const wrapped = withRateLimit(provider, { maxCallsPerHour: 100, burstSize: 10, waitTimeoutMs: 1000 });
 		expect(wrapped.name).toBe("claude-code:haiku");
 	});
 

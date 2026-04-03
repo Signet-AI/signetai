@@ -57,6 +57,7 @@ export type {
 	PipelineEmbeddingTrackerConfig,
 	PipelineContinuityConfig,
 	PipelineSynthesisConfig,
+	ProviderRateLimitConfig,
 	PipelineProceduralConfig,
 	PredictorConfig,
 	ExtractedFact,
