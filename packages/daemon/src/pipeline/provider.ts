@@ -12,7 +12,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "n
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import type { LlmGenerateResult, LlmProvider } from "@signet/core";
+import type { LlmGenerateResult, LlmProvider, ProviderRateLimitConfig } from "@signet/core";
 import { logger } from "../logger";
 import { trimTrailingSlash } from "./url";
 
@@ -93,12 +93,6 @@ export class RateLimitExceededError extends Error {
 		super(`Rate limit exceeded: ${maxCallsPerHour}/hr for ${providerName}`);
 		this.name = "RateLimitExceededError";
 	}
-}
-
-export interface ProviderRateLimitConfig {
-	readonly maxCallsPerHour: number;
-	readonly burstSize: number;
-	readonly waitTimeoutMs: number;
 }
 
 export class TokenBucketRateLimiter {
@@ -209,36 +203,29 @@ export function withRateLimit(provider: LlmProvider, config?: Partial<ProviderRa
 			return provider.generate(prompt, opts);
 		},
 
-		async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
-			if (!provider.generateWithUsage) {
-				throw new Error("generateWithUsage not available");
-			}
-			if (!(await bucket.acquire(cfg.waitTimeoutMs))) {
-				if (Date.now() - lastWarnMs > WARN_INTERVAL_MS) {
-					logger.warn(
-						"pipeline",
-						`Rate limit throttled ${provider.name} (${bucket.stats.totalThrottled} total)`,
-						bucket.stats,
-					);
-					lastWarnMs = Date.now();
+		...(provider.generateWithUsage
+			? {
+					async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
+						if (!(await bucket.acquire(cfg.waitTimeoutMs))) {
+							if (Date.now() - lastWarnMs > WARN_INTERVAL_MS) {
+								logger.warn(
+									"pipeline",
+									`Rate limit throttled ${provider.name} (${bucket.stats.totalThrottled} total)`,
+									bucket.stats,
+								);
+								lastWarnMs = Date.now();
+							}
+							throw new RateLimitExceededError(provider.name, cfg.maxCallsPerHour);
+						}
+						return provider.generateWithUsage(prompt, opts);
+					},
 				}
-				throw new RateLimitExceededError(provider.name, cfg.maxCallsPerHour);
-			}
-			return provider.generateWithUsage(prompt, opts);
-		},
+			: {}),
 
 		async available(): Promise<boolean> {
 			return provider.available();
 		},
 	};
-}
-
-export function getRateLimitStats(): Record<string, ReturnType<TokenBucketRateLimiter["stats"]>> {
-	return {};
-}
-
-export function registerRateLimitStats(providerName: string, bucket: TokenBucketRateLimiter): void {
-	getRateLimitStats()[providerName] = bucket.stats as ReturnType<TokenBucketRateLimiter["stats"]>;
 }
 
 /**

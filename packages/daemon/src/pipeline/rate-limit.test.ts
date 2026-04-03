@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import type { LlmProvider } from "@signet/core";
-import { RateLimitExceededError, TokenBucketRateLimiter, withRateLimit } from "./provider";
+import { RateLimitExceededError, TokenBucketRateLimiter, generateWithTracking, withRateLimit } from "./provider";
 
 function mockProvider(name = "test"): LlmProvider {
 	return {
@@ -55,16 +55,21 @@ describe("TokenBucketRateLimiter", () => {
 	});
 
 	it("refills tokens over time", async () => {
-		const bucket = new TokenBucketRateLimiter(3600_000, 1);
-		// drain the single token
-		await bucket.acquire(0);
-		expect(await bucket.acquire(0)).toBe(false);
+		const realNow = Date.now;
+		let now = 1_000;
+		Date.now = () => now;
+		try {
+			const bucket = new TokenBucketRateLimiter(3600_000, 1);
+			expect(await bucket.acquire(0)).toBe(true);
+			expect(await bucket.acquire(0)).toBe(false);
 
-		// Mock time passing by directly manipulating internal state
-		const before = bucket.stats.totalConsumed;
-		// We can't easily mock Date.now, so test the stats endpoint
-		expect(bucket.stats.totalConsumed).toBe(1);
-		expect(bucket.stats.totalThrottled).toBe(1);
+			now += 1;
+			expect(await bucket.acquire(0)).toBe(true);
+			expect(bucket.stats.totalConsumed).toBe(2);
+			expect(bucket.stats.totalThrottled).toBe(1);
+		} finally {
+			Date.now = realNow;
+		}
 	});
 
 	it("tracks stats correctly", async () => {
@@ -112,6 +117,14 @@ describe("withRateLimit", () => {
 		const wrapped = withRateLimit(provider, { maxCallsPerHour: 200, burstSize: 20, waitTimeoutMs: 5000 });
 		const result = await wrapped.generateWithUsage?.("test");
 		expect(result?.text).toBe("ok");
+	});
+
+	it("preserves generate fallback when provider lacks generateWithUsage", async () => {
+		const provider = mockProvider("claude-code:haiku");
+		const wrapped = withRateLimit(provider, { maxCallsPerHour: 200, burstSize: 20, waitTimeoutMs: 5000 });
+		expect(wrapped.generateWithUsage).toBeUndefined();
+		const result = await generateWithTracking(wrapped, "test");
+		expect(result).toEqual({ text: "ok", usage: null });
 	});
 
 	it("throws RateLimitExceededError when limit is exceeded", async () => {

@@ -257,6 +257,11 @@ function clampPositive(raw: unknown, min: number, max: number, fallback: number)
 	return Math.max(min, Math.min(max, raw));
 }
 
+function parseOptionalPositive(raw: unknown, min: number, max: number): number | undefined {
+	if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+	return Math.max(min, Math.min(max, raw));
+}
+
 function clampFraction(raw: unknown, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
 	return Math.max(0, Math.min(1, raw));
@@ -290,9 +295,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parseRateLimitConfig(raw: unknown): PipelineV2Config["extraction"]["rateLimit"] | undefined {
 	if (!isRecord(raw)) return undefined;
-	const maxCallsPerHour = clampPositive(raw.maxCallsPerHour, 0, 10000, undefined);
-	const burstSize = clampPositive(raw.burstSize, 1, 1000, undefined);
-	const waitTimeoutMs = clampPositive(raw.waitTimeoutMs, 0, 60000, undefined);
+	const maxCallsPerHour = parseOptionalPositive(raw.maxCallsPerHour, 0, 10000);
+	const burstSize = parseOptionalPositive(raw.burstSize, 1, 1000);
+	const waitTimeoutMs = parseOptionalPositive(raw.waitTimeoutMs, 0, 60000);
 	if (maxCallsPerHour === undefined && burstSize === undefined && waitTimeoutMs === undefined) return undefined;
 	return {
 		maxCallsPerHour: maxCallsPerHour ?? 200,
