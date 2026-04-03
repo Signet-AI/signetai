@@ -1395,7 +1395,9 @@ async function stopPipelineRuntime(): Promise<void> {
 	}
 
 	if (schedulerHandle) {
-		schedulerHandle.stop();
+		try {
+			await schedulerHandle.stop();
+		} catch {}
 		schedulerHandle = null;
 	}
 
