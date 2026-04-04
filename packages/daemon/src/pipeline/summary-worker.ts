@@ -112,6 +112,29 @@ export function resolveFailedSummaryJobStatus(
 
 const AGENTS_DIR = process.env.SIGNET_PATH || join(homedir(), ".agents");
 const POLL_INTERVAL_MS = 5_000;
+
+// Cached schema probe: true when summary_jobs has the new-schema columns
+// (session_id, agent_id, trigger, etc.).  Resolved lazily on the first
+// enqueueSummaryJob call so the DB is guaranteed to be open.
+let hasNewSchemaColumns: boolean | null = null;
+
+function probeNewSchemaColumns(accessor: DbAccessor): boolean {
+	if (hasNewSchemaColumns !== null) return hasNewSchemaColumns;
+	try {
+		hasNewSchemaColumns = accessor.withReadDb((db) => {
+			const cols = db.prepare("PRAGMA table_info(summary_jobs)").all() as ReadonlyArray<Record<string, unknown>>;
+			return cols.some((col) => col.name === "session_id");
+		});
+	} catch {
+		hasNewSchemaColumns = false;
+	}
+	return hasNewSchemaColumns;
+}
+
+/** @internal Test-only: reset the cached schema probe so the next call re-checks. */
+export function _resetSummarySchemaCache(): void {
+	hasNewSchemaColumns = null;
+}
 // Timeout is now configured per-provider via resolveProvider() and config.
 
 // Transcripts longer than this are split into chunks, each summarized
@@ -1674,7 +1697,7 @@ export function enqueueSummaryJob(
 	const now = new Date().toISOString();
 
 	accessor.withWriteTx((db) => {
-		try {
+		if (probeNewSchemaColumns(accessor)) {
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, session_id, harness, project, agent_id, transcript,
@@ -1694,22 +1717,15 @@ export function enqueueSummaryJob(
 				params.endedAt || null,
 				now,
 			);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			const isSchemaError = /no such column|has no column named/i.test(msg);
-			if (!isSchemaError) throw err;
-			// Legacy schema fallback: databases that have not yet run the
-			// migration adding session_id/agent_id/trigger/etc columns will
-			// hit this branch. The derived sessionId is dropped, so processJob
-			// falls back to session_key — this means the per-session-end
-			// uniqueness guarantee (distinct sessionId → distinct token →
-			// distinct artifact path) is bypassed. Recurring sessions on an
-			// old schema may still hit immutable-artifact conflicts, which are
-			// classified as terminal by isTerminalSummaryJobError.
-			logger.warn("summary-worker", "New-schema INSERT failed, falling back to legacy columns", {
-				error: msg,
-				jobId: id,
-			});
+		} else {
+			// Legacy schema: databases that have not yet run the migration
+			// adding session_id/agent_id/trigger/etc columns.  The derived
+			// sessionId is dropped, so processJob falls back to session_key —
+			// the per-session-end uniqueness guarantee (distinct sessionId →
+			// distinct token → distinct artifact path) is bypassed.  Recurring
+			// sessions on an old schema may still hit immutable-artifact
+			// conflicts, which are classified as terminal by
+			// isTerminalSummaryJobError.
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, harness, project, transcript, status, created_at)

@@ -2597,6 +2597,15 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	} else if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	}
+	// Derive a stable session identity for artifact paths.  When the
+	// transcript is empty and no explicit sessionId was provided,
+	// deriveSessionEndFallbackId returns a random UUID — making this call
+	// non-idempotent.  This is acceptable because: (a) empty-transcript
+	// sessions skip the transcript artifact write (guard below) and the
+	// summary job (< 500 char guard), so no ghost artifacts accumulate;
+	// (b) very short (1–499 char) transcripts do write a transcript
+	// artifact with a non-deterministic path, but the summary job is
+	// still skipped, limiting blast radius.
 	const sessionId = req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, transcript);
 
 	// Lossless retention: write transcript immediately regardless of length
@@ -2924,6 +2933,10 @@ export function handleCheckpointExtract(req: CheckpointExtractRequest): Checkpoi
 		harness: req.harness,
 		transcript: capped,
 		sessionKey: req.sessionKey,
+		// Intentionally sessionKey: checkpoint extracts reuse the same
+		// session identity so all checkpoint artifacts share a single
+		// canonical manifest.  findExistingManifest looks up by session_id,
+		// which matches because session_id is persisted as sessionKey.
 		sessionId: req.sessionKey,
 		project: req.project,
 		agentId,
