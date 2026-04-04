@@ -2046,13 +2046,22 @@ describe("memory-lineage", () => {
 	});
 
 	test("deriveSessionToken is deterministic and agent-scoped", () => {
-		const a = deriveSessionToken("default", "sess-1", "sess-1");
-		const b = deriveSessionToken("default", "sess-1", "sess-1");
-		const c = deriveSessionToken("agent-b", "sess-1", "sess-1");
+		const a = deriveSessionToken("default", "sess-1");
+		const b = deriveSessionToken("default", "sess-1");
+		const c = deriveSessionToken("agent-b", "sess-1");
 
 		expect(a).toBe(b);
 		expect(a).not.toBe(c);
 		expect(a).toMatch(/^[a-z2-7]{16}$/);
+	});
+
+	test("deriveSessionToken produces distinct tokens for different sessionIds with same sessionKey", () => {
+		const a = deriveSessionToken("default", "shared-key");
+		const b = deriveSessionToken("default", "session-end:path:/tmp/t1:abc123");
+		const c = deriveSessionToken("default", "session-end:path:/tmp/t2:def456");
+
+		expect(a).not.toBe(b);
+		expect(b).not.toBe(c);
 	});
 
 	test.serial(

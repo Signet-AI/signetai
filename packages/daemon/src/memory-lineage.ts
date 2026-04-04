@@ -212,14 +212,14 @@ function base32Sha256(input: string): string {
 }
 
 // Derives a stable session token from the agent and session identity.
-// When sessionKey is present it takes precedence over sessionId, so
-// concurrent sessions sharing the same key produce the same token.
-// Artifact path uniqueness then depends on capturedAt (millisecond
-// precision). Callers must not fire multiple session-end events for the
-// same sessionKey within the same millisecond.
-export function deriveSessionToken(agentId: string, sessionKey: string | null, sessionId: string): string {
-	const identity = sessionKey && sessionKey.trim().length > 0 ? sessionKey.trim() : sessionId.trim();
-	const seed = `${agentId}:${identity}`;
+// Derive a deterministic, agent-scoped token used in artifact file names.
+// Uses sessionId as the identity source so each session-end run (which has
+// a unique derived sessionId) produces a distinct token and artifact path,
+// even when multiple runs share the same sessionKey. For checkpoint-extract
+// where sessionId === sessionKey, the result is unchanged from the old
+// behavior.
+export function deriveSessionToken(agentId: string, sessionId: string): string {
+	const seed = `${agentId}:${sessionId.trim()}`;
 	return base32Sha256(seed).slice(0, 16);
 }
 
@@ -428,8 +428,7 @@ function upsertArtifactRow(path: string, frontmatter: Record<string, unknown>, b
 	const sourceKind = typeof frontmatter.kind === "string" ? frontmatter.kind : "manifest";
 	const sessionId = typeof frontmatter.session_id === "string" ? frontmatter.session_id : sourcePath;
 	const sessionKey = typeof frontmatter.session_key === "string" ? frontmatter.session_key : null;
-	const sessionToken =
-		sourcePath.match(/--([a-z2-7]{16})--/)?.[1] ?? deriveSessionToken(agentId, sessionKey, sessionId);
+	const sessionToken = sourcePath.match(/--([a-z2-7]{16})--/)?.[1] ?? deriveSessionToken(agentId, sessionId);
 	const project = typeof frontmatter.project === "string" ? frontmatter.project : null;
 	const harness = typeof frontmatter.harness === "string" ? frontmatter.harness : null;
 	const capturedAt = typeof frontmatter.captured_at === "string" ? frontmatter.captured_at : new Date().toISOString();
@@ -678,7 +677,7 @@ export function ensureCanonicalManifest(seed: {
 	if (existing) return existing;
 	return ensureManifestRecord({
 		...seed,
-		sessionToken: deriveSessionToken(seed.agentId, seed.sessionKey, seed.sessionId),
+		sessionToken: deriveSessionToken(seed.agentId, seed.sessionId),
 	});
 }
 
@@ -719,7 +718,7 @@ export function writeTranscriptArtifact(params: {
 	readonly transcript: string;
 }): { readonly manifestPath: string; readonly transcriptPath: string } {
 	const manifest = ensureCanonicalManifest(params);
-	const sessionToken = deriveSessionToken(params.agentId, params.sessionKey, params.sessionId);
+	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = sanitizeTranscriptV1(params.transcript);
 	const sentence = {
 		text: fallbackSentence(body, params.project, params.harness, "transcript"),
@@ -764,7 +763,7 @@ export async function writeSummaryArtifact(params: {
 }): Promise<{ readonly manifestPath: string; readonly summaryPath: string }> {
 	const manifest = ensureCanonicalManifest(params);
 	const capturedAt = manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt;
-	const sessionToken = deriveSessionToken(params.agentId, params.sessionKey, params.sessionId);
+	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = normalizeMarkdownBody(params.summary);
 	const sentence = await resolveMemorySentence(body, params.project, params.harness, "summary", params.provider);
 	const fullPath = writeImmutableArtifact({
@@ -805,7 +804,7 @@ export async function writeCompactionArtifact(params: {
 }): Promise<{ readonly manifestPath: string; readonly compactionPath: string }> {
 	const manifest = ensureCanonicalManifest(params);
 	const capturedAt = manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt;
-	const sessionToken = deriveSessionToken(params.agentId, params.sessionKey, params.sessionId);
+	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = normalizeMarkdownBody(params.summary);
 	const sentence = await resolveMemorySentence(body, params.project, params.harness, "compaction", params.provider);
 	const fullPath = writeImmutableArtifact({

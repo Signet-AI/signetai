@@ -95,7 +95,7 @@ export function resolveSummaryHeadingDate(job: Pick<SummaryJobRow, "ended_at" | 
 }
 
 export function isTerminalSummaryJobError(errorMessage: string): boolean {
-	return errorMessage.includes(IMMUTABLE_ARTIFACT_ERROR_PREFIX);
+	return errorMessage.startsWith(IMMUTABLE_ARTIFACT_ERROR_PREFIX);
 }
 
 export function resolveFailedSummaryJobStatus(
@@ -1701,7 +1701,11 @@ export function enqueueSummaryJob(
 			// Legacy schema fallback: databases that have not yet run the
 			// migration adding session_id/agent_id/trigger/etc columns will
 			// hit this branch. The derived sessionId is dropped, so processJob
-			// falls back to session_key.
+			// falls back to session_key — this means the per-session-end
+			// uniqueness guarantee (distinct sessionId → distinct token →
+			// distinct artifact path) is bypassed. Recurring sessions on an
+			// old schema may still hit immutable-artifact conflicts, which are
+			// classified as terminal by isTerminalSummaryJobError.
 			logger.warn("summary-worker", "New-schema INSERT failed, falling back to legacy columns", {
 				error: msg,
 				jobId: id,
