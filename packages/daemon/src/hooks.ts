@@ -2501,12 +2501,17 @@ export function deriveSessionEndFallbackId(
 			const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
 			return `session-end:path:${path}:${digest}`;
 		}
+		// Intentionally non-idempotent: without transcript content there is no
+		// stable material to hash, so each call produces a unique ID.  This
+		// prevents two empty-body session-end calls from colliding but means
+		// retries will create distinct artifacts rather than deduplicating.
 		return `session-end:path:${path}:${randomUUID()}`;
 	}
 	if (body.length > 0) {
 		const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
 		return `session-end:${scopedKey}:${digest}`;
 	}
+	// See comment above: non-idempotent for the same reason.
 	return `session-end:${scopedKey}:${randomUUID()}`;
 }
 

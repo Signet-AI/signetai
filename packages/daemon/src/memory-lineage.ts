@@ -211,7 +211,6 @@ function base32Sha256(input: string): string {
 	return out;
 }
 
-// Derives a stable session token from the agent and session identity.
 // Derive a deterministic, agent-scoped token used in artifact file names.
 // Uses sessionId as the identity source so each session-end run (which has
 // a unique derived sessionId) produces a distinct token and artifact path,
