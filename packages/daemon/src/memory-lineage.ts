@@ -632,36 +632,26 @@ function saveManifest(path: string, frontmatter: Record<string, unknown>, body: 
 	return manifest;
 }
 
-function findExistingManifest(agentId: string, sessionKey: string | null, sessionId: string): ManifestState | null {
+function findExistingManifest(agentId: string, sessionId: string): ManifestState | null {
 	try {
-		const row = getDbAccessor().withReadDb((db) => {
-			const bySessionId = db
-				.prepare(
-					`SELECT source_path
+		// Pre-fix rows stored session_id verbatim from the caller (equal to
+		// session_key). New rows use a derived session_id (e.g. "session-end:
+		// path:…"). Both cases are covered by this single session_id lookup —
+		// a separate session_key fallback is unnecessary because pre-fix rows
+		// match on session_id directly (it was persisted as the session_key
+		// value) and new rows have a unique derived session_id.
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_path
 					 FROM memory_artifacts
 					 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?
 					 ORDER BY captured_at ASC
 					 LIMIT 1`,
-				)
-				.get(agentId, sessionId) as { source_path: string } | undefined;
-			if (bySessionId) return bySessionId;
-			// Legacy fallback: only applies to pre-fix rows where session_id was
-			// persisted verbatim from the caller and therefore still equals the
-			// shared session_key value. For new rows with derived IDs (e.g.
-			// "session-end:path:…") sessionKey !== sessionId, so this branch is
-			// skipped. It also does not fire when a caller explicitly sets both
-			// fields to the same value, because step 1 above already returns.
-			if (!sessionKey || sessionKey !== sessionId) return undefined;
-			return db
-				.prepare(
-					`SELECT source_path
-					 FROM memory_artifacts
-					 WHERE agent_id = ? AND source_kind = 'manifest' AND session_key = ?
-					 ORDER BY captured_at ASC
-					 LIMIT 1`,
-				)
-				.get(agentId, sessionKey) as { source_path: string } | undefined;
-		});
+					)
+					.get(agentId, sessionId) as { source_path: string } | undefined,
+		);
 		if (!row) return null;
 		return loadManifest(join(getAgentsDir(), row.source_path));
 	} catch {
@@ -684,7 +674,7 @@ export function ensureCanonicalManifest(seed: {
 	readonly startedAt: string | null;
 	readonly endedAt: string | null;
 }): ManifestState {
-	const existing = findExistingManifest(seed.agentId, seed.sessionKey, seed.sessionId);
+	const existing = findExistingManifest(seed.agentId, seed.sessionId);
 	if (existing) return existing;
 	return ensureManifestRecord({
 		...seed,

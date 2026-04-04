@@ -2056,7 +2056,7 @@ describe("memory-lineage", () => {
 	});
 
 	test.serial(
-		"findExistingManifest legacy fallback returns manifest for pre-fix rows where session_id equals session_key",
+		"ensureCanonicalManifest returns existing manifest for pre-fix rows where session_id equals session_key",
 		() => {
 			createMemoryDb([]);
 			const capturedAt = "2026-04-03T10:00:00.000Z";
@@ -2077,8 +2077,8 @@ describe("memory-lineage", () => {
 			expect(manifest).toBeDefined();
 			expect(manifest.path).toBeTruthy();
 
-			// Calling again with the same session_id === session_key should
-			// return the existing manifest (legacy fallback path).
+			// Calling again with the same session_id should return the
+			// existing manifest via the session_id lookup.
 			const found = ensureCanonicalManifest({
 				agentId: "default",
 				sessionId: sharedKey,
@@ -2093,13 +2093,13 @@ describe("memory-lineage", () => {
 		},
 	);
 
-	test.serial("findExistingManifest does not return legacy manifest when sessionId differs from sessionKey", () => {
+	test.serial("ensureCanonicalManifest creates fresh manifest when sessionId differs from sessionKey", () => {
 		createMemoryDb([]);
 		const capturedAt = "2026-04-03T11:00:00.000Z";
 		const sharedKey = "agent:main:main";
 
 		// Pre-fix row: session_id === session_key
-		ensureCanonicalManifest({
+		const legacy = ensureCanonicalManifest({
 			agentId: "default",
 			sessionId: sharedKey,
 			sessionKey: sharedKey,
@@ -2122,6 +2122,8 @@ describe("memory-lineage", () => {
 			startedAt: null,
 			endedAt: null,
 		});
+
+		expect(fresh.path).not.toBe(legacy.path);
 
 		const db = openTestDb();
 		try {
