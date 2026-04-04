@@ -211,6 +211,12 @@ function base32Sha256(input: string): string {
 	return out;
 }
 
+// Derives a stable session token from the agent and session identity.
+// When sessionKey is present it takes precedence over sessionId, so
+// concurrent sessions sharing the same key produce the same token.
+// Artifact path uniqueness then depends on capturedAt (millisecond
+// precision). Callers must not fire multiple session-end events for the
+// same sessionKey within the same millisecond.
 export function deriveSessionToken(agentId: string, sessionKey: string | null, sessionId: string): string {
 	const identity = sessionKey && sessionKey.trim().length > 0 ? sessionKey.trim() : sessionId.trim();
 	const seed = `${agentId}:${identity}`;

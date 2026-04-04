@@ -1695,6 +1695,12 @@ export function enqueueSummaryJob(
 				now,
 			);
 		} catch {
+			// Legacy schema fallback: databases that have not yet run the
+			// migration adding session_id/agent_id/trigger/etc columns will
+			// hit this branch. The derived sessionId is silently dropped, so
+			// processJob falls back to session_key — acceptable because these
+			// DBs also lack the artifact rows that would trigger immutable
+			// conflicts.
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, harness, project, transcript, status, created_at)

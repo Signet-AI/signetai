@@ -36,6 +36,7 @@ const {
 } = hooks;
 const {
 	deriveSessionToken,
+	ensureCanonicalManifest,
 	hashNormalizedBody,
 	normalizeMarkdownBody,
 	reindexMemoryArtifacts,
@@ -2052,6 +2053,85 @@ describe("memory-lineage", () => {
 		expect(a).toBe(b);
 		expect(a).not.toBe(c);
 		expect(a).toMatch(/^[a-z2-7]{16}$/);
+	});
+
+	test.serial(
+		"findExistingManifest legacy fallback returns manifest for pre-fix rows where session_id equals session_key",
+		() => {
+			createMemoryDb([]);
+			const capturedAt = "2026-04-03T10:00:00.000Z";
+			const sharedKey = "agent:main:main";
+
+			// Create a manifest via the normal path — this simulates a pre-fix
+			// row where session_id was persisted verbatim from the shared key.
+			const manifest = ensureCanonicalManifest({
+				agentId: "default",
+				sessionId: sharedKey,
+				sessionKey: sharedKey,
+				project: null,
+				harness: "test",
+				capturedAt,
+				startedAt: null,
+				endedAt: null,
+			});
+			expect(manifest).toBeDefined();
+			expect(manifest.path).toBeTruthy();
+
+			// Calling again with the same session_id === session_key should
+			// return the existing manifest (legacy fallback path).
+			const found = ensureCanonicalManifest({
+				agentId: "default",
+				sessionId: sharedKey,
+				sessionKey: sharedKey,
+				project: null,
+				harness: "test",
+				capturedAt: "2026-04-03T10:01:00.000Z",
+				startedAt: null,
+				endedAt: null,
+			});
+			expect(found.path).toBe(manifest.path);
+		},
+	);
+
+	test.serial("findExistingManifest does not return legacy manifest when sessionId differs from sessionKey", () => {
+		createMemoryDb([]);
+		const capturedAt = "2026-04-03T11:00:00.000Z";
+		const sharedKey = "agent:main:main";
+
+		// Pre-fix row: session_id === session_key
+		ensureCanonicalManifest({
+			agentId: "default",
+			sessionId: sharedKey,
+			sessionKey: sharedKey,
+			project: null,
+			harness: "test",
+			capturedAt,
+			startedAt: null,
+			endedAt: null,
+		});
+
+		// New-style call with a derived session_id should NOT match
+		// the legacy row and should create a fresh manifest.
+		const fresh = ensureCanonicalManifest({
+			agentId: "default",
+			sessionId: "session-end:path:/tmp/transcript:abc123",
+			sessionKey: sharedKey,
+			project: null,
+			harness: "test",
+			capturedAt: "2026-04-03T11:01:00.000Z",
+			startedAt: null,
+			endedAt: null,
+		});
+
+		const db = openTestDb();
+		try {
+			const count = db.prepare("SELECT COUNT(*) as n FROM memory_artifacts WHERE source_kind = 'manifest'").get() as {
+				n: number;
+			};
+			expect(count.n).toBe(2);
+		} finally {
+			db.close();
+		}
 	});
 
 	test.serial("resolveMemorySentence falls back when provider emits low-signal output", async () => {
