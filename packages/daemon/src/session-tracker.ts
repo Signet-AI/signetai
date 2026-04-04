@@ -288,6 +288,11 @@ export function stopSessionCleanup(): void {
 	}
 }
 
+/** Exposed for tests to verify module imports do not start cleanup side effects. */
+export function isSessionCleanupRunning(): boolean {
+	return cleanupStarted;
+}
+
 /** Release all active sessions (for graceful shutdown). */
 export function releaseAllSessions(): number {
 	const count = sessions.size;
