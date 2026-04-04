@@ -285,8 +285,9 @@ describe("summary job helpers", () => {
 		expect(isTerminalSummaryJobError("summary command timed out after 5000ms")).toBe(false);
 	});
 
-	it("marks immutable artifact conflicts dead without consuming retry budget", () => {
-		// terminal=true (immutable artifact conflict) -> dead regardless of attempts
+	it("marks terminal errors dead immediately even with remaining attempts", () => {
+		// terminal=true -> dead regardless of attempt count (one attempt is
+		// still consumed by the worker tick before the error is classified)
 		expect(resolveFailedSummaryJobStatus(true, 1, 3)).toBe("dead");
 		// terminal=false, attempts < maxAttempts -> pending (retryable)
 		expect(resolveFailedSummaryJobStatus(false, 1, 3)).toBe("pending");

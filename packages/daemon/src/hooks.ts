@@ -2486,7 +2486,6 @@ export function deriveSessionEndFallbackId(
 	sessionKey: string | undefined,
 	transcriptPath: string | undefined,
 	transcript: string,
-	endedAt: string,
 ): string {
 	const scopedKey = sessionKey?.trim() || "anonymous";
 	const path = transcriptPath?.trim();
@@ -2494,6 +2493,10 @@ export function deriveSessionEndFallbackId(
 	if (path) {
 		// Include a content digest so rotating log files that reuse the same
 		// path across distinct sessions produce different IDs.
+		// Note: sessions with identical path AND identical content will
+		// intentionally deduplicate — writeImmutableArtifact returns the
+		// existing artifact path when the content hash matches, so this is
+		// a graceful no-op rather than an error.
 		if (body.length > 0) {
 			const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
 			return `session-end:path:${path}:${digest}`;
@@ -2504,7 +2507,7 @@ export function deriveSessionEndFallbackId(
 		const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
 		return `session-end:${scopedKey}:${digest}`;
 	}
-	return `session-end:${scopedKey}:${endedAt}:${randomUUID()}`;
+	return `session-end:${scopedKey}:${randomUUID()}`;
 }
 
 export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
@@ -2589,8 +2592,7 @@ export function handleSessionEnd(req: SessionEndRequest): SessionEndResponse {
 	} else if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	}
-	const sessionId =
-		req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, transcript, endedAt);
+	const sessionId = req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, transcript);
 
 	// Lossless retention: write transcript immediately regardless of length
 	// or whether the summary worker succeeds later.

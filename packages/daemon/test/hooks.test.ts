@@ -1812,11 +1812,11 @@ describe("handleSessionEnd", () => {
 	);
 
 	test("adds a random suffix when transcript context is unavailable", () => {
-		const first = deriveSessionEndFallbackId("agent:main:main", undefined, "", "2026-04-03T18:00:00.000Z");
-		const second = deriveSessionEndFallbackId("agent:main:main", undefined, "", "2026-04-03T18:00:00.000Z");
+		const first = deriveSessionEndFallbackId("agent:main:main", undefined, "");
+		const second = deriveSessionEndFallbackId("agent:main:main", undefined, "");
 
-		expect(first).toMatch(/^session-end:agent:main:main:2026-04-03T18:00:00\.000Z:[0-9a-f-]{36}$/);
-		expect(second).toMatch(/^session-end:agent:main:main:2026-04-03T18:00:00\.000Z:[0-9a-f-]{36}$/);
+		expect(first).toMatch(/^session-end:agent:main:main:[0-9a-f-]{36}$/);
+		expect(second).toMatch(/^session-end:agent:main:main:[0-9a-f-]{36}$/);
 		expect(first).not.toBe(second);
 	});
 });
