@@ -1694,15 +1694,16 @@ export function enqueueSummaryJob(
 				params.endedAt || null,
 				now,
 			);
-		} catch (schemaErr) {
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			const isSchemaError = /no such column|has no column named/i.test(msg);
+			if (!isSchemaError) throw err;
 			// Legacy schema fallback: databases that have not yet run the
 			// migration adding session_id/agent_id/trigger/etc columns will
-			// hit this branch. The derived sessionId is silently dropped, so
-			// processJob falls back to session_key — acceptable because these
-			// DBs also lack the artifact rows that would trigger immutable
-			// conflicts.
+			// hit this branch. The derived sessionId is dropped, so processJob
+			// falls back to session_key.
 			logger.warn("summary-worker", "New-schema INSERT failed, falling back to legacy columns", {
-				error: schemaErr instanceof Error ? schemaErr.message : String(schemaErr),
+				error: msg,
 				jobId: id,
 			});
 			db.prepare(

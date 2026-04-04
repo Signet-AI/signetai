@@ -274,6 +274,13 @@ describe("summary job helpers", () => {
 				created_at: "2026-04-03T00:00:01.000Z",
 			}),
 		).toBe("2026-04-02");
+		expect(
+			resolveSummaryHeadingDate({
+				ended_at: null,
+				captured_at: null,
+				created_at: "2026-04-01T12:00:00.000Z",
+			}),
+		).toBe("2026-04-01");
 	});
 
 	it("classifies immutable artifact conflicts as terminal failures", () => {
