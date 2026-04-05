@@ -43,7 +43,7 @@ right now, with enough precision to help instead of distract.
 
 Why teams adopt it:
 - less prompt re-explaining between sessions
-- one memory layer across Claude Code, OpenCode, OpenClaw, and Codex
+- one memory layer across Claude Code, OpenCode, OpenClaw, Codex, and Hermes Agent
 - clear visibility into what was recalled, why, and from which scope
 
 **Benchmark note:** early LoCoMo results show **87.5% answer accuracy**
@@ -59,7 +59,7 @@ signet status              # confirm daemon + pipeline health
 signet dashboard           # open memory + retrieval inspector
 ```
 
-If you already use Claude Code, OpenCode, OpenClaw, or Codex, keep your
+If you already use Claude Code, OpenCode, OpenClaw, Codex, or Hermes Agent, keep your
 existing harness. Signet installs under it.
 
 ### Docker self-hosting
@@ -169,9 +169,10 @@ Signet is built to support:
 
 ## Harness support
 
-Signet is not a harness. It doesn't replace Claude Code, OpenClaw, or
-OpenCode — it runs alongside them as an enhancement. Bring the harness
-you already use. Signet handles the memory layer underneath it.
+Signet is not a harness. It doesn't replace Claude Code, OpenClaw,
+OpenCode, or Hermes Agent — it runs alongside them as an enhancement.
+Bring the harness you already use. Signet handles the memory layer
+underneath it.
 
 | Harness | Status | Integration |
 |---|---|---|
@@ -180,6 +181,7 @@ you already use. Signet handles the memory layer underneath it.
 | [OpenCode](https://github.com/sst/opencode) | **Supported** | Plugin + Hooks |
 | [OpenClaw](https://github.com/openclaw/openclaw) | **Supported** | Runtime plugin + NemoClaw compatible |
 | [Codex](https://github.com/openai/codex) | **Supported** | Hooks + MCP server |
+| [Hermes Agent](https://github.com/hermes-ai/hermes) | **Supported** | Memory provider plugin |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Planned | — |
 
 
@@ -337,7 +339,7 @@ SDK (@signet/sdk)
   typed client, React hooks, Vercel AI SDK middleware
 
 Connectors
-  claude-code, opencode, openclaw, codex, oh-my-pi, forge
+  claude-code, opencode, openclaw, codex, oh-my-pi, hermes-agent, forge
 ```
 
 ## Packages
@@ -355,6 +357,7 @@ Connectors
 | [`@signet/connector-openclaw`](./packages/connector-openclaw) | OpenClaw integration |
 | [`@signet/connector-codex`](./packages/connector-codex) | Codex CLI integration |
 | [`@signet/connector-oh-my-pi`](./packages/connector-oh-my-pi) | Oh My Pi integration |
+| [`@signet/connector-hermes-agent`](./packages/connector-hermes-agent) | Hermes Agent integration |
 | [`@signet/oh-my-pi-extension`](./packages/oh-my-pi-extension) | Oh My Pi extension bridge |
 | [`@signet/opencode-plugin`](./packages/opencode-plugin) | OpenCode runtime plugin — memory tools and session hooks |
 | [`@signetai/signet-memory-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
