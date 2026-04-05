@@ -149,8 +149,8 @@ class SignetMemoryProvider(MemoryProvider):
         if config_path.exists():
             try:
                 existing = json.loads(config_path.read_text())
-            except Exception:
-                pass
+            except Exception as err:
+                logger.warning("Failed to parse %s, overwriting: %s", config_path, err)
         existing.update(values)
         config_path.write_text(json.dumps(existing, indent=2))
 
@@ -281,12 +281,19 @@ class SignetMemoryProvider(MemoryProvider):
                     project=self._project,
                 )
                 if result:
-                    # Handle daemon restart detection
+                    # Handle daemon restart detection: re-initialize and refresh context
                     if not result.get("sessionKnown", True) and self._session_initialized:
                         logger.debug("Signet daemon restarted mid-session, re-initializing")
-                        self._client.session_start(
+                        reinit = self._client.session_start(
                             self._session_key, project=self._project,
                         )
+                        if reinit:
+                            inject_from_reinit = reinit.get("inject", "")
+                            if inject_from_reinit and inject_from_reinit.strip():
+                                with self._prefetch_lock:
+                                    self._prefetch_result = inject_from_reinit
+                                # Skip using the stale inject from the failed prompt-submit
+                                return
                     inject = result.get("inject", "")
                     if inject and inject.strip():
                         with self._prefetch_lock:

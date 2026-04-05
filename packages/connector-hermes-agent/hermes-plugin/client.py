@@ -14,8 +14,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -79,8 +80,8 @@ class SignetClient:
             body_text = ""
             try:
                 body_text = e.read().decode("utf-8", errors="replace")[:200]
-            except Exception:
-                pass
+            except Exception as read_err:
+                logger.debug("Signet POST %s: failed to read error body: %s", path, read_err)
             logger.debug("Signet POST %s returned %d: %s", path, e.code, body_text)
             return None
         except (urllib.error.URLError, OSError, TimeoutError) as e:
@@ -302,7 +303,3 @@ class SignetClient:
         if session_key:
             body["session_key"] = session_key
         return self._post("/api/memory/feedback", body)
-
-
-# Needs import for search URL encoding
-import urllib.parse  # noqa: E402

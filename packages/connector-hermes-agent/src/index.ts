@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,15 +42,12 @@ function resolveHermesRepo(): string | null {
 
 	// Try finding via `hermes` CLI in PATH
 	try {
-		const { execSync } = require("node:child_process");
-		const hermesPath = execSync("which hermes 2>/dev/null || where hermes 2>nul", {
-			encoding: "utf-8",
-			timeout: 5000,
-		}).trim();
+		const result = spawnSync("which", ["hermes"], { encoding: "utf-8", timeout: 5000 });
+		const hermesPath = result.stdout?.trim();
 
 		if (hermesPath) {
 			// hermes is usually a script/symlink; resolve to repo root
-			const realPath = require("node:fs").realpathSync(hermesPath);
+			const realPath = realpathSync(hermesPath);
 			const repoDir = dirname(realPath);
 			if (existsSync(join(repoDir, "plugins", "memory"))) {
 				return repoDir;
