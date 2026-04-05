@@ -27,20 +27,25 @@ _TIMEOUT_SECS = 5
 _LONG_TIMEOUT_SECS = 15
 
 
+def _sanitize(value: str) -> str:
+    """Strip leading/trailing whitespace and embedded newlines from env values."""
+    return value.strip().replace("\r", "").replace("\n", "")
+
+
 def _resolve_base_url() -> str:
     """Resolve the Signet daemon base URL."""
-    explicit = os.environ.get("SIGNET_DAEMON_URL", "").strip()
+    explicit = _sanitize(os.environ.get("SIGNET_DAEMON_URL", ""))
     if explicit:
         return explicit.rstrip("/")
-    host = os.environ.get("SIGNET_HOST", _DEFAULT_HOST).strip()
-    port = os.environ.get("SIGNET_PORT", str(_DEFAULT_PORT)).strip()
+    host = _sanitize(os.environ.get("SIGNET_HOST", _DEFAULT_HOST))
+    port = _sanitize(os.environ.get("SIGNET_PORT", str(_DEFAULT_PORT)))
     return f"http://{host}:{port}"
 
 
 class SignetClient:
     """HTTP client for the Signet daemon API."""
 
-    def __init__(self, agent_id: str = "default", harness: str = "hermes-agent"):
+    def __init__(self, agent_id: str = "", harness: str = "hermes-agent"):
         self._base_url = _resolve_base_url()
         self._agent_id = agent_id
         self._harness = harness
@@ -59,7 +64,7 @@ class SignetClient:
         # Include auth token when present (required for remote/non-localhost mode).
         # In the default hybrid mode the daemon allows unauthenticated localhost
         # requests, so this is optional but included when available.
-        token = os.environ.get("SIGNET_TOKEN", "").strip()
+        token = _sanitize(os.environ.get("SIGNET_TOKEN", ""))
         if token:
             h["Authorization"] = f"Bearer {token}"
         if extra:

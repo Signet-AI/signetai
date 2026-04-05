@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
-import { expandHome, resolveHermesRepoPluginPath } from "@signet/core";
+import { expandHome, hermesAgentCandidateDirs, resolveHermesRepoPluginPath } from "@signet/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -31,13 +31,7 @@ function resolveHermesRepo(): string | null {
 	const explicit = process.env.HERMES_REPO?.trim();
 	if (explicit && existsSync(join(explicit, "plugins", "memory"))) return explicit;
 
-	const candidates = [
-		join(homedir(), "hermes-agent"),
-		join(homedir(), ".local", "share", "hermes-agent"),
-		join(homedir(), "src", "hermes-agent"),
-		"/opt/hermes-agent",
-	];
-	for (const candidate of candidates) {
+	for (const candidate of hermesAgentCandidateDirs()) {
 		if (existsSync(join(candidate, "plugins", "memory"))) return candidate;
 	}
 
@@ -207,6 +201,20 @@ export class HermesAgentConnector extends BaseConnector {
 			// shared "default" scope (AGENTS.md: never hardcode "default" for scoped paths).
 			signetVars.SIGNET_AGENT_ID = (process.env.SIGNET_AGENT_ID?.trim() || "hermes-agent").replace(/[\r\n]+/g, "");
 
+			// Persist auth token so Hermes can reach a non-localhost daemon.
+			// Warn if absent and SIGNET_DAEMON_URL points to a remote host.
+			if (process.env.SIGNET_TOKEN) {
+				signetVars.SIGNET_TOKEN = process.env.SIGNET_TOKEN.replace(/[\r\n]+/g, "");
+			} else if (
+				process.env.SIGNET_DAEMON_URL &&
+				!process.env.SIGNET_DAEMON_URL.includes("localhost") &&
+				!process.env.SIGNET_DAEMON_URL.includes("127.0.0.1")
+			) {
+				warnings.push(
+					`SIGNET_TOKEN is not set. The Signet daemon at ${process.env.SIGNET_DAEMON_URL} may require authentication. Set SIGNET_TOKEN in your environment before starting Hermes.`,
+				);
+			}
+
 			let changed = false;
 			for (const [key, value] of Object.entries(signetVars)) {
 				const pattern = new RegExp(`^${key}=.*$`, "m");
@@ -279,8 +287,9 @@ export class HermesAgentConnector extends BaseConnector {
 					writeFileSync(envPath, `${envContent.replace(/\n{3,}/g, "\n\n").trimEnd()}\n`);
 					configsPatched.push(envPath);
 				}
-			} catch {
-				// Best effort
+			} catch (e) {
+				// Best effort — log but don't fail the uninstall
+				console.warn(`[hermes-agent] Failed to clean up .env: ${e instanceof Error ? e.message : String(e)}`);
 			}
 		}
 

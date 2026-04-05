@@ -169,6 +169,7 @@ export {
 	resolveSignetForgeManagedPath,
 	resolveAgentBasePath,
 	resolveHermesRepoPluginPath,
+	hermesAgentCandidateDirs,
 } from "./identity";
 export type {
 	IdentityFileSpec,

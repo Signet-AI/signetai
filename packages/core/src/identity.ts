@@ -7,9 +7,9 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { listOhMyPiAgentDirCandidates } from "./oh-my-pi";
 
 const FORGE_BINARY_NAME = "forge";
@@ -333,6 +333,22 @@ function isForgeInstalled(agentsDir: string, home: string): boolean {
 }
 
 /**
+ * Canonical list of common Hermes Agent repo install paths.
+ *
+ * Exported so `connector-hermes-agent` can import it instead of duplicating
+ * the list, eliminating parity drift between install and detection logic.
+ */
+export function hermesAgentCandidateDirs(): readonly string[] {
+	const home = homedir();
+	return [
+		join(home, "hermes-agent"),
+		join(home, ".local", "share", "hermes-agent"),
+		join(home, "src", "hermes-agent"),
+		"/opt/hermes-agent",
+	] as const;
+}
+
+/**
  * Resolve the path to the Signet plugin file inside the Hermes Agent repo.
  *
  * Checks (in order): `HERMES_REPO` env var, four common install paths, then
@@ -346,7 +362,6 @@ function isForgeInstalled(agentsDir: string, home: string): boolean {
  */
 export function resolveHermesRepoPluginPath(): string | null {
 	const pluginFile = join("plugins", "memory", "signet", "__init__.py");
-	const home = homedir();
 
 	const hermesRepo = process.env.HERMES_REPO?.trim();
 	if (hermesRepo) {
@@ -354,13 +369,7 @@ export function resolveHermesRepoPluginPath(): string | null {
 		if (existsSync(candidate)) return candidate;
 	}
 
-	const commonPaths = [
-		join(home, "hermes-agent"),
-		join(home, ".local", "share", "hermes-agent"),
-		join(home, "src", "hermes-agent"),
-		"/opt/hermes-agent",
-	];
-	for (const base of commonPaths) {
+	for (const base of hermesAgentCandidateDirs()) {
 		const candidate = join(base, pluginFile);
 		if (existsSync(candidate)) return candidate;
 	}
@@ -373,7 +382,7 @@ export function resolveHermesRepoPluginPath(): string | null {
 			timeout: 3000,
 		}).trim();
 		if (hermesPath) {
-			const candidate = join(join(realpathSync(hermesPath), ".."), pluginFile);
+			const candidate = join(dirname(realpathSync(hermesPath)), pluginFile);
 			if (existsSync(candidate)) return candidate;
 		}
 	} catch {
@@ -402,7 +411,6 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 	let memoryLogCount = 0;
 	if (existsSync(memoryDir)) {
 		try {
-			const { readdirSync } = require("node:fs");
 			const files = readdirSync(memoryDir);
 			memoryLogCount = files.filter((f: string) => f.endsWith(".md") && !f.startsWith("TEMPLATE")).length;
 		} catch {

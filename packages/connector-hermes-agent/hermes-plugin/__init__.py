@@ -12,7 +12,7 @@ embedding, reranking, knowledge graph traversal, and predictive scoring.
 Config:
   - SIGNET_HOST / SIGNET_PORT env vars (default: localhost:3850)
   - SIGNET_DAEMON_URL env var for full URL override
-  - SIGNET_AGENT_ID env var for agent scoping (default: "default")
+  - SIGNET_AGENT_ID env var for agent scoping (default: "hermes-agent")
 """
 
 from __future__ import annotations
@@ -21,9 +21,15 @@ import json
 import logging
 import os
 import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
+
+try:
+    from plugins.memory.signet.client import SignetClient
+except ImportError:  # pragma: no cover — only missing during Hermes bootstrap
+    SignetClient = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -133,16 +139,17 @@ class SignetMemoryProvider(MemoryProvider):
 
     def is_available(self) -> bool:
         """Check if the Signet daemon is reachable. No credentials needed."""
+        if SignetClient is None:
+            logger.debug("Signet is_available(): SignetClient not importable")
+            return False
         try:
-            from plugins.memory.signet.client import SignetClient
-            client = SignetClient()
-            return client.is_available()
-        except Exception:
+            return SignetClient().is_available()
+        except Exception as err:
+            logger.debug("Signet is_available() check failed: %s", err)
             return False
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
         """Write config to $HERMES_HOME/signet.json."""
-        from pathlib import Path
         config_path = Path(hermes_home) / "signet.json"
         existing: Dict[str, Any] = {}
         if config_path.exists():
@@ -164,7 +171,7 @@ class SignetMemoryProvider(MemoryProvider):
             {
                 "key": "agent_id",
                 "description": "Agent scope identifier",
-                "default": "default",
+                "default": "hermes-agent",
                 "env_var": "SIGNET_AGENT_ID",
             },
         ]
@@ -175,15 +182,17 @@ class SignetMemoryProvider(MemoryProvider):
         Retrieves identity, memories, and system prompt injection from
         the daemon. Caches the inject text for system_prompt_block().
         """
-        from plugins.memory.signet.client import SignetClient
+        if SignetClient is None:
+            logger.warning("Signet plugin: SignetClient not importable — skipping initialization")
+            return
 
         agent_id = os.environ.get("SIGNET_AGENT_ID", "").strip()
         if not agent_id:
             logger.warning(
-                "SIGNET_AGENT_ID is not set; memory will be stored under the 'default' "
-                "agent scope. Set SIGNET_AGENT_ID to scope memories to this agent."
+                "SIGNET_AGENT_ID is not set; memory will be stored under the 'hermes-agent' "
+                "scope. Set SIGNET_AGENT_ID to scope memories to a specific agent."
             )
-            agent_id = "default"
+            agent_id = "hermes-agent"
 
         # Skip for cron/flush contexts — no memory injection needed
         agent_context = kwargs.get("agent_context", "")
@@ -277,13 +286,21 @@ class SignetMemoryProvider(MemoryProvider):
         with self._transcript_lock:
             self._transcript_lines.append(f"user: {query}")
 
+        # Capture mutable state before spawning the thread to avoid
+        # data races: sync_turn() can update _last_assistant_message
+        # concurrently, and shutdown() can null _client.
+        client = self._client
+        session_key = self._session_key
+        project = self._project
+        last_assistant = self._last_assistant_message
+
         def _run():
             try:
-                result = self._client.user_prompt_submit(
-                    self._session_key,
+                result = client.user_prompt_submit(
+                    session_key,
                     query,
-                    last_assistant_message=self._last_assistant_message,
-                    project=self._project,
+                    last_assistant_message=last_assistant,
+                    project=project,
                 )
                 if result:
                     # Handle daemon restart detection: re-initialize and refresh context.
@@ -291,8 +308,8 @@ class SignetMemoryProvider(MemoryProvider):
                     # daemon no longer recognizes, so its inject would be stale/wrong.
                     if not result.get("sessionKnown", True) and self._session_initialized:
                         logger.debug("Signet daemon restarted mid-session, re-initializing")
-                        reinit = self._client.session_start(
-                            self._session_key, project=self._project,
+                        reinit = client.session_start(
+                            session_key, project=project,
                         )
                         if reinit:
                             inject_from_reinit = reinit.get("inject", "")
