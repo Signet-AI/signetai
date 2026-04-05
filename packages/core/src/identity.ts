@@ -188,6 +188,7 @@ export interface SetupDetection {
 		codex: boolean;
 		ohMyPi: boolean;
 		forge: boolean;
+		hermesAgent: boolean;
 	};
 }
 
@@ -382,6 +383,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
 			ohMyPi: isSignetManagedOhMyPiInstall(),
 			forge: isForgeInstalled(basePath, home),
+			hermesAgent: existsSync(join(home, ".hermes")) || existsSync(join(home, "hermes-agent", "plugins", "memory")),
 		},
 	};
 }

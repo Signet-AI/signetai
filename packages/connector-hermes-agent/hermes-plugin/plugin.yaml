@@ -1,0 +1,5 @@
+name: signet
+version: 1.0.0
+description: "Signet Memory — persistent cross-session memory with hybrid search, knowledge graph, and predictive recall via the Signet daemon."
+hooks:
+  - on_session_end

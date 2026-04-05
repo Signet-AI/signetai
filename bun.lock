@@ -34,6 +34,7 @@
         "@signet/connector-claude-code": "workspace:*",
         "@signet/connector-codex": "workspace:*",
         "@signet/connector-forge": "workspace:*",
+        "@signet/connector-hermes-agent": "workspace:*",
         "@signet/connector-oh-my-pi": "workspace:*",
         "@signet/connector-openclaw": "workspace:*",
         "@signet/connector-opencode": "workspace:*",
@@ -134,6 +135,18 @@
     },
     "packages/connector-forge": {
       "name": "@signet/connector-forge",
+      "version": "0.93.7",
+      "dependencies": {
+        "@signet/connector-base": "workspace:*",
+        "@signet/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/connector-hermes-agent": {
+      "name": "@signet/connector-hermes-agent",
       "version": "0.93.7",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
@@ -1356,6 +1369,8 @@
     "@signet/connector-codex": ["@signet/connector-codex@workspace:packages/connector-codex"],
 
     "@signet/connector-forge": ["@signet/connector-forge@workspace:packages/connector-forge"],
+
+    "@signet/connector-hermes-agent": ["@signet/connector-hermes-agent@workspace:packages/connector-hermes-agent"],
 
     "@signet/connector-oh-my-pi": ["@signet/connector-oh-my-pi@workspace:packages/connector-oh-my-pi"],
 
@@ -3563,6 +3578,8 @@
 
     "@signet/connector-forge/@types/node": ["@types/node@22.19.11", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-BH7YwL6rA93ReqeQS1c4bsPpcfOmJasG+Fkr6Y59q83f9M1WcBRHR2vM+P9eOisYRcN3ujQoiZY8uk5W+1WL8w=="],
 
+    "@signet/connector-hermes-agent/@types/node": ["@types/node@22.19.11", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-BH7YwL6rA93ReqeQS1c4bsPpcfOmJasG+Fkr6Y59q83f9M1WcBRHR2vM+P9eOisYRcN3ujQoiZY8uk5W+1WL8w=="],
+
     "@signet/connector-oh-my-pi/@types/node": ["@types/node@22.19.11", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-BH7YwL6rA93ReqeQS1c4bsPpcfOmJasG+Fkr6Y59q83f9M1WcBRHR2vM+P9eOisYRcN3ujQoiZY8uk5W+1WL8w=="],
 
     "@signet/connector-openclaw/@types/node": ["@types/node@22.19.11", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-BH7YwL6rA93ReqeQS1c4bsPpcfOmJasG+Fkr6Y59q83f9M1WcBRHR2vM+P9eOisYRcN3ujQoiZY8uk5W+1WL8w=="],
@@ -3880,6 +3897,8 @@
     "@signet/connector-codex/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-forge/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
+
+    "@signet/connector-hermes-agent/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-oh-my-pi/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 

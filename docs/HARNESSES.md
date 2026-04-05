@@ -557,6 +557,70 @@ This is a runtime plugin that OpenClaw loads to:
 
 Has a peer dependency on `openclaw` — only usable within the OpenClaw process.
 
+## Hermes Agent
+
+Hermes Agent is an open-source terminal AI agent by Nous Research. Signet
+integrates as a pluggable memory provider via Hermes's `MemoryProvider` ABC,
+deploying a Python plugin that bridges all Signet daemon hooks into the
+Hermes lifecycle.
+
+### Files managed by Signet
+
+| Location | Description |
+|----------|-------------|
+| `<hermes-repo>/plugins/memory/signet/__init__.py` | Signet `MemoryProvider` implementation |
+| `<hermes-repo>/plugins/memory/signet/client.py` | HTTP client for the Signet daemon API |
+| `<hermes-repo>/plugins/memory/signet/plugin.yaml` | Plugin metadata |
+| `~/.hermes/.env` | Daemon connection environment variables |
+
+### How it works
+
+1. `signet setup` (with `hermes-agent` selected) copies the Python plugin
+   into `plugins/memory/signet/` inside the Hermes Agent repo and writes
+   daemon connection env vars to `~/.hermes/.env`.
+2. The user activates the plugin via `hermes memory setup` (select "signet")
+   or `hermes config set memory.provider signet`.
+3. At session start, Hermes calls `initialize()` on the plugin, which fires
+   `POST /api/hooks/session-start` to load identity, memories, and system
+   prompt injection from the daemon.
+4. On each user turn, `queue_prefetch()` fires
+   `POST /api/hooks/user-prompt-submit` for per-turn hybrid recall
+   (BM25 + vector + KG + predictive scoring).
+5. At session end, `on_session_end()` sends the accumulated transcript via
+   `POST /api/hooks/session-end` for async pipeline extraction.
+
+### Tools exposed to the agent
+
+| Tool | Description |
+|------|-------------|
+| `signet_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
+| `signet_store` | Store a fact/preference/decision with auto entity extraction |
+| `signet_profile` | Broad overview of stored memories and working context |
+
+### Supported hooks
+
+| Hook | Supported |
+|------|-----------|
+| session-start | yes — identity + memories via `system_prompt_block()` |
+| user-prompt-submit | yes — per-turn recall via `queue_prefetch()` / `prefetch()` |
+| pre-compaction | yes — daemon-generated summary guidelines via `on_pre_compress()` |
+| compaction-complete | yes — saves summary as session memory via `on_compaction_complete()` |
+| checkpoint-extract | yes — periodic mid-session delta extraction every 30 turns |
+| session-end | yes — transcript extraction via `on_session_end()` |
+
+### Delegation support
+
+When Hermes delegates to subagents, the parent's `on_delegation()` hook
+stores the task+result pair as a Signet memory tagged `["delegation", "subagent"]`.
+
+### Prerequisites
+
+- Hermes Agent installed (repo with `plugins/memory/` directory)
+- Signet daemon running (`signet start`)
+- Plugin activated via `hermes memory setup` or `hermes config set memory.provider signet`
+
+---
+
 ## Adding a New Harness
 
 To integrate Signet with a harness not listed here:
@@ -596,6 +660,7 @@ Where they differ is lifecycle fidelity:
 | OpenCode plugin | yes | yes | yes | yes | yes | Reference full-fidelity path |
 | OpenClaw plugin | yes | yes | yes | yes | yes | Flagship path; post-compaction may read summary back from `sessionFile` when the hook only exposes metadata |
 | Oh My Pi extension (v1) | yes | yes | yes | yes | yes | Lifecycle events only; no Signet memory tools or AGENTS.md sync yet |
+| Hermes Agent plugin | yes | yes | yes | yes | yes | Full fidelity via `MemoryProvider` ABC; includes checkpoint-extract and delegation hooks |
 | Claude Code | yes | yes | yes | no | yes | Good continuity, degraded after-compaction fidelity |
 | Codex | yes | yes | no | no | yes | Solid baseline, degraded compaction fidelity |
 | OpenClaw legacy hooks | manual `/context` | no | no | no | no | Compatibility-only, not full parity |

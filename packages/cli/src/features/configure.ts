@@ -262,6 +262,7 @@ async function configureHarnesses(yaml: string, deps: Deps, dir: string): Promis
 						? "managed install unavailable on this platform; install Forge separately first"
 						: false,
 			},
+			{ value: "hermes-agent", name: "Hermes Agent" },
 			{ value: "cursor", name: "Cursor" },
 			{ value: "windsurf", name: "Windsurf" },
 		],
