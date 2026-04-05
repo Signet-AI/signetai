@@ -265,14 +265,14 @@ class SignetClient:
         min_score: float = 0.0,
     ) -> Optional[Dict[str, Any]]:
         """Search memories via hybrid recall."""
-        return self._post(
-            "/api/memory/recall",
-            {
-                "query": query,
-                "limit": limit,
-                "agentId": self._agent_id,
-            },
-        )
+        body: Dict[str, Any] = {
+            "query": query,
+            "limit": limit,
+            "agentId": self._agent_id,
+        }
+        if min_score > 0.0:
+            body["minScore"] = min_score
+        return self._post("/api/memory/recall", body)
 
     def search(
         self,

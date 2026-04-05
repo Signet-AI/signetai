@@ -114,7 +114,6 @@ class SignetMemoryProvider(MemoryProvider):
         self._prefetch_result = ""
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread: Optional[threading.Thread] = None
-        self._sync_thread: Optional[threading.Thread] = None
         self._turn_count = 0
         self._last_user_message = ""
         self._last_assistant_message = ""
@@ -281,7 +280,9 @@ class SignetMemoryProvider(MemoryProvider):
                     project=self._project,
                 )
                 if result:
-                    # Handle daemon restart detection: re-initialize and refresh context
+                    # Handle daemon restart detection: re-initialize and refresh context.
+                    # Always return after this branch — result came from a session the
+                    # daemon no longer recognizes, so its inject would be stale/wrong.
                     if not result.get("sessionKnown", True) and self._session_initialized:
                         logger.debug("Signet daemon restarted mid-session, re-initializing")
                         reinit = self._client.session_start(
@@ -292,14 +293,19 @@ class SignetMemoryProvider(MemoryProvider):
                             if inject_from_reinit and inject_from_reinit.strip():
                                 with self._prefetch_lock:
                                     self._prefetch_result = inject_from_reinit
-                                # Skip using the stale inject from the failed prompt-submit
-                                return
+                        return
                     inject = result.get("inject", "")
                     if inject and inject.strip():
                         with self._prefetch_lock:
                             self._prefetch_result = inject
             except Exception as e:
                 logger.debug("Signet prefetch failed: %s", e)
+
+        # Join the previous prefetch thread before starting a new one to prevent
+        # a stale turn-N result from overwriting a turn-N+1 cleared prefetch.
+        prev_thread = self._prefetch_thread
+        if prev_thread and prev_thread.is_alive():
+            prev_thread.join(timeout=2.0)
 
         self._prefetch_thread = threading.Thread(
             target=_run, daemon=True, name="signet-prefetch"
@@ -355,10 +361,6 @@ class SignetMemoryProvider(MemoryProvider):
         """Call session-end hook to trigger memory extraction from transcript."""
         if not self._client:
             return
-
-        # Wait for pending sync
-        if self._sync_thread and self._sync_thread.is_alive():
-            self._sync_thread.join(timeout=10.0)
 
         # Prefer accumulated transcript (captures tool calls, etc.),
         # fall back to rebuilding from messages argument

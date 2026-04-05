@@ -386,7 +386,8 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			hermesAgent:
 				existsSync(join(home, "hermes-agent", "plugins", "memory", "signet", "__init__.py")) ||
 				existsSync(join(home, ".local", "share", "hermes-agent", "plugins", "memory", "signet", "__init__.py")) ||
-				existsSync(join(home, "src", "hermes-agent", "plugins", "memory", "signet", "__init__.py")),
+				existsSync(join(home, "src", "hermes-agent", "plugins", "memory", "signet", "__init__.py")) ||
+				existsSync(join("/opt", "hermes-agent", "plugins", "memory", "signet", "__init__.py")),
 		},
 	};
 }
