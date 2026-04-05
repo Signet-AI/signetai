@@ -181,7 +181,7 @@ underneath it.
 | [OpenCode](https://github.com/sst/opencode) | **Supported** | Plugin + Hooks |
 | [OpenClaw](https://github.com/openclaw/openclaw) | **Supported** | Runtime plugin + NemoClaw compatible |
 | [Codex](https://github.com/openai/codex) | **Supported** | Hooks + MCP server |
-| [Hermes Agent](https://github.com/hermes-ai/hermes) | **Supported** | Memory provider plugin |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | **Supported** | Memory provider plugin |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Planned | — |
 
 

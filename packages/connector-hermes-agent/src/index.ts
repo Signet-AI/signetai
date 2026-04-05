@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
-import { expandHome } from "@signet/core";
+import { expandHome, resolveHermesRepoPluginPath } from "@signet/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -20,38 +20,37 @@ function resolveHermesHome(): string {
 	return join(homedir(), ".hermes");
 }
 
-/** Resolve the Hermes Agent repo/install directory.
- *  Order: HERMES_REPO env -> common install locations */
+/**
+ * Resolve the Hermes Agent repo directory by checking for a `plugins/memory` tree.
+ * Checks HERMES_REPO env, common paths, and falls back to which(1).
+ *
+ * Note: this checks for Hermes presence, not Signet plugin installation.
+ * Use resolveHermesRepoPluginPath() (from @signet/core) for the latter.
+ */
 function resolveHermesRepo(): string | null {
 	const explicit = process.env.HERMES_REPO?.trim();
-	if (explicit && existsSync(explicit)) return explicit;
+	if (explicit && existsSync(join(explicit, "plugins", "memory"))) return explicit;
 
-	// Common install locations
 	const candidates = [
 		join(homedir(), "hermes-agent"),
 		join(homedir(), ".local", "share", "hermes-agent"),
 		join(homedir(), "src", "hermes-agent"),
 		"/opt/hermes-agent",
 	];
-
 	for (const candidate of candidates) {
-		if (existsSync(join(candidate, "plugins", "memory"))) {
-			return candidate;
-		}
+		if (existsSync(join(candidate, "plugins", "memory"))) return candidate;
 	}
 
-	// Try finding via `hermes` CLI in PATH
+	// Fallback: resolve via `hermes` CLI in PATH
 	try {
-		const result = spawnSync("which", ["hermes"], { encoding: "utf-8", timeout: 5000 });
-		const hermesPath = result.stdout?.trim();
-
+		const hermesPath = execFileSync("which", ["hermes"], {
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 3000,
+		}).trim();
 		if (hermesPath) {
-			// hermes is usually a script/symlink; resolve to repo root
-			const realPath = realpathSync(hermesPath);
-			const repoDir = dirname(realPath);
-			if (existsSync(join(repoDir, "plugins", "memory"))) {
-				return repoDir;
-			}
+			const repoDir = dirname(realpathSync(hermesPath));
+			if (existsSync(join(repoDir, "plugins", "memory"))) return repoDir;
 		}
 	} catch {
 		// Not in PATH
@@ -289,10 +288,7 @@ export class HermesAgentConnector extends BaseConnector {
 	}
 
 	isInstalled(): boolean {
-		const hermesRepo = this.getHermesRepo();
-		if (!hermesRepo) return false;
-		const targetDir = getPluginTargetDir(hermesRepo);
-		return existsSync(join(targetDir, "__init__.py"));
+		return resolveHermesRepoPluginPath() !== null;
 	}
 }
 
