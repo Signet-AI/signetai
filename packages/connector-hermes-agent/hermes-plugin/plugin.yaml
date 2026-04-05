@@ -3,6 +3,7 @@ version: 1.0.0
 description: "Signet Memory — persistent cross-session memory with hybrid search, knowledge graph, and predictive recall via the Signet daemon."
 hooks:
   - initialize
+  - system_prompt_block
   - queue_prefetch
   - prefetch
   - on_turn_start
@@ -12,3 +13,4 @@ hooks:
   - on_compaction_complete
   - on_session_end
   - on_delegation
+  - shutdown

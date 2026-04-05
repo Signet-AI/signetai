@@ -383,11 +383,20 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
 			ohMyPi: isSignetManagedOhMyPiInstall(),
 			forge: isForgeInstalled(basePath, home),
-			hermesAgent:
-				existsSync(join(home, "hermes-agent", "plugins", "memory", "signet", "__init__.py")) ||
-				existsSync(join(home, ".local", "share", "hermes-agent", "plugins", "memory", "signet", "__init__.py")) ||
-				existsSync(join(home, "src", "hermes-agent", "plugins", "memory", "signet", "__init__.py")) ||
-				existsSync(join("/opt", "hermes-agent", "plugins", "memory", "signet", "__init__.py")),
+			hermesAgent: (() => {
+				// Mirror resolveHermesRepo() from connector-hermes-agent without
+				// importing it (layering: core must not depend on connectors).
+				// Check HERMES_REPO env first, then common paths.
+				const pluginFile = join("plugins", "memory", "signet", "__init__.py");
+				const hermesRepo = process.env.HERMES_REPO?.trim();
+				if (hermesRepo && existsSync(join(hermesRepo, pluginFile))) return true;
+				return (
+					existsSync(join(home, "hermes-agent", pluginFile)) ||
+					existsSync(join(home, ".local", "share", "hermes-agent", pluginFile)) ||
+					existsSync(join(home, "src", "hermes-agent", pluginFile)) ||
+					existsSync(join("/opt", "hermes-agent", pluginFile))
+				);
+			})(),
 		},
 	};
 }

@@ -293,6 +293,11 @@ class SignetMemoryProvider(MemoryProvider):
                             if inject_from_reinit and inject_from_reinit.strip():
                                 with self._prefetch_lock:
                                     self._prefetch_result = inject_from_reinit
+                        else:
+                            logger.warning(
+                                "Signet re-initialization after daemon restart returned no data; "
+                                "session context will be missing until next turn"
+                            )
                         return
                     inject = result.get("inject", "")
                     if inject and inject.strip():
@@ -341,12 +346,13 @@ class SignetMemoryProvider(MemoryProvider):
         """Mirror built-in memory writes to Signet."""
         if action != "add" or not content:
             return
-        if not self._client:
+        client = self._client
+        if not client:
             return
 
         def _write():
             try:
-                self._client.remember(
+                client.remember(
                     content,
                     importance=0.6,
                     tags=["hermes-builtin", target],
@@ -463,14 +469,15 @@ class SignetMemoryProvider(MemoryProvider):
     def on_delegation(self, task: str, result: str, *,
                       child_session_id: str = "", **kwargs) -> None:
         """Observe subagent delegation results — store as a memory."""
-        if not self._client or not result:
+        client = self._client
+        if not client or not result:
             return
 
         content = f"Delegated task: {task[:200]}\nResult: {result[:500]}"
 
         def _run():
             try:
-                self._client.remember(
+                client.remember(
                     content,
                     importance=0.6,
                     tags=["delegation", "subagent"],
@@ -483,18 +490,25 @@ class SignetMemoryProvider(MemoryProvider):
 
     def _fire_checkpoint(self) -> None:
         """Fire a checkpoint-extract for long-running sessions."""
+        client = self._client
+        if not client:
+            return
+
         with self._transcript_lock:
             transcript = "\n\n".join(self._transcript_lines)
 
         if not transcript or len(transcript) < 500:
             return
 
+        session_key = self._session_key
+        project = self._project
+
         def _run():
             try:
-                result = self._client.checkpoint_extract(
-                    self._session_key,
+                result = client.checkpoint_extract(
+                    session_key,
                     transcript,
-                    project=self._project,
+                    project=project,
                 )
                 if result:
                     logger.debug(
@@ -577,9 +591,8 @@ class SignetMemoryProvider(MemoryProvider):
 
     def shutdown(self) -> None:
         """Clean shutdown — wait for background threads."""
-        for t in (self._prefetch_thread, self._sync_thread):
-            if t and t.is_alive():
-                t.join(timeout=5.0)
+        if self._prefetch_thread and self._prefetch_thread.is_alive():
+            self._prefetch_thread.join(timeout=5.0)
 
 
 # ---------------------------------------------------------------------------

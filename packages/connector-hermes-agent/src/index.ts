@@ -202,10 +202,10 @@ export class HermesAgentConnector extends BaseConnector {
 			const signetVars: Record<string, string> = {};
 
 			if (process.env.SIGNET_DAEMON_URL) {
-				signetVars.SIGNET_DAEMON_URL = process.env.SIGNET_DAEMON_URL;
+				signetVars.SIGNET_DAEMON_URL = process.env.SIGNET_DAEMON_URL.replace(/[\r\n]+/g, "");
 			}
 			if (process.env.SIGNET_AGENT_ID) {
-				signetVars.SIGNET_AGENT_ID = process.env.SIGNET_AGENT_ID;
+				signetVars.SIGNET_AGENT_ID = process.env.SIGNET_AGENT_ID.replace(/[\r\n]+/g, "");
 			}
 
 			let changed = false;
