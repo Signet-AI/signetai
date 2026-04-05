@@ -177,7 +177,13 @@ class SignetMemoryProvider(MemoryProvider):
         """
         from plugins.memory.signet.client import SignetClient
 
-        agent_id = os.environ.get("SIGNET_AGENT_ID", "default")
+        agent_id = os.environ.get("SIGNET_AGENT_ID", "").strip()
+        if not agent_id:
+            logger.warning(
+                "SIGNET_AGENT_ID is not set; memory will be stored under the 'default' "
+                "agent scope. Set SIGNET_AGENT_ID to scope memories to this agent."
+            )
+            agent_id = "default"
 
         # Skip for cron/flush contexts — no memory injection needed
         agent_context = kwargs.get("agent_context", "")
@@ -385,9 +391,19 @@ class SignetMemoryProvider(MemoryProvider):
         if not transcript:
             return
 
-        # Truncate to ~100k chars to avoid oversized requests
+        # Truncate to ~100k chars, snapping to the nearest message boundary so
+        # the extraction pipeline never receives a partial user/assistant line.
         if len(transcript) > 100_000:
-            transcript = transcript[-100_000:]
+            cutoff = len(transcript) - 100_000
+            # Scan forward from the cutoff to the next message boundary
+            boundary = transcript.find("\n\nuser: ", cutoff)
+            if boundary == -1:
+                boundary = transcript.find("\n\nassistant: ", cutoff)
+            if boundary != -1:
+                transcript = transcript[boundary + 2:]  # skip leading \n\n
+            else:
+                # No boundary found after cutoff; drop the leading fragment
+                transcript = transcript[cutoff:]
 
         try:
             result = self._client.session_end(

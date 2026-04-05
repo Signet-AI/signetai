@@ -204,9 +204,9 @@ export class HermesAgentConnector extends BaseConnector {
 			if (process.env.SIGNET_DAEMON_URL) {
 				signetVars.SIGNET_DAEMON_URL = process.env.SIGNET_DAEMON_URL.replace(/[\r\n]+/g, "");
 			}
-			if (process.env.SIGNET_AGENT_ID) {
-				signetVars.SIGNET_AGENT_ID = process.env.SIGNET_AGENT_ID.replace(/[\r\n]+/g, "");
-			}
+			// Always write SIGNET_AGENT_ID — never allow the plugin to fall back to the
+			// shared "default" scope (AGENTS.md: never hardcode "default" for scoped paths).
+			signetVars.SIGNET_AGENT_ID = (process.env.SIGNET_AGENT_ID?.trim() || "hermes-agent").replace(/[\r\n]+/g, "");
 
 			let changed = false;
 			for (const [key, value] of Object.entries(signetVars)) {

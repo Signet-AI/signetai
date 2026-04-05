@@ -56,6 +56,12 @@ class SignetClient:
             "x-signet-agent-id": self._agent_id,
             "x-signet-actor": "hermes-memory-plugin",
         }
+        # Include auth token when present (required for remote/non-localhost mode).
+        # In the default hybrid mode the daemon allows unauthenticated localhost
+        # requests, so this is optional but included when available.
+        token = os.environ.get("SIGNET_TOKEN", "").strip()
+        if token:
+            h["Authorization"] = f"Bearer {token}"
         if extra:
             h.update(extra)
         return h

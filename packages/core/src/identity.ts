@@ -7,7 +7,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { listOhMyPiAgentDirCandidates } from "./oh-my-pi";
@@ -386,16 +386,32 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			hermesAgent: (() => {
 				// Mirror resolveHermesRepo() from connector-hermes-agent without
 				// importing it (layering: core must not depend on connectors).
-				// Check HERMES_REPO env first, then common paths.
+				// Check HERMES_REPO env first, then common paths, then which(1) fallback.
 				const pluginFile = join("plugins", "memory", "signet", "__init__.py");
 				const hermesRepo = process.env.HERMES_REPO?.trim();
 				if (hermesRepo && existsSync(join(hermesRepo, pluginFile))) return true;
-				return (
-					existsSync(join(home, "hermes-agent", pluginFile)) ||
-					existsSync(join(home, ".local", "share", "hermes-agent", pluginFile)) ||
-					existsSync(join(home, "src", "hermes-agent", pluginFile)) ||
-					existsSync(join("/opt", "hermes-agent", pluginFile))
-				);
+				const commonPaths = [
+					join(home, "hermes-agent"),
+					join(home, ".local", "share", "hermes-agent"),
+					join(home, "src", "hermes-agent"),
+					"/opt/hermes-agent",
+				];
+				if (commonPaths.some((p) => existsSync(join(p, pluginFile)))) return true;
+				// Last resort: resolve hermes CLI → repo root via which(1)
+				try {
+					const hermesPath = execFileSync("which", ["hermes"], {
+						encoding: "utf-8",
+						stdio: ["ignore", "pipe", "ignore"],
+						timeout: 3000,
+					}).trim();
+					if (hermesPath) {
+						const repoDir = join(realpathSync(hermesPath), "..");
+						if (existsSync(join(repoDir, pluginFile))) return true;
+					}
+				} catch {
+					// hermes not in PATH
+				}
+				return false;
 			})(),
 		},
 	};
