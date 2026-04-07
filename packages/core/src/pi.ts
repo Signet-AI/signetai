@@ -50,6 +50,13 @@ export function readConfiguredPiAgentDir(env: NodeJS.ProcessEnv = process.env): 
 	}
 }
 
+/**
+ * Resolve the Pi agent directory.
+ *
+ * Mirrors the logic of Pi SDK's `getAgentDir()` (env → default) but adds
+ * a persistence layer via `~/.config/signet/pi.json` so the CLI remembers
+ * the path across sessions even when the env var is unset.
+ */
 export function resolvePiAgentDir(env: NodeJS.ProcessEnv = process.env): string {
 	const configured = readTrimmed(env, "PI_CODING_AGENT_DIR");
 	if (configured) return normalizePath(configured);
