@@ -437,7 +437,7 @@ Otherwise it writes to `~/.pi/agent/extensions/`.
   - `/remember critical: <content>` — save as pinned (never decays)
   - `/remember [tag1, tag2]: <content>` — save with tags
   - `/remember critical: [tag1, tag2]: <content>` — pinned with tags (critical prefix must come first)
-- **Agent tools**: `signet_recall` and `signet_remember` are registered as LLM-callable tools. When the agent calls `signet_recall`, the results **are** returned into the conversation context via the tool response.
+- **Agent tools**: `signet_recall`, `signet_remember`, and `signet_memory_feedback` are registered as LLM-callable tools. When the agent calls `signet_recall`, the results (including memory IDs) **are** returned into the conversation context via the tool response. `signet_memory_feedback` lets the LLM rate injected memory relevance (-1 to 1) to improve future recall ranking.
 - Hidden inject messages use `display: false` and `role: "custom"`. Pi converts custom messages to `role: "user"` for the LLM, so the `X-Initiator` header (which determines Copilot billing attribution) is set based on the last message's role — extensions cannot override it via an `attribution` field as Oh My Pi can.
 - Does not sync `AGENTS.md` into pi.
 
@@ -745,7 +745,7 @@ Where they differ is lifecycle fidelity:
 | OpenClaw plugin | yes | yes | yes | yes | yes | Flagship path; post-compaction may read summary back from `sessionFile` when the hook only exposes metadata |
 | Oh My Pi extension (v1) | yes | yes | yes | yes | yes | Lifecycle events only; no Signet memory tools or AGENTS.md sync yet |
 | Hermes Agent plugin | yes | yes | yes | yes | yes | Full fidelity via `MemoryProvider` ABC; includes checkpoint-extract and delegation hooks |
-| pi extension | yes | yes | yes | yes | yes | Full lifecycle and memory tools (`/recall`, `/remember`, `signet_recall`, `signet_remember`); no AGENTS.md sync yet |
+| pi extension | yes | yes | yes | yes | yes | Full lifecycle and memory tools (`/recall`, `/remember`, `signet_recall`, `signet_remember`, `signet_memory_feedback`); no AGENTS.md sync yet |
 | Claude Code | yes | yes | yes | no | yes | Good continuity, degraded after-compaction fidelity |
 | Codex | yes | yes | no | no | yes | Solid baseline, degraded compaction fidelity |
 | OpenClaw legacy hooks | manual `/context` | no | no | no | no | Compatibility-only, not full parity |

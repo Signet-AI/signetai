@@ -118,7 +118,7 @@ export async function recallMemories(
 		agentId?: string;
 		scope?: "global" | "agent" | "session";
 	} = {},
-): Promise<Array<{ content: string; importance?: number; tags?: string[] }>> {
+): Promise<Array<{ id: string; content: string; importance?: number; tags?: string[] }>> {
 	const { limit = 10, agentId, scope } = options;
 
 	const response = await fetch(`${daemonUrl}/api/memory/recall`, {
@@ -139,9 +139,10 @@ export async function recallMemories(
 	}
 
 	const data = (await response.json()) as {
-		results?: Array<{ content: string; importance?: number; tags?: string | null }>;
+		results?: Array<{ id: string; content: string; importance?: number; tags?: string | null }>;
 	};
 	return (data.results ?? []).map((r) => ({
+		id: r.id,
 		content: r.content,
 		importance: r.importance,
 		tags:
@@ -183,6 +184,31 @@ export async function rememberContent(
 		const error = await response.text();
 		throw new Error(`Remember failed: ${error}`);
 	}
+}
+
+export async function sendMemoryFeedback(
+	daemonUrl: string,
+	sessionKey: string,
+	ratings: Record<string, number>,
+	options: { agentId?: string } = {},
+): Promise<{ recorded: number; accepted?: number }> {
+	const response = await fetch(`${daemonUrl}/api/memory/feedback`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			sessionKey,
+			agentId: options.agentId ?? "default",
+			feedback: ratings,
+		}),
+		signal: AbortSignal.timeout(WRITE_TIMEOUT),
+	});
+
+	if (!response.ok) {
+		const error = await response.text();
+		throw new Error(`Feedback failed: ${error}`);
+	}
+
+	return (await response.json()) as { recorded: number; accepted?: number };
 }
 
 function updateStatus(ctx: PiExtensionContext): void {
@@ -361,7 +387,7 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				const formatted = memories
 					.map((m, i) => {
 						const tags = m.tags?.length ? `[${m.tags.join(", ")}] ` : "";
-						return `${i + 1}. ${tags}${m.content}`;
+						return `${i + 1}. [${m.id}] ${tags}${m.content}`;
 					})
 					.join("\n");
 
@@ -480,7 +506,7 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				const formatted = memories.map((m, i) => {
 					const tags = m.tags?.length ? `[tags: ${m.tags.join(", ")}]` : "";
 					const importance = m.importance ? `[importance: ${m.importance.toFixed(2)}]` : "";
-					return `${i + 1}. ${m.content} ${tags} ${importance}`.trim();
+					return `${i + 1}. [id: ${m.id}] ${m.content} ${tags} ${importance}`.trim();
 				});
 
 				return {
@@ -556,6 +582,69 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				const message = error instanceof Error ? error.message : String(error);
 				return {
 					content: [{ type: "text", text: `Error saving memory: ${message}` }],
+					details: { error: message },
+					isError: true,
+				};
+			}
+		},
+	});
+
+	// signet_memory_feedback tool
+	pi.registerTool({
+		name: "signet_memory_feedback",
+		label: "Memory Feedback",
+		description:
+			"Rate how relevant injected memories were to the conversation. " +
+			"Scores from -1 (harmful) to 1 (directly helpful). 0 = unused.",
+		promptSnippet:
+			"After each turn where injected memories are present, rate every memory's relevance " +
+			"so future recall improves. Always call this tool — do not skip feedback.",
+		promptGuidelines: [
+			"Call this tool EVERY turn that includes injected Signet memories",
+			"Rate each memory ID: 1 = directly helpful, 0 = unused, -1 = harmful/misleading",
+			"Do not wait for the user to ask — proactively rate memories after using them",
+			"Include ALL injected memory IDs in the ratings map, even unused ones (rate 0)",
+		],
+		parameters: Type.Object({
+			ratings: Type.Record(Type.String(), Type.Number(), {
+				description: "Map of memory ID to relevance score (-1 to 1)",
+			}),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const healthy = await checkDaemonHealth(daemonUrl);
+			if (!healthy) {
+				return {
+					content: [{ type: "text", text: "Signet daemon not running. Cannot record feedback." }],
+					details: { error: "daemon_offline" },
+				};
+			}
+
+			try {
+				const ratings = params.ratings as Record<string, number>;
+				const session = currentSessionRef(ctx);
+				const sessionKey = readTrimmedString(session.sessionId);
+				if (!sessionKey) {
+					return {
+						content: [{ type: "text", text: "Cannot record feedback: session not initialized." }],
+						details: { error: "no_session" },
+					};
+				}
+
+				const result = await sendMemoryFeedback(daemonUrl, sessionKey, ratings, { agentId });
+
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Recorded feedback for ${result.recorded} memories (${result.accepted ?? result.recorded} accepted).`,
+						},
+					],
+					details: result,
+				};
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return {
+					content: [{ type: "text", text: `Error recording feedback: ${message}` }],
 					details: { error: message },
 					isError: true,
 				};
