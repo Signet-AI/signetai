@@ -1,10 +1,10 @@
 import { copyFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { WorkspaceSourceRepoSyncResult } from "@signet/core";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
+import type { WorkspaceSourceRepoSyncResult } from "@signet/core";
 import chalk from "chalk";
 
 interface SkillSync {
@@ -103,6 +103,7 @@ function syncSourceRepo(basePath: string, deps: Deps): number {
 		console.log(chalk.dim(`  ${result.message}`));
 		return 0;
 	}
+	// current: already up to date, no output
 	return 0;
 }
 

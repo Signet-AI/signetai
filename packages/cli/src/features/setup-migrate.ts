@@ -27,8 +27,8 @@ import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotPro
 import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
-	getEmbeddingDimensions,
 	formatWorkspaceSourceRepoSync,
+	getEmbeddingDimensions,
 	readErr,
 	readHarnesses,
 	readRecord,

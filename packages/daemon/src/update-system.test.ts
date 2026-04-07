@@ -55,7 +55,7 @@ describe("Issue 322: verify installed version after update install", () => {
 	});
 
 	it("syncs the managed Signet source checkout after a successful update", () => {
-		expect(UPDATE_SYSTEM_SRC).toContain("const repoSync = syncWorkspaceSourceRepo(agentsDir)");
+		expect(UPDATE_SYSTEM_SRC).toContain("syncWorkspaceSourceRepoAsync(");
 	});
 });
 

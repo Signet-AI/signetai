@@ -5,19 +5,19 @@
  * db-accessor.ts).
  */
 
-import { spawn } from "child_process";
-import { existsSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
-	parseSimpleYaml,
-	resolvePrimaryPackageManager,
-	getGlobalInstallCommand,
-	resolveGlobalPackagePath,
-	syncWorkspaceSourceRepo,
 	type PackageManagerFamily,
+	getGlobalInstallCommand,
+	parseSimpleYaml,
+	resolveGlobalPackagePath,
+	resolvePrimaryPackageManager,
+	syncWorkspaceSourceRepoAsync,
 } from "@signet/core";
 import { logger } from "./logger";
-import { compareVersions, isVersionNewer, isMajorUpgrade } from "./version";
+import { compareVersions, isMajorUpgrade, isVersionNewer } from "./version";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -594,7 +594,7 @@ export async function runUpdate(targetVersion?: string): Promise<UpdateRunResult
 				stderr += d.toString();
 			});
 
-			proc.on("close", (code) => {
+			proc.on("close", async (code) => {
 				logger.info("update", "Update command exited", {
 					exitCode: code ?? -1,
 					command: `${installCommand.command} ${installCommand.args.join(" ")}`,
@@ -617,7 +617,7 @@ export async function runUpdate(targetVersion?: string): Promise<UpdateRunResult
 					pendingRestartVersion = verification.installedVersion;
 					lastUpdateCheck = null;
 					lastUpdateCheckTime = null;
-					const repoSync = syncWorkspaceSourceRepo(agentsDir);
+					const repoSync = await syncWorkspaceSourceRepoAsync(agentsDir);
 					if (repoSync.status === "error") {
 						logger.warn("system", "Workspace Signet source checkout sync failed after update", {
 							path: repoSync.path,
