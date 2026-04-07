@@ -108,7 +108,7 @@ These are the product surface areas Signet is optimized around:
 | 🎯 Predictive context selection | Structured memory and session feedback build toward a scorer that learns what context is actually useful |
 | 💾 Session continuity | Checkpoint and transcript-backed context carried across sessions |
 | 🏠 Local-first storage | Data lives on your machine in SQLite and markdown, portable by default |
-| 🤝 Cross-harness runtime | Claude Code, OpenCode, OpenClaw, Codex, one shared memory substrate |
+| 🤝 Cross-harness runtime | Claude Code, OpenCode, OpenClaw, Codex, Pi, one shared memory substrate |
 
 ## Is Signet right for you?
 
@@ -170,7 +170,7 @@ Signet is built to support:
 ## Harness support
 
 Signet is not a harness. It doesn't replace Claude Code, OpenClaw,
-OpenCode, or Hermes Agent — it runs alongside them as an enhancement.
+OpenCode, Pi, or Hermes Agent — it runs alongside them as an enhancement.
 Bring the harness you already use. Signet handles the memory layer
 underneath it.
 
@@ -182,6 +182,7 @@ underneath it.
 | [OpenClaw](https://github.com/openclaw/openclaw) | **Supported** | Runtime plugin + NemoClaw compatible |
 | [Codex](https://github.com/openai/codex) | **Supported** | Hooks + MCP server |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | **Supported** | Memory provider plugin |
+| [Pi](https://github.com/mariozechner/pi-coding-agent) | **Supported** | Extension + Hooks |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Planned | — |
 
 
@@ -339,7 +340,7 @@ SDK (@signet/sdk)
   typed client, React hooks, Vercel AI SDK middleware
 
 Connectors
-  claude-code, opencode, openclaw, codex, oh-my-pi, hermes-agent, forge
+  claude-code, opencode, openclaw, codex, oh-my-pi, pi, hermes-agent, forge
 ```
 
 ## Packages
@@ -358,7 +359,9 @@ Connectors
 | [`@signet/connector-codex`](./packages/connector-codex) | Codex CLI integration |
 | [`@signet/connector-oh-my-pi`](./packages/connector-oh-my-pi) | Oh My Pi integration |
 | [`@signet/connector-hermes-agent`](./packages/connector-hermes-agent) | Hermes Agent integration |
+| [`@signet/connector-pi`](./packages/connector-pi) | Pi coding agent integration |
 | [`@signet/oh-my-pi-extension`](./packages/oh-my-pi-extension) | Oh My Pi extension bridge |
+| [`@signet/pi-extension`](./packages/pi-extension) | Pi extension — memory tools, lifecycle, and session hooks |
 | [`@signet/opencode-plugin`](./packages/opencode-plugin) | OpenCode runtime plugin — memory tools and session hooks |
 | [`@signetai/signet-memory-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
 | [`@signet/extension`](./packages/extension) | Browser extension for Chrome and Firefox |
