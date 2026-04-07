@@ -156,4 +156,15 @@ describe("syncWorkspaceSourceRepo", () => {
 			chmodSync(daemonDir, 0o700);
 		}
 	});
+
+	it("returns a typed error when the workspace path cannot host the lock directory", () => {
+		const root = makeTempDir("signet-source-workspace-");
+		const workspaceFile = join(root, "workspace-file");
+		writeFileSync(workspaceFile, "not a directory\n");
+
+		const result = syncWorkspaceSourceRepo(workspaceFile);
+
+		expect(result.status).toBe("error");
+		expect(result.message).toContain("failed to prepare source checkout sync lock directory");
+	});
 });

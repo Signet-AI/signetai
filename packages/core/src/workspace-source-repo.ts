@@ -54,6 +54,8 @@ type SyncLockAttempt =
 	| { readonly status: "busy" }
 	| { readonly status: "error"; readonly message: string };
 
+type WorkspaceDirEnsureResult = { readonly ok: true } | { readonly ok: false; readonly message: string };
+
 type MaybePromise<T> = T | Promise<T>;
 type GitRunner = (
 	args: readonly string[],
@@ -148,7 +150,10 @@ function syncWorkspaceSourceRepoLocked(
 	timeoutMs: number,
 ): MaybePromise<WorkspaceSourceRepoSyncResult> {
 	if (!existsSync(repoPath) || isEmptyDirectory(repoPath)) {
-		mkdirSync(workspaceDir, { recursive: true });
+		const workspaceReady = ensureWorkspaceDir(workspaceDir);
+		if (workspaceReady.ok === false) {
+			return errorResult(repoPath, workspaceReady.message);
+		}
 		return mapToSyncResult(run(["clone", "--depth", "1", "--", remoteUrl, repoPath], undefined, timeoutMs), (clone) => {
 			if (!clone.ok) {
 				return errorResult(repoPath, `failed to clone Signet source checkout: ${readGitError(clone, timeoutMs)}`);
@@ -498,7 +503,10 @@ function clearStaleSourceRepoSyncLock(path: string): boolean {
 
 function acquireSourceRepoSyncLock(workspaceDir: string): SyncLockAttempt {
 	const path = sourceRepoSyncLockPath(workspaceDir);
-	mkdirSync(join(resolve(workspaceDir), ".daemon"), { recursive: true });
+	const daemonDirReady = ensureDaemonDir(workspaceDir);
+	if (daemonDirReady.ok === false) {
+		return { status: "error", message: daemonDirReady.message };
+	}
 	const immediate = tryAcquireSourceRepoSyncLock(path);
 	if (immediate.status === "acquired") {
 		return immediate;
@@ -514,7 +522,10 @@ function acquireSourceRepoSyncLock(workspaceDir: string): SyncLockAttempt {
 
 async function acquireSourceRepoSyncLockAsync(workspaceDir: string): Promise<SyncLockAttempt> {
 	const path = sourceRepoSyncLockPath(workspaceDir);
-	mkdirSync(join(resolve(workspaceDir), ".daemon"), { recursive: true });
+	const daemonDirReady = ensureDaemonDir(workspaceDir);
+	if (daemonDirReady.ok === false) {
+		return { status: "error", message: daemonDirReady.message };
+	}
 	const end = Date.now() + SOURCE_REPO_SYNC_LOCK_WAIT_MS;
 
 	while (Date.now() < end) {
@@ -590,6 +601,35 @@ function sourceRepoSyncLockErrorResult(repoPath: string, detail: string): Worksp
 		branch: null,
 		defaultBranch: null,
 	};
+}
+
+function ensureDaemonDir(workspaceDir: string): WorkspaceDirEnsureResult {
+	const daemonDir = join(resolve(workspaceDir), ".daemon");
+	try {
+		mkdirSync(daemonDir, { recursive: true });
+		return { ok: true };
+	} catch (err) {
+		return {
+			ok: false,
+			message: readFsError("failed to prepare source checkout sync lock directory", err),
+		};
+	}
+}
+
+function ensureWorkspaceDir(workspaceDir: string): WorkspaceDirEnsureResult {
+	try {
+		mkdirSync(workspaceDir, { recursive: true });
+		return { ok: true };
+	} catch (err) {
+		return {
+			ok: false,
+			message: readFsError("failed to prepare workspace for Signet source checkout", err),
+		};
+	}
+}
+
+function readFsError(prefix: string, err: unknown): string {
+	return `${prefix}: ${err instanceof Error ? err.message : String(err)}`;
 }
 
 function skippedResult(repoPath: string, message: string, state?: RepoState): WorkspaceSourceRepoSyncResult {

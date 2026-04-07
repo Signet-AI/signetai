@@ -31,7 +31,7 @@ interface Deps {
 	readonly syncBuiltinSkills: (skillsSourceDir: string, basePath: string) => SkillSync;
 	readonly syncNativeEmbeddingModel: (basePath: string) => Promise<SyncState>;
 	readonly syncPredictorBinary: (basePath: string) => Promise<SyncState>;
-	readonly syncWorkspaceSourceRepo: (basePath: string) => WorkspaceSourceRepoSyncResult;
+	readonly syncWorkspaceSourceRepo: (basePath: string) => Promise<WorkspaceSourceRepoSyncResult>;
 }
 
 export async function syncTemplates(deps: Deps): Promise<void> {
@@ -48,7 +48,7 @@ export async function syncTemplates(deps: Deps): Promise<void> {
 
 	let synced = 0;
 	synced += syncGitignore(basePath, templatesDir);
-	synced += syncSourceRepo(basePath, deps);
+	synced += await syncSourceRepo(basePath, deps);
 	synced += syncSkills(basePath, deps);
 	synced += await syncPredictor(basePath, deps);
 	synced += await syncNative(basePath, deps);
@@ -85,8 +85,8 @@ function syncSkills(basePath: string, deps: Deps): number {
 	return result.installed.length + result.updated.length;
 }
 
-function syncSourceRepo(basePath: string, deps: Deps): number {
-	const result = deps.syncWorkspaceSourceRepo(basePath);
+async function syncSourceRepo(basePath: string, deps: Deps): Promise<number> {
+	const result = await deps.syncWorkspaceSourceRepo(basePath);
 	if (result.status === "cloned" || result.status === "pulled") {
 		console.log(chalk.green(`  ✓ ${result.message}`));
 		return 1;

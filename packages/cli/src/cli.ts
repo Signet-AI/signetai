@@ -1311,7 +1311,7 @@ registerAppCommands(program, {
 			syncBuiltinSkills,
 			syncNativeEmbeddingModel,
 			syncPredictorBinary,
-			syncWorkspaceSourceRepo,
+			syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
 		}),
 });
 
