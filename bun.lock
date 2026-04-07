@@ -271,13 +271,6 @@
         "typescript": "^5.7.0",
       },
     },
-    "packages/extension-base": {
-      "name": "@signet/extension-base",
-      "version": "0.91.4",
-      "dependencies": {
-        "@signet/core": "workspace:*",
-      },
-    },
     "packages/native": {
       "name": "@signet/native",
       "version": "0.98.7",
@@ -291,7 +284,7 @@
       "dependencies": {
         "@oh-my-pi/pi-coding-agent": "^13.16.4",
         "@signet/core": "workspace:*",
-        "@signet/extension-base": "workspace:*",
+        "@signet/pi-extension-base": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -315,13 +308,20 @@
       "dependencies": {
         "@mariozechner/pi-coding-agent": "^0.54.1",
         "@signet/core": "workspace:*",
-        "@signet/extension-base": "workspace:*",
+        "@signet/pi-extension-base": "workspace:*",
         "@sinclair/typebox": "^0.34.0",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
         "bun-types": "latest",
         "typescript": "^5.7.0",
+      },
+    },
+    "packages/pi-extension-base": {
+      "name": "@signet/pi-extension-base",
+      "version": "0.91.4",
+      "dependencies": {
+        "@signet/core": "workspace:*",
       },
     },
     "packages/sdk": {
@@ -1422,8 +1422,6 @@
 
     "@signet/extension": ["@signet/extension@workspace:packages/extension"],
 
-    "@signet/extension-base": ["@signet/extension-base@workspace:packages/extension-base"],
-
     "@signet/native": ["@signet/native@workspace:packages/native"],
 
     "@signet/oh-my-pi-extension": ["@signet/oh-my-pi-extension@workspace:packages/oh-my-pi-extension"],
@@ -1431,6 +1429,8 @@
     "@signet/opencode-plugin": ["@signet/opencode-plugin@workspace:packages/opencode-plugin"],
 
     "@signet/pi-extension": ["@signet/pi-extension@workspace:packages/pi-extension"],
+
+    "@signet/pi-extension-base": ["@signet/pi-extension-base@workspace:packages/pi-extension-base"],
 
     "@signet/sdk": ["@signet/sdk@workspace:packages/sdk"],
 

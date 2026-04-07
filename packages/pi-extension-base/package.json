@@ -1,5 +1,5 @@
 {
-	"name": "@signet/extension-base",
+	"name": "@signet/pi-extension-base",
 	"version": "0.91.4",
 	"description": "Shared runtime utilities for Signet harness extensions (helpers, transcript, types, lifecycle, session state)",
 	"type": "module",

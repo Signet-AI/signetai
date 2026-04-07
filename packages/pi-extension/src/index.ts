@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolvePiAgentDir } from "@signet/core";
-import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/extension-base";
+import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
 import { Type } from "@sinclair/typebox";
 import { createDaemonClient } from "./daemon-client.js";
 import {

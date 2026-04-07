@@ -1,4 +1,4 @@
-import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/extension-base";
+import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
 import { createDaemonClient } from "./daemon-client.js";
 import {
 	type LifecycleDeps,

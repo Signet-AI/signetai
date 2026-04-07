@@ -15,8 +15,8 @@ import {
 	flushPendingSessionEnds,
 	refreshSessionStart,
 	requestRecallForPrompt,
-} from "@signet/extension-base";
-import { readTrimmedRuntimeEnv } from "@signet/extension-base";
+} from "@signet/pi-extension-base";
+import { readTrimmedRuntimeEnv } from "@signet/pi-extension-base";
 import {
 	FETCH_TIMEOUT_ENV,
 	HARNESS,

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readSessionFileSnapshot } from "@signet/extension-base";
+import { readSessionFileSnapshot } from "@signet/pi-extension-base";
 import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE } from "./src/types.js";
 
 const tempDirs: string[] = [];

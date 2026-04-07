@@ -9,7 +9,7 @@ import {
 	flushPendingSessionEnds,
 	refreshSessionStart,
 	requestRecallForPrompt,
-} from "@signet/extension-base";
+} from "@signet/pi-extension-base";
 import {
 	HARNESS,
 	HIDDEN_RECALL_CUSTOM_TYPE,

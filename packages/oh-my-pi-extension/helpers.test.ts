@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { readRuntimeEnv, readTrimmedRuntimeEnv } from "@signet/extension-base";
+import { readRuntimeEnv, readTrimmedRuntimeEnv } from "@signet/pi-extension-base";
 
 const originalEnv = {
 	SIGNET_AGENT_ID: process.env.SIGNET_AGENT_ID,

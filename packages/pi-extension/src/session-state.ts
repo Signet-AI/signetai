@@ -1,5 +1,5 @@
-import { type BaseSessionState, BaseSessionStateStore, sanitizeInject } from "@signet/extension-base";
-import { readTrimmedString } from "@signet/extension-base";
+import { type BaseSessionState, BaseSessionStateStore, sanitizeInject } from "@signet/pi-extension-base";
+import { readTrimmedString } from "@signet/pi-extension-base";
 import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE, type PiAgentMessage } from "./types.js";
 
 function createHiddenInjectMessage(customType: string, inject: string): PiAgentMessage {

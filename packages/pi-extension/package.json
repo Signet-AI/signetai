@@ -18,7 +18,7 @@
 	"dependencies": {
 		"@mariozechner/pi-coding-agent": "^0.54.1",
 		"@signet/core": "workspace:*",
-		"@signet/extension-base": "workspace:*",
+		"@signet/pi-extension-base": "workspace:*",
 		"@sinclair/typebox": "^0.34.0"
 	},
 	"devDependencies": {
