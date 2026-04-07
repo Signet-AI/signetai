@@ -49,6 +49,13 @@ interface SyncLock {
 	readonly path: string;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+type GitRunner = (
+	args: readonly string[],
+	cwd: string | undefined,
+	timeoutMs: number,
+) => MaybePromise<GitCommandResult>;
+
 export function resolveWorkspaceSourceRepoPath(
 	workspaceDir: string,
 	repoDirName = SIGNET_SOURCE_CHECKOUT_DIRNAME,
@@ -446,142 +453,55 @@ function isEmptyDirectory(path: string): boolean {
 }
 
 function readRepoState(repoPath: string, timeoutMs: number): RepoState {
-	return {
-		branch: readCurrentBranch(repoPath, timeoutMs),
-		defaultBranch: readDefaultBranch(repoPath, timeoutMs),
-	};
+	return readRepoStateWith(runGit, repoPath, timeoutMs);
 }
 
 async function readRepoStateAsync(repoPath: string, timeoutMs: number): Promise<RepoState> {
-	return {
-		branch: await readCurrentBranchAsync(repoPath, timeoutMs),
-		defaultBranch: await readDefaultBranchAsync(repoPath, timeoutMs),
-	};
+	return await readRepoStateWith(runGitAsync, repoPath, timeoutMs);
 }
 
 function readOriginRemote(repoPath: string, timeoutMs: number): string | null {
-	const result = runGit(["config", "--get", "remote.origin.url"], repoPath, timeoutMs);
-	if (!result.ok) {
-		return null;
-	}
-
-	const value = result.stdout.trim();
-	return value.length > 0 ? value : null;
+	return readOriginRemoteWith(runGit, repoPath, timeoutMs);
 }
 
 async function readOriginRemoteAsync(repoPath: string, timeoutMs: number): Promise<string | null> {
-	const result = await runGitAsync(["config", "--get", "remote.origin.url"], repoPath, timeoutMs);
-	if (!result.ok) {
-		return null;
-	}
-
-	const value = result.stdout.trim();
-	return value.length > 0 ? value : null;
+	return await readOriginRemoteWith(runGitAsync, repoPath, timeoutMs);
 }
 
 function readCurrentBranch(repoPath: string, timeoutMs: number): string | null {
-	const result = runGit(["branch", "--show-current"], repoPath, timeoutMs);
-	if (!result.ok) {
-		return null;
-	}
-
-	const value = result.stdout.trim();
-	return value.length > 0 ? value : null;
+	return readCurrentBranchWith(runGit, repoPath, timeoutMs);
 }
 
 async function readCurrentBranchAsync(repoPath: string, timeoutMs: number): Promise<string | null> {
-	const result = await runGitAsync(["branch", "--show-current"], repoPath, timeoutMs);
-	if (!result.ok) {
-		return null;
-	}
-
-	const value = result.stdout.trim();
-	return value.length > 0 ? value : null;
+	return await readCurrentBranchWith(runGitAsync, repoPath, timeoutMs);
 }
 
 function readDefaultBranch(repoPath: string, timeoutMs: number): string | null {
-	const result = runGit(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], repoPath, timeoutMs);
-	if (!result.ok) {
-		return null;
-	}
-
-	const value = result.stdout.trim();
-	if (!value.startsWith("origin/")) {
-		return null;
-	}
-
-	const branch = value.slice("origin/".length);
-	return branch.length > 0 ? branch : null;
+	return readDefaultBranchWith(runGit, repoPath, timeoutMs);
 }
 
 async function readDefaultBranchAsync(repoPath: string, timeoutMs: number): Promise<string | null> {
-	const result = await runGitAsync(
-		["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
-		repoPath,
-		timeoutMs,
-	);
-	if (!result.ok) {
-		return null;
-	}
-
-	const value = result.stdout.trim();
-	if (!value.startsWith("origin/")) {
-		return null;
-	}
-
-	const branch = value.slice("origin/".length);
-	return branch.length > 0 ? branch : null;
+	return await readDefaultBranchWith(runGitAsync, repoPath, timeoutMs);
 }
 
 function isWorkingTreeDirty(repoPath: string, timeoutMs: number): boolean {
-	const result = runGit(["status", "--porcelain", "--ignore-submodules=all"], repoPath, timeoutMs);
-	if (!result.ok) {
-		return true;
-	}
-
-	return result.stdout.trim().length > 0;
+	return isWorkingTreeDirtyWith(runGit, repoPath, timeoutMs);
 }
 
 async function isWorkingTreeDirtyAsync(repoPath: string, timeoutMs: number): Promise<boolean> {
-	const result = await runGitAsync(["status", "--porcelain", "--ignore-submodules=all"], repoPath, timeoutMs);
-	if (!result.ok) {
-		return true;
-	}
-
-	return result.stdout.trim().length > 0;
+	return await isWorkingTreeDirtyWith(runGitAsync, repoPath, timeoutMs);
 }
 
 function readUpstreamBranch(repoPath: string, timeoutMs: number): string | null {
-	const result = runGit(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], repoPath, timeoutMs);
-	if (!result.ok) {
-		return null;
-	}
-
-	const value = result.stdout.trim();
-	return value.length > 0 ? value : null;
+	return readUpstreamBranchWith(runGit, repoPath, timeoutMs);
 }
 
 async function readUpstreamBranchAsync(repoPath: string, timeoutMs: number): Promise<string | null> {
-	const result = await runGitAsync(
-		["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
-		repoPath,
-		timeoutMs,
-	);
-	if (!result.ok) {
-		return null;
-	}
-
-	const value = result.stdout.trim();
-	return value.length > 0 ? value : null;
+	return await readUpstreamBranchWith(runGitAsync, repoPath, timeoutMs);
 }
 
 function readAheadBehind(repoPath: string, upstream: string, timeoutMs: number): AheadBehind | null {
-	const result = runGit(["rev-list", "--left-right", "--count", `HEAD...${upstream}`], repoPath, timeoutMs);
-	if (!result.ok) {
-		return null;
-	}
-
-	return parseAheadBehind(result.stdout);
+	return readAheadBehindWith(runGit, repoPath, upstream, timeoutMs);
 }
 
 async function readAheadBehindAsync(
@@ -589,12 +509,7 @@ async function readAheadBehindAsync(
 	upstream: string,
 	timeoutMs: number,
 ): Promise<AheadBehind | null> {
-	const result = await runGitAsync(["rev-list", "--left-right", "--count", `HEAD...${upstream}`], repoPath, timeoutMs);
-	if (!result.ok) {
-		return null;
-	}
-
-	return parseAheadBehind(result.stdout);
+	return await readAheadBehindWith(runGitAsync, repoPath, upstream, timeoutMs);
 }
 
 function parseAheadBehind(value: string): AheadBehind | null {
@@ -657,19 +572,11 @@ function isSafeCloneSource(remoteUrl: string): boolean {
 }
 
 function isSafeBranchName(branch: string, timeoutMs: number): boolean {
-	if (branch.length === 0 || branch.startsWith("-")) {
-		return false;
-	}
-
-	return runGit(["check-ref-format", "--branch", branch], undefined, timeoutMs).ok;
+	return isSafeBranchNameWith(runGit, branch, timeoutMs);
 }
 
 async function isSafeBranchNameAsync(branch: string, timeoutMs: number): Promise<boolean> {
-	if (branch.length === 0 || branch.startsWith("-")) {
-		return false;
-	}
-
-	return (await runGitAsync(["check-ref-format", "--branch", branch], undefined, timeoutMs)).ok;
+	return await isSafeBranchNameWith(runGitAsync, branch, timeoutMs);
 }
 
 function readGitError(result: GitCommandResult): string {
@@ -723,25 +630,13 @@ function clearStaleSourceRepoSyncLock(path: string): boolean {
 function acquireSourceRepoSyncLock(workspaceDir: string, timeoutMs: number): SyncLock | null {
 	const path = sourceRepoSyncLockPath(workspaceDir);
 	mkdirSync(join(resolve(workspaceDir), ".daemon"), { recursive: true });
-	const end = Date.now() + Math.min(timeoutMs, SOURCE_REPO_SYNC_LOCK_WAIT_MS);
-
-	while (Date.now() < end) {
-		try {
-			const fd = openSync(path, "wx");
-			writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
-			return { fd, path };
-		} catch (err) {
-			const code = err instanceof Error && "code" in err ? String(err.code) : "";
-			if (code !== "EEXIST") {
-				return null;
-			}
-		}
-
-		if (clearStaleSourceRepoSyncLock(path)) {
-			// lock cleared, retry immediately
-		}
+	const immediate = tryAcquireSourceRepoSyncLock(path);
+	if (immediate !== null) {
+		return immediate;
 	}
-
+	if (clearStaleSourceRepoSyncLock(path)) {
+		return tryAcquireSourceRepoSyncLock(path);
+	}
 	return null;
 }
 
@@ -873,4 +768,156 @@ function currentResult(repoPath: string, state: RepoState): WorkspaceSourceRepoS
 		branch: state.branch,
 		defaultBranch: state.defaultBranch,
 	};
+}
+
+function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
+	return typeof value === "object" && value !== null && "then" in value;
+}
+
+function mapMaybePromise<T, U>(value: MaybePromise<T>, map: (value: T) => U): MaybePromise<U> {
+	return isPromiseLike(value) ? value.then(map) : map(value);
+}
+
+function readRepoStateWith(run: typeof runGit, repoPath: string, timeoutMs: number): RepoState;
+function readRepoStateWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<RepoState>;
+function readRepoStateWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<RepoState>;
+function readRepoStateWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<RepoState> {
+	const branch = readCurrentBranchWith(run, repoPath, timeoutMs);
+	if (isPromiseLike(branch)) {
+		return branch.then(async (resolvedBranch) => ({
+			branch: resolvedBranch,
+			defaultBranch: await readDefaultBranchWith(run, repoPath, timeoutMs),
+		}));
+	}
+	return mapMaybePromise(readDefaultBranchWith(run, repoPath, timeoutMs), (defaultBranch) => ({
+		branch,
+		defaultBranch,
+	}));
+}
+
+function readOriginRemoteWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
+function readOriginRemoteWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
+function readOriginRemoteWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
+function readOriginRemoteWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
+	return mapMaybePromise(run(["config", "--get", "remote.origin.url"], repoPath, timeoutMs), (result) =>
+		readTrimmedValue(result),
+	);
+}
+
+function readCurrentBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
+function readCurrentBranchWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
+function readCurrentBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
+function readCurrentBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
+	return mapMaybePromise(run(["branch", "--show-current"], repoPath, timeoutMs), (result) => readTrimmedValue(result));
+}
+
+function readDefaultBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
+function readDefaultBranchWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
+function readDefaultBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
+function readDefaultBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
+	return mapMaybePromise(
+		run(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], repoPath, timeoutMs),
+		(result) => {
+			if (!result.ok) {
+				return null;
+			}
+
+			const value = result.stdout.trim();
+			if (!value.startsWith("origin/")) {
+				return null;
+			}
+
+			const branch = value.slice("origin/".length);
+			return branch.length > 0 ? branch : null;
+		},
+	);
+}
+
+function isWorkingTreeDirtyWith(run: typeof runGit, repoPath: string, timeoutMs: number): boolean;
+function isWorkingTreeDirtyWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<boolean>;
+function isWorkingTreeDirtyWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<boolean>;
+function isWorkingTreeDirtyWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<boolean> {
+	return mapMaybePromise(run(["status", "--porcelain", "--ignore-submodules=all"], repoPath, timeoutMs), (result) => {
+		if (!result.ok) {
+			return true;
+		}
+
+		return result.stdout.trim().length > 0;
+	});
+}
+
+function readUpstreamBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
+function readUpstreamBranchWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
+function readUpstreamBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
+function readUpstreamBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
+	return mapMaybePromise(
+		run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], repoPath, timeoutMs),
+		(result) => readTrimmedValue(result),
+	);
+}
+
+function readAheadBehindWith(
+	run: typeof runGit,
+	repoPath: string,
+	upstream: string,
+	timeoutMs: number,
+): AheadBehind | null;
+function readAheadBehindWith(
+	run: typeof runGitAsync,
+	repoPath: string,
+	upstream: string,
+	timeoutMs: number,
+): Promise<AheadBehind | null>;
+function readAheadBehindWith(
+	run: GitRunner,
+	repoPath: string,
+	upstream: string,
+	timeoutMs: number,
+): MaybePromise<AheadBehind | null>;
+function readAheadBehindWith(
+	run: GitRunner,
+	repoPath: string,
+	upstream: string,
+	timeoutMs: number,
+): MaybePromise<AheadBehind | null> {
+	return mapMaybePromise(
+		run(["rev-list", "--left-right", "--count", `HEAD...${upstream}`], repoPath, timeoutMs),
+		(result) => {
+			if (!result.ok) {
+				return null;
+			}
+
+			return parseAheadBehind(result.stdout);
+		},
+	);
+}
+
+function isSafeBranchNameWith(run: typeof runGit, branch: string, timeoutMs: number): boolean;
+function isSafeBranchNameWith(run: typeof runGitAsync, branch: string, timeoutMs: number): Promise<boolean>;
+function isSafeBranchNameWith(run: GitRunner, branch: string, timeoutMs: number): MaybePromise<boolean>;
+function isSafeBranchNameWith(run: GitRunner, branch: string, timeoutMs: number): MaybePromise<boolean> {
+	if (branch.length === 0 || branch.startsWith("-")) {
+		return false;
+	}
+
+	return mapMaybePromise(run(["check-ref-format", "--branch", branch], undefined, timeoutMs), (result) => result.ok);
+}
+
+function readTrimmedValue(result: GitCommandResult): string | null {
+	if (!result.ok) {
+		return null;
+	}
+
+	const value = result.stdout.trim();
+	return value.length > 0 ? value : null;
+}
+
+function tryAcquireSourceRepoSyncLock(path: string): SyncLock | null {
+	try {
+		const fd = openSync(path, "wx");
+		writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
+		return { fd, path };
+	} catch {
+		return null;
+	}
 }
