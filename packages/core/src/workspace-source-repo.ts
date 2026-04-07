@@ -184,27 +184,6 @@ function syncWorkspaceSourceRepoLocked(
 	);
 }
 
-function finalizeFetchedRepo(
-	run: typeof runGit,
-	repoPath: string,
-	state: RepoState,
-	timeoutMs: number,
-): WorkspaceSourceRepoSyncResult;
-function finalizeFetchedRepo(
-	run: typeof runGitAsync,
-	repoPath: string,
-	state: RepoState,
-	timeoutMs: number,
-): Promise<WorkspaceSourceRepoSyncResult>;
-function finalizeFetchedRepo(
-	run: typeof runGit | typeof runGitAsync,
-	repoPath: string,
-	state: RepoState,
-	timeoutMs: number,
-): MaybePromise<WorkspaceSourceRepoSyncResult> {
-	return finalizeFetchedRepoWith(run, repoPath, state, timeoutMs);
-}
-
 function finalizeFetchedRepoWith(
 	run: GitRunner,
 	repoPath: string,

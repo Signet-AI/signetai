@@ -55,7 +55,7 @@ export interface SetupDeps {
 		skillsSourceDir: string,
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
-	readonly syncWorkspaceSourceRepo: (basePath: string) => WorkspaceSourceRepoSyncResult;
+	readonly syncWorkspaceSourceRepo: (basePath: string) => Promise<WorkspaceSourceRepoSyncResult>;
 }
 
 export interface FreshSetupConfig {

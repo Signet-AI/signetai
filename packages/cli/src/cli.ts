@@ -53,8 +53,9 @@ import {
 	readStaticIdentity,
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
-	syncWorkspaceSourceRepo,
 	symlinkSkills,
+	syncWorkspaceSourceRepo,
+	syncWorkspaceSourceRepoAsync,
 	unifySkills,
 } from "@signet/core";
 import chalk from "chalk";
@@ -1296,7 +1297,7 @@ registerAppCommands(program, {
 			signetLogo,
 			startDaemon,
 			syncBuiltinSkills,
-			syncWorkspaceSourceRepo,
+			syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
 		}),
 	showDoctor: (options) => showDoctor(options, healthDeps),
 	showStatus: (options) => showStatus(options, healthDeps),

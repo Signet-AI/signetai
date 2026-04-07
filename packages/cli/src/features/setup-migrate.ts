@@ -95,7 +95,7 @@ export async function runExistingSetupWizard(
 		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), basePath);
 
 		spinner.text = "Cloning Signet source checkout...";
-		const sourceRepoSync = deps.syncWorkspaceSourceRepo(basePath);
+		const sourceRepoSync = await deps.syncWorkspaceSourceRepo(basePath);
 
 		spinner.text = "Creating agent manifest...";
 		const now = new Date().toISOString();

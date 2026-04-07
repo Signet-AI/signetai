@@ -70,7 +70,7 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), cfg.basePath);
 
 		spinner.text = "Cloning Signet source checkout...";
-		const sourceRepoSync = deps.syncWorkspaceSourceRepo(cfg.basePath);
+		const sourceRepoSync = await deps.syncWorkspaceSourceRepo(cfg.basePath);
 
 		spinner.text = "Creating agent identity...";
 		const agentsTemplate = join(templatesDir, "AGENTS.md.template");
