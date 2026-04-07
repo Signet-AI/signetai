@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	type PackageManagerFamily,
+	type WorkspaceSourceRepoSyncResult,
 	getGlobalInstallCommand,
 	parseSimpleYaml,
 	resolveGlobalPackagePath,
@@ -489,6 +490,10 @@ interface UpdateVerificationDeps {
 	readFileSync: (path: string, encoding: BufferEncoding) => string;
 }
 
+interface FinalizeSuccessfulUpdateDeps {
+	syncWorkspaceSourceRepoAsync: (workspaceDir: string) => Promise<WorkspaceSourceRepoSyncResult>;
+}
+
 export function verifyInstalledVersion(
 	family: PackageManagerFamily,
 	packageName: string,
@@ -543,6 +548,41 @@ export function verifyInstalledVersion(
 			}`,
 		};
 	}
+}
+
+export async function finalizeSuccessfulUpdateInstall(
+	installedVersion: string,
+	stdout: string,
+	deps: FinalizeSuccessfulUpdateDeps = {
+		syncWorkspaceSourceRepoAsync: (workspaceDir) => syncWorkspaceSourceRepoAsync(workspaceDir),
+	},
+): Promise<UpdateRunResult> {
+	pendingRestartVersion = installedVersion;
+	lastUpdateCheck = null;
+	lastUpdateCheckTime = null;
+
+	const repoSync = await deps.syncWorkspaceSourceRepoAsync(agentsDir);
+	if (repoSync.status === "error") {
+		logger.warn("system", "Workspace Signet source checkout sync failed after update", {
+			path: repoSync.path,
+			message: repoSync.message,
+		});
+	} else if (repoSync.status !== "current") {
+		logger.info("system", "Workspace Signet source checkout sync result", {
+			path: repoSync.path,
+			status: repoSync.status,
+			message: repoSync.message,
+		});
+	}
+
+	logger.info("system", "Update installed successfully");
+	return {
+		success: true,
+		message: "Update installed. Restart daemon to apply.",
+		output: stdout,
+		installedVersion,
+		restartRequired: true,
+	};
 }
 
 export async function runUpdate(targetVersion?: string): Promise<UpdateRunResult> {
@@ -615,31 +655,7 @@ export async function runUpdate(targetVersion?: string): Promise<UpdateRunResult
 							return;
 						}
 
-						pendingRestartVersion = verification.installedVersion;
-						lastUpdateCheck = null;
-						lastUpdateCheckTime = null;
-						const repoSync = await syncWorkspaceSourceRepoAsync(agentsDir);
-						if (repoSync.status === "error") {
-							logger.warn("system", "Workspace Signet source checkout sync failed after update", {
-								path: repoSync.path,
-								message: repoSync.message,
-							});
-						} else if (repoSync.status !== "current") {
-							logger.info("system", "Workspace Signet source checkout sync result", {
-								path: repoSync.path,
-								status: repoSync.status,
-								message: repoSync.message,
-							});
-						}
-
-						logger.info("system", "Update installed successfully");
-						resolve({
-							success: true,
-							message: "Update installed. Restart daemon to apply.",
-							output: stdout,
-							installedVersion: verification.installedVersion,
-							restartRequired: true,
-						});
+						resolve(await finalizeSuccessfulUpdateInstall(verification.installedVersion, stdout));
 						return;
 					}
 

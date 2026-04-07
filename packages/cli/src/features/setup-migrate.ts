@@ -349,6 +349,7 @@ export async function runExistingSetupWizard(
 
 		const sourceRepoLine = formatWorkspaceSourceRepoSync(sourceRepoSync);
 		if (sourceRepoLine) {
+			console.log();
 			console.log(chalk.dim(sourceRepoLine));
 		}
 

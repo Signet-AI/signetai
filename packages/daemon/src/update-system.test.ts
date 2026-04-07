@@ -2,16 +2,20 @@
  * Tests for update-system bug fixes.
  *
  * These tests exercise the exported pure/config functions directly.
- * Network-dependent functions (checkForUpdates, runUpdate) are tested
- * via structural assertions on the source code.
+ * Network-dependent functions are mostly covered with structural tests,
+ * but critical post-install behavior should be exercised directly.
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	MAX_UPDATE_INTERVAL_SECONDS,
 	MIN_UPDATE_INTERVAL_SECONDS,
 	categorizeUpdateError,
+	finalizeSuccessfulUpdateInstall,
+	getUpdateState,
+	initUpdateSystem,
 	normalizeTargetVersion,
 	parseBooleanFlag,
 	parseInstalledPackageVersion,
@@ -38,7 +42,7 @@ describe("Bug 5: pendingRestartVersion is set only after successful verification
 	});
 
 	it("sets pendingRestartVersion from verified installed version", () => {
-		expect(UPDATE_SYSTEM_SRC).toContain("pendingRestartVersion = verification.installedVersion");
+		expect(UPDATE_SYSTEM_SRC).toContain("pendingRestartVersion = installedVersion");
 	});
 });
 
@@ -54,8 +58,33 @@ describe("Issue 322: verify installed version after update install", () => {
 		expect(UPDATE_SYSTEM_SRC).toContain("resolveGlobalPackagePath");
 	});
 
-	it("syncs the managed Signet source checkout after a successful update", () => {
-		expect(UPDATE_SYSTEM_SRC).toContain("syncWorkspaceSourceRepoAsync(");
+	it("syncs the managed Signet source checkout after a successful update", async () => {
+		const workspaceDir = join(tmpdir(), `signet-update-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const calls: string[] = [];
+		initUpdateSystem("0.78.0", workspaceDir);
+
+		const result = await finalizeSuccessfulUpdateInstall("0.78.1", "installed ok", {
+			syncWorkspaceSourceRepoAsync: async (dir) => {
+				calls.push(dir);
+				return {
+					status: "current",
+					path: join(dir, "signetai"),
+					message: "Signet source checkout is already current",
+					branch: "main",
+					defaultBranch: "main",
+				};
+			},
+		});
+
+		expect(calls).toEqual([workspaceDir]);
+		expect(result).toEqual({
+			success: true,
+			message: "Update installed. Restart daemon to apply.",
+			output: "installed ok",
+			installedVersion: "0.78.1",
+			restartRequired: true,
+		});
+		expect(getUpdateState().pendingRestartVersion).toBe("0.78.1");
 	});
 });
 

@@ -49,6 +49,11 @@ interface SyncLock {
 	readonly path: string;
 }
 
+type SyncLockAttempt =
+	| { readonly status: "acquired"; readonly lock: SyncLock }
+	| { readonly status: "busy" }
+	| { readonly status: "error"; readonly message: string };
+
 type MaybePromise<T> = T | Promise<T>;
 type GitRunner = (
 	args: readonly string[],
@@ -78,14 +83,17 @@ export function syncWorkspaceSourceRepo(
 	}
 
 	const lock = acquireSourceRepoSyncLock(workspaceDir);
-	if (lock === null) {
+	if (lock.status === "busy") {
 		return syncInProgressResult(repoPath);
+	}
+	if (lock.status === "error") {
+		return sourceRepoSyncLockErrorResult(repoPath, lock.message);
 	}
 
 	try {
 		return syncWorkspaceSourceRepoLocked(runGit, workspaceDir, repoPath, remoteUrl, timeoutMs);
 	} finally {
-		releaseSourceRepoSyncLock(lock);
+		releaseSourceRepoSyncLock(lock.lock);
 	}
 }
 
@@ -104,14 +112,17 @@ export async function syncWorkspaceSourceRepoAsync(
 	}
 
 	const lock = await acquireSourceRepoSyncLockAsync(workspaceDir);
-	if (lock === null) {
+	if (lock.status === "busy") {
 		return syncInProgressResult(repoPath);
+	}
+	if (lock.status === "error") {
+		return sourceRepoSyncLockErrorResult(repoPath, lock.message);
 	}
 
 	try {
 		return await syncWorkspaceSourceRepoLocked(runGitAsync, workspaceDir, repoPath, remoteUrl, timeoutMs);
 	} finally {
-		releaseSourceRepoSyncLock(lock);
+		releaseSourceRepoSyncLock(lock.lock);
 	}
 }
 
@@ -485,20 +496,23 @@ function clearStaleSourceRepoSyncLock(path: string): boolean {
 	return false;
 }
 
-function acquireSourceRepoSyncLock(workspaceDir: string): SyncLock | null {
+function acquireSourceRepoSyncLock(workspaceDir: string): SyncLockAttempt {
 	const path = sourceRepoSyncLockPath(workspaceDir);
 	mkdirSync(join(resolve(workspaceDir), ".daemon"), { recursive: true });
 	const immediate = tryAcquireSourceRepoSyncLock(path);
-	if (immediate !== null) {
+	if (immediate.status === "acquired") {
+		return immediate;
+	}
+	if (immediate.status === "error") {
 		return immediate;
 	}
 	if (clearStaleSourceRepoSyncLock(path)) {
 		return tryAcquireSourceRepoSyncLock(path);
 	}
-	return null;
+	return { status: "busy" };
 }
 
-async function acquireSourceRepoSyncLockAsync(workspaceDir: string): Promise<SyncLock | null> {
+async function acquireSourceRepoSyncLockAsync(workspaceDir: string): Promise<SyncLockAttempt> {
 	const path = sourceRepoSyncLockPath(workspaceDir);
 	mkdirSync(join(resolve(workspaceDir), ".daemon"), { recursive: true });
 	const end = Date.now() + SOURCE_REPO_SYNC_LOCK_WAIT_MS;
@@ -507,11 +521,11 @@ async function acquireSourceRepoSyncLockAsync(workspaceDir: string): Promise<Syn
 		try {
 			const fd = openSync(path, "wx");
 			writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
-			return { fd, path };
+			return { status: "acquired", lock: { fd, path } };
 		} catch (err) {
 			const code = err instanceof Error && "code" in err ? String(err.code) : "";
 			if (code !== "EEXIST") {
-				return null;
+				return { status: "error", message: code || "unknown lock error" };
 			}
 		}
 
@@ -522,7 +536,7 @@ async function acquireSourceRepoSyncLockAsync(workspaceDir: string): Promise<Syn
 		await sleep(200);
 	}
 
-	return null;
+	return { status: "busy" };
 }
 
 function releaseSourceRepoSyncLock(lock: SyncLock): void {
@@ -563,6 +577,16 @@ function syncInProgressResult(repoPath: string): WorkspaceSourceRepoSyncResult {
 		status: "skipped",
 		path: repoPath,
 		message: "source checkout sync already in progress, skipped duplicate run",
+		branch: null,
+		defaultBranch: null,
+	};
+}
+
+function sourceRepoSyncLockErrorResult(repoPath: string, detail: string): WorkspaceSourceRepoSyncResult {
+	return {
+		status: "error",
+		path: repoPath,
+		message: `failed to acquire source checkout sync lock: ${detail}`,
 		branch: null,
 		defaultBranch: null,
 	};
@@ -780,12 +804,16 @@ function readTrimmedValue(result: GitCommandResult): string | null {
 	return value.length > 0 ? value : null;
 }
 
-function tryAcquireSourceRepoSyncLock(path: string): SyncLock | null {
+function tryAcquireSourceRepoSyncLock(path: string): SyncLockAttempt {
 	try {
 		const fd = openSync(path, "wx");
 		writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
-		return { fd, path };
-	} catch {
-		return null;
+		return { status: "acquired", lock: { fd, path } };
+	} catch (err) {
+		const code = err instanceof Error && "code" in err ? String(err.code) : "";
+		if (code === "EEXIST") {
+			return { status: "busy" };
+		}
+		return { status: "error", message: code || "unknown lock error" };
 	}
 }

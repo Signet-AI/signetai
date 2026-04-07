@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -138,5 +138,22 @@ describe("syncWorkspaceSourceRepo", () => {
 
 		expect(result.status).toBe("error");
 		expect(result.message).toContain("safe git source");
+	});
+
+	it("surfaces sync lock acquisition errors instead of reporting a duplicate run", () => {
+		const workspaceDir = makeTempDir("signet-source-workspace-");
+		const daemonDir = join(workspaceDir, ".daemon");
+		mkdirSync(daemonDir, { recursive: true });
+		chmodSync(daemonDir, 0o500);
+
+		try {
+			const result = syncWorkspaceSourceRepo(workspaceDir);
+
+			expect(result.status).toBe("error");
+			expect(result.message).toContain("failed to acquire source checkout sync lock");
+			expect(result.message).toContain("EACCES");
+		} finally {
+			chmodSync(daemonDir, 0o700);
+		}
 	});
 });
