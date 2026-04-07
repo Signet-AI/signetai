@@ -53,6 +53,15 @@ export function syncWorkspaceSourceRepo(
 	const timeoutMs = options.gitTimeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
 	const remoteUrl = options.remoteUrl ?? SIGNET_SOURCE_REMOTE_URL;
 	const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir, options.repoDirName);
+	if (!isSafeCloneSource(remoteUrl)) {
+		return {
+			status: "error",
+			path: repoPath,
+			message: "failed to clone Signet source checkout: remote URL is not a safe git source",
+			branch: null,
+			defaultBranch: null,
+		};
+	}
 
 	if (!isGitAvailable(timeoutMs)) {
 		return {
@@ -66,7 +75,7 @@ export function syncWorkspaceSourceRepo(
 
 	if (!existsSync(repoPath) || isEmptyDirectory(repoPath)) {
 		mkdirSync(workspaceDir, { recursive: true });
-		const clone = runGit(["clone", "--depth", "1", remoteUrl, repoPath], undefined, timeoutMs);
+		const clone = runGit(["clone", "--depth", "1", "--", remoteUrl, repoPath], undefined, timeoutMs);
 		if (!clone.ok) {
 			return {
 				status: "error",
@@ -214,7 +223,17 @@ export function syncWorkspaceSourceRepo(
 		};
 	}
 
-	const pull = runGit(["pull", "--ff-only", "origin", defaultBranch], repoPath, timeoutMs);
+	if (!isSafeBranchName(defaultBranch, timeoutMs)) {
+		return {
+			status: "fetched",
+			path: repoPath,
+			message: "fetched latest Signet source checkout, skipped pull because origin HEAD resolved to an unsafe branch name",
+			branch,
+			defaultBranch,
+		};
+	}
+
+	const pull = runGit(["merge", "--ff-only", "--no-edit", `refs/remotes/origin/${defaultBranch}`], repoPath, timeoutMs);
 	if (!pull.ok) {
 		return {
 			status: "error",
@@ -346,7 +365,7 @@ function readAheadBehind(repoPath: string, upstream: string, timeoutMs: number):
 }
 
 function normalizeRemoteUrl(url: string): string {
-	const trimmed = url.trim().replace(/\/+$/, "");
+	const trimmed = trimTrailingSlashes(url.trim());
 	if (trimmed.startsWith("git@github.com:")) {
 		return `github.com/${stripGitSuffix(trimmed.slice("git@github.com:".length))}`.toLowerCase();
 	}
@@ -364,6 +383,37 @@ function normalizeRemoteUrl(url: string): string {
 
 function stripGitSuffix(value: string): string {
 	return value.replace(/^\/+/, "").replace(/\.git$/i, "");
+}
+
+function trimTrailingSlashes(value: string): string {
+	let end = value.length;
+	while (end > 0 && value[end - 1] === "/") {
+		end -= 1;
+	}
+	return end === value.length ? value : value.slice(0, end);
+}
+
+function isSafeCloneSource(remoteUrl: string): boolean {
+	const trimmed = remoteUrl.trim();
+	if (trimmed.length === 0 || trimmed.startsWith("-")) {
+		return false;
+	}
+
+	return (
+		trimmed.startsWith("https://") ||
+		trimmed.startsWith("http://") ||
+		trimmed.startsWith("ssh://") ||
+		trimmed.startsWith("git@") ||
+		trimmed.startsWith("file://")
+	);
+}
+
+function isSafeBranchName(branch: string, timeoutMs: number): boolean {
+	if (branch.length === 0 || branch.startsWith("-")) {
+		return false;
+	}
+
+	return runGit(["check-ref-format", "--branch", branch], undefined, timeoutMs).ok;
 }
 
 function readGitError(result: GitCommandResult): string {

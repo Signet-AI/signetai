@@ -118,4 +118,13 @@ describe("syncWorkspaceSourceRepo", () => {
 		expect(result.message).toContain("working tree has local changes");
 		expect(readFileSync(join(repoPath, "README.md"), "utf-8")).toBe("# local edits\n");
 	});
+
+	it("rejects unsafe remote URLs before invoking git clone", () => {
+		const workspaceDir = makeTempDir("signet-source-workspace-");
+
+		const result = syncWorkspaceSourceRepo(workspaceDir, { remoteUrl: "--upload-pack=touch /tmp/pwned" });
+
+		expect(result.status).toBe("error");
+		expect(result.message).toContain("safe git source");
+	});
 });
