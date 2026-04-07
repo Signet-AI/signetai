@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { WorkspaceSourceRepoSyncResult } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
@@ -20,7 +19,6 @@ interface UpdateDeps {
 		skillsSourceDir: string,
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
-	readonly syncWorkspaceSourceRepo: (basePath: string) => WorkspaceSourceRepoSyncResult;
 }
 
 export function registerUpdateCommands(program: Command, deps: UpdateDeps): void {
@@ -133,15 +131,6 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 
 			spinner.succeed(data.message || "Update installed");
 			try {
-				const repoSync = deps.syncWorkspaceSourceRepo(deps.AGENTS_DIR);
-				if (repoSync.status === "cloned" || repoSync.status === "pulled") {
-					console.log(chalk.green(`  ✓ ${repoSync.message}`));
-				} else if (repoSync.status === "fetched" || repoSync.status === "skipped") {
-					console.log(chalk.dim(`  ${repoSync.message}`));
-				} else if (repoSync.status === "error") {
-					console.log(chalk.yellow(`  ⚠ ${repoSync.message}`));
-				}
-
 				const skillResult = deps.syncBuiltinSkills(deps.getSkillsSourceDir(), deps.AGENTS_DIR);
 				const totalSynced = skillResult.installed.length + skillResult.updated.length;
 				if (totalSynced > 0) {

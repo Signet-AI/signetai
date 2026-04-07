@@ -77,13 +77,13 @@ export function syncWorkspaceSourceRepo(
 		return gitUnavailableResult(repoPath);
 	}
 
-	const lock = acquireSourceRepoSyncLock(workspaceDir, timeoutMs);
+	const lock = acquireSourceRepoSyncLock(workspaceDir);
 	if (lock === null) {
 		return syncInProgressResult(repoPath);
 	}
 
 	try {
-		return syncWorkspaceSourceRepoLocked(workspaceDir, repoPath, remoteUrl, timeoutMs);
+		return syncWorkspaceSourceRepoLocked(runGit, workspaceDir, repoPath, remoteUrl, timeoutMs);
 	} finally {
 		releaseSourceRepoSyncLock(lock);
 	}
@@ -109,172 +109,108 @@ export async function syncWorkspaceSourceRepoAsync(
 	}
 
 	try {
-		return await syncWorkspaceSourceRepoLockedAsync(workspaceDir, repoPath, remoteUrl, timeoutMs);
+		return await syncWorkspaceSourceRepoLocked(runGitAsync, workspaceDir, repoPath, remoteUrl, timeoutMs);
 	} finally {
 		releaseSourceRepoSyncLock(lock);
 	}
 }
 
 function syncWorkspaceSourceRepoLocked(
+	run: typeof runGit,
 	workspaceDir: string,
 	repoPath: string,
 	remoteUrl: string,
 	timeoutMs: number,
-): WorkspaceSourceRepoSyncResult {
+): WorkspaceSourceRepoSyncResult;
+function syncWorkspaceSourceRepoLocked(
+	run: typeof runGitAsync,
+	workspaceDir: string,
+	repoPath: string,
+	remoteUrl: string,
+	timeoutMs: number,
+): Promise<WorkspaceSourceRepoSyncResult>;
+function syncWorkspaceSourceRepoLocked(
+	run: GitRunner,
+	workspaceDir: string,
+	repoPath: string,
+	remoteUrl: string,
+	timeoutMs: number,
+): MaybePromise<WorkspaceSourceRepoSyncResult> {
 	if (!existsSync(repoPath) || isEmptyDirectory(repoPath)) {
 		mkdirSync(workspaceDir, { recursive: true });
-		const clone = runGit(["clone", "--depth", "1", "--", remoteUrl, repoPath], undefined, timeoutMs);
-		if (!clone.ok) {
-			return errorResult(repoPath, `failed to clone Signet source checkout: ${readGitError(clone)}`);
-		}
+		return mapToSyncResult(run(["clone", "--depth", "1", "--", remoteUrl, repoPath], undefined, timeoutMs), (clone) => {
+			if (!clone.ok) {
+				return errorResult(repoPath, `failed to clone Signet source checkout: ${readGitError(clone, timeoutMs)}`);
+			}
 
-		const state = readRepoState(repoPath, timeoutMs);
-		return clonedResult(repoPath, state);
+			return mapToSyncResult(readRepoStateWith(run, repoPath, timeoutMs), (state) => clonedResult(repoPath, state));
+		});
 	}
 
 	if (!hasGitMetadata(repoPath)) {
 		return skippedResult(repoPath, "workspace already has a non-git signetai directory, skipped managed checkout sync");
 	}
 
-	const state = readRepoState(repoPath, timeoutMs);
-	const currentRemote = readOriginRemote(repoPath, timeoutMs);
-	if (!currentRemote) {
-		return skippedResult(repoPath, "existing Signet source checkout has no origin remote, skipped managed sync", state);
-	}
+	return mapToSyncResult(readRepoStateWith(run, repoPath, timeoutMs), (state) =>
+		mapToSyncResult(readOriginRemoteWith(run, repoPath, timeoutMs), (currentRemote) => {
+			if (!currentRemote) {
+				return skippedResult(
+					repoPath,
+					"existing Signet source checkout has no origin remote, skipped managed sync",
+					state,
+				);
+			}
 
-	if (normalizeRemoteUrl(currentRemote) !== normalizeRemoteUrl(remoteUrl)) {
-		return skippedResult(repoPath, "existing signetai checkout points at a different remote, left it untouched", state);
-	}
+			if (normalizeRemoteUrl(currentRemote) !== normalizeRemoteUrl(remoteUrl)) {
+				return skippedResult(
+					repoPath,
+					"existing signetai checkout points at a different remote, left it untouched",
+					state,
+				);
+			}
 
-	const fetch = runGit(["fetch", "origin", "--prune"], repoPath, timeoutMs);
-	if (!fetch.ok) {
-		return errorResult(repoPath, `failed to fetch Signet source checkout: ${readGitError(fetch)}`, state);
-	}
+			return mapToSyncResult(run(["fetch", "origin", "--prune"], repoPath, timeoutMs), (fetch) => {
+				if (!fetch.ok) {
+					return errorResult(
+						repoPath,
+						`failed to fetch Signet source checkout: ${readGitError(fetch, timeoutMs)}`,
+						state,
+					);
+				}
 
-	return finalizeFetchedRepo(repoPath, state, timeoutMs);
-}
-
-async function syncWorkspaceSourceRepoLockedAsync(
-	workspaceDir: string,
-	repoPath: string,
-	remoteUrl: string,
-	timeoutMs: number,
-): Promise<WorkspaceSourceRepoSyncResult> {
-	if (!existsSync(repoPath) || isEmptyDirectory(repoPath)) {
-		mkdirSync(workspaceDir, { recursive: true });
-		const clone = await runGitAsync(["clone", "--depth", "1", "--", remoteUrl, repoPath], undefined, timeoutMs);
-		if (!clone.ok) {
-			return errorResult(repoPath, `failed to clone Signet source checkout: ${readGitError(clone)}`);
-		}
-
-		const state = await readRepoStateAsync(repoPath, timeoutMs);
-		return clonedResult(repoPath, state);
-	}
-
-	if (!hasGitMetadata(repoPath)) {
-		return skippedResult(repoPath, "workspace already has a non-git signetai directory, skipped managed checkout sync");
-	}
-
-	const state = await readRepoStateAsync(repoPath, timeoutMs);
-	const currentRemote = await readOriginRemoteAsync(repoPath, timeoutMs);
-	if (!currentRemote) {
-		return skippedResult(repoPath, "existing Signet source checkout has no origin remote, skipped managed sync", state);
-	}
-
-	if (normalizeRemoteUrl(currentRemote) !== normalizeRemoteUrl(remoteUrl)) {
-		return skippedResult(repoPath, "existing signetai checkout points at a different remote, left it untouched", state);
-	}
-
-	const fetch = await runGitAsync(["fetch", "origin", "--prune"], repoPath, timeoutMs);
-	if (!fetch.ok) {
-		return errorResult(repoPath, `failed to fetch Signet source checkout: ${readGitError(fetch)}`, state);
-	}
-
-	return await finalizeFetchedRepoAsync(repoPath, state, timeoutMs);
-}
-
-function finalizeFetchedRepo(repoPath: string, state: RepoState, timeoutMs: number): WorkspaceSourceRepoSyncResult {
-	if (state.branch === null) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because the repo is in detached HEAD state",
-			state,
-		);
-	}
-	if (state.defaultBranch === null) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because origin HEAD is unavailable",
-			state,
-		);
-	}
-	if (state.branch !== state.defaultBranch) {
-		return fetchedResult(
-			repoPath,
-			`fetched latest Signet source checkout, skipped pull because the current branch is ${state.branch}`,
-			state,
-		);
-	}
-	if (isWorkingTreeDirty(repoPath, timeoutMs)) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because the working tree has local changes",
-			state,
-		);
-	}
-
-	const upstream = readUpstreamBranch(repoPath, timeoutMs);
-	if (upstream !== `origin/${state.defaultBranch}`) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because the current branch is not tracking origin",
-			state,
-		);
-	}
-
-	const divergence = readAheadBehind(repoPath, upstream, timeoutMs);
-	if (divergence === null) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because branch divergence could not be determined",
-			state,
-		);
-	}
-	if (divergence.ahead > 0) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because the checkout has local commits",
-			state,
-		);
-	}
-	if (divergence.behind === 0) {
-		return currentResult(repoPath, state);
-	}
-	if (!isSafeBranchName(state.defaultBranch, timeoutMs)) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because origin HEAD resolved to an unsafe branch name",
-			state,
-		);
-	}
-
-	const pull = runGit(
-		["merge", "--ff-only", "--no-edit", `refs/remotes/origin/${state.defaultBranch}`],
-		repoPath,
-		timeoutMs,
+				return finalizeFetchedRepoWith(run, repoPath, state, timeoutMs);
+			});
+		}),
 	);
-	if (!pull.ok) {
-		return errorResult(repoPath, `failed to fast-forward Signet source checkout: ${readGitError(pull)}`, state);
-	}
-
-	return pulledResult(repoPath, state);
 }
 
-async function finalizeFetchedRepoAsync(
+function finalizeFetchedRepo(
+	run: typeof runGit,
 	repoPath: string,
 	state: RepoState,
 	timeoutMs: number,
-): Promise<WorkspaceSourceRepoSyncResult> {
+): WorkspaceSourceRepoSyncResult;
+function finalizeFetchedRepo(
+	run: typeof runGitAsync,
+	repoPath: string,
+	state: RepoState,
+	timeoutMs: number,
+): Promise<WorkspaceSourceRepoSyncResult>;
+function finalizeFetchedRepo(
+	run: typeof runGit | typeof runGitAsync,
+	repoPath: string,
+	state: RepoState,
+	timeoutMs: number,
+): MaybePromise<WorkspaceSourceRepoSyncResult> {
+	return finalizeFetchedRepoWith(run, repoPath, state, timeoutMs);
+}
+
+function finalizeFetchedRepoWith(
+	run: GitRunner,
+	repoPath: string,
+	state: RepoState,
+	timeoutMs: number,
+): MaybePromise<WorkspaceSourceRepoSyncResult> {
 	if (state.branch === null) {
 		return fetchedResult(
 			repoPath,
@@ -296,59 +232,70 @@ async function finalizeFetchedRepoAsync(
 			state,
 		);
 	}
-	if (await isWorkingTreeDirtyAsync(repoPath, timeoutMs)) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because the working tree has local changes",
-			state,
-		);
-	}
+	return mapToSyncResult(isWorkingTreeDirtyWith(run, repoPath, timeoutMs), (dirty) => {
+		if (dirty) {
+			return fetchedResult(
+				repoPath,
+				"fetched latest Signet source checkout, skipped pull because the working tree has local changes",
+				state,
+			);
+		}
 
-	const upstream = await readUpstreamBranchAsync(repoPath, timeoutMs);
-	if (upstream !== `origin/${state.defaultBranch}`) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because the current branch is not tracking origin",
-			state,
-		);
-	}
+		return mapToSyncResult(readUpstreamBranchWith(run, repoPath, timeoutMs), (upstream) => {
+			if (upstream !== `origin/${state.defaultBranch}`) {
+				return fetchedResult(
+					repoPath,
+					"fetched latest Signet source checkout, skipped pull because the current branch is not tracking origin",
+					state,
+				);
+			}
 
-	const divergence = await readAheadBehindAsync(repoPath, upstream, timeoutMs);
-	if (divergence === null) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because branch divergence could not be determined",
-			state,
-		);
-	}
-	if (divergence.ahead > 0) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because the checkout has local commits",
-			state,
-		);
-	}
-	if (divergence.behind === 0) {
-		return currentResult(repoPath, state);
-	}
-	if (!(await isSafeBranchNameAsync(state.defaultBranch, timeoutMs))) {
-		return fetchedResult(
-			repoPath,
-			"fetched latest Signet source checkout, skipped pull because origin HEAD resolved to an unsafe branch name",
-			state,
-		);
-	}
+			return mapToSyncResult(readAheadBehindWith(run, repoPath, upstream, timeoutMs), (divergence) => {
+				if (divergence === null) {
+					return fetchedResult(
+						repoPath,
+						"fetched latest Signet source checkout, skipped pull because branch divergence could not be determined",
+						state,
+					);
+				}
+				if (divergence.ahead > 0) {
+					return fetchedResult(
+						repoPath,
+						"fetched latest Signet source checkout, skipped pull because the checkout has local commits",
+						state,
+					);
+				}
+				if (divergence.behind === 0) {
+					return currentResult(repoPath, state);
+				}
 
-	const pull = await runGitAsync(
-		["merge", "--ff-only", "--no-edit", `refs/remotes/origin/${state.defaultBranch}`],
-		repoPath,
-		timeoutMs,
-	);
-	if (!pull.ok) {
-		return errorResult(repoPath, `failed to fast-forward Signet source checkout: ${readGitError(pull)}`, state);
-	}
+				return mapToSyncResult(isSafeBranchNameWith(run, state.defaultBranch, timeoutMs), (safeBranchName) => {
+					if (!safeBranchName) {
+						return fetchedResult(
+							repoPath,
+							"fetched latest Signet source checkout, skipped pull because origin HEAD resolved to an unsafe branch name",
+							state,
+						);
+					}
 
-	return pulledResult(repoPath, state);
+					return mapToSyncResult(
+						run(["merge", "--ff-only", "--no-edit", `refs/remotes/origin/${state.defaultBranch}`], repoPath, timeoutMs),
+						(pull) => {
+							if (!pull.ok) {
+								return errorResult(
+									repoPath,
+									`failed to fast-forward Signet source checkout: ${readGitError(pull, timeoutMs)}`,
+									state,
+								);
+							}
+
+							return pulledResult(repoPath, state);
+						},
+					);
+				});
+			});
+		});
+	});
 }
 
 function isGitAvailable(timeoutMs: number): boolean {
@@ -452,66 +399,6 @@ function isEmptyDirectory(path: string): boolean {
 	}
 }
 
-function readRepoState(repoPath: string, timeoutMs: number): RepoState {
-	return readRepoStateWith(runGit, repoPath, timeoutMs);
-}
-
-async function readRepoStateAsync(repoPath: string, timeoutMs: number): Promise<RepoState> {
-	return await readRepoStateWith(runGitAsync, repoPath, timeoutMs);
-}
-
-function readOriginRemote(repoPath: string, timeoutMs: number): string | null {
-	return readOriginRemoteWith(runGit, repoPath, timeoutMs);
-}
-
-async function readOriginRemoteAsync(repoPath: string, timeoutMs: number): Promise<string | null> {
-	return await readOriginRemoteWith(runGitAsync, repoPath, timeoutMs);
-}
-
-function readCurrentBranch(repoPath: string, timeoutMs: number): string | null {
-	return readCurrentBranchWith(runGit, repoPath, timeoutMs);
-}
-
-async function readCurrentBranchAsync(repoPath: string, timeoutMs: number): Promise<string | null> {
-	return await readCurrentBranchWith(runGitAsync, repoPath, timeoutMs);
-}
-
-function readDefaultBranch(repoPath: string, timeoutMs: number): string | null {
-	return readDefaultBranchWith(runGit, repoPath, timeoutMs);
-}
-
-async function readDefaultBranchAsync(repoPath: string, timeoutMs: number): Promise<string | null> {
-	return await readDefaultBranchWith(runGitAsync, repoPath, timeoutMs);
-}
-
-function isWorkingTreeDirty(repoPath: string, timeoutMs: number): boolean {
-	return isWorkingTreeDirtyWith(runGit, repoPath, timeoutMs);
-}
-
-async function isWorkingTreeDirtyAsync(repoPath: string, timeoutMs: number): Promise<boolean> {
-	return await isWorkingTreeDirtyWith(runGitAsync, repoPath, timeoutMs);
-}
-
-function readUpstreamBranch(repoPath: string, timeoutMs: number): string | null {
-	return readUpstreamBranchWith(runGit, repoPath, timeoutMs);
-}
-
-async function readUpstreamBranchAsync(repoPath: string, timeoutMs: number): Promise<string | null> {
-	return await readUpstreamBranchWith(runGitAsync, repoPath, timeoutMs);
-}
-
-function readAheadBehind(repoPath: string, upstream: string, timeoutMs: number): AheadBehind | null {
-	return readAheadBehindWith(runGit, repoPath, upstream, timeoutMs);
-}
-
-async function readAheadBehindAsync(
-	repoPath: string,
-	upstream: string,
-	timeoutMs: number,
-): Promise<AheadBehind | null> {
-	return await readAheadBehindWith(runGitAsync, repoPath, upstream, timeoutMs);
-}
-
 function parseAheadBehind(value: string): AheadBehind | null {
 	const match = /^(\d+)\s+(\d+)$/.exec(value.trim());
 	if (!match) {
@@ -571,15 +458,7 @@ function isSafeCloneSource(remoteUrl: string): boolean {
 	);
 }
 
-function isSafeBranchName(branch: string, timeoutMs: number): boolean {
-	return isSafeBranchNameWith(runGit, branch, timeoutMs);
-}
-
-async function isSafeBranchNameAsync(branch: string, timeoutMs: number): Promise<boolean> {
-	return await isSafeBranchNameWith(runGitAsync, branch, timeoutMs);
-}
-
-function readGitError(result: GitCommandResult): string {
+function readGitError(result: GitCommandResult, timeoutMs: number): string {
 	const stderr = result.stderr.trim();
 	if (stderr.length > 0) {
 		return stderr;
@@ -591,7 +470,7 @@ function readGitError(result: GitCommandResult): string {
 	}
 
 	if (result.errorCode === "TIMEOUT") {
-		return `timed out after ${DEFAULT_GIT_TIMEOUT_MS}ms`;
+		return `timed out after ${timeoutMs}ms`;
 	}
 	if (result.errorCode) {
 		return result.errorCode;
@@ -627,7 +506,7 @@ function clearStaleSourceRepoSyncLock(path: string): boolean {
 	return false;
 }
 
-function acquireSourceRepoSyncLock(workspaceDir: string, timeoutMs: number): SyncLock | null {
+function acquireSourceRepoSyncLock(workspaceDir: string): SyncLock | null {
 	const path = sourceRepoSyncLockPath(workspaceDir);
 	mkdirSync(join(resolve(workspaceDir), ".daemon"), { recursive: true });
 	const immediate = tryAcquireSourceRepoSyncLock(path);
@@ -776,6 +655,16 @@ function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
 
 function mapMaybePromise<T, U>(value: MaybePromise<T>, map: (value: T) => U): MaybePromise<U> {
 	return isPromiseLike(value) ? value.then(map) : map(value);
+}
+
+function mapToSyncResult<T>(
+	value: MaybePromise<T>,
+	map: (value: T) => WorkspaceSourceRepoSyncResult | MaybePromise<WorkspaceSourceRepoSyncResult>,
+): MaybePromise<WorkspaceSourceRepoSyncResult> {
+	if (isPromiseLike(value)) {
+		return value.then(async (resolved) => await map(resolved));
+	}
+	return map(value);
 }
 
 function readRepoStateWith(run: typeof runGit, repoPath: string, timeoutMs: number): RepoState;

@@ -3,9 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	type WorkspaceSourceRepoSyncResult,
 	resolveWorkspaceSourceRepoPath,
 	syncWorkspaceSourceRepo,
-	type WorkspaceSourceRepoSyncResult,
 } from "./workspace-source-repo";
 
 const tmpDirs: string[] = [];
@@ -101,6 +101,18 @@ describe("syncWorkspaceSourceRepo", () => {
 
 		expect(result.status).toBe("pulled");
 		expect(readFileSync(join(repoPath, "README.md"), "utf-8")).toContain("second");
+	});
+
+	it("returns current when the checkout already matches origin", () => {
+		const { remoteUrl } = seedRemote();
+		const workspaceDir = makeTempDir("signet-source-workspace-");
+
+		expect(syncWorkspace(workspaceDir, remoteUrl).status).toBe("cloned");
+
+		const result = syncWorkspace(workspaceDir, remoteUrl);
+
+		expect(result.status).toBe("current");
+		expect(result.message).toContain("already current");
 	});
 
 	it("fetches but does not pull over local workspace changes", () => {
