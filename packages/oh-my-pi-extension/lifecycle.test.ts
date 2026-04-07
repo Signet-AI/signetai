@@ -51,7 +51,10 @@ describe("Oh My Pi lifecycle session-end handling", () => {
 		deps.state.setActiveSession("prev-session", sessionFile);
 
 		await endPreviousSession(deps, { previousSessionFile: sessionFile }, "session_switch");
-		expect(calls).toHaveLength(0);
+		// Release call sent even without transcript (to free daemon claim)
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.path).toBe("/api/hooks/session-end");
+		expect((calls[0]?.body as Record<string, unknown>).transcript).toBeUndefined();
 		expect(deps.state.sessionAlreadyEnded("prev-session")).toBe(false);
 		expect(deps.state.getPendingSessionEnds()).toHaveLength(1);
 
@@ -67,15 +70,15 @@ describe("Oh My Pi lifecycle session-end handling", () => {
 		);
 
 		await flushPendingSessionEnds(deps);
-		expect(calls).toHaveLength(1);
+		expect(calls).toHaveLength(2);
 		expect(deps.state.sessionAlreadyEnded("prev-session")).toBe(false);
 		expect(deps.state.getPendingSessionEnds()).toHaveLength(1);
 
 		shouldSucceed = true;
 		await flushPendingSessionEnds(deps);
-		expect(calls).toHaveLength(2);
-		expect(calls[1]?.path).toBe("/api/hooks/session-end");
-		expect(calls[1]?.body).toMatchObject({
+		expect(calls).toHaveLength(3);
+		expect(calls[2]?.path).toBe("/api/hooks/session-end");
+		expect(calls[2]?.body).toMatchObject({
 			sessionKey: "prev-session",
 			reason: "session_switch",
 			transcript: "User: hello",

@@ -101,7 +101,18 @@ export async function flushPendingSessionEnds(deps: LifecycleDeps): Promise<void
 		}
 
 		const snapshot = readSessionFileSnapshot(pending.sessionFile, deps.config.excludedCustomTypes);
-		if (!snapshot.loaded) continue;
+		if (!snapshot.loaded) {
+			// Session file still not on disk (e.g. after /new); release
+			// the daemon claim so the stale session stops appearing.
+			await submitSessionEnd(deps, {
+				sessionId: pending.sessionId,
+				agentId: pending.agentId,
+				transcript: undefined,
+				reason: pending.reason,
+				project: undefined,
+			});
+			continue;
+		}
 
 		const submitted = await submitSessionEnd(deps, {
 			sessionId: snapshot.sessionId ?? pending.sessionId,
@@ -188,6 +199,19 @@ export async function endPreviousSession(
 	if (deps.state.sessionAlreadyEnded(sessionId)) return;
 
 	if (!previousSnapshot.loaded) {
+		// /new triggers session_switch before the prior session file is
+		// flushed to disk. Release the daemon claim immediately so the
+		// old session disappears from the tracker; the transcript is
+		// still queued for deferred retry below.
+		if (sessionId) {
+			await submitSessionEnd(deps, {
+				sessionId,
+				agentId: deps.agentId,
+				transcript: undefined,
+				reason,
+				project: undefined,
+			});
+		}
 		if (sessionId && previousSessionFile) {
 			deps.state.queuePendingSessionEnd(sessionId, previousSessionFile, deps.agentId, reason);
 		}
