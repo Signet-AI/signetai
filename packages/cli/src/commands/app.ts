@@ -112,5 +112,5 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 
 	program.command("configure").alias("config").description("Configure agent settings").action(deps.configureAgent);
 
-	program.command("sync").description("Sync built-in templates and skills").action(deps.syncTemplates);
+	program.command("sync").description("Sync hooks, extensions, built-in templates, and skills").action(deps.syncTemplates);
 }
