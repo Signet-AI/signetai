@@ -131,13 +131,21 @@ describe("resolveTaskModel", () => {
 	it("caches models independently per harness", () => {
 		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
 		try {
+			const configPath = join(agentsDir, "agent.yaml");
 			writeFileSync(
-				join(agentsDir, "agent.yaml"),
+				configPath,
 				["memory:", "  pipelineV2:", "    extraction:", "      provider: claude-code", "      model: haiku"].join("\n"),
 			);
 
 			expect(resolveTaskModel("claude-code", agentsDir)).toBe("haiku");
-			expect(resolveTaskModel("codex", agentsDir)).toBeUndefined();
+
+			writeFileSync(
+				configPath,
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.4-codex"].join("\n"),
+			);
+
+			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.4-codex");
+			expect(resolveTaskModel("claude-code", agentsDir)).toBe("haiku");
 		} finally {
 			rmSync(agentsDir, { recursive: true, force: true });
 		}
