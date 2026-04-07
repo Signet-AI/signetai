@@ -25,8 +25,14 @@ export interface SpawnResult {
 
 function buildCommand(harness: TaskHarness, prompt: string, model?: string): readonly [string, ReadonlyArray<string>] {
 	switch (harness) {
-		case "claude-code":
-			return ["claude", ["--dangerously-skip-permissions", "-p", prompt]];
+		case "claude-code": {
+			const args = ["--dangerously-skip-permissions"];
+			if (model) {
+				args.push("--model", model);
+			}
+			args.push("-p", prompt);
+			return ["claude", args];
+		}
 		case "codex": {
 			const args = ["exec", "--skip-git-repo-check", "--json"];
 			if (model) {
