@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveWorkspaceSourceRepoPath } from "@signet/core";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
 
 const tmpDirs: string[] = [];
@@ -70,5 +71,15 @@ describe("createAgentsWatcherIgnoreMatcher", () => {
 		);
 		expect(shouldIgnore(join(agentsDir, "agents-backup", "claude-code", "workspace", "AGENTS.md"))).toBe(false);
 		expect(shouldIgnore(join(agentsDir, "agents", "claude-code", "SOUL.md"))).toBe(false);
+	});
+
+	it("ignores the managed Signet source checkout and everything under it", () => {
+		const agentsDir = makeTempAgentsDir();
+		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
+		const repoRoot = resolveWorkspaceSourceRepoPath(agentsDir);
+
+		expect(shouldIgnore(repoRoot)).toBe(true);
+		expect(shouldIgnore(join(repoRoot, "packages", "core", "src", "index.ts"))).toBe(true);
+		expect(shouldIgnore(join(agentsDir, "signetai-notes.md"))).toBe(false);
 	});
 });

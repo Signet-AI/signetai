@@ -212,6 +212,12 @@ search. 0.7 (70% semantic, 30% keyword) works well for most people.
 The wizard can initialize a git repo in `$SIGNET_WORKSPACE/` so every change to
 your agent files is automatically versioned.
 
+Setup also clones a managed Signet source checkout into
+`$SIGNET_WORKSPACE/signetai/`. Future `signet update` and `signet sync`
+operations fetch the latest upstream changes, but they only auto-pull when that
+checkout is clean and still sitting on the default branch. If you are hacking on
+the internals locally, Signet fetches and leaves your changes alone.
+
 After the wizard completes, the [[daemon]] starts automatically and the
 [[dashboard]] opens at `http://localhost:3850`.
 
@@ -229,6 +235,7 @@ $SIGNET_WORKSPACE/
 ├── memory/
 │   ├── memories.db      # SQLite memory database
 │   └── scripts/         # Optional batch tools (memory.py)
+├── signetai/            # Managed local Signet source checkout for debugging
 ├── skills/
 │   ├── remember/        # Built-in: /remember command
 │   └── recall/          # Built-in: /recall command

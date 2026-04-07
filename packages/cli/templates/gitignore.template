@@ -13,3 +13,6 @@ memory/memories.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Managed Signet source checkout
+signetai/

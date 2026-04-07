@@ -53,6 +53,10 @@ describe("Issue 322: verify installed version after update install", () => {
 		expect(UPDATE_SYSTEM_SRC).toContain("Install exited cleanly but version is");
 		expect(UPDATE_SYSTEM_SRC).toContain("resolveGlobalPackagePath");
 	});
+
+	it("syncs the managed Signet source checkout after a successful update", () => {
+		expect(UPDATE_SYSTEM_SRC).toContain("const repoSync = syncWorkspaceSourceRepo(agentsDir)");
+	});
 });
 
 describe("verifyInstalledVersion", () => {

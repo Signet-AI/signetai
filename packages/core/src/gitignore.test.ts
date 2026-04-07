@@ -22,6 +22,7 @@ describe("mergeSignetGitignoreEntries", () => {
 				"memory/memories.db",
 				"memory/memories.db-shm",
 				"memory/memories.db-journal",
+				"signetai/",
 				"",
 			].join("\n"),
 		);

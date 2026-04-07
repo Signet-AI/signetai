@@ -53,6 +53,7 @@ import {
 	readStaticIdentity,
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
+	syncWorkspaceSourceRepo,
 	symlinkSkills,
 	unifySkills,
 } from "@signet/core";
@@ -1295,6 +1296,7 @@ registerAppCommands(program, {
 			signetLogo,
 			startDaemon,
 			syncBuiltinSkills,
+			syncWorkspaceSourceRepo,
 		}),
 	showDoctor: (options) => showDoctor(options, healthDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
@@ -1308,6 +1310,7 @@ registerAppCommands(program, {
 			syncBuiltinSkills,
 			syncNativeEmbeddingModel,
 			syncPredictorBinary,
+			syncWorkspaceSourceRepo,
 		}),
 });
 
@@ -1421,6 +1424,7 @@ registerUpdateCommands(program, {
 	isOpenClawInstalled: () => new OpenClawConnector().isInstalled(),
 	isOhMyPiInstalled: () => new OhMyPiConnector().isInstalled(),
 	syncBuiltinSkills,
+	syncWorkspaceSourceRepo,
 });
 
 registerGitCommands(program, {

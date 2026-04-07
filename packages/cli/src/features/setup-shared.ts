@@ -1,5 +1,5 @@
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import type { SetupDetection } from "@signet/core";
+import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core";
 import chalk from "chalk";
 
 export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "oh-my-pi" | "codex" | "forge" | "hermes-agent";
@@ -276,6 +276,23 @@ export function readRecord(value: unknown): Record<string, unknown> {
 
 export function readString(value: unknown): string | null {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+export function formatWorkspaceSourceRepoSync(result: WorkspaceSourceRepoSyncResult): string | null {
+	switch (result.status) {
+		case "cloned":
+			return `  ✓ ${result.message}: ${result.path}`;
+		case "pulled":
+			return `  ✓ ${result.message}: ${result.path}`;
+		case "fetched":
+			return `  ↺ ${result.message}`;
+		case "error":
+			return `  ⚠ ${result.message}`;
+		case "skipped":
+			return `  ${result.message}`;
+		case "current":
+			return null;
+	}
 }
 
 export function readHarnesses(value: unknown): string[] {

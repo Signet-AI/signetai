@@ -1,8 +1,11 @@
+import { SIGNET_SOURCE_CHECKOUT_DIRNAME } from "./workspace-source-repo";
+
 export const SIGNET_GIT_PROTECTED_PATHS = [
 	"memory/memories.db",
 	"memory/memories.db-wal",
 	"memory/memories.db-shm",
 	"memory/memories.db-journal",
+	`${SIGNET_SOURCE_CHECKOUT_DIRNAME}/`,
 ] as const;
 
 export function mergeSignetGitignoreEntries(existingContent: string): string {

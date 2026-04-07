@@ -850,6 +850,7 @@ $SIGNET_WORKSPACE/
 ├── memory/
 │   ├── memories.db      # SQLite database (source of truth)
 │   └── scripts/         # Optional batch tools (Python)
+├── signetai/            # Managed local Signet source checkout
 ├── skills/              # Installed skills (subdirs)
 ├── .secrets/            # Encrypted secret store
 └── .daemon/

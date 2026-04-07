@@ -13,6 +13,7 @@ import {
 	resolvePrimaryPackageManager,
 	getGlobalInstallCommand,
 	resolveGlobalPackagePath,
+	syncWorkspaceSourceRepo,
 	type PackageManagerFamily,
 } from "@signet/core";
 import { logger } from "./logger";
@@ -616,6 +617,19 @@ export async function runUpdate(targetVersion?: string): Promise<UpdateRunResult
 					pendingRestartVersion = verification.installedVersion;
 					lastUpdateCheck = null;
 					lastUpdateCheckTime = null;
+					const repoSync = syncWorkspaceSourceRepo(agentsDir);
+					if (repoSync.status === "error") {
+						logger.warn("system", "Workspace Signet source checkout sync failed after update", {
+							path: repoSync.path,
+							message: repoSync.message,
+						});
+					} else if (repoSync.status !== "current") {
+						logger.info("system", "Workspace Signet source checkout sync result", {
+							path: repoSync.path,
+							status: repoSync.status,
+							message: repoSync.message,
+						});
+					}
 
 					logger.info("system", "Update installed successfully");
 					resolve({

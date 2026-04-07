@@ -1,4 +1,5 @@
 import { isAbsolute, join, normalize, relative, resolve } from "node:path";
+import { resolveWorkspaceSourceRepoPath } from "@signet/core";
 import { loadMemoryConfig } from "./memory-config";
 import { resolvePredictorCheckpointPath } from "./predictor-client";
 
@@ -27,6 +28,7 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 	const memoriesDbWal = resolveForComparison(join(agentsDir, "memory", "memories.db-wal"));
 	const memoriesDbShm = resolveForComparison(join(agentsDir, "memory", "memories.db-shm"));
 	const memoriesDbJournal = resolveForComparison(join(agentsDir, "memory", "memories.db-journal"));
+	const sourceRepoRoot = resolveForComparison(resolveWorkspaceSourceRepoPath(agentsDir));
 	const ignoredPaths = new Set([
 		defaultPredictorCheckpoint,
 		configuredPredictorCheckpoint,
@@ -38,6 +40,10 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 
 	return (path: string): boolean => {
 		const normalizedPath = resolveForComparison(path);
+		if (relativePathWithin(sourceRepoRoot, normalizedPath) !== null) {
+			return true;
+		}
+
 		const relativeToAgentsRoot = relativePathWithin(agentRoot, normalizedPath);
 		const agentSegments = relativeToAgentsRoot === null ? [] : relativeToAgentsRoot.split(/[\\/]+/).filter(Boolean);
 		const isGeneratedWorkspacePath =

@@ -10,7 +10,7 @@ import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
-import { readErr, readRecord } from "./setup-shared.js";
+import { formatWorkspaceSourceRepoSync, readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
 
 export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Promise<void> {
@@ -68,6 +68,9 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 
 		spinner.text = "Installing built-in skills...";
 		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), cfg.basePath);
+
+		spinner.text = "Cloning Signet source checkout...";
+		const sourceRepoSync = deps.syncWorkspaceSourceRepo(cfg.basePath);
 
 		spinner.text = "Creating agent identity...";
 		const agentsTemplate = join(templatesDir, "AGENTS.md.template");
@@ -224,6 +227,7 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		console.log(chalk.dim("    ├── IDENTITY.md   agent identity"));
 		console.log(chalk.dim("    ├── USER.md       your profile"));
 		console.log(chalk.dim("    ├── MEMORY.md     working memory"));
+		console.log(chalk.dim("    ├── signetai/     Signet source checkout"));
 		console.log(chalk.dim("    └── memory/       database & vectors"));
 
 		if (configuredHarnesses.length > 0) {
@@ -232,6 +236,12 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			for (const harness of configuredHarnesses) {
 				console.log(chalk.dim(`    ✓ ${harness}`));
 			}
+		}
+
+		const sourceRepoLine = formatWorkspaceSourceRepoSync(sourceRepoSync);
+		if (sourceRepoLine) {
+			console.log();
+			console.log(chalk.dim(sourceRepoLine));
 		}
 
 		if (daemonStarted) {
