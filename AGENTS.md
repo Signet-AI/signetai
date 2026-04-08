@@ -143,7 +143,8 @@ bun run deploy:web
 
 ```text
 build:core -> build:connector-base -> build:opencode-plugin -> build:native
--> build:oh-my-pi-extension -> build:connector-oh-my-pi -> build:deps
+-> build:oh-my-pi-extension -> build:connector-oh-my-pi
+-> build:pi-extension -> build:connector-pi -> build:deps
 -> build:signetai
 ```
 
@@ -168,9 +169,12 @@ bun test packages/daemon/src/pipeline/worker.test.ts
 | `@signet/connector-openclaw` | OpenClaw install-time integration | node |
 | `@signet/connector-codex` | Codex CLI install-time integration | node |
 | `@signet/connector-oh-my-pi` | Oh My Pi install-time integration | node |
+| `@signet/connector-pi` | Pi install-time integration | node |
 | `@signet/connector-hermes-agent` | Hermes Agent install-time integration + Python plugin | node |
 | `@signet/opencode-plugin` | OpenCode runtime plugin | node |
 | `@signet/oh-my-pi-extension` | Oh My Pi extension/runtime bundle | browser |
+| `@signet/pi-extension-base` | Shared Pi/OMP extension utilities (raw TS) | node |
+| `@signet/pi-extension` | Pi extension/runtime bundle | node |
 | `@signetai/signet-memory-openclaw` | OpenClaw runtime adapter | node |
 | `@signet/tray` | Desktop shell / packaging | node |
 | `signetai` | Meta-package bundling CLI + daemon | - |
