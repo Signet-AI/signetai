@@ -277,7 +277,8 @@ export function resolveSignetDaemonUrl(): string {
 	if (explicit) return explicit;
 
 	const host = readManagedTrimmedEnv("SIGNET_HOST") ?? "127.0.0.1";
-	const port = readManagedTrimmedEnv("SIGNET_PORT") ?? "3850";
+	const rawPort = readManagedTrimmedEnv("SIGNET_PORT") ?? "3850";
+	const port = Number.isFinite(Number.parseInt(rawPort, 10)) ? rawPort : "3850";
 	return `http://${host}:${port}`;
 }
 
