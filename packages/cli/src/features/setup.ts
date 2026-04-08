@@ -155,8 +155,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				for (const harness of requestedHarnesses) {
 					try {
 						await deps.configureHarnessHooks(harness, basePath);
-					} catch {
+					} catch (err) {
 						// best-effort — non-interactive should not fail on hook errors
+						console.warn(
+							chalk.yellow(`  ⚠ Could not configure ${harness}: ${err instanceof Error ? err.message : String(err)}`),
+						);
 					}
 				}
 			}
