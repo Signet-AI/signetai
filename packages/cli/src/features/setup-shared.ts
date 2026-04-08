@@ -74,7 +74,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.openclaw) harnesses.push("OpenClaw");
 	if (detection.harnesses.opencode) harnesses.push("OpenCode");
 	if (detection.harnesses.ohMyPi) harnesses.push("Oh My Pi");
-	if (detection.harnesses.pi) harnesses.push("pi");
+	if (detection.harnesses.pi) harnesses.push("Pi");
 	if (detection.harnesses.codex) harnesses.push("Codex");
 	if (detection.harnesses.hermesAgent) harnesses.push("Hermes Agent");
 	if (detection.harnesses.forge) harnesses.push("Forge");

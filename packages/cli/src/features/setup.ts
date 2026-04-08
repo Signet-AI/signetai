@@ -387,7 +387,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		{ value: "opencode", name: "OpenCode", checked: existingHarnesses.includes("opencode") },
 		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },
 		{ value: "oh-my-pi", name: "Oh My Pi", checked: existingHarnesses.includes("oh-my-pi") },
-		{ value: "pi", name: "Pi (pi-coding-agent)", checked: existingHarnesses.includes("pi") },
+		{ value: "pi", name: "Pi", checked: existingHarnesses.includes("pi") },
 		{
 			value: "forge",
 			name: "Forge (native Signet harness)",
