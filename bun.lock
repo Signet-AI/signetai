@@ -197,7 +197,7 @@
     },
     "packages/connector-pi": {
       "name": "@signet/connector-pi",
-      "version": "0.91.4",
+      "version": "0.98.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -304,7 +304,7 @@
     },
     "packages/pi-extension": {
       "name": "@signet/pi-extension",
-      "version": "0.91.4",
+      "version": "0.98.3",
       "dependencies": {
         "@mariozechner/pi-coding-agent": "^0.54.1",
         "@signet/core": "workspace:*",
@@ -319,7 +319,7 @@
     },
     "packages/pi-extension-base": {
       "name": "@signet/pi-extension-base",
-      "version": "0.91.4",
+      "version": "0.98.3",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -351,6 +351,7 @@
         "@hono/node-server": "^1.14.0",
         "@huggingface/transformers": "^3.4.0",
         "@inquirer/prompts": "^7.0.0",
+        "@signet/connector-pi": "workspace:*",
         "chalk": "^5.3.0",
         "chokidar": "^4.0.0",
         "commander": "^12.0.0",
