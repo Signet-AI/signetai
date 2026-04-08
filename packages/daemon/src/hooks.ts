@@ -2656,7 +2656,12 @@ export async function handleUserPromptSubmit(
 		// Append agent feedback request if enabled and there are injected memories
 		const selectedIds = selected.map((s) => s.id);
 		if (feedbackEnabled && selectedIds.length > 0) {
-			inject += `\n<memory-feedback>\nRate injected memories using the mcp__signet__memory_feedback tool. Pass session_key "${req.sessionKey}" and a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.\nIDs: ${selectedIds.join(", ")}\n</memory-feedback>`;
+			const isPiHarness = req.harness === "pi";
+			const toolName = isPiHarness ? "signet_memory_feedback" : "mcp__signet__memory_feedback";
+			const instruction = isPiHarness
+				? `Rate injected memories using the ${toolName} tool. Pass a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`
+				: `Rate injected memories using the ${toolName} tool. Pass session_key "${req.sessionKey}" and a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`;
+			inject += `\n<memory-feedback>\n${instruction}\nIDs: ${selectedIds.join(", ")}\n</memory-feedback>`;
 		}
 
 		// Record injected IDs into sliding window for dedup
