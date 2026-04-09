@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PiConnector } from "./src/index.js";
 import { EXTENSION_BUNDLE } from "./src/extension-bundle.js";
+import { PiConnector } from "./src/index.js";
 
 const originalEnv = {
 	HOME: process.env.HOME,
@@ -33,6 +33,7 @@ beforeEach(() => {
 	process.env.PI_CODING_AGENT_DIR = join(tmpRoot, "agent");
 	process.env.SIGNET_AGENT_ID = "agent-from-env";
 	process.env.SIGNET_DAEMON_URL = "http://127.0.0.1:4123";
+	// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 	delete process.env.SIGNET_PATH;
 });
 

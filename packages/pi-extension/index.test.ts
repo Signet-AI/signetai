@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import SignetPiExtension, { loadConfig, parseRememberArgs, recallMemories, rememberContent } from "./src/index.js";
@@ -55,6 +55,7 @@ function makeTempDirInHome() {
 describe("loadConfig", () => {
 	it("defaults to enabled when no env var or config file exists", () => {
 		saveEnv("SIGNET_ENABLED", "PI_CODING_AGENT_DIR");
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.SIGNET_ENABLED;
 		process.env.PI_CODING_AGENT_DIR = makeTempDir(); // empty dir — no signet.json
 		expect(loadConfig().enabled).toBe(true);
@@ -82,6 +83,7 @@ describe("loadConfig", () => {
 		mkdirSync(join(dir, "extensions"), { recursive: true });
 		writeFileSync(join(dir, "extensions", "signet.json"), JSON.stringify({ enabled: false }));
 		process.env.PI_CODING_AGENT_DIR = dir;
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.SIGNET_ENABLED;
 		expect(loadConfig().enabled).toBe(false);
 	});
@@ -94,13 +96,16 @@ describe("loadConfig", () => {
 		// Express the path as ~/relative so tilde expansion is required
 		const rel = relative(homedir(), dir);
 		process.env.PI_CODING_AGENT_DIR = `~/${rel}`;
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.SIGNET_ENABLED;
 		expect(loadConfig().enabled).toBe(false);
 	});
 
 	it("reads config from persisted pi.json when PI_CODING_AGENT_DIR is unset", () => {
 		saveEnv("SIGNET_ENABLED", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME");
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.SIGNET_ENABLED;
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.PI_CODING_AGENT_DIR;
 
 		// Set XDG_CONFIG_HOME to an isolated temp dir so we don't touch the real config
@@ -112,14 +117,19 @@ describe("loadConfig", () => {
 		mkdirSync(join(agentDir, "extensions"), { recursive: true });
 		writeFileSync(join(agentDir, "extensions", "signet.json"), JSON.stringify({ enabled: false }));
 		mkdirSync(join(configHome, "signet"), { recursive: true });
-		writeFileSync(join(configHome, "signet", "pi.json"), JSON.stringify({ version: 1, agentDir, updatedAt: new Date().toISOString() }));
+		writeFileSync(
+			join(configHome, "signet", "pi.json"),
+			JSON.stringify({ version: 1, agentDir, updatedAt: new Date().toISOString() }),
+		);
 
 		expect(loadConfig().enabled).toBe(false);
 	});
 
 	it("SIGNET_BYPASS=1 is not part of loadConfig (read at runtime)", () => {
 		saveEnv("SIGNET_ENABLED", "SIGNET_BYPASS", "PI_CODING_AGENT_DIR");
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.SIGNET_ENABLED;
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.PI_CODING_AGENT_DIR;
 		process.env.SIGNET_BYPASS = "1";
 		// loadConfig does not include bypass — it's checked at factory call time
@@ -188,7 +198,18 @@ describe("recallMemories", () => {
 				if (capturedPath === "/api/memory/recall") {
 					return Response.json({
 						results: [
-							{ content: "use bun", importance: 0.9, tags: "bun,tooling", score: 0.9, source: "user", type: "fact", pinned: false, who: "agent", project: null, created_at: "" },
+							{
+								content: "use bun",
+								importance: 0.9,
+								tags: "bun,tooling",
+								score: 0.9,
+								source: "user",
+								type: "fact",
+								pinned: false,
+								who: "agent",
+								project: null,
+								created_at: "",
+							},
 						],
 						query: "bun",
 						method: "hybrid",
@@ -225,7 +246,20 @@ describe("recallMemories", () => {
 			port: 0,
 			async fetch() {
 				return Response.json({
-					results: [{ content: "x", tags: "a,b,c", score: 1, importance: 1, source: "user", type: "fact", pinned: false, who: "agent", project: null, created_at: "" }],
+					results: [
+						{
+							content: "x",
+							tags: "a,b,c",
+							score: 1,
+							importance: 1,
+							source: "user",
+							type: "fact",
+							pinned: false,
+							who: "agent",
+							project: null,
+							created_at: "",
+						},
+					],
 				});
 			},
 		});
@@ -323,9 +357,13 @@ describe("SignetPiExtension", () => {
 		for (const server of servers.splice(0)) {
 			server.stop();
 		}
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.SIGNET_ENABLED;
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.SIGNET_AGENT_ID;
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.SIGNET_DAEMON_URL;
+		// biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"
 		delete process.env.SIGNET_BYPASS;
 	});
 
@@ -423,8 +461,7 @@ describe("SignetPiExtension", () => {
 		const result = await handlers.context[0]?.({ messages: [] }, ctx);
 
 		expect(result).not.toBeUndefined();
-		const messages = (result as { messages: Array<{ customType?: string; content?: unknown }> })
-			.messages;
+		const messages = (result as { messages: Array<{ customType?: string; content?: unknown }> }).messages;
 		expect(Array.isArray(messages)).toBe(true);
 
 		const sessionCtxMsg = messages.find((m) => m.customType === "signet-pi-session-context");

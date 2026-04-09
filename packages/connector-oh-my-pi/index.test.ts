@@ -140,11 +140,7 @@ describe("root build pipeline", () => {
 describe("OhMyPiConnector.install — legacy SIGNET block migration", () => {
 	it("strips legacy block from AGENTS.md and reports path in filesWritten", async () => {
 		const agentsPath = join(tmpRoot, "AGENTS.md");
-		writeFileSync(
-			agentsPath,
-			`before\n<!-- SIGNET:START -->\nmanaged block\n<!-- SIGNET:END -->\nafter\n`,
-			"utf-8",
-		);
+		writeFileSync(agentsPath, "before\n<!-- SIGNET:START -->\nmanaged block\n<!-- SIGNET:END -->\nafter\n", "utf-8");
 		const result = await new OhMyPiConnector().install(tmpRoot);
 		expect(readFileSync(agentsPath, "utf-8")).toBe("before\nafter\n");
 		expect(result.filesWritten).toContain(agentsPath);

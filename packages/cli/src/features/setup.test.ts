@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SetupDetection } from "@signet/core";
-import { setupWizard } from "./setup.js";
 import type { SetupDeps } from "./setup-types.js";
+import { setupWizard } from "./setup.js";
 
 const NO_HARNESSES = {
 	claudeCode: false,

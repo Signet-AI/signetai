@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type LifecycleDeps, PI_LIFECYCLE_CONFIG, endCurrentSession, endPreviousSession, flushPendingSessionEnds } from "./src/lifecycle.js";
+import {
+	type LifecycleDeps,
+	PI_LIFECYCLE_CONFIG,
+	endCurrentSession,
+	endPreviousSession,
+	flushPendingSessionEnds,
+} from "./src/lifecycle.js";
 import { createSessionState } from "./src/session-state.js";
 
 const tempDirs: string[] = [];
