@@ -96,9 +96,10 @@ describe("setupWizard non-interactive harness hooks", () => {
 
 		await setupWizard({ nonInteractive: true, harness: ["pi", "claude-code"] }, deps);
 
-		expect(configureHarnessHooks).toHaveBeenCalledTimes(2);
-		expect(configureHarnessHooks).toHaveBeenCalledWith("pi", basePath);
-		expect(configureHarnessHooks).toHaveBeenCalledWith("claude-code", basePath);
+		expect(configureHarnessHooks.mock.calls).toEqual([
+			["pi", basePath],
+			["claude-code", basePath],
+		]);
 	});
 
 	it("warns but does not throw when hook installation fails", async () => {
@@ -152,7 +153,10 @@ describe("setupWizard non-interactive harness hooks", () => {
 
 			await setupWizard({ nonInteractive: true, harness: ["pi", "claude-code"] }, deps);
 
-			expect(configureHarnessHooks).toHaveBeenCalledTimes(2);
+			expect(configureHarnessHooks.mock.calls).toEqual([
+				["pi", basePath],
+				["claude-code", basePath],
+			]);
 			expect(warnSpy).toHaveBeenCalledTimes(2);
 
 			const warnings = warnSpy.mock.calls.map((c) => c[0] as string);

@@ -6,6 +6,7 @@ import {
 	type InstallResult,
 	type UninstallResult,
 	BaseConnector,
+	removeManagedExtensionFile,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
 } from "./src/index";
@@ -94,6 +95,20 @@ describe("BaseConnector.stripLegacySignetBlock", () => {
 });
 
 describe("resolveSignetDaemonUrl", () => {
+	it("uses a valid explicit daemon URL override", () => {
+		process.env.SIGNET_DAEMON_URL = " https://example.test/signet/ ";
+
+		expect(resolveSignetDaemonUrl()).toBe("https://example.test/signet");
+	});
+
+	it("ignores invalid explicit daemon URLs and falls back to loopback defaults", () => {
+		process.env.SIGNET_DAEMON_URL = "file:///tmp/signet.sock";
+		process.env.SIGNET_HOST = "127.0.0.1";
+		process.env.SIGNET_PORT = "4123";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+	});
+
 	it("uses the parsed numeric port rather than the raw env string", () => {
 		delete process.env.SIGNET_DAEMON_URL;
 		process.env.SIGNET_HOST = "127.0.0.1";
@@ -105,6 +120,14 @@ describe("resolveSignetDaemonUrl", () => {
 	it("falls back to localhost-safe defaults when host contains URL control characters", () => {
 		delete process.env.SIGNET_DAEMON_URL;
 		process.env.SIGNET_HOST = "127.0.0.1@evil.com";
+		process.env.SIGNET_PORT = "4123";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+	});
+
+	it("rejects degenerate host values that only contain separators", () => {
+		delete process.env.SIGNET_DAEMON_URL;
+		process.env.SIGNET_HOST = "...";
 		process.env.SIGNET_PORT = "4123";
 
 		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
@@ -140,5 +163,25 @@ describe("resolveSignetWorkspacePath", () => {
 		expect(resolveSignetWorkspacePath()).toBe(
 			resolve(join(homedir(), rel, "..", rel, "agents")),
 		);
+	});
+});
+
+describe("removeManagedExtensionFile", () => {
+	it("removes files that contain the managed marker", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-managed-file-"));
+		const filePath = join(dir, "managed.js");
+		writeFileSync(filePath, "// signet-managed\nconst x = 1;\n", "utf-8");
+
+		expect(removeManagedExtensionFile(filePath, "signet-managed")).toBe(true);
+		expect(existsSync(filePath)).toBe(false);
+	});
+
+	it("leaves unmanaged files in place", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-unmanaged-file-"));
+		const filePath = join(dir, "plain.js");
+		writeFileSync(filePath, "const x = 1;\n", "utf-8");
+
+		expect(removeManagedExtensionFile(filePath, "signet-managed")).toBe(false);
+		expect(existsSync(filePath)).toBe(true);
 	});
 });

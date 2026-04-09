@@ -152,6 +152,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 			const requestedHarnesses = normalizeHarnessList(options.harness, deps);
 			if (requestedHarnesses.length > 0) {
+				// Hooks are installed before the daemon starts. This is safe because
+				// connectors only write static files with a baked-in loopback default.
+				// The installed runtime reads SIGNET_DAEMON_URL at runtime and only
+				// falls back to that default when no explicit override is present.
 				for (const harness of requestedHarnesses) {
 					try {
 						await deps.configureHarnessHooks(harness, basePath);

@@ -32,7 +32,7 @@
  * ```
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -274,12 +274,26 @@ export function resolveSignetWorkspacePath(home = homedir()): string {
 }
 
 function isSafeDaemonHost(host: string): boolean {
-	return /^[A-Za-z0-9.-]+$/.test(host);
+	return /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host);
+}
+
+function normalizeExplicitDaemonUrl(rawUrl: string): string | null {
+	try {
+		const url = new URL(rawUrl);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+		if (!url.hostname || url.username || url.password || url.hash || url.search) return null;
+		return url.toString().replace(/\/$/, "");
+	} catch {
+		return null;
+	}
 }
 
 export function resolveSignetDaemonUrl(): string {
 	const explicit = readManagedTrimmedEnv("SIGNET_DAEMON_URL");
-	if (explicit) return explicit;
+	if (explicit) {
+		const normalized = normalizeExplicitDaemonUrl(explicit);
+		if (normalized) return normalized;
+	}
 
 	const rawHost = readManagedTrimmedEnv("SIGNET_HOST") ?? "127.0.0.1";
 	const host = isSafeDaemonHost(rawHost) ? rawHost : "127.0.0.1";
@@ -329,18 +343,22 @@ export function managedExtensionFilePath(agentDir: string, filename: string): st
 }
 
 export function isManagedExtensionFile(filePath: string, marker: string): boolean {
-	if (!existsSync(filePath)) return false;
+	const content = readManagedExtensionFile(filePath);
+	return content?.includes(marker) ?? false;
+}
+
+function readManagedExtensionFile(filePath: string): string | null {
 	try {
-		const content = readFileSync(filePath, "utf8");
-		return content.includes(marker);
+		return readFileSync(filePath, "utf8");
 	} catch {
-		return false;
+		return null;
 	}
 }
 
 export function removeManagedExtensionFile(filePath: string, marker: string): boolean {
-	if (!existsSync(filePath) || !isManagedExtensionFile(filePath, marker)) return false;
-	rmSync(filePath, { force: true });
+	const content = readManagedExtensionFile(filePath);
+	if (!content?.includes(marker)) return false;
+	unlinkSync(filePath);
 	return true;
 }
 
