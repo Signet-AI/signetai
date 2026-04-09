@@ -126,22 +126,34 @@ export default function DocSearch() {
 					aria-expanded={isOpen}
 					role="combobox"
 					aria-controls="doc-search-results"
+					aria-activedescendant={results[selectedIndex] ? `doc-search-option-${selectedIndex}` : undefined}
 					autoComplete="off"
 				/>
 				<kbd className="doc-search-shortcut">/</kbd>
 			</div>
 
 			{isOpen && (
-				<ul id="doc-search-results" className="doc-search-results">
-					{results.map((r, i) => (
-						<li key={r.item.slug} className={i === selectedIndex ? "selected" : ""}>
-							<a href={r.item.url}>
-								<span className="doc-search-result-title">{r.item.title}</span>
-								<span className="doc-search-result-section">{r.item.sectionTitle || r.item.section || "Docs"}</span>
-							</a>
-						</li>
-					))}
-				</ul>
+				/* biome-ignore lint/a11y/useSemanticElements: ARIA listbox popup is required for the combobox relationship */
+				<div id="doc-search-results" className="doc-search-results" role="listbox" tabIndex={-1}>
+					{results.map((r, i) => {
+						const option = (
+							<div
+								id={`doc-search-option-${i}`}
+								key={r.item.slug}
+								role="option"
+								tabIndex={-1}
+								aria-selected={i === selectedIndex}
+								className={i === selectedIndex ? "selected" : ""}
+							>
+								<a href={r.item.url}>
+									<span className="doc-search-result-title">{r.item.title}</span>
+									<span className="doc-search-result-section">{r.item.sectionTitle || r.item.section || "Docs"}</span>
+								</a>
+							</div>
+						);
+						return option;
+					})}
+				</div>
 			)}
 		</div>
 	);

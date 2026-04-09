@@ -17,6 +17,10 @@ interface HeadingSlice {
 	readonly end: number;
 }
 
+function maskFencedCode(content: string): string {
+	return content.replace(/```[\s\S]*?```/g, (block) => block.replace(/[^\n]/g, " "));
+}
+
 function toSlug(id: string): string {
 	return id.replace(/\.md$/, "").toLowerCase();
 }
@@ -41,7 +45,8 @@ function excerpt(content: string, limit = 240): string {
 }
 
 function headingSlices(body: string): HeadingSlice[] {
-	const matches = [...body.matchAll(/^(##|###)\s+(.+)$/gm)];
+	const masked = maskFencedCode(body);
+	const matches = [...masked.matchAll(/^(##|###)\s+(.+)$/gm)];
 	return matches.map((match, index) => ({
 		depth: match[1].length,
 		text: match[2].trim(),

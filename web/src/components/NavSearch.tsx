@@ -113,7 +113,8 @@ export default function NavSearch() {
 	}
 
 	return (
-		<div ref={rootRef} className={`nav-search ${open ? "is-open" : ""}`}>
+		/* biome-ignore lint/a11y/useSemanticElements: search landmark is intentional for assistive technology navigation */
+		<div ref={rootRef} className={`nav-search ${open ? "is-open" : ""}`} role="search">
 			<button
 				type="button"
 				className="nav-search-trigger"
@@ -139,18 +140,32 @@ export default function NavSearch() {
 						placeholder="Search docs..."
 						autoComplete="off"
 						aria-label="Search documentation"
+						aria-expanded={results.length > 0}
+						aria-controls="nav-search-results"
+						aria-activedescendant={results[selected] ? `nav-search-option-${selected}` : undefined}
 					/>
 					{results.length > 0 && (
-						<ul className="nav-search-results">
-							{results.map((r, i) => (
-								<li key={r.item.slug} className={i === selected ? "selected" : ""}>
-									<a href={r.item.url} onClick={() => setOpen(false)}>
-										<span className="nav-search-result-title">{r.item.title}</span>
-										<span className="nav-search-result-section">{r.item.sectionTitle || r.item.section || "Docs"}</span>
-									</a>
-								</li>
-							))}
-						</ul>
+						/* biome-ignore lint/a11y/useSemanticElements: popup search results use listbox semantics for screen readers */
+						<div id="nav-search-results" className="nav-search-results" role="listbox" tabIndex={-1}>
+							{results.map((r, i) => {
+								const option = (
+									<div
+										id={`nav-search-option-${i}`}
+										key={r.item.slug}
+										role="option"
+										tabIndex={-1}
+										aria-selected={i === selected}
+										className={i === selected ? "selected" : ""}
+									>
+										<a href={r.item.url} onClick={() => setOpen(false)}>
+											<span className="nav-search-result-title">{r.item.title}</span>
+											<span className="nav-search-result-section">{r.item.sectionTitle || r.item.section || "Docs"}</span>
+										</a>
+									</div>
+								);
+								return option;
+							})}
+						</div>
 					)}
 					{query.length >= 2 && results.length === 0 && <div className="nav-search-empty">No results</div>}
 				</div>
