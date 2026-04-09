@@ -472,4 +472,139 @@ describe("SignetPiExtension", () => {
 		expect(typeof recallMsg?.content).toBe("string");
 		expect(recallMsg?.content as string).toContain("Preferred language is TypeScript");
 	});
+
+	it("session_before_compact posts pre-compaction guidance with session metadata", async () => {
+		const requests: Array<{ path: string; body: unknown }> = [];
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				const body = req.method === "POST" ? ((await req.json()) as unknown) : undefined;
+				requests.push({ path, body });
+
+				if (path === "/api/hooks/session-start") {
+					return Response.json({ inject: "session-context-content" });
+				}
+				if (path === "/api/hooks/pre-compaction") {
+					return Response.json({ summaryPrompt: "keep the important bits" });
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+		};
+		SignetPiExtension(pi as never);
+
+		const ctx = {
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-pi-compact-1", cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-pi-compact-1",
+			},
+			ui: {
+				notify: () => {},
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		};
+
+		const result = await handlers.session_before_compact[0]?.(
+			{
+				type: "session_before_compact",
+				preparation: {
+					messagesToSummarize: [{ id: 1 }, { id: 2 }, { id: 3 }],
+				},
+			},
+			ctx,
+		);
+
+		expect(result).toBeUndefined();
+		expect(requests.map((req) => req.path)).toEqual([
+			"/api/hooks/session-start",
+			"/api/hooks/pre-compaction",
+		]);
+		expect(requests[1]?.body).toEqual({
+			harness: "pi",
+			sessionKey: "session-pi-compact-1",
+			messageCount: 3,
+			runtimePath: "plugin",
+		});
+	});
+
+	it("session_compact posts compaction-complete with summary and current session info", async () => {
+		const requests: Array<{ path: string; body: unknown }> = [];
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				const body = req.method === "POST" ? ((await req.json()) as unknown) : undefined;
+				requests.push({ path, body });
+
+				if (path === "/api/hooks/compaction-complete") {
+					return Response.json({ ok: true });
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+		process.env.SIGNET_AGENT_ID = "agent-pi-test";
+
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+		};
+		SignetPiExtension(pi as never);
+
+		const ctx = {
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-pi-compact-2", cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-pi-compact-2",
+			},
+			ui: {
+				notify: () => {},
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		};
+
+		await handlers.session_compact[0]?.(
+			{
+				compactionEntry: {
+					summary: "the conversation was about TypeScript and memory routing",
+				},
+			},
+			ctx,
+		);
+
+		expect(requests.map((req) => req.path)).toEqual(["/api/hooks/compaction-complete"]);
+		expect(requests[0]?.body).toEqual({
+			harness: "pi",
+			summary: "the conversation was about TypeScript and memory routing",
+			project: "/tmp/pi-project",
+			sessionKey: "session-pi-compact-2",
+			agentId: "agent-pi-test",
+			runtimePath: "plugin",
+		});
+	});
 });
