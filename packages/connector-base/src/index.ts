@@ -34,9 +34,10 @@
 
 import { existsSync, readFileSync, rmSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
+	expandHome,
 	stripSignetBlock,
 	symlinkSkills,
 	type SymlinkOptions,
@@ -256,7 +257,7 @@ export function readManagedTrimmedEnv(name: string): string | undefined {
 
 export function resolveSignetWorkspacePath(home = homedir()): string {
 	const configured = readManagedTrimmedEnv("SIGNET_PATH");
-	if (configured) return configured;
+	if (configured) return resolve(expandHome(configured));
 
 	const configHome = readManagedTrimmedEnv("XDG_CONFIG_HOME") ?? join(home, ".config");
 	const workspaceConfigPath = join(configHome, "signet", "workspace.json");
@@ -265,20 +266,26 @@ export function resolveSignetWorkspacePath(home = homedir()): string {
 	try {
 		const raw = JSON.parse(readFileSync(workspaceConfigPath, "utf8")) as { workspace?: unknown };
 		return typeof raw.workspace === "string" && raw.workspace.trim().length > 0
-			? raw.workspace.trim()
+			? resolve(expandHome(raw.workspace.trim()))
 			: join(home, ".agents");
 	} catch {
 		return join(home, ".agents");
 	}
 }
 
+function isSafeDaemonHost(host: string): boolean {
+	return /^[A-Za-z0-9.-]+$/.test(host);
+}
+
 export function resolveSignetDaemonUrl(): string {
 	const explicit = readManagedTrimmedEnv("SIGNET_DAEMON_URL");
 	if (explicit) return explicit;
 
-	const host = readManagedTrimmedEnv("SIGNET_HOST") ?? "127.0.0.1";
+	const rawHost = readManagedTrimmedEnv("SIGNET_HOST") ?? "127.0.0.1";
+	const host = isSafeDaemonHost(rawHost) ? rawHost : "127.0.0.1";
 	const rawPort = readManagedTrimmedEnv("SIGNET_PORT") ?? "3850";
-	const port = Number.isFinite(Number.parseInt(rawPort, 10)) ? rawPort : "3850";
+	const parsedPort = Number.parseInt(rawPort, 10);
+	const port = Number.isFinite(parsedPort) ? String(parsedPort) : "3850";
 	return `http://${host}:${port}`;
 }
 
