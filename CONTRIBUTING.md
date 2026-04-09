@@ -7,8 +7,14 @@ the reference implementation of the Signet open standard.
 **New to git or GitHub?** Start with [Your First PR](./docs/FIRST-PR.md),
 a step-by-step walkthrough of making your first contribution.
 
+This guide is for contributing from source. If you just want to use
+Signet as a product, follow [Quickstart](./docs/QUICKSTART.md) and
+install the global `signet` CLI instead of cloning the repo.
+
 Development Setup
 ---
+
+Contributor workflow, from source:
 
 ```bash
 git clone https://github.com/Signet-AI/signetai.git
@@ -25,6 +31,19 @@ bun run typecheck   # TypeScript strict mode check
 bun run lint        # Biome static analysis
 bun run format      # Biome auto-format
 bun test            # All tests
+```
+
+Common local loops:
+
+```bash
+# Full workspace build
+bun run build
+
+# Daemon local dev
+cd packages/daemon && bun run dev
+
+# Website local dev
+cd web && bun run dev
 ```
 
 Project Structure

@@ -14,52 +14,11 @@
 import type { Root, Text } from "mdast";
 import type { Plugin } from "unified";
 import { visit } from "unist-util-visit";
+import { resolveWikilinkTarget } from "./content-routes";
 
 function escapeHtml(str: string): string {
 	return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-
-// All known doc slugs (filename without .md, lowercased)
-const DOC_SLUGS = new Set([
-	"agents",
-	"analytics",
-	"api",
-	"architecture",
-	"auth",
-	"cli",
-	"configuration",
-	"connectors",
-	"contributing",
-	"daemon",
-	"dashboard",
-	"diagnostics",
-	"documents",
-	"harnesses",
-	"hooks",
-	"knowledge-architecture",
-	"mcp",
-	"memory-skills",
-	"memory",
-	"pipeline",
-	"quickstart",
-	"readme",
-	"roadmap",
-	"scheduling",
-	"sdk",
-	"secrets",
-	"self-hosting",
-	"skills",
-	"tray",
-	"vision",
-]);
-
-// All known blog slugs (filename without .mdx)
-const BLOG_SLUGS = new Set([
-	"introducing-signet",
-	"knowledge-architecture",
-	"migrate-chatgpt-memory-to-claude",
-	"why-local-first-memory",
-]);
 
 // Matches [[slug]] or [[slug|display text]]
 const WIKILINK_RE = /\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g;
@@ -71,36 +30,13 @@ interface WikilinkData {
 }
 
 function resolveWikilink(raw: string): WikilinkData | undefined {
-	const normalized = raw.trim().toLowerCase();
-
-	// Explicit prefix: [[docs/memory]] or [[blog/introducing-signet]]
-	if (normalized.startsWith("docs/")) {
-		const slug = normalized.slice(5);
-		if (DOC_SLUGS.has(slug)) {
-			return { slug: `docs/${slug}`, collection: "docs", url: `/docs/${slug}/` };
-		}
-		return undefined;
-	}
-	if (normalized.startsWith("blog/")) {
-		const slug = normalized.slice(5);
-		if (BLOG_SLUGS.has(slug)) {
-			return { slug: `blog/${slug}`, collection: "blog", url: `/blog/${slug}/` };
-		}
-		return undefined;
-	}
-
-	// Strip .md / .mdx extension if present
-	const stripped = normalized.replace(/\.mdx?$/, "");
-
-	// Try docs first (more content there), then blog
-	if (DOC_SLUGS.has(stripped)) {
-		return { slug: `docs/${stripped}`, collection: "docs", url: `/docs/${stripped}/` };
-	}
-	if (BLOG_SLUGS.has(stripped)) {
-		return { slug: `blog/${stripped}`, collection: "blog", url: `/blog/${stripped}/` };
-	}
-
-	return undefined;
+	const resolved = resolveWikilinkTarget(raw);
+	if (!resolved) return undefined;
+	return {
+		slug: `${resolved.collection}/${resolved.slug}`,
+		collection: resolved.collection,
+		url: resolved.url,
+	};
 }
 
 function defaultDisplayText(raw: string): string {
@@ -176,4 +112,4 @@ const remarkWikilinks: Plugin<[], Root> = () => {
 };
 
 export default remarkWikilinks;
-export { resolveWikilink, DOC_SLUGS, BLOG_SLUGS, WIKILINK_RE };
+export { resolveWikilink, WIKILINK_RE };

@@ -5,6 +5,7 @@ interface SearchItem {
 	title: string;
 	description: string;
 	section: string;
+	sectionTitle: string;
 	slug: string;
 	url: string;
 	excerpt: string;
@@ -32,10 +33,11 @@ export default function DocSearch() {
 			const data: SearchItem[] = await res.json();
 			const instance = new Fuse(data, {
 				keys: [
-					{ name: "title", weight: 0.4 },
-					{ name: "description", weight: 0.3 },
-					{ name: "excerpt", weight: 0.2 },
-					{ name: "section", weight: 0.1 },
+					{ name: "title", weight: 0.35 },
+					{ name: "sectionTitle", weight: 0.25 },
+					{ name: "excerpt", weight: 0.25 },
+					{ name: "description", weight: 0.1 },
+					{ name: "section", weight: 0.05 },
 				],
 				threshold: 0.4,
 				includeScore: true,
@@ -130,17 +132,12 @@ export default function DocSearch() {
 			</div>
 
 			{isOpen && (
-				<ul id="doc-search-results" className="doc-search-results" role="listbox">
+				<ul id="doc-search-results" className="doc-search-results">
 					{results.map((r, i) => (
-						<li
-							key={r.item.slug}
-							role="option"
-							aria-selected={i === selectedIndex}
-							className={i === selectedIndex ? "selected" : ""}
-						>
+						<li key={r.item.slug} className={i === selectedIndex ? "selected" : ""}>
 							<a href={r.item.url}>
 								<span className="doc-search-result-title">{r.item.title}</span>
-								{r.item.section && <span className="doc-search-result-section">{r.item.section}</span>}
+								<span className="doc-search-result-section">{r.item.sectionTitle || r.item.section || "Docs"}</span>
 							</a>
 						</li>
 					))}

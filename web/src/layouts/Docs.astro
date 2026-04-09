@@ -1,9 +1,9 @@
 ---
-import Base from "./Base.astro";
-import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
-import Sidebar from "../components/docs/Sidebar.astro";
 import GraphViewer from "../components/GraphViewer";
+import Nav from "../components/Nav.astro";
+import Sidebar from "../components/docs/Sidebar.astro";
+import Base from "./Base.astro";
 import "../styles/docs.css";
 import "../styles/graph.css";
 
@@ -60,8 +60,10 @@ const hasToc = tocHeadings.length > 2;
           <nav class="docs-toc-inline" aria-label="Table of contents">
             <p class="docs-rail-label">On this page</p>
             <ul class="docs-rail-toc-list">
-              {tocHeadings.filter((h) => h.depth === 2).map((h) => (
-                <li><a href={`#${h.slug}`}>{h.text}</a></li>
+              {tocHeadings.map((h) => (
+                <li class:list={[{ "docs-rail-toc-sub": h.depth === 3 }]}>
+                  <a href={`#${h.slug}`}>{h.text}</a>
+                </li>
               ))}
             </ul>
           </nav>

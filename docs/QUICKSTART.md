@@ -108,6 +108,10 @@ Prerequisites
 Install
 ---
 
+Quickstart is for installing and using Signet. If you want to work on
+Signet itself from source, use the contributor workflow in
+[Contributing](./CONTRIBUTING.md) instead of the global install path below.
+
 ```bash
 # bun (recommended)
 bun add -g signetai
