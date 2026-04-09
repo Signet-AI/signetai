@@ -96,13 +96,21 @@ describe("BaseConnector.stripLegacySignetBlock", () => {
 
 describe("resolveSignetDaemonUrl", () => {
 	it("uses a valid explicit daemon URL override", () => {
-		process.env.SIGNET_DAEMON_URL = " https://example.test/signet/ ";
+		process.env.SIGNET_DAEMON_URL = " https://example.test/ ";
 
-		expect(resolveSignetDaemonUrl()).toBe("https://example.test/signet");
+		expect(resolveSignetDaemonUrl()).toBe("https://example.test");
 	});
 
 	it("ignores invalid explicit daemon URLs and falls back to loopback defaults", () => {
 		process.env.SIGNET_DAEMON_URL = "file:///tmp/signet.sock";
+		process.env.SIGNET_HOST = "127.0.0.1";
+		process.env.SIGNET_PORT = "4123";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+	});
+
+	it("rejects explicit daemon URLs with a non-root path", () => {
+		process.env.SIGNET_DAEMON_URL = "https://example.test/custom";
 		process.env.SIGNET_HOST = "127.0.0.1";
 		process.env.SIGNET_PORT = "4123";
 
@@ -131,6 +139,14 @@ describe("resolveSignetDaemonUrl", () => {
 		process.env.SIGNET_PORT = "4123";
 
 		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+	});
+
+	it("falls back to the default port when SIGNET_PORT is out of range", () => {
+		delete process.env.SIGNET_DAEMON_URL;
+		process.env.SIGNET_HOST = "127.0.0.1";
+		process.env.SIGNET_PORT = "70000";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:3850");
 	});
 });
 

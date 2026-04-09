@@ -282,6 +282,7 @@ function normalizeExplicitDaemonUrl(rawUrl: string): string | null {
 		const url = new URL(rawUrl);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
 		if (!url.hostname || url.username || url.password || url.hash || url.search) return null;
+		if (url.pathname !== "/" && url.pathname !== "") return null;
 		return url.toString().replace(/\/$/, "");
 	} catch {
 		return null;
@@ -299,7 +300,10 @@ export function resolveSignetDaemonUrl(): string {
 	const host = isSafeDaemonHost(rawHost) ? rawHost : "127.0.0.1";
 	const rawPort = readManagedTrimmedEnv("SIGNET_PORT") ?? "3850";
 	const parsedPort = Number.parseInt(rawPort, 10);
-	const port = Number.isFinite(parsedPort) ? String(parsedPort) : "3850";
+	const port =
+		Number.isFinite(parsedPort) && parsedPort >= 1 && parsedPort <= 65_535
+			? String(parsedPort)
+			: "3850";
 	return `http://${host}:${port}`;
 }
 

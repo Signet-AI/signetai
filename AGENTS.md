@@ -148,6 +148,10 @@ build:core -> build:connector-base -> build:opencode-plugin -> build:native
 -> build:signetai
 ```
 
+`@signet/pi-extension-base` is a source-only shared package with no
+standalone build step. `build:oh-my-pi-extension` and `build:pi-extension`
+consume it directly from workspace source.
+
 Run a single test file directly with:
 
 ```bash
