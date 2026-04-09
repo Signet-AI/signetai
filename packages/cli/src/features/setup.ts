@@ -29,6 +29,7 @@ import {
 	detectPreferredOpenClawWorkspace,
 	failNonInteractiveSetup,
 	failSetupValidation,
+	findUnknownHarnessValues,
 	formatDetectionSummary,
 	getDeploymentExtractionGuidance,
 	getEmbeddingDimensions,
@@ -134,6 +135,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	if (rawExtractionProvider && !requestedExtractionProvider) {
 		failSetupValidation(
 			`Unknown --extraction-provider value: ${rawExtractionProvider}. Valid choices: ${EXTRACTION_PROVIDER_CHOICES.join(", ")}.`,
+		);
+	}
+	const unknownHarnessValues = findUnknownHarnessValues(options.harness, deps);
+	if (nonInteractive && unknownHarnessValues.length > 0) {
+		failNonInteractiveSetup(
+			`Unknown --harness value(s): ${unknownHarnessValues.join(", ")}. Valid choices: ${SETUP_HARNESS_CHOICES.join(", ")}.`,
 		);
 	}
 
@@ -408,20 +415,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 	let harnesses: HarnessChoice[] = [];
 	if (nonInteractive) {
-		const rawParts = (options.harness ?? []).flatMap((value) =>
-			value
-				.split(",")
-				.map((part) => part.trim())
-				.filter(Boolean),
-		);
 		const requestedHarnesses = normalizeHarnessList(options.harness, deps);
-
-		if (rawParts.length > 0 && rawParts.length !== requestedHarnesses.length) {
-			const unknown = rawParts.filter((part) => !deps.normalizeChoice(part, SETUP_HARNESS_CHOICES));
-			failNonInteractiveSetup(
-				`Unknown --harness value(s): ${unknown.join(", ")}. Valid choices: ${SETUP_HARNESS_CHOICES.join(", ")}.`,
-			);
-		}
 
 		if (requestedHarnesses.length > 0) {
 			harnesses = requestedHarnesses;

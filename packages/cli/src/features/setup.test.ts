@@ -184,4 +184,32 @@ describe("setupWizard non-interactive harness hooks", () => {
 
 		expect(configureHarnessHooks).not.toHaveBeenCalled();
 	});
+
+	it("fails fast on unknown non-interactive harness values in the existing-install path", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-invalid-harness-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: basePath,
+				normalizeAgentPath: mock((p: string) => p),
+				detectExistingSetup: mock(() => fakeDetection(basePath)),
+			});
+
+			await expect(setupWizard({ nonInteractive: true, harness: ["pi,nope"] }, deps)).rejects.toThrow(
+				"process.exit:1",
+			);
+			expect(errorSpy).toHaveBeenCalled();
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("Unknown --harness value(s): nope");
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
 });

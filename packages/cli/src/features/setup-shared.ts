@@ -135,6 +135,21 @@ export function normalizeHarnessList(rawValues: readonly string[] | undefined, d
 	return harnesses;
 }
 
+export function findUnknownHarnessValues(rawValues: readonly string[] | undefined, deps: HarnessDeps): string[] {
+	if (!rawValues || rawValues.length === 0) {
+		return [];
+	}
+
+	return rawValues
+		.flatMap((value) =>
+			value
+				.split(",")
+				.map((part) => part.trim())
+				.filter(Boolean),
+		)
+		.filter((part) => !deps.normalizeChoice(part, SETUP_HARNESS_CHOICES));
+}
+
 export function failSetupValidation(message: string, hint?: string): never {
 	console.error(chalk.red(`  ${message}`));
 	if (hint) {
