@@ -238,6 +238,40 @@ specs:
       - "Regression tests fail when `npm pack --dry-run` for `@signet/daemon` or `signetai` omits `dashboard/index.html`"
     decision: null
 
+  - id: explicit-recall-surface-alignment
+    status: approved
+    path: docs/specs/approved/explicit-recall-surface-alignment.md
+    hard_depends_on:
+      - memory-pipeline-v2
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by: []
+    success_criteria:
+      - "TypeScript explicit recall uses one canonical retrieval engine and one canonical response contract across API, CLI, MCP, and harness consumers"
+      - "Prompt-submit recall remains a lightweight injection path and does not absorb explicit recall product concerns"
+      - "Legacy or duplicate TypeScript recall helpers are either removed or reduced to thin wrappers around the canonical recall path"
+      - "Consumer renderers preserve useful recall metadata instead of flattening results into source-less snippet lists"
+    decision: null
+
+  - id: semantic-prospective-hints
+    status: planning
+    path: docs/specs/planning/semantic-prospective-hints.md
+    hard_depends_on:
+      - memory-pipeline-v2
+      - desire-paths-epic
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-OBSIDIAN-VAULT-RECALL-EVAL.md
+      - docs/research/market/memory-benchmark-comparison.md
+    success_criteria:
+      - "Prospective hints are embedded at write time and become queryable through the same embedding provider path used for document recall"
+      - "Hybrid recall fuses content FTS, content vectors, hint FTS, and hint vectors without regressing no-hint behavior"
+      - "Backfill and degraded-mode behavior are explicit: existing installs can populate missing hint embeddings incrementally and recall continues to function when hint vectors are unavailable"
+      - "Evaluation shows semantic hint retrieval is a measurable improvement over hint FTS alone on Signet's retrieval-quality suite"
+    decision: null
+
   - id: openclaw-legacy-plugin-migration
     status: planning
     path: docs/specs/planning/openclaw-legacy-plugin-migration.md

@@ -6,6 +6,7 @@
  * against databases that already have these tables.
  */
 
+import { createMemoriesFts } from "../fts-schema";
 import type { MigrationDb } from "./index";
 
 export function up(db: MigrationDb): void {
@@ -102,38 +103,5 @@ export function up(db: MigrationDb): void {
 	}
 
 	// FTS5 virtual table for full-text search on memories
-	db.exec(`
-		CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-			content,
-			content=memories,
-			content_rowid=rowid
-		);
-	`);
-
-	// FTS sync triggers
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS memories_ai
-		AFTER INSERT ON memories BEGIN
-			INSERT INTO memories_fts(rowid, content)
-			VALUES (new.rowid, new.content);
-		END;
-	`);
-
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS memories_ad
-		AFTER DELETE ON memories BEGIN
-			INSERT INTO memories_fts(memories_fts, rowid, content)
-			VALUES('delete', old.rowid, old.content);
-		END;
-	`);
-
-	db.exec(`
-		CREATE TRIGGER IF NOT EXISTS memories_au
-		AFTER UPDATE ON memories BEGIN
-			INSERT INTO memories_fts(memories_fts, rowid, content)
-			VALUES('delete', old.rowid, old.content);
-			INSERT INTO memories_fts(rowid, content)
-			VALUES (new.rowid, new.content);
-		END;
-	`);
+	createMemoriesFts(db);
 }

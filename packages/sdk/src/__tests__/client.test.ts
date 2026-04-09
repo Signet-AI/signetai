@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { SignetClient } from "../index.js";
 import type { Server } from "bun";
+import { SignetClient } from "../index.js";
 
 interface RecordedRequest {
 	readonly method: string;
@@ -94,6 +94,197 @@ describe("SignetClient", () => {
 			limit: 5,
 			type: "preference",
 		});
+	});
+
+	test("recall() returns the daemon recall shape and applies minScore client-side", async () => {
+		const { client } = mockDaemon((req) => {
+			if (req.path === "/api/memory/recall") {
+				return {
+					results: [
+						{
+							id: "mem-low",
+							content: "Low confidence memory",
+							content_length: 21,
+							truncated: false,
+							score: 0.42,
+							source: "keyword",
+							type: "fact",
+							tags: null,
+							pinned: false,
+							importance: 0.4,
+							who: "claude-code",
+							project: null,
+							created_at: "2026-04-01T00:00:00.000Z",
+						},
+						{
+							id: "mem-high",
+							content: "High confidence memory",
+							content_length: 22,
+							truncated: false,
+							score: 0.91,
+							source: "hybrid",
+							type: "fact",
+							tags: "important",
+							pinned: false,
+							importance: 0.9,
+							who: "claude-code",
+							project: "proj-a",
+							created_at: "2026-04-02T00:00:00.000Z",
+							supplementary: true,
+						},
+					],
+					query: "confidence",
+					method: "hybrid",
+					meta: {
+						totalReturned: 2,
+						hasSupplementary: true,
+						noHits: false,
+					},
+					sources: {
+						"mem-high": "memory/abc.md",
+					},
+				};
+			}
+			return { ok: true };
+		});
+
+		const result = await client.recall("confidence", {
+			limit: 5,
+			minScore: 0.8,
+			until: "2026-04-03T00:00:00Z",
+			project: "proj-a",
+			keywordQuery: "confidence",
+			agentId: "agent-1",
+		});
+
+		const req = lastRequest();
+		expect(req.method).toBe("POST");
+		expect(req.path).toBe("/api/memory/recall");
+		expect(req.body).toEqual({
+			query: "confidence",
+			limit: 5,
+			minScore: 0.8,
+			until: "2026-04-03T00:00:00Z",
+			project: "proj-a",
+			keywordQuery: "confidence",
+			agentId: "agent-1",
+		});
+		expect(result.query).toBe("confidence");
+		expect(result.method).toBe("hybrid");
+		expect(result.meta).toEqual({
+			totalReturned: 1,
+			hasSupplementary: true,
+			noHits: false,
+		});
+		expect(result.results.map((row) => row.id)).toEqual(["mem-high"]);
+		expect(result.sources?.["mem-high"]).toBe("memory/abc.md");
+	});
+
+	test("hookRecall() forwards the hook recall filters and returns the typed recall shape", async () => {
+		const { client } = mockDaemon((req) => {
+			if (req.path === "/api/hooks/recall") {
+				return {
+					results: [
+						{
+							id: "mem-1",
+							content: "User prefers dark mode",
+							content_length: 22,
+							truncated: false,
+							score: 0.91,
+							source: "hybrid",
+							type: "preference",
+							tags: "ui,theme",
+							pinned: false,
+							importance: 0.8,
+							who: "claude-code",
+							project: "proj-a",
+							created_at: "2026-04-01T00:00:00.000Z",
+						},
+					],
+					query: "dark mode",
+					method: "hybrid",
+					meta: {
+						totalReturned: 1,
+						hasSupplementary: false,
+						noHits: false,
+					},
+				};
+			}
+			return { ok: true };
+		});
+
+		const result = await client.hookRecall({
+			query: "dark mode",
+			keywordQuery: '"dark mode" OR theme',
+			project: "proj-a",
+			limit: 5,
+			type: "preference",
+			tags: "ui,theme",
+			who: "claude-code",
+			since: "2026-01-01T00:00:00Z",
+			until: "2026-04-01T00:00:00Z",
+			expand: true,
+			sessionKey: "sess-123",
+			runtimePath: "plugin",
+		});
+
+		const req = lastRequest();
+		expect(req.method).toBe("POST");
+		expect(req.path).toBe("/api/hooks/recall");
+		expect(req.body).toEqual({
+			query: "dark mode",
+			keywordQuery: '"dark mode" OR theme',
+			project: "proj-a",
+			limit: 5,
+			type: "preference",
+			tags: "ui,theme",
+			who: "claude-code",
+			since: "2026-01-01T00:00:00Z",
+			until: "2026-04-01T00:00:00Z",
+			expand: true,
+			sessionKey: "sess-123",
+			runtimePath: "plugin",
+		});
+		expect(result.meta.totalReturned).toBe(1);
+		expect(result.query).toBe("dark mode");
+		expect(result.results[0]?.project).toBe("proj-a");
+	});
+
+	test("deprecated rememberHook()/recallHook() aliases still work", async () => {
+		const { client } = mockDaemon((req) => {
+			if (req.path === "/api/hooks/remember") {
+				return { id: "mem-1" };
+			}
+			if (req.path === "/api/hooks/recall") {
+				return {
+					results: [],
+					memories: [],
+					count: 0,
+					query: "dark mode",
+					method: "hybrid",
+					meta: {
+						totalReturned: 0,
+						hasSupplementary: false,
+						noHits: true,
+					},
+				};
+			}
+			return { ok: true };
+		});
+
+		const rememberResult = await client.rememberHook({
+			content: "dark mode",
+			type: "preference",
+		});
+		expect(rememberResult.id).toBe("mem-1");
+		expect(lastRequest().path).toBe("/api/hooks/remember");
+
+		const recallResult = await client.recallHook({
+			query: "dark mode",
+			sessionKey: "sess-123",
+		});
+		expect(recallResult.query).toBe("dark mode");
+		expect(lastRequest().path).toBe("/api/hooks/recall");
 	});
 
 	test("getMemory() sends GET /api/memory/:id", async () => {

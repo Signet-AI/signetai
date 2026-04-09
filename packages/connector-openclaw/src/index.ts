@@ -1144,6 +1144,50 @@ async function fetchDaemon(path, body) {
   return res.json();
 }
 
+function formatRecallMessage(data) {
+  const rows = Array.isArray(data?.results) ? data.results : [];
+  const meta = typeof data?.meta === "object" && data?.meta !== null
+    ? data.meta
+    : {
+        totalReturned: rows.length,
+        hasSupplementary: rows.some((row) => row?.supplementary === true),
+        noHits: rows.length === 0,
+      };
+
+  if (meta.noHits || rows.length === 0) {
+    return "No matching memories found.";
+  }
+
+  const primary = rows.filter((row) => row?.supplementary !== true);
+  const supporting = rows.filter((row) => row?.supplementary === true);
+  const parts = [
+    \`Found \${meta.totalReturned} memories\${data?.method ? \` (\${data.method})\` : ""}.\`,
+    "",
+    "Primary matches:",
+    ...primary.map((row) => {
+      const score = typeof row?.score === "number" ? \`[\${Math.round(row.score * 100)}%] \` : "";
+      const source = typeof row?.source === "string" ? row.source : "unknown";
+      const type = typeof row?.type === "string" ? row.type : "memory";
+      const createdAt = typeof row?.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
+      return \`- \${score}\${row?.content || ""} (\${type}, \${source}, \${createdAt})\`;
+    }),
+  ];
+
+  if (supporting.length > 0) {
+    parts.push("", "Supporting context:");
+    parts.push(
+      ...supporting.map((row) => {
+        const source = typeof row?.source === "string" ? row.source : "unknown";
+        const type = typeof row?.type === "string" ? row.type : "memory";
+        const createdAt = typeof row?.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
+        return \`- \${row?.content || ""} (\${type}, \${source}, \${createdAt})\`;
+      })
+    );
+  }
+
+  return parts.join("\\n");
+}
+
 const handler = async (event) => {
   // When the plugin runtime path is active, legacy hooks are disabled
   // to prevent duplicate capture/recall. Set SIGNET_RUNTIME_PATH=plugin
@@ -1169,11 +1213,7 @@ const handler = async (event) => {
         const data = await fetchDaemon("/api/hooks/recall", {
           harness: "openclaw", query: args.trim(),
         });
-        if (data.results?.length) {
-          event.messages.push(data.results.map(r => \`- \${r.content}\`).join("\\n"));
-        } else {
-          event.messages.push("No memories found.");
-        }
+        event.messages.push(formatRecallMessage(data));
       } catch (e) { event.messages.push(\`Error: \${e.message}\`); }
       break;
     case "context":

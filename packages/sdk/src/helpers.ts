@@ -8,9 +8,9 @@
  * - Error shortcuts
  */
 
-import type { SignetTransport } from "./transport.js";
-import type { JobStatus, MemoryRecord, DocumentRecord, RecallResponse } from "./types.js";
 import { SignetApiError } from "./errors.js";
+import type { SignetTransport } from "./transport.js";
+import type { DocumentRecord, JobStatus, MemoryRecord, RecallResponse } from "./types.js";
 
 export interface WaitForJobOptions {
 	/** Maximum time to wait in milliseconds (default: 30_000) */
@@ -24,6 +24,23 @@ export interface BatchModifyProgress {
 	readonly done: number;
 	/** Total patches to process */
 	readonly total: number;
+}
+
+export function applyRecallMinScore(result: RecallResponse, minScore?: number): RecallResponse {
+	if (typeof minScore !== "number") {
+		return result;
+	}
+
+	const filtered = result.results.filter((row) => row.score >= minScore);
+	return {
+		...result,
+		results: filtered,
+		meta: {
+			totalReturned: filtered.length,
+			hasSupplementary: filtered.some((row) => row.supplementary === true),
+			noHits: filtered.length === 0,
+		},
+	};
 }
 
 export class SignetClientHelpers {
@@ -128,21 +145,28 @@ export class SignetClientHelpers {
 	async recallOrThrow(
 		query: string,
 		opts?: {
+			readonly keywordQuery?: string;
 			readonly limit?: number;
+			readonly project?: string;
 			readonly type?: string;
 			readonly tags?: string;
 			readonly who?: string;
 			readonly pinned?: boolean;
 			readonly importance_min?: number;
 			readonly since?: string;
+			readonly until?: string;
 			readonly expand?: boolean;
 			readonly minScore?: number;
+			readonly agentId?: string;
 		},
 	): Promise<RecallResponse> {
-		const result = await this.transport.post<RecallResponse>("/api/memory/recall", {
-			query,
-			...opts,
-		});
+		const result = applyRecallMinScore(
+			await this.transport.post<RecallResponse>("/api/memory/recall", {
+				query,
+				...opts,
+			}),
+			opts?.minScore,
+		);
 
 		if (!result.results || result.results.length === 0) {
 			throw new Error(`No memories found for query: "${query}"`);

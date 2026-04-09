@@ -46,6 +46,25 @@ afterEach(() => {
 });
 
 describe("OpenClawConnector config patching", () => {
+	it("writes a recall hook that preserves recall metadata and supporting context", () => {
+		const connector = new OpenClawConnector();
+		const hookBasePath = join(tmpRoot, "agents");
+
+		const written = connector.installHookFiles(hookBasePath);
+		const handlerPath = written.find((path) => path.endsWith("hooks/agent-memory/handler.js"));
+
+		if (!handlerPath) {
+			throw new Error("Expected installHookFiles() to write hooks/agent-memory/handler.js");
+		}
+		const handlerJs = readFileSync(handlerPath, "utf-8");
+		expect(handlerJs).toContain("function formatRecallMessage(data)");
+		expect(handlerJs).toContain('return "No matching memories found.";');
+		expect(handlerJs).toContain("Primary matches:");
+		expect(handlerJs).toContain("Supporting context:");
+		expect(handlerJs).toContain("event.messages.push(formatRecallMessage(data));");
+		expect(handlerJs).not.toContain('data.results.map(r => `- ${r.content}`).join("\\\\n")');
+	});
+
 	it("does not patch workspace when configureWorkspace is false", async () => {
 		const configPath = join(tmpRoot, "openclaw.json");
 		const hookBasePath = join(tmpRoot, "agents");

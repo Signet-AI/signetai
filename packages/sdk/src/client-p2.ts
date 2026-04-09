@@ -5,60 +5,61 @@
 
 import type { SignetTransport } from "./transport.js";
 import type {
-	// Hooks
-	SessionStartResponse,
-	UserPromptSubmitResponse,
-	SessionEndResponse,
-	PreCompactionResponse,
-	CompactionCompleteResponse,
-	SynthesisConfigResponse,
-	SynthesisRequestResponse,
-	SynthesisCompleteResponse,
-	// Connectors
-	ConnectorListResponse,
-	ConnectorRecord,
-	ConnectorCreateResponse,
-	ConnectorSyncResponse,
-	ConnectorResyncResponse,
-	ConnectorDeleteResponse,
-	ConnectorHealthResponse,
-	// Analytics
-	UsageCountersResponse,
-	ErrorsResponse,
-	LatencyResponse,
-	LogsResponse,
-	MemorySafetyResponse,
-	ContinuityResponse,
-	ContinuityLatestResponse,
-	// Knowledge Graph
-	KnowledgeEntityListResponse,
-	KnowledgeEntityDetail,
-	PinEntityResponse,
-	UnpinEntityResponse,
-	EntityAspectsResponse,
-	AspectAttributesResponse,
-	EntityDependenciesResponse,
-	KnowledgeStatsResponse,
-	TraversalStatusResponse,
-	ConstellationResponse,
-	// Repair
-	RepairActionResponse,
-	EmbeddingGapsResponse,
-	DedupStatsResponse,
-	DeduplicateResponse,
+	AgentMessageListResponse,
+	AgentMessageSendResponse,
 	// Cross-Agent
 	AgentPresenceListResponse,
 	AgentPresenceUpdateResponse,
-	AgentMessageListResponse,
-	AgentMessageSendResponse,
+	AspectAttributesResponse,
+	CompactionCompleteResponse,
+	ComparisonsByEntityResponse,
+	ComparisonsByProjectResponse,
+	ComparisonsListResponse,
+	ConnectorCreateResponse,
+	ConnectorDeleteResponse,
+	ConnectorHealthResponse,
+	// Connectors
+	ConnectorListResponse,
+	ConnectorRecord,
+	ConnectorResyncResponse,
+	ConnectorSyncResponse,
+	ConstellationResponse,
+	ContinuityLatestResponse,
+	ContinuityResponse,
+	DedupStatsResponse,
+	DeduplicateResponse,
+	EmbeddingGapsResponse,
+	EntityAspectsResponse,
+	EntityDependenciesResponse,
+	ErrorsResponse,
+	HookRecallResponse,
+	KnowledgeEntityDetail,
+	// Knowledge Graph
+	KnowledgeEntityListResponse,
+	KnowledgeStatsResponse,
+	LatencyResponse,
+	LogsResponse,
+	MemorySafetyResponse,
+	PinEntityResponse,
+	PreCompactionResponse,
 	// Predictor
 	PredictorStatusResponse,
-	ComparisonsByProjectResponse,
-	ComparisonsByEntityResponse,
-	ComparisonsListResponse,
-	TrainingRunsResponse,
-	TrainingPairsCountResponse,
+	// Repair
+	RepairActionResponse,
+	SessionEndResponse,
+	// Hooks
+	SessionStartResponse,
+	SynthesisCompleteResponse,
+	SynthesisConfigResponse,
+	SynthesisRequestResponse,
 	TrainPredictorResponse,
+	TrainingPairsCountResponse,
+	TrainingRunsResponse,
+	TraversalStatusResponse,
+	UnpinEntityResponse,
+	// Analytics
+	UsageCountersResponse,
+	UserPromptSubmitResponse,
 } from "./types-p2.js";
 
 // ============================================================================
@@ -136,6 +137,21 @@ export class SignetClientP2 {
 	}
 
 	/**
+	 * @deprecated Use `hookRemember()` instead.
+	 */
+	async rememberHook(opts: {
+		readonly content: string;
+		readonly type?: string;
+		readonly importance?: number;
+		readonly tags?: string;
+		readonly who?: string;
+		readonly sessionKey?: string;
+		readonly runtimePath?: string;
+	}): Promise<{ readonly id: string }> {
+		return this.hookRemember(opts);
+	}
+
+	/**
 	 * @example
 	 * const result = await client.hookRecall({
 	 *   query: 'dark mode preferences'
@@ -143,11 +159,39 @@ export class SignetClientP2 {
 	 */
 	async hookRecall(opts: {
 		readonly query: string;
+		readonly keywordQuery?: string;
 		readonly limit?: number;
+		readonly project?: string;
 		readonly type?: string;
 		readonly tags?: string;
-	}): Promise<{ readonly results: readonly unknown[] }> {
-		return this.transport.post<{ readonly results: readonly unknown[] }>("/api/hooks/recall", opts);
+		readonly who?: string;
+		readonly since?: string;
+		readonly until?: string;
+		readonly expand?: boolean;
+		readonly sessionKey?: string;
+		readonly runtimePath?: string;
+	}): Promise<HookRecallResponse> {
+		return this.transport.post<HookRecallResponse>("/api/hooks/recall", opts);
+	}
+
+	/**
+	 * @deprecated Use `hookRecall()` instead.
+	 */
+	async recallHook(opts: {
+		readonly query: string;
+		readonly keywordQuery?: string;
+		readonly limit?: number;
+		readonly project?: string;
+		readonly type?: string;
+		readonly tags?: string;
+		readonly who?: string;
+		readonly since?: string;
+		readonly until?: string;
+		readonly expand?: boolean;
+		readonly sessionKey?: string;
+		readonly runtimePath?: string;
+	}): Promise<HookRecallResponse> {
+		return this.hookRecall(opts);
 	}
 
 	/**

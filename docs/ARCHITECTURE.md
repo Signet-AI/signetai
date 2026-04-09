@@ -569,10 +569,11 @@ Stores raw embedding vectors as BLOBs. Keyed by `content_hash`
 
 **memories_fts**
 
-FTS5 external content table backed by `memories`. Three triggers
-(`memories_ai`, `memories_ad`, `memories_au`) keep the index in sync
-with inserts, deletes, and updates. Queried with BM25 scoring via
-`bm25(memories_fts)`.
+FTS5 external content table backed by `memories`, created with the
+`unicode61` tokenizer to avoid overly aggressive stemming on recall
+queries. Three triggers (`memories_ai`, `memories_ad`, `memories_au`)
+keep the index in sync with inserts, deletes, and updates. Queried with
+BM25 scoring via `bm25(memories_fts)`.
 
 **memory_jobs**
 
@@ -929,7 +930,7 @@ All endpoints are served by the Hono server on port 3850.
 | `/api/pipeline/status` | GET | diagnostics | Pipeline status snapshot |
 | `/api/repair/requeue-dead` | POST | operator | Requeue dead-letter jobs |
 | `/api/repair/release-leases` | POST | operator | Release stale job leases |
-| `/api/repair/check-fts` | POST | operator | Check/repair FTS consistency |
+| `/api/repair/check-fts` | POST | operator | Check/repair FTS consistency and tokenizer drift |
 | `/api/repair/retention-sweep` | POST | operator | Trigger retention sweep |
 | `/api/repair/embedding-gaps` | GET | operator | Count unembedded memories |
 | `/api/repair/re-embed` | POST | operator | Batch re-embed missing vectors |

@@ -435,20 +435,41 @@ Search memories using hybrid vector + keyword search.
 
 ```bash
 signet recall "user preferences"
-signet recall "deploy process" --limit 5
-signet recall "auth" --tags backend --who claude-code
+signet recall "release notes" --project /home/user/myapp --expand
+signet recall "deploy process" --limit 5 --type decision
+signet recall "auth" --tags backend --who claude-code --since 2026-01-01
+signet recall "deploy checklist" --keyword-query "deploy OR rollback" --min-score 0.8
 signet recall "secrets" --json
 ```
 
-Options:
+Primary controls:
 
 | Option | Description |
 |--------|-------------|
 | `-l, --limit <n>` | Max results (default: 10) |
+| `--project <project>` | Filter by project |
+| `--expand` | Include expanded transcript/context sources |
+
+Common refinements:
+
+| Option | Description |
+|--------|-------------|
 | `-t, --type <type>` | Filter by memory type |
 | `--tags <tags>` | Filter by tags (comma-separated) |
 | `--who <who>` | Filter by author |
-| `--json` | Output raw JSON |
+| `--since <date>` | Only include memories created after this date |
+| `--until <date>` | Only include memories created before this date |
+
+Advanced controls:
+
+| Option | Description |
+|--------|-------------|
+| `--keyword-query <query>` | Override the keyword/FTS query used for recall |
+| `--pinned` | Only return pinned memories |
+| `--importance-min <n>` | Only return memories at or above this importance |
+| `--min-score <n>` | Minimum recall score threshold, applied client-side |
+| `--agent <name>` | Filter by agent ID |
+| `--json` | Print the recall response as JSON |
 
 ---
 

@@ -3,6 +3,8 @@
  * Detects and migrates between different memory database schemas
  */
 
+import { createMemoriesFts } from "./fts-schema";
+
 export type SchemaType = "python" | "cli-v1" | "core" | "unknown";
 
 export interface SchemaInfo {
@@ -262,8 +264,8 @@ function migrateFromPython(
 		.all() as Array<Record<string, unknown>>;
 
 	// Drop old table and create new one
-	db.exec(`DROP TABLE IF EXISTS memories`);
-	db.exec(`DROP TABLE IF EXISTS memories_fts`);
+	db.exec("DROP TABLE IF EXISTS memories");
+	db.exec("DROP TABLE IF EXISTS memories_fts");
 	db.exec(`
     CREATE TABLE memories (
       id TEXT PRIMARY KEY,
@@ -349,13 +351,7 @@ function migrateFromPython(
 	}
 
 	// Recreate FTS
-	db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-      content,
-      content=memories,
-      content_rowid=rowid
-    )
-  `);
+	createMemoriesFts(db);
 
 	// Populate FTS
 	if (migrated > 0) {
@@ -364,24 +360,6 @@ function migrateFromPython(
       SELECT rowid, content FROM memories
     `);
 	}
-
-	// Create triggers for FTS sync
-	db.exec(`
-    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-      INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, content)
-        VALUES('delete', old.rowid, old.content);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, content)
-        VALUES('delete', old.rowid, old.content);
-      INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
-    END;
-  `);
 
 	return migrated;
 }
@@ -408,7 +386,7 @@ function migrateFromCliV1(
 		.all() as Array<Record<string, unknown>>;
 
 	// Drop and recreate
-	db.exec(`DROP TABLE IF EXISTS memories`);
+	db.exec("DROP TABLE IF EXISTS memories");
 	db.exec(`
     CREATE TABLE memories (
       id TEXT PRIMARY KEY,
@@ -474,16 +452,10 @@ function migrateFromCliV1(
 	}
 
 	// Create FTS if not exists
-	db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-      content,
-      content=memories,
-      content_rowid=rowid
-    )
-  `);
+	createMemoriesFts(db);
 
 	if (migrated > 0) {
-		db.exec(`INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories`);
+		db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
 	}
 
 	return migrated;

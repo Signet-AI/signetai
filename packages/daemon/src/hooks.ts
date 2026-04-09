@@ -58,6 +58,7 @@ import {
 	traverseKnowledgeGraph,
 } from "./pipeline/graph-traversal";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
+import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 import {
 	type CandidateInput,
 	type CandidateSource,
@@ -210,6 +211,12 @@ export interface HooksConfig {
 		includeRecentContext?: boolean;
 		recencyBias?: number;
 		query?: string;
+		maxInjectTokens?: number;
+		/**
+		 * @deprecated Renamed to `maxInjectTokens`. If set without `maxInjectTokens`,
+		 * the value is auto-migrated using `Math.round(maxInjectChars / 4)` (~4 chars/token
+		 * for ASCII; code or Unicode content may be 1–2 chars/token, so migrate explicitly.
+		 */
 		maxInjectChars?: number;
 	};
 	userPromptSubmit?: {
@@ -357,22 +364,17 @@ export interface RememberResponse {
 export interface RecallRequest {
 	harness: string;
 	query: string;
+	keywordQuery?: string;
 	project?: string;
 	limit?: number;
+	type?: string;
+	tags?: string;
+	who?: string;
+	since?: string;
+	until?: string;
+	expand?: boolean;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
-}
-
-export interface RecallResponse {
-	results: Array<{
-		id: string;
-		content: string;
-		type: string;
-		importance: number;
-		tags: string | null;
-		created_at: string;
-	}>;
-	count: number;
 }
 
 // ============================================================================
@@ -428,10 +430,10 @@ function buildTranscriptFallbackResponse(
 	warnings?: string[],
 ): UserPromptSubmitResponse {
 	const rows = hits.map((hit) => ({
-		content: `- ${hit.excerpt} (${formatMemoryDate(hit.updatedAt)}, session ${formatTranscriptSessionLabel(hit.sessionKey)})`,
+		content: `- [transcript ${formatTranscriptSessionLabel(hit.sessionKey)}] ${hit.excerpt} (${formatMemoryDate(hit.updatedAt)})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${lines.length} | engine=transcript-fallback]\n${lines.join("\n")}`;
+	const inject = buildPromptRecallInject(metadataHeader, lines);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -454,10 +456,10 @@ function buildTemporalFallbackResponse(
 	warnings?: string[],
 ): UserPromptSubmitResponse {
 	const rows = hits.map((hit) => ({
-		content: `- [node ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
+		content: `- [thread ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${lines.length} | engine=temporal-fallback]\n${lines.join("\n")}`;
+	const inject = buildPromptRecallInject(metadataHeader, lines);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -477,6 +479,62 @@ export function selectWithBudget<T extends { content: string }>(rows: ReadonlyAr
 		used += row.content.length;
 	}
 	return selected;
+}
+
+function selectWithBudgetSkippingOversized<T extends { content: string }>(
+	rows: ReadonlyArray<T>,
+	charBudget: number,
+): T[] {
+	const selected: T[] = [];
+	let used = 0;
+	for (const row of rows) {
+		if (used + row.content.length > charBudget) continue;
+		selected.push(row);
+		used += row.content.length;
+	}
+	return selected;
+}
+
+/** Truncate rows to fit a token budget using BPE token counts. */
+export function selectWithTokenBudget<T extends { content: string }>(rows: ReadonlyArray<T>, tokenBudget: number): T[] {
+	const selected: T[] = [];
+	let used = 0;
+	for (const row of rows) {
+		const cost = countTokens(row.content);
+		if (used + cost > tokenBudget) break;
+		selected.push(row);
+		used += cost;
+	}
+	return selected;
+}
+
+const TRUNCATED_MARKER = "\n[context truncated]";
+const TRUNCATED_MARKER_TOKENS = countTokens(TRUNCATED_MARKER);
+
+/**
+ * Truncate `inject` to fit within `mainBudget` tokens.
+ * Returns an empty string when budget is zero (reserved sections exhausted it).
+ * Appends a truncation marker when budget permits; omits it when the budget is
+ * too small to fit the marker itself (avoids overflow in that range).
+ */
+export function applyTokenBudget(inject: string, mainBudget: number): string {
+	if (mainBudget <= 0) return "";
+	if (countTokens(inject) <= mainBudget) return inject;
+	// Budget too tight to fit content + marker — truncate without marker
+	if (mainBudget <= TRUNCATED_MARKER_TOKENS) return truncateToTokens(inject, mainBudget);
+	return truncateToTokens(inject, mainBudget - TRUNCATED_MARKER_TOKENS) + TRUNCATED_MARKER;
+}
+
+function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<string>): string {
+	// Keep formatting behavior aligned with daemon-rs
+	// `build_prompt_recall_inject()` in `packages/daemon-rs/.../routes/hooks.rs`.
+	const parts = [metadataHeader.trimEnd(), "", "## Relevant Memory", ""];
+	parts.push(...lines);
+	parts.push("");
+	parts.push(
+		"if you need deeper history, use /recall or memory_search. if you learn something durable, save it with /remember or memory_store.",
+	);
+	return `${parts.join("\n").trimEnd()}\n`;
 }
 
 /** Build a brief "since your last session" summary for temporal awareness */
@@ -1438,7 +1496,22 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Apply budget to select what we actually inject (on re-ranked order)
-	const memories = selectWithBudget(sortedCandidates, 2000);
+	if (config.maxInjectChars !== undefined && config.maxInjectTokens === undefined) {
+		logger.warn(
+			"hooks",
+			"hooks.sessionStart.maxInjectChars is deprecated — migrating to maxInjectTokens automatically. Rename it in agent.yaml to silence this warning.",
+			{ maxInjectChars: config.maxInjectChars, derivedTokens: Math.round(config.maxInjectChars / 4) },
+		);
+	}
+	const rawTokenBudget =
+		config.maxInjectTokens ?? (config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
+	if (rawTokenBudget <= 0) {
+		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
+			configured: rawTokenBudget,
+		});
+	}
+	const tokenBudget = Math.max(1, rawTokenBudget);
+	const memories = selectWithTokenBudget(sortedCandidates, tokenBudget);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
@@ -1716,14 +1789,18 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	const duration = Date.now() - start;
-	const maxInject = config.maxInjectChars ?? 24000;
+	const maxTokens = config.maxInjectTokens ?? (config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
 	// Pre-reserve space for constraints + recovery so they are never truncated
-	const reservedChars = recoverySection.length + constraintsSection.length;
-	const mainBudget = Math.max(0, maxInject - reservedChars);
+	const reservedTokens = countTokens(recoverySection) + countTokens(constraintsSection);
+	const mainBudget = Math.max(0, maxTokens - reservedTokens);
 	let inject = injectParts.join("\n");
-	if (inject.length > mainBudget) {
-		inject = `${inject.slice(0, mainBudget)}\n[context truncated]`;
+	if (mainBudget === 0) {
+		logger.warn("hooks", "Session-start reserved sections exhaust token budget — main inject cleared", {
+			maxTokens,
+			reservedTokens,
+		});
 	}
+	inject = applyTokenBudget(inject, mainBudget);
 	if (constraintsSection) {
 		inject += constraintsSection;
 	}
@@ -1740,7 +1817,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		traversalMemories,
 		traversalConstraints,
 		traversalTimedOut,
-		injectChars: inject.length,
+		injectTokens: countTokens(inject),
 		inject,
 		durationMs: duration,
 	});
@@ -2060,6 +2137,96 @@ function extractSubstantiveWords(text: string): string[] {
 	return result;
 }
 
+function countPromptTermOverlap(text: string, promptTerms: ReadonlyArray<string>): number {
+	if (promptTerms.length === 0) return 0;
+	const hay = new Set(extractSubstantiveWords(text));
+	let overlap = 0;
+	for (const term of promptTerms) {
+		if (hay.has(term)) overlap++;
+	}
+	return overlap;
+}
+
+function chooseCompactPromptSentence(content: string, promptTerms: ReadonlyArray<string>): string {
+	const normalized = content
+		.replace(/\s+/g, " ")
+		.replace(/\s*\[truncated\]\s*$/i, "")
+		.trim();
+	if (!normalized) return "";
+	const sentences = normalized
+		.split(/(?<=[.!?])\s+/)
+		.map((part) => part.trim())
+		.filter(Boolean) || [normalized];
+	const ranked = [...sentences].sort((a, b) => {
+		const overlapDelta = countPromptTermOverlap(b, promptTerms) - countPromptTermOverlap(a, promptTerms);
+		if (overlapDelta !== 0) return overlapDelta;
+		return a.length - b.length;
+	});
+	return ranked[0] ?? normalized;
+}
+
+function compactPromptMemoryLine(
+	content: string,
+	createdAt: string,
+	promptTerms: ReadonlyArray<string>,
+	maxChars = 160,
+): string {
+	const sentence = chooseCompactPromptSentence(content, promptTerms);
+	const compact = sentence.length > maxChars ? `${sentence.slice(0, maxChars - 1).trimEnd()}…` : sentence;
+	return `- [memory] ${compact} (${formatMemoryDate(createdAt)})`;
+}
+
+type PromptInjectCandidate = {
+	readonly id: string;
+	readonly content: string;
+	readonly score?: number;
+	readonly overlap: number;
+	readonly index: number;
+};
+
+function buildPromptInjectCandidates(
+	rows: ReadonlyArray<{
+		readonly id: string;
+		readonly content: string;
+		readonly created_at: string;
+		readonly score?: number;
+	}>,
+	promptTerms: ReadonlyArray<string>,
+): PromptInjectCandidate[] {
+	return rows.map((row, index) => {
+		const content = compactPromptMemoryLine(row.content, row.created_at, promptTerms);
+		return {
+			id: row.id,
+			content,
+			score: row.score,
+			overlap: countPromptTermOverlap(row.content, promptTerms),
+			index,
+		};
+	});
+}
+
+function shouldRescuePromptInjectSelection(
+	selected: ReadonlyArray<PromptInjectCandidate>,
+	all: ReadonlyArray<PromptInjectCandidate>,
+): boolean {
+	if (selected.length === 0) return true;
+	const selectedBest = Math.max(...selected.map((row) => row.overlap), 0);
+	if (selectedBest > 0) return false;
+	return all.some((row) => row.overlap > selectedBest);
+}
+
+function rerankPromptInjectCandidates(rows: ReadonlyArray<PromptInjectCandidate>): PromptInjectCandidate[] {
+	return [...rows].sort((a, b) => {
+		const overlapDelta = b.overlap - a.overlap;
+		if (overlapDelta !== 0) return overlapDelta;
+		const aScore = typeof a.score === "number" ? a.score : Number.NEGATIVE_INFINITY;
+		const bScore = typeof b.score === "number" ? b.score : Number.NEGATIVE_INFINITY;
+		if (aScore !== bScore) return bScore - aScore;
+		if (a.content.length !== b.content.length) return a.content.length - b.content.length;
+		return a.index - b.index;
+	});
+}
+
 export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyArray<{ content: string }>): boolean {
 	const anchors = extractAnchorTerms(stripUntrustedMetadata(query));
 	if (anchors.length === 0) return false;
@@ -2337,6 +2504,8 @@ export async function handleUserPromptSubmit(
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const recallLimit = submitCfg.recallLimit ?? 10;
+		// userPromptSubmit.maxInjectChars already reads from config — no hardcoded fallback here.
+		// Falls back to pipelineV2.guardrails.contextBudgetChars when not set in agent.yaml.
 		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
 		const minScore = resolveUserPromptMinScore(submitCfg.minScore);
 		const queryTerms = vectorQuery.slice(0, 80);
@@ -2428,11 +2597,21 @@ export async function handleUserPromptSubmit(
 			...result,
 			pinned: result.pinned ? 1 : 0,
 		}));
-		const budgetFiltered = selectWithBudget(mapped, injectBudget);
+		const promptTerms = extractSubstantiveWords(userMessage);
+		const candidates = buildPromptInjectCandidates(mapped, promptTerms);
+		let budgetFiltered = selectWithBudgetSkippingOversized(candidates, injectBudget);
+		if (shouldRescuePromptInjectSelection(budgetFiltered, candidates)) {
+			const reranked = rerankPromptInjectCandidates(candidates);
+			const overlapFirst = reranked.filter((row) => row.overlap > 0);
+			budgetFiltered = selectWithBudgetSkippingOversized(
+				overlapFirst.length > 0 ? overlapFirst : reranked,
+				injectBudget,
+			);
+		}
 		const budgetSelected = budgetFiltered.slice(0, 5);
 		// omitted reflects only budget truncation, not the 5-item display cap,
 		// so the hint correctly directs users to raise contextBudgetChars.
-		const omitted = recall.results.length - budgetFiltered.length;
+		const omitted = Math.max(0, recall.results.length - budgetFiltered.length);
 
 		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
 		const allMatchedIds = recall.results.map((result) => result.id);
@@ -2466,14 +2645,13 @@ export async function handleUserPromptSubmit(
 			);
 		}
 
-		const lines = selected.map((s) => {
-			const dateStr = formatMemoryDate(s.created_at);
-			return `- ${s.content} (${dateStr})`;
-		});
+		const lines = selected.map((s) => s.content);
 		if (omitted > 0) {
-			lines.push(`(+${omitted} more not shown — raise memory.guardrails.contextBudgetChars to include)`);
+			lines.push(
+				`[signet:note] ${omitted} additional ${omitted === 1 ? "match was" : "matches were"} omitted to keep this lightweight (raise memory.guardrails.contextBudgetChars to include more).`,
+			);
 		}
-		let inject = `${metadataHeader}\n[signet:recall | query="${queryTerms}" | results=${selected.length} | engine=hybrid]\n${lines.join("\n")}`;
+		let inject = buildPromptRecallInject(metadataHeader, lines);
 
 		// Append agent feedback request if enabled and there are injected memories
 		const selectedIds = selected.map((s) => s.id);
@@ -3336,97 +3514,6 @@ export function handleRemember(req: RememberRequest): RememberResponse {
 	} catch (e) {
 		logger.error("hooks", "Remember failed", e as Error);
 		return { saved: false, id: "" };
-	}
-}
-
-// ============================================================================
-// Recall
-// ============================================================================
-
-export function handleRecall(req: RecallRequest): RecallResponse {
-	const limit = req.limit || 10;
-
-	if (!existsSync(getMemoryDbPath())) {
-		return { results: [], count: 0 };
-	}
-
-	type RecallRow = {
-		id: string;
-		content: string;
-		type: string;
-		importance: number;
-		tags: string | null;
-		created_at: string;
-	};
-
-	try {
-		const rows = getDbAccessor().withReadDb((db) => {
-			let found: RecallRow[] = [];
-
-			// Try FTS search first
-			try {
-				const words = req.query
-					.toLowerCase()
-					.split(/\W+/)
-					.filter((w) => w.length >= 3)
-					.slice(0, 10);
-
-				if (words.length > 0) {
-					const ftsQuery = words.join(" OR ");
-					const baseQuery = req.project
-						? `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
-						   FROM memories m
-						   JOIN memories_fts f ON m.rowid = f.rowid
-						   WHERE memories_fts MATCH ?
-						   AND m.is_deleted = 0
-						   AND m.project = ?
-						   LIMIT ?`
-						: `SELECT m.id, m.content, m.type, m.importance, m.tags, m.created_at
-						   FROM memories m
-						   JOIN memories_fts f ON m.rowid = f.rowid
-						   WHERE memories_fts MATCH ?
-						   AND m.is_deleted = 0
-						   LIMIT ?`;
-
-					found = req.project
-						? (db.prepare(baseQuery).all(ftsQuery, req.project, limit) as RecallRow[])
-						: (db.prepare(baseQuery).all(ftsQuery, limit) as RecallRow[]);
-				}
-			} catch {
-				// FTS not available, fall through to LIKE
-			}
-
-			// Fallback to LIKE search
-			if (found.length === 0) {
-				const likePattern = `%${req.query}%`;
-				const baseQuery = req.project
-					? `SELECT id, content, type, importance, tags, created_at
-					   FROM memories
-					   WHERE content LIKE ? AND is_deleted = 0 AND project = ?
-					   ORDER BY importance DESC
-					   LIMIT ?`
-					: `SELECT id, content, type, importance, tags, created_at
-					   FROM memories
-					   WHERE content LIKE ? AND is_deleted = 0
-					   ORDER BY importance DESC
-					   LIMIT ?`;
-
-				found = req.project
-					? (db.prepare(baseQuery).all(likePattern, req.project, limit) as RecallRow[])
-					: (db.prepare(baseQuery).all(likePattern, limit) as RecallRow[]);
-			}
-
-			return found;
-		});
-
-		// Update access tracking
-		const ids = rows.map((r) => r.id);
-		updateAccessTracking(ids);
-
-		return { results: rows, count: rows.length };
-	} catch (e) {
-		logger.error("hooks", "Recall failed", e as Error);
-		return { results: [], count: 0 };
 	}
 }
 

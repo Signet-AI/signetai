@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { readMemoriesFtsSql } from "../fts-schema";
 
 /**
  * Tests for the migration framework.
@@ -15,6 +16,38 @@ import { MIGRATIONS, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
+}
+
+function installLegacyPorterMemoriesFts(db: Database): void {
+	db.exec("DROP TRIGGER IF EXISTS memories_ai");
+	db.exec("DROP TRIGGER IF EXISTS memories_ad");
+	db.exec("DROP TRIGGER IF EXISTS memories_au");
+	db.exec("DROP TABLE IF EXISTS memories_fts");
+	db.exec(`
+		CREATE VIRTUAL TABLE memories_fts USING fts5(
+			content,
+			content='memories',
+			content_rowid='rowid',
+			tokenize='porter unicode61'
+		);
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+	db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
 }
 
 describe("migration framework", () => {
@@ -958,5 +991,42 @@ describe("migration framework", () => {
 				}
 			}
 		}
+	});
+
+	test("migration 057 recreates legacy porter-tokenized memories_fts", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		db.exec(`
+			INSERT INTO memories (id, content, type, confidence, created_at, updated_at, updated_by)
+			VALUES
+				('mem-celebrate', 'We celebrate wins together', 'fact', 0.9, datetime('now'), datetime('now'), 'test'),
+				('mem-celebrity', 'Celebrity filter blocks face likenesses', 'fact', 0.9, datetime('now'), datetime('now'), 'test')
+		`);
+
+		installLegacyPorterMemoriesFts(db);
+		const before = db
+			.query<{ content: string }, [string]>(
+				"SELECT content FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rowid",
+			)
+			.all("celebrate")
+			.map((row) => row.content);
+		expect(before).toContain("Celebrity filter blocks face likenesses");
+
+		db.prepare("DELETE FROM schema_migrations WHERE version = 57").run();
+		runMigrations(db);
+
+		const sql = readMemoriesFtsSql(db);
+		expect(sql).toContain("tokenize='unicode61'");
+		expect(sql).not.toContain("porter unicode61");
+
+		const after = db
+			.query<{ content: string }, [string]>(
+				"SELECT content FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rowid",
+			)
+			.all("celebrate")
+			.map((row) => row.content);
+		expect(after).toContain("We celebrate wins together");
+		expect(after).not.toContain("Celebrity filter blocks face likenesses");
 	});
 });

@@ -787,17 +787,28 @@ Only `query` is required.
       "importance": 0.9,
       "who": "claude-code",
       "project": null,
-      "created_at": "2026-02-21T10:00:00.000Z"
+      "created_at": "2026-02-21T10:00:00.000Z",
+      "supplementary": false
     }
   ],
   "query": "user preferences for editor",
-  "method": "hybrid"
+  "method": "hybrid",
+  "meta": {
+    "totalReturned": 1,
+    "hasSupplementary": false,
+    "noHits": false
+  }
 }
 ```
 
 `source` per result is one of `hybrid`, `vector`, `keyword`, or `llm_summary`.
 `method` on the response reflects whether vector search was available for
 this call.
+
+`meta.totalReturned` reflects the number of returned rows. `meta.hasSupplementary`
+is `true` when the response includes supporting context such as an LLM summary
+card or linked rationale context. `meta.noHits` is `true` when recall completed
+normally but found no matching results.
 
 When `memory.pipelineV2.reranker.useExtractionModel` is enabled, an
 additional synthesized summary card may be prepended to results. This card
@@ -1788,12 +1799,57 @@ Explicit memory query from within a session. Requires `recall` permission.
 {
   "harness": "claude-code",
   "query": "user UI preferences",
+  "keywordQuery": "\"dark mode\" OR theme",
+  "project": "/workspace/repo",
+  "limit": 5,
+  "type": "preference",
+  "tags": "ui,editor",
+  "who": "claude-code",
+  "since": "2026-01-01T00:00:00Z",
+  "until": "2026-04-01T00:00:00Z",
+  "expand": true,
   "sessionKey": "session-uuid",
   "runtimePath": "plugin"
 }
 ```
 
 `harness` and `query` are required.
+
+This route is a hook-oriented wrapper around `POST /api/memory/recall`. It
+accepts a narrower request surface, applies hook/session policy checks, and
+then forwards the supported recall filters into the shared hybrid recall path.
+
+`project` on this route is forwarded as the memory `project` filter. It is not
+remapped to recall `scope`.
+
+**Response**
+
+Same recall-family shape as `POST /api/memory/recall`, plus legacy
+compatibility fields during the transition period:
+
+```json
+{
+  "results": [],
+  "memories": [],
+  "count": 0,
+  "query": "user UI preferences",
+  "method": "hybrid",
+  "meta": {
+    "totalReturned": 0,
+    "hasSupplementary": false,
+    "noHits": true
+  }
+}
+```
+
+Special no-op cases preserve the same shape and add a flag:
+
+- `{ ..., "bypassed": true }` when the session is bypassed
+- `{ ..., "internal": true }` for internal no-hook calls
+
+`memories` and `count` are legacy compatibility aliases for older hook
+consumers and will mirror `results` and `results.length` during the
+transition period.
 
 ### POST /api/hooks/pre-compaction
 
@@ -2356,8 +2412,9 @@ reached `max_attempts` are moved to `dead` instead of being requeued again.
 
 ### POST /api/repair/check-fts
 
-Check FTS5 index consistency against the memories table. Optionally repair
-mismatches.
+Check FTS5 index consistency against the memories table and detect legacy
+tokenizer drift. Optionally repair mismatches by rebuilding the index or
+recreating `memories_fts` with the canonical `unicode61` tokenizer.
 
 **Request body** (optional)
 

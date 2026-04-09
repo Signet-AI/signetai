@@ -642,6 +642,11 @@ Phase ordering based on hard dependencies and integration contracts.
   - reference inspiration: Hermes Agent
 - **Remember/Recall Skill Parity Refresh** (`remember-recall-skill-parity`)
   - align `/remember` and `/recall` skills with current architecture/schema
+- **Explicit Recall Surface Alignment** (`explicit-recall-surface-alignment`)
+  - consolidate TypeScript explicit recall around one engine and one response contract
+  - keep prompt-submit lightweight and stop consumer renderers from discarding metadata
+- **Semantic Prospective Hints** (`semantic-prospective-hints`)
+  - extend prospective indexing with hint embeddings and semantic recall over predicted future cues
 - **Rust Daemon Parity and Runtime Cutover** (`rust-daemon-parity-cutover`)
   - parity completion and primary-runtime switch strategy
 - **Deep Memory Search** (`deep-memory-search`)
@@ -716,6 +721,8 @@ Legend:
 | `pipeline-pause-control` | complete | `docs/specs/complete/pipeline-pause-control.md` | `memory-pipeline-v2` | - | CLI and dashboard pause/resume shipped on top of live daemon pause/resume API, paused-mode observability, and local Ollama unload |
 | `daemon-startup-responsiveness` | planning | `docs/specs/planning/daemon-startup-responsiveness.md` | `memory-pipeline-v2` | - | Incident-driven stub for issue #331: keep /health responsive during large-db startup recovery and recover stale managed daemon processes cleanly |
 | `runtime-upgrade-regression-hardening` | planning | `docs/specs/planning/runtime-upgrade-regression-hardening.md` | `signet-runtime` | - | Incident-driven stub for the March 29, 2026 `0.83.0` → `0.85.3` runtime regressions: hook transport wiring and dashboard publish contract hardening |
+| `explicit-recall-surface-alignment` | approved | `docs/specs/approved/explicit-recall-surface-alignment.md` | `memory-pipeline-v2`, `signet-runtime` | - | Consolidate TypeScript explicit recall around `hybridRecall()` and `/api/memory/recall`, keep prompt-submit lightweight, and stop CLI/MCP/connector consumers from flattening away useful metadata |
+| `semantic-prospective-hints` | planning | `docs/specs/planning/semantic-prospective-hints.md` | `memory-pipeline-v2`, `desire-paths-epic` | - | Extend DP-6.1 prospective indexing with hint embeddings, semantic hint retrieval, incremental backfill, and degraded-mode-safe fusion into hybrid recall |
 | `openclaw-legacy-plugin-migration` | planning | `docs/specs/planning/openclaw-legacy-plugin-migration.md` | `openclaw-hardening`, `signet-runtime` | - | Incident-driven stub for issue #434: auto-migrate legacy-only OpenClaw installs to the plugin runtime path and surface the degraded state in doctor |
 | `dogfood-hardening-2026-03-29` | planning | `docs/specs/planning/dogfood-hardening-2026-03-29.md` | `memory-pipeline-v2`, `signet-runtime`, `knowledge-architecture-schema` | - | Incident-driven stub for the March 29, 2026 dogfood failures across vector runtime gating, exact entity expansion, temporal session lookup, session bypass normalization, and constructed-card hygiene |
 | `daemon-provider-fallback-status` | complete | `docs/specs/complete/daemon-provider-fallback-status.md` | `memory-pipeline-v2` | - | Issue #320 complete: extraction fallback/block state now persists in status surfaces with explicit fallbackProvider control and startup dead-lettering on hard block |

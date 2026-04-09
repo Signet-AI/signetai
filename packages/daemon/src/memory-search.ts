@@ -68,6 +68,11 @@ export interface RecallResponse {
 	results: RecallResult[];
 	query: string;
 	method: "hybrid" | "keyword";
+	meta: {
+		totalReturned: number;
+		hasSupplementary: boolean;
+		noHits: boolean;
+	};
 	entities?: Array<{
 		name: string;
 		type: string;
@@ -447,7 +452,12 @@ export async function hybridRecall(
 				const queryTokens = tokenizeGraphQuery(query);
 				if (queryTokens.length > 0) {
 					const agentId = params.agentId ?? "default";
-					const focal = getDbAccessor().withReadDb((db) => resolveFocalEntities(db, agentId, { queryTokens }));
+					const focal = getDbAccessor().withReadDb((db) =>
+						resolveFocalEntities(db, agentId, {
+							queryTokens,
+							includePinned: false,
+						}),
+					);
 
 					if (focal.entityIds.length > 0) {
 						const traversal = getDbAccessor().withReadDb((db) =>
@@ -581,7 +591,12 @@ export async function hybridRecall(
 				const queryTokens = tokenizeGraphQuery(query);
 				if (queryTokens.length > 0) {
 					const agentId = params.agentId ?? "default";
-					const focal = getDbAccessor().withReadDb((db) => resolveFocalEntities(db, agentId, { queryTokens }));
+					const focal = getDbAccessor().withReadDb((db) =>
+						resolveFocalEntities(db, agentId, {
+							queryTokens,
+							includePinned: false,
+						}),
+					);
 
 					if (focal.entityIds.length > 0) {
 						const traversal = getDbAccessor().withReadDb((db) =>
@@ -860,7 +875,16 @@ export async function hybridRecall(
 	const topIds = scored.slice(0, preHydrate).map((s) => s.id);
 
 	if (topIds.length === 0) {
-		return { results: [], query, method: "hybrid" };
+		return {
+			results: [],
+			query,
+			method: "hybrid",
+			meta: {
+				totalReturned: 0,
+				hasSupplementary: false,
+				noHits: true,
+			},
+		};
 	}
 
 	// --- Fetch full memory rows ---
@@ -875,6 +899,8 @@ export async function hybridRecall(
 				: " AND m.scope = ?"
 			: " AND m.scope IS NULL";
 	const scopeArgs: unknown[] = params.scope !== undefined && params.scope !== null ? [params.scope] : [];
+	const projectClause = params.project ? " AND m.project = ?" : "";
+	const projectArgs: unknown[] = params.project ? [params.project] : [];
 	const agentScope =
 		params.agentId && params.readPolicy
 			? buildAgentScopeClause(params.agentId, params.readPolicy, params.policyGroup ?? null)
@@ -887,9 +913,9 @@ export async function hybridRecall(
 				.prepare(
 					`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at
         FROM memories m
-        WHERE m.id IN (${placeholders})${scopeClause}${agentScope.sql}`,
+        WHERE m.id IN (${placeholders})${scopeClause}${projectClause}${agentScope.sql}`,
 				)
-				.all(...topIds, ...scopeArgs, ...agentScope.args) as Array<{
+				.all(...topIds, ...scopeArgs, ...projectArgs, ...agentScope.args) as Array<{
 				id: string;
 				content: string;
 				source_id: string | null;
@@ -1069,7 +1095,10 @@ export async function hybridRecall(
 			if (queryTokens.length > 0) {
 				const agentId = params.agentId ?? "default";
 				const ctx = getDbAccessor().withReadDb((db) => {
-					const focal = resolveFocalEntities(db, agentId, { queryTokens });
+					const focal = resolveFocalEntities(db, agentId, {
+						queryTokens,
+						includePinned: false,
+					});
 					if (focal.entityIds.length === 0) return null;
 
 					// Scope-filter: only include entities mentioned in
@@ -1231,6 +1260,11 @@ export async function hybridRecall(
 		results,
 		query,
 		method: vectorMap.size > 0 ? "hybrid" : "keyword",
+		meta: {
+			totalReturned: results.length,
+			hasSupplementary: results.some((row) => row.supplementary === true),
+			noHits: results.length === 0,
+		},
 		entities: entityContext && entityContext.length > 0 ? entityContext : undefined,
 		sources,
 	};

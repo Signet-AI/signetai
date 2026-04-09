@@ -263,10 +263,12 @@ curl -X POST http://localhost:3850/api/repair/release-leases
 
 ### POST /api/repair/check-fts
 
-Verifies that the FTS5 index is consistent with the active memory count.
-Pass `{ "repair": true }` in the JSON body to trigger a full FTS rebuild
-if a mismatch is detected. Without that flag, the endpoint checks and
-reports only.
+Verifies that the FTS5 index is consistent with the active memory count
+and that `memories_fts` is using the canonical `unicode61` tokenizer.
+Pass `{ "repair": true }` in the JSON body to trigger a full repair:
+row-count mismatches rebuild the index, while tokenizer drift recreates
+`memories_fts` and backfills it from `memories`. Without that flag, the
+endpoint checks and reports only.
 
 FTS rebuilds are expensive. This action uses a separate, stricter rate limit:
 

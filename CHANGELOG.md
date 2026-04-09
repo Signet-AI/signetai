@@ -2,6 +2,27 @@
 
 All notable changes to Signet are documented here.
 
+## [0.98.6] - 2026-04-08
+
+### Docs
+
+- **repo**: sync root-derived docs (#484)
+
+
+## [0.98.2] - 2026-04-08
+
+### Refactoring
+
+- align recall surfaces and validate prospective hint retrieval (#474)
+
+
+## [0.98.1] - 2026-04-08
+
+### Bug Fixes
+
+- **daemon**: honour maxInjectChars config in session-start hook (#482)
+
+
 ## [0.98.0] - 2026-04-07
 
 ### Refactoring
