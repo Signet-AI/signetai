@@ -18,6 +18,8 @@ RUN bun run build:opencode-plugin
 RUN bun run build:native
 RUN bun run build:oh-my-pi-extension
 RUN bun run build:connector-oh-my-pi
+RUN bun run build:pi-extension
+RUN bun run build:connector-pi
 RUN bun run build:deps
 RUN bun run build:dashboard
 RUN bun run build:signetai
