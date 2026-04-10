@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Hono } from "hono";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
-import { CRON_PRESETS, computeNextRun, isHarnessAvailable, resolveSkillPrompt, validateCron } from "../scheduler";
+import { CRON_PRESETS, computeNextRun, isHarnessAvailable, resolveSkillPrompt, resolveTaskModel, validateCron } from "../scheduler";
 import { emitTaskStream, getTaskStreamSnapshot, subscribeTaskStream } from "../scheduler/task-stream.js";
 import { readScopedTask, readTaskAgentId } from "../task-scope.js";
 import {
@@ -707,34 +707,42 @@ export function registerMiscRoutes(app: Hono): void {
 		const taskSkillMode = typeof task.skill_mode === "string" ? task.skill_mode : null;
 		const taskWorkingDir = typeof task.working_directory === "string" ? task.working_directory : null;
 		const taskAgentId = readTaskAgentId(task, scoped.agentId);
+		const taskModel = taskHarness === "claude-code" || taskHarness === "codex" ? resolveTaskModel(taskHarness) : undefined;
 
 		const effectivePrompt = resolveSkillPrompt(taskPrompt, taskSkillName, taskSkillMode);
 		const startedMs = Date.now();
 
 		import("../scheduler/spawn.js").then((mod) => {
 			mod
-				.spawnTask(taskHarness, effectivePrompt, taskWorkingDir, undefined, {
-					onStdoutChunk: (chunk) => {
-						emitTaskStream({
-							type: "run-output",
-							taskId,
-							runId,
-							stream: "stdout",
-							chunk,
-							timestamp: new Date().toISOString(),
-						});
+				.spawnTask(
+					taskHarness,
+					effectivePrompt,
+					taskWorkingDir,
+					undefined,
+					{
+						onStdoutChunk: (chunk) => {
+							emitTaskStream({
+								type: "run-output",
+								taskId,
+								runId,
+								stream: "stdout",
+								chunk,
+								timestamp: new Date().toISOString(),
+							});
+						},
+						onStderrChunk: (chunk) => {
+							emitTaskStream({
+								type: "run-output",
+								taskId,
+								runId,
+								stream: "stderr",
+								chunk,
+								timestamp: new Date().toISOString(),
+							});
+						},
 					},
-					onStderrChunk: (chunk) => {
-						emitTaskStream({
-							type: "run-output",
-							taskId,
-							runId,
-							stream: "stderr",
-							chunk,
-							timestamp: new Date().toISOString(),
-						});
-					},
-				})
+					taskModel,
+				)
 				.then((result) => {
 					const completedAt = new Date().toISOString();
 					const status =
