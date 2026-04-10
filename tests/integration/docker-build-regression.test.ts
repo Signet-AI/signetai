@@ -41,6 +41,8 @@ describe("Docker build pipeline regression guard", () => {
 			"build:native",
 			"build:oh-my-pi-extension",
 			"build:connector-oh-my-pi",
+			"build:pi-extension",
+			"build:connector-pi",
 			"build:deps",
 			"build:dashboard",
 			"build:signetai",
