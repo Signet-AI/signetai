@@ -191,7 +191,7 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 
 				if (result === null) return DAEMON_OFFLINE_MSG;
 				const id = result.id ?? result.memoryId;
-				return id ? `Saved: ${args.content.slice(0, 50)}` : "Saved.";
+				return id ? `Saved${args.pinned ? " (pinned)" : ""}: ${args.content.slice(0, 50)}` : "Saved.";
 			},
 		}),
 
