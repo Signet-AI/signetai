@@ -59,7 +59,8 @@ const VALID_DEP_TYPES = new Set<string>(DEPENDENCY_TYPES);
 // Queries
 // ---------------------------------------------------------------------------
 
-// TODO: thread agentId from DependencySynthesisDeps when multi-agent lands
+// Mirrors the current dependency-synthesis scope. Thread the runtime agent id
+// through this worker before supporting non-default agents.
 const AGENT_ID = "default";
 
 function findStaleEntities(db: ReadDb, limit: number): readonly StaleEntity[] {
@@ -251,10 +252,10 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 	const cfg = deps.pipelineCfg.structural;
 	const maxStallMs = cfg.synthesisMaxStallMs;
 	const extractionStats = deps.getExtractionStats?.();
-	const lastProgressAt = resolveExtractionProgressAt(
-		extractionStats?.lastProgressAt,
-		loadLatestExtractionProgressAt(deps.accessor),
-	);
+	const lastProgressAt =
+		maxStallMs > 0
+			? resolveExtractionProgressAt(extractionStats?.lastProgressAt, loadLatestExtractionProgressAt(deps.accessor))
+			: undefined;
 	const now = Date.now();
 	if (!shouldRunDependencySynthesis(now, lastProgressAt, maxStallMs)) {
 		logger.debug("dependency-synthesis", "Skipping tick while extraction pipeline is stalled", {

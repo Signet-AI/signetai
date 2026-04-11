@@ -840,6 +840,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				d.structural.synthesisTopEntities,
 			),
 			synthesisMaxFacts: clampPositive(structuralRaw?.synthesisMaxFacts, 3, 50, d.structural.synthesisMaxFacts),
+			// 0 is the documented sentinel that disables the dependency-synthesis stall gate.
 			synthesisMaxStallMs: clampPositive(
 				structuralRaw?.synthesisMaxStallMs ?? dependencySynthesisRaw?.maxStallMs,
 				0,

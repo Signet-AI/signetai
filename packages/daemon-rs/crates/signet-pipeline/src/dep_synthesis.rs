@@ -290,7 +290,11 @@ async fn extraction_stalled_ms(pool: &DbPool, max_stall_ms: u64) -> Result<Optio
         return Ok(None);
     }
 
-    Ok(last_progress.map(|ts| now_ms.saturating_sub(ts)))
+    // The guard above only falls through when a durable progress timestamp is stalled.
+    let Some(last_progress) = last_progress else {
+        return Ok(None);
+    };
+    Ok(Some(now_ms.saturating_sub(last_progress)))
 }
 
 async fn latest_extraction_progress_ms(pool: &DbPool) -> Result<Option<i64>, String> {
