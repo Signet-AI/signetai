@@ -226,7 +226,7 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 	const now = Date.now();
 	if (!shouldRunDependencySynthesis(now, lastProgressAt, maxStallMs)) {
 		logger.debug("dependency-synthesis", "Skipping tick while extraction pipeline is stalled", {
-			stalledMs: now - lastProgressAt,
+			stalledMs: lastProgressAt != null ? now - lastProgressAt : undefined,
 			maxStallMs,
 			pending: extractionStats?.pending,
 		});

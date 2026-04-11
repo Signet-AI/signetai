@@ -18,6 +18,8 @@ use tracing::{info, warn};
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
 use crate::structural::DEP_DESCRIPTIONS;
 
+// Mirrors the current Rust dependency-synthesis scope. Thread the runtime
+// agent id through this worker before supporting non-default Rust agents.
 const AGENT_ID: &str = "default";
 
 // ---------------------------------------------------------------------------
@@ -278,10 +280,11 @@ async fn extraction_stalled_ms(pool: &DbPool, max_stall_ms: u64) -> Result<Optio
     }
 
     let last_progress = latest_extraction_progress_ms(pool).await?;
-    let now_ms = SystemTime::now()
+    let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_millis() as i64;
+        .map_err(|e| e.to_string())?;
+    let now_ms = i64::try_from(elapsed.as_millis())
+        .map_err(|_| "system time milliseconds overflowed i64".to_string())?;
 
     if should_run_dependency_synthesis(now_ms, last_progress, max_stall_ms) {
         return Ok(None);
@@ -323,6 +326,26 @@ async fn pending_extraction_jobs(pool: &DbPool) -> Result<i64, String> {
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_run_dependency_synthesis;
+
+    #[test]
+    fn stall_gate_blocks_progress_older_than_window() {
+        let now = 10_000;
+        assert!(!should_run_dependency_synthesis(now, Some(3_999), 6_000));
+        assert!(should_run_dependency_synthesis(now, Some(4_000), 6_000));
+    }
+
+    #[test]
+    fn stall_gate_allows_disabled_or_unknown_progress() {
+        let now = 10_000;
+        assert!(should_run_dependency_synthesis(now, Some(1_000), 0));
+        assert!(should_run_dependency_synthesis(now, None, 6_000));
+        assert!(should_run_dependency_synthesis(now, Some(0), 6_000));
+    }
 }
 
 // ---------------------------------------------------------------------------
