@@ -297,6 +297,8 @@ fn normalize_pipeline_structural(pipeline: &mut PipelineV2Config, raw: Option<&s
     let dependency_synthesis_max_stall_ms = raw
         .and_then(|value| raw_child(value, "dependencySynthesis"))
         .and_then(|value| {
+            // raw_u64 rejects negative YAML integers, preserving the default
+            // instead of treating them as the zero-disable sentinel.
             raw_u64(value, "maxStallMs").or_else(|| raw_u64(value, "synthesisMaxStallMs"))
         });
     let synthesis_max_stall_ms = structural_max_stall_ms.or(dependency_synthesis_max_stall_ms);

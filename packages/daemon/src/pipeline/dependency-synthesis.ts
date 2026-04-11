@@ -224,9 +224,9 @@ export function shouldRunDependencySynthesis(
 	lastExtractionProgressAt: number | undefined,
 	maxStallMs: number | undefined,
 ): boolean {
-	if (maxStallMs == null || maxStallMs <= 0) return true;
+	if (maxStallMs === undefined || maxStallMs <= 0) return true;
 	// Missing, never-ran, or epoch timestamps are not treated as stalls.
-	if (lastExtractionProgressAt == null || lastExtractionProgressAt <= 0) return true;
+	if (lastExtractionProgressAt === undefined || lastExtractionProgressAt <= 0) return true;
 	return now - lastExtractionProgressAt <= maxStallMs;
 }
 
