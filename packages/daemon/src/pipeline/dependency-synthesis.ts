@@ -250,6 +250,10 @@ export function shouldLoadDurableExtractionProgress(
 	return now - workerProgressAt > freshnessMs;
 }
 
+export function durableExtractionProgressFreshnessMs(synthesisIntervalMs: number, maxStallMs: number): number {
+	return Math.min(synthesisIntervalMs, Math.max(1, Math.floor(maxStallMs / 2)));
+}
+
 export async function runDependencySynthesisTick(deps: DependencySynthesisDeps): Promise<void> {
 	const cfg = deps.pipelineCfg.structural;
 	const maxStallMs = cfg.synthesisMaxStallMs;
@@ -257,7 +261,12 @@ export async function runDependencySynthesisTick(deps: DependencySynthesisDeps):
 	const now = Date.now();
 	const workerProgressAt = extractionStats?.lastProgressAt;
 	const durableProgressAt =
-		maxStallMs > 0 && shouldLoadDurableExtractionProgress(now, workerProgressAt, cfg.synthesisIntervalMs)
+		maxStallMs > 0 &&
+		shouldLoadDurableExtractionProgress(
+			now,
+			workerProgressAt,
+			durableExtractionProgressFreshnessMs(cfg.synthesisIntervalMs, maxStallMs),
+		)
 			? loadLatestExtractionProgressAt(deps.accessor, deps.agentId)
 			: undefined;
 	const lastProgressAt = maxStallMs > 0 ? resolveExtractionProgressAt(workerProgressAt, durableProgressAt) : undefined;

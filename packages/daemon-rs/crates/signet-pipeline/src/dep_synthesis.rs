@@ -301,10 +301,8 @@ async fn extraction_stalled_ms(
         return Ok(None);
     }
 
-    // This branch is unreachable while should_run_dependency_synthesis treats
-    // unknown progress as runnable, but keep it non-panicking if that changes.
     let Some(last_progress) = last_progress else {
-        return Ok(None);
+        unreachable!("stalled path requires a durable progress timestamp");
     };
     Ok(Some(now_ms.saturating_sub(last_progress)))
 }

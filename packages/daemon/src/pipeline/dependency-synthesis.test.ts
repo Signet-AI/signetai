@@ -13,6 +13,7 @@ import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import {
 	buildSynthesisPrompt,
+	durableExtractionProgressFreshnessMs,
 	resolveExtractionProgressAt,
 	runDependencySynthesisTick,
 	shouldLoadDurableExtractionProgress,
@@ -84,6 +85,19 @@ function seedAspectAttribute(db: Database, id: string, entityId: string, agentId
 		 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
 		 VALUES (?, ?, ?, 'fact', ?, ?, 0.9, 0.5, 'active', ?, ?)`,
 	).run(id, aspectId, agentId, content, content.toLowerCase(), now, now);
+}
+
+function seedCompletedExtractionJob(db: Database, id: string, agentId: string, completedAt: string): void {
+	const now = new Date().toISOString();
+	const memoryId = `mem-${id}`;
+	db.prepare(
+		`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+		 VALUES (?, 'completed extraction source', 'fact', ?, ?, ?, 'test')`,
+	).run(memoryId, agentId, now, now);
+	db.prepare(
+		`INSERT INTO memory_jobs (id, memory_id, job_type, status, completed_at, created_at, updated_at)
+		 VALUES (?, ?, 'extract', 'completed', ?, ?, ?)`,
+	).run(id, memoryId, completedAt, now, now);
 }
 
 async function ollamaAvailable(): Promise<boolean> {
@@ -178,15 +192,65 @@ describe(`${MODEL} dependency synthesis`, () => {
 		expect(shouldLoadDurableExtractionProgress(now, undefined, 2_000)).toBe(true);
 	});
 
+	test("caps durable progress freshness by the stall window", () => {
+		expect(durableExtractionProgressFreshnessMs(3_600_000, 60_000)).toBe(30_000);
+		expect(durableExtractionProgressFreshnessMs(10_000, 60_000)).toBe(10_000);
+		expect(durableExtractionProgressFreshnessMs(10_000, 1)).toBe(1);
+	});
+
+	test("uses DB-backed extraction progress to skip stale synthesis and resume when recent", async () => {
+		const db = makeDb();
+		const accessor = makeAccessor(db);
+		seedEntity(db, "agent-b-src", "agent-b", "agent b source");
+		seedEntity(db, "agent-b-target", "agent-b", "agent b target", 5);
+		seedAspectAttribute(db, "agent-b-fact", "agent-b-src", "agent-b", "agent b source uses agent b target");
+		seedCompletedExtractionJob(db, "job-stale", "agent-b", new Date(Date.now() - 120_000).toISOString());
+
+		let calls = 0;
+		const deps = {
+			accessor,
+			agentId: "agent-b",
+			provider: {
+				name: "test",
+				available: async () => true,
+				generate: async () => {
+					calls += 1;
+					return JSON.stringify([{ target: "agent b target", dep_type: "uses", reason: "source uses target" }]);
+				},
+			},
+			pipelineCfg: {
+				...DEFAULT_PIPELINE_V2,
+				structural: {
+					...DEFAULT_PIPELINE_V2.structural,
+					dependencyBatchSize: 1,
+					synthesisMaxStallMs: 60_000,
+				},
+			},
+		};
+
+		await runDependencySynthesisTick(deps);
+		expect(calls).toBe(0);
+		expect(db.prepare("SELECT COUNT(*) AS n FROM entity_dependencies").get()).toEqual({ n: 0 });
+
+		db.prepare("UPDATE memory_jobs SET completed_at = ? WHERE id = 'job-stale'").run(new Date().toISOString());
+		await runDependencySynthesisTick(deps);
+		expect(calls).toBe(1);
+		expect(db.prepare("SELECT source_entity_id, target_entity_id FROM entity_dependencies").get()).toEqual({
+			source_entity_id: "agent-b-src",
+			target_entity_id: "agent-b-target",
+		});
+	});
+
 	test("synthesizes dependencies only within the requested agent scope", async () => {
 		const db = makeDb();
 		const accessor = makeAccessor(db);
 		seedEntity(db, "default-src", "default", "default source");
-		seedEntity(db, "default-target", "default", "default target", 5);
-		seedAspectAttribute(db, "default-fact", "default-src", "default", "default source uses default target");
+		seedEntity(db, "default-target", "default", "shared target", 5);
+		seedAspectAttribute(db, "default-fact", "default-src", "default", "default source uses shared target");
 		seedEntity(db, "agent-b-src", "agent-b", "agent b source");
-		seedEntity(db, "agent-b-target", "agent-b", "agent b target", 5);
-		seedAspectAttribute(db, "agent-b-fact", "agent-b-src", "agent-b", "agent b source uses agent b target");
+		seedEntity(db, "agent-b-target", "agent-b", "agent b shared target", 5);
+		db.prepare("UPDATE entities SET canonical_name = 'shared target' WHERE id = 'agent-b-target'").run();
+		seedAspectAttribute(db, "agent-b-fact", "agent-b-src", "agent-b", "agent b source uses shared target");
 
 		await runDependencySynthesisTick({
 			accessor,
@@ -195,13 +259,13 @@ describe(`${MODEL} dependency synthesis`, () => {
 				name: "test",
 				available: async () => true,
 				generate: async () =>
-					JSON.stringify([{ target: "agent b target", dep_type: "uses", reason: "source uses target" }]),
+					JSON.stringify([{ target: "shared target", dep_type: "uses", reason: "source uses target" }]),
 			},
 			pipelineCfg: {
 				...DEFAULT_PIPELINE_V2,
 				structural: {
 					...DEFAULT_PIPELINE_V2.structural,
-					dependencyBatchSize: 1,
+					dependencyBatchSize: 2,
 					synthesisMaxStallMs: 0,
 				},
 			},
