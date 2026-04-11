@@ -248,15 +248,26 @@ export function resolveExtractionProgressAt(
 	return Math.max(worker, durable);
 }
 
+export function shouldLoadDurableExtractionProgress(
+	now: number,
+	workerProgressAt: number | undefined,
+	freshnessMs: number,
+): boolean {
+	if (typeof workerProgressAt !== "number" || !Number.isFinite(workerProgressAt) || workerProgressAt <= 0) return true;
+	return now - workerProgressAt > freshnessMs;
+}
+
 async function tick(deps: DependencySynthesisDeps): Promise<void> {
 	const cfg = deps.pipelineCfg.structural;
 	const maxStallMs = cfg.synthesisMaxStallMs;
 	const extractionStats = deps.getExtractionStats?.();
-	const lastProgressAt =
-		maxStallMs > 0
-			? resolveExtractionProgressAt(extractionStats?.lastProgressAt, loadLatestExtractionProgressAt(deps.accessor))
-			: undefined;
 	const now = Date.now();
+	const workerProgressAt = extractionStats?.lastProgressAt;
+	const durableProgressAt =
+		maxStallMs > 0 && shouldLoadDurableExtractionProgress(now, workerProgressAt, cfg.synthesisIntervalMs)
+			? loadLatestExtractionProgressAt(deps.accessor)
+			: undefined;
+	const lastProgressAt = maxStallMs > 0 ? resolveExtractionProgressAt(workerProgressAt, durableProgressAt) : undefined;
 	if (!shouldRunDependencySynthesis(now, lastProgressAt, maxStallMs)) {
 		logger.debug("dependency-synthesis", "Skipping tick while extraction pipeline is stalled", {
 			stalledMs: lastProgressAt != null ? now - lastProgressAt : undefined,

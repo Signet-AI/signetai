@@ -290,10 +290,7 @@ async fn extraction_stalled_ms(pool: &DbPool, max_stall_ms: u64) -> Result<Optio
         return Ok(None);
     }
 
-    // The guard above only falls through when a durable progress timestamp is stalled.
-    let Some(last_progress) = last_progress else {
-        return Ok(None);
-    };
+    let last_progress = last_progress.expect("stall path requires a durable progress timestamp");
     Ok(Some(now_ms.saturating_sub(last_progress)))
 }
 

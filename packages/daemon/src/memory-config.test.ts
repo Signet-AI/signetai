@@ -834,6 +834,20 @@ describe("loadPipelineConfig", () => {
 		expect(result.structural.synthesisMaxStallMs).toBe(0);
 	});
 
+	it("preserves zero through dependencySynthesis.maxStallMs alias", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					dependencySynthesis: {
+						maxStallMs: 0,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(0);
+	});
+
 	it("supports dependencySynthesis.maxStallMs as a config alias", () => {
 		const result = loadPipelineConfig({
 			memory: {

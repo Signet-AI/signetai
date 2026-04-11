@@ -10,6 +10,7 @@ import { DEPENDENCY_TYPES } from "@signet/core";
 import {
 	buildSynthesisPrompt,
 	resolveExtractionProgressAt,
+	shouldLoadDurableExtractionProgress,
 	shouldRunDependencySynthesis,
 } from "./dependency-synthesis";
 import { stripFences, tryParseJson } from "./extraction";
@@ -105,6 +106,13 @@ describe(`${MODEL} dependency synthesis`, () => {
 		expect(resolveExtractionProgressAt(undefined, 5_000)).toBe(5_000);
 		expect(resolveExtractionProgressAt(6_000, 5_000)).toBe(6_000);
 		expect(resolveExtractionProgressAt(0, undefined)).toBeUndefined();
+	});
+
+	test("skips durable progress reads while worker progress is fresh", () => {
+		const now = 10_000;
+		expect(shouldLoadDurableExtractionProgress(now, 9_000, 2_000)).toBe(false);
+		expect(shouldLoadDurableExtractionProgress(now, 7_999, 2_000)).toBe(true);
+		expect(shouldLoadDurableExtractionProgress(now, undefined, 2_000)).toBe(true);
 	});
 
 	test("prompt encodes candidate boundary and empty-array rules", () => {

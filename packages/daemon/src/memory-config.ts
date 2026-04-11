@@ -256,6 +256,7 @@ class MemoryConfigValidationError extends Error {}
 
 function clampPositive(raw: unknown, min: number, max: number, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+	// Bounds are inclusive; a few config fields intentionally use 0 as a disable sentinel.
 	return Math.max(min, Math.min(max, raw));
 }
 
