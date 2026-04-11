@@ -11,7 +11,7 @@ import { DEPENDENCY_TYPES, type DependencyType } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { upsertDependency } from "../knowledge-graph";
 import { logger } from "../logger";
-import { DEFAULT_PIPELINE_V2, type PipelineV2Config } from "../memory-config";
+import type { PipelineV2Config } from "../memory-config";
 import { stripFences, tryParseJson } from "./extraction";
 import { invalidateTraversalCache } from "./graph-traversal";
 import type { LlmProvider } from "./provider";
@@ -223,7 +223,7 @@ export function shouldRunDependencySynthesis(
 
 async function tick(deps: DependencySynthesisDeps): Promise<void> {
 	const cfg = deps.pipelineCfg.structural;
-	const maxStallMs = cfg.synthesisMaxStallMs ?? DEFAULT_PIPELINE_V2.structural.synthesisMaxStallMs;
+	const maxStallMs = cfg.synthesisMaxStallMs;
 	const extractionStats = deps.getExtractionStats?.();
 	const now = Date.now();
 	if (!shouldRunDependencySynthesis(now, extractionStats?.lastProgressAt, maxStallMs)) {
@@ -358,7 +358,7 @@ export function startDependencySynthesisWorker(deps: DependencySynthesisDeps): D
 		intervalMs: interval,
 		topEntities: deps.pipelineCfg.structural.synthesisTopEntities,
 		maxFacts: deps.pipelineCfg.structural.synthesisMaxFacts,
-		maxStallMs: deps.pipelineCfg.structural.synthesisMaxStallMs ?? DEFAULT_PIPELINE_V2.structural.synthesisMaxStallMs,
+		maxStallMs: deps.pipelineCfg.structural.synthesisMaxStallMs,
 	});
 
 	return {

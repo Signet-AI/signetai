@@ -414,7 +414,7 @@ export interface PipelineStructuralConfig {
 	readonly synthesisIntervalMs: number;
 	readonly synthesisTopEntities: number;
 	readonly synthesisMaxFacts: number;
-	readonly synthesisMaxStallMs?: number;
+	readonly synthesisMaxStallMs: number;
 	readonly supersessionEnabled: boolean;
 	readonly supersessionSweepEnabled: boolean;
 	readonly supersessionSemanticFallback: boolean;

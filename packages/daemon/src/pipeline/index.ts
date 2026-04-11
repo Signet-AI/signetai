@@ -195,7 +195,14 @@ export function startPipeline(
 				accessor,
 				provider,
 				pipelineCfg,
-				getExtractionStats: () => workerHandle?.stats,
+				getExtractionStats: () => {
+					const stats: WorkerStats | undefined = workerHandle?.stats;
+					if (!stats) return undefined;
+					return {
+						lastProgressAt: stats.lastProgressAt,
+						pending: stats.pending,
+					};
+				},
 			});
 		}
 	}

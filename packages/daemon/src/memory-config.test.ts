@@ -820,6 +820,20 @@ describe("loadPipelineConfig", () => {
 		expect(result.structural.synthesisMaxStallMs).toBe(90_000);
 	});
 
+	it("preserves zero as the dependency synthesis stall disable value", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: 0,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(0);
+	});
+
 	it("supports dependencySynthesis.maxStallMs as a config alias", () => {
 		const result = loadPipelineConfig({
 			memory: {
