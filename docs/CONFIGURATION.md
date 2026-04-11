@@ -503,7 +503,8 @@ dependency edges from the existing graph.
 | `synthesisMaxFacts` | `10` | 3-50 | Facts included for the focal entity |
 | `synthesisMaxStallMs` | `1800000` | 0-86400000 ms | Pause dependency synthesis when extraction has made no successful progress for this long; set `0` to disable the circuit breaker |
 
-The alias `dependencySynthesis.maxStallMs` is accepted for
+The aliases `dependencySynthesis.maxStallMs` and
+`dependencySynthesis.synthesisMaxStallMs` are accepted for
 `structural.synthesisMaxStallMs`.
 
 

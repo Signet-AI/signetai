@@ -847,7 +847,9 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 			),
 			synthesisMaxFacts: clampPositive(structuralRaw?.synthesisMaxFacts, 3, 50, d.structural.synthesisMaxFacts),
 			synthesisMaxStallMs: clampNonNegative(
-				structuralRaw?.synthesisMaxStallMs ?? dependencySynthesisRaw?.maxStallMs,
+				structuralRaw?.synthesisMaxStallMs ??
+					dependencySynthesisRaw?.maxStallMs ??
+					dependencySynthesisRaw?.synthesisMaxStallMs,
 				24 * 60 * 60_000,
 				d.structural.synthesisMaxStallMs,
 			),

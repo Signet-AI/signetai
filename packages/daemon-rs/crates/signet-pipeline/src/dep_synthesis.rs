@@ -129,11 +129,9 @@ async fn tick(
     if let Some(stalled_ms) =
         extraction_stalled_ms(pool, agent_id, config.synthesis_max_stall_ms).await?
     {
-        let pending = pending_extraction_jobs(pool, agent_id).await.unwrap_or(0);
         tracing::debug!(
             stalled_ms,
             max_stall_ms = config.synthesis_max_stall_ms,
-            pending,
             "skipping dep-synthesis tick while extraction pipeline is stalled"
         );
         return Ok(());
@@ -303,8 +301,12 @@ async fn extraction_stalled_ms(
         return Ok(None);
     }
 
-    let last_progress = last_progress
-        .ok_or_else(|| "stall path requires a durable progress timestamp".to_string())?;
+    // This branch is unreachable while should_run_dependency_synthesis treats
+    // unknown progress as runnable, but keep it non-panicking if that changes.
+    let Some(last_progress) = last_progress else {
+        debug_assert!(false, "stall path requires a durable progress timestamp");
+        return Ok(None);
+    };
     Ok(Some(now_ms.saturating_sub(last_progress)))
 }
 
@@ -324,24 +326,6 @@ async fn latest_extraction_progress_ms(
                AND m.agent_id = ?1",
             rusqlite::params![agent_id],
             |r| r.get::<_, Option<i64>>(0),
-        )?)
-    })
-    .await
-    .map_err(|e| e.to_string())
-}
-
-async fn pending_extraction_jobs(pool: &DbPool, agent_id: &str) -> Result<i64, String> {
-    let agent_id = agent_id.to_string();
-    pool.read(move |conn| {
-        Ok(conn.query_row(
-            "SELECT COUNT(*)
-             FROM memory_jobs j
-             JOIN memories m ON m.id = j.memory_id
-             WHERE j.status = 'pending'
-               AND j.job_type IN ('extract', 'extraction')
-               AND m.agent_id = ?1",
-            rusqlite::params![agent_id],
-            |r| r.get::<_, i64>(0),
         )?)
     })
     .await

@@ -27,7 +27,7 @@ export interface DependencySynthesisHandle {
 	readonly running: boolean;
 }
 
-interface DependencySynthesisDeps {
+export interface DependencySynthesisDeps {
 	readonly accessor: DbAccessor;
 	readonly agentId: string;
 	readonly provider: LlmProvider;
@@ -250,7 +250,7 @@ export function shouldLoadDurableExtractionProgress(
 	return now - workerProgressAt > freshnessMs;
 }
 
-async function tick(deps: DependencySynthesisDeps): Promise<void> {
+export async function runDependencySynthesisTick(deps: DependencySynthesisDeps): Promise<void> {
 	const cfg = deps.pipelineCfg.structural;
 	const maxStallMs = cfg.synthesisMaxStallMs;
 	const extractionStats = deps.getExtractionStats?.();
@@ -379,7 +379,7 @@ export function startDependencySynthesisWorker(deps: DependencySynthesisDeps): D
 	timer = setInterval(() => {
 		if (!running || ticking) return;
 		ticking = true;
-		tick(deps)
+		runDependencySynthesisTick(deps)
 			.catch((e) => {
 				logger.warn("dependency-synthesis", "Tick error", {
 					error: String(e),

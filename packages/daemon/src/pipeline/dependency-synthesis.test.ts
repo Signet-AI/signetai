@@ -5,11 +5,16 @@
  * SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test dependency-synthesis.test.ts
  */
 
-import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import { DEPENDENCY_TYPES } from "@signet/core";
+import { runMigrations } from "../../../core/src/migrations";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import {
 	buildSynthesisPrompt,
 	resolveExtractionProgressAt,
+	runDependencySynthesisTick,
 	shouldLoadDurableExtractionProgress,
 	shouldRunDependencySynthesis,
 } from "./dependency-synthesis";
@@ -22,6 +27,64 @@ const OLLAMA = "http://localhost:11434";
 const EXPLICIT_MODEL = process.env.SIGNET_OLLAMA_TEST_MODEL;
 const MODEL = EXPLICIT_MODEL ?? "qwen3:4b";
 const VALID = new Set<string>(DEPENDENCY_TYPES);
+const dbs: Database[] = [];
+
+afterEach(() => {
+	while (dbs.length > 0) {
+		dbs.pop()?.close();
+	}
+});
+
+function makeDb(): Database {
+	const db = new Database(":memory:");
+	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+	dbs.push(db);
+	return db;
+}
+
+function makeAccessor(db: Database): DbAccessor {
+	return {
+		withWriteTx<T>(fn: (db: WriteDb) => T): T {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const result = fn(db as unknown as WriteDb);
+				db.exec("COMMIT");
+				return result;
+			} catch (err) {
+				db.exec("ROLLBACK");
+				throw err;
+			}
+		},
+		withReadDb<T>(fn: (db: ReadDb) => T): T {
+			return fn(db as unknown as ReadDb);
+		},
+		close() {
+			db.close();
+		},
+	};
+}
+
+function seedEntity(db: Database, id: string, agentId: string, name: string, mentions = 1): void {
+	const now = new Date().toISOString();
+	db.prepare(
+		`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+		 VALUES (?, ?, ?, 'system', ?, ?, ?, ?)`,
+	).run(id, name, name.trim().toLowerCase(), agentId, mentions, now, now);
+}
+
+function seedAspectAttribute(db: Database, id: string, entityId: string, agentId: string, content: string): void {
+	const now = new Date().toISOString();
+	const aspectId = `asp-${id}`;
+	db.prepare(
+		`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+		 VALUES (?, ?, ?, 'general', 'general', 0.5, ?, ?)`,
+	).run(aspectId, entityId, agentId, now, now);
+	db.prepare(
+		`INSERT INTO entity_attributes
+		 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+		 VALUES (?, ?, ?, 'fact', ?, ?, 0.9, 0.5, 'active', ?, ?)`,
+	).run(id, aspectId, agentId, content, content.toLowerCase(), now, now);
+}
 
 async function ollamaAvailable(): Promise<boolean> {
 	try {
@@ -113,6 +176,56 @@ describe(`${MODEL} dependency synthesis`, () => {
 		expect(shouldLoadDurableExtractionProgress(now, 9_000, 2_000)).toBe(false);
 		expect(shouldLoadDurableExtractionProgress(now, 7_999, 2_000)).toBe(true);
 		expect(shouldLoadDurableExtractionProgress(now, undefined, 2_000)).toBe(true);
+	});
+
+	test("synthesizes dependencies only within the requested agent scope", async () => {
+		const db = makeDb();
+		const accessor = makeAccessor(db);
+		seedEntity(db, "default-src", "default", "default source");
+		seedEntity(db, "default-target", "default", "default target", 5);
+		seedAspectAttribute(db, "default-fact", "default-src", "default", "default source uses default target");
+		seedEntity(db, "agent-b-src", "agent-b", "agent b source");
+		seedEntity(db, "agent-b-target", "agent-b", "agent b target", 5);
+		seedAspectAttribute(db, "agent-b-fact", "agent-b-src", "agent-b", "agent b source uses agent b target");
+
+		await runDependencySynthesisTick({
+			accessor,
+			agentId: "agent-b",
+			provider: {
+				name: "test",
+				available: async () => true,
+				generate: async () =>
+					JSON.stringify([{ target: "agent b target", dep_type: "uses", reason: "source uses target" }]),
+			},
+			pipelineCfg: {
+				...DEFAULT_PIPELINE_V2,
+				structural: {
+					...DEFAULT_PIPELINE_V2.structural,
+					dependencyBatchSize: 1,
+					synthesisMaxStallMs: 0,
+				},
+			},
+		});
+
+		const defaultRow = db.prepare("SELECT last_synthesized_at FROM entities WHERE id = 'default-src'").get() as {
+			last_synthesized_at: string | null;
+		};
+		const agentBRow = db.prepare("SELECT last_synthesized_at FROM entities WHERE id = 'agent-b-src'").get() as {
+			last_synthesized_at: string | null;
+		};
+		const deps = db
+			.prepare("SELECT agent_id, source_entity_id, target_entity_id FROM entity_dependencies ORDER BY agent_id")
+			.all() as Array<{ agent_id: string; source_entity_id: string; target_entity_id: string }>;
+
+		expect(defaultRow.last_synthesized_at).toBeNull();
+		expect(typeof agentBRow.last_synthesized_at).toBe("string");
+		expect(deps).toEqual([
+			{
+				agent_id: "agent-b",
+				source_entity_id: "agent-b-src",
+				target_entity_id: "agent-b-target",
+			},
+		]);
 	});
 
 	test("prompt encodes candidate boundary and empty-array rules", () => {
