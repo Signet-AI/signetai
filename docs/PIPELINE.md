@@ -1056,6 +1056,17 @@ graph:
   boostWeight: 0.15              # fraction 0.0–1.0
   boostTimeoutMs: 500            # ms, range 50–5000
 
+structural:
+  enabled: true
+  classifyBatchSize: 8           # range 1–20
+  dependencyBatchSize: 5         # range 1–10
+  pollIntervalMs: 10000          # ms, range 2000–120000
+  synthesisEnabled: true
+  synthesisIntervalMs: 60000     # ms, range 10000–600000
+  synthesisTopEntities: 20       # range 5–100
+  synthesisMaxFacts: 10          # range 3–50
+  synthesisMaxStallMs: 1800000   # 30 min, set 0 to disable
+
 reranker:
   enabled: true
   model: ""

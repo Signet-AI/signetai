@@ -186,6 +186,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		synthesisIntervalMs: 60_000,
 		synthesisTopEntities: 20,
 		synthesisMaxFacts: 10,
+		synthesisMaxStallMs: 30 * 60_000,
 		supersessionEnabled: true,
 		supersessionSweepEnabled: true,
 		supersessionSemanticFallback: true,
@@ -391,6 +392,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const synthesisRaw = raw.synthesis as Record<string, unknown> | undefined;
 	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
 	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
+	const dependencySynthesisRaw = raw.dependencySynthesis as Record<string, unknown> | undefined;
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
 	const writeGateRaw = raw.writeGate as Record<string, unknown> | undefined;
@@ -838,6 +840,12 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				d.structural.synthesisTopEntities,
 			),
 			synthesisMaxFacts: clampPositive(structuralRaw?.synthesisMaxFacts, 3, 50, d.structural.synthesisMaxFacts),
+			synthesisMaxStallMs: clampPositive(
+				structuralRaw?.synthesisMaxStallMs ?? dependencySynthesisRaw?.maxStallMs,
+				0,
+				24 * 60 * 60_000,
+				d.structural.synthesisMaxStallMs,
+			),
 			supersessionEnabled: resolveBool(structuralRaw?.supersessionEnabled, undefined, d.structural.supersessionEnabled),
 			supersessionSweepEnabled: resolveBool(
 				structuralRaw?.supersessionSweepEnabled,

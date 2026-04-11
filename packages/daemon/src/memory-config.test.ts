@@ -806,6 +806,34 @@ describe("loadPipelineConfig", () => {
 		expect(result.feedback.decayIntervalSessions).toBe(25);
 	});
 
+	it("loads dependency synthesis stall circuit breaker config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: 90_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(90_000);
+	});
+
+	it("supports dependencySynthesis.maxStallMs as a config alias", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					dependencySynthesis: {
+						maxStallMs: 120_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(120_000);
+	});
+
 	it("treats non-boolean truthy values as defaults (not coerced)", () => {
 		const result = loadPipelineConfig({
 			memory: {

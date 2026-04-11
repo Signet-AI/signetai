@@ -9,13 +9,13 @@
 
 import { DEPENDENCY_TYPES, type DependencyType } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
-import { stripFences, tryParseJson } from "./extraction";
-import { DEP_DESCRIPTIONS } from "./structural-dependency";
 import { upsertDependency } from "../knowledge-graph";
-import { invalidateTraversalCache } from "./graph-traversal";
 import { logger } from "../logger";
+import { DEFAULT_PIPELINE_V2, type PipelineV2Config } from "../memory-config";
+import { stripFences, tryParseJson } from "./extraction";
+import { invalidateTraversalCache } from "./graph-traversal";
+import type { LlmProvider } from "./provider";
+import { DEP_DESCRIPTIONS } from "./structural-dependency";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,6 +30,12 @@ interface DependencySynthesisDeps {
 	readonly accessor: DbAccessor;
 	readonly provider: LlmProvider;
 	readonly pipelineCfg: PipelineV2Config;
+	readonly getExtractionStats?: () => ExtractionProgressStats | undefined;
+}
+
+interface ExtractionProgressStats {
+	readonly lastProgressAt: number;
+	readonly pending: number;
 }
 
 interface StaleEntity {
@@ -205,8 +211,29 @@ function validateResults(parsed: unknown): readonly SynthesisResult[] {
 // Tick
 // ---------------------------------------------------------------------------
 
+export function shouldRunDependencySynthesis(
+	now: number,
+	lastExtractionProgressAt: number | undefined,
+	maxStallMs: number | undefined,
+): boolean {
+	if (!maxStallMs || maxStallMs <= 0) return true;
+	if (!lastExtractionProgressAt || lastExtractionProgressAt <= 0) return true;
+	return now - lastExtractionProgressAt <= maxStallMs;
+}
+
 async function tick(deps: DependencySynthesisDeps): Promise<void> {
 	const cfg = deps.pipelineCfg.structural;
+	const maxStallMs = cfg.synthesisMaxStallMs ?? DEFAULT_PIPELINE_V2.structural.synthesisMaxStallMs;
+	const extractionStats = deps.getExtractionStats?.();
+	const now = Date.now();
+	if (!shouldRunDependencySynthesis(now, extractionStats?.lastProgressAt, maxStallMs)) {
+		logger.debug("dependency-synthesis", "Skipping tick while extraction pipeline is stalled", {
+			stalledMs: now - (extractionStats?.lastProgressAt ?? now),
+			maxStallMs,
+			pending: extractionStats?.pending,
+		});
+		return;
+	}
 
 	const stale = deps.accessor.withReadDb((db) => findStaleEntities(db, cfg.dependencyBatchSize));
 	if (stale.length === 0) return;
@@ -331,6 +358,7 @@ export function startDependencySynthesisWorker(deps: DependencySynthesisDeps): D
 		intervalMs: interval,
 		topEntities: deps.pipelineCfg.structural.synthesisTopEntities,
 		maxFacts: deps.pipelineCfg.structural.synthesisMaxFacts,
+		maxStallMs: deps.pipelineCfg.structural.synthesisMaxStallMs ?? DEFAULT_PIPELINE_V2.structural.synthesisMaxStallMs,
 	});
 
 	return {

@@ -7,8 +7,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { DEPENDENCY_TYPES } from "@signet/core";
+import { buildSynthesisPrompt, shouldRunDependencySynthesis } from "./dependency-synthesis";
 import { stripFences, tryParseJson } from "./extraction";
-import { buildSynthesisPrompt } from "./dependency-synthesis";
 
 const OLLAMA = "http://localhost:11434";
 // Live Ollama tests only run when SIGNET_OLLAMA_TEST_MODEL is explicitly set.
@@ -84,6 +84,19 @@ const candidates = [
 ];
 
 describe(`${MODEL} dependency synthesis`, () => {
+	test("pauses when extraction progress is older than the configured stall window", () => {
+		const now = 10_000;
+		expect(shouldRunDependencySynthesis(now, 3_999, 6_000)).toBe(false);
+		expect(shouldRunDependencySynthesis(now, 4_000, 6_000)).toBe(true);
+	});
+
+	test("keeps running when the stall gate is disabled or progress is unknown", () => {
+		const now = 10_000;
+		expect(shouldRunDependencySynthesis(now, 1_000, 0)).toBe(true);
+		expect(shouldRunDependencySynthesis(now, undefined, 6_000)).toBe(true);
+		expect(shouldRunDependencySynthesis(now, 0, 6_000)).toBe(true);
+	});
+
 	test("prompt encodes candidate boundary and empty-array rules", () => {
 		const prompt = buildSynthesisPrompt(entity, facts, candidates, new Set(["Redis"]));
 		expect(prompt).toContain("Only connect auth service to entities from the known entity list above");

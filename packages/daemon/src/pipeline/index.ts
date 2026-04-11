@@ -195,6 +195,7 @@ export function startPipeline(
 				accessor,
 				provider,
 				pipelineCfg,
+				getExtractionStats: () => workerHandle?.stats,
 			});
 		}
 	}
