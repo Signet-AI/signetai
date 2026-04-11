@@ -303,7 +303,8 @@ async fn extraction_stalled_ms(
         return Ok(None);
     }
 
-    let last_progress = last_progress.expect("stall path requires a durable progress timestamp");
+    let last_progress = last_progress
+        .ok_or_else(|| "stall path requires a durable progress timestamp".to_string())?;
     Ok(Some(now_ms.saturating_sub(last_progress)))
 }
 

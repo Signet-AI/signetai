@@ -291,9 +291,15 @@ fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde
 }
 
 fn normalize_pipeline_structural(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
-    let synthesis_max_stall_ms = raw
+    let structural_max_stall_ms = raw
         .and_then(|value| raw_child(value, "structural"))
         .and_then(|value| raw_u64(value, "synthesisMaxStallMs"));
+    let dependency_synthesis_max_stall_ms = raw
+        .and_then(|value| raw_child(value, "dependencySynthesis"))
+        .and_then(|value| {
+            raw_u64(value, "maxStallMs").or_else(|| raw_u64(value, "synthesisMaxStallMs"))
+        });
+    let synthesis_max_stall_ms = structural_max_stall_ms.or(dependency_synthesis_max_stall_ms);
     if let Some(value) = synthesis_max_stall_ms {
         pipeline.structural.synthesis_max_stall_ms = value.min(MAX_SYNTHESIS_STALL_MS);
     }
@@ -1008,6 +1014,24 @@ memory:
             .and_then(|memory| memory.pipeline_v2)
             .expect("pipeline config");
         assert_eq!(pipeline.structural.synthesis_max_stall_ms, 24 * 60 * 60_000);
+    }
+
+    #[test]
+    fn dependency_synthesis_max_stall_ms_alias_loads_structural_stall_gate() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    dependencySynthesis:
+      maxStallMs: 120000
+"#,
+        )
+        .expect("parse manifest");
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(pipeline.structural.synthesis_max_stall_ms, 120_000);
     }
 
     #[test]
