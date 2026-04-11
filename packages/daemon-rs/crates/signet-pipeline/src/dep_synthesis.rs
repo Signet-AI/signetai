@@ -294,11 +294,13 @@ async fn latest_extraction_progress_ms(pool: &DbPool) -> Result<Option<i64>, Str
     pool.read(move |conn| {
         Ok(conn.query_row(
             "SELECT MAX(CAST(strftime('%s', completed_at) AS INTEGER) * 1000)
-             FROM memory_jobs
-             WHERE status = 'completed'
-               AND job_type IN ('extract', 'extraction')
-               AND completed_at IS NOT NULL",
-            [],
+             FROM memory_jobs j
+             JOIN memories m ON m.id = j.memory_id
+             WHERE j.status = 'completed'
+               AND j.job_type IN ('extract', 'extraction')
+               AND j.completed_at IS NOT NULL
+               AND m.agent_id = ?1",
+            rusqlite::params![AGENT_ID],
             |r| r.get::<_, Option<i64>>(0),
         )?)
     })
@@ -310,10 +312,12 @@ async fn pending_extraction_jobs(pool: &DbPool) -> Result<i64, String> {
     pool.read(move |conn| {
         Ok(conn.query_row(
             "SELECT COUNT(*)
-             FROM memory_jobs
-             WHERE status = 'pending'
-               AND job_type IN ('extract', 'extraction')",
-            [],
+             FROM memory_jobs j
+             JOIN memories m ON m.id = j.memory_id
+             WHERE j.status = 'pending'
+               AND j.job_type IN ('extract', 'extraction')
+               AND m.agent_id = ?1",
+            rusqlite::params![AGENT_ID],
             |r| r.get::<_, i64>(0),
         )?)
     })
