@@ -966,6 +966,24 @@ memory:
     }
 
     #[test]
+    fn structural_synthesis_max_stall_ms_parses_zero() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    structural:
+      synthesisMaxStallMs: 0
+"#,
+        )
+        .expect("parse manifest");
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(pipeline.structural.synthesis_max_stall_ms, 0);
+    }
+
+    #[test]
     fn reranker_use_extraction_model_loads_from_nested_or_flat_keys() {
         let nested = parse_manifest(
             r#"

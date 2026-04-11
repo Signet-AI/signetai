@@ -7,7 +7,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { DEPENDENCY_TYPES } from "@signet/core";
-import { buildSynthesisPrompt, shouldRunDependencySynthesis } from "./dependency-synthesis";
+import {
+	buildSynthesisPrompt,
+	resolveExtractionProgressAt,
+	shouldRunDependencySynthesis,
+} from "./dependency-synthesis";
 import { stripFences, tryParseJson } from "./extraction";
 
 const OLLAMA = "http://localhost:11434";
@@ -95,6 +99,12 @@ describe(`${MODEL} dependency synthesis`, () => {
 		expect(shouldRunDependencySynthesis(now, 1_000, 0)).toBe(true);
 		expect(shouldRunDependencySynthesis(now, undefined, 6_000)).toBe(true);
 		expect(shouldRunDependencySynthesis(now, 0, 6_000)).toBe(true);
+	});
+
+	test("uses durable extraction progress when worker progress is unavailable", () => {
+		expect(resolveExtractionProgressAt(undefined, 5_000)).toBe(5_000);
+		expect(resolveExtractionProgressAt(6_000, 5_000)).toBe(6_000);
+		expect(resolveExtractionProgressAt(0, undefined)).toBeUndefined();
 	});
 
 	test("prompt encodes candidate boundary and empty-array rules", () => {

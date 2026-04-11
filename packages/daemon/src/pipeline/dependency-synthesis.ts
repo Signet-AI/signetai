@@ -116,6 +116,24 @@ function loadExistingTargets(db: ReadDb, entityId: string): ReadonlySet<string> 
 	return new Set(rows.map((r) => r.target_name));
 }
 
+function loadLatestExtractionProgressAt(accessor: DbAccessor): number | undefined {
+	return accessor.withReadDb((db) => {
+		const row = db
+			.prepare(
+				`SELECT MAX(CAST(strftime('%s', j.completed_at) AS INTEGER) * 1000) AS last_progress_at
+				 FROM memory_jobs j
+				 JOIN memories m ON m.id = j.memory_id
+				 WHERE j.status = 'completed'
+				   AND j.job_type IN ('extract', 'extraction')
+				   AND j.completed_at IS NOT NULL
+				   AND m.agent_id = ?`,
+			)
+			.get(AGENT_ID) as { last_progress_at: number | null } | undefined;
+		const value = row?.last_progress_at;
+		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+	});
+}
+
 function markSynthesized(accessor: DbAccessor, entityId: string): void {
 	const now = new Date().toISOString();
 	accessor.withWriteTx((db) => {
@@ -212,17 +230,31 @@ export function shouldRunDependencySynthesis(
 	lastExtractionProgressAt: number | undefined,
 	maxStallMs: number | undefined,
 ): boolean {
-	if (!maxStallMs || maxStallMs <= 0) return true;
+	if (maxStallMs == null || maxStallMs <= 0) return true;
 	// Missing, never-ran, or epoch timestamps are not treated as stalls.
 	if (lastExtractionProgressAt == null || lastExtractionProgressAt <= 0) return true;
 	return now - lastExtractionProgressAt <= maxStallMs;
+}
+
+export function resolveExtractionProgressAt(
+	workerProgressAt: number | undefined,
+	durableProgressAt: number | undefined,
+): number | undefined {
+	const worker = typeof workerProgressAt === "number" && workerProgressAt > 0 ? workerProgressAt : undefined;
+	const durable = typeof durableProgressAt === "number" && durableProgressAt > 0 ? durableProgressAt : undefined;
+	if (worker == null) return durable;
+	if (durable == null) return worker;
+	return Math.max(worker, durable);
 }
 
 async function tick(deps: DependencySynthesisDeps): Promise<void> {
 	const cfg = deps.pipelineCfg.structural;
 	const maxStallMs = cfg.synthesisMaxStallMs;
 	const extractionStats = deps.getExtractionStats?.();
-	const lastProgressAt = extractionStats?.lastProgressAt;
+	const lastProgressAt = resolveExtractionProgressAt(
+		extractionStats?.lastProgressAt,
+		loadLatestExtractionProgressAt(deps.accessor),
+	);
 	const now = Date.now();
 	if (!shouldRunDependencySynthesis(now, lastProgressAt, maxStallMs)) {
 		logger.debug("dependency-synthesis", "Skipping tick while extraction pipeline is stalled", {
