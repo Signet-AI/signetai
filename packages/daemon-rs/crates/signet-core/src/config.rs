@@ -1628,6 +1628,7 @@ pub struct StructuralConfig {
     pub synthesis_interval_ms: u64,
     pub synthesis_top_entities: usize,
     pub synthesis_max_facts: usize,
+    pub synthesis_max_stall_ms: u64,
 }
 
 impl Default for StructuralConfig {
@@ -1641,6 +1642,7 @@ impl Default for StructuralConfig {
             synthesis_interval_ms: 60_000,
             synthesis_top_entities: 20,
             synthesis_max_facts: 10,
+            synthesis_max_stall_ms: 30 * 60_000,
         }
     }
 }

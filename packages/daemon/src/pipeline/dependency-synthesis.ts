@@ -16,6 +16,7 @@ import { stripFences, tryParseJson } from "./extraction";
 import { invalidateTraversalCache } from "./graph-traversal";
 import type { LlmProvider } from "./provider";
 import { DEP_DESCRIPTIONS } from "./structural-dependency";
+import type { WorkerProgressStats } from "./worker";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -30,12 +31,7 @@ interface DependencySynthesisDeps {
 	readonly accessor: DbAccessor;
 	readonly provider: LlmProvider;
 	readonly pipelineCfg: PipelineV2Config;
-	readonly getExtractionStats?: () => ExtractionProgressStats | undefined;
-}
-
-interface ExtractionProgressStats {
-	readonly lastProgressAt: number;
-	readonly pending: number;
+	readonly getExtractionStats?: () => WorkerProgressStats | undefined;
 }
 
 interface StaleEntity {
@@ -217,7 +213,8 @@ export function shouldRunDependencySynthesis(
 	maxStallMs: number | undefined,
 ): boolean {
 	if (!maxStallMs || maxStallMs <= 0) return true;
-	if (!lastExtractionProgressAt || lastExtractionProgressAt <= 0) return true;
+	// Missing, never-ran, or epoch timestamps are not treated as stalls.
+	if (lastExtractionProgressAt == null || lastExtractionProgressAt <= 0) return true;
 	return now - lastExtractionProgressAt <= maxStallMs;
 }
 
@@ -225,10 +222,12 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 	const cfg = deps.pipelineCfg.structural;
 	const maxStallMs = cfg.synthesisMaxStallMs;
 	const extractionStats = deps.getExtractionStats?.();
+	const lastProgressAt = extractionStats?.lastProgressAt;
 	const now = Date.now();
-	if (!shouldRunDependencySynthesis(now, extractionStats?.lastProgressAt, maxStallMs)) {
+	if (!shouldRunDependencySynthesis(now, lastProgressAt, maxStallMs)) {
+		if (lastProgressAt == null || lastProgressAt <= 0) return;
 		logger.debug("dependency-synthesis", "Skipping tick while extraction pipeline is stalled", {
-			stalledMs: now - (extractionStats?.lastProgressAt ?? now),
+			stalledMs: now - lastProgressAt,
 			maxStallMs,
 			pending: extractionStats?.pending,
 		});

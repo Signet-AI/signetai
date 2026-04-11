@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use signet_core::config::StructuralConfig;
 use signet_core::constants::DEPENDENCY_TYPES;
@@ -92,6 +92,7 @@ async fn worker_loop(
         interval_ms = config.synthesis_interval_ms,
         top_entities = config.synthesis_top_entities,
         max_facts = config.synthesis_max_facts,
+        max_stall_ms = config.synthesis_max_stall_ms,
         "dep-synthesis worker started"
     );
 
@@ -124,6 +125,17 @@ async fn tick(
     semaphore: &Arc<LlmSemaphore>,
     config: &StructuralConfig,
 ) -> Result<(), String> {
+    if let Some(stalled_ms) = extraction_stalled_ms(pool, config.synthesis_max_stall_ms).await? {
+        let pending = pending_extraction_jobs(pool).await.unwrap_or(0);
+        tracing::debug!(
+            stalled_ms,
+            max_stall_ms = config.synthesis_max_stall_ms,
+            pending,
+            "skipping dep-synthesis tick while extraction pipeline is stalled"
+        );
+        return Ok(());
+    }
+
     let batch = config.dependency_batch_size;
     let stale = find_stale_entities(pool, batch).await?;
     if stale.is_empty() {
@@ -241,6 +253,72 @@ async fn tick(
     }
 
     Ok(())
+}
+
+fn should_run_dependency_synthesis(
+    now_ms: i64,
+    last_extraction_progress_at_ms: Option<i64>,
+    max_stall_ms: u64,
+) -> bool {
+    if max_stall_ms == 0 {
+        return true;
+    }
+    let Some(last_progress_at) = last_extraction_progress_at_ms else {
+        return true;
+    };
+    if last_progress_at <= 0 {
+        return true;
+    }
+    now_ms.saturating_sub(last_progress_at) <= max_stall_ms as i64
+}
+
+async fn extraction_stalled_ms(pool: &DbPool, max_stall_ms: u64) -> Result<Option<i64>, String> {
+    if max_stall_ms == 0 {
+        return Ok(None);
+    }
+
+    let last_progress = latest_extraction_progress_ms(pool).await?;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis() as i64;
+
+    if should_run_dependency_synthesis(now_ms, last_progress, max_stall_ms) {
+        return Ok(None);
+    }
+
+    Ok(last_progress.map(|ts| now_ms.saturating_sub(ts)))
+}
+
+async fn latest_extraction_progress_ms(pool: &DbPool) -> Result<Option<i64>, String> {
+    pool.read(move |conn| {
+        Ok(conn.query_row(
+            "SELECT MAX(CAST(strftime('%s', completed_at) AS INTEGER) * 1000)
+             FROM memory_jobs
+             WHERE status = 'completed'
+               AND job_type IN ('extract', 'extraction')
+               AND completed_at IS NOT NULL",
+            [],
+            |r| r.get::<_, Option<i64>>(0),
+        )?)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+async fn pending_extraction_jobs(pool: &DbPool) -> Result<i64, String> {
+    pool.read(move |conn| {
+        Ok(conn.query_row(
+            "SELECT COUNT(*)
+             FROM memory_jobs
+             WHERE status = 'pending'
+               AND job_type IN ('extract', 'extraction')",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------

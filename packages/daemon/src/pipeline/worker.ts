@@ -49,6 +49,8 @@ export interface WorkerStats {
 	readonly nextTickInMs: number;
 }
 
+export type WorkerProgressStats = Pick<WorkerStats, "lastProgressAt" | "pending">;
+
 export interface WorkerHandle {
 	stop(): Promise<void>;
 	readonly running: boolean;

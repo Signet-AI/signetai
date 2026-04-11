@@ -20,7 +20,7 @@ import { type StructuralClassifyHandle, startStructuralClassifyWorker } from "./
 import { type StructuralDependencyHandle, startStructuralDependencyWorker } from "./structural-dependency";
 import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
-import { type WorkerHandle, type WorkerStats, startWorker } from "./worker";
+import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
 
 export { enqueueExtractionJob } from "./worker";
 export type { WorkerStats } from "./worker";
@@ -198,10 +198,11 @@ export function startPipeline(
 				getExtractionStats: () => {
 					const stats: WorkerStats | undefined = workerHandle?.stats;
 					if (!stats) return undefined;
+					const { lastProgressAt, pending } = stats;
 					return {
-						lastProgressAt: stats.lastProgressAt,
-						pending: stats.pending,
-					};
+						lastProgressAt,
+						pending,
+					} satisfies WorkerProgressStats;
 				},
 			});
 		}
