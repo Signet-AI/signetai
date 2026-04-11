@@ -676,6 +676,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				type: z.string().optional().describe("Memory type (fact, preference, decision, etc.)"),
 				importance: z.number().optional().describe("Importance score 0-1"),
 				tags: z.string().optional().describe("Comma-separated tags for categorization"),
+				pinned: z.boolean().optional().describe("Pin this memory — prevents decay, bypasses 0.95^days aging"),
 				transcript: z
 					.string()
 					.optional()
@@ -713,7 +714,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ content, type, importance, tags, transcript, structured }) => {
+		async ({ content, type, importance, tags, transcript, structured, pinned }) => {
 			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
 			let body = content;
 			if (tags) {
@@ -727,6 +728,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance,
 					transcript,
 					structured,
+					pinned,
 				},
 			});
 
@@ -804,11 +806,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				type: z.string().optional().describe("New type"),
 				importance: z.number().optional().describe("New importance"),
 				tags: z.string().optional().describe("New tags (comma-separated)"),
+				pinned: z.boolean().optional().describe("Pin or unpin this memory"),
 				reason: z.string().describe("Why this edit is being made"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ id, content, type, importance, tags, reason }) => {
+		async ({ id, content, type, importance, tags, reason, pinned }) => {
 			const result = await daemonFetch<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
 				method: "PATCH",
 				body: {
@@ -817,6 +820,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance,
 					tags,
 					reason,
+					pinned,
 				},
 			});
 

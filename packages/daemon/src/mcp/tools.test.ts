@@ -317,6 +317,19 @@ describe("createMcpServer", () => {
 			const body = JSON.parse(cap.body ?? "{}");
 			expect(body.content).toBe("[foo,bar]: tagged memory");
 		});
+
+		it("passes pinned through to request body", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(200, { id: "pin-1", deduped: false }, cap);
+
+			await callTool(server, "memory_store", {
+				content: "critical constraint",
+				pinned: true,
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.pinned).toBe(true);
+		});
 	});
 
 	describe("memory_get", () => {
@@ -356,6 +369,21 @@ describe("createMcpServer", () => {
 			const body = JSON.parse(cap.body ?? "{}");
 			expect(body.content).toBe("updated content");
 			expect(body.reason).toBe("fixing typo");
+		});
+
+		it("passes pinned through to PATCH body", async () => {
+			const cap: { method?: string; body?: string } = {};
+			mockFetch(200, { status: "updated" }, cap);
+
+			await callTool(server, "memory_modify", {
+				id: "abc",
+				pinned: true,
+				reason: "promoting to pinned",
+			});
+
+			expect(cap.method).toBe("PATCH");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.pinned).toBe(true);
 		});
 	});
 
