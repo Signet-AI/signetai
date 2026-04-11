@@ -18,10 +18,6 @@ use tracing::{info, warn};
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
 use crate::structural::DEP_DESCRIPTIONS;
 
-// Mirrors the current Rust dependency-synthesis scope. Thread the runtime
-// agent id through this worker before supporting non-default Rust agents.
-const AGENT_ID: &str = "default";
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -72,9 +68,10 @@ pub fn start(
     provider: Arc<dyn LlmProvider>,
     semaphore: Arc<LlmSemaphore>,
     config: StructuralConfig,
+    agent_id: String,
 ) -> DepSynthesisHandle {
     let (tx, rx) = watch::channel(false);
-    let handle = tokio::spawn(worker_loop(pool, provider, semaphore, config, rx));
+    let handle = tokio::spawn(worker_loop(pool, provider, semaphore, config, agent_id, rx));
     DepSynthesisHandle {
         shutdown: tx,
         handle,
@@ -86,6 +83,7 @@ async fn worker_loop(
     provider: Arc<dyn LlmProvider>,
     semaphore: Arc<LlmSemaphore>,
     config: StructuralConfig,
+    agent_id: String,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let interval = Duration::from_millis(config.synthesis_interval_ms);
@@ -111,7 +109,7 @@ async fn worker_loop(
             break;
         }
 
-        if let Err(e) = tick(&pool, &provider, &semaphore, &config).await {
+        if let Err(e) = tick(&pool, &provider, &semaphore, &config, &agent_id).await {
             warn!(err = %e, "dep-synthesis tick error");
         }
     }
@@ -126,9 +124,12 @@ async fn tick(
     provider: &Arc<dyn LlmProvider>,
     semaphore: &Arc<LlmSemaphore>,
     config: &StructuralConfig,
+    agent_id: &str,
 ) -> Result<(), String> {
-    if let Some(stalled_ms) = extraction_stalled_ms(pool, config.synthesis_max_stall_ms).await? {
-        let pending = pending_extraction_jobs(pool).await.unwrap_or(0);
+    if let Some(stalled_ms) =
+        extraction_stalled_ms(pool, agent_id, config.synthesis_max_stall_ms).await?
+    {
+        let pending = pending_extraction_jobs(pool, agent_id).await.unwrap_or(0);
         tracing::debug!(
             stalled_ms,
             max_stall_ms = config.synthesis_max_stall_ms,
@@ -139,28 +140,28 @@ async fn tick(
     }
 
     let batch = config.dependency_batch_size;
-    let stale = find_stale_entities(pool, batch).await?;
+    let stale = find_stale_entities(pool, agent_id, batch).await?;
     if stale.is_empty() {
         return Ok(());
     }
 
     for entity in stale {
-        let facts = load_facts(pool, &entity.id, config.synthesis_max_facts).await?;
+        let facts = load_facts(pool, agent_id, &entity.id, config.synthesis_max_facts).await?;
 
         if facts.is_empty() {
-            mark_synthesized(pool, &entity.id).await;
+            mark_synthesized(pool, agent_id, &entity.id).await;
             continue;
         }
 
         let candidates =
-            load_top_entities(pool, &entity.id, config.synthesis_top_entities).await?;
+            load_top_entities(pool, agent_id, &entity.id, config.synthesis_top_entities).await?;
 
         if candidates.is_empty() {
-            mark_synthesized(pool, &entity.id).await;
+            mark_synthesized(pool, agent_id, &entity.id).await;
             continue;
         }
 
-        let existing = load_existing_targets(pool, &entity.id).await?;
+        let existing = load_existing_targets(pool, agent_id, &entity.id).await?;
         let prompt = build_prompt(&entity, &facts, &candidates, &existing);
 
         let opts = GenerateOpts {
@@ -169,7 +170,10 @@ async fn tick(
         };
 
         let p = provider.clone();
-        let raw = match semaphore.run(async { p.generate(&prompt, &opts).await }).await {
+        let raw = match semaphore
+            .run(async { p.generate(&prompt, &opts).await })
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 warn!(entity = %entity.name, err = %e, "dep-synthesis LLM call failed");
@@ -185,7 +189,7 @@ async fn tick(
             let canonical = canonical.split_whitespace().collect::<Vec<_>>().join(" ");
 
             let target_id =
-                match lookup_entity_by_canonical(pool, &canonical, &entity.id).await {
+                match lookup_entity_by_canonical(pool, agent_id, &canonical, &entity.id).await {
                     Ok(Some(id)) => id,
                     Ok(None) => continue,
                     Err(e) => {
@@ -196,6 +200,7 @@ async fn tick(
 
             let src = entity.id.clone();
             let tgt = target_id;
+            let agent_id = agent_id.to_string();
             let dep_type = result.dep_type.clone();
             // Mirror TS normalization: trim before fallback check so whitespace-only
             // model output doesn't bypass the related_to reason enforcement.
@@ -208,7 +213,11 @@ async fn tick(
             } else {
                 raw
             };
-            let reason_opt: Option<String> = if reason.is_empty() { None } else { Some(reason) };
+            let reason_opt: Option<String> = if reason.is_empty() {
+                None
+            } else {
+                Some(reason)
+            };
 
             let res = pool
                 .write(Priority::Low, move |conn| {
@@ -217,7 +226,7 @@ async fn tick(
                         signet_services::graph::UpsertDepInput {
                             source_entity_id: &src,
                             target_entity_id: &tgt,
-                            agent_id: AGENT_ID,
+                            agent_id: &agent_id,
                             aspect_id: None,
                             dependency_type: &dep_type,
                             strength: Some(0.5),
@@ -242,7 +251,7 @@ async fn tick(
 
         // Only stamp synthesized if nothing to do, or at least one upsert succeeded
         if results.is_empty() || created > 0 {
-            mark_synthesized(pool, &entity.id).await;
+            mark_synthesized(pool, agent_id, &entity.id).await;
         }
 
         info!(
@@ -274,12 +283,16 @@ fn should_run_dependency_synthesis(
     now_ms.saturating_sub(last_progress_at) <= max_stall_ms as i64
 }
 
-async fn extraction_stalled_ms(pool: &DbPool, max_stall_ms: u64) -> Result<Option<i64>, String> {
+async fn extraction_stalled_ms(
+    pool: &DbPool,
+    agent_id: &str,
+    max_stall_ms: u64,
+) -> Result<Option<i64>, String> {
     if max_stall_ms == 0 {
         return Ok(None);
     }
 
-    let last_progress = latest_extraction_progress_ms(pool).await?;
+    let last_progress = latest_extraction_progress_ms(pool, agent_id).await?;
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?;
@@ -294,7 +307,11 @@ async fn extraction_stalled_ms(pool: &DbPool, max_stall_ms: u64) -> Result<Optio
     Ok(Some(now_ms.saturating_sub(last_progress)))
 }
 
-async fn latest_extraction_progress_ms(pool: &DbPool) -> Result<Option<i64>, String> {
+async fn latest_extraction_progress_ms(
+    pool: &DbPool,
+    agent_id: &str,
+) -> Result<Option<i64>, String> {
+    let agent_id = agent_id.to_string();
     pool.read(move |conn| {
         Ok(conn.query_row(
             "SELECT MAX(CAST(strftime('%s', completed_at) AS INTEGER) * 1000)
@@ -304,7 +321,7 @@ async fn latest_extraction_progress_ms(pool: &DbPool) -> Result<Option<i64>, Str
                AND j.job_type IN ('extract', 'extraction')
                AND j.completed_at IS NOT NULL
                AND m.agent_id = ?1",
-            rusqlite::params![AGENT_ID],
+            rusqlite::params![agent_id],
             |r| r.get::<_, Option<i64>>(0),
         )?)
     })
@@ -312,7 +329,8 @@ async fn latest_extraction_progress_ms(pool: &DbPool) -> Result<Option<i64>, Str
     .map_err(|e| e.to_string())
 }
 
-async fn pending_extraction_jobs(pool: &DbPool) -> Result<i64, String> {
+async fn pending_extraction_jobs(pool: &DbPool, agent_id: &str) -> Result<i64, String> {
+    let agent_id = agent_id.to_string();
     pool.read(move |conn| {
         Ok(conn.query_row(
             "SELECT COUNT(*)
@@ -321,7 +339,7 @@ async fn pending_extraction_jobs(pool: &DbPool) -> Result<i64, String> {
              WHERE j.status = 'pending'
                AND j.job_type IN ('extract', 'extraction')
                AND m.agent_id = ?1",
-            rusqlite::params![AGENT_ID],
+            rusqlite::params![agent_id],
             |r| r.get::<_, i64>(0),
         )?)
     })
@@ -353,7 +371,12 @@ mod tests {
 // Queries
 // ---------------------------------------------------------------------------
 
-async fn find_stale_entities(pool: &DbPool, limit: usize) -> Result<Vec<StaleEntity>, String> {
+async fn find_stale_entities(
+    pool: &DbPool,
+    agent_id: &str,
+    limit: usize,
+) -> Result<Vec<StaleEntity>, String> {
+    let agent_id = agent_id.to_string();
     pool.read(move |conn| {
         let mut stmt = conn.prepare_cached(
             "SELECT id, name, entity_type
@@ -365,7 +388,7 @@ async fn find_stale_entities(pool: &DbPool, limit: usize) -> Result<Vec<StaleEnt
              LIMIT ?2",
         )?;
         let rows = stmt
-            .query_map(rusqlite::params![AGENT_ID, limit], |r| {
+            .query_map(rusqlite::params![agent_id, limit], |r| {
                 Ok(StaleEntity {
                     id: r.get(0)?,
                     name: r.get(1)?,
@@ -380,7 +403,13 @@ async fn find_stale_entities(pool: &DbPool, limit: usize) -> Result<Vec<StaleEnt
     .map_err(|e| e.to_string())
 }
 
-async fn load_facts(pool: &DbPool, entity_id: &str, limit: usize) -> Result<Vec<String>, String> {
+async fn load_facts(
+    pool: &DbPool,
+    agent_id: &str,
+    entity_id: &str,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    let agent_id = agent_id.to_string();
     let eid = entity_id.to_string();
     pool.read(move |conn| {
         let mut stmt = conn.prepare_cached(
@@ -393,7 +422,7 @@ async fn load_facts(pool: &DbPool, entity_id: &str, limit: usize) -> Result<Vec<
              LIMIT ?3",
         )?;
         let facts = stmt
-            .query_map(rusqlite::params![eid, AGENT_ID, limit], |r| r.get(0))?
+            .query_map(rusqlite::params![eid, agent_id, limit], |r| r.get(0))?
             .filter_map(|r| r.ok())
             .collect();
         Ok(facts)
@@ -404,9 +433,11 @@ async fn load_facts(pool: &DbPool, entity_id: &str, limit: usize) -> Result<Vec<
 
 async fn load_top_entities(
     pool: &DbPool,
+    agent_id: &str,
     exclude_id: &str,
     limit: usize,
 ) -> Result<Vec<GraphEntity>, String> {
+    let agent_id = agent_id.to_string();
     let excl = exclude_id.to_string();
     pool.read(move |conn| {
         let mut stmt = conn.prepare_cached(
@@ -417,7 +448,7 @@ async fn load_top_entities(
              LIMIT ?3",
         )?;
         let rows = stmt
-            .query_map(rusqlite::params![excl, AGENT_ID, limit], |r| {
+            .query_map(rusqlite::params![excl, agent_id, limit], |r| {
                 Ok(GraphEntity {
                     name: r.get(0)?,
                     entity_type: r.get(1)?,
@@ -434,8 +465,10 @@ async fn load_top_entities(
 
 async fn load_existing_targets(
     pool: &DbPool,
+    agent_id: &str,
     entity_id: &str,
 ) -> Result<HashSet<String>, String> {
+    let agent_id = agent_id.to_string();
     let eid = entity_id.to_string();
     pool.read(move |conn| {
         let mut stmt = conn.prepare_cached(
@@ -446,7 +479,7 @@ async fn load_existing_targets(
              WHERE dep.source_entity_id = ?2 AND dep.agent_id = ?1",
         )?;
         let names: HashSet<String> = stmt
-            .query_map(rusqlite::params![AGENT_ID, eid], |r| r.get(0))?
+            .query_map(rusqlite::params![agent_id, eid], |r| r.get(0))?
             .filter_map(|r| r.ok())
             .collect();
         Ok(names)
@@ -457,16 +490,18 @@ async fn load_existing_targets(
 
 async fn lookup_entity_by_canonical(
     pool: &DbPool,
+    agent_id: &str,
     canonical: &str,
     exclude_id: &str,
 ) -> Result<Option<String>, String> {
+    let agent_id = agent_id.to_string();
     let c = canonical.to_string();
     let excl = exclude_id.to_string();
     pool.read(move |conn| {
         let id: Option<String> = conn
             .query_row(
-                "SELECT id FROM entities WHERE canonical_name = ?1 AND id != ?2 LIMIT 1",
-                rusqlite::params![c, excl],
+                "SELECT id FROM entities WHERE canonical_name = ?1 AND agent_id = ?2 AND id != ?3 LIMIT 1",
+                rusqlite::params![c, agent_id, excl],
                 |r| r.get(0),
             )
             .ok();
@@ -476,14 +511,15 @@ async fn lookup_entity_by_canonical(
     .map_err(|e| e.to_string())
 }
 
-async fn mark_synthesized(pool: &DbPool, entity_id: &str) {
+async fn mark_synthesized(pool: &DbPool, agent_id: &str, entity_id: &str) {
+    let agent_id = agent_id.to_string();
     let eid = entity_id.to_string();
     let _ = pool
         .write(Priority::Low, move |conn| {
             let ts = chrono::Utc::now().to_rfc3339();
             conn.execute(
                 "UPDATE entities SET last_synthesized_at = ?1 WHERE id = ?2 AND agent_id = ?3",
-                rusqlite::params![ts, eid, AGENT_ID],
+                rusqlite::params![ts, eid, agent_id],
             )?;
             Ok(serde_json::Value::Null)
         })
@@ -578,7 +614,11 @@ fn parse_results(raw: &str) -> Vec<SynthesisResult> {
                 .chars()
                 .take(300)
                 .collect();
-            Some(SynthesisResult { target, dep_type, reason })
+            Some(SynthesisResult {
+                target,
+                dep_type,
+                reason,
+            })
         })
         .collect()
 }

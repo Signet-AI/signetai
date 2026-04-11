@@ -848,6 +848,20 @@ describe("loadPipelineConfig", () => {
 		expect(result.structural.synthesisMaxStallMs).toBe(0);
 	});
 
+	it("does not let negative dependency synthesis stall config disable the gate", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: -1,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(DEFAULT_PIPELINE_V2.structural.synthesisMaxStallMs);
+	});
+
 	it("supports dependencySynthesis.maxStallMs as a config alias", () => {
 		const result = loadPipelineConfig({
 			memory: {

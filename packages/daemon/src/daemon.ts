@@ -2133,6 +2133,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			providerTracker,
 			analyticsCollector,
 			telemetry,
+			resolveAgentId({}),
 		);
 	} else {
 		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);

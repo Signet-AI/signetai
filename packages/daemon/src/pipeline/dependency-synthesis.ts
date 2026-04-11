@@ -29,6 +29,7 @@ export interface DependencySynthesisHandle {
 
 interface DependencySynthesisDeps {
 	readonly accessor: DbAccessor;
+	readonly agentId: string;
 	readonly provider: LlmProvider;
 	readonly pipelineCfg: PipelineV2Config;
 	readonly getExtractionStats?: () => WorkerProgressStats | undefined;
@@ -59,11 +60,7 @@ const VALID_DEP_TYPES = new Set<string>(DEPENDENCY_TYPES);
 // Queries
 // ---------------------------------------------------------------------------
 
-// Mirrors the current dependency-synthesis scope. Thread the runtime agent id
-// through this worker before supporting non-default agents.
-const AGENT_ID = "default";
-
-function findStaleEntities(db: ReadDb, limit: number): readonly StaleEntity[] {
+function findStaleEntities(db: ReadDb, agentId: string, limit: number): readonly StaleEntity[] {
 	return db
 		.prepare(
 			`SELECT id, name, entity_type
@@ -74,10 +71,10 @@ function findStaleEntities(db: ReadDb, limit: number): readonly StaleEntity[] {
 			 ORDER BY updated_at DESC
 			 LIMIT ?`,
 		)
-		.all(AGENT_ID, limit) as StaleEntity[];
+		.all(agentId, limit) as StaleEntity[];
 }
 
-function loadFacts(db: ReadDb, entityId: string, limit: number): readonly string[] {
+function loadFacts(db: ReadDb, agentId: string, entityId: string, limit: number): readonly string[] {
 	const rows = db
 		.prepare(
 			`SELECT ea.content
@@ -88,11 +85,11 @@ function loadFacts(db: ReadDb, entityId: string, limit: number): readonly string
 			 ORDER BY ea.updated_at DESC
 			 LIMIT ?`,
 		)
-		.all(entityId, AGENT_ID, limit) as Array<{ content: string }>;
+		.all(entityId, agentId, limit) as Array<{ content: string }>;
 	return rows.map((r) => r.content);
 }
 
-function loadTopEntities(db: ReadDb, excludeId: string, limit: number): readonly GraphEntity[] {
+function loadTopEntities(db: ReadDb, agentId: string, excludeId: string, limit: number): readonly GraphEntity[] {
 	return db
 		.prepare(
 			`SELECT id, name, entity_type, mentions
@@ -101,10 +98,10 @@ function loadTopEntities(db: ReadDb, excludeId: string, limit: number): readonly
 			 ORDER BY mentions DESC
 			 LIMIT ?`,
 		)
-		.all(excludeId, AGENT_ID, limit) as GraphEntity[];
+		.all(excludeId, agentId, limit) as GraphEntity[];
 }
 
-function loadExistingTargets(db: ReadDb, entityId: string): ReadonlySet<string> {
+function loadExistingTargets(db: ReadDb, agentId: string, entityId: string): ReadonlySet<string> {
 	const rows = db
 		.prepare(
 			`SELECT dst.name AS target_name
@@ -113,11 +110,11 @@ function loadExistingTargets(db: ReadDb, entityId: string): ReadonlySet<string> 
 			   AND dst.agent_id = ?
 			 WHERE dep.source_entity_id = ? AND dep.agent_id = ?`,
 		)
-		.all(AGENT_ID, entityId, AGENT_ID) as Array<{ target_name: string }>;
+		.all(agentId, entityId, agentId) as Array<{ target_name: string }>;
 	return new Set(rows.map((r) => r.target_name));
 }
 
-function loadLatestExtractionProgressAt(accessor: DbAccessor): number | undefined {
+function loadLatestExtractionProgressAt(accessor: DbAccessor, agentId: string): number | undefined {
 	return accessor.withReadDb((db) => {
 		const row = db
 			.prepare(
@@ -129,20 +126,16 @@ function loadLatestExtractionProgressAt(accessor: DbAccessor): number | undefine
 				   AND j.completed_at IS NOT NULL
 				   AND m.agent_id = ?`,
 			)
-			.get(AGENT_ID) as { last_progress_at: number | null } | undefined;
+			.get(agentId) as { last_progress_at: number | null } | undefined;
 		const value = row?.last_progress_at;
 		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 	});
 }
 
-function markSynthesized(accessor: DbAccessor, entityId: string): void {
+function markSynthesized(accessor: DbAccessor, agentId: string, entityId: string): void {
 	const now = new Date().toISOString();
 	accessor.withWriteTx((db) => {
-		db.prepare("UPDATE entities SET last_synthesized_at = ? WHERE id = ? AND agent_id = ?").run(
-			now,
-			entityId,
-			AGENT_ID,
-		);
+		db.prepare("UPDATE entities SET last_synthesized_at = ? WHERE id = ? AND agent_id = ?").run(now, entityId, agentId);
 	});
 }
 
@@ -265,7 +258,7 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 	const workerProgressAt = extractionStats?.lastProgressAt;
 	const durableProgressAt =
 		maxStallMs > 0 && shouldLoadDurableExtractionProgress(now, workerProgressAt, cfg.synthesisIntervalMs)
-			? loadLatestExtractionProgressAt(deps.accessor)
+			? loadLatestExtractionProgressAt(deps.accessor, deps.agentId)
 			: undefined;
 	const lastProgressAt = maxStallMs > 0 ? resolveExtractionProgressAt(workerProgressAt, durableProgressAt) : undefined;
 	if (!shouldRunDependencySynthesis(now, lastProgressAt, maxStallMs)) {
@@ -277,25 +270,27 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 		return;
 	}
 
-	const stale = deps.accessor.withReadDb((db) => findStaleEntities(db, cfg.dependencyBatchSize));
+	const stale = deps.accessor.withReadDb((db) => findStaleEntities(db, deps.agentId, cfg.dependencyBatchSize));
 	if (stale.length === 0) return;
 
 	for (const entity of stale) {
-		const facts = deps.accessor.withReadDb((db) => loadFacts(db, entity.id, cfg.synthesisMaxFacts));
+		const facts = deps.accessor.withReadDb((db) => loadFacts(db, deps.agentId, entity.id, cfg.synthesisMaxFacts));
 
 		if (facts.length === 0) {
-			markSynthesized(deps.accessor, entity.id);
+			markSynthesized(deps.accessor, deps.agentId, entity.id);
 			continue;
 		}
 
-		const candidates = deps.accessor.withReadDb((db) => loadTopEntities(db, entity.id, cfg.synthesisTopEntities));
+		const candidates = deps.accessor.withReadDb((db) =>
+			loadTopEntities(db, deps.agentId, entity.id, cfg.synthesisTopEntities),
+		);
 
 		if (candidates.length === 0) {
-			markSynthesized(deps.accessor, entity.id);
+			markSynthesized(deps.accessor, deps.agentId, entity.id);
 			continue;
 		}
 
-		const existing = deps.accessor.withReadDb((db) => loadExistingTargets(db, entity.id));
+		const existing = deps.accessor.withReadDb((db) => loadExistingTargets(db, deps.agentId, entity.id));
 
 		const prompt = buildSynthesisPrompt(entity, facts, candidates, existing);
 
@@ -319,9 +314,9 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 			const canonical = result.target.trim().toLowerCase().replace(/\s+/g, " ");
 			const target = deps.accessor.withReadDb(
 				(db) =>
-					db.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1").get(canonical) as
-						| { id: string }
-						| undefined,
+					db
+						.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
+						.get(canonical, deps.agentId) as { id: string } | undefined,
 			);
 
 			if (!target || target.id === entity.id) continue;
@@ -335,7 +330,7 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 				upsertDependency(deps.accessor, {
 					sourceEntityId: entity.id,
 					targetEntityId: target.id,
-					agentId: AGENT_ID,
+					agentId: deps.agentId,
 					dependencyType: result.dep_type as DependencyType,
 					strength: 0.5,
 					confidence: 0.5,
@@ -354,7 +349,7 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 		// Only mark synthesized if there was nothing to do or at least one
 		// upsert succeeded — otherwise the entity retries on the next tick.
 		if (results.length === 0 || created > 0) {
-			markSynthesized(deps.accessor, entity.id);
+			markSynthesized(deps.accessor, deps.agentId, entity.id);
 		}
 
 		if (created > 0) {

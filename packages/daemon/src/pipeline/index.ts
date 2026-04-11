@@ -22,6 +22,8 @@ import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
 
+const DEFAULT_PIPELINE_AGENT_ID = "default";
+
 export { enqueueExtractionJob } from "./worker";
 export type { WorkerStats } from "./worker";
 export { enqueueDocumentIngestJob } from "./document-worker";
@@ -118,6 +120,7 @@ export function startPipeline(
 	providerTracker?: ProviderTracker,
 	analytics?: AnalyticsCollector,
 	telemetry?: TelemetryCollector,
+	agentId = DEFAULT_PIPELINE_AGENT_ID,
 ): void {
 	if (workerHandle) {
 		logger.warn("pipeline", "Pipeline already running, skipping start");
@@ -193,6 +196,7 @@ export function startPipeline(
 		if (!dependencySynthesisHandle && pipelineCfg.structural.synthesisEnabled) {
 			dependencySynthesisHandle = startDependencySynthesisWorker({
 				accessor,
+				agentId,
 				provider,
 				pipelineCfg,
 				getExtractionStats: () => {

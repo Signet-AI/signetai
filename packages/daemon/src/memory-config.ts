@@ -260,6 +260,11 @@ function clampPositive(raw: unknown, min: number, max: number, fallback: number)
 	return Math.max(min, Math.min(max, raw));
 }
 
+function clampNonNegative(raw: unknown, max: number, fallback: number): number {
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return fallback;
+	return Math.min(max, raw);
+}
+
 function parseOptionalPositive(raw: unknown, min: number, max: number): number | undefined {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
 	return Math.max(min, Math.min(max, raw));
@@ -841,10 +846,8 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				d.structural.synthesisTopEntities,
 			),
 			synthesisMaxFacts: clampPositive(structuralRaw?.synthesisMaxFacts, 3, 50, d.structural.synthesisMaxFacts),
-			// 0 is the documented sentinel that disables the dependency-synthesis stall gate.
-			synthesisMaxStallMs: clampPositive(
+			synthesisMaxStallMs: clampNonNegative(
 				structuralRaw?.synthesisMaxStallMs ?? dependencySynthesisRaw?.maxStallMs,
-				0,
 				24 * 60 * 60_000,
 				d.structural.synthesisMaxStallMs,
 			),
