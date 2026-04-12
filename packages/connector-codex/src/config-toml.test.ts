@@ -340,6 +340,20 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(hooks.UserPromptSubmit).toBeDefined();
 		expect(hooks.Stop).toBeDefined();
 	});
+
+	test("writes fresh Signet hooks when existing hooks.json has _signet marker but empty hooks", async () => {
+		writeFileSync(hooksPath, JSON.stringify({ _signet: true, hooks: {} }));
+
+		const c = connector();
+		await c.install(tempHome);
+
+		expect(c.isInstalled()).toBe(true);
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, unknown>;
+		expect(hooks.SessionStart).toBeDefined();
+		expect(hooks.UserPromptSubmit).toBeDefined();
+		expect(hooks.Stop).toBeDefined();
+	});
 });
 
 describe("CodexConnector.install — hooks.json legacy migration", () => {

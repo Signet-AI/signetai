@@ -313,9 +313,10 @@ export class CodexConnector extends BaseConnector {
 
 		if (existing) {
 			const migrated = migrateLegacyHooksFile(existing, signetArgs);
-			if (isSignetOwned(migrated)) {
+			const hasHooks = migrated.hooks && Object.keys(migrated.hooks).length > 0;
+			if (isSignetOwned(migrated) && hasHooks) {
 				writeHooksFile(hooksPath, migrated);
-			} else if (migrated.hooks && Object.keys(migrated.hooks).length > 0) {
+			} else if (!isSignetOwned(migrated) && hasHooks) {
 				const signet = buildHooksFile(signetArgs);
 				const merged: HooksFile = { ...migrated, _signet: true };
 				merged.hooks = { ...(migrated.hooks as Record<string, MatcherGroup[]>) };
