@@ -91,8 +91,8 @@ function seedCompletedExtractionJob(db: Database, id: string, agentId: string, c
 	const now = new Date().toISOString();
 	const memoryId = `mem-${id}`;
 	db.prepare(
-		`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
-		 VALUES (?, 'completed extraction source', 'fact', ?, ?, ?, 'test')`,
+		`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by, vector_clock)
+		 VALUES (?, 'completed extraction source', 'fact', ?, ?, ?, 'test', '{}')`,
 	).run(memoryId, agentId, now, now);
 	db.prepare(
 		`INSERT INTO memory_jobs (id, memory_id, job_type, status, completed_at, created_at, updated_at)

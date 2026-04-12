@@ -2130,10 +2130,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			memoryCfg.embedding,
 			fetchEmbedding,
 			memoryCfg.search,
+			resolveDaemonAgentId(),
 			providerTracker,
 			analyticsCollector,
 			telemetry,
-			resolveDaemonAgentId(),
 		);
 	} else {
 		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION);

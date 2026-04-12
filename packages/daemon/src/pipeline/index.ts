@@ -22,7 +22,6 @@ import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
 
-const DEFAULT_PIPELINE_AGENT_ID = "default";
 
 export { enqueueExtractionJob } from "./worker";
 export type { WorkerStats } from "./worker";
@@ -117,10 +116,10 @@ export function startPipeline(
 	embeddingCfg: EmbeddingConfig,
 	fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	searchCfg: { alpha: number; top_k: number; min_score: number },
+	agentId: string,
 	providerTracker?: ProviderTracker,
 	analytics?: AnalyticsCollector,
 	telemetry?: TelemetryCollector,
-	agentId = DEFAULT_PIPELINE_AGENT_ID,
 ): void {
 	if (workerHandle) {
 		logger.warn("pipeline", "Pipeline already running, skipping start");

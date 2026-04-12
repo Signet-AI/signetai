@@ -328,11 +328,11 @@ export async function runDependencySynthesisTick(deps: DependencySynthesisDeps):
 			const target = deps.accessor.withReadDb(
 				(db) =>
 					db
-						.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
-						.get(canonical, deps.agentId) as { id: string } | undefined,
+						.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? AND id != ? LIMIT 1")
+						.get(canonical, deps.agentId, entity.id) as { id: string } | undefined,
 			);
 
-			if (!target || target.id === entity.id) continue;
+			if (!target) continue;
 
 			try {
 				const normalized = result.reason.trim();
