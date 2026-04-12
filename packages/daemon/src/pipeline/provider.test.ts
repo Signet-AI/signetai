@@ -715,6 +715,34 @@ describe("createOpenCodeProvider", () => {
 		expect(typeof capturedBody.system).toBe("string");
 	});
 
+	it("generate() omits format field when enableStructuredOutput is false", async () => {
+		let capturedBody: Record<string, unknown> = {};
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_no_so",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			capturedBody = JSON.parse(init?.body as string);
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			enableStructuredOutput: false,
+		});
+		await provider.generate("my prompt");
+
+		expect(capturedBody.parts).toEqual([{ type: "text", text: "my prompt" }]);
+		expect(capturedBody.format).toBeUndefined();
+		expect(capturedBody.system).toBeUndefined();
+	});
+
 	it("generate() joins multiple text parts", async () => {
 		mockFetch(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
@@ -895,9 +923,7 @@ describe("createOpenCodeProvider", () => {
 					tokens: { input: 10, output: 5 },
 					structured: { facts: [{ content: "from structured", type: "fact", confidence: 0.9 }], entities: [] },
 				},
-				parts: [
-					{ type: "text", text: "ignore this text", id: "p1", sessionID: "ses_structured", messageID: "msg_s" },
-				],
+				parts: [{ type: "text", text: "ignore this text", id: "p1", sessionID: "ses_structured", messageID: "msg_s" }],
 			});
 		});
 
@@ -970,6 +996,52 @@ describe("createOpenCodeProvider", () => {
 		await provider.generate("second call");
 		expect(bodies[2]?.format).toBeUndefined();
 	});
+
+	it("generate() disables structured output after consecutive malformed 200 responses", async () => {
+		let postCount = 0;
+		const postBodies: Record<string, unknown>[] = [];
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_200err_${postCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			if (init?.method === "POST") {
+				postCount++;
+				postBodies.push(JSON.parse(init?.body as string));
+				if (postCount <= 2) {
+					// First two POSTs: 200 with empty body (GitHub Copilot schema rejection pattern)
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				// Third POST (after structured output disabled): succeed
+				return Response.json(openCodeResponse("recovered without format"));
+			}
+			// GET polls: return empty array so poll times out quickly
+			return Response.json([]);
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			enableOllamaFallback: false,
+			defaultTimeoutMs: 500,
+		});
+		const result = await provider.generate("test");
+		expect(result).toBe("recovered without format");
+
+		// The third POST body should NOT have the format field
+		expect(postBodies.length).toBeGreaterThanOrEqual(3);
+		expect(postBodies[0]?.format).toBeDefined(); // first: had format
+		expect(postBodies[1]?.format).toBeDefined(); // second (retry): still had format
+		expect(postBodies[2]?.format).toBeUndefined(); // third: format disabled
+	}, 15000);
 
 	it("generate() does not disable structured output on an unrelated 400", async () => {
 		let attempts = 0;

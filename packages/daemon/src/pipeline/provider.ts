@@ -1552,6 +1552,7 @@ export interface OpenCodeProviderConfig {
 	readonly ollamaFallbackModel?: string;
 	readonly ollamaFallbackBaseUrl: string;
 	readonly ollamaFallbackMaxContextTokens?: number;
+	readonly enableStructuredOutput?: boolean;
 }
 
 const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
@@ -1562,6 +1563,7 @@ const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
 	ollamaFallbackModel: undefined,
 	ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
 	ollamaFallbackMaxContextTokens: undefined,
+	enableStructuredOutput: true,
 };
 
 /**
@@ -1962,7 +1964,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		return sessionId;
 	}
 
-	let structuredOutputSupported = true;
+	let structuredOutputSupported = cfg.enableStructuredOutput !== false;
 
 	function buildMessageBody(prompt: string, structured?: boolean): string {
 		const body: Record<string, unknown> = {
@@ -2161,6 +2163,30 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			}
 			const retryParsed = await parsePostResponse(retryRes, retrySid);
 			if (retryParsed) return retryParsed;
+
+			// Two consecutive malformed 200s with structured output enabled is a
+			// strong signal that the upstream provider rejects the format field
+			// but wraps the rejection in a 200 (e.g. GitHub Copilot). Disable
+			// structured output and try once more before falling back.
+			if (structuredOutputSupported) {
+				logger.info("pipeline", "Consecutive malformed 200 responses; disabling structured output", {
+					sessionId: retrySid,
+				});
+				structuredOutputSupported = false;
+				sessionId = null;
+				const fallbackSid = await createSession();
+				sessionId = fallbackSid;
+				const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: buildMessageBody(prompt, false),
+					signal: controller.signal,
+				});
+				if (fallbackRes.ok) {
+					const fallbackParsed = await parsePostResponse(fallbackRes, fallbackSid);
+					if (fallbackParsed) return fallbackParsed;
+				}
+			}
 
 			logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
 				sessionId: retrySid,
