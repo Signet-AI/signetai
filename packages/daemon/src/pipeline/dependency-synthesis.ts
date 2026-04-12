@@ -126,6 +126,10 @@ function loadLatestExtractionProgressAt(accessor: DbAccessor, agentId: string): 
 				   AND j.completed_at IS NOT NULL
 				   AND m.agent_id = ?`,
 			)
+			// NOTE: strftime('%s') truncates to 1-second resolution.
+			// At the default 30-minute stall window this is negligible (<0.1%).
+			// For very small stall windows (≤10 s), the rounding may cause
+			// ±1 tick of jitter near the boundary.
 			.get(agentId) as { last_progress_at: number | null } | undefined;
 		const value = row?.last_progress_at;
 		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;

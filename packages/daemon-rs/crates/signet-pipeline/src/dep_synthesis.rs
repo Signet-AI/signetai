@@ -325,6 +325,8 @@ async fn latest_extraction_progress_ms(
             rusqlite::params![agent_id],
             |r| r.get::<_, Option<i64>>(0),
         )?)
+        // NOTE: strftime('%s') truncates to 1-second resolution.
+        // At the default 30-minute stall window this is negligible (<0.1%).
     })
     .await
     .map_err(|e| e.to_string())

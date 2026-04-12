@@ -208,6 +208,9 @@ export function startPipeline(
 						pending,
 					} satisfies WorkerProgressStats;
 				},
+				// NOTE: The extraction worker is a singleton — its stats are
+				// global, not per-agent. The stall gate measures overall
+				// extraction health rather than agent-specific progress.
 			});
 		}
 	}
