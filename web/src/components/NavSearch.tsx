@@ -1,11 +1,12 @@
+import Fuse from "fuse.js";
 import { SearchIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import Fuse from "fuse.js";
 
 interface SearchItem {
 	readonly title: string;
 	readonly description: string;
 	readonly section: string;
+	readonly sectionTitle: string;
 	readonly slug: string;
 	readonly url: string;
 	readonly excerpt: string;
@@ -33,10 +34,11 @@ export default function NavSearch() {
 			setFuse(
 				new Fuse(data, {
 					keys: [
-						{ name: "title", weight: 0.4 },
-						{ name: "description", weight: 0.3 },
-						{ name: "excerpt", weight: 0.2 },
-						{ name: "section", weight: 0.1 },
+						{ name: "title", weight: 0.35 },
+						{ name: "sectionTitle", weight: 0.25 },
+						{ name: "excerpt", weight: 0.25 },
+						{ name: "description", weight: 0.1 },
+						{ name: "section", weight: 0.05 },
 					],
 					threshold: 0.4,
 					includeScore: true,
@@ -111,6 +113,7 @@ export default function NavSearch() {
 	}
 
 	return (
+		/* biome-ignore lint/a11y/useSemanticElements: search landmark is intentional for assistive technology navigation */
 		<div ref={rootRef} className={`nav-search ${open ? "is-open" : ""}`} role="search">
 			<button
 				type="button"
@@ -120,7 +123,9 @@ export default function NavSearch() {
 			>
 				<SearchIcon size={14} />
 				<span className="nav-search-hint">Search</span>
-				<kbd className="nav-search-kbd">{typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘K" : "Ctrl+K"}</kbd>
+				<kbd className="nav-search-kbd">
+					{typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘K" : "Ctrl+K"}
+				</kbd>
 			</button>
 
 			{open && (
@@ -135,29 +140,34 @@ export default function NavSearch() {
 						placeholder="Search docs..."
 						autoComplete="off"
 						aria-label="Search documentation"
+						aria-expanded={results.length > 0}
+						aria-controls="nav-search-results"
+						aria-activedescendant={results[selected] ? `nav-search-option-${selected}` : undefined}
 					/>
 					{results.length > 0 && (
-						<ul className="nav-search-results" role="listbox">
-							{results.map((r, i) => (
-								<li
-									key={r.item.slug}
-									role="option"
-									aria-selected={i === selected}
-									className={i === selected ? "selected" : ""}
-								>
-									<a href={r.item.url} onClick={() => setOpen(false)}>
-										<span className="nav-search-result-title">{r.item.title}</span>
-										{r.item.section && (
-											<span className="nav-search-result-section">{r.item.section}</span>
-										)}
-									</a>
-								</li>
-							))}
-						</ul>
+						/* biome-ignore lint/a11y/useSemanticElements: popup search results use listbox semantics for screen readers */
+						<div id="nav-search-results" className="nav-search-results" role="listbox" tabIndex={-1}>
+							{results.map((r, i) => {
+								const option = (
+									<div
+										id={`nav-search-option-${i}`}
+										key={r.item.slug}
+										role="option"
+										tabIndex={-1}
+										aria-selected={i === selected}
+										className={i === selected ? "selected" : ""}
+									>
+										<a href={r.item.url} onClick={() => setOpen(false)}>
+											<span className="nav-search-result-title">{r.item.title}</span>
+											<span className="nav-search-result-section">{r.item.sectionTitle || r.item.section || "Docs"}</span>
+										</a>
+									</div>
+								);
+								return option;
+							})}
+						</div>
 					)}
-					{query.length >= 2 && results.length === 0 && (
-						<div className="nav-search-empty">No results</div>
-					)}
+					{query.length >= 2 && results.length === 0 && <div className="nav-search-empty">No results</div>}
 				</div>
 			)}
 		</div>

@@ -4,85 +4,106 @@ Roadmap
 This is the public roadmap for Signet, updated manually as priorities
 shift. It captures what we're actively building, what's committed next,
 and what we're still shaping. For implementation sequencing, dependency
-contracts, and status truth, see `docs/specs/INDEX.md`.
+contracts, and status truth, see [Spec Index](./docs/specs/INDEX.md).
 
 Status markers: `[done]` shipped, `[wip]` in progress, `[next]` planned,
 `[stub]` intentionally tracked but not fully planned, `[idea]` exploring.
 
 
-Current Focus (0.76.x)
+Current Focus (0.98.x)
 ---
 
-- [wip] Desire Paths Phase 4-5 continuation
-  - path scoring evolution, temporal reinforcement, explorer-bee and
-    reconsolidation tracks
-- [wip] Procedural Memory P2-P5
-  - usage tracking, relation computation, retrieval/suggestion quality,
-    and visualization polish
-- [wip] Multi-agent + runtime hardening
-  - scoped memory policies, runtime adapter stability, connector reliability
-- [wip] Ontology hardening
-  - confidence/provenance semantics, relationship typing, temporal lineage
-- [wip] SSM translation track
-  - benchmark harness and shadow-mode rollout specs now in the index
+- [wip] Public positioning and documentation correctness
+  - align README, docs, and website language around portable agent state,
+    local ownership, and behavioral context portability
+- [wip] Connector and harness reliability
+  - harden Claude Code, OpenCode, OpenClaw, Codex, Pi, and Hermes Agent
+    integrations with smoke tests and clearer install diagnostics
+- [wip] Multi-agent runtime hardening
+  - scoped memory policies, runtime adapter stability, session routing,
+    and visibility correctness across named agents
+- [wip] Memory quality and provenance
+  - extraction-first memory, transcript-backed verification, entity graph
+    cleanup, recall provenance, and lower-noise context injection
+- [wip] Permissions, auth, and secrets boundary
+  - agent-blind secrets, RBAC, token policy, rate limits, and capability
+    scoping for tool and MCP access
 
 
 Planned Next
 ---
 
-- [next] Ontology governance workflow
-  - proposal/review gates, compatibility notes, rollback requirements
-- [next] SSM temporal backbone (shadow mode)
-  - deterministic fallback, canary validation, latency/drift guardrails
-- [next] SSM-assisted traversal ranking (shadow mode)
-  - multi-hop quality lift while preserving traversal bounds + constraints
+- [next] Behavioral context portability / OAS working draft
+  - define export/import expectations for identity, memory, provenance,
+    skills, and secrets metadata without tying the standard to one harness
+- [next] Hermes Agent production hardening
+  - validate real install flows, gateway session routing, and cross-platform
+    memory continuity before broader migration guidance
+- [next] Capability-scoped tool permissions
+  - distinguish read-only, destructive, credentialed, and approval-gated
+    actions across harnesses and MCP tools
 - [next] Rust daemon parity + primary runtime cutover
-  - parity first, cutover second
-- [next] Deep memory search (optional escalation)
-  - multi-agent LLM memory search when primary retrieval confidence is low
+  - parity first, cutover second, with divergence logging and rollback
+    paths preserved until confidence is boring
+- [next] Deep memory search as an optional escalation path
+  - multi-agent or LLM-assisted search only when primary retrieval cannot
+    answer with enough confidence
 
 
 Strategic Stub Backlog (tracked, planning incomplete)
 ---
 
 - [stub] Distributed harness and multi-remote orchestration
-- [stub] First-party Signet harness (while continuing connector support)
-  - reference direction: Hermes Agent
+- [stub] First-party Signet harness while continuing connector support
+  - reference direction: Hermes Agent and Forge-style native runtime work
 - [stub] Remember/Recall skill parity refresh with current schema
 - [stub] MCP CLI bridge + usage analytics in dashboard
-  - reference direction: MC Porter
+  - reference direction: MC Porter-style command visibility
 - [stub] Git-based marketplace monorepo for skills + MCP servers
   - GitHub-authenticated PR publishing/reviews, JSON review artifacts
-- [stub] Adaptive skill lifecycle (passive/continuous maintenance)
+- [stub] Adaptive skill lifecycle
+  - usage tracking, maintenance suggestions, and procedural memory links
 - [stub] Cryptographic identity roadmap
-- [stub] Connectors: Py Agent, Hermes Agent
-- [stub] Plugin API + app ecosystem integrations (dashboard/CLI)
-- [stub] Unified realtime constellation/embedding/entity viewer
-  - replace slow current 3D path; visualize new dependency types by default
+  - agent passports, artifact signing, and verifiable identity without
+    requiring a specific chain or vendor identity provider
+- [stub] Plugin API + app ecosystem integrations
+  - dashboard and CLI surfaces for third-party integrations
+- [stub] Unified realtime constellation / embedding / entity viewer
+  - replace slow current 3D path and make provenance inspectable by default
 - [stub] Dashboard IA refactor
   - settings as standalone page, breadcrumb-first navigation model
 - [stub] Post-install behavior migration audit
-  - ensure daemon/CLI own critical install flows
+  - ensure daemon/CLI own critical install flows consistently
 
 
 Recently Shipped
 ---
 
-- [done] Index and dependency control plane expanded and synchronized
-  - ontology track, SSM track, and strategic stub backlog fully registered
-- [done] Desire Paths Phase 1-3 baseline
-  - traversal-primary retrieval, constructed memories, prospective indexing,
-    scoped vector restore, reranking and dampening groundwork
-- [done] Knowledge Architecture KA-1 through KA-6
-  - entity/aspect/attribute schema, traversal retrieval, continuity coupling,
-    entity pinning, behavioral feedback
-- [done] Multi-agent support phases 1-8
-  - roster/scoping/runtime routing foundation complete; polish phases deferred
+- [done] Readable changelog generation and release-note correctness
+  - release entries now use the bumped version and include a highlights
+    layer plus exact release ledger
+- [done] Workspace source checkout sync
+  - managed source checkout, clean-branch update behavior, and watcher
+    ignore coverage
+- [done] Connector expansion and hardening
+  - Hermes Agent integration, Forge connector work, OpenClaw runtime
+    hardening, and request normalization
+- [done] Recall surface alignment
+  - CLI, MCP, SDK, and hook recall paths now share more of the same filter
+    and response contract
+- [done] Documentation site quality pass
+  - section-aware docs search, normal markdown link rewriting, TOC fixes,
+    and clearer contributor/user workflow docs
+- [done] Multi-agent support baseline
+  - roster/scoping/runtime routing foundation complete; polish phases remain
+    active in current focus
 
 
 Notes
 ---
 
-- Explicitly dropped: client-side LLM reranking (superseded by better path).
-- This roadmap is directional. `docs/specs/INDEX.md` remains the execution
-  contract and dependency source of truth.
+- The old predictor-centered roadmap is retired as a public framing. Learned
+  ranking can remain experimental, but Signet's product claim is portable
+  agent state with inspectable extraction, provenance, and context selection.
+- This roadmap is directional. [Spec Index](./docs/specs/INDEX.md) remains
+  the execution contract and dependency source of truth.

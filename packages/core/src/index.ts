@@ -110,6 +110,14 @@ export {
 	type VectorSearchOptions,
 	type HybridSearchOptions,
 } from "./search";
+export { applyRecallScoreThreshold, partitionRecallRows } from "./recall";
+export type { RecallPartitionableRow } from "./recall";
+export {
+	createMemoriesFts,
+	memoriesFtsNeedsTokenizerRepair,
+	readMemoriesFtsSql,
+	recreateMemoriesFts,
+} from "./fts-schema";
 export { migrate, MigrationSource } from "./migrate";
 export {
 	detectSchema,
@@ -201,6 +209,16 @@ export {
 	resolveOhMyPiExtensionsDir,
 	writeConfiguredOhMyPiAgentDir,
 } from "./oh-my-pi";
+
+export {
+	clearConfiguredPiAgentDir,
+	getPiConfigPath,
+	listPiAgentDirCandidates,
+	readConfiguredPiAgentDir,
+	resolvePiAgentDir,
+	resolvePiExtensionsDir,
+	writeConfiguredPiAgentDir,
+} from "./pi";
 
 // Multi-agent support
 export {

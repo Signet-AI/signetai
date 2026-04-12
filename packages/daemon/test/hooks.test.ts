@@ -15,7 +15,7 @@ import { join } from "node:path";
 const TEST_DIR = join(tmpdir(), `signet-hooks-test-${Date.now()}`);
 process.env.SIGNET_PATH = TEST_DIR;
 
-const { initDbAccessor, closeDbAccessor } = await import("../src/db-accessor");
+const { initDbAccessor, closeDbAccessor, getDbAccessor } = await import("../src/db-accessor");
 const hooks = await import("../src/hooks");
 const lineage = await import("../src/memory-lineage");
 const transcriptAudit = await import("../src/transcript-audit");
@@ -25,7 +25,6 @@ const {
 	handleSynthesisRequest,
 	handleUserPromptSubmit,
 	handleRemember,
-	handleRecall,
 	handleSessionEnd,
 	handleCheckpointExtract,
 	deriveSessionEndFallbackId,
@@ -499,6 +498,19 @@ afterEach(() => {
 	if (existsSync(TEST_DIR)) {
 		rmSync(TEST_DIR, { recursive: true, force: true });
 	}
+});
+
+describe("db accessor pragmas", () => {
+	test.serial("openDb path sets busy_timeout", () => {
+		createMemoryDb();
+		closeDbAccessor();
+		initDbAccessor(join(TEST_DIR, "memory", "memories.db"));
+		const timeout = getDbAccessor().withReadDb((db) => {
+			const row = db.prepare("PRAGMA busy_timeout").get() as { timeout?: number } | undefined;
+			return row?.timeout ?? 0;
+		});
+		expect(timeout).toBe(5000);
+	});
 });
 
 // ============================================================================
@@ -1591,72 +1603,6 @@ describe("handleRemember", () => {
 });
 
 // ============================================================================
-// handleRecall
-// ============================================================================
-
-describe("handleRecall", () => {
-	test.serial("finds matching memories via FTS", async () => {
-		createMemoryDb([
-			{
-				content: "TypeScript is the preferred language for this project",
-				importance: 0.8,
-			},
-			{
-				content: "The database uses PostgreSQL",
-				importance: 0.7,
-			},
-		]);
-
-		const result = handleRecall({
-			harness: "test",
-			query: "TypeScript language",
-		});
-
-		expect(result.count).toBeGreaterThan(0);
-		expect(result.results.some((r) => r.content.includes("TypeScript"))).toBe(true);
-	});
-
-	test.serial("returns empty for no-match query", async () => {
-		createMemoryDb([{ content: "The database uses PostgreSQL", importance: 0.8 }]);
-
-		const result = handleRecall({
-			harness: "test",
-			query: "quantum computing algorithms",
-		});
-
-		expect(result.count).toBe(0);
-		expect(result.results).toEqual([]);
-	});
-
-	test.serial("handles missing database", async () => {
-		const result = handleRecall({
-			harness: "test",
-			query: "anything",
-		});
-
-		expect(result.count).toBe(0);
-		expect(result.results).toEqual([]);
-	});
-
-	test.serial("falls back to LIKE when FTS has no results", async () => {
-		createMemoryDb([
-			{
-				content: "Special config: xyz-protocol-v2",
-				importance: 0.8,
-			},
-		]);
-
-		const result = handleRecall({
-			harness: "test",
-			query: "xyz-protocol-v2",
-		});
-
-		// Should find via LIKE fallback
-		expect(result.count).toBeGreaterThan(0);
-	});
-});
-
-// ============================================================================
 // handleSessionEnd
 // ============================================================================
 
@@ -1878,10 +1824,7 @@ describe("handleSessionEnd", () => {
 		const latestPath = result?.latestPath ?? "";
 		const latestName = latestPath.split("/").pop() ?? "";
 		const scoped = createHash("sha256").update(rawTranscript, "utf8").digest("hex");
-		const expectedToken = createHash("sha256")
-			.update(`agent-a:${scoped}`, "utf8")
-			.digest("hex")
-			.slice(0, 16);
+		const expectedToken = createHash("sha256").update(`agent-a:${scoped}`, "utf8").digest("hex").slice(0, 16);
 		expect(latestName).toBe(`${expectedToken}--latest.log`);
 	});
 
@@ -2713,19 +2656,6 @@ describe("schema", () => {
 		db.close();
 
 		expect(rows.length).toBe(1);
-	});
-
-	test.serial("busy_timeout is set by openDb", async () => {
-		createMemoryDb([]);
-
-		// handleRecall uses openDb internally which sets busy_timeout
-		// If this doesn't throw, the timeout is working
-		const result = handleRecall({
-			harness: "test",
-			query: "anything",
-		});
-
-		expect(result).toBeDefined();
 	});
 });
 

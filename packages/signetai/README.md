@@ -1,8 +1,11 @@
 # Signet
 
-**Portable AI agent identity - own your agent, bring it anywhere.**
+**Local-first identity, memory, and secrets for AI agents.**
 
-Signet gives your AI agents persistent memory and identity that follows them across any tool or harness - Claude Code, OpenCode, OpenClaw, and more.
+Signet keeps an agent's identity, memory, secrets, and skills outside
+any single model or harness. Claude Code, OpenCode, OpenClaw, Codex,
+Hermes Agent, and other tools can change while the agent keeps its
+state.
 
 ## Install
 
@@ -27,11 +30,11 @@ signet dashboard
 
 ## Features
 
-- **Persistent Memory** - `/remember` and `/recall` work everywhere
-- **Unified Identity** - AGENTS.md syncs to all your tools
+- **Ambient Memory** - context is captured and recalled across sessions
+- **Portable Identity** - identity files sync across connected harnesses
 - **Background Daemon** - Always-on API at localhost:3850
 - **Web Dashboard** - Visual memory browser and config editor
-- **Encrypted Secrets** - Secure API key storage with libsodium
+- **Agent-Blind Secrets** - credentials stay out of model context
 - **Git Sync** - Auto-commit and push to GitHub
 - **Skills System** - Extend capabilities from skills.sh
 
@@ -72,9 +75,9 @@ signet update enable    # Enable unattended installs
 
 1. **Setup** creates `~/.agents/` with your agent config
 2. **Daemon** runs in background, serves API and dashboard
-3. **Harnesses** (Claude Code, etc.) connect via hooks
-4. **Memories** persist in SQLite with vector embeddings
-5. **AGENTS.md** syncs to all tool config locations
+3. **Harnesses** connect through hooks or plugins
+4. **Memories** persist in SQLite, markdown, transcripts, and semantic indexes
+5. **Identity files** sync without moving ownership out of your workspace
 
 ## Requirements
 

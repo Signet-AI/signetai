@@ -1,7 +1,7 @@
 {
   "name": "signetai",
-  "version": "0.98.0",
-  "description": "Portable AI agent identity - own your agent, bring it anywhere",
+  "version": "0.98.13",
+  "description": "Local-first identity, memory, and secrets for AI agents",
   "type": "module",
   "bin": {
     "signet": "bin/signet.js",
@@ -27,13 +27,20 @@
   },
   "keywords": [
     "ai",
-    "agent",
-    "identity",
-    "memory",
+    "ai-agents",
+    "agent-memory",
+    "agent-identity",
+    "agent-infrastructure",
     "llm",
-    "claude",
-    "openai",
-    "portable",
+    "mcp",
+    "local-first",
+    "self-hosted",
+    "claude-code",
+    "openclaw",
+    "opencode",
+    "typescript",
+    "bun",
+    "sqlite",
     "signet"
   ],
   "author": "Signet AI <hello@signetai.sh>",
@@ -45,6 +52,9 @@
   "homepage": "https://signetai.sh",
   "bugs": {
     "url": "https://github.com/Signet-AI/signetai/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=18"

@@ -15,7 +15,7 @@ export async function GET(context: APIContext) {
 	const sections: string[] = [
 		"# SignetAI — Full Documentation",
 		"",
-		"> Signet is local-first agent infrastructure. Portable memory, encrypted secrets, and identity that lives on your machine — not locked inside someone else's API.",
+		"> Local-first identity, memory, and secrets for AI agents. Portable state across models and harnesses.",
 		"",
 		`Source: ${site}`,
 		"",

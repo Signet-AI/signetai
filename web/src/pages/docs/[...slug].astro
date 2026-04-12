@@ -1,7 +1,7 @@
 ---
 import { getCollection, render } from "astro:content";
-import Docs from "../../layouts/Docs.astro";
 import StructuredData from "../../components/StructuredData.astro";
+import Docs from "../../layouts/Docs.astro";
 import { buildDocsNav, getDocNeighbors } from "../../lib/docs-nav";
 
 export async function getStaticPaths() {
@@ -20,7 +20,7 @@ const currentSlug = doc.id.replace(/\.md$/, "").toLowerCase();
 const allDocs = await getCollection("docs");
 const { flat } = buildDocsNav(allDocs);
 const { previous, next } = getDocNeighbors(flat, currentSlug);
-const toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3).slice(0, 24);
+const toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
 
 const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
 const pageUrl = `${siteUrl}/docs/${currentSlug}/`;

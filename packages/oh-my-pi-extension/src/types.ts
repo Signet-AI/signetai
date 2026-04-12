@@ -1,3 +1,11 @@
+import type {
+	BaseAgentMessage,
+	BaseExtensionContext,
+	BaseReadonlySessionManager,
+	BaseSessionEntry,
+	BaseSessionHeader,
+} from "@signet/pi-extension-base";
+
 export const DAEMON_URL_DEFAULT = "http://localhost:3850";
 export const HARNESS = "oh-my-pi" as const;
 export const RUNTIME_PATH = "plugin" as const;
@@ -11,17 +19,6 @@ export const FETCH_TIMEOUT_ENV = "SIGNET_FETCH_TIMEOUT";
 export const HIDDEN_RECALL_CUSTOM_TYPE = "signet-oh-my-pi-hidden-recall";
 export const HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE = "signet-oh-my-pi-session-context";
 
-export interface SessionStartResult {
-	readonly inject?: string;
-	readonly recentContext?: string;
-}
-
-export interface UserPromptSubmitResult {
-	readonly inject?: string;
-	readonly memoryCount?: number;
-	readonly sessionKnown?: boolean;
-}
-
 export interface PreCompactionResult {
 	readonly guidelines?: string;
 	readonly summaryPrompt?: string;
@@ -32,45 +29,14 @@ export interface PreCompactionResult {
 // actually consumes so `tsc --noEmit` still verifies our integration.
 export type OmpMessageAttribution = "user" | "agent";
 
-export interface OmpAgentMessage extends Record<string, unknown> {
-	readonly role?: string;
-	readonly customType?: string;
-	readonly display?: boolean;
-	readonly content?: unknown;
+export interface OmpAgentMessage extends BaseAgentMessage {
 	readonly attribution?: OmpMessageAttribution;
-	readonly timestamp?: number;
 }
 
-export interface OmpSessionEntry extends Record<string, unknown> {
-	readonly type?: string;
-	readonly customType?: string;
-	readonly content?: unknown;
-	readonly message?: {
-		readonly role?: string;
-		readonly content?: unknown;
-		readonly parts?: unknown;
-	};
-}
-
-export interface OmpSessionHeader extends Record<string, unknown> {
-	readonly id?: unknown;
-	readonly cwd?: unknown;
-	readonly project?: unknown;
-	readonly workspace?: unknown;
-}
-
-export interface ReadonlySessionManager {
-	getBranch(): ReadonlyArray<OmpSessionEntry> | undefined;
-	getEntries(): ReadonlyArray<OmpSessionEntry> | undefined;
-	getHeader(): OmpSessionHeader | undefined;
-	getSessionFile(): string | undefined;
-	getSessionId(): string | undefined;
-}
-
-export interface OmpExtensionContext {
-	readonly cwd?: string;
-	readonly sessionManager: ReadonlySessionManager;
-}
+export type OmpSessionEntry = BaseSessionEntry;
+export type OmpSessionHeader = BaseSessionHeader;
+export type ReadonlySessionManager = BaseReadonlySessionManager;
+export type OmpExtensionContext = BaseExtensionContext;
 
 export interface OmpInputEvent {
 	readonly text: string;

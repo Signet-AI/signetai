@@ -4,6 +4,7 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { readMemoriesFtsSql } from "../../core/src/fts-schema";
 import { runMigrations } from "../../core/src/migrations";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
@@ -47,6 +48,38 @@ function asAccessor(db: Database): DbAccessor {
 			db.close();
 		},
 	};
+}
+
+function installLegacyPorterMemoriesFts(db: Database): void {
+	db.exec("DROP TRIGGER IF EXISTS memories_ai");
+	db.exec("DROP TRIGGER IF EXISTS memories_ad");
+	db.exec("DROP TRIGGER IF EXISTS memories_au");
+	db.exec("DROP TABLE IF EXISTS memories_fts");
+	db.exec(`
+		CREATE VIRTUAL TABLE memories_fts USING fts5(
+			content,
+			content='memories',
+			content_rowid='rowid',
+			tokenize='porter unicode61'
+		);
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+		END;
+	`);
+	db.exec(`
+		CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+			INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+			INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+		END;
+	`);
+	db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
 }
 
 const TEST_CFG: PipelineV2Config = {
@@ -473,6 +506,33 @@ describe("checkFtsConsistency", () => {
 		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, true);
 		// Rebuild only runs on mismatch; consistent case is a no-op
 		expect(result.success).toBe(true);
+	});
+
+	it("detects legacy porter tokenizer drift", () => {
+		insertMemory(db, "We celebrate wins together");
+		installLegacyPorterMemoriesFts(db);
+		const limiter = createRateLimiter();
+		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, false);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(result.message).toMatch(/tokenizer drift/i);
+		expect(readMemoriesFtsSql(db)).toContain("porter unicode61");
+	});
+
+	it("repairs legacy porter tokenizer drift when repair=true", () => {
+		insertMemory(db, "We celebrate wins together");
+		installLegacyPorterMemoriesFts(db);
+		const limiter = createRateLimiter();
+		const result = checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, true);
+
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(result.message).toMatch(/unicode61 tokenizer/i);
+
+		const sql = readMemoriesFtsSql(db);
+		expect(sql).toContain("tokenize='unicode61'");
+		expect(sql).not.toContain("porter unicode61");
 	});
 });
 

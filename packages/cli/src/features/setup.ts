@@ -29,6 +29,7 @@ import {
 	detectPreferredOpenClawWorkspace,
 	failNonInteractiveSetup,
 	failSetupValidation,
+	findUnknownHarnessValues,
 	formatDetectionSummary,
 	getDeploymentExtractionGuidance,
 	getEmbeddingDimensions,
@@ -136,6 +137,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			`Unknown --extraction-provider value: ${rawExtractionProvider}. Valid choices: ${EXTRACTION_PROVIDER_CHOICES.join(", ")}.`,
 		);
 	}
+	const unknownHarnessValues = findUnknownHarnessValues(options.harness, deps);
+	if (nonInteractive && unknownHarnessValues.length > 0) {
+		failNonInteractiveSetup(
+			`Unknown --harness value(s): ${unknownHarnessValues.join(", ")}. Valid choices: ${SETUP_HARNESS_CHOICES.join(", ")}.`,
+		);
+	}
 
 	if (existing.agentsDir && existing.memoryDb) {
 		console.log(chalk.green("  ✓ Existing Signet installation detected"));
@@ -149,6 +156,24 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 				createLocalBackup: options.createLocalBackup === true,
 			});
+
+			const requestedHarnesses = normalizeHarnessList(options.harness, deps);
+			if (requestedHarnesses.length > 0) {
+				// Hooks are installed before the daemon starts. This is safe because
+				// connectors only write static files with a baked-in loopback default.
+				// The installed runtime reads SIGNET_DAEMON_URL at runtime and only
+				// falls back to that default when no explicit override is present.
+				for (const harness of requestedHarnesses) {
+					try {
+						await deps.configureHarnessHooks(harness, basePath);
+					} catch (err) {
+						// best-effort — non-interactive should not fail on hook errors
+						console.warn(
+							chalk.yellow(`  ⚠ Could not configure ${harness}: ${err instanceof Error ? err.message : String(err)}`),
+						);
+					}
+				}
+			}
 
 			const running = await deps.isDaemonRunning();
 			if (!running) {
@@ -376,6 +401,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		{ value: "opencode", name: "OpenCode", checked: existingHarnesses.includes("opencode") },
 		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },
 		{ value: "oh-my-pi", name: "Oh My Pi", checked: existingHarnesses.includes("oh-my-pi") },
+		{ value: "pi", name: "Pi", checked: existingHarnesses.includes("pi") },
 		{
 			value: "forge",
 			name: "Forge (native Signet harness)",
@@ -389,20 +415,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 
 	let harnesses: HarnessChoice[] = [];
 	if (nonInteractive) {
-		const rawParts = (options.harness ?? []).flatMap((value) =>
-			value
-				.split(",")
-				.map((part) => part.trim())
-				.filter(Boolean),
-		);
 		const requestedHarnesses = normalizeHarnessList(options.harness, deps);
-
-		if (rawParts.length > 0 && rawParts.length !== requestedHarnesses.length) {
-			const unknown = rawParts.filter((part) => !deps.normalizeChoice(part, SETUP_HARNESS_CHOICES));
-			failNonInteractiveSetup(
-				`Unknown --harness value(s): ${unknown.join(", ")}. Valid choices: ${SETUP_HARNESS_CHOICES.join(", ")}.`,
-			);
-		}
 
 		if (requestedHarnesses.length > 0) {
 			harnesses = requestedHarnesses;

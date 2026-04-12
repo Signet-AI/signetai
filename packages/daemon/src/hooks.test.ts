@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
+	applyTokenBudget,
 	buildSignetSystemPrompt,
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript,
 	queryAnchorsMissingFromRecall,
+	selectWithTokenBudget,
 	writeMemoryMd,
 } from "./hooks";
 
@@ -330,5 +332,74 @@ describe("normalizeSessionTranscript", () => {
 			'{"role":"assistant","content":"Ship it by Friday."}',
 		].join("\n");
 		expect(normalizeSessionTranscript("opencode", json)).toBe("User: What's the plan?\nAssistant: Ship it by Friday.");
+	});
+});
+
+describe("selectWithTokenBudget", () => {
+	const rows = [
+		{ content: "alpha ".repeat(50) },   // ~50 tokens
+		{ content: "beta ".repeat(50) },    // ~50 tokens
+		{ content: "gamma ".repeat(200) },  // ~200 tokens
+	];
+
+	it("selects rows up to the token budget", () => {
+		const result = selectWithTokenBudget(rows, 120);
+		expect(result).toHaveLength(2);
+		expect(result[0]).toBe(rows[0]);
+		expect(result[1]).toBe(rows[1]);
+	});
+
+	it("returns all rows when budget is not exceeded", () => {
+		const result = selectWithTokenBudget(rows, 10000);
+		expect(result).toHaveLength(3);
+	});
+
+	it("returns empty array when budget is too small for any row", () => {
+		const result = selectWithTokenBudget(rows, 1);
+		expect(result).toHaveLength(0);
+	});
+
+	it("returns empty array for zero budget", () => {
+		const result = selectWithTokenBudget(rows, 0);
+		expect(result).toHaveLength(0);
+	});
+
+	it("handles negative budget the same as zero", () => {
+		const result = selectWithTokenBudget(rows, -100);
+		expect(result).toHaveLength(0);
+	});
+});
+
+describe("applyTokenBudget", () => {
+	const TEXT = "word ".repeat(500); // ~500 tokens
+
+	it("returns inject unchanged when it fits within budget", () => {
+		expect(applyTokenBudget("hello world", 1000)).toBe("hello world");
+	});
+
+	it("truncates and appends marker when inject exceeds budget", async () => {
+		const result = applyTokenBudget(TEXT, 50);
+		expect(result).toContain("[context truncated]");
+		// total tokens must not exceed budget (marker tokens pre-subtracted)
+		const { countTokens } = await import("./pipeline/tokenizer");
+		expect(countTokens(result)).toBeLessThanOrEqual(50);
+	});
+
+	it("returns empty string when mainBudget is zero (reserved sections exhausted budget)", () => {
+		expect(applyTokenBudget(TEXT, 0)).toBe("");
+	});
+
+	it("returns empty string when mainBudget is negative", () => {
+		expect(applyTokenBudget(TEXT, -1)).toBe("");
+	});
+
+	it("never exceeds budget when budget is smaller than marker token count", async () => {
+		// Regression: marker is ~5 tokens; budgets in [1, TRUNCATED_MARKER_TOKENS) must
+		// not overflow by appending the full marker after truncation.
+		const { countTokens } = await import("./pipeline/tokenizer");
+		for (const budget of [1, 2, 3, 4]) {
+			const result = applyTokenBudget(TEXT, budget);
+			expect(countTokens(result)).toBeLessThanOrEqual(budget);
+		}
 	});
 });

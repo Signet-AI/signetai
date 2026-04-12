@@ -28,8 +28,9 @@ cabinet the agent sometimes opens. It puts the LLM in charge of
 micromanaging what to store and when to retrieve it.
 
 Signet takes a different approach. The goal is ambient context
-selection: turn interactions into durable memory substrate, then learn
-what should surface automatically when the next session begins.
+selection: turn interactions into durable memory substrate, preserve the
+record of what actually happened, and surface the right pieces when the
+next session begins.
 
 ### The distillation layer
 
@@ -47,17 +48,16 @@ the project's architecture, the people involved, the tools it depends
 on, the constraints that apply. This structure improves the quality of
 candidate context instead of treating memory as a flat pile of fragments.
 
-### The predictive scorer
+### Context selection
 
-A predictive scorer can use that structured candidate pool to learn what
-context is actually useful in your sessions. The aim is not just storage
-or retrieval, but selecting the most helpful context automatically, with
-high precision. The scorer is unique to each user. Your weights never
-leave your machine.
+The structured candidate pool gives Signet something better than a flat
+list of snippets. Retrieval can combine graph traversal, keyword search,
+semantic similarity, provenance, scope, recency, and feedback without
+hiding the result behind an opaque ranking model.
 
-Crucially, the system should learn from regret, not just reuse. If
-injected context does not help, that should become negative evidence
-instead of being silently reinforced forever.
+The aim is practical precision: surface the context that helps the agent
+work now, and keep noisy or repeatedly unhelpful memories from haunting
+the context window forever.
 
 ### Retrieval
 
@@ -107,6 +107,10 @@ Prerequisites
 
 Install
 ---
+
+Quickstart is for installing and using Signet. If you want to work on
+Signet itself from source, use the contributor workflow in
+[Contributing](./CONTRIBUTING.md) instead of the global install path below.
 
 ```bash
 # bun (recommended)

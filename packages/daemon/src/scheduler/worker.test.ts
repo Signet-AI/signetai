@@ -113,6 +113,44 @@ describe("resolveTaskModel", () => {
 		}
 	});
 
+	it("returns the configured claude extraction model for claude-code tasks", () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
+		try {
+			writeFileSync(
+				join(agentsDir, "agent.yaml"),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: claude-code", "      model: haiku"].join("\n"),
+			);
+
+			expect(resolveTaskModel("claude-code", agentsDir)).toBe("haiku");
+			expect(resolveTaskModel("codex", agentsDir)).toBeUndefined();
+		} finally {
+			rmSync(agentsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("caches models independently per harness", () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
+		try {
+			const configPath = join(agentsDir, "agent.yaml");
+			writeFileSync(
+				configPath,
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: claude-code", "      model: haiku"].join("\n"),
+			);
+
+			expect(resolveTaskModel("claude-code", agentsDir)).toBe("haiku");
+
+			writeFileSync(
+				configPath,
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.4-codex"].join("\n"),
+			);
+
+			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.4-codex");
+			expect(resolveTaskModel("claude-code", agentsDir)).toBe("haiku");
+		} finally {
+			rmSync(agentsDir, { recursive: true, force: true });
+		}
+	});
+
 	it("caches the resolved model for repeated codex task lookups", () => {
 		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
 		try {
@@ -136,6 +174,30 @@ describe("resolveTaskModel", () => {
 			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
 			clearTaskModelCache();
 			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.4-codex");
+		} finally {
+			rmSync(agentsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("caches the resolved model for repeated claude-code task lookups", () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "signet-agents-"));
+		try {
+			const configPath = join(agentsDir, "agent.yaml");
+			writeFileSync(
+				configPath,
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: claude-code", "      model: haiku"].join("\n"),
+			);
+
+			expect(resolveTaskModel("claude-code", agentsDir)).toBe("haiku");
+
+			writeFileSync(
+				configPath,
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: claude-code", "      model: sonnet"].join("\n"),
+			);
+
+			expect(resolveTaskModel("claude-code", agentsDir)).toBe("haiku");
+			clearTaskModelCache();
+			expect(resolveTaskModel("claude-code", agentsDir)).toBe("sonnet");
 		} finally {
 			rmSync(agentsDir, { recursive: true, force: true });
 		}

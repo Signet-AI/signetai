@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { SignetClient } from "../index.js";
 import type { Server } from "bun";
+import { SignetClient } from "../index.js";
 
 interface RecordedRequest {
 	readonly method: string;
@@ -140,24 +140,65 @@ describe("SignetClientHelpers", () => {
 				{
 					id: "mem-1",
 					content: "user prefers dark mode",
+					content_length: 22,
+					truncated: false,
 					score: 0.95,
+					source: "hybrid",
+					type: "preference",
+					tags: "ui,theme",
+					pinned: false,
+					importance: 0.9,
+					who: "claude-code",
+					project: null,
+					created_at: "2026-04-01T00:00:00.000Z",
 				},
 			],
-			total: 1,
+			query: "dark mode",
+			method: "hybrid",
+			meta: {
+				totalReturned: 1,
+				hasSupplementary: false,
+				noHits: false,
+			},
 		}));
 
 		const result = await client.recallOrThrow("dark mode");
 		expect(result.results).toHaveLength(1);
 		expect(result.results[0].content).toBe("user prefers dark mode");
+		expect(result.meta.totalReturned).toBe(1);
 	});
 
-	test("recallOrThrow() throws when no results", async () => {
+	test("recallOrThrow() throws when client-side minScore filtering removes all results", async () => {
 		const { client } = mockDaemon(() => ({
-			results: [],
-			total: 0,
+			results: [
+				{
+					id: "mem-low",
+					content: "weak memory",
+					content_length: 11,
+					truncated: false,
+					score: 0.2,
+					source: "keyword",
+					type: "fact",
+					tags: null,
+					pinned: false,
+					importance: 0.2,
+					who: "claude-code",
+					project: null,
+					created_at: "2026-04-01T00:00:00.000Z",
+				},
+			],
+			query: "nonexistent",
+			method: "hybrid",
+			meta: {
+				totalReturned: 1,
+				hasSupplementary: false,
+				noHits: false,
+			},
 		}));
 
-		await expect(client.recallOrThrow("nonexistent")).rejects.toThrow('No memories found for query: "nonexistent"');
+		await expect(client.recallOrThrow("nonexistent", { minScore: 0.5 })).rejects.toThrow(
+			'No memories found for query: "nonexistent"',
+		);
 	});
 
 	test("getMemoryOrThrow() returns memory when found", async () => {

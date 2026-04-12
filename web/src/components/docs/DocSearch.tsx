@@ -5,6 +5,7 @@ interface SearchItem {
 	title: string;
 	description: string;
 	section: string;
+	sectionTitle: string;
 	slug: string;
 	url: string;
 	excerpt: string;
@@ -32,10 +33,11 @@ export default function DocSearch() {
 			const data: SearchItem[] = await res.json();
 			const instance = new Fuse(data, {
 				keys: [
-					{ name: "title", weight: 0.4 },
-					{ name: "description", weight: 0.3 },
-					{ name: "excerpt", weight: 0.2 },
-					{ name: "section", weight: 0.1 },
+					{ name: "title", weight: 0.35 },
+					{ name: "sectionTitle", weight: 0.25 },
+					{ name: "excerpt", weight: 0.25 },
+					{ name: "description", weight: 0.1 },
+					{ name: "section", weight: 0.05 },
 				],
 				threshold: 0.4,
 				includeScore: true,
@@ -124,27 +126,34 @@ export default function DocSearch() {
 					aria-expanded={isOpen}
 					role="combobox"
 					aria-controls="doc-search-results"
+					aria-activedescendant={results[selectedIndex] ? `doc-search-option-${selectedIndex}` : undefined}
 					autoComplete="off"
 				/>
 				<kbd className="doc-search-shortcut">/</kbd>
 			</div>
 
 			{isOpen && (
-				<ul id="doc-search-results" className="doc-search-results" role="listbox">
-					{results.map((r, i) => (
-						<li
-							key={r.item.slug}
-							role="option"
-							aria-selected={i === selectedIndex}
-							className={i === selectedIndex ? "selected" : ""}
-						>
-							<a href={r.item.url}>
-								<span className="doc-search-result-title">{r.item.title}</span>
-								{r.item.section && <span className="doc-search-result-section">{r.item.section}</span>}
-							</a>
-						</li>
-					))}
-				</ul>
+				/* biome-ignore lint/a11y/useSemanticElements: ARIA listbox popup is required for the combobox relationship */
+				<div id="doc-search-results" className="doc-search-results" role="listbox" tabIndex={-1}>
+					{results.map((r, i) => {
+						const option = (
+							<div
+								id={`doc-search-option-${i}`}
+								key={r.item.slug}
+								role="option"
+								tabIndex={-1}
+								aria-selected={i === selectedIndex}
+								className={i === selectedIndex ? "selected" : ""}
+							>
+								<a href={r.item.url}>
+									<span className="doc-search-result-title">{r.item.title}</span>
+									<span className="doc-search-result-section">{r.item.sectionTitle || r.item.section || "Docs"}</span>
+								</a>
+							</div>
+						);
+						return option;
+					})}
+				</div>
 			)}
 		</div>
 	);

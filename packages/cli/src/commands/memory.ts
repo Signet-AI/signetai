@@ -1,3 +1,4 @@
+import { applyRecallScoreThreshold, partitionRecallRows } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
@@ -13,6 +14,87 @@ interface MemoryDeps {
 		ok: boolean;
 		data: unknown;
 	}>;
+}
+
+interface RecallMeta {
+	readonly totalReturned: number;
+	readonly hasSupplementary: boolean;
+	readonly noHits: boolean;
+}
+
+interface RecallRow {
+	readonly content: string;
+	readonly created_at?: string;
+	readonly score?: number;
+	readonly source?: string;
+	readonly who?: string;
+	readonly type?: string;
+	readonly tags?: string | null;
+	readonly pinned?: boolean;
+	readonly project?: string | null;
+	readonly supplementary?: boolean;
+}
+
+interface ParsedRecallResult {
+	readonly rows: RecallRow[];
+	readonly meta: RecallMeta;
+	readonly query?: string;
+	readonly method?: string;
+}
+
+function parseRecallMeta(raw: unknown, fallbackCount: number): RecallMeta {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		return {
+			totalReturned: fallbackCount,
+			hasSupplementary: false,
+			noHits: fallbackCount === 0,
+		};
+	}
+	const totalReturned =
+		"totalReturned" in raw && typeof raw.totalReturned === "number" ? raw.totalReturned : fallbackCount;
+	const hasSupplementary = "hasSupplementary" in raw && raw.hasSupplementary === true;
+	const noHits = "noHits" in raw ? raw.noHits === true : totalReturned === 0;
+	return { totalReturned, hasSupplementary, noHits };
+}
+
+function parseRecallResult(raw: unknown): ParsedRecallResult {
+	const result = typeof raw === "object" && raw !== null ? raw : {};
+	const rows = "results" in result && Array.isArray(result.results) ? (result.results as RecallRow[]) : [];
+	const meta = parseRecallMeta("meta" in result ? result.meta : undefined, rows.length);
+	const query = "query" in result && typeof result.query === "string" ? result.query : undefined;
+	const method = "method" in result && typeof result.method === "string" ? result.method : undefined;
+	return { rows, meta, query, method };
+}
+
+function formatRecallRows(rows: ReadonlyArray<RecallRow>): string[] {
+	const { primary, supporting } = partitionRecallRows(rows);
+	const sections: Array<{ heading?: string; rows: ReadonlyArray<RecallRow> }> = [];
+	if (primary.length > 0) sections.push({ rows: primary });
+	if (supporting.length > 0) sections.push({ heading: "  Supporting context:\n", rows: supporting });
+
+	const lines: string[] = [];
+	for (const section of sections) {
+		if (section.heading) lines.push(chalk.bold(section.heading));
+		for (const row of section.rows) {
+			const content = typeof row.content === "string" ? row.content : "";
+			const createdAt = typeof row.created_at === "string" ? row.created_at : "";
+			const scoreValue = typeof row.score === "number" ? row.score : 0;
+			const source = typeof row.source === "string" ? row.source : "unknown";
+			const who = typeof row.who === "string" && row.who.length > 0 ? row.who : "unknown";
+			const type = typeof row.type === "string" ? row.type : "memory";
+			const tags = typeof row.tags === "string" ? row.tags : "";
+			const pinned = row.pinned === true;
+			const date = createdAt.slice(0, 10) || "unknown";
+			const score = chalk.dim(`[${(scoreValue * 100).toFixed(0)}%]`);
+			const critical = pinned ? chalk.red("★") : "";
+			const tagLabel = tags ? chalk.dim(` [${tags}]`) : "";
+			const displayContent = content.length > 120 ? `${content.slice(0, 117)}...` : content;
+
+			lines.push(`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tagLabel}`);
+			lines.push(chalk.dim(`      ${type} · ${source} · by ${who}`));
+		}
+	}
+	return lines;
 }
 
 export function registerMemoryCommands(program: Command, deps: MemoryDeps): void {
@@ -65,11 +147,17 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.command("recall <query>")
 		.description("Search memories using hybrid (vector + keyword) search")
 		.option("-l, --limit <n>", "Max results", Number.parseInt, 10)
+		.option("--project <project>", "Filter by project")
+		.option("--expand", "Include expanded transcript/context sources", false)
 		.option("-t, --type <type>", "Filter by type")
 		.option("--tags <tags>", "Filter by tags (comma-separated)")
 		.option("--who <who>", "Filter by who")
 		.option("--since <date>", "Only memories created after this date (ISO or YYYY-MM-DD)")
 		.option("--until <date>", "Only memories created before this date (ISO or YYYY-MM-DD)")
+		.option("--keyword-query <query>", "Override the keyword/FTS query used for recall")
+		.option("--pinned", "Only return pinned memories", false)
+		.option("--importance-min <n>", "Only return memories at or above this importance", Number.parseFloat)
+		.option("--min-score <n>", "Minimum recall score threshold (client-side)", Number.parseFloat)
 		.option("--agent <name>", "Filter by agent ID")
 		.option("--json", "Output as JSON")
 		.action(async (query: string, options) => {
@@ -78,12 +166,17 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			const spinner = ora("Searching memories...").start();
 			const { ok, data } = await deps.secretApiCall("POST", "/api/memory/recall", {
 				query,
+				keywordQuery: options.keywordQuery,
 				limit: options.limit,
+				project: options.project,
 				type: options.type,
 				tags: options.tags,
 				who: options.who,
+				pinned: options.pinned === true ? true : undefined,
+				importance_min: options.importanceMin,
 				since: options.since,
 				until: options.until,
+				expand: options.expand === true ? true : undefined,
 				...(options.agent ? { agentId: options.agent } : {}),
 			});
 
@@ -94,41 +187,29 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			}
 
 			spinner.stop();
-			const result = typeof data === "object" && data !== null ? data : {};
-			const rows = Array.isArray(result.results) ? result.results : [];
+			// Score thresholds trim ranked matches, but intentionally keep
+			// unscored supporting context in-band.
+			const filtered = applyRecallScoreThreshold(data, options.minScore);
+			const parsed = parseRecallResult(filtered);
 
 			if (options.json) {
-				console.log(JSON.stringify(rows, null, 2));
+				console.log(JSON.stringify(filtered, null, 2));
 				return;
 			}
 
-			if (rows.length === 0) {
+			if (parsed.meta.noHits || parsed.rows.length === 0) {
 				console.log(chalk.dim("  No memories found"));
 				console.log(chalk.dim("  Try a different query or add memories with `signet remember`"));
 				return;
 			}
 
-			console.log(chalk.bold(`\n  Found ${rows.length} memories:\n`));
-			for (const row of rows) {
-				if (typeof row !== "object" || row === null) continue;
-				const content = typeof row.content === "string" ? row.content : "";
-				const createdAt = typeof row.created_at === "string" ? row.created_at : "";
-				const scoreValue = typeof row.score === "number" ? row.score : 0;
-				const source = typeof row.source === "string" ? row.source : "unknown";
-				const who = typeof row.who === "string" ? row.who : "unknown";
-				const type = typeof row.type === "string" ? row.type : "memory";
-				const tags = typeof row.tags === "string" ? row.tags : "";
-				const pinned = row.pinned === true;
-				const date = createdAt.slice(0, 10);
-				const score = chalk.dim(`[${(scoreValue * 100).toFixed(0)}%]`);
-				const sourceLabel = chalk.dim(`(${source})`);
-				const critical = pinned ? chalk.red("★") : "";
-				const tagLabel = tags ? chalk.dim(` [${tags}]`) : "";
-				const displayContent = content.length > 120 ? `${content.slice(0, 117)}...` : content;
-
-				console.log(`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tagLabel}`);
-				console.log(chalk.dim(`      by ${who} · ${type} · ${sourceLabel}`));
-			}
+			const summarySuffix: string[] = [];
+			if (parsed.method) summarySuffix.push(parsed.method);
+			if (parsed.meta.hasSupplementary) summarySuffix.push("includes supporting context");
+			const summary = summarySuffix.length > 0 ? ` ${chalk.dim(`(${summarySuffix.join(" · ")})`)}` : "";
+			const noun = parsed.meta.totalReturned === 1 ? "memory" : "memories";
+			console.log(chalk.bold(`\n  Found ${parsed.meta.totalReturned} ${noun}:${summary}\n`));
+			for (const line of formatRecallRows(parsed.rows)) console.log(line);
 			console.log();
 		});
 

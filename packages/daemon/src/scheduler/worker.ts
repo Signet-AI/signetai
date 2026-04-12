@@ -29,6 +29,10 @@ interface TaskModelCacheEntry {
 
 const taskModelCache = new Map<string, TaskModelCacheEntry>();
 
+function taskModelCacheKey(harness: "claude-code" | "codex", agentsDir: string): string {
+	return `${agentsDir}:${harness}`;
+}
+
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
 }
@@ -76,17 +80,19 @@ export function resolveTaskModel(
 	harness: DueTaskRow["harness"],
 	agentsDir: string = getAgentsDir(),
 ): string | undefined {
-	if (harness !== "codex") return undefined;
+	if (harness !== "codex" && harness !== "claude-code") return undefined;
 
 	const now = Date.now();
-	const cached = taskModelCache.get(agentsDir);
+	const cacheKey = taskModelCacheKey(harness, agentsDir);
+	const cached = taskModelCache.get(cacheKey);
 	if (cached && cached.expiresAt > now) {
 		return cached.model;
 	}
 
 	const cfg = loadMemoryConfig(agentsDir);
-	const model = cfg.pipelineV2.extraction.provider === "codex" ? cfg.pipelineV2.extraction.model : undefined;
-	taskModelCache.set(agentsDir, {
+	const extraction = cfg.pipelineV2.extraction;
+	const model = extraction.provider === harness ? extraction.model : undefined;
+	taskModelCache.set(cacheKey, {
 		model,
 		expiresAt: now + TASK_MODEL_CACHE_TTL_MS,
 	});
@@ -250,7 +256,7 @@ export async function executeTask(
 		if (!isTaskHarness(task.harness)) {
 			throw new Error(`Unsupported harness: ${task.harness}`);
 		}
-		const model = deps.resolveTaskModel(task.harness);
+		const model = task.harness === "claude-code" || task.harness === "codex" ? deps.resolveTaskModel(task.harness) : undefined;
 		result = await deps.spawnTask(
 			task.harness,
 			effectivePrompt,

@@ -10,7 +10,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { listOhMyPiAgentDirCandidates } from "./oh-my-pi";
+import { listOhMyPiAgentDirCandidates, resolveOhMyPiAgentDir } from "./oh-my-pi";
+import { listPiAgentDirCandidates, resolvePiAgentDir } from "./pi";
 
 const FORGE_BINARY_NAME = "forge";
 const SIGNET_FORGE_PRIMARY_MARKER = "Signet's native AI terminal";
@@ -42,6 +43,9 @@ const COMPATIBLE_FORGE_MARKER_GROUPS = [
 const OH_MY_PI_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.js";
 const OH_MY_PI_LEGACY_MANAGED_EXTENSION_FILENAME = "signet-oh-my-pi.mjs";
 const OH_MY_PI_MANAGED_MARKER = "SIGNET_MANAGED_OH_MY_PI_EXTENSION";
+const PI_MANAGED_EXTENSION_FILENAME = "signet-pi.js";
+const PI_LEGACY_MANAGED_EXTENSION_FILENAME = "signet-pi.mjs";
+const PI_MANAGED_MARKER = "SIGNET_MANAGED_PI_EXTENSION";
 
 /**
  * Returns the base path for agent-specific files.
@@ -187,6 +191,7 @@ export interface SetupDetection {
 		opencode: boolean;
 		codex: boolean;
 		ohMyPi: boolean;
+		pi: boolean;
 		forge: boolean;
 		hermesAgent: boolean;
 	};
@@ -241,6 +246,23 @@ function isSignetManagedOhMyPiInstall(): boolean {
 			try {
 				const content = readFileSync(extensionPath, "utf8");
 				if (content.includes(OH_MY_PI_MANAGED_MARKER)) return true;
+			} catch {
+				// ignore unreadable candidate and continue checking others
+			}
+		}
+	}
+	return false;
+}
+
+function isSignetManagedPiInstall(): boolean {
+	for (const agentDir of listPiAgentDirCandidates()) {
+		const extensionsDir = join(agentDir, "extensions");
+		for (const filename of [PI_MANAGED_EXTENSION_FILENAME, PI_LEGACY_MANAGED_EXTENSION_FILENAME]) {
+			const extensionPath = join(extensionsDir, filename);
+			if (!existsSync(extensionPath)) continue;
+			try {
+				const content = readFileSync(extensionPath, "utf8");
+				if (content.includes(PI_MANAGED_MARKER)) return true;
 			} catch {
 				// ignore unreadable candidate and continue checking others
 			}
@@ -440,7 +462,8 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			opencode: existsSync(join(home, ".config", "opencode", "config.json")),
 			codex:
 				existsSync(join(home, ".codex", "config.toml")) || existsSync(join(home, ".config", "signet", "bin", "codex")),
-			ohMyPi: isSignetManagedOhMyPiInstall(),
+			ohMyPi: isSignetManagedOhMyPiInstall() || existsSync(resolveOhMyPiAgentDir()),
+			pi: isSignetManagedPiInstall() || existsSync(resolvePiAgentDir()),
 			forge: isForgeInstalled(basePath, home),
 			hermesAgent: resolveHermesRepoPluginPath() !== null,
 		},

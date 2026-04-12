@@ -9,7 +9,7 @@ const memoryFlow = [
 	"Knowledge graph + embeddings: structured memory substrate persisted for later recall",
 	"Embeddings computed and stored alongside each memory",
 	"/api/memory/recall builds a bounded candidate pool (graph + BM25 + vector)",
-	"Predictive scorer reranks when available, and fails open to baseline ordering when it is not",
+	"Scoped ranking, provenance, and dampening keep recall inspectable and bounded",
 ];
 
 const configFlow = [

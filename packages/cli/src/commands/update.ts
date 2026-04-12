@@ -14,6 +14,7 @@ interface UpdateDeps {
 	readonly getTemplatesDir: () => string;
 	readonly isOpenClawInstalled: () => boolean;
 	readonly isOhMyPiInstalled: () => boolean;
+	readonly isPiInstalled: () => boolean;
 	readonly getSkillsSourceDir: () => string;
 	readonly syncBuiltinSkills: (
 		skillsSourceDir: string,
@@ -148,6 +149,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 				if (existsSync(join(homedir(), ".config", "opencode"))) harnesses.push("opencode");
 				if (deps.isOpenClawInstalled()) harnesses.push("openclaw");
 				if (deps.isOhMyPiInstalled()) harnesses.push("oh-my-pi");
+				if (deps.isPiInstalled()) harnesses.push("pi");
 
 				for (const harness of harnesses) {
 					try {

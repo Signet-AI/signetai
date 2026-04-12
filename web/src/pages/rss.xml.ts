@@ -1,9 +1,9 @@
-import rss from "@astrojs/rss";
-import { getCollection } from "astro:content";
-import type { APIContext } from "astro";
 import { readdirSync, statSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getCollection } from "astro:content";
+import rss from "@astrojs/rss";
+import type { APIContext } from "astro";
 
 export const prerender = true;
 
@@ -71,8 +71,7 @@ export async function GET(context: APIContext) {
 
 	return rss({
 		title: "SignetAI",
-		description:
-			"Signet is local-first agent infrastructure. Portable memory, encrypted secrets, and identity that lives on your machine.",
+		description: "Local-first identity, memory, and secrets for AI agents. Portable state across models and harnesses.",
 		site: context.site?.toString() ?? "https://signetai.sh",
 		items,
 		customData: "<language>en-us</language>",

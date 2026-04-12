@@ -4,7 +4,7 @@
 
 # S I G N E T   A I
 
-**Local-first persistent memory for AI agents**
+**Local-first identity, memory, and secrets for AI agents**
 
 <a href="https://github.com/Signet-AI/signetai/actions"><img src="https://img.shields.io/github/actions/workflow/status/Signet-AI/signetai/release.yml?branch=main&style=for-the-badge" alt="CI status"></a>
 <a href="https://github.com/Signet-AI/signetai/releases"><img src="https://img.shields.io/github/v/release/Signet-AI/signetai?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
@@ -21,25 +21,25 @@
 
 ---
 
-**Persistent memory for AI agents, across sessions, tools, and environments.**
+**Portable AI agent state, across sessions, models, and harnesses.**
 
 **TL;DR**
-- Installs under your existing harness, not instead of it
+- Works beneath your existing harness
 - Captures and injects relevant memory automatically between sessions
 - Runs local-first, with inspectable storage and no vendor lock-in
 
-Most agents only remember when explicitly told to.
+Signet keeps an agent's identity, memory, secrets, and skills outside
+any single model or harness. The harness can change. The model can
+change. The agent keeps its state.
 
-That is not memory, that's a filing cabinet.
+Memory is ambient. Signet extracts and injects relevant context
+automatically, between sessions, before the next prompt starts. Your
+agent wakes up with the continuity it needs instead of asking you to
+rebuild the room by hand.
 
-Signet makes memory ambient. It extracts and injects context
-automatically, between sessions, before the next prompt starts.
-Your agent just has memory.
-
-Structured memory, graph traversal, and hybrid retrieval matter, but
-they are not the point. They are substrate for the larger job Signet is
-building toward: deciding what should enter the model's context window
-right now, with enough precision to help instead of distract.
+Structured memory, graph traversal, and hybrid retrieval are the
+substrate. The larger job is behavioral context portability: keeping the
+agent's accumulated understanding under the user's control.
 
 Why teams adopt it:
 - less prompt re-explaining between sessions
@@ -59,8 +59,8 @@ signet status              # confirm daemon + pipeline health
 signet dashboard           # open memory + retrieval inspector
 ```
 
-If you already use Claude Code, OpenCode, OpenClaw, Codex, or Hermes Agent, keep your
-existing harness. Signet installs under it.
+If you already use Claude Code, OpenCode, OpenClaw, Codex, or Hermes
+Agent, keep your existing harness. Signet installs under it.
 
 ### Docker self-hosting
 
@@ -105,10 +105,10 @@ These are the product surface areas Signet is optimized around:
 | Core | What it does |
 |---|---|
 | 🧠 Ambient memory extraction | Sessions are distilled automatically, no memory tool calls required |
-| 🎯 Predictive context selection | Structured memory and session feedback build toward a scorer that learns what context is actually useful |
+| 🎯 Structured context selection | Graph traversal, hybrid search, provenance, and scoped ranking surface useful context without flooding the window |
 | 💾 Session continuity | Checkpoint and transcript-backed context carried across sessions |
 | 🏠 Local-first storage | Data lives on your machine in SQLite and markdown, portable by default |
-| 🤝 Cross-harness runtime | Claude Code, OpenCode, OpenClaw, Codex, one shared memory substrate |
+| 🤝 Cross-harness runtime | Claude Code, OpenCode, OpenClaw, Codex, Pi, one shared memory substrate |
 
 ## Is Signet right for you?
 
@@ -136,7 +136,7 @@ These systems improve quality and reliability of the core memory loop:
 |---|---|
 | 📜 Lossless transcripts | Raw session history preserved alongside extracted memories |
 | 🕸️ Structured retrieval substrate | Graph traversal + FTS5 + vector search produce bounded candidate context |
-| 🎯 Predictive scorer | Wired into the system as a maturing path toward learned reranking from session outcomes, including regret signals |
+| 🎯 Feedback-aware ranking | Recency, provenance, importance, and dampening signals help separate useful context from repeated noise |
 | 🔬 Noise filtering | Hub and similarity controls reduce low-signal memory surfacing |
 | 📄 Document ingestion | Pull PDFs, markdown, and URLs into the same retrieval pipeline |
 | 🖥️ CLI + Dashboard | Operate and inspect the system from terminal or web UI |
@@ -170,7 +170,7 @@ Signet is built to support:
 ## Harness support
 
 Signet is not a harness. It doesn't replace Claude Code, OpenClaw,
-OpenCode, or Hermes Agent — it runs alongside them as an enhancement.
+OpenCode, Pi, or Hermes Agent — it runs alongside them as an enhancement.
 Bring the harness you already use. Signet handles the memory layer
 underneath it.
 
@@ -182,6 +182,7 @@ underneath it.
 | [OpenClaw](https://github.com/openclaw/openclaw) | **Supported** | Runtime plugin + NemoClaw compatible |
 | [Codex](https://github.com/openai/codex) | **Supported** | Hooks + MCP server |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | **Supported** | Memory provider plugin |
+| [Pi](https://github.com/mariozechner/pi-coding-agent) | **Supported** | Extension + Hooks |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Planned | — |
 
 
@@ -290,9 +291,8 @@ session ends
   → raw transcript is preserved and distilled into structured memory
   → entities, constraints, and relations are linked into a navigable graph
   → traversal + flat search build a bounded candidate pool
-  → predictive scorer reranks candidates against your interaction patterns
-  → fail-open guards keep baseline ordering if the model is cold or unavailable
-  → post-fusion dampening separates signal from noise
+  → scoped ranking and provenance checks keep retrieval inspectable
+  → dampening and feedback signals separate signal from repeated noise
   → right context injected before the next prompt starts
 ```
 
@@ -319,8 +319,8 @@ Daemon (@signet/daemon, localhost:3850)
   |     prospective indexing -> FTS5 index
   |-- Inline Entity Linker
   |     write-time entity extraction (no LLM), decision auto-protection
-  |-- Predictive Scorer
-  |     learned relevance model over structured candidates
+  |-- Ranking + Feedback
+  |     bounded candidate ordering, dampening, and provenance signals
   |-- Document Worker
   |     ingest -> chunk -> embed -> index
   |-- MCP Server
@@ -339,7 +339,7 @@ SDK (@signet/sdk)
   typed client, React hooks, Vercel AI SDK middleware
 
 Connectors
-  claude-code, opencode, openclaw, codex, oh-my-pi, hermes-agent, forge
+  claude-code, opencode, openclaw, codex, oh-my-pi, pi, hermes-agent, forge
 ```
 
 ## Packages
@@ -358,13 +358,15 @@ Connectors
 | [`@signet/connector-codex`](./packages/connector-codex) | Codex CLI integration |
 | [`@signet/connector-oh-my-pi`](./packages/connector-oh-my-pi) | Oh My Pi integration |
 | [`@signet/connector-hermes-agent`](./packages/connector-hermes-agent) | Hermes Agent integration |
+| [`@signet/connector-pi`](./packages/connector-pi) | Pi coding agent integration |
 | [`@signet/oh-my-pi-extension`](./packages/oh-my-pi-extension) | Oh My Pi extension bridge |
+| [`@signet/pi-extension`](./packages/pi-extension) | Pi extension — memory tools, lifecycle, and session hooks |
 | [`@signet/opencode-plugin`](./packages/opencode-plugin) | OpenCode runtime plugin — memory tools and session hooks |
 | [`@signetai/signet-memory-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
 | [`@signet/extension`](./packages/extension) | Browser extension for Chrome and Firefox |
 | [`@signet/tray`](./packages/tray) | Desktop system tray application |
 | [`@signet/native`](./packages/native) | Native accelerators |
-| [`predictor`](./packages/predictor) | Predictive memory scorer sidecar (Rust) |
+| [`predictor`](./packages/predictor) | Experimental Rust sidecar for learned relevance ranking |
 | [`signetai`](./packages/signetai) | Meta-package (`signet` binary) |
 
 ## Documentation
@@ -438,7 +440,7 @@ contributing significant features. Read the
 ## Contributors
 
 <p align="left">
-  <a href="https://github.com/NicholaiVogel"><img src="https://avatars.githubusercontent.com/u/217880623?v=4&s=48" width="48" height="48" alt="NicholaiVogel" title="NicholaiVogel"/></a> <a href="https://github.com/BusyBee3333"><img src="https://avatars.githubusercontent.com/u/241850310?v=4&s=48" width="48" height="48" alt="BusyBee3333" title="BusyBee3333"/></a> <a href="https://github.com/stephenwoska2-cpu"><img src="https://avatars.githubusercontent.com/u/258141506?v=4&s=48" width="48" height="48" alt="stephenwoska2-cpu" title="stephenwoska2-cpu"/></a> <a href="https://github.com/PatchyToes"><img src="https://avatars.githubusercontent.com/u/256889430?v=4&s=48" width="48" height="48" alt="PatchyToes" title="PatchyToes"/></a> <a href="https://github.com/aaf2tbz"><img src="https://avatars.githubusercontent.com/u/260091788?v=4&s=48" width="48" height="48" alt="aaf2tbz" title="aaf2tbz"/></a> <a href="https://github.com/ddasgupta4"><img src="https://avatars.githubusercontent.com/ddasgupta4?v=4&s=48" width="48" height="48" alt="ddasgupta4" title="ddasgupta4"/></a> <a href="https://github.com/alcar2364"><img src="https://avatars.githubusercontent.com/alcar2364?v=4&s=48" width="48" height="48" alt="alcar2364" title="alcar2364"/></a> <a href="https://github.com/maximhar"><img src="https://avatars.githubusercontent.com/maximhar?v=4&s=48" width="48" height="48" alt="maximhar" title="maximhar"/></a>
+  <a href="https://github.com/NicholaiVogel"><img src="https://avatars.githubusercontent.com/u/217880623?v=4&s=48" width="48" height="48" alt="NicholaiVogel" title="NicholaiVogel"/></a> <a href="https://github.com/BusyBee3333"><img src="https://avatars.githubusercontent.com/u/241850310?v=4&s=48" width="48" height="48" alt="BusyBee3333" title="BusyBee3333"/></a> <a href="https://github.com/stephenwoska2-cpu"><img src="https://avatars.githubusercontent.com/u/258141506?v=4&s=48" width="48" height="48" alt="stephenwoska2-cpu" title="stephenwoska2-cpu"/></a> <a href="https://github.com/PatchyToes"><img src="https://avatars.githubusercontent.com/u/256889430?v=4&s=48" width="48" height="48" alt="PatchyToes" title="PatchyToes"/></a> <a href="https://github.com/aaf2tbz"><img src="https://avatars.githubusercontent.com/u/260091788?v=4&s=48" width="48" height="48" alt="aaf2tbz" title="aaf2tbz"/></a> <a href="https://github.com/ddasgupta4"><img src="https://avatars.githubusercontent.com/ddasgupta4?v=4&s=48" width="48" height="48" alt="ddasgupta4" title="ddasgupta4"/></a> <a href="https://github.com/alcar2364"><img src="https://avatars.githubusercontent.com/alcar2364?v=4&s=48" width="48" height="48" alt="alcar2364" title="alcar2364"/></a> <a href="https://github.com/maximhar"><img src="https://avatars.githubusercontent.com/maximhar?v=4&s=48" width="48" height="48" alt="maximhar" title="maximhar"/></a> <a href="https://github.com/lost-orchard"><img src="https://avatars.githubusercontent.com/lost-orchard?v=4&s=48" width="48" height="48" alt="lost-orchard" title="lost-orchard"/></a> <a href="https://github.com/Ostico"><img src="https://avatars.githubusercontent.com/u/8008416?v=4&s=48" width="48" height="48" alt="Ostico" title="Ostico"/></a>
 </p>
 
 Made with love by members of Dashore Incubator & friends of Jake Shore and Nicholai Vogel.

@@ -163,6 +163,10 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(payload?.engine).toBe("temporal-fallback");
 		expect(payload?.memoryCount).toBe(1);
 		expect(searchTranscriptFallbackMock).not.toHaveBeenCalled();
+		expect(result.inject).toContain("## Relevant Memory");
+		expect(result.inject).toContain("[thread node-1]");
+		expect(result.inject).toContain("if you need deeper history, use /recall or memory_search");
+		expect(result.inject).not.toContain("[signet:recall");
 	});
 
 	it("logs successful transcript fallback outcomes", async () => {
@@ -190,6 +194,87 @@ describe("handleUserPromptSubmit observability", () => {
 		const payload = submitCalls[0]?.[2];
 		expect(payload?.engine).toBe("transcript-fallback");
 		expect(payload?.memoryCount).toBe(1);
+		expect(result.inject).toContain("## Relevant Memory");
+		expect(result.inject).toContain("[transcript session-2]");
+		expect(result.inject).toContain("save it with /remember or memory_store");
+		expect(result.inject).not.toContain("[signet:recall");
+	});
+
+	it("formats successful hybrid recall as a lightweight recall block", async () => {
+		hybridRecallMock.mockResolvedValueOnce({
+			results: [
+				{
+					id: "mem-1",
+					score: 0.96,
+					content: "prompt submit observability now logs fallback engine transitions",
+					created_at: "2026-03-26T20:10:00.000Z",
+				},
+				{
+					id: "mem-2",
+					score: 0.91,
+					content: "prompt submit injects a deterministic current date header",
+					created_at: "2026-03-25T10:00:00.000Z",
+				},
+			],
+		});
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "vscode-custom-agent",
+				userMessage: "show prompt submit observability behavior",
+				sessionKey: "session-hybrid-brief",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("hybrid");
+		expect(result.memoryCount).toBe(2);
+		expect(result.inject).toContain("## Relevant Memory");
+		expect(result.inject).toContain("[memory] prompt submit observability now logs fallback engine transitions");
+		expect(result.inject).toContain("if you need deeper history, use /recall or memory_search");
+		expect(result.inject).not.toContain("[signet:recall");
+	});
+
+	it("rescues a later relevant memory when earlier compact candidates are irrelevant", async () => {
+		hybridRecallMock.mockResolvedValueOnce({
+			results: [
+				{
+					id: "mem-noisy",
+					score: 0.99,
+					content: `${"workspace migration checklist and daemon route refactor notes ".repeat(20).trim()}.`,
+					created_at: "2026-03-26T20:10:00.000Z",
+				},
+				{
+					id: "mem-proud",
+					score: 0.96,
+					content: "i am so proud of you for fixing recall and shipping the follow-up cleanly.",
+					created_at: "2026-03-25T10:00:00.000Z",
+				},
+			],
+		});
+
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			["hooks:", "  userPromptSubmit:", "    maxInjectChars: 110", ""].join("\n"),
+		);
+		try {
+			const result = await handleUserPromptSubmit(
+				{
+					harness: "vscode-custom-agent",
+					userMessage: "im proud of you",
+					sessionKey: "session-proud-rescue",
+				},
+				makeDeps(),
+			);
+
+			expect(result.engine).toBe("hybrid");
+			expect(result.memoryCount).toBe(1);
+			expect(result.inject).toContain("## Relevant Memory");
+			expect(result.inject).toContain("i am so proud of you");
+			expect(result.inject).not.toContain("workspace migration checklist");
+		} finally {
+			writeFileSync(join(agentsDir, "agent.yaml"), "");
+		}
 	});
 
 	it("skips prompt-submit injection when top recall score is below confidence gate", async () => {

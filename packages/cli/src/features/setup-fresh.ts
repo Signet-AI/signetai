@@ -184,6 +184,11 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		}
 
 		spinner.text = "Configuring harness hooks...";
+		// Hooks are installed before the daemon starts. This is safe because
+		// connectors only write static files (extension bundles) with a
+		// well-known daemon URL (127.0.0.1:3850). The extension resolves the
+		// actual daemon address at runtime via SIGNET_DAEMON_URL, falling back
+		// to the baked default — no live daemon connection is needed here.
 		const configuredHarnesses: string[] = [];
 		for (const harness of cfg.harnesses) {
 			try {

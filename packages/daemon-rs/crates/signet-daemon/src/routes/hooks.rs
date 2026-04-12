@@ -806,6 +806,27 @@ fn format_metadata_header() -> String {
     )
 }
 
+fn build_prompt_recall_inject(metadata_header: &str, sources: &[String]) -> String {
+    // Keep formatting behavior aligned with TypeScript
+    // `buildPromptRecallInject()` in `packages/daemon/src/hooks.ts`.
+    let mut parts = vec![
+        metadata_header.trim_end().to_string(),
+        String::new(),
+        "## Relevant Memory".to_string(),
+        String::new(),
+    ];
+
+    parts.extend_from_slice(sources);
+    parts.push(String::new());
+
+    parts.push(
+        "if you need deeper history, use /recall or memory_search. if you learn something durable, save it with /remember or memory_store."
+            .to_string(),
+    );
+
+    format!("{}\n", parts.join("\n").trim_end())
+}
+
 pub async fn prompt_submit(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1108,17 +1129,11 @@ pub async fn prompt_submit(
                 let lines = mem_rows
                     .iter()
                     .map(|(_, content, created_at)| {
-                        format!("- {} ({})", trim_for_inject(content, 300), created_at)
+                        format!("- [memory] {} ({})", trim_for_inject(content, 300), created_at)
                     })
                     .collect::<Vec<_>>();
                 return Ok(serde_json::json!({
-                    "inject": format!(
-                        "{}\n[signet:recall | query=\"{}\" | results={} | engine=hybrid]\n{}",
-                        metadata_header,
-                        query_terms_for_resp,
-                        lines.len(),
-                        lines.join("\n")
-                    ),
+                    "inject": build_prompt_recall_inject(&metadata_header, &lines),
                     "memoryCount": lines.len(),
                     "queryTerms": query_terms_for_resp,
                     "engine": "hybrid",
@@ -1158,7 +1173,7 @@ pub async fn prompt_submit(
                         }
                     }
                     picked.push(format!(
-                        "- [node {}] {} ({}, {})",
+                        "- [thread {}] {} ({}, {})",
                         id,
                         trim_for_inject(&sample, 280),
                         latest_at,
@@ -1170,13 +1185,7 @@ pub async fn prompt_submit(
                 }
                 if !picked.is_empty() {
                     return Ok(serde_json::json!({
-                        "inject": format!(
-                            "{}\n[signet:recall | query=\"{}\" | results={} | engine=temporal-fallback]\n{}",
-                            metadata_header,
-                            query_terms_for_resp,
-                            picked.len(),
-                            picked.join("\n")
-                        ),
+                        "inject": build_prompt_recall_inject(&metadata_header, &picked),
                         "memoryCount": picked.len(),
                         "queryTerms": query_terms_for_resp,
                         "engine": "temporal-fallback",
@@ -1228,10 +1237,10 @@ pub async fn prompt_submit(
                 }
                 let excerpt = trim_for_inject(&content, 260);
                 tx_lines.push(format!(
-                    "- {} ({}, session {})",
+                    "- [transcript {}] {} ({})",
+                    sk,
                     excerpt,
-                    updated_at.unwrap_or_else(|| "unknown".to_string()),
-                    sk
+                    updated_at.unwrap_or_else(|| "unknown".to_string())
                 ));
                 if tx_lines.len() >= 3 {
                     break;
@@ -1239,13 +1248,7 @@ pub async fn prompt_submit(
             }
             if !tx_lines.is_empty() {
                 return Ok(serde_json::json!({
-                    "inject": format!(
-                        "{}\n[signet:recall | query=\"{}\" | results={} | engine=transcript-fallback]\n{}",
-                        metadata_header,
-                        query_terms_for_resp,
-                        tx_lines.len(),
-                        tx_lines.join("\n")
-                    ),
+                    "inject": build_prompt_recall_inject(&metadata_header, &tx_lines),
                     "memoryCount": tx_lines.len(),
                     "queryTerms": query_terms_for_resp,
                     "engine": "transcript-fallback",
@@ -3063,6 +3066,67 @@ mod tests {
             .unwrap_or_default();
         assert!(stored.contains("longer transcript"));
         assert!(!stored.contains("User: short\nAssistant: short"));
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_submit_formats_temporal_fallback_as_lightweight_recall_block() {
+        let (state, writer, _tmp) = test_state("hooks-prompt-submit-structured-brief");
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                conn.execute(
+                    "INSERT INTO memory_thread_heads (agent_id, thread_key, label, project, session_key, source_type, source_ref, harness, node_id, latest_at, sample, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'summary', ?6, 'test', ?7, ?8, ?9, ?8)",
+                    rusqlite::params![
+                        "agent-a",
+                        "thread-prompt-structured",
+                        "recent work",
+                        "packages/daemon-rs",
+                        "sess-prompt-structured",
+                        "summary-node-1",
+                        "node-1",
+                        "2026-04-06T22:39:00Z",
+                        "prompt submit observability review now uses structured recall formatting",
+                    ],
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = prompt_submit(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(PromptSubmitBody {
+                harness: Some("test".to_string()),
+                project: Some("packages/daemon-rs".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                user_message: Some("show prompt submit observability review".to_string()),
+                user_prompt: None,
+                last_assistant_message: None,
+                session_key: Some("sess-prompt-structured".to_string()),
+                transcript: None,
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        let inject = body["inject"].as_str().unwrap_or_default();
+        assert_eq!(
+            body["engine"],
+            serde_json::Value::String("temporal-fallback".to_string())
+        );
+        assert!(inject.contains("## Relevant Memory"));
+        assert!(inject.contains("[thread node-1]"));
+        assert!(inject.contains("prompt submit observability review now uses structured recall formatting"));
+        assert!(inject.contains("if you need deeper history, use /recall or memory_search"));
+        assert!(!inject.contains("[signet:recall"));
 
         drop(state);
         let _ = writer.await;

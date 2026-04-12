@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readSessionFileSnapshot } from "./src/transcript.js";
+import { readSessionFileSnapshot } from "@signet/pi-extension-base";
+import { HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE } from "./src/types.js";
 
 const tempDirs: string[] = [];
 
@@ -43,7 +44,10 @@ describe("readSessionFileSnapshot", () => {
 			].join("\n"),
 		);
 
-		const snapshot = readSessionFileSnapshot(sessionFile);
+		const snapshot = readSessionFileSnapshot(
+			sessionFile,
+			new Set([HIDDEN_RECALL_CUSTOM_TYPE, HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE]),
+		);
 		expect(snapshot).toEqual({
 			loaded: true,
 			sessionId: "session-123",

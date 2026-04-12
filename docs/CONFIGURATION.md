@@ -982,9 +982,9 @@ The SQLite database at `memory/memories.db` contains three main tables.
 
 ### memories_fts
 
-FTS5 virtual table for keyword search. Indexes `content` and `tags`
-from the `memories` table. An after-delete trigger keeps the FTS index
-in sync when tombstones are hard-purged.
+FTS5 virtual table for keyword search over `content`, backed by the
+`memories` table and created with the `unicode61` tokenizer. Triggers
+keep the index in sync when rows are inserted, deleted, or updated.
 
 
 Harness-Specific Configuration

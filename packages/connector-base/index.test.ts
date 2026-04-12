@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { type InstallResult, type UninstallResult, BaseConnector } from "./src/index";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, relative, resolve } from "node:path";
+import {
+	type InstallResult,
+	type UninstallResult,
+	BaseConnector,
+	removeManagedExtensionFile,
+	resolveSignetDaemonUrl,
+	resolveSignetWorkspacePath,
+} from "./src/index";
 
 class TestConnector extends BaseConnector {
 	readonly name = "Test";
@@ -30,10 +37,24 @@ class TestConnector extends BaseConnector {
 }
 
 let dir = "";
+const originalEnv = {
+	SIGNET_PATH: process.env.SIGNET_PATH,
+	SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
+	SIGNET_HOST: process.env.SIGNET_HOST,
+	SIGNET_PORT: process.env.SIGNET_PORT,
+	XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+};
 
 afterEach(() => {
 	if (dir) rmSync(dir, { recursive: true, force: true });
 	dir = "";
+	for (const [key, value] of Object.entries(originalEnv)) {
+		if (value === undefined) {
+			delete process.env[key];
+			continue;
+		}
+		process.env[key] = value;
+	}
 });
 
 describe("BaseConnector.stripLegacySignetBlock", () => {
@@ -70,5 +91,113 @@ describe("BaseConnector.stripLegacySignetBlock", () => {
 		const strippedPath = connector.cleanup(dir);
 		expect(strippedPath).toBeNull();
 		expect(existsSync(join(dir, "AGENTS.md"))).toBe(false);
+	});
+});
+
+describe("resolveSignetDaemonUrl", () => {
+	it("uses a valid explicit daemon URL override", () => {
+		process.env.SIGNET_DAEMON_URL = " https://example.test/ ";
+
+		expect(resolveSignetDaemonUrl()).toBe("https://example.test");
+	});
+
+	it("ignores invalid explicit daemon URLs and falls back to loopback defaults", () => {
+		process.env.SIGNET_DAEMON_URL = "file:///tmp/signet.sock";
+		process.env.SIGNET_HOST = "127.0.0.1";
+		process.env.SIGNET_PORT = "4123";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+	});
+
+	it("rejects explicit daemon URLs with a non-root path", () => {
+		process.env.SIGNET_DAEMON_URL = "https://example.test/custom";
+		process.env.SIGNET_HOST = "127.0.0.1";
+		process.env.SIGNET_PORT = "4123";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+	});
+
+	it("uses the parsed numeric port rather than the raw env string", () => {
+		delete process.env.SIGNET_DAEMON_URL;
+		process.env.SIGNET_HOST = "127.0.0.1";
+		process.env.SIGNET_PORT = "3850abc";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:3850");
+	});
+
+	it("falls back to localhost-safe defaults when host contains URL control characters", () => {
+		delete process.env.SIGNET_DAEMON_URL;
+		process.env.SIGNET_HOST = "127.0.0.1@evil.com";
+		process.env.SIGNET_PORT = "4123";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+	});
+
+	it("rejects degenerate host values that only contain separators", () => {
+		delete process.env.SIGNET_DAEMON_URL;
+		process.env.SIGNET_HOST = "...";
+		process.env.SIGNET_PORT = "4123";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+	});
+
+	it("falls back to the default port when SIGNET_PORT is out of range", () => {
+		delete process.env.SIGNET_DAEMON_URL;
+		process.env.SIGNET_HOST = "127.0.0.1";
+		process.env.SIGNET_PORT = "70000";
+
+		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:3850");
+	});
+});
+
+describe("resolveSignetWorkspacePath", () => {
+	it("normalizes SIGNET_PATH when provided directly", () => {
+		const relativeWorkspace = "./tmp/signet-workspace";
+		process.env.SIGNET_PATH = relativeWorkspace;
+
+		expect(resolveSignetWorkspacePath()).toBe(resolve(relativeWorkspace));
+	});
+
+	it("expands and normalizes the configured workspace path", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-workspace-"));
+		process.env.XDG_CONFIG_HOME = dir;
+		const rel = relative(homedir(), dir);
+		const tildeWorkspace = `~/${rel}/../${relative(homedir(), dir)}/agents`;
+		const cfgDir = join(dir, "signet");
+		const cfgPath = join(cfgDir, "workspace.json");
+		mkdirSync(cfgDir, { recursive: true });
+		writeFileSync(
+			cfgPath,
+			JSON.stringify({
+				version: 1,
+				workspace: tildeWorkspace,
+				updatedAt: new Date().toISOString(),
+			}),
+			"utf-8",
+		);
+
+		expect(resolveSignetWorkspacePath()).toBe(
+			resolve(join(homedir(), rel, "..", rel, "agents")),
+		);
+	});
+});
+
+describe("removeManagedExtensionFile", () => {
+	it("removes files that contain the managed marker", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-managed-file-"));
+		const filePath = join(dir, "managed.js");
+		writeFileSync(filePath, "// signet-managed\nconst x = 1;\n", "utf-8");
+
+		expect(removeManagedExtensionFile(filePath, "signet-managed")).toBe(true);
+		expect(existsSync(filePath)).toBe(false);
+	});
+
+	it("leaves unmanaged files in place", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-unmanaged-file-"));
+		const filePath = join(dir, "plain.js");
+		writeFileSync(filePath, "const x = 1;\n", "utf-8");
+
+		expect(removeManagedExtensionFile(filePath, "signet-managed")).toBe(false);
+		expect(existsSync(filePath)).toBe(true);
 	});
 });

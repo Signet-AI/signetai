@@ -10,6 +10,7 @@ dist/
 *.tsbuildinfo
 .svelte-kit/
 packages/cli/dashboard/build/
+packages/daemon/dashboard/
 packages/signetai/dist/
 packages/signetai/dashboard/
 packages/signetai/bin/signet-predictor-*

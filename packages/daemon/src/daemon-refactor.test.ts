@@ -11,9 +11,12 @@ describe("daemon route extraction refactor", () => {
 
 	// Guards against module-level side effects at import time (e.g.
 	// calling startSessionCleanup() during top-level evaluation).
-	// NOTE: This test relies on ESM module caching — the daemon module
-	// body only runs on the first import in a given process. If another
-	// test file imports ./daemon first, this test becomes a no-op.
+	// BEST-EFFORT GUARD: This test relies on ESM module caching — the
+	// daemon module body only runs on the first import in a given
+	// process. If another test file imports ./daemon first, this test
+	// becomes a no-op. This is an intentional trade-off: running this
+	// test in isolation still catches regressions, and the daemon's
+	// integration tests cover session cleanup behavior independently.
 	it("does not start session cleanup when daemon is imported for route registration", async () => {
 		expect.assertions(2);
 		expect(isSessionCleanupRunning()).toBe(false);

@@ -59,23 +59,48 @@ reranking.
 
 **Parameters:**
 
+Primary controls:
+
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `query` | string | yes | Search query text |
 | `limit` | number | no | Max results to return (default 10) |
-| `type` | string | no | Filter by memory type (e.g. `"preference"`, `"fact"`) |
-| `min_score` | number | no | Minimum relevance score threshold |
+| `project` | string | no | Optional project path filter |
+| `expand` | boolean | no | Include expanded transcript/context sources |
 
-**Returns:** Array of memory objects with content, type, importance, tags,
-and relevance score.
+Common refinements:
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `type` | string | no | Filter by memory type (e.g. `"preference"`, `"fact"`) |
+| `tags` | string | no | Filter by tags (comma-separated) |
+| `who` | string | no | Filter by author |
+| `since` | string | no | Only include memories created after this date |
+| `until` | string | no | Only include memories created before this date |
+
+Advanced controls:
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `keyword_query` | string | no | Override the keyword/FTS query used for recall |
+| `pinned` | boolean | no | Only return pinned memories |
+| `importance_min` | number | no | Minimum memory importance threshold |
+| `min_score` | number | no | Deprecated compatibility alias for `importance_min` |
+| `score_min` | number | no | Minimum recall score threshold, applied client-side to returned rows |
+
+**Returns:** A formatted recall brief with primary matches, supporting
+context, and no-hit handling. The tool still reads from
+`POST /api/memory/recall` under the hood.
 
 **Example:**
 
 ```json
 {
   "query": "user prefers dark mode",
+  "project": "/home/user/myapp",
   "limit": 5,
-  "type": "preference"
+  "type": "preference",
+  "score_min": 0.8
 }
 ```
 

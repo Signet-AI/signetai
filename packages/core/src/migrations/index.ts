@@ -62,6 +62,7 @@ import { up as skillInvocations } from "./053-skill-invocations";
 import { up as taskAgentScope } from "./054-task-agent-scope";
 import { up as dreamingState } from "./055-dreaming-state";
 import { up as agentScopedContentHash } from "./056-agent-scoped-content-hash";
+import { up as memoriesFtsTokenizerRepair } from "./057-memories-fts-tokenizer-repair";
 
 // -- Public interface consumed by Database.init() --
 
@@ -539,6 +540,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 56,
 		name: "agent-scoped-content-hash",
 		up: agentScopedContentHash,
+	},
+	{
+		version: 57,
+		name: "memories-fts-tokenizer-repair",
+		up: memoriesFtsTokenizerRepair,
 	},
 ];
 

@@ -249,6 +249,7 @@ export function resolveFocalEntities(
 		sessionKey?: string;
 		checkpointEntityIds?: string[];
 		queryTokens?: string[];
+		includePinned?: boolean;
 	},
 ): FocalEntityResult {
 	try {
@@ -261,7 +262,7 @@ export function resolveFocalEntities(
 			};
 		}
 
-		const pinnedEntityIds = getPinnedEntityIds(db, agentId);
+		const pinnedEntityIds = signals.includePinned === false ? [] : getPinnedEntityIds(db, agentId);
 		let resolvedEntityIds: string[] = [];
 		let source: FocalEntityResult["source"] = signals.project ? "project" : "query";
 

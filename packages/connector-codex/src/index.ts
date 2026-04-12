@@ -47,7 +47,6 @@ function resolveSignetMcp(): { command: string; args: string[] } {
 // ---------------------------------------------------------------------------
 
 const HOOK_EVENT_KEYS = ["SessionStart", "UserPromptSubmit", "Stop"] as const;
-type HookEventKey = (typeof HOOK_EVENT_KEYS)[number];
 
 interface MatcherGroup {
 	matcher?: string;
@@ -101,7 +100,7 @@ function writeHooksFile(path: string, file: HooksFile): void {
 	atomicWriteJson(path, file);
 }
 
-const SIGNET_HOOK_SUBSTRINGS = ["hook session-start", "hook user-prompt-submit", "hook session-end"] as const;
+const SIGNET_HOOK_SUBSTRINGS = ["signet hook session-start", "signet hook user-prompt-submit", "signet hook session-end"] as const;
 
 function isSignetMatcherGroup(group: unknown): boolean {
 	if (typeof group !== "object" || group === null) return false;
@@ -132,7 +131,7 @@ function isLegacySignetMatcherGroup(group: unknown): boolean {
 }
 
 function removeSignetEntries(file: HooksFile): HooksFile {
-	const cleaned = { ...file };
+	const cleaned: HooksFile = { ...file, hooks: file.hooks ? { ...file.hooks } : undefined };
 	const events = cleaned.hooks;
 	if (!events || typeof events !== "object") return cleaned;
 

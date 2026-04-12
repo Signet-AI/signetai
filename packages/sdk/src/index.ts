@@ -3,9 +3,9 @@
  * No native dependencies (no SQLite, no @signet/core).
  */
 
-import { SignetTransport } from "./transport.js";
-import { SignetClientHelpers } from "./helpers.js";
 import { SignetClientP2 } from "./client-p2.js";
+import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
+import { SignetTransport } from "./transport.js";
 import type {
 	BatchModifyItemResult,
 	BatchModifyResponse,
@@ -128,21 +128,28 @@ export class SignetClient extends SignetClientHelpers {
 	async recall(
 		query: string,
 		opts?: {
+			readonly keywordQuery?: string;
 			readonly limit?: number;
+			readonly project?: string;
 			readonly type?: string;
 			readonly tags?: string;
 			readonly who?: string;
 			readonly pinned?: boolean;
 			readonly importance_min?: number;
 			readonly since?: string;
+			readonly until?: string;
 			readonly minScore?: number;
 			readonly expand?: boolean;
+			readonly agentId?: string;
 		},
 	): Promise<RecallResponse> {
-		return this.transport.post<RecallResponse>("/api/memory/recall", {
-			query,
-			...opts,
-		});
+		return applyRecallMinScore(
+			await this.transport.post<RecallResponse>("/api/memory/recall", {
+				query,
+				...opts,
+			}),
+			opts?.minScore,
+		);
 	}
 
 	async getMemory(id: string): Promise<MemoryRecord> {
@@ -1087,7 +1094,13 @@ export class SignetClient extends SignetClientHelpers {
 }
 
 export interface SignetClient extends SignetClientP2 {}
-Object.assign(SignetClient.prototype, SignetClientP2.prototype);
+for (const key of Reflect.ownKeys(SignetClientP2.prototype)) {
+	if (key === "constructor") continue;
+	const descriptor = Object.getOwnPropertyDescriptor(SignetClientP2.prototype, key);
+	if (descriptor) {
+		Object.defineProperty(SignetClient.prototype, key, descriptor);
+	}
+}
 
 /** @deprecated Use SignetClient instead */
 export const SignetSDK = SignetClient;

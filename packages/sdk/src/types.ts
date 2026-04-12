@@ -28,25 +28,49 @@ export interface MemoryRecord {
 export interface RecallResult {
 	readonly id: string;
 	readonly content: string;
-	readonly type: string;
-	readonly importance: number;
-	readonly tags: string | null;
-	readonly who: string | null;
-	readonly pinned: boolean;
-	readonly source_type: string | null;
+	readonly content_length: number;
+	readonly truncated: boolean;
 	readonly score: number;
-	readonly source: "hybrid" | "vector" | "keyword";
-	readonly accessCount: number;
-	readonly lastAccessed: string | null;
+	readonly source: string;
+	readonly type: string;
+	readonly tags: string | null;
+	readonly pinned: boolean;
+	readonly importance: number;
+	readonly who: string;
+	readonly project: string | null;
+	readonly created_at: string;
+	readonly supplementary?: boolean;
+}
+
+export interface RecallMeta {
+	readonly totalReturned: number;
+	readonly hasSupplementary: boolean;
+	readonly noHits: boolean;
+}
+
+export interface RecallEntityAttribute {
+	readonly content: string;
+	readonly status: string;
+	readonly importance: number;
+}
+
+export interface RecallEntityAspect {
+	readonly name: string;
+	readonly attributes: readonly RecallEntityAttribute[];
+}
+
+export interface RecallEntity {
+	readonly name: string;
+	readonly type: string;
+	readonly aspects: readonly RecallEntityAspect[];
 }
 
 export interface RecallResponse {
 	readonly results: readonly RecallResult[];
-	readonly stats: {
-		readonly total: number;
-		readonly searchTime: number;
-		readonly graphBoosted?: number;
-	};
+	readonly query: string;
+	readonly method: "hybrid" | "keyword";
+	readonly meta: RecallMeta;
+	readonly entities?: readonly RecallEntity[];
 	readonly sources?: Readonly<Record<string, string>>;
 }
 
@@ -750,6 +774,8 @@ export type {
 	SessionStartResponse,
 	UserPromptSubmitResponse,
 	SessionEndResponse,
+	HookRecallResult,
+	HookRecallResponse,
 	PreCompactionResponse,
 	CompactionCompleteResponse,
 	SynthesisConfigResponse,

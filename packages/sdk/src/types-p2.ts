@@ -18,6 +18,38 @@ export interface SessionEndResponse {
 	readonly message: string;
 }
 
+export interface HookRecallResult {
+	readonly id: string;
+	readonly content: string;
+	readonly content_length: number;
+	readonly truncated: boolean;
+	readonly score: number;
+	readonly source: string;
+	readonly type: string;
+	readonly tags: string | null;
+	readonly pinned: boolean;
+	readonly importance: number;
+	readonly who: string;
+	readonly project: string | null;
+	readonly created_at: string;
+	readonly supplementary?: boolean;
+}
+
+export interface HookRecallResponse {
+	readonly results: readonly HookRecallResult[];
+	readonly memories?: readonly HookRecallResult[];
+	readonly count?: number;
+	readonly query: string;
+	readonly method: "hybrid" | "keyword";
+	readonly meta: {
+		readonly totalReturned: number;
+		readonly hasSupplementary: boolean;
+		readonly noHits: boolean;
+	};
+	readonly bypassed?: boolean;
+	readonly internal?: boolean;
+}
+
 export interface PreCompactionResponse {
 	readonly instructions: string;
 }

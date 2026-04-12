@@ -33,9 +33,11 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
+	expandHome,
 	stripSignetBlock,
 	symlinkSkills,
 	type SymlinkOptions,
@@ -237,6 +239,131 @@ export function atomicWriteJson(path: string, data: unknown, indent: number | st
 		} catch {}
 		throw err;
 	}
+}
+
+// ============================================================================
+// Shared managed-extension utilities (used by connector-pi, connector-oh-my-pi)
+// ============================================================================
+
+export const MANAGED_DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
+export const MANAGED_AGENT_ID_DEFAULT = "default";
+
+export function readManagedTrimmedEnv(name: string): string | undefined {
+	const value = process.env[name];
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function resolveSignetWorkspacePath(home = homedir()): string {
+	const configured = readManagedTrimmedEnv("SIGNET_PATH");
+	if (configured) return resolve(expandHome(configured));
+
+	const configHome = readManagedTrimmedEnv("XDG_CONFIG_HOME") ?? join(home, ".config");
+	const workspaceConfigPath = join(configHome, "signet", "workspace.json");
+	if (!existsSync(workspaceConfigPath)) return join(home, ".agents");
+
+	try {
+		const raw = JSON.parse(readFileSync(workspaceConfigPath, "utf8")) as { workspace?: unknown };
+		return typeof raw.workspace === "string" && raw.workspace.trim().length > 0
+			? resolve(expandHome(raw.workspace.trim()))
+			: join(home, ".agents");
+	} catch {
+		return join(home, ".agents");
+	}
+}
+
+function isSafeDaemonHost(host: string): boolean {
+	return /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host);
+}
+
+function normalizeExplicitDaemonUrl(rawUrl: string): string | null {
+	try {
+		const url = new URL(rawUrl);
+		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+		if (!url.hostname || url.username || url.password || url.hash || url.search) return null;
+		if (url.pathname !== "/" && url.pathname !== "") return null;
+		return url.toString().replace(/\/$/, "");
+	} catch {
+		return null;
+	}
+}
+
+export function resolveSignetDaemonUrl(): string {
+	const explicit = readManagedTrimmedEnv("SIGNET_DAEMON_URL");
+	if (explicit) {
+		const normalized = normalizeExplicitDaemonUrl(explicit);
+		if (normalized) return normalized;
+	}
+
+	const rawHost = readManagedTrimmedEnv("SIGNET_HOST") ?? "127.0.0.1";
+	const host = isSafeDaemonHost(rawHost) ? rawHost : "127.0.0.1";
+	const rawPort = readManagedTrimmedEnv("SIGNET_PORT") ?? "3850";
+	const parsedPort = Number.parseInt(rawPort, 10);
+	const port =
+		Number.isFinite(parsedPort) && parsedPort >= 1 && parsedPort <= 65_535
+			? String(parsedPort)
+			: "3850";
+	return `http://${host}:${port}`;
+}
+
+export function resolveSignetAgentId(): string {
+	return readManagedTrimmedEnv("SIGNET_AGENT_ID") ?? MANAGED_AGENT_ID_DEFAULT;
+}
+
+export function buildManagedExtensionEnvBootstrap(env: {
+	readonly signetPath: string;
+	readonly daemonUrl: string;
+	readonly agentId: string;
+}): string {
+	const workspace = JSON.stringify(env.signetPath);
+	const daemonUrl = JSON.stringify(env.daemonUrl);
+	const agentId = JSON.stringify(env.agentId);
+
+	return `const __signetRuntimeProcess = Reflect.get(globalThis, "process");
+if (__signetRuntimeProcess && typeof __signetRuntimeProcess === "object") {
+	const __signetRuntimeEnv = Reflect.get(__signetRuntimeProcess, "env");
+	const __signetReadEnv = (key) => {
+		if (!__signetRuntimeEnv || typeof __signetRuntimeEnv !== "object") return undefined;
+		const value = Reflect.get(__signetRuntimeEnv, key);
+		return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+	};
+	if (__signetRuntimeEnv && typeof __signetRuntimeEnv === "object") {
+		if (!__signetReadEnv("SIGNET_PATH")) {
+			Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${workspace});
+		}
+		if (!__signetReadEnv("SIGNET_DAEMON_URL")) {
+			Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", ${daemonUrl});
+		}
+		if (!__signetReadEnv("SIGNET_AGENT_ID")) {
+			Reflect.set(__signetRuntimeEnv, "SIGNET_AGENT_ID", ${agentId});
+		}
+	}
+}`;
+}
+
+export function managedExtensionFilePath(agentDir: string, filename: string): string {
+	return join(agentDir, "extensions", filename);
+}
+
+export function isManagedExtensionFile(filePath: string, marker: string): boolean {
+	const content = readManagedExtensionFile(filePath);
+	return content?.includes(marker) ?? false;
+}
+
+function readManagedExtensionFile(filePath: string): string | null {
+	try {
+		return readFileSync(filePath, "utf8");
+	} catch {
+		return null;
+	}
+}
+
+export function removeManagedExtensionFile(filePath: string, marker: string): boolean {
+	const content = readManagedExtensionFile(filePath);
+	if (!content?.includes(marker)) return false;
+	unlinkSync(filePath);
+	return true;
 }
 
 // ============================================================================

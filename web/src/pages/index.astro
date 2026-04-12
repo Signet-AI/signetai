@@ -1,13 +1,13 @@
 ---
-import Base from "../layouts/Base.astro";
-import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
-import Hero from "../components/landing/Hero.astro";
-import Showcase from "../components/landing/Showcase.astro";
-import CoreCapabilities from "../components/landing/CoreCapabilities.astro";
-import Benchmark from "../components/landing/Benchmark.astro";
-import InstallCta from "../components/landing/InstallCta.astro";
+import Nav from "../components/Nav.astro";
 import StructuredData from "../components/StructuredData.astro";
+import Benchmark from "../components/landing/Benchmark.astro";
+import CoreCapabilities from "../components/landing/CoreCapabilities.astro";
+import Hero from "../components/landing/Hero.astro";
+import InstallCta from "../components/landing/InstallCta.astro";
+import Showcase from "../components/landing/Showcase.astro";
+import Base from "../layouts/Base.astro";
 import "../styles/landing.css";
 
 const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
@@ -19,14 +19,14 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.s
     '@type': 'WebSite',
     name: 'SignetAI',
     url: siteUrl,
-    description: "Local-first persistent memory for AI agents. Ambient extraction, knowledge graph, cross-harness runtime.",
+    description: "Local-first identity, memory, and secrets for AI agents. Portable agent state across models and harnesses.",
   }} />
   <StructuredData data={{
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
     name: 'Signet',
     url: siteUrl,
-    description: "Local-first persistent memory for AI agents. Ambient extraction, encrypted secrets, and portable identity across Claude Code, OpenClaw, OpenCode, Codex, and Forge.",
+    description: "Local-first identity, memory, and secrets for AI agents. Portable state across Claude Code, OpenClaw, OpenCode, Codex, and Forge.",
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'Linux, macOS',
     offers: {

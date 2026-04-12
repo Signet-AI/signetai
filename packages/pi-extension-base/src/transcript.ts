@@ -1,11 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isRecord, readTrimmedString } from "./helpers.js";
-import {
-	HIDDEN_RECALL_CUSTOM_TYPE,
-	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
-	type OmpSessionEntry,
-	type OmpSessionHeader,
-} from "./types.js";
+import type { BaseSessionEntry, BaseSessionHeader } from "./types.js";
 
 export interface SessionFileSnapshot {
 	readonly loaded: boolean;
@@ -63,11 +58,11 @@ function buildMessageLine(role: string | undefined, content: unknown): string | 
 	return `${roleLabel(role)}: ${text}`;
 }
 
-function entryToTranscriptLine(entry: OmpSessionEntry): string | undefined {
+function entryToTranscriptLine(entry: BaseSessionEntry, excludeCustomTypes: ReadonlySet<string>): string | undefined {
 	if (!isRecord(entry) || typeof entry.type !== "string") return undefined;
 
 	if (entry.type === "custom_message") {
-		if (entry.customType === HIDDEN_RECALL_CUSTOM_TYPE || entry.customType === HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE) {
+		if (typeof entry.customType === "string" && excludeCustomTypes.has(entry.customType)) {
 			return undefined;
 		}
 		return buildMessageLine("custom", entry.content);
@@ -81,11 +76,14 @@ function entryToTranscriptLine(entry: OmpSessionEntry): string | undefined {
 	return buildMessageLine(role, content);
 }
 
-export function buildTranscriptFromEntries(entries: ReadonlyArray<OmpSessionEntry>): string | undefined {
+export function buildTranscriptFromEntries(
+	entries: ReadonlyArray<BaseSessionEntry>,
+	excludeCustomTypes: ReadonlySet<string> = new Set(),
+): string | undefined {
 	const lines: string[] = [];
 
 	for (const entry of entries) {
-		const line = entryToTranscriptLine(entry);
+		const line = entryToTranscriptLine(entry, excludeCustomTypes);
 		if (!line) continue;
 		lines.push(line);
 	}
@@ -103,20 +101,20 @@ function parseJsonLine(line: string): unknown {
 }
 
 function classifySessionRows(lines: ReadonlyArray<string>): {
-	readonly header: OmpSessionHeader | undefined;
-	readonly entries: OmpSessionEntry[];
+	readonly header: BaseSessionHeader | undefined;
+	readonly entries: BaseSessionEntry[];
 } {
-	let header: OmpSessionHeader | undefined;
-	const entries: OmpSessionEntry[] = [];
+	let header: BaseSessionHeader | undefined;
+	const entries: BaseSessionEntry[] = [];
 
 	for (const line of lines) {
 		const row = parseJsonLine(line);
 		if (!isRecord(row) || typeof row.type !== "string") continue;
 		if (row.type === "session") {
-			header = row as OmpSessionHeader;
+			header = row as BaseSessionHeader;
 			continue;
 		}
-		entries.push(row as OmpSessionEntry);
+		entries.push(row as BaseSessionEntry);
 	}
 
 	return { header, entries };
@@ -129,11 +127,14 @@ function readSessionLines(sessionFile: string): string[] {
 		.filter((line) => line.length > 0);
 }
 
-function sessionProject(header: OmpSessionHeader | undefined): string | undefined {
+function sessionProject(header: BaseSessionHeader | undefined): string | undefined {
 	return readTrimmedString(header?.cwd) ?? readTrimmedString(header?.project) ?? readTrimmedString(header?.workspace);
 }
 
-export function readSessionFileSnapshot(sessionFile: string | undefined): SessionFileSnapshot {
+export function readSessionFileSnapshot(
+	sessionFile: string | undefined,
+	excludeCustomTypes: ReadonlySet<string> = new Set(),
+): SessionFileSnapshot {
 	if (!sessionFile || !existsSync(sessionFile)) {
 		return { loaded: false, sessionId: undefined, project: undefined, transcript: undefined };
 	}
@@ -144,7 +145,7 @@ export function readSessionFileSnapshot(sessionFile: string | undefined): Sessio
 			loaded: true,
 			sessionId: readTrimmedString(header?.id),
 			project: sessionProject(header),
-			transcript: buildTranscriptFromEntries(entries),
+			transcript: buildTranscriptFromEntries(entries, excludeCustomTypes),
 		};
 	} catch {
 		return { loaded: false, sessionId: undefined, project: undefined, transcript: undefined };

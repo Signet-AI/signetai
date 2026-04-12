@@ -58,7 +58,7 @@ Commands Overview
 | `signet import` | Import a portable bundle |
 | `signet migrate-schema` | Migrate database to unified schema |
 | `signet migrate-vectors` | Migrate BLOB vectors to sqlite-vec format |
-| `signet sync` | Sync built-in templates and skills |
+| `signet sync` | Sync hooks, extensions, built-in templates, and skills |
 | `signet secret` | Manage encrypted secrets |
 | `signet skill` | Manage agent skills from registry |
 | `signet git` | Git sync management for $SIGNET_WORKSPACE |
@@ -123,7 +123,7 @@ Options:
 | `--name <name>` | Agent name in non-interactive mode |
 | `--description <description>` | Agent description in non-interactive mode |
 | `--deployment-type <type>` | Deployment context (`local`, `vps`, `server`) used for interactive guidance and non-interactive inferred defaults |
-| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `codex`) |
+| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `oh-my-pi`, `pi`, `codex`, `forge`) |
 | `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) |
 | `--embedding-model <model>` | Non-interactive embedding model |
 | `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) |
@@ -435,20 +435,41 @@ Search memories using hybrid vector + keyword search.
 
 ```bash
 signet recall "user preferences"
-signet recall "deploy process" --limit 5
-signet recall "auth" --tags backend --who claude-code
+signet recall "release notes" --project /home/user/myapp --expand
+signet recall "deploy process" --limit 5 --type decision
+signet recall "auth" --tags backend --who claude-code --since 2026-01-01
+signet recall "deploy checklist" --keyword-query "deploy OR rollback" --min-score 0.8
 signet recall "secrets" --json
 ```
 
-Options:
+Primary controls:
 
 | Option | Description |
 |--------|-------------|
 | `-l, --limit <n>` | Max results (default: 10) |
+| `--project <project>` | Filter by project |
+| `--expand` | Include expanded transcript/context sources |
+
+Common refinements:
+
+| Option | Description |
+|--------|-------------|
 | `-t, --type <type>` | Filter by memory type |
 | `--tags <tags>` | Filter by tags (comma-separated) |
 | `--who <who>` | Filter by author |
-| `--json` | Output raw JSON |
+| `--since <date>` | Only include memories created after this date |
+| `--until <date>` | Only include memories created before this date |
+
+Advanced controls:
+
+| Option | Description |
+|--------|-------------|
+| `--keyword-query <query>` | Override the keyword/FTS query used for recall |
+| `--pinned` | Only return pinned memories |
+| `--importance-min <n>` | Only return memories at or above this importance |
+| `--min-score <n>` | Minimum recall score threshold, applied client-side |
+| `--agent <name>` | Filter by agent ID |
+| `--json` | Print the recall response as JSON |
 
 ---
 
@@ -545,9 +566,9 @@ Options:
 `signet sync`
 ---
 
-Sync built-in template files and skills to your `$SIGNET_WORKSPACE/` directory,
+Sync hooks, extensions, built-in template files, and skills to your `$SIGNET_WORKSPACE/` directory,
 and re-register hooks for any detected harnesses. Run this after an
-upgrade if built-in skills appear stale. If OpenClaw is still configured on
+upgrade if built-in skills appear stale or hooks need updating. If OpenClaw is still configured on
 the legacy Signet hook path, `signet sync` now migrates it to the plugin
 runtime path automatically so full lifecycle capture resumes.
 

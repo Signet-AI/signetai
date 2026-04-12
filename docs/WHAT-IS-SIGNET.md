@@ -8,249 +8,208 @@ section: "Core Concepts"
 What Is Signet
 ==============
 
-Signet is the layer between AI agents and AI models.
+Signet holds an AI agent's identity, memory, secrets, and skills outside
+any single model or harness. The agent survives vendor changes, model
+upgrades, tool switches, and new sessions because its state lives in a
+place the user controls.
 
-Models are reasoning engines. They're powerful, but stateless — every
-session starts fresh, every tool switch resets everything, and the model
-has no memory of who you are or what you've been working on.
+Models provide inference. Harnesses provide an interface. Signet provides
+the local services that let an agent remain the same entity over time.
 
-Signet fixes that by giving agents a persistent home. Identity,
-knowledge, secrets, and skills all live in that home, independent of
-whichever model happens to be running. The model is a guest. It reads
-what it needs, does its work, and writes back what it learned. Swap the
-model out entirely and the agent stays the same entity.
+That distinction matters because the most valuable thing an agent builds
+with a user is behavioral context: the accumulated understanding of how
+the user works, what they care about, what projects exist, which
+constraints matter, and what has already been tried. Losing that context
+means starting over with a brilliant stranger.
 
-The simplest analogy: Signet is a home directory for AI agents.
-
-But that still understates the real problem.
-
-Persistent memory is not just a storage problem. It is a context
-selection problem. Given everything an agent knows, what should actually
-enter the context window right now to help, not distract?
-
-That is the job Signet is built around.
+Signet is built so that context travels with the agent.
 
 
 Why This Matters
 ----------------
 
-Today, your AI assistant is tied to a platform. ChatGPT's memory belongs
-to OpenAI. Claude's memory belongs to Anthropic. Switch tools and you
-start over. Cancel your subscription and everything disappears.
+AI platforms are moving toward always-on agents with built-in memory,
+tools, and automation. That is useful, but it creates a new kind of
+lock-in. Older lock-in was about files, messages, customer records, or
+source code. Agent lock-in is about the learned model of how you work.
 
-Signet moves the center of gravity from the AI company to the user. Your
-agent's identity and knowledge live on your machine, in files and a
-database you own. You can inspect every memory, back up everything, and
-carry it to any tool that supports the standard.
+If six months of agent memory lives inside one company's product, you do
+not merely lose chat history when you switch. You lose the relationship
+the agent built with you. You lose the project map, the operating
+patterns, the small preferences, the hard-earned context, and the
+continuity that made the agent useful.
 
-The agent becomes portable. The model becomes interchangeable.
+Signet moves that state to a local-first workspace. Your agent's
+identity and knowledge live in files and SQLite you can inspect, back up,
+edit, sync, and move. A platform can provide the interface. A model can
+provide the reasoning. The agent's accumulated context remains yours.
 
 
-The Architecture in One Picture
--------------------------------
+The Four-Layer Model
+--------------------
 
-Most people think of the AI stack as:
+Signet uses a simple model for the agent stack:
 
-```
-applications
-models
-hardware
-```
-
-Signet introduces a layer that doesn't exist yet:
-
-```
-applications
-agents
-persistent cognition layer  ← Signet
-models
-hardware
+```text
+Harness = shell       where the user interacts
+Agent   = kernel      the persistent entity with identity and memory
+Signet  = OS services memory, identity, secrets, IPC, skills, policies
+LLM     = compute     stateless reasoning invoked by the agent
 ```
 
-Historically, the layers between systems tend to become foundational.
-TCP/IP sits between machines and networks. POSIX sits between software
-and operating systems. SQL sits between applications and databases.
+The harness might be Claude Code, OpenCode, OpenClaw, Codex, Hermes
+Agent, or another tool. The model might be Claude, GPT, GLM, Gemma, or a
+local model. Those choices can change.
 
-Signet sits between agents and models.
+The agent is the persistent thing. Signet provides the services that let
+that persistence work in practice.
 
-The Real Problem
-----------------
-
-Most memory systems stop at storage and retrieval. They persist
-transcripts, embeddings, or structured facts, then rely on explicit
-search or heuristic ranking to recover relevant context later.
-
-That works, up to a point. But agents usually do not fail because they
-cannot store enough. They fail because the wrong things surface at the
-wrong time, or useful context never surfaces at all.
-
-The hard problem is not merely how to store knowledge, nor even how to
-retrieve it. It is how to ensure that the context surfaced to an agent
-is consistently the most helpful possible at the moment of use.
+This framing keeps Signet focused on the boring, durable infrastructure
+every agent needs: memory, identity, secret handling, policy, provenance,
+and eventually stronger verification and coordination.
 
 
-How Signet Approaches It
-------------------------
+What Lives in Signet
+--------------------
 
-Signet approaches this as a predictive context-selection problem.
+A Signet workspace contains the pieces that make an agent portable:
 
-It starts by turning messy session output into more durable substrate.
-The extraction pipeline runs in the background, continuously distilling
-raw session data into structured memory:
+- **Identity files**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
+  and working summaries that tell the agent who it is and who it serves.
+- **Memory**: structured facts, decisions, preferences, constraints,
+  relationships, and session-derived knowledge.
+- **Episodic records**: transcripts, summaries, markdown files, and
+  source artifacts that preserve what actually happened.
+- **Semantic indexes**: SQLite, FTS, embeddings, entities, aspects, and
+  graph links that make the record searchable and useful.
+- **Secrets**: encrypted credentials that can be injected into execution
+  environments without exposing raw values to the model.
+- **Skills and tools**: portable capabilities and MCP integrations that
+  travel with the agent instead of being trapped in one harness.
+- **Policies**: agent scoping, visibility rules, token policy, and other
+  controls that decide what can be seen or used.
 
-- **Sparse facts** — raw observations, unprocessed, high volume
-- **Observational facts** — extracted and validated, but not yet connected
-- **Atomic facts** — the target form: standalone, named, useful in isolation
-- **Procedural memory** — knowledge about how to do things (workflows, rules)
-
-Over time, the goal is for the database to get *smaller and smarter*,
-not larger and noisier. Distillation, deduplication, and structural
-organization all exist to improve the quality of candidate context, not
-just to make storage prettier.
-
-This is the difference between "here's everything that was said" and
-"here's what the system might actually need later."
-
-
-Structured Memory Is Substrate
-------------------------------
-
-Signet uses structured memory because prediction needs structure.
-
-Everything in Signet's knowledge base is organized around entities,
-aspects, attributes, constraints, and dependencies. That graph matters,
-but it is not the product. It is storage and retrieval substrate.
-
-The graph makes retrieval more coherent. Instead of treating memory as a
-flat pile of fragments, Signet can walk from a project to its
-architecture, constraints, people, and tools. Embedding search and
-keyword search still matter, but they now operate alongside explicit
-structure.
-
-That makes the candidate pool better. It does not, by itself, solve the
-hard problem.
+The workspace is deliberately inspectable. The user should be able to see
+what the agent knows, why something was recalled, where it came from,
+and how to repair it when it is wrong.
 
 
-The Predictive Scorer
----------------------
+Memory Architecture
+-------------------
 
-Today, Signet still has a baseline retrieval path built from heuristics,
-hybrid search, traversal, and bounded ranking rules. That substrate
-works, but the endgame is not heuristic retrieval with a nicer graph.
+Signet treats memory as two layers working together.
 
-What Signet is building toward is a predictive model — a per-user
-relevance system that learns which memories, constraints, entities, and
-paths were actually useful in real sessions.
+The first layer is the exact record: transcripts, notes, summaries, and
+workspace files. This is the episodic source of truth. It gives the
+system something to audit when extracted memory is wrong or incomplete.
 
-The key idea is simple: use the agent in the loop as the source of
-training signal. Inject context, observe what actually helped, compare
-that against the baseline, and let the model earn influence over time.
+The second layer is semantic: entities, relationships, embeddings,
+keywords, procedural knowledge, and retrieval indexes. This layer makes
+the record useful at the moment of work.
 
-That means learning from regret, not just reuse. If injected context
-does not improve the outcome, that should count as negative evidence.
-Stale or repeatedly unhelpful context should decay, be downweighted, or
-lose influence over time.
+Semantic memory alone will drift. Raw transcripts alone are too heavy to
+use directly. The combination matters: preserve the exact record, build a
+semantic layer from it, and keep enough provenance to repair mistakes.
 
-That makes Signet more than a memory store. It becomes a system for
-learning what context is useful.
-
-The model runs locally. No cloud, no shared weights. It earns its
-influence by proving it outperforms the baseline in controlled
-comparisons. If it doesn't help, it gets rolled back automatically.
-
-This is what transforms Signet from a persistence layer into something
-closer to persistent cognition: not just storing what happened, but
-learning what should surface next.
+That is why Signet emphasizes write-side intelligence. The extraction
+pipeline turns messy session output into durable memory structure,
+deduplicates repeated facts, links entities, records constraints, and
+keeps provenance attached. Better extraction makes retrieval simpler and
+more reliable over time.
 
 
-Skills
-------
+Context Selection
+-----------------
 
-Skills are portable capabilities that extend what an agent can do.
-They're installed into the agent's home directory and travel with it
-across platforms.
+Useful memory requires more than storage. The right context has to appear
+at the right time, in the right amount, with enough provenance to trust
+it.
 
-A skill might teach the agent how to write in a specific style, follow a
-particular workflow, or interact with a specialized tool. Skills are
-almost inseparable from the agent itself — they become part of its
-expertise. In this model, highly skilled individuals embed their niche
-knowledge into their agents, creating differentiated capabilities that
-reflect their own expertise.
+Signet builds context from several signals:
+
+- graph traversal across projects, people, tools, constraints, and
+  dependencies
+- keyword and semantic search over memories and documents
+- session transcripts and summaries when exact history matters
+- scoped visibility rules for multi-agent deployments
+- feedback, recency, importance, and dampening to reduce repeated noise
+
+The goal is practical precision. An agent should wake up with the context
+it needs for the current task, without flooding the model window with
+everything it has ever learned.
+
+Learned ranking remains an experimental direction, but the product does
+not depend on a black-box scorer being right. The baseline path must stay
+inspectable, bounded, and useful on its own.
 
 
 Secrets and Safety
 ------------------
 
-Signet includes an encrypted secrets vault. API keys, passwords, and
-tokens are stored encrypted at rest and injected into subprocesses as
-environment variables at runtime. The agent never sees raw secret values
-— they're redacted from all output automatically.
+Agents need access to real tools. Real tools need credentials. Raw
+credentials should not be placed in the model context.
 
-This is a safety boundary between the model and your infrastructure.
-The agent can use tools that require credentials without ever having
-access to the credentials themselves.
+Signet stores secrets encrypted at rest and injects them into subprocess
+environments at runtime. Outputs are redacted so secret values do not
+leak back into transcripts or tool logs. This gives the agent practical
+access to infrastructure while keeping a boundary between the model and
+the credential itself.
 
-
-Continuity
-----------
-
-An agent running across five sessions at once, on three different
-platforms, is still one agent. Its experiences branch and merge like
-version control — same history, different heads, converging back into
-a single identity.
-
-This is the hard problem. Not just remembering across sessions, but
-maintaining coherence when the agent is active in multiple places
-simultaneously. Signet treats continuity as a first-class concern,
-not an afterthought.
+That same principle extends to agent policy. Multi-agent deployments need
+clear scoping: which agent can see which memory, which tools are
+available, which actions require approval, and which operations should be
+logged for later review.
 
 
-Identity and Trust
-------------------
+Cross-Harness Continuity
+------------------------
 
-Today, Signet's identity story is local-first and practical: files,
-config, scopes, and portable agent state you control. Longer-term,
-Signet is exploring stronger cryptographic identity and trust layers for
-cross-machine and cross-network agent systems.
+A useful agent may run in more than one place. It might code in Claude
+Code, respond in Discord through OpenClaw, run a Hermes gateway, and use
+Codex for a focused implementation task.
 
-That future direction is about provable identity, not chain maximalism.
-When an agent acts on your behalf online, there eventually needs to be a
-portable trust layer that verifies who it is and what it's authorized to
-do. Signet is being built so that layer can exist without owning the
-agent itself.
+Those should not become separate half-agents with separate memories.
+Signet provides one shared state layer underneath the harnesses. Sessions
+can start, branch, end, and consolidate while the agent remains one
+continuous entity.
+
+This is especially important for teams. Multiple named agents can share
+one daemon and database while retaining isolated, shared, or group memory
+visibility. The point is controlled continuity, not a global pile of
+context everyone can read.
 
 
-Local-First, Open Standard
---------------------------
+Local-First and Open
+--------------------
 
-Everything lives on your machine. SQLite database, markdown files, YAML
-configuration. No cloud dependency, no vendor lock-in.
+Signet runs local-first. The default workspace lives on the user's
+machine. SQLite and markdown are inspectable. Git sync can version the
+workspace to a remote the user controls. Docker and self-hosted
+deployments keep the same ownership model.
 
-Signet collects local-only operational telemetry — latency, usage counts,
-and error events. This data stays on your machine and is never sent
-externally.
+Local-first means the user owns the root of trust. Sync, backup,
+sharing, and team deployment can be added while the agent's identity and
+behavioral context remain portable.
 
-Signet is an open specification. The format is documented, the
-implementation is open source, and anyone can build tools that read and
-write the same data. Your agent's home directory is yours — not a
-proprietary format locked behind an API.
+The longer-term standardization goal is behavioral context portability:
+an agent should be exportable from one compliant platform and importable
+into another without losing identity, memory, or provenance. Signet is
+the reference implementation path toward that goal.
 
 
 Where This Is Going
 -------------------
 
-The vision is an agent that becomes genuinely more useful over time.
-Not because it stores more data, but because it gets better at
-selecting the right context. An agent that knows your projects, your
-preferences, your decision patterns — and that gets sharper the longer
-you work together.
+The near-term job is reliability: better extraction, better provenance,
+better scoping, better connector support, better inspection, and less
+noise in the context window.
 
-An agent that moves between tools and models without losing itself. That
-maintains coherence across concurrent sessions. That accumulates real
-expertise from the skills its operator develops.
+The larger goal is a portable agent state layer that works across models,
+harnesses, machines, and teams. Identity, memory, secrets, skills,
+policies, and verification should belong to the agent and its owner.
 
-An agent that is yours.
+When the model changes, the agent should remain itself.
+When the harness changes, the agent should remain itself.
+When a platform disappears, the agent should not disappear with it.
 
----
-
-*The difference between a tool that remembers and a mind that persists.*
+That is the core promise of Signet: your agent is yours.

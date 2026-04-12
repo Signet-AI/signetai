@@ -6,7 +6,12 @@
  * All actions respect autonomousFrozen regardless of actor type.
  */
 
-import type { LlmProvider } from "@signet/core";
+import {
+	type LlmProvider,
+	memoriesFtsNeedsTokenizerRepair,
+	readMemoriesFtsSql,
+	recreateMemoriesFts,
+} from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import {
@@ -330,8 +335,8 @@ export function releaseStaleLeases(
 }
 
 /**
- * Check FTS row count against active memory count, optionally rebuilding.
- * Uses a longer cooldown since FTS rebuilds are expensive.
+ * Check FTS row count and tokenizer definition, optionally rebuilding.
+ * Uses a longer cooldown since FTS recreation is expensive.
  */
 export function checkFtsConsistency(
 	accessor: DbAccessor,
@@ -352,7 +357,7 @@ export function checkFtsConsistency(
 		};
 	}
 
-	const { memCount, ftsCount, ftsMissing } = accessor.withReadDb((db) => {
+	const { memCount, ftsCount, ftsMissing, tokenizerDrift } = accessor.withReadDb((db) => {
 		const memRow = db.prepare("SELECT COUNT(*) as n FROM memories WHERE is_deleted = 0").get() as { n: number };
 
 		// Guard against missing FTS table (can happen on upgrades)
@@ -364,7 +369,13 @@ export function checkFtsConsistency(
 		} catch {
 			missing = true;
 		}
-		return { memCount: memRow.n, ftsCount: ftsN, ftsMissing: missing };
+		const ftsSql = missing ? null : readMemoriesFtsSql(db);
+		return {
+			memCount: memRow.n,
+			ftsCount: ftsN,
+			ftsMissing: missing,
+			tokenizerDrift: memoriesFtsNeedsTokenizerRepair(ftsSql),
+		};
 	});
 
 	// If FTS table is missing entirely, report it (startup self-heal
@@ -383,6 +394,32 @@ export function checkFtsConsistency(
 			success: true,
 			affected: 0,
 			message: msg,
+		};
+	}
+
+	if (tokenizerDrift) {
+		if (repair) {
+			accessor.withWriteTx((db) => {
+				recreateMemoriesFts(db);
+				writeRepairAudit(db, action, ctx, 1, "FTS recreated with unicode61 tokenizer");
+			});
+		}
+
+		limiter.record(action);
+		const message = repair
+			? "FTS tokenizer drift detected — recreated with unicode61 tokenizer"
+			: "FTS tokenizer drift detected — run with repair=true to recreate";
+		logger.warn("pipeline", "repair: FTS tokenizer drift", {
+			memCount,
+			ftsCount,
+			repaired: repair,
+			actor: ctx.actor,
+		});
+		return {
+			action,
+			success: true,
+			affected: 1,
+			message,
 		};
 	}
 
@@ -552,7 +589,7 @@ async function reembedMissingMemoriesBatch(
 		// and abort the entire batch. Skip the write-back in that case -- the dedup worker
 		// will soft-delete the duplicate in a later pass.
 		const checkHash = db.prepare(
-			`SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 AND id <> ? LIMIT 1`,
+			"SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 AND id <> ? LIMIT 1",
 		);
 
 		for (const { memory, vector } of results) {

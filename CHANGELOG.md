@@ -2,21 +2,173 @@
 
 All notable changes to Signet are documented here.
 
-## [0.97.0] - 2026-04-07
+## Recent Highlights
+
+Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
+
+### 2026-04-12
+- Bug fixes: expose pinned param in memory_store and memory_modify.
+- Docs: align generated site metadata.
+
+### 2026-04-11
+- Docs: refresh public Signet positioning.
+
+### 2026-04-10
+- Bug fixes: rebuild changelog with readable highlights.
+
+### 2026-04-09
+- Bug fixes: block leaked workspace deps in release; improve docs search and docs navigation.
+
+### 2026-04-08
+- Bug fixes: honour maxInjectChars config in session-start hook.
+- Refactoring: align recall surfaces and validate prospective hint retrieval.
+- Docs: sync root-derived docs.
+
+### 2026-04-07
+- Features: manage workspace source checkout; add token-bucket rate limiting for remote LLM providers; Discord community CTAs + /join opt-in page.
+- Bug fixes: harden transcript capture and summary inputs.
+- Refactoring: extract routes from daemon.ts into separate modules.
+
+### 2026-04-06
+- Features: add Hermes Agent memory provider integration; OpenClaw adapter request normalization.
+
+## Release Ledger
+
+## [0.98.13] - 2026-04-12
+
+Release summary: 1 bug fix and 1 docs update.
+Tag range: `v0.98.12..v0.98.13`.
+
+### Bug Fixes
+
+- **mcp**: expose pinned param in memory_store and memory_modify (#491)
+
+### Docs
+
+- align generated site metadata (#489)
+
+## [0.98.12] - 2026-04-11
+
+Release summary: 1 docs update.
+Tag range: `v0.98.11..v0.98.12`.
+
+### Docs
+
+- refresh public Signet positioning (#488)
+
+## [0.98.11] - 2026-04-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.98.10..v0.98.11`.
+
+### Bug Fixes
+
+- **release**: rebuild changelog with readable highlights (#487)
+
+## [0.98.10] - 2026-04-10
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.98.9..v0.98.10`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.98.9] - 2026-04-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.98.8..v0.98.9`.
+
+### Bug Fixes
+
+- **publish**: block leaked workspace deps in release (#486)
+
+## [0.98.8] - 2026-04-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.98.7..v0.98.8`.
+
+### Bug Fixes
+
+- **web**: improve docs search and docs navigation (#485)
+
+## [0.98.7] - 2026-04-08
+
+Release summary: 1 docs update.
+Tag range: `v0.98.6..v0.98.7`.
+
+### Docs
+
+- **repo**: sync root-derived docs (#484)
+
+## [0.98.6] - 2026-04-08
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.98.5..v0.98.6`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.98.5] - 2026-04-08
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.98.4..v0.98.5`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.98.4] - 2026-04-08
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.98.3..v0.98.4`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.98.3] - 2026-04-08
+
+Release summary: 1 refactor.
+Tag range: `v0.98.2..v0.98.3`.
+
+### Refactoring
+
+- align recall surfaces and validate prospective hint retrieval (#474)
+
+## [0.98.2] - 2026-04-08
+
+Release summary: 1 bug fix.
+Tag range: `v0.98.1..v0.98.2`.
+
+### Bug Fixes
+
+- **daemon**: honour maxInjectChars config in session-start hook (#482)
+
+## [0.98.1] - 2026-04-07
+
+Release summary: 1 refactor.
+Tag range: `v0.98.0..v0.98.1`.
+
+### Refactoring
+
+- **daemon**: extract routes from daemon.ts into separate modules (#473)
+
+## [0.98.0] - 2026-04-07
+
+Release summary: 1 feature.
+Tag range: `v0.97.0..v0.98.0`.
 
 ### Features
 
 - **cli**: manage workspace source checkout (#472)
 
+## [0.97.0] - 2026-04-07
 
-## [0.96.0] - 2026-04-07
+Release summary: 1 feature.
+Tag range: `v0.96.0..v0.97.0`.
 
 ### Features
 
 - **pipeline**: add token-bucket rate limiting for remote LLM providers (#469)
 
+## [0.96.0] - 2026-04-07
 
-## [0.95.0] - 2026-04-07
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.95.0..v0.96.0`.
 
 ### Features
 
@@ -26,163 +178,230 @@ All notable changes to Signet are documented here.
 
 - harden transcript capture and summary inputs (#466)
 
+## [0.95.0] - 2026-04-06
 
-## [0.94.0] - 2026-04-06
+Release summary: 1 feature.
+Tag range: `v0.94.0..v0.95.0`.
 
 ### Features
 
 - **connector**: add Hermes Agent memory provider integration (#465)
 
+## [0.94.0] - 2026-04-06
 
-## [0.93.7] - 2026-04-06
+Release summary: 1 feature.
+Tag range: `v0.93.7..v0.94.0`.
 
 ### Features
 
 - OpenClaw adapter request normalization (#468)
 
+## [0.93.7] - 2026-04-05
 
-## [0.93.5] - 2026-04-04
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.93.6..v0.93.7`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.93.6] - 2026-04-04
+
+Release summary: 1 bug fix.
+Tag range: `v0.93.5..v0.93.6`.
 
 ### Bug Fixes
 
 - scope sub-agent memory dedupe and synthesis (#455)
 
+## [0.93.5] - 2026-04-04
 
-## [0.93.4] - 2026-04-04
+Release summary: 1 bug fix.
+Tag range: `v0.93.4..v0.93.5`.
 
 ### Bug Fixes
 
 - **daemon**: prevent summary-worker retries on shared session-end keys (#459)
 
+## [0.93.4] - 2026-04-03
 
-## [0.93.3] - 2026-04-03
+Release summary: 1 bug fix.
+Tag range: `v0.93.3..v0.93.4`.
 
 ### Bug Fixes
 
 - **cli**: auto-migrate legacy-only OpenClaw runtime (#446)
 
+## [0.93.3] - 2026-04-03
 
-## [0.93.2] - 2026-04-03
+Release summary: 1 bug fix.
+Tag range: `v0.93.2..v0.93.3`.
 
 ### Bug Fixes
 
 - **daemon**: ignore generated MEMORY backup markdown files (#452)
 
+## [0.93.2] - 2026-04-03
 
-## [0.92.0] - 2026-04-03
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.93.1..v0.93.2`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.93.1] - 2026-04-03
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.93.0..v0.93.1`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.93.0] - 2026-04-03
+
+Release summary: 1 feature.
+Tag range: `v0.92.0..v0.93.0`.
 
 ### Features
 
 - **connector-forge**: add ForgeCode connector (#444)
 
+## [0.92.0] - 2026-04-02
 
-## [0.91.12] - 2026-04-02
+Release summary: 1 feature.
+Tag range: `v0.91.12..v0.92.0`.
 
 ### Features
 
 - dreaming memory consolidation — periodic LLM-driven knowledge graph refinement (#442)
 
+## [0.91.12] - 2026-04-02
 
-## [0.91.11] - 2026-04-02
+Release summary: 1 bug fix.
+Tag range: `v0.91.11..v0.91.12`.
 
 ### Bug Fixes
 
 - **cli**: use wall-clock deadline for daemon startup poll and exit non-zero on failure (#445)
 
+## [0.91.11] - 2026-04-02
 
-## [0.91.10] - 2026-04-02
+Release summary: 1 bug fix.
+Tag range: `v0.91.10..v0.91.11`.
 
 ### Bug Fixes
 
 - enforce 5000-token MEMORY.md budget (#443)
 
+## [0.91.10] - 2026-04-02
 
-## [0.91.9] - 2026-04-02
+Release summary: 1 bug fix.
+Tag range: `v0.91.9..v0.91.10`.
 
 ### Bug Fixes
 
 - **daemon**: stop re-ingesting pipeline artifacts as memories (#439)
 
+## [0.91.9] - 2026-04-01
 
-## [0.91.8] - 2026-04-01
+Release summary: 1 bug fix.
+Tag range: `v0.91.8..v0.91.9`.
 
 ### Bug Fixes
 
 - **cli**: restore homedir import for workspace resolution
 
+## [0.91.8] - 2026-04-01
 
-## [0.91.7] - 2026-04-01
+Release summary: 1 refactor.
+Tag range: `v0.91.7..v0.91.8`.
 
 ### Refactoring
 
 - extract Signet system prompt from AGENTS.md into session-start inject (#440)
 
+## [0.91.7] - 2026-04-01
 
-## [0.91.6] - 2026-04-01
+Release summary: 2 bug fixes.
+Tag range: `v0.91.6..v0.91.7`.
 
 ### Bug Fixes
 
 - **ci**: prevent lockfile drift and restore openclaw build
 - **runtime**: hotfix issues #432 #433 #435 #437 (#438)
 
+## [0.91.6] - 2026-04-01
 
-## [0.91.5] - 2026-04-01
+Release summary: 1 bug fix.
+Tag range: `v0.91.5..v0.91.6`.
 
 ### Bug Fixes
 
 - **pipeline**: pass maxContextTokens to direct Ollama synthesis (#426) (#430)
 
+## [0.91.5] - 2026-04-01
 
-## [0.91.4] - 2026-04-01
+Release summary: 1 bug fix.
+Tag range: `v0.91.4..v0.91.5`.
 
 ### Bug Fixes
 
 - **daemon**: resolve ReferenceError in /api/hooks/recall endpoint (#436)
 
+## [0.91.4] - 2026-04-01
 
-## [0.91.3] - 2026-04-01
+Release summary: 1 bug fix.
+Tag range: `v0.91.3..v0.91.4`.
 
 ### Bug Fixes
 
 - **pipeline**: support Copilot models via OpenCode structured output (#425)
 
+## [0.91.3] - 2026-03-31
 
-## [0.91.2] - 2026-03-31
+Release summary: 1 bug fix.
+Tag range: `v0.91.2..v0.91.3`.
 
 ### Bug Fixes
 
 - **openclaw**: prevent double registration blocking gateway providers (#423)
 
+## [0.91.2] - 2026-03-31
 
-## [0.91.1] - 2026-03-31
+Release summary: 1 bug fix.
+Tag range: `v0.91.1..v0.91.2`.
 
 ### Bug Fixes
 
 - **codex**: repair stale MCP config on setup instead of skipping (#421)
 
+## [0.91.1] - 2026-03-31
 
-## [0.91.0] - 2026-03-31
+Release summary: 1 bug fix.
+Tag range: `v0.91.0..v0.91.1`.
 
 ### Bug Fixes
 
 - **daemon**: preserve multiline markdown for embeddings (#419)
 
+## [0.91.0] - 2026-03-31
 
-## [0.90.0] - 2026-03-31
+Release summary: 1 feature.
+Tag range: `v0.90.0..v0.91.0`.
 
 ### Features
 
 - **dashboard**: show real overview usage analytics (#416)
 
+## [0.90.0] - 2026-03-31
 
-## [0.89.0] - 2026-03-31
+Release summary: 1 feature.
+Tag range: `v0.89.0..v0.90.0`.
 
 ### Features
 
 - **dashboard**: feature official marketplace skills (#415)
 
+## [0.89.0] - 2026-03-31
 
-## [0.88.1] - 2026-03-31
+Release summary: 1 feature, 3 bug fixes, and 1 docs update.
+Tag range: `v0.88.1..v0.89.0`.
 
 ### Features
 
@@ -198,8 +417,10 @@ All notable changes to Signet are documented here.
 
 - add StarRank badge to README
 
+## [0.88.1] - 2026-03-30
 
-## [0.88.0] - 2026-03-30
+Release summary: 3 bug fixes.
+Tag range: `v0.88.0..v0.88.1`.
 
 ### Bug Fixes
 
@@ -207,8 +428,10 @@ All notable changes to Signet are documented here.
 - **skills**: add __pycache__/ to gitignore
 - **docker**: add skills/ to build context and runtime stage
 
+## [0.88.0] - 2026-03-30
 
-## [0.87.2] - 2026-03-30
+Release summary: 1 feature and 1 docs update.
+Tag range: `v0.87.2..v0.88.0`.
 
 ### Features
 
@@ -218,92 +441,125 @@ All notable changes to Signet are documented here.
 
 - add planning document for groundswell
 
+## [0.87.2] - 2026-03-30
 
-## [0.87.1] - 2026-03-30
+Release summary: 1 bug fix.
+Tag range: `v0.87.1..v0.87.2`.
 
 ### Bug Fixes
 
 - **repo**: recover rebase follow-ups and restore green checks (#410)
 
+## [0.87.1] - 2026-03-30
 
-## [0.87.0] - 2026-03-30
+Release summary: 1 bug fix.
+Tag range: `v0.87.0..v0.87.1`.
 
 ### Bug Fixes
 
 - **worker**: exclude exhausted jobs from watchdog stall detector query (#339) (#409)
 
+## [0.87.0] - 2026-03-30
 
-## [0.86.4] - 2026-03-30
+Release summary: 1 feature.
+Tag range: `v0.86.4..v0.87.0`.
 
 ### Features
 
 - MCP CLI bridge, invocation tracking, and analytics (Phase 1) (#407)
 
+## [0.86.4] - 2026-03-30
 
-## [0.86.3] - 2026-03-30
+Release summary: 1 bug fix.
+Tag range: `v0.86.3..v0.86.4`.
 
 ### Bug Fixes
 
 - **oh-my-pi**: persist hidden Signet recall as agent messages (#404)
 
+## [0.86.3] - 2026-03-29
 
-## [0.86.2] - 2026-03-29
+Release summary: 1 bug fix.
+Tag range: `v0.86.2..v0.86.3`.
 
 ### Bug Fixes
 
 - extraction-model reranker can synthesize recall summary (#402)
 
+## [0.86.2] - 2026-03-29
 
-## [0.86.1] - 2026-03-29
+Release summary: 1 bug fix.
+Tag range: `v0.86.1..v0.86.2`.
 
 ### Bug Fixes
 
 - **daemon**: harden dogfood runtime and MCP surfaces (#403)
 
+## [0.86.1] - 2026-03-29
 
-## [0.86.0] - 2026-03-29
+Release summary: 1 bug fix.
+Tag range: `v0.86.0..v0.86.1`.
 
 ### Bug Fixes
 
 - **daemon**: harden pipeline parsers and skill reconciler idempotency (#401)
 
+## [0.86.0] - 2026-03-29
 
-## [0.85.5] - 2026-03-29
+Release summary: 1 feature.
+Tag range: `v0.85.5..v0.86.0`.
 
 ### Features
 
 - **memory**: derive MEMORY.md from canonical lineage (#399)
 
+## [0.85.5] - 2026-03-29
 
-## [0.85.3] - 2026-03-29
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.85.4..v0.85.5`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.85.4] - 2026-03-29
+
+Release summary: 1 bug fix.
+Tag range: `v0.85.3..v0.85.4`.
 
 ### Bug Fixes
 
 - **pipeline**: harden dependency prompt auditability (#397)
 
+## [0.85.3] - 2026-03-29
 
-## [0.85.2] - 2026-03-29
+Release summary: 1 bug fix.
+Tag range: `v0.85.2..v0.85.3`.
 
 ### Bug Fixes
 
 - **core**: align Signet prompt with identity stewardship (#398)
 
+## [0.85.2] - 2026-03-29
 
-## [0.85.1] - 2026-03-29
+Release summary: 1 bug fix.
+Tag range: `v0.85.1..v0.85.2`.
 
 ### Bug Fixes
 
 - **daemon**: preserve reranker score calibration + gate low-confidence prompt recalls (#396)
 
+## [0.85.1] - 2026-03-29
 
-## [0.85.0] - 2026-03-29
+Release summary: 1 bug fix.
+Tag range: `v0.85.0..v0.85.1`.
 
 ### Bug Fixes
 
 - distinguish session-start timeouts from offline fallback (#395)
 
+## [0.85.0] - 2026-03-29
 
-## [0.84.2] - 2026-03-29
+Release summary: 1 feature and 2 docs updates.
+Tag range: `v0.84.2..v0.85.0`.
 
 ### Features
 
@@ -314,79 +570,108 @@ All notable changes to Signet are documented here.
 - add link to memscore in benchmarking documentation
 - add oh my pi connector to readme
 
+## [0.84.2] - 2026-03-29
 
-## [0.84.1] - 2026-03-29
+Release summary: 1 bug fix.
+Tag range: `v0.84.1..v0.84.2`.
 
 ### Bug Fixes
 
 - **daemon**: populate content_hash in summary facts, backfill write-back, exhausted job recovery (#372)
 
+## [0.84.1] - 2026-03-29
 
-## [0.84.0] - 2026-03-29
+Release summary: 1 bug fix.
+Tag range: `v0.84.0..v0.84.1`.
 
 ### Bug Fixes
 
 - **daemon-rs**: parity for PR #372 -- startup recovery + content_hash notes
 
+## [0.84.0] - 2026-03-29
 
-## [0.83.0] - 2026-03-29
+Release summary: 1 feature.
+Tag range: `v0.83.0..v0.84.0`.
 
 ### Features
 
 - **oh-my-pi**: add Oh My Pi support (#386)
 
+## [0.83.0] - 2026-03-29
 
-## [0.82.7] - 2026-03-29
+Release summary: 1 feature.
+Tag range: `v0.82.7..v0.83.0`.
 
 ### Features
 
 - **dashboard**: ontology constellation view (#393)
 
+## [0.82.7] - 2026-03-29
 
-## [0.82.6] - 2026-03-29
+Release summary: 1 bug fix.
+Tag range: `v0.82.6..v0.82.7`.
 
 ### Bug Fixes
 
 - **ci**: replace mapfile for macOS-compatible release uploads (#392)
 
+## [0.82.6] - 2026-03-29
 
-## [0.82.5] - 2026-03-29
+Release summary: 2 bug fixes.
+Tag range: `v0.82.5..v0.82.6`.
 
 ### Bug Fixes
 
 - **daemon**: prototype DP-19 adaptive write gate with scoped guards (#380)
 - **tray**: unblock mac self-signed CI and prefer bundled linux daemon (#388)
 
+## [0.82.5] - 2026-03-28
 
-## [0.82.4] - 2026-03-28
+Release summary: 1 bug fix.
+Tag range: `v0.82.4..v0.82.5`.
 
 ### Bug Fixes
 
 - **tray**: resolve macOS bundled-daemon path compile regression (#387)
 
+## [0.82.4] - 2026-03-28
 
-## [0.82.3] - 2026-03-28
+Release summary: 1 bug fix.
+Tag range: `v0.82.3..v0.82.4`.
 
 ### Bug Fixes
 
 - **ci**: harden self-signed desktop signing on macOS and windows (#384)
 
+## [0.82.3] - 2026-03-28
 
-## [0.82.2] - 2026-03-28
+Release summary: 1 bug fix.
+Tag range: `v0.82.2..v0.82.3`.
 
 ### Bug Fixes
 
 - **ci**: add self-signed desktop signing and arch package validation (#383)
 
+## [0.82.2] - 2026-03-28
 
-## [0.82.0] - 2026-03-28
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.82.1..v0.82.2`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.82.1] - 2026-03-28
+
+Release summary: 1 bug fix.
+Tag range: `v0.82.0..v0.82.1`.
 
 ### Bug Fixes
 
 - **cli**: protect OpenClaw-linked workspaces from unprotected data loss (#378)
 
+## [0.82.0] - 2026-03-28
 
-## [0.81.2] - 2026-03-28
+Release summary: 1 feature, 1 bug fix, and 2 docs updates.
+Tag range: `v0.81.2..v0.82.0`.
 
 ### Features
 
@@ -401,8 +686,10 @@ All notable changes to Signet are documented here.
 - add Groundswell implementation specs + PRD + SSM synthesis (#381)
 - **specs**: add Groundswell PRD and gap analyses for community knowledge graphs
 
+## [0.81.2] - 2026-03-28
 
-## [0.81.1] - 2026-03-28
+Release summary: 1 bug fix and 1 docs update.
+Tag range: `v0.81.1..v0.81.2`.
 
 ### Bug Fixes
 
@@ -412,33 +699,37 @@ All notable changes to Signet are documented here.
 
 - add alcar2364 to contributors
 
+## [0.81.1] - 2026-03-28
 
-## [0.81.0] - 2026-03-28
+Release summary: 1 bug fix.
+Tag range: `v0.81.0..v0.81.1`.
 
 ### Bug Fixes
 
 - **docker**: unblock post-merge smoke failures from #374 (#377)
 
+## [0.81.0] - 2026-03-27
 
-## [0.80.0] - 2026-03-27
+Release summary: 1 feature.
+Tag range: `v0.80.0..v0.81.0`.
 
 ### Features
 
 - **docker**: add first-party self-hosting stack (#374)
 
+## [0.80.0] - 2026-03-27
 
-## [0.79.0] - 2026-03-27
+Release summary: 1 feature.
+Tag range: `v0.79.0..v0.80.0`.
 
 ### Features
 
 - **pipeline**: add command extraction provider for summary worker control-plane path (#368)
-- **docker**: add first-party self-hosting stack (Compose + Caddy + token bootstrap) and GHCR image workflows
 
-### Docs
+## [0.79.0] - 2026-03-27
 
-- add Docker self-hosting quickstart and operations runbook updates
-
-## [0.78.4] - 2026-03-27
+Release summary: 1 feature and 2 docs updates.
+Tag range: `v0.78.4..v0.79.0`.
 
 ### Features
 
@@ -449,8 +740,10 @@ All notable changes to Signet are documented here.
 - add first-PR guide for new contributors
 - **research**: add agent loop comparison across Forge, Codex, Hermes
 
+## [0.78.4] - 2026-03-27
 
-## [0.78.3] - 2026-03-27
+Release summary: 1 bug fix and 1 docs update.
+Tag range: `v0.78.3..v0.78.4`.
 
 ### Bug Fixes
 
@@ -460,8 +753,10 @@ All notable changes to Signet are documented here.
 
 - add ddasgupta4 to contributors
 
+## [0.78.3] - 2026-03-27
 
-## [0.78.2] - 2026-03-27
+Release summary: 1 bug fix and 1 refactor.
+Tag range: `v0.78.2..v0.78.3`.
 
 ### Bug Fixes
 
@@ -471,86 +766,149 @@ All notable changes to Signet are documented here.
 
 - **dashboard**: stabilize IA and gate experimental surfaces (#364)
 
+## [0.78.2] - 2026-03-27
 
-## [0.78.1] - 2026-03-27
+Release summary: 1 bug fix.
+Tag range: `v0.78.1..v0.78.2`.
 
 ### Bug Fixes
 
 - **update**: verify installed version after install (#365)
 
+## [0.78.1] - 2026-03-27
 
-## [0.78.0] - 2026-03-27
+Release summary: 1 bug fix.
+Tag range: `v0.78.0..v0.78.1`.
 
 ### Bug Fixes
 
 - **daemon**: add prompt-submit success telemetry on all success paths (#360)
 
+## [0.78.0] - 2026-03-26
 
-## [0.77.7] - 2026-03-26
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.77.7..v0.78.0`.
 
 ### Features
 
 - **forge**: require explicit dev-warning acknowledgement on install and launch (#359)
 
+### Bug Fixes
 
-## [0.77.5] - 2026-03-26
+- **forge**: switch reqwest to rustls and guard openssl regressions (#353)
+
+## [0.77.7] - 2026-03-26
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.77.6..v0.77.7`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.77.6] - 2026-03-26
+
+Release summary: 1 bug fix.
+Tag range: `v0.77.5..v0.77.6`.
 
 ### Bug Fixes
 
 - force event-driven MEMORY.md refresh after summary/compaction (#349)
 
+## [0.77.5] - 2026-03-26
 
-## [0.77.4] - 2026-03-26
+Release summary: 1 bug fix.
+Tag range: `v0.77.4..v0.77.5`.
 
 ### Bug Fixes
 
 - **memory**: close lossless working-memory runtime gaps (#344)
 
+## [0.77.4] - 2026-03-26
 
-## [0.77.3] - 2026-03-26
+Release summary: 2 bug fixes.
+Tag range: `v0.77.3..v0.77.4`.
 
 ### Bug Fixes
 
 - **daemon**: broaden macOS SQLite runtime discovery for sqlite-vec (#338)
 - **docs**: align Signet positioning around context selection (#342)
 
+## [0.77.3] - 2026-03-26
 
-## [0.77.1] - 2026-03-25
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.77.2..v0.77.3`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.77.2] - 2026-03-25
+
+Release summary: 1 bug fix.
+Tag range: `v0.77.1..v0.77.2`.
 
 ### Bug Fixes
 
 - **cli**: recover stale daemon processes on restart (#333)
 
+## [0.77.1] - 2026-03-25
 
-## [0.77.0] - 2026-03-25
+Release summary: 1 bug fix.
+Tag range: `v0.77.0..v0.77.1`.
 
 ### Bug Fixes
 
 - **daemon**: keep startup recovery responsive on large databases (#332)
 
+## [0.77.0] - 2026-03-25
 
-## [0.76.6] - 2026-03-25
+Release summary: 1 feature.
+Tag range: `v0.76.6..v0.77.0`.
 
 ### Features
 
 - **pipeline**: add live pause controls (#329)
 
+## [0.76.6] - 2026-03-25
 
-## [0.76.5] - 2026-03-25
+Release summary: 1 bug fix.
+Tag range: `v0.76.5..v0.76.6`.
 
 ### Bug Fixes
 
 - recover stuck processing summary_jobs on startup + fix embed backfill infinite cycle (#319)
 
+## [0.76.5] - 2026-03-25
 
-## [0.76.2] - 2026-03-24
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.76.4..v0.76.5`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.76.4] - 2026-03-25
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.76.3..v0.76.4`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.76.3] - 2026-03-24
+
+Release summary: 1 bug fix.
+Tag range: `v0.76.2..v0.76.3`.
 
 ### Bug Fixes
 
 - **memory**: raise contradiction timeout and guard embedding tracker null hashes
 
+## [0.76.2] - 2026-03-24
 
-## [0.76.0] - 2026-03-24
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.76.1..v0.76.2`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.76.1] - 2026-03-24
+
+Release summary: 1 bug fix and 1 docs update.
+Tag range: `v0.76.0..v0.76.1`.
 
 ### Bug Fixes
 
@@ -560,29 +918,37 @@ All notable changes to Signet are documented here.
 
 - spec and index for sub-agent context continuity (#315)
 
+## [0.76.0] - 2026-03-24
 
-## [0.75.3] - 2026-03-24
+Release summary: 1 feature.
+Tag range: `v0.75.3..v0.76.0`.
 
 ### Features
 
 - multi-agent support — scoped identity, memory, and OpenClaw routing (#316)
 
+## [0.75.3] - 2026-03-24
 
-## [0.75.2] - 2026-03-24
+Release summary: 1 bug fix.
+Tag range: `v0.75.2..v0.75.3`.
 
 ### Bug Fixes
 
 - session expiry, hooks config, dead-memory API, openclaw health (#295)
 
+## [0.75.2] - 2026-03-24
 
-## [0.75.1] - 2026-03-24
+Release summary: 1 bug fix.
+Tag range: `v0.75.1..v0.75.2`.
 
 ### Bug Fixes
 
 - **daemon**: graceful SIGTERM shutdown (#307)
 
+## [0.75.1] - 2026-03-24
 
-## [0.75.0] - 2026-03-24
+Release summary: 1 bug fix and 1 docs update.
+Tag range: `v0.75.0..v0.75.1`.
 
 ### Bug Fixes
 
@@ -592,22 +958,28 @@ All notable changes to Signet are documented here.
 
 - competitive systems research — 3-repo analysis with integration contracts (#309)
 
+## [0.75.0] - 2026-03-23
 
-## [0.74.1] - 2026-03-23
+Release summary: 1 feature.
+Tag range: `v0.74.1..v0.75.0`.
 
 ### Features
 
 - **cli**: add configurable Signet workspace path + migration (#302)
 
+## [0.74.1] - 2026-03-23
 
-## [0.74.0] - 2026-03-23
+Release summary: 1 bug fix.
+Tag range: `v0.74.0..v0.74.1`.
 
 ### Bug Fixes
 
 - **dashboard**: remove review-queue tab; fix knowledge tab load performance (#305)
 
+## [0.74.0] - 2026-03-23
 
-## [0.73.8] - 2026-03-23
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.73.8..v0.74.0`.
 
 ### Features
 
@@ -617,276 +989,382 @@ All notable changes to Signet are documented here.
 
 - support provider: none for extraction and synthesis (#301)
 
+## [0.73.8] - 2026-03-23
 
-## [0.73.7] - 2026-03-23
+Release summary: 1 bug fix.
+Tag range: `v0.73.7..v0.73.8`.
 
 ### Bug Fixes
 
 - March 2026 codebase review (#294)
 
+## [0.73.7] - 2026-03-23
 
-## [0.73.6] - 2026-03-23
+Release summary: 1 bug fix.
+Tag range: `v0.73.6..v0.73.7`.
 
 ### Bug Fixes
 
 - wire marketplace reviews sync to production Worker endpoint (#293)
 
+## [0.73.6] - 2026-03-23
 
-## [0.73.4] - 2026-03-23
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.73.5..v0.73.6`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.73.5] - 2026-03-23
+
+Release summary: 1 bug fix.
+Tag range: `v0.73.4..v0.73.5`.
 
 ### Bug Fixes
 
 - 5 critical memory and injection stability fixes (#291)
 
+## [0.73.4] - 2026-03-23
 
-## [0.73.3] - 2026-03-23
+Release summary: 1 bug fix.
+Tag range: `v0.73.3..v0.73.4`.
 
 ### Bug Fixes
 
 - **daemon**: align embedding-tracker hash with normalizeAndHashContent (#286)
 
+## [0.73.3] - 2026-03-23
 
-## [0.73.2] - 2026-03-23
+Release summary: 1 bug fix.
+Tag range: `v0.73.2..v0.73.3`.
 
 ### Bug Fixes
 
 - normalize remember tags across daemon and openclaw (#285)
 
+## [0.73.2] - 2026-03-22
 
-## [0.73.1] - 2026-03-22
+Release summary: 1 bug fix.
+Tag range: `v0.73.1..v0.73.2`.
 
 ### Bug Fixes
 
 - **daemon**: normalize Claude Code transcript records (#284)
 
+## [0.73.1] - 2026-03-22
 
-## [0.73.0] - 2026-03-22
+Release summary: 1 bug fix.
+Tag range: `v0.73.0..v0.73.1`.
 
 ### Bug Fixes
 
 - task run output display — stdin close, chunk normalization, terminal rendering (#283)
 
+## [0.73.0] - 2026-03-22
 
-## [0.72.8] - 2026-03-22
+Release summary: 1 feature.
+Tag range: `v0.72.8..v0.73.0`.
 
 ### Features
 
 - desire paths retrieval + prospective indexing (#253)
 
+## [0.72.8] - 2026-03-22
 
-## [0.72.7] - 2026-03-22
+Release summary: 2 bug fixes.
+Tag range: `v0.72.7..v0.72.8`.
 
 ### Bug Fixes
 
 - **dashboard**: replace @signet/core runtime import with local constant
 - **openclaw**: dedupe marketplace proxy refresh (#281)
 
+## [0.72.7] - 2026-03-22
 
-## [0.72.6] - 2026-03-22
+Release summary: 1 bug fix.
+Tag range: `v0.72.6..v0.72.7`.
 
 ### Bug Fixes
 
 - security hardening — auth timing, SSRF, YAML injection, scope enforcement (#276)
 
+## [0.72.6] - 2026-03-22
 
-## [0.72.5] - 2026-03-22
+Release summary: 1 bug fix.
+Tag range: `v0.72.5..v0.72.6`.
 
 ### Bug Fixes
 
 - address 9 security and stability issues (#275)
 
+## [0.72.5] - 2026-03-22
 
-## [0.72.4] - 2026-03-22
+Release summary: 1 bug fix.
+Tag range: `v0.72.4..v0.72.5`.
 
 ### Bug Fixes
 
 - resolve daemon path in published bundle (#274)
 
+## [0.72.4] - 2026-03-22
 
-## [0.72.2] - 2026-03-22
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.72.3..v0.72.4`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.72.3] - 2026-03-22
+
+Release summary: 1 bug fix.
+Tag range: `v0.72.2..v0.72.3`.
 
 ### Bug Fixes
 
 - comprehensive security audit hardening (#271)
 
+## [0.72.2] - 2026-03-22
 
-## [0.72.1] - 2026-03-22
+Release summary: 2 bug fixes.
+Tag range: `v0.72.1..v0.72.2`.
 
 ### Bug Fixes
 
 - harden error handling and resource cleanup (#272)
 - codex MCP config uses string command, not array (#273)
 
+## [0.72.1] - 2026-03-22
 
-## [0.71.6] - 2026-03-22
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.72.0..v0.72.1`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.72.0] - 2026-03-22
+
+Release summary: 1 feature.
+Tag range: `v0.71.6..v0.72.0`.
 
 ### Features
 
 - **os**: Visual GUI Agent — Page-Agent Integration (#266)
 
+## [0.71.6] - 2026-03-21
 
-## [0.71.5] - 2026-03-21
+Release summary: 1 bug fix.
+Tag range: `v0.71.5..v0.71.6`.
 
 ### Bug Fixes
 
 - **troubleshooter**: handle daemon stop/restart lifecycle commands (#265)
 
+## [0.71.5] - 2026-03-21
 
-## [0.71.4] - 2026-03-21
+Release summary: 1 bug fix.
+Tag range: `v0.71.4..v0.71.5`.
 
 ### Bug Fixes
 
 - **tray**: add icon.ico for Windows build (#263)
 
+## [0.71.4] - 2026-03-21
 
-## [0.71.3] - 2026-03-21
+Release summary: 1 bug fix.
+Tag range: `v0.71.3..v0.71.4`.
 
 ### Bug Fixes
 
 - **tray**: cross-platform build script for Windows CI (#262)
 
+## [0.71.3] - 2026-03-21
 
-## [0.71.2] - 2026-03-21
+Release summary: 1 bug fix.
+Tag range: `v0.71.2..v0.71.3`.
 
 ### Bug Fixes
 
 - **tray**: restore npm tauri CLI + convert icons to RGBA (#261)
 
+## [0.71.2] - 2026-03-21
 
-## [0.71.1] - 2026-03-21
+Release summary: 1 bug fix.
+Tag range: `v0.71.1..v0.71.2`.
 
 ### Bug Fixes
 
 - pipeline worker stall after burst processing (#259)
 
+## [0.71.1] - 2026-03-21
 
-## [0.71.0] - 2026-03-21
+Release summary: 1 bug fix.
+Tag range: `v0.71.0..v0.71.1`.
 
 ### Bug Fixes
 
 - **tray**: revert to cargo tauri CLI, convert icons to RGBA (#260)
 
+## [0.71.0] - 2026-03-21
 
-## [0.70.0] - 2026-03-21
+Release summary: 1 feature.
+Tag range: `v0.70.0..v0.71.0`.
 
 ### Features
 
 - **connector-codex**: native hooks + MCP for full mid-session memory (#258)
 
+## [0.70.0] - 2026-03-21
 
-## [0.69.5] - 2026-03-21
+Release summary: 1 feature.
+Tag range: `v0.69.5..v0.70.0`.
 
 ### Features
 
 - **dashboard**: Cortex page — unified Memory, Apps, Tasks, Troubleshooter (#256)
 
+## [0.69.5] - 2026-03-21
 
-## [0.69.3] - 2026-03-21
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.69.4..v0.69.5`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.69.4] - 2026-03-21
+
+Release summary: 1 bug fix.
+Tag range: `v0.69.3..v0.69.4`.
 
 ### Bug Fixes
 
 - use npm tauri CLI instead of cargo plugin in tray scripts (#254)
 
+## [0.69.3] - 2026-03-20
 
-## [0.69.2] - 2026-03-20
+Release summary: 1 bug fix.
+Tag range: `v0.69.2..v0.69.3`.
 
 ### Bug Fixes
 
 - install tray deps explicitly in desktop build workflow
 
+## [0.69.2] - 2026-03-20
 
-## [0.69.1] - 2026-03-20
+Release summary: 1 bug fix.
+Tag range: `v0.69.1..v0.69.2`.
 
 ### Bug Fixes
 
 - use RELEASE_PAT in release workflow for branch protection bypass
 
+## [0.69.1] - 2026-03-20
 
-## [0.69.0] - 2026-03-20
+Release summary: 1 bug fix.
+Tag range: `v0.69.0..v0.69.1`.
 
 ### Bug Fixes
 
 - use local timezone for timeline Today boundaries (#252)
 
+## [0.69.0] - 2026-03-20
 
-## [0.68.3] - 2026-03-20
+Release summary: 1 feature.
+Tag range: `v0.68.3..v0.69.0`.
 
 ### Features
 
 - homepage spotlights, dynamic insights, and health consistency (#250)
 
+## [0.68.3] - 2026-03-20
 
-## [0.68.2] - 2026-03-20
+Release summary: 1 bug fix.
+Tag range: `v0.68.2..v0.68.3`.
 
 ### Bug Fixes
 
 - settings persist across refresh without daemon restart (#251)
 
+## [0.68.2] - 2026-03-20
 
-## [0.68.1] - 2026-03-20
+Release summary: 1 bug fix.
+Tag range: `v0.68.1..v0.68.2`.
 
 ### Bug Fixes
 
 - remove provider icon tinting and auto-sync pre-installed apps (#249)
 
+## [0.68.1] - 2026-03-20
 
-## [0.68.0] - 2026-03-20
+Release summary: 1 bug fix.
+Tag range: `v0.68.0..v0.68.1`.
 
 ### Bug Fixes
 
 - prevent CMD window flashing on Windows and fix workspace path matching (#247)
 
+## [0.68.0] - 2026-03-20
 
-## [0.67.0] - 2026-03-20
+Release summary: 1 feature.
+Tag range: `v0.67.0..v0.68.0`.
 
 ### Features
 
 - Signet OS v2 — sandboxed widget rendering, LLM auto-generation, MCP app dashboard
 
+## [0.67.0] - 2026-03-19
 
-## [0.66.1] - 2026-03-19
+Release summary: 1 feature.
+Tag range: `v0.66.1..v0.67.0`.
 
 ### Features
 
 - add scope column for memory isolation (#245)
 
+## [0.66.1] - 2026-03-19
 
-## [0.66.0] - 2026-03-19
+Release summary: 1 bug fix.
+Tag range: `v0.66.0..v0.66.1`.
 
 ### Bug Fixes
 
 - **openclaw**: harden plugin sync and patch plugins.allow (#246)
 
+## [0.66.0] - 2026-03-19
 
-## [0.65.9] - 2026-03-19
+Release summary: 1 feature.
+Tag range: `v0.65.9..v0.66.0`.
 
 ### Features
 
 - retroactive memory supersession (#244)
 
+## [0.65.9] - 2026-03-19
 
-## [0.65.8] - 2026-03-19
+Release summary: 1 bug fix.
+Tag range: `v0.65.8..v0.65.9`.
 
 ### Bug Fixes
 
 - MCP stdio server process leak on session end (#243)
 
+## [0.65.8] - 2026-03-19
 
-## [0.65.7] - 2026-03-19
+Release summary: 1 bug fix.
+Tag range: `v0.65.7..v0.65.8`.
 
 ### Bug Fixes
 
 - add missing --project option to pre-compaction hook (#242)
 
+## [0.65.7] - 2026-03-19
 
-## [0.65.6] - 2026-03-19
+Release summary: 1 bug fix.
+Tag range: `v0.65.6..v0.65.7`.
 
 ### Bug Fixes
 
 - prevent CMD window flashing and fix workspace path matching on Windows (#241)
 
+## [0.65.6] - 2026-03-19
 
-## [0.65.5] - 2026-03-19
+Release summary: 1 bug fix and 1 docs update.
+Tag range: `v0.65.5..v0.65.6`.
 
 ### Bug Fixes
 
@@ -896,29 +1374,37 @@ All notable changes to Signet are documented here.
 
 - add BusyBee3333, stephenwoska2-cpu, and PatchyToes to contributors (#240)
 
+## [0.65.5] - 2026-03-19
 
-## [0.65.4] - 2026-03-19
+Release summary: 1 bug fix.
+Tag range: `v0.65.4..v0.65.5`.
 
 ### Bug Fixes
 
 - use bash shell for cargo build steps on Windows runners (#239)
 
+## [0.65.4] - 2026-03-19
 
-## [0.65.3] - 2026-03-19
+Release summary: 1 bug fix.
+Tag range: `v0.65.3..v0.65.4`.
 
 ### Bug Fixes
 
 - move @signet/core to devDependencies in openclaw plugin (#237)
 
+## [0.65.3] - 2026-03-19
 
-## [0.65.2] - 2026-03-19
+Release summary: 1 bug fix.
+Tag range: `v0.65.2..v0.65.3`.
 
 ### Bug Fixes
 
 - predictor sidecar binary distribution for Windows (#236)
 
+## [0.65.2] - 2026-03-19
 
-## [0.65.1] - 2026-03-19
+Release summary: 4 bug fixes.
+Tag range: `v0.65.1..v0.65.2`.
 
 ### Bug Fixes
 
@@ -927,15 +1413,26 @@ All notable changes to Signet are documented here.
 - add migration for missing embeddings.vector column on older DBs
 - release pipeline — skip workspace-inherited Cargo versions and clobber duplicate assets
 
+## [0.65.1] - 2026-03-19
 
-## [0.64.0] - 2026-03-19
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.65.0..v0.65.1`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.65.0] - 2026-03-19
+
+Release summary: 1 feature.
+Tag range: `v0.64.0..v0.65.0`.
 
 ### Features
 
 - Signet OS — browser, MCP app dashboard, event bus, ambient awareness
 
+## [0.64.0] - 2026-03-19
 
-## [0.63.3] - 2026-03-19
+Release summary: 1 feature, 6 bug fixes, and 3 docs updates.
+Tag range: `v0.63.3..v0.64.0`.
 
 ### Features
 
@@ -956,8 +1453,10 @@ All notable changes to Signet are documented here.
 - refactor README and add Why Signet to quickstart
 - add AI policy, PR template, and GitHub Discussions setup
 
+## [0.63.3] - 2026-03-18
 
-## [0.63.2] - 2026-03-18
+Release summary: 4 bug fixes.
+Tag range: `v0.63.2..v0.63.3`.
 
 ### Bug Fixes
 
@@ -966,22 +1465,28 @@ All notable changes to Signet are documented here.
 - address review — document spawnHidden throw safety, clarify Bun.which calls
 - resolve CLI binary paths on Windows for extraction/synthesis providers
 
+## [0.63.2] - 2026-03-18
 
-## [0.63.1] - 2026-03-18
+Release summary: 1 bug fix.
+Tag range: `v0.63.1..v0.63.2`.
 
 ### Bug Fixes
 
 - add sharp to optionalDependencies for Windows ARM64 support
 
+## [0.63.1] - 2026-03-18
 
-## [0.63.0] - 2026-03-18
+Release summary: 1 refactor.
+Tag range: `v0.63.0..v0.63.1`.
 
 ### Refactoring
 
 - **docs**: organize docs into research-to-implementation pipeline
 
+## [0.63.0] - 2026-03-18
 
-## [0.62.0] - 2026-03-18
+Release summary: 1 feature and 3 bug fixes.
+Tag range: `v0.62.0..v0.63.0`.
 
 ### Features
 
@@ -993,8 +1498,10 @@ All notable changes to Signet are documented here.
 - **sync**: harden runtime artifact sync and warmup
 - **sync**: move runtime downloads from postinstall to signet sync
 
+## [0.62.0] - 2026-03-18
 
-## [0.61.0] - 2026-03-18
+Release summary: 3 features and 5 bug fixes.
+Tag range: `v0.61.0..v0.62.0`.
 
 ### Features
 
@@ -1010,8 +1517,10 @@ All notable changes to Signet are documented here.
 - **daemon-rs**: address round-2 review feedback
 - **daemon-rs**: address code review feedback
 
+## [0.61.0] - 2026-03-18
 
-## [0.60.1] - 2026-03-18
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.60.1..v0.61.0`.
 
 ### Features
 
@@ -1021,15 +1530,19 @@ All notable changes to Signet are documented here.
 
 - **memory**: address openrouter review feedback
 
+## [0.60.1] - 2026-03-18
 
-## [0.60.0] - 2026-03-18
+Release summary: 1 bug fix.
+Tag range: `v0.60.0..v0.60.1`.
 
 ### Bug Fixes
 
 - vec_embeddings backfill race — use direct LEFT JOIN instead of count comparison
 
+## [0.60.0] - 2026-03-18
 
-## [0.59.0] - 2026-03-18
+Release summary: 2 features and 2 bug fixes.
+Tag range: `v0.59.0..v0.60.0`.
 
 ### Features
 
@@ -1041,8 +1554,10 @@ All notable changes to Signet are documented here.
 - eliminate budget duplication, fix CLI JSON shape (PR review)
 - fall back to static identity files when daemon is unreachable (#219)
 
+## [0.59.0] - 2026-03-17
 
-## [0.58.3] - 2026-03-17
+Release summary: 2 features and 12 bug fixes.
+Tag range: `v0.58.3..v0.59.0`.
 
 ### Features
 
@@ -1064,8 +1579,10 @@ All notable changes to Signet are documented here.
 - guard upsert pair with try/catch, cap aspect name length
 - derive prompt types from DEPENDENCY_TYPES, thread aspectId
 
+## [0.58.3] - 2026-03-16
 
-## [0.58.2] - 2026-03-16
+Release summary: 3 bug fixes.
+Tag range: `v0.58.2..v0.58.3`.
 
 ### Bug Fixes
 
@@ -1073,8 +1590,10 @@ All notable changes to Signet are documented here.
 - address review — widen locale regex, use locale-prefixed detail URLs
 - MCP catalog parser — third-party section boundary and mcpservers.org locale
 
+## [0.58.2] - 2026-03-15
 
-## [0.58.1] - 2026-03-15
+Release summary: 19 bug fixes and 1 refactor.
+Tag range: `v0.58.1..v0.58.2`.
 
 ### Bug Fixes
 
@@ -1102,8 +1621,10 @@ All notable changes to Signet are documented here.
 
 - extract shared card utils, tighten github validation, add docs
 
+## [0.58.1] - 2026-03-14
 
-## [0.58.0] - 2026-03-14
+Release summary: 20 bug fixes.
+Tag range: `v0.58.0..v0.58.1`.
 
 ### Bug Fixes
 
@@ -1128,8 +1649,10 @@ All notable changes to Signet are documented here.
 - address PR review feedback on sheet width and timeline overflow
 - dashboard UI improvements — mobile sidebar, banner spacing, and QOS
 
+## [0.58.0] - 2026-03-14
 
-## [0.57.1] - 2026-03-14
+Release summary: 2 features and 26 bug fixes.
+Tag range: `v0.57.1..v0.58.0`.
 
 ### Features
 
@@ -1165,16 +1688,20 @@ All notable changes to Signet are documented here.
 - auto-detect git sync branch instead of hardcoding "main"
 - **daemon**: sanitize session transcripts and remove truncation
 
+## [0.57.1] - 2026-03-14
 
-## [0.57.0] - 2026-03-14
+Release summary: 2 bug fixes.
+Tag range: `v0.57.0..v0.57.1`.
 
 ### Bug Fixes
 
 - address PR review feedback on migration 030
 - make memory_jobs.memory_id nullable for document ingest jobs
 
+## [0.57.0] - 2026-03-14
 
-## [0.56.2] - 2026-03-14
+Release summary: 1 feature and 2 docs updates.
+Tag range: `v0.56.2..v0.57.0`.
 
 ### Features
 
@@ -1185,8 +1712,10 @@ All notable changes to Signet are documented here.
 - add dashboard and constellation screenshots to README
 - refactor AGENTS.md into behavioral contract with backlinks
 
+## [0.56.2] - 2026-03-14
 
-## [0.56.1] - 2026-03-14
+Release summary: 11 bug fixes.
+Tag range: `v0.56.1..v0.56.2`.
 
 ### Bug Fixes
 
@@ -1202,16 +1731,20 @@ All notable changes to Signet are documented here.
 - **migrations**: address review feedback on PR #199
 - **migrations**: self-heal phantom migrations with artifact verification
 
+## [0.56.1] - 2026-03-14
 
-## [0.56.0] - 2026-03-14
+Release summary: 2 bug fixes.
+Tag range: `v0.56.0..v0.56.1`.
 
 ### Bug Fixes
 
 - **daemon**: harden ollama fallback max-context validation
 - **daemon**: remove hardcoded qwen fallback model
 
+## [0.56.0] - 2026-03-12
 
-## [0.55.0] - 2026-03-12
+Release summary: 1 feature, 5 bug fixes, and 1 performance improvement.
+Tag range: `v0.55.0..v0.56.0`.
 
 ### Features
 
@@ -1229,8 +1762,10 @@ All notable changes to Signet are documented here.
 
 - replace polling with onResized event listener in WindowTitlebar
 
+## [0.55.0] - 2026-03-12
 
-## [0.54.2] - 2026-03-12
+Release summary: 1 feature, 5 bug fixes, and 3 docs updates.
+Tag range: `v0.54.2..v0.55.0`.
 
 ### Features
 
@@ -1250,8 +1785,10 @@ All notable changes to Signet are documented here.
 - update RESEARCH-LCM-ACP.md frontmatter
 - add GitNexus pattern analysis and integrate into architecture docs
 
+## [0.54.2] - 2026-03-11
 
-## [0.54.1] - 2026-03-11
+Release summary: 3 bug fixes.
+Tag range: `v0.54.1..v0.54.2`.
 
 ### Bug Fixes
 
@@ -1259,15 +1796,19 @@ All notable changes to Signet are documented here.
 - address review feedback on contradiction timeout PR
 - make semantic contradiction timeout configurable
 
+## [0.54.1] - 2026-03-11
 
-## [0.54.0] - 2026-03-11
+Release summary: 1 bug fix.
+Tag range: `v0.54.0..v0.54.1`.
 
 ### Bug Fixes
 
 - enable positional options on secret command to prevent CLI crash
 
+## [0.54.0] - 2026-03-11
 
-## [0.53.4] - 2026-03-11
+Release summary: 1 feature and 21 bug fixes.
+Tag range: `v0.53.4..v0.54.0`.
 
 ### Features
 
@@ -1297,8 +1838,10 @@ All notable changes to Signet are documented here.
 - variadic exec args, null exit code, document secrets map
 - address review — add ok check in secret get, extend exec timeout
 
+## [0.53.4] - 2026-03-10
 
-## [0.53.3] - 2026-03-10
+Release summary: 6 bug fixes.
+Tag range: `v0.53.3..v0.53.4`.
 
 ### Bug Fixes
 
@@ -1309,8 +1852,10 @@ All notable changes to Signet are documented here.
 - **daemon**: address PR review regressions and doc gaps
 - **daemon**: harden VPS runtime config and pipeline behavior
 
+## [0.53.3] - 2026-03-10
 
-## [0.53.2] - 2026-03-10
+Release summary: 21 bug fixes.
+Tag range: `v0.53.2..v0.53.3`.
 
 ### Bug Fixes
 
@@ -1336,8 +1881,10 @@ All notable changes to Signet are documented here.
 - address reviewer feedback on Anthropic provider and subprocess handling
 - replace node:child_process with Bun.spawn for reliable subprocess I/O
 
+## [0.53.2] - 2026-03-10
 
-## [0.53.1] - 2026-03-10
+Release summary: 16 bug fixes.
+Tag range: `v0.53.1..v0.53.2`.
 
 ### Bug Fixes
 
@@ -1358,8 +1905,10 @@ All notable changes to Signet are documented here.
 - **pipeline**: address PR #180 review comments
 - **pipeline**: config resolution pairing, codex error capture, DAG upsert
 
+## [0.53.1] - 2026-03-09
 
-## [0.53.0] - 2026-03-09
+Release summary: 3 bug fixes.
+Tag range: `v0.53.0..v0.53.1`.
 
 ### Bug Fixes
 
@@ -1367,8 +1916,10 @@ All notable changes to Signet are documented here.
 - **sdk**: strict typescript discipline - remove unsafe casts, add type guards, discriminated unions
 - **sdk**: align sdk contracts with daemon responses
 
+## [0.53.0] - 2026-03-09
 
-## [0.52.0] - 2026-03-09
+Release summary: 1 feature and 6 bug fixes.
+Tag range: `v0.52.0..v0.53.0`.
 
 ### Features
 
@@ -1383,8 +1934,10 @@ All notable changes to Signet are documented here.
 - **lcm**: address greptile pass-2 findings
 - address Greptile review findings
 
+## [0.52.0] - 2026-03-09
 
-## [0.51.0] - 2026-03-09
+Release summary: 1 feature and 2 bug fixes.
+Tag range: `v0.51.0..v0.52.0`.
 
 ### Features
 
@@ -1395,8 +1948,10 @@ All notable changes to Signet are documented here.
 - address review feedback on prompt-submit hook
 - cap pendingInject map to prevent unbounded growth
 
+## [0.51.0] - 2026-03-09
 
-## [0.50.1] - 2026-03-09
+Release summary: 2 features and 2 bug fixes.
+Tag range: `v0.50.1..v0.51.0`.
 
 ### Features
 
@@ -1408,16 +1963,20 @@ All notable changes to Signet are documented here.
 - **tray**: address PR #172 round 2 feedback
 - **tray**: address PR #172 review feedback
 
+## [0.50.1] - 2026-03-09
 
-## [0.50.0] - 2026-03-09
+Release summary: 2 bug fixes.
+Tag range: `v0.50.0..v0.50.1`.
 
 ### Bug Fixes
 
 - match toCanonicalName() whitespace collapse in migration 027
 - resolve UNIQUE constraint crash in skill reconciler
 
+## [0.50.0] - 2026-03-09
 
-## [0.49.0] - 2026-03-09
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.49.0..v0.50.0`.
 
 ### Features
 
@@ -1427,15 +1986,19 @@ All notable changes to Signet are documented here.
 
 - **native**: address Greptile review — epsilon parity and dead export TODO
 
+## [0.49.0] - 2026-03-09
 
-## [0.48.2] - 2026-03-09
+Release summary: 1 feature.
+Tag range: `v0.48.2..v0.49.0`.
 
 ### Features
 
 - inject date/time metadata on every user-prompt-submit hook
 
+## [0.48.2] - 2026-03-09
 
-## [0.48.1] - 2026-03-09
+Release summary: 3 bug fixes and 1 docs update.
+Tag range: `v0.48.1..v0.48.2`.
 
 ### Bug Fixes
 
@@ -1447,15 +2010,19 @@ All notable changes to Signet are documented here.
 
 - research docs, LCM patterns spec, ACP integration vision, README rewrite
 
+## [0.48.1] - 2026-03-09
 
-## [0.48.0] - 2026-03-09
+Release summary: 1 bug fix.
+Tag range: `v0.48.0..v0.48.1`.
 
 ### Bug Fixes
 
 - **dashboard**: center PageBanner title on pages without side slots (#170)
 
+## [0.48.0] - 2026-03-09
 
-## [0.47.2] - 2026-03-09
+Release summary: 1 feature, 5 bug fixes, and 1 docs update.
+Tag range: `v0.47.2..v0.48.0`.
 
 ### Features
 
@@ -1473,8 +2040,10 @@ All notable changes to Signet are documented here.
 
 - add PR screenshots for theme refresh
 
+## [0.47.2] - 2026-03-09
 
-## [0.47.1] - 2026-03-09
+Release summary: 5 bug fixes.
+Tag range: `v0.47.1..v0.47.2`.
 
 ### Bug Fixes
 
@@ -1484,15 +2053,19 @@ All notable changes to Signet are documented here.
 - **openclaw**: address PR review edge cases
 - **openclaw**: sync connector and adapter compatibility
 
+## [0.47.1] - 2026-03-08
 
-## [0.47.0] - 2026-03-08
+Release summary: 1 bug fix.
+Tag range: `v0.47.0..v0.47.1`.
 
 ### Bug Fixes
 
 - **mcp**: flatten agent_message_send schema and clarify agent_peers description
 
+## [0.47.0] - 2026-03-08
 
-## [0.46.0] - 2026-03-08
+Release summary: 1 feature, 4 bug fixes, and 2 docs updates.
+Tag range: `v0.46.0..v0.47.0`.
 
 ### Features
 
@@ -1510,8 +2083,10 @@ All notable changes to Signet are documented here.
 - add bypass toggle to API, CLI, hooks, MCP, and dashboard docs
 - add bypass toggle to API endpoints, env vars, and CLI docs
 
+## [0.46.0] - 2026-03-08
 
-## [0.45.2] - 2026-03-08
+Release summary: 1 feature and 3 bug fixes.
+Tag range: `v0.45.2..v0.46.0`.
 
 ### Features
 
@@ -1523,8 +2098,10 @@ All notable changes to Signet are documented here.
 - **daemon**: harden cross-agent prompt and routing safety
 - **daemon**: harden cross-agent auth and ACP relay
 
+## [0.45.2] - 2026-03-08
 
-## [0.45.1] - 2026-03-08
+Release summary: 1 bug fix and 1 refactor.
+Tag range: `v0.45.1..v0.45.2`.
 
 ### Bug Fixes
 
@@ -1534,8 +2111,10 @@ All notable changes to Signet are documented here.
 
 - **dashboard**: decompose +page.svelte into focused layout components
 
+## [0.45.1] - 2026-03-08
 
-## [0.45.0] - 2026-03-08
+Release summary: 4 bug fixes and 2 docs updates.
+Tag range: `v0.45.0..v0.45.1`.
 
 ### Bug Fixes
 
@@ -1549,8 +2128,10 @@ All notable changes to Signet are documented here.
 - delete duplicates
 - add frontmatter to docs missing metadata
 
+## [0.45.0] - 2026-03-08
 
-## [0.44.0] - 2026-03-08
+Release summary: 8 features, 36 bug fixes, 1 refactor, and 9 docs updates.
+Tag range: `v0.44.0..v0.45.0`.
 
 ### Features
 
@@ -1618,8 +2199,10 @@ All notable changes to Signet are documented here.
 - update KA spec for agent_id scoping, add KA-1 sprint brief
 - add frontmatter to IDEAL-SIGNET.md
 
+## [0.44.0] - 2026-03-08
 
-## [0.43.1] - 2026-03-08
+Release summary: 1 feature and 13 bug fixes.
+Tag range: `v0.43.1..v0.44.0`.
 
 ### Features
 
@@ -1641,8 +2224,10 @@ All notable changes to Signet are documented here.
 - address second wave of keyboard navigation review comments
 - address all keyboard navigation review comments
 
+## [0.43.1] - 2026-03-08
 
-## [0.43.0] - 2026-03-08
+Release summary: 3 bug fixes.
+Tag range: `v0.43.0..v0.43.1`.
 
 ### Bug Fixes
 
@@ -1650,8 +2235,10 @@ All notable changes to Signet are documented here.
 - address review feedback on windows-spawn-hide PR
 - **windows**: prevent console window flashing from spawn calls
 
+## [0.43.0] - 2026-03-08
 
-## [0.42.3] - 2026-03-08
+Release summary: 1 feature, 6 bug fixes, and 1 docs update.
+Tag range: `v0.42.3..v0.43.0`.
 
 ### Features
 
@@ -1670,15 +2257,19 @@ All notable changes to Signet are documented here.
 
 - **synthesis**: document drain() precondition on SynthesisWorkerHandle
 
+## [0.42.3] - 2026-03-06
 
-## [0.42.2] - 2026-03-06
+Release summary: 1 bug fix.
+Tag range: `v0.42.2..v0.42.3`.
 
 ### Bug Fixes
 
 - **codex**: address post-merge Greptile follow-ups (#153)
 
+## [0.42.2] - 2026-03-06
 
-## [0.42.1] - 2026-03-06
+Release summary: 4 bug fixes.
+Tag range: `v0.42.1..v0.42.2`.
 
 ### Bug Fixes
 
@@ -1687,8 +2278,10 @@ All notable changes to Signet are documented here.
 - **daemon**: use hybrid recall for prompt submit
 - **openclaw**: clean recall queries and refresh plugin runtime
 
+## [0.42.1] - 2026-03-06
 
-## [0.42.0] - 2026-03-06
+Release summary: 3 bug fixes.
+Tag range: `v0.42.0..v0.42.1`.
 
 ### Bug Fixes
 
@@ -1696,8 +2289,10 @@ All notable changes to Signet are documented here.
 - **synthesis**: filter session files by mtime for incremental merges
 - **synthesis**: read session summaries instead of raw DB facts
 
+## [0.42.0] - 2026-03-06
 
-## [0.41.0] - 2026-03-06
+Release summary: 1 feature, 4 bug fixes, and 1 docs update.
+Tag range: `v0.41.0..v0.42.0`.
 
 ### Features
 
@@ -1714,8 +2309,10 @@ All notable changes to Signet are documented here.
 
 - remediate P0/P1 drift from audit (2026-03)
 
+## [0.41.0] - 2026-03-06
 
-## [0.40.0] - 2026-03-06
+Release summary: 1 feature and 8 bug fixes.
+Tag range: `v0.40.0..v0.41.0`.
 
 ### Features
 
@@ -1732,8 +2329,10 @@ All notable changes to Signet are documented here.
 - **connectors**: harden wrapper payload handling
 - **codex**: address review feedback
 
+## [0.40.0] - 2026-03-06
 
-## [0.39.0] - 2026-03-06
+Release summary: 3 features and 9 bug fixes.
+Tag range: `v0.39.0..v0.40.0`.
 
 ### Features
 
@@ -1753,8 +2352,10 @@ All notable changes to Signet are documented here.
 - prevent rapid retry on synthesis failure, export PipelineSynthesisConfig
 - address greptile review — race guard and maxTokens in prompt
 
+## [0.39.0] - 2026-03-06
 
-## [0.38.6] - 2026-03-06
+Release summary: 2 features, 40 bug fixes, and 1 performance improvement.
+Tag range: `v0.38.6..v0.39.0`.
 
 ### Features
 
@@ -1808,15 +2409,19 @@ All notable changes to Signet are documented here.
 
 - hoist prepared statements and batch trackFtsHits
 
+## [0.38.6] - 2026-03-05
 
-## [0.38.5] - 2026-03-05
+Release summary: 1 bug fix.
+Tag range: `v0.38.5..v0.38.6`.
 
 ### Bug Fixes
 
 - **daemon**: harden SIGNET-ARCHITECTURE.md persistence (#137)
 
+## [0.38.5] - 2026-03-05
 
-## [0.38.4] - 2026-03-05
+Release summary: 3 bug fixes.
+Tag range: `v0.38.4..v0.38.5`.
 
 ### Bug Fixes
 
@@ -1824,8 +2429,10 @@ All notable changes to Signet are documented here.
 - **logs**: close stream edge cases and recent-read gaps
 - **logs**: ship refreshed UI with hardened stream behavior
 
+## [0.38.4] - 2026-03-05
 
-## [0.38.3] - 2026-03-05
+Release summary: 3 bug fixes.
+Tag range: `v0.38.3..v0.38.4`.
 
 ### Bug Fixes
 
@@ -1833,36 +2440,46 @@ All notable changes to Signet are documented here.
 - handle ollama base_url nullish defaulting consistently
 - default ollama embedding base_url to localhost:11434
 
+## [0.38.3] - 2026-03-04
 
-## [0.38.2] - 2026-03-04
+Release summary: 1 bug fix.
+Tag range: `v0.38.2..v0.38.3`.
 
 ### Bug Fixes
 
 - **daemon**: bump extraction timeout default from 45s to 90s
 
+## [0.38.2] - 2026-03-04
 
-## [0.38.1] - 2026-03-04
+Release summary: 1 bug fix.
+Tag range: `v0.38.1..v0.38.2`.
 
 ### Bug Fixes
 
 - **daemon**: replace `as Error` casts with proper narrowing in db-accessor
 
+## [0.38.1] - 2026-03-04
 
-## [0.38.0] - 2026-03-04
+Release summary: 1 bug fix.
+Tag range: `v0.38.0..v0.38.1`.
 
 ### Bug Fixes
 
 - **daemon**: replace self-fetch in search endpoint, add vec0 error logging
 
+## [0.38.0] - 2026-03-04
 
-## [0.37.2] - 2026-03-04
+Release summary: 1 feature.
+Tag range: `v0.37.2..v0.38.0`.
 
 ### Features
 
 - prompt to restart OpenClaw after daemon restart
 
+## [0.37.2] - 2026-03-04
 
-## [0.37.1] - 2026-03-04
+Release summary: 1 bug fix and 3 docs updates.
+Tag range: `v0.37.1..v0.37.2`.
 
 ### Bug Fixes
 
@@ -1874,16 +2491,20 @@ All notable changes to Signet are documented here.
 - the ideal signet
 - reorganize specs, add integration contract and sprint brief
 
+## [0.37.1] - 2026-03-04
 
-## [0.37.0] - 2026-03-04
+Release summary: 2 bug fixes.
+Tag range: `v0.37.0..v0.37.1`.
 
 ### Bug Fixes
 
 - replace type assertions with runtime narrowing in startConnectorSync
 - **connectors**: add harness and connector resync actions
 
+## [0.37.0] - 2026-03-04
 
-## [0.36.2] - 2026-03-04
+Release summary: 1 feature, 2 bug fixes, and 2 docs updates.
+Tag range: `v0.36.2..v0.37.0`.
 
 ### Features
 
@@ -1899,15 +2520,26 @@ All notable changes to Signet are documented here.
 - **web**: replace introducing signet blog post with architectural explainer
 - **web**: add positioning blog post and update hero copy
 
+## [0.36.2] - 2026-03-03
 
-## [0.36.0] - 2026-03-03
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.36.1..v0.36.2`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.36.1] - 2026-03-03
+
+Release summary: 1 docs update.
+Tag range: `v0.36.0..v0.36.1`.
 
 ### Docs
 
 - update documentation suite and add runtime spec
 
+## [0.36.0] - 2026-03-03
 
-## [0.35.4] - 2026-03-03
+Release summary: 2 features, 1 bug fix, and 1 docs update.
+Tag range: `v0.35.4..v0.36.0`.
 
 ### Features
 
@@ -1922,37 +2554,47 @@ All notable changes to Signet are documented here.
 
 - integrate addendum sections into knowledge architecture body
 
+## [0.35.4] - 2026-03-03
 
-## [0.35.3] - 2026-03-03
+Release summary: 2 bug fixes.
+Tag range: `v0.35.3..v0.35.4`.
 
 ### Bug Fixes
 
 - **embedding**: log ollama fallback failures for observability
 - **embedding**: resolve native embedding regression and restore ollama support
 
+## [0.35.3] - 2026-03-03
 
-## [0.35.2] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.35.2..v0.35.3`.
 
 ### Bug Fixes
 
 - resolve skills marketplace tab crash from duplicate each-block keys
 
+## [0.35.2] - 2026-03-03
 
-## [0.35.1] - 2026-03-03
+Release summary: 1 docs update.
+Tag range: `v0.35.1..v0.35.2`.
 
 ### Docs
 
 - update Patchy's credit link to Substack
 
+## [0.35.1] - 2026-03-03
 
-## [0.35.0] - 2026-03-03
+Release summary: 1 docs update.
+Tag range: `v0.35.0..v0.35.1`.
 
 ### Docs
 
 - add hyperlinks to author credits
 
+## [0.35.0] - 2026-03-03
 
-## [0.34.1] - 2026-03-03
+Release summary: 1 feature, 1 bug fix, and 3 docs updates.
+Tag range: `v0.34.1..v0.35.0`.
 
 ### Features
 
@@ -1968,78 +2610,100 @@ All notable changes to Signet are documented here.
 - credit Michael (PatchyToes) for entity/aspect/attribute framework contributions
 - constraint confidence, bounded context, and set-and-forget principle
 
+## [0.34.1] - 2026-03-03
 
-## [0.34.0] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.34.0..v0.34.1`.
 
 ### Bug Fixes
 
 - externalize @huggingface/transformers from bundler
 
+## [0.34.0] - 2026-03-03
 
-## [0.33.8] - 2026-03-03
+Release summary: 1 feature.
+Tag range: `v0.33.8..v0.34.0`.
 
 ### Features
 
 - **dashboard**: consolidate navigation from 10 items to 6 with grouped sub-tabs
 
+## [0.33.8] - 2026-03-03
 
-## [0.33.7] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.33.7..v0.33.8`.
 
 ### Bug Fixes
 
 - **embedding**: harden native transformers bootstrap path
 
+## [0.33.7] - 2026-03-03
 
-## [0.33.6] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.33.6..v0.33.7`.
 
 ### Bug Fixes
 
 - **daemon**: harden native embedding init for transformers exports
 
+## [0.33.6] - 2026-03-03
 
-## [0.33.5] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.33.5..v0.33.6`.
 
 ### Bug Fixes
 
 - **daemon**: alias sharp to empty shim via Bun.build() API
 
+## [0.33.5] - 2026-03-03
 
-## [0.33.4] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.33.4..v0.33.5`.
 
 ### Bug Fixes
 
 - **daemon**: externalize sharp to prevent native binary path errors
 
+## [0.33.4] - 2026-03-03
 
-## [0.33.3] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.33.3..v0.33.4`.
 
 ### Bug Fixes
 
 - **daemon**: fix native embedding init by properly externalizing onnxruntime-node
 
+## [0.33.3] - 2026-03-03
 
-## [0.33.2] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.33.2..v0.33.3`.
 
 ### Bug Fixes
 
 - **daemon**: externalize onnxruntime-node and huggingface/transformers from bundle
 
+## [0.33.2] - 2026-03-03
 
-## [0.33.1] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.33.1..v0.33.2`.
 
 ### Bug Fixes
 
 - **daemon**: lazy-load @1password/sdk to prevent WASM ENOENT crash
 
+## [0.33.1] - 2026-03-03
 
-## [0.33.0] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.33.0..v0.33.1`.
 
 ### Bug Fixes
 
 - **embeddings**: harden repair flows and surface live progress
 
+## [0.33.0] - 2026-03-03
 
-## [0.32.0] - 2026-03-03
+Release summary: 1 feature and 2 bug fixes.
+Tag range: `v0.32.0..v0.33.0`.
 
 ### Features
 
@@ -2050,8 +2714,10 @@ All notable changes to Signet are documented here.
 - **specs**: resolve package.json merge conflict cleanly
 - **daemon**: reset modelCached flag on native provider shutdown
 
+## [0.32.0] - 2026-03-03
 
-## [0.31.3] - 2026-03-03
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.31.3..v0.32.0`.
 
 ### Features
 
@@ -2061,36 +2727,46 @@ All notable changes to Signet are documented here.
 
 - **daemon**: validate skill name against path traversal in task routes
 
+## [0.31.3] - 2026-03-03
 
-## [0.31.2] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.31.2..v0.31.3`.
 
 ### Bug Fixes
 
 - **dashboard**: persist active tab in URL hash across page refreshes
 
+## [0.31.2] - 2026-03-03
 
-## [0.31.1] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.31.1..v0.31.2`.
 
 ### Bug Fixes
 
 - dashboard config persistence, version display, auto-update self-restart, and docs cleanup
 
+## [0.31.1] - 2026-03-03
 
-## [0.31.0] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.31.0..v0.31.1`.
 
 ### Bug Fixes
 
 - **daemon**: ignore SQLite journal files in file watcher
 
+## [0.31.0] - 2026-03-03
 
-## [0.30.0] - 2026-03-03
+Release summary: 1 feature.
+Tag range: `v0.30.0..v0.31.0`.
 
 ### Features
 
 - **extension**: add browser extension for Chrome and Firefox
 
+## [0.30.0] - 2026-03-03
 
-## [0.29.0] - 2026-03-03
+Release summary: 2 features and 2 bug fixes.
+Tag range: `v0.29.0..v0.30.0`.
 
 ### Features
 
@@ -2102,15 +2778,19 @@ All notable changes to Signet are documented here.
 - **embeddings**: wire repair actions and vec resync
 - **secrets**: keep exec path non-blocking
 
+## [0.29.0] - 2026-03-03
 
-## [0.28.0] - 2026-03-03
+Release summary: 1 feature.
+Tag range: `v0.28.0..v0.29.0`.
 
 ### Features
 
 - **web**: update vision blog post - "It Learns Now"
 
+## [0.28.0] - 2026-03-03
 
-## [0.27.1] - 2026-03-03
+Release summary: 2 features, 3 bug fixes, and 1 docs update.
+Tag range: `v0.27.1..v0.28.0`.
 
 ### Features
 
@@ -2127,22 +2807,28 @@ All notable changes to Signet are documented here.
 
 - the database knows what you did last summer
 
+## [0.27.1] - 2026-03-03
 
-## [0.27.0] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.27.0..v0.27.1`.
 
 ### Bug Fixes
 
 - **daemon**: avoid marketplace MCP route shadowing
 
+## [0.27.0] - 2026-03-03
 
-## [0.26.0] - 2026-03-03
+Release summary: 1 feature.
+Tag range: `v0.26.0..v0.27.0`.
 
 ### Features
 
 - **mcp**: add scoped search-driven tool exposure
 
+## [0.26.0] - 2026-03-03
 
-## [0.25.2] - 2026-03-03
+Release summary: 1 feature, 7 bug fixes, and 1 refactor.
+Tag range: `v0.25.2..v0.26.0`.
 
 ### Features
 
@@ -2162,44 +2848,56 @@ All notable changes to Signet are documented here.
 
 - **dashboard**: polish settings page with single-section view
 
+## [0.25.2] - 2026-03-03
 
-## [0.25.1] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.25.1..v0.25.2`.
 
 ### Bug Fixes
 
 - use directory junctions on Windows for skill symlinks
 
+## [0.25.1] - 2026-03-03
 
-## [0.25.0] - 2026-03-03
+Release summary: 1 bug fix.
+Tag range: `v0.25.0..v0.25.1`.
 
 ### Bug Fixes
 
 - use file:// URL for ESM dynamic import on Windows
 
+## [0.25.0] - 2026-03-02
 
-## [0.24.0] - 2026-03-02
+Release summary: 1 feature.
+Tag range: `v0.24.0..v0.25.0`.
 
 ### Features
 
 - **mcp**: live refresh marketplace proxy tools
 
+## [0.24.0] - 2026-03-02
 
-## [0.23.0] - 2026-03-02
+Release summary: 1 feature.
+Tag range: `v0.23.0..v0.24.0`.
 
 ### Features
 
 - **dashboard**: add sync button for document connectors
 
+## [0.23.0] - 2026-03-02
 
-## [0.22.0] - 2026-03-02
+Release summary: 2 features.
+Tag range: `v0.22.0..v0.23.0`.
 
 ### Features
 
 - **dashboard**: add keyboard shortcuts for tasks tab
 - **dashboard**: add minimap for large embedding graphs
 
+## [0.22.0] - 2026-03-02
 
-## [0.21.0] - 2026-03-02
+Release summary: 1 feature and 1 performance improvement.
+Tag range: `v0.21.0..v0.22.0`.
 
 ### Features
 
@@ -2209,38 +2907,48 @@ All notable changes to Signet are documented here.
 
 - **dashboard**: lazy load EmbeddingCanvas3D and defer graph init
 
+## [0.21.0] - 2026-03-02
 
-## [0.20.2] - 2026-03-02
+Release summary: 1 feature.
+Tag range: `v0.20.2..v0.21.0`.
 
 ### Features
 
 - **marketplace**: add curated storefront and MCP server workflows
 
+## [0.20.2] - 2026-03-02
 
-## [0.20.1] - 2026-03-02
+Release summary: 1 refactor.
+Tag range: `v0.20.1..v0.20.2`.
 
 ### Refactoring
 
 - **dashboard**: add loading indicator during search debounce
 
+## [0.20.1] - 2026-03-02
 
-## [0.20.0] - 2026-03-02
+Release summary: 2 bug fixes.
+Tag range: `v0.20.0..v0.20.1`.
 
 ### Bug Fixes
 
 - **dashboard**: add keyboard navigation and delete confirmation for memory cards
 - **hooks**: sanitize per-prompt recall query context
 
+## [0.20.0] - 2026-03-02
 
-## [0.19.0] - 2026-03-02
+Release summary: 2 features.
+Tag range: `v0.19.0..v0.20.0`.
 
 ### Features
 
 - **web**: two-column blog layout with sticky TOC rail
 - **web**: improve blog readability, navigation, and add hero images
 
+## [0.19.0] - 2026-03-02
 
-## [0.18.0] - 2026-03-02
+Release summary: 1 feature and 2 bug fixes.
+Tag range: `v0.18.0..v0.19.0`.
 
 ### Features
 
@@ -2251,15 +2959,19 @@ All notable changes to Signet are documented here.
 - **dashboard**: close handleEdit brace and add error handling for edit failure
 - **dashboard**: remove as cast, properly type updates object in MemoryForm
 
+## [0.18.0] - 2026-03-02
 
-## [0.17.0] - 2026-03-02
+Release summary: 1 feature.
+Tag range: `v0.17.0..v0.18.0`.
 
 ### Features
 
 - **web**: add ChatGPT to Claude migration tutorial blog post
 
+## [0.17.0] - 2026-03-02
 
-## [0.16.0] - 2026-03-02
+Release summary: 1 feature and 2 docs updates.
+Tag range: `v0.16.0..v0.17.0`.
 
 ### Features
 
@@ -2270,8 +2982,10 @@ All notable changes to Signet are documented here.
 - update AGENTS.md
 - comprehensive audit and update for v0.14.5 codebase
 
+## [0.16.0] - 2026-03-02
 
-## [0.15.1] - 2026-03-02
+Release summary: 2 features and 1 performance improvement.
+Tag range: `v0.15.1..v0.16.0`.
 
 ### Features
 
@@ -2282,94 +2996,120 @@ All notable changes to Signet are documented here.
 
 - **dashboard**: cache skills catalog in localStorage for instant repeat loads
 
+## [0.15.1] - 2026-03-02
 
-## [0.15.0] - 2026-03-02
+Release summary: 1 bug fix.
+Tag range: `v0.15.0..v0.15.1`.
 
 ### Bug Fixes
 
 - **daemon**: use Homebrew SQLite on macOS for extension loading
 
+## [0.15.0] - 2026-03-01
 
-## [0.14.5] - 2026-03-01
+Release summary: 1 feature.
+Tag range: `v0.14.5..v0.15.0`.
 
 ### Features
 
 - **web**: add SEO and AEO infrastructure
 
+## [0.14.5] - 2026-03-01
 
-## [0.14.4] - 2026-03-01
+Release summary: 1 bug fix.
+Tag range: `v0.14.4..v0.14.5`.
 
 ### Bug Fixes
 
 - **dashboard{logs**: preserve reconnect counter across retries for correct exponential backoff (#68)
 
+## [0.14.4] - 2026-03-01
 
-## [0.14.3] - 2026-03-01
+Release summary: 1 bug fix.
+Tag range: `v0.14.3..v0.14.4`.
 
 ### Bug Fixes
 
 - **embeddings**: stabilize large constellation layouts and add physics tuning
 
+## [0.14.3] - 2026-03-01
 
-## [0.14.2] - 2026-03-01
+Release summary: 1 bug fix.
+Tag range: `v0.14.2..v0.14.3`.
 
 ### Bug Fixes
 
 - **daemon**: prevent tracker inserts from violating embeddings schema
 
+## [0.14.2] - 2026-03-01
 
-## [0.14.1] - 2026-03-01
+Release summary: 1 bug fix.
+Tag range: `v0.14.1..v0.14.2`.
 
 ### Bug Fixes
 
 - resolve embedding tracker dimensions constraint and prompt recall query issues
 
+## [0.14.1] - 2026-03-01
 
-## [0.14.0] - 2026-03-01
+Release summary: 1 bug fix.
+Tag range: `v0.14.0..v0.14.1`.
 
 ### Bug Fixes
 
 - use PreCompact hook key instead of PreCompaction for Claude Code
 
+## [0.14.0] - 2026-03-01
 
-## [0.13.0] - 2026-03-01
+Release summary: 1 feature.
+Tag range: `v0.13.0..v0.14.0`.
 
 ### Features
 
 - add incremental embedding refresh tracker
 
+## [0.13.0] - 2026-03-01
 
-## [0.12.3] - 2026-03-01
+Release summary: 2 features.
+Tag range: `v0.12.3..v0.13.0`.
 
 ### Features
 
 - pre-compaction capture + enriched passive checkpoints (Phase 2)
 - session continuity protocol (Phase 1)
 
+## [0.12.3] - 2026-03-01
 
-## [0.12.2] - 2026-03-01
+Release summary: 1 bug fix.
+Tag range: `v0.12.2..v0.12.3`.
 
 ### Bug Fixes
 
 - **daemon**: reorder secrets routes so /exec isn't swallowed by /:name
 
+## [0.12.2] - 2026-03-01
 
-## [0.12.1] - 2026-03-01
+Release summary: 1 bug fix.
+Tag range: `v0.12.1..v0.12.2`.
 
 ### Bug Fixes
 
 - **openclaw**: harden workspace path validation and add connector health visibility
 
+## [0.12.1] - 2026-03-01
 
-## [0.12.0] - 2026-03-01
+Release summary: 2 bug fixes.
+Tag range: `v0.12.0..v0.12.1`.
 
 ### Bug Fixes
 
 - **dashboard**: handle null editingId for new task creation
 - **dashboard**: prevent task form from resetting on auto-refresh
 
+## [0.12.0] - 2026-03-01
 
-## [0.11.2] - 2026-03-01
+Release summary: 5 features.
+Tag range: `v0.11.2..v0.12.0`.
 
 ### Features
 
@@ -2379,23 +3119,29 @@ All notable changes to Signet are documented here.
 - **web**: redesign landing page, add MDX testimonials, mobile optimization
 - **web**: add shadcn/ui component library with Tailwind v4
 
+## [0.11.2] - 2026-02-28
 
-## [0.11.1] - 2026-02-28
+Release summary: 1 bug fix.
+Tag range: `v0.11.1..v0.11.2`.
 
 ### Bug Fixes
 
 - **install**: harden agent setup instructions and add guard
 
+## [0.11.1] - 2026-02-28
 
-## [0.11.0] - 2026-02-28
+Release summary: 2 bug fixes.
+Tag range: `v0.11.0..v0.11.1`.
 
 ### Bug Fixes
 
 - **cli**: make logs path-aware for custom workspaces
 - **setup**: support existing OpenClaw workspace directories
 
+## [0.11.0] - 2026-02-28
 
-## [0.10.4] - 2026-02-28
+Release summary: 2 features and 5 bug fixes.
+Tag range: `v0.10.4..v0.11.0`.
 
 ### Features
 
@@ -2410,38 +3156,48 @@ All notable changes to Signet are documented here.
 - **dashboard**: improve config/settings save-state UX
 - **pipeline**: harden OpenCode extraction recovery
 
+## [0.10.4] - 2026-02-28
 
-## [0.10.3] - 2026-02-28
+Release summary: 2 bug fixes.
+Tag range: `v0.10.3..v0.10.4`.
 
 ### Bug Fixes
 
 - **dashboard**: remove sidebar and pipeline divider lines
 - **dashboard**: make settings collapsible sections clickable
 
+## [0.10.3] - 2026-02-28
 
-## [0.10.2] - 2026-02-28
+Release summary: 1 bug fix.
+Tag range: `v0.10.2..v0.10.3`.
 
 ### Bug Fixes
 
 - **dashboard**: improve expanded pipeline log visibility
 
+## [0.10.2] - 2026-02-28
 
-## [0.10.1] - 2026-02-28
+Release summary: 1 refactor.
+Tag range: `v0.10.1..v0.10.2`.
 
 ### Refactoring
 
 - **dashboard**: componentize settings tab and extract state
 
+## [0.10.1] - 2026-02-28
 
-## [0.10.0] - 2026-02-28
+Release summary: 2 bug fixes.
+Tag range: `v0.10.0..v0.10.1`.
 
 ### Bug Fixes
 
 - **dashboard**: improve pipeline live feed usability
 - **cli**: prevent CLI from hanging after daemon start/restart
 
+## [0.10.0] - 2026-02-28
 
-## [0.9.0] - 2026-02-28
+Release summary: 1 feature, 4 bug fixes, and 2 refactors.
+Tag range: `v0.9.0..v0.10.0`.
 
 ### Features
 
@@ -2459,8 +3215,10 @@ All notable changes to Signet are documented here.
 - **daemon**: extract skills routes into standalone module
 - **dashboard**: replace PageHero with compact top bar headers
 
+## [0.9.0] - 2026-02-27
 
-## [0.9.0] - 2026-02-28
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.8.3..v0.9.0`.
 
 ### Features
 
@@ -2470,8 +3228,20 @@ All notable changes to Signet are documented here.
 
 - **config-ui**: box key config section titles
 
+## [0.8.3] - 2026-02-27
 
-## [0.8.1] - 2026-02-27
+Release summary: 2 bug fixes.
+Tag range: `v0.8.2..v0.8.3`.
+
+### Bug Fixes
+
+- **dashboard**: unify tab headers and constellation wordmark
+- **scheduler**: run overdue tasks using ISO time compare
+
+## [0.8.2] - 2026-02-27
+
+Release summary: 1 refactor and 1 docs update.
+Tag range: `v0.8.1..v0.8.2`.
 
 ### Refactoring
 
@@ -2481,15 +3251,19 @@ All notable changes to Signet are documented here.
 
 - clarify commit prefix guidance — reserve feat: for user-facing features
 
+## [0.8.1] - 2026-02-27
 
-## [0.8.0] - 2026-02-27
+Release summary: 1 bug fix.
+Tag range: `v0.8.0..v0.8.1`.
 
 ### Bug Fixes
 
 - **docs**: add missing frontmatter to daemon-rust-rewrite spec
 
+## [0.8.0] - 2026-02-27
 
-## [0.7.0] - 2026-02-27
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.7.0..v0.8.0`.
 
 ### Features
 
@@ -2499,22 +3273,28 @@ All notable changes to Signet are documented here.
 
 - **predictor**: reject mismatched candidate_features instead of silent zero-fill
 
+## [0.7.0] - 2026-02-27
 
-## [0.6.3] - 2026-02-27
+Release summary: 1 feature.
+Tag range: `v0.6.3..v0.7.0`.
 
 ### Features
 
 - **predictor**: implement phase 1 scorer scaffold
 
+## [0.6.3] - 2026-02-27
 
-## [0.6.2] - 2026-02-27
+Release summary: 1 bug fix.
+Tag range: `v0.6.2..v0.6.3`.
 
 ### Bug Fixes
 
 - **defaults**: enable pipeline, graph, reranker, and autonomous by default
 
+## [0.6.2] - 2026-02-27
 
-## [0.6.1] - 2026-02-27
+Release summary: 1 bug fix and 1 performance improvement.
+Tag range: `v0.6.1..v0.6.2`.
 
 ### Bug Fixes
 
@@ -2524,29 +3304,37 @@ All notable changes to Signet are documented here.
 
 - **dashboard**: lazy-load tab content modules
 
+## [0.6.1] - 2026-02-27
 
-## [0.6.0] - 2026-02-27
+Release summary: 1 bug fix.
+Tag range: `v0.6.0..v0.6.1`.
 
 ### Bug Fixes
 
 - **scheduler**: strip CLAUDECODE env var when spawning tasks
 
+## [0.6.0] - 2026-02-27
 
-## [0.5.3] - 2026-02-27
+Release summary: 1 feature.
+Tag range: `v0.5.3..v0.6.0`.
 
 ### Features
 
 - **cli**: require explicit providers for non-interactive setup
 
+## [0.5.3] - 2026-02-27
 
-## [0.5.2] - 2026-02-27
+Release summary: 1 refactor.
+Tag range: `v0.5.2..v0.5.3`.
 
 ### Refactoring
 
 - **cli**: restrict setup wizard to supported connectors
 
+## [0.5.2] - 2026-02-27
 
-## [0.5.1] - 2026-02-27
+Release summary: 3 bug fixes.
+Tag range: `v0.5.1..v0.5.2`.
 
 ### Bug Fixes
 
@@ -2554,36 +3342,46 @@ All notable changes to Signet are documented here.
 - **tasks**: streamline edit flow and detail run state
 - **tasks**: stream live task runs and correct opencode execution
 
+## [0.5.1] - 2026-02-27
 
-## [0.5.0] - 2026-02-27
+Release summary: 1 bug fix.
+Tag range: `v0.5.0..v0.5.1`.
 
 ### Bug Fixes
 
 - **embeddings**: stop scope time-filter refresh loop
 
+## [0.5.0] - 2026-02-27
 
-## [0.4.2] - 2026-02-27
+Release summary: 1 feature.
+Tag range: `v0.4.2..v0.5.0`.
 
 ### Features
 
 - **embeddings**: add scoped projection filters and point window controls
 
+## [0.4.2] - 2026-02-27
 
-## [0.4.1] - 2026-02-27
+Release summary: 1 bug fix.
+Tag range: `v0.4.1..v0.4.2`.
 
 ### Bug Fixes
 
 - **connector-openclaw**: prevent temp workspace paths from leaking into config
 
+## [0.4.1] - 2026-02-27
 
-## [0.4.0] - 2026-02-27
+Release summary: 1 docs update.
+Tag range: `v0.4.0..v0.4.1`.
 
 ### Docs
 
 - add secrets API endpoints and MCP tools to CLAUDE.md
 
+## [0.4.0] - 2026-02-27
 
-## [0.3.0] - 2026-02-27
+Release summary: 2 features and 2 bug fixes.
+Tag range: `v0.2.1..v0.4.0`.
 
 ### Features
 
@@ -2595,18 +3393,26 @@ All notable changes to Signet are documented here.
 - **ci**: bump base version past deprecated 0.3.0 on npm
 - **publish**: convert postinstall to CJS for reliable npm install
 
+## [0.2.1] - 2026-02-26
 
-## [0.2.0] - 2026-02-26
+Release summary: 1 bug fix.
+Tag range: `v0.2.0..v0.2.1`.
 
 ### Bug Fixes
 
 - **pipeline**: propagate LLM failures and improve observability
 
+## [0.2.0] - 2026-02-25
 
-## [0.1.135] - 2026-02-25
+Release summary: 59 features, 55 bug fixes, 2 performance improvements, 6 refactors, and 28 docs updates.
+Tag range: `v0.1.53..v0.2.0`.
 
 ### Features
 
+- **release**: add release reliability and update safety system
+- **daemon**: add session memory recording for predictive scorer (Phase 0)
+- **web**: add React, GSAP, sitemap, RSS, search, and docs enhancements
+- **tray**: macOS auto-launch at login with branded template icons
 - **telemetry**: add anonymous opt-in telemetry with token tracking
 - **dashboard**: add interactive Pipeline visualization tab
 - **pipeline**: backwards deduplication pass for memory pipeline
@@ -2662,34 +3468,13 @@ All notable changes to Signet are documented here.
 - **cli**: sync built-in skills on setup/reconfigure
 - **update**: add unattended auto-update installs
 - **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
 
 ### Bug Fixes
 
+- **daemon**: close hook isolation gaps in remember/recall routes
+- **update**: fix 7 auto-update bugs and make better-sqlite3 optional
+- **daemon**: fix git sync credential resolution and cwd for non-GitHub remotes
+- **daemon**: pass agentsDir to loadMemoryConfig in hooks and summary-worker
 - **pipeline**: add per-job exponential backoff to prevent rapid retry cycling
 - **pipeline**: respect enabled=false master switch in summary worker
 - **hooks**: prevent recursive extraction loops in spawned agents
@@ -2741,34 +3526,6 @@ All notable changes to Signet are documented here.
 - **cli**: accept value arg in secret put
 - **opencode**: wire plugin and AGENTS-first inject
 - **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
 
 ### Performance
 
@@ -2777,16 +3534,17 @@ All notable changes to Signet are documented here.
 
 ### Refactoring
 
+- **daemon**: extract hybrid recall search into memory-search.ts
 - **ingest**: decouple extractors from Ollama, deduplicate shared utilities
 - **pipeline**: restructure PipelineV2Config into nested sub-objects
 - **daemon**: extract update system, add observability
 - **daemon**: expose LlmProvider as singleton
 - **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
 
 ### Docs
 
+- reorganize specs into approved/complete/planning structure
+- **skills**: expand daemon restart instructions in memory-debug skill
 - it learns now
 - add memory loop pipeline diagrams
 - teach agents they can't see their own infrastructure
@@ -2813,70 +3571,13 @@ All notable changes to Signet are documented here.
 - **readme**: add memory loop blueprint diagram
 - **readme**: add poster images
 - **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
 
+## [0.1.53] - 2026-02-19
 
-## [0.1.134] - 2026-02-25
+Release summary: 25 features, 28 bug fixes, 2 refactors, and 4 docs updates.
 
 ### Features
 
-- **dashboard**: add interactive Pipeline visualization tab
-- **pipeline**: backwards deduplication pass for memory pipeline
-- **hooks**: make Signet legible to its own agents
-- **dashboard**: full log payloads + config char budgets
-- **core**: add document ingestion pipeline
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
 - **setup**: harden installer and setup flows
 - **core,daemon**: migrate vector search to sqlite-vec
 - **core,daemon**: add hierarchical chunking for memory ingestion
@@ -2905,55 +3606,6 @@ All notable changes to Signet are documented here.
 
 ### Bug Fixes
 
-- **hooks**: prevent recursive extraction loops in spawned agents
-- **dashboard**: resolve settings from daemon's config priority
-- **hooks**: prevent context overflow and filter deleted memories
-- **daemon**: fix 6 runtime bugs across summary worker, API routes, and DB accessor
-- **adapter**: add clawdbot compatibility to openclaw adapter
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
 - **cli**: show agent.yaml in status checks
 - **skills**: update templates to use signet recall/remember CLI
 - **migration**: handle schema_migrations table without checksum column
@@ -2983,9103 +3635,14 @@ All notable changes to Signet are documented here.
 - **bin**: use spawnSync instead of spawn.sync
 - **cli**: daemon path resolution for published package
 
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
 ### Refactoring
 
-- **ingest**: decouple extractors from Ollama, deduplicate shared utilities
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
 - **cli**: remove Python/zvec setup in favor of sqlite-vec
 - **core,cli,daemon**: extract shared utilities and add connector-base
 
 ### Docs
 
-- it learns now
-- add memory loop pipeline diagrams
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
 - update memory commands to use signet remember/recall CLI
 - sync documentation with current implementation
 - update documentation for schema migration system
 - improve README with badges and clearer value prop
-
-
-## [0.1.133] - 2026-02-25
-
-### Features
-
-- **dashboard**: add interactive Pipeline visualization tab
-- **pipeline**: backwards deduplication pass for memory pipeline
-- **hooks**: make Signet legible to its own agents
-- **dashboard**: full log payloads + config char budgets
-- **core**: add document ingestion pipeline
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **hooks**: prevent recursive extraction loops in spawned agents
-- **dashboard**: resolve settings from daemon's config priority
-- **hooks**: prevent context overflow and filter deleted memories
-- **daemon**: fix 6 runtime bugs across summary worker, API routes, and DB accessor
-- **adapter**: add clawdbot compatibility to openclaw adapter
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **ingest**: decouple extractors from Ollama, deduplicate shared utilities
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- add memory loop pipeline diagrams
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.132] - 2026-02-25
-
-### Features
-
-- **pipeline**: backwards deduplication pass for memory pipeline
-- **hooks**: make Signet legible to its own agents
-- **dashboard**: full log payloads + config char budgets
-- **core**: add document ingestion pipeline
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: resolve settings from daemon's config priority
-- **hooks**: prevent context overflow and filter deleted memories
-- **daemon**: fix 6 runtime bugs across summary worker, API routes, and DB accessor
-- **adapter**: add clawdbot compatibility to openclaw adapter
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **ingest**: decouple extractors from Ollama, deduplicate shared utilities
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- add memory loop pipeline diagrams
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.131] - 2026-02-25
-
-### Features
-
-- **pipeline**: backwards deduplication pass for memory pipeline
-- **hooks**: make Signet legible to its own agents
-- **dashboard**: full log payloads + config char budgets
-- **core**: add document ingestion pipeline
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **hooks**: prevent context overflow and filter deleted memories
-- **daemon**: fix 6 runtime bugs across summary worker, API routes, and DB accessor
-- **adapter**: add clawdbot compatibility to openclaw adapter
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **ingest**: decouple extractors from Ollama, deduplicate shared utilities
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- add memory loop pipeline diagrams
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.130] - 2026-02-25
-
-### Features
-
-- **pipeline**: backwards deduplication pass for memory pipeline
-- **hooks**: make Signet legible to its own agents
-- **dashboard**: full log payloads + config char budgets
-- **core**: add document ingestion pipeline
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **adapter**: add clawdbot compatibility to openclaw adapter
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **ingest**: decouple extractors from Ollama, deduplicate shared utilities
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- add memory loop pipeline diagrams
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.129] - 2026-02-25
-
-### Features
-
-- **hooks**: make Signet legible to its own agents
-- **dashboard**: full log payloads + config char budgets
-- **core**: add document ingestion pipeline
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **adapter**: add clawdbot compatibility to openclaw adapter
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **ingest**: decouple extractors from Ollama, deduplicate shared utilities
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- add memory loop pipeline diagrams
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.128] - 2026-02-25
-
-### Features
-
-- **dashboard**: full log payloads + config char budgets
-- **core**: add document ingestion pipeline
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **adapter**: add clawdbot compatibility to openclaw adapter
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **ingest**: decouple extractors from Ollama, deduplicate shared utilities
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- add memory loop pipeline diagrams
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.127] - 2026-02-25
-
-### Features
-
-- **core**: add document ingestion pipeline
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **adapter**: add clawdbot compatibility to openclaw adapter
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **ingest**: decouple extractors from Ollama, deduplicate shared utilities
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.126] - 2026-02-24
-
-### Features
-
-- **core**: add document ingestion pipeline
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **ingest**: decouple extractors from Ollama, deduplicate shared utilities
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.125] - 2026-02-24
-
-### Features
-
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.124] - 2026-02-24
-
-### Features
-
-- **skills**: add ClawHub provider and marketplace card grid UI
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.123] - 2026-02-24
-
-### Features
-
-- **daemon**: add unified embedding health check endpoint and dashboard UI
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.122] - 2026-02-24
-
-### Features
-
-- **daemon**: add memory content size guardrails
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **connector-openclaw**: claim memory slot and disable native memorySearch
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.121] - 2026-02-24
-
-### Features
-
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- teach agents they can't see their own infrastructure
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.120] - 2026-02-24
-
-### Features
-
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- update AGENTS.md
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.119] - 2026-02-24
-
-### Features
-
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **openclaw**: rewrite adapter to OpenClaw register(api) plugin pattern
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.118] - 2026-02-24
-
-### Features
-
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **skills**: move onboarding skill to signetai/templates/skills
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.117] - 2026-02-24
-
-### Features
-
-- **web**: add curl install script for signetai.sh/install
-- **skills**: add /onboarding skill for interactive agent setup
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **ci**: bump version to 0.1.116 to fix npm publish collision
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- **skill.md**: move /onboarding details to skill, keep as suggestion in install
-- **skill.md**: add /onboarding as Step 6 in installation flow
-- **skill.md**: add full /onboarding section to install guide
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.114] - 2026-02-23
-
-### Features
-
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- add contribution strategy
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.113] - 2026-02-23
-
-### Features
-
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: use let for $state binding in FormSection
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.112] - 2026-02-23
-
-### Features
-
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **adapter-openclaw**: add openclaw.plugin.json manifest and use unscoped plugin id
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.111] - 2026-02-23
-
-### Features
-
-- add scheduled agent tasks with cron-based execution
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **adapter-openclaw**: rename package scope from @signet to @signetai for npm publish
-- **dashboard**: move submit button back inside form element
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.110] - 2026-02-23
-
-### Features
-
-- **adapter-openclaw**: prepare package for npm publish
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **adapter-openclaw**: use DOM lib instead of node types for CI compat
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.109] - 2026-02-23
-
-### Features
-
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **connector-openclaw**: use object format for plugins config
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.108] - 2026-02-23
-
-### Features
-
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: clean up bloated pipeline settings UI
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.107] - 2026-02-23
-
-### Features
-
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **cli**: remove duplicate embed command registration
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.106] - 2026-02-23
-
-### Features
-
-- memory system roadmap — 8 features + docs
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **cli**: rename duplicate embedCmd variable to fix build
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.105] - 2026-02-23
-
-### Features
-
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **core**: pass Float32Array instead of Buffer to vec0 MATCH query
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.104] - 2026-02-23
-
-### Features
-
-- **daemon**: inject local date/time and timezone in session-start hook
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.103] - 2026-02-23
-
-### Features
-
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **connector-base**: add @types/node for node:fs and node:path imports
-- include SOUL.md, IDENTITY.md, USER.md in all harness config generation
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.102] - 2026-02-23
-
-### Features
-
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **connector-claude-code**: register MCP server in ~/.claude.json, not settings.json
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.101] - 2026-02-23
-
-### Features
-
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **core**: use npm root -g to find sqlite-vec when running under bun
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.100] - 2026-02-23
-
-### Features
-
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **core**: search well-known npm global paths for sqlite-vec extension
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.99] - 2026-02-23
-
-### Features
-
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **signetai**: add signet-mcp bin entry and build step to meta-package
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.98] - 2026-02-23
-
-### Features
-
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **cli**: drop stale vec_embeddings before recreating with correct dimensions
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.97] - 2026-02-23
-
-### Features
-
-- **daemon**: expose MCP server for native tool access from harnesses
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.96] - 2026-02-23
-
-### Features
-
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **embeddings**: read actual dimensions instead of hardcoding vec0 table size
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.95] - 2026-02-23
-
-### Features
-
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- require shadcn-svelte components for dashboard UI work
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.94] - 2026-02-23
-
-### Features
-
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **cli**: load sqlite-vec extension before CREATE VIRTUAL TABLE in migrate-vectors
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.93] - 2026-02-23
-
-### Features
-
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **pipeline**: restructure PipelineV2Config into nested sub-objects
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.92] - 2026-02-23
-
-### Features
-
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **core**: support sqlite-vec on macOS and other non-Linux platforms
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.91] - 2026-02-23
-
-### Features
-
-- **pipeline**: wire update + delete mutations in pipeline worker
-- **web**: add tabbed agent install prompt to hero and CTA
-- **pipeline**: enforce atomic memory extraction via prompt rewriting
-- **web**: add agent install skill at /skill.md
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **recall**: fix signet recall returning no results
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.90] - 2026-02-23
-
-### Features
-
-- **tray**: macOS menu bar app Phase 1 — rich stats, quick capture, search
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.89] - 2026-02-23
-
-### Features
-
-- **opencode**: add runtime plugin with full tool surface
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: fix embeddings effect cycle and perf
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.88] - 2026-02-23
-
-### Features
-
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: fix hover card stuck at origin
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.87] - 2026-02-23
-
-### Features
-
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: eliminate embeddings idle CPU burn
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.86] - 2026-02-23
-
-### Features
-
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: stabilize embeddings graph performance
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.85] - 2026-02-23
-
-### Features
-
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: restore embeddings inspector selection
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.84] - 2026-02-23
-
-### Features
-
-- **dashboard**: add shift lock for embeddings hover preview
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- fill documentation gaps from audit
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.83] - 2026-02-23
-
-### Features
-
-- **dashboard**: color code log levels in logs tab
-- **dashboard**: add embedding filter presets and cluster lens
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **cli**: force fresh update check on explicit commands
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.82] - 2026-02-23
-
-### Features
-
-- **skills**: add signet-design skill assets
-- **tray**: add system tray app (Tauri v2)
-- **web**: migrate to Astro, add /docs section
-- **dashboard**: migrate selects and date filter to shadcn components
-- **scripts**: add post-push release sync
-- **dashboard**: surface hook outputs in logs
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: extract update system, add observability
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- update AGENTS.md for recent changes
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.81] - 2026-02-23
-
-### Features
-
-- add changelog + public roadmap
-- **dashboard**: make session logs scrollable and inspectable
-- **daemon**: add re-embed repair endpoint and CLI
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-- refine session end hook
-- **daemon**: add Claude Code headless LLM provider
-- **daemon**: add analytics and timeline (Phase K)
-- **daemon**: add auth module (Phase J)
-- **sdk**: rewrite as HTTP client for daemon API
-- **daemon**: phase H ingestion and connectors
-- **openclaw**: add plugin path option to setup
-- **daemon**: phase G plugin-first runtime
-- **daemon**: phase F autonomous maintenance
-- **daemon**: phase E graph + reranking
-- **web**: update hero and add secrets section
-- **daemon**: phase D2/D3 soft-delete and policy
-- **daemon**: phase B shadow extraction pipeline
-- **core,daemon**: phase A infrastructure hardening
-- **web**: integrate marketing website into workspace
-- **hooks**: migrate all hooks from memory.py to daemon API
-- **cli**: sync built-in skills on setup/reconfigure
-- **update**: add unattended auto-update installs
-- **embeddings**: speed up graph loading
-- **setup**: harden installer and setup flows
-- **core,daemon**: migrate vector search to sqlite-vec
-- **core,daemon**: add hierarchical chunking for memory ingestion
-- **daemon**: use system git credentials for sync
-- **cli**: add signet remember and signet recall commands
-- **daemon**: add embedding provider status check
-- **dashboard**: schematic monochrome graph aesthetic
-- **connectors**: add @signet/connector-openclaw
-- **connectors**: inject Signet system block into harness files
-- **core**: add database schema migration system
-- **core**: add runtime-detected SQLite and connector packages
-- **cli**: auto-detect Python and offer alternatives for zvec
-- sync existing Claude memories on daemon startup
-- auto-sync Claude Code project memories to Signet
-- add /api/hook/remember endpoint for Claude Code compatibility
-- add signet skill to teach agents how to use signet
-- add secrets to interactive menu, fix yaml parsing for existing config
-- symlink skills to harness dirs, use --system-site-packages for venv
-- **setup**: add 'Import from GitHub' option for fresh installs and existing
-- **cli**: add 'signet sync' command to sync templates and fix venv
-- **setup**: add .gitignore template (ignores .venv, .daemon, pycache)
-- **setup**: create venv for Python deps, daemon uses venv Python
-- **setup**: auto-install Python dependencies (PyYAML, zvec)
-- **dashboard**: add memory filter UI and similar search
-- initial monorepo scaffold
-
-### Bug Fixes
-
-- **dashboard**: break projection polling loop on error
-- **daemon**: handle bun:sqlite Uint8Array blobs
-- **core**: compute __dirname at runtime
-- **docs**: correct license to Apache-2.0 in READMEs
-- **daemon**: sync vec_embeddings on write
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction
-- **daemon**: repair vector search with sqlite-vec
-- pre-release safety fixes
-- **core**: repair v0.1.65 migration version collision
-- **test**: exclude references from test discovery
-- **cli**: accept value arg in secret put
-- **opencode**: wire plugin and AGENTS-first inject
-- **embeddings**: support legacy pagination paths
-- **cli**: show agent.yaml in status checks
-- **skills**: update templates to use signet recall/remember CLI
-- **migration**: handle schema_migrations table without checksum column
-- **build**: ensure connectors build before signetai meta-package
-- **connectors**: add @types/node for CI builds
-- **templates**: wrap Signet block in SIGNET:START/END delimiters
-- **build**: use relative import for @signet/core in CLI
-- **build**: ensure core builds before dependent packages
-- **ci**: mark @signet/core as external in CLI build
-- **ci**: use jq for version bump to avoid npm workspace issue
-- add missing dependencies for CI build
-- **ci**: remove frozen-lockfile for workspace compat
-- update lockfile
-- **cli**: use simple bin format for npm
-- **cli**: add shebang to build output and fix repository url
-- make zvec optional (requires Python 3.10-3.12)
-- add zvec back to requirements.txt
-- rename .gitignore to gitignore.template so npm includes it
-- better browser open messages, remove zvec dep, improve postinstall
-- **setup**: better venv/pip error messages with actual stderr output
-- **cli**: clear screen between menu iterations, add pause after output
-- **setup**: better venv error message with distro-specific install hints
-- **setup**: robust pip install with fallbacks and warning on failure
-- **setup**: load existing config values as defaults when reconfiguring
-- **daemon**: auto-init memory schema, add remember/recall skills
-- **cli**: replace emojis with text icons, handle Ctrl+C gracefully
-- **bin**: use spawnSync instead of spawn.sync
-- **cli**: daemon path resolution for published package
-
-### Performance
-
-- **dashboard**: move UMAP projection server-side
-
-### Refactoring
-
-- **daemon**: expose LlmProvider as singleton
-- **dashboard**: migrate to shadcn-svelte
-- **cli**: remove Python/zvec setup in favor of sqlite-vec
-- **core,cli,daemon**: extract shared utilities and add connector-base
-
-### Docs
-
-- **wip**: add daemon.ts refactor plan
-- **memory**: turn procedural memory plan into implementation spec
-- update procedural memory plan
-- update AGENTS.md with architecture gaps
-- update CLAUDE.md with Phase G pipeline docs
-- update frontmatter yaml on signet skill
-- embed vision into signet skill template
-- **daemon**: add procedural memory plan
-- the future remembers everything
-- the future remembers everything
-- **readme**: add how memory works section
-- **readme**: use HTML tables for layout
-- **readme**: add memory loop blueprint diagram
-- **readme**: add poster images
-- **repo**: refresh README and AGENTS guidance
-- update memory commands to use signet remember/recall CLI
-- sync documentation with current implementation
-- update documentation for schema migration system
-- improve README with badges and clearer value prop
-
-
-## [0.1.80] - 2026-02-22
-
-### Features
-- **dashboard**: make session logs scrollable and inspectable
-
-## [0.1.79] - 2026-02-22
-
-### Docs
-- update AGENTS.md with architecture gaps
-
-## [0.1.78] - 2026-02-21
-
-### Bug Fixes
-- **dashboard**: break projection polling loop on error
-
-## [0.1.77] - 2026-02-21
-
-### Bug Fixes
-- **daemon**: handle bun:sqlite Uint8Array blobs
-
-## [0.1.76] - 2026-02-21
-
-### Performance
-- **dashboard**: move UMAP projection server-side
-
-### Features
-- **daemon**: add re-embed repair endpoint and CLI
-
-## [0.1.75] - 2026-02-20
-
-### Refactoring
-- **dashboard**: migrate to shadcn-svelte
-
-### Features
-- **dashboard**: unify settings tab form
-- **dashboard**: redesign with shadcn sidebar and skills.sh integration
-
-## [0.1.74] - 2026-02-19
-
-### Features
-- refine session end hook
-
-### Bug Fixes
-- **core**: compute __dirname at runtime
-
-## [0.1.73] - 2026-02-19
-
-### Features
-- **daemon**: add Claude Code headless LLM provider
-
-## [0.1.72] - 2026-02-18
-
-### Bug Fixes
-- **docs**: correct license to Apache-2.0 in READMEs
-
-## [0.1.71] - 2026-02-18
-
-### Bug Fixes
-- **daemon**: sync vec_embeddings on write
-
-## [0.1.70] - 2026-02-17
-
-### Bug Fixes
-- **core**: add unique index on embeddings.content_hash
-- **daemon**: use Ollama HTTP API for extraction

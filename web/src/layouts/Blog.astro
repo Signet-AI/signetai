@@ -1,10 +1,10 @@
 ---
 import { getCollection } from "astro:content";
-import Base from "./Base.astro";
-import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
-import ShareButtons from "../components/ShareButtons.astro";
 import GraphViewer from "../components/GraphViewer";
+import Nav from "../components/Nav.astro";
+import ShareButtons from "../components/ShareButtons.astro";
+import Base from "./Base.astro";
 import "../styles/blog.css";
 import "../styles/docs.css";
 import "../styles/graph.css";
@@ -122,8 +122,10 @@ const allPosts = (await getCollection("blog"))
           <nav class="blog-toc-inline" aria-label="Table of contents">
             <p class="blog-toc-label">On this page</p>
             <ul class="blog-toc-list">
-              {tocHeadings.filter((h) => h.depth === 2).map((h) => (
-                <li><a href={`#${h.slug}`}>{h.text}</a></li>
+              {tocHeadings.map((h) => (
+                <li class:list={[{ "docs-rail-toc-sub": h.depth === 3 }]}>
+                  <a href={`#${h.slug}`}>{h.text}</a>
+                </li>
               ))}
             </ul>
           </nav>

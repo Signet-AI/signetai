@@ -97,7 +97,7 @@ jobs:
           BASE_VERSION=$(printf '%s\n%s\n' "$LOCAL_VERSION" "$REMOTE_VERSION" | sort -V | tail -n1)
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
 
-          bun scripts/changelog.ts
+          bun scripts/changelog.ts --bump-only
 
           BUMP=$(cat .bump-level 2>/dev/null || echo "patch")
           case "$BUMP" in
@@ -111,16 +111,18 @@ jobs:
           echo "bump_level=$BUMP" >> $GITHUB_OUTPUT
           rm -f .bump-level
 
-          PACKAGE_FILES=$(git ls-files package.json 'packages/**/package.json' | grep -v '^packages/cli/dashboard/package.json$')
-          for file in $PACKAGE_FILES; do
+          mapfile -t PACKAGE_FILES < <(git ls-files package.json 'packages/**/package.json' | grep -v '^packages/cli/dashboard/package.json$')
+          for file in "${PACKAGE_FILES[@]}"; do
             jq --arg v "$NEW_VERSION" '.version = $v' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
           done
+
+          bun scripts/changelog.ts --version "$NEW_VERSION"
 
           # Keep lockfile aligned with workspace version bumps so frozen installs
           # (Docker smoke and consumer builds) stay deterministic.
           bun install
 
-          git add $PACKAGE_FILES bun.lock CHANGELOG.md
+          git add -- "${PACKAGE_FILES[@]}" bun.lock CHANGELOG.md
           git commit -m "chore: release $NEW_VERSION"
           git tag "v$NEW_VERSION"
 
@@ -134,7 +136,14 @@ jobs:
         id: create_release
         if: steps.changes.outputs.skip != 'true'
         run: |
-          NOTES=$(bun scripts/extract-changelog-section.ts "$NEW_VERSION" 2>/dev/null || echo "See CHANGELOG.md for details")
+          NOTES=$(bun scripts/extract-changelog-section.ts "$NEW_VERSION")
+          if [ -z "$NOTES" ] || [ "$NOTES" = "No changelog section found for v$NEW_VERSION" ]; then
+            # This runs after the version bump commit and tag are pushed. If it
+            # fails, recover by creating the draft release manually with
+            # `gh release create "v$NEW_VERSION" --draft --notes-file <notes>`.
+            echo "::error::Missing CHANGELOG.md section for v$NEW_VERSION"
+            exit 1
+          fi
           # Create as draft — predictor assets are uploaded by build-predictor
           # before the publish job promotes this to non-draft and publishes npm.
           gh release create "v$NEW_VERSION" --draft --title "v$NEW_VERSION" --notes "$NOTES"
@@ -310,15 +319,20 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Resolve workspace protocols
+        run: bun scripts/version-sync.ts --to "$NEW_VERSION"
+
+      - name: Validate publish manifests
+        run: bun scripts/check-publish-manifests.ts
+
       - name: Publish release
-        # Undraft first so predictor assets are publicly accessible before
-        # any npm install can trigger the postinstall downloader.
+        # Undraft only after publish manifests pass, so a broken npm package
+        # cannot slip through behind a green release job.
+        # Assets must still be public before npm publish can expose any
+        # postinstall downloader paths to users.
         run: gh release edit "v${NEW_VERSION}" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve workspace protocols
-        run: bun scripts/version-sync.ts --to "$NEW_VERSION"
 
       - name: Publish to npm
         run: |

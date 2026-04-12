@@ -1,0 +1,13 @@
+import { type DaemonClient, createDaemonClient as createBaseDaemonClient } from "@signet/pi-extension-base";
+import { READ_TIMEOUT, RUNTIME_PATH } from "./types.js";
+
+export type { DaemonClient };
+
+export function createDaemonClient(daemonUrl: string): DaemonClient {
+	return createBaseDaemonClient(daemonUrl, {
+		logPrefix: "signet-pi",
+		actorName: "pi-extension",
+		runtimePath: RUNTIME_PATH,
+		defaultTimeout: READ_TIMEOUT,
+	});
+}

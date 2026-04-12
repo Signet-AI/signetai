@@ -107,13 +107,7 @@
     "title": "Contributing",
     "url": "/docs/contributing/",
     "tags": [],
-    "links": [
-      "docs/pipeline",
-      "docs/auth",
-      "docs/connectors",
-      "docs/analytics",
-      "docs/diagnostics"
-    ],
+    "links": [],
     "collection": "docs"
   },
   "docs/daemon": {
