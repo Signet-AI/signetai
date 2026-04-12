@@ -130,7 +130,7 @@ function loadLatestExtractionProgressAt(accessor: DbAccessor, agentId: string): 
 			// At the default 30-minute stall window this is negligible (<0.1%).
 			// For very small stall windows (≤10 s), the rounding may cause
 			// ±1 tick of jitter near the boundary.
-			.get(agentId) as { last_progress_at: number | null } | undefined;
+			.get(agentId) as { last_progress_at: number | null } | null;
 		const value = row?.last_progress_at;
 		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 	});

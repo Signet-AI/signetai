@@ -421,6 +421,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_extraction_progress_handles_plus00_offset_format() {
+        let path = test_db("plus00");
+        let (pool, handle) = DbPool::open(&path).expect("failed to open DB");
+        pool.write(Priority::Low, |conn| {
+            conn.execute_batch(
+                "INSERT INTO memories (id, agent_id, content, created_at, updated_at, updated_by, vector_clock)
+                 VALUES ('m1', 'tz-agent', 'hello', '2026-04-12T00:00:00+00:00', '2026-04-12T00:00:00+00:00', 'test', '{}');
+                 INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at, completed_at)
+                 VALUES ('j1', 'm1', 'extract', 'completed', '2026-04-12T00:00:00+00:00', '2026-04-12T00:00:30+00:00', '2026-04-12T00:01:00+00:00');",
+            )
+            .expect("seed data");
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("write succeeded");
+
+        let result = latest_extraction_progress_ms(&pool, "tz-agent")
+            .await
+            .expect("query succeeded");
+        assert!(result.is_some());
+        let ts = result.unwrap();
+        assert_eq!(ts, 1_775_952_060_000);
+        handle.abort();
+    }
+
+    #[tokio::test]
     async fn extraction_stalled_ms_returns_none_when_no_progress() {
         let path = test_db("stalled");
         let (pool, handle) = DbPool::open(&path).expect("failed to open DB");
