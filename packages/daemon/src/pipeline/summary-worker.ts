@@ -1506,6 +1506,7 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 				ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
 				ollamaFallbackMaxContextTokens: ollamaMaxContextTokens,
 				defaultTimeoutMs: timeout,
+				enableStructuredOutput: cfg.pipelineV2.extraction.structuredOutput,
 			});
 		default:
 			return createOllamaProvider({

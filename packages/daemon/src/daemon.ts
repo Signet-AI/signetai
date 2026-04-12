@@ -1753,6 +1753,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				ollamaFallbackBaseUrl: extractionOllamaFallbackBaseUrl,
 				ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
 				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
+				enableStructuredOutput: memoryCfg.pipelineV2.extraction.structuredOutput,
 			});
 		}
 		if (provider === "claude-code") {
@@ -2078,6 +2079,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 								ollamaFallbackBaseUrl: synthesisOllamaFallbackBaseUrl,
 								ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
 								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+								enableStructuredOutput: memoryCfg.pipelineV2.extraction.structuredOutput,
 							})
 						: effectiveSynthesisProvider === "codex"
 							? createCodexProvider({

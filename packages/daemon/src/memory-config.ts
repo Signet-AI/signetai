@@ -564,6 +564,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				),
 			},
 			rateLimit: parseRateLimitConfig(extractionRaw?.rateLimit),
+			structuredOutput: (() => {
+				const candidate = extractionRaw?.structuredOutput;
+				return typeof candidate === "boolean" ? candidate : undefined;
+			})(),
 		},
 
 		worker: {
