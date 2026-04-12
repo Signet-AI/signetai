@@ -334,7 +334,11 @@ async fn latest_extraction_progress_ms(
 
 #[cfg(test)]
 mod tests {
-    use super::should_run_dependency_synthesis;
+    use super::{
+        extraction_stalled_ms, latest_extraction_progress_ms, should_run_dependency_synthesis,
+    };
+    use signet_core::DbPool;
+    use signet_core::db::Priority;
 
     #[test]
     fn stall_gate_blocks_progress_older_than_window() {
@@ -349,6 +353,83 @@ mod tests {
         assert!(should_run_dependency_synthesis(now, Some(1_000), 0));
         assert!(should_run_dependency_synthesis(now, None, 6_000));
         assert!(should_run_dependency_synthesis(now, Some(0), 6_000));
+    }
+
+    fn test_db(name: &str) -> std::path::PathBuf {
+        let pid = std::process::id();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("signet-dep-synth-{name}-{pid}-{now}.db"))
+    }
+
+    #[tokio::test]
+    async fn latest_extraction_progress_returns_max_completed_job() {
+        let path = test_db("progress");
+        let (pool, handle) = DbPool::open(&path).expect("failed to open DB");
+        pool.write(Priority::Low, |conn| {
+            conn.execute_batch(
+                "INSERT INTO memories (id, agent_id, content, created_at, updated_at, updated_by, vector_clock)
+                 VALUES ('m1', 'test-agent', 'hello', '2026-04-12T00:00:00Z', '2026-04-12T00:00:00Z', 'test', '{}');
+                 INSERT INTO memories (id, agent_id, content, created_at, updated_at, updated_by, vector_clock)
+                 VALUES ('m2', 'other-agent', 'world', '2026-04-12T00:00:00Z', '2026-04-12T00:00:00Z', 'test', '{}');
+                 INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at, completed_at)
+                 VALUES ('j1', 'm1', 'extract', 'completed', '2026-04-12T00:00:00Z', '2026-04-12T00:00:30Z', '2026-04-12T00:00:30Z');
+                 INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at, completed_at)
+                 VALUES ('j2', 'm1', 'extract', 'completed', '2026-04-12T00:00:00Z', '2026-04-12T00:01:00Z', '2026-04-12T00:01:00Z');
+                 INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at, completed_at)
+                 VALUES ('j3', 'm2', 'extract', 'completed', '2026-04-12T00:00:00Z', '2026-04-12T00:02:00Z', '2026-04-12T00:02:00Z');",
+            )
+            .expect("seed data");
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("write succeeded");
+
+        let result = latest_extraction_progress_ms(&pool, "test-agent")
+            .await
+            .expect("query succeeded");
+        assert!(result.is_some());
+        let ts = result.unwrap();
+        assert_eq!(ts, 1_775_952_060_000);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn latest_extraction_progress_scopes_by_agent() {
+        let path = test_db("scope");
+        let (pool, handle) = DbPool::open(&path).expect("failed to open DB");
+        pool.write(Priority::Low, |conn| {
+            conn.execute_batch(
+                "INSERT INTO memories (id, agent_id, content, created_at, updated_at, updated_by, vector_clock)
+                 VALUES ('m1', 'a1', 'x', '2026-04-12T00:00:00Z', '2026-04-12T00:00:00Z', 'test', '{}');
+                 INSERT INTO memory_jobs (id, memory_id, job_type, status, created_at, updated_at, completed_at)
+                 VALUES ('j1', 'm1', 'extract', 'completed', '2026-04-12T00:00:00Z', '2026-04-12T00:01:00Z', '2026-04-12T00:01:00Z');",
+            )
+            .expect("seed data");
+            Ok(serde_json::Value::Null)
+        })
+        .await
+        .expect("write succeeded");
+
+        let result = latest_extraction_progress_ms(&pool, "different-agent")
+            .await
+            .expect("query succeeded");
+        assert!(result.is_none());
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn extraction_stalled_ms_returns_none_when_no_progress() {
+        let path = test_db("stalled");
+        let (pool, handle) = DbPool::open(&path).expect("failed to open DB");
+
+        let result = extraction_stalled_ms(&pool, "test-agent", 30 * 60_000)
+            .await
+            .expect("query succeeded");
+        assert!(result.is_none());
+        handle.abort();
     }
 }
 
