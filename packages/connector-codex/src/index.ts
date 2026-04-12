@@ -49,6 +49,7 @@ function resolveSignetMcp(): { command: string; args: string[] } {
 const HOOK_EVENT_KEYS = ["SessionStart", "UserPromptSubmit", "Stop"] as const;
 
 interface MatcherGroup {
+	_signet?: boolean;
 	matcher?: string;
 	hooks: HandlerConfig[];
 }
@@ -67,6 +68,7 @@ interface HooksFile {
 
 function buildHooksFile(signetArgs: string[]): HooksFile {
 	const cmd = (subcommand: string, secs: number): MatcherGroup => ({
+		_signet: true,
 		hooks: [{ type: "command", command: [...signetArgs, "hook", subcommand, "-H", "codex"].join(" "), timeout: secs }],
 	});
 	return {
@@ -100,17 +102,22 @@ function writeHooksFile(path: string, file: HooksFile): void {
 	atomicWriteJson(path, file);
 }
 
-const SIGNET_HOOK_SUBSTRINGS = ["signet hook session-start", "signet hook user-prompt-submit", "signet hook session-end"] as const;
+const SIGNET_HOOK_PREFIXES = [
+	"signet hook session-start",
+	"signet hook user-prompt-submit",
+	"signet hook session-end",
+] as const;
 
 function isSignetMatcherGroup(group: unknown): boolean {
 	if (typeof group !== "object" || group === null) return false;
+	if ((group as Record<string, unknown>)._signet === true) return true;
 	const hooksArr = (group as Record<string, unknown>).hooks;
 	if (!Array.isArray(hooksArr)) return false;
 	for (const handler of hooksArr) {
 		if (typeof handler !== "object" || handler === null) continue;
 		const cmd = (handler as Record<string, unknown>).command;
 		if (typeof cmd !== "string") continue;
-		if (SIGNET_HOOK_SUBSTRINGS.some((s) => cmd.includes(s))) return true;
+		if (SIGNET_HOOK_PREFIXES.some((s) => cmd.startsWith(s))) return true;
 	}
 	return false;
 }
@@ -124,14 +131,14 @@ function isLegacySignetMatcherGroup(group: unknown): boolean {
 		const cmd = (handler as Record<string, unknown>).command;
 		if (Array.isArray(cmd)) {
 			const joined = cmd.join(" ");
-			if (SIGNET_HOOK_SUBSTRINGS.some((s) => joined.includes(s))) return true;
+			if (SIGNET_HOOK_PREFIXES.some((s) => joined.startsWith(s))) return true;
 		}
 	}
 	return false;
 }
 
 function removeSignetEntries(file: HooksFile): HooksFile {
-	const cleaned: HooksFile = { ...file, hooks: file.hooks ? { ...file.hooks } : undefined };
+	const cleaned: HooksFile = { ...file, hooks: file.hooks ? structuredClone(file.hooks) : undefined };
 	const events = cleaned.hooks;
 	if (!events || typeof events !== "object") return cleaned;
 
