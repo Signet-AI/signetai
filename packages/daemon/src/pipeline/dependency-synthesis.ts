@@ -130,6 +130,9 @@ function loadLatestExtractionProgressAt(accessor: DbAccessor, agentId: string): 
 			// At the default 30-minute stall window this is negligible (<0.1%).
 			// For very small stall windows (≤10 s), the rounding may cause
 			// ±1 tick of jitter near the boundary.
+			// Bun bundles SQLite ≥ 3.39 (2022), which parses +HH:MM offsets
+			// in strftime correctly. Older SQLite returns NULL — the guard
+			// below handles this by falling back to undefined (no stall).
 			.get(agentId) as { last_progress_at: number | null } | null;
 		const value = row?.last_progress_at;
 		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
@@ -276,7 +279,7 @@ export async function runDependencySynthesisTick(deps: DependencySynthesisDeps):
 	const lastProgressAt = maxStallMs > 0 ? resolveExtractionProgressAt(workerProgressAt, durableProgressAt) : undefined;
 	if (!shouldRunDependencySynthesis(now, lastProgressAt, maxStallMs)) {
 		logger.debug("dependency-synthesis", "Skipping tick while extraction pipeline is stalled", {
-			stalledMs: lastProgressAt != null ? now - lastProgressAt : undefined,
+			stalledMs: now - lastProgressAt,
 			maxStallMs,
 			pending: extractionStats?.pending,
 		});
