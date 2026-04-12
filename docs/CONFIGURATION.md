@@ -315,6 +315,7 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 | `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
+| `structuredOutput` | `true` | — | Send JSON schema in the `format` field of LLM requests. Set `false` when the provider rejects structured output (e.g. GitHub Copilot API). The daemon also auto-detects unsupported providers at runtime and disables this transparently. |
 | `command` | — | — | Command provider config (`bin`, `args[]`, optional `cwd`, optional `env`) — required when `provider: "command"` |
 | `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max extraction-provider calls per hour; set `0` to disable rate limiting |
 | `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |

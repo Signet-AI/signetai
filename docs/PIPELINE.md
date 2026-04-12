@@ -1028,6 +1028,7 @@ extraction:
   model: qwen3:4b
   timeout: 90000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
+  structuredOutput: true         # send JSON schema in format field; set false for providers that reject it (e.g. GitHub Copilot)
   command:                       # required when provider: command
     bin: node
     args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY", "--agent", "$AGENT_ID"]
