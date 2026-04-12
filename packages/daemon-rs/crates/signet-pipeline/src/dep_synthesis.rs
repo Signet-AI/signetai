@@ -327,6 +327,9 @@ async fn latest_extraction_progress_ms(
         )?)
         // NOTE: strftime('%s') truncates to 1-second resolution.
         // At the default 30-minute stall window this is negligible (<0.1%).
+        // rusqlite bundles SQLite ≥ 3.39, which parses +HH:MM offsets
+        // correctly. Older SQLite returns NULL — the Option return handles
+        // this gracefully (None = no stall).
     })
     .await
     .map_err(|e| e.to_string())

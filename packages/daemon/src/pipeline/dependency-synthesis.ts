@@ -133,8 +133,10 @@ function loadLatestExtractionProgressAt(accessor: DbAccessor, agentId: string): 
 			// Bun bundles SQLite ≥ 3.39 (2022), which parses +HH:MM offsets
 			// in strftime correctly. Older SQLite returns NULL — the guard
 			// below handles this by falling back to undefined (no stall).
-			.get(agentId) as { last_progress_at: number | null } | null;
-		const value = row?.last_progress_at;
+			.get(agentId) as unknown;
+		if (typeof row !== "object" || row === null) return undefined;
+		const raw = (row as Record<string, unknown>).last_progress_at;
+		const value = typeof raw === "number" ? raw : null;
 		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 	});
 }
