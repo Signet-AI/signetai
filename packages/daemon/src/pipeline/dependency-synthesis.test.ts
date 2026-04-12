@@ -232,7 +232,9 @@ describe(`${MODEL} dependency synthesis`, () => {
 		expect(calls).toBe(0);
 		expect(db.prepare("SELECT COUNT(*) AS n FROM entity_dependencies").get()).toEqual({ n: 0 });
 
-		db.prepare("UPDATE memory_jobs SET completed_at = ? WHERE id = 'job-stale'").run(new Date().toISOString());
+		db.prepare("UPDATE memory_jobs SET completed_at = ? WHERE id = 'job-stale'").run(
+			new Date().toISOString().replace("Z", "+00:00"),
+		);
 		await runDependencySynthesisTick(deps);
 		expect(calls).toBe(1);
 		expect(db.prepare("SELECT source_entity_id, target_entity_id FROM entity_dependencies").get()).toEqual({
