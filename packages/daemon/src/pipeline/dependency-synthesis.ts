@@ -9,13 +9,14 @@
 
 import { DEPENDENCY_TYPES, type DependencyType } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
-import { stripFences, tryParseJson } from "./extraction";
-import { DEP_DESCRIPTIONS } from "./structural-dependency";
 import { upsertDependency } from "../knowledge-graph";
-import { invalidateTraversalCache } from "./graph-traversal";
 import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
+import { stripFences, tryParseJson } from "./extraction";
+import { invalidateTraversalCache } from "./graph-traversal";
+import type { LlmProvider } from "./provider";
+import { DEP_DESCRIPTIONS } from "./structural-dependency";
+import type { WorkerProgressStats } from "./worker";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,10 +27,12 @@ export interface DependencySynthesisHandle {
 	readonly running: boolean;
 }
 
-interface DependencySynthesisDeps {
+export interface DependencySynthesisDeps {
 	readonly accessor: DbAccessor;
+	readonly agentId: string;
 	readonly provider: LlmProvider;
 	readonly pipelineCfg: PipelineV2Config;
+	readonly getExtractionStats?: () => WorkerProgressStats | undefined;
 }
 
 interface StaleEntity {
@@ -57,10 +60,7 @@ const VALID_DEP_TYPES = new Set<string>(DEPENDENCY_TYPES);
 // Queries
 // ---------------------------------------------------------------------------
 
-// TODO: thread agentId from DependencySynthesisDeps when multi-agent lands
-const AGENT_ID = "default";
-
-function findStaleEntities(db: ReadDb, limit: number): readonly StaleEntity[] {
+function findStaleEntities(db: ReadDb, agentId: string, limit: number): readonly StaleEntity[] {
 	return db
 		.prepare(
 			`SELECT id, name, entity_type
@@ -71,10 +71,10 @@ function findStaleEntities(db: ReadDb, limit: number): readonly StaleEntity[] {
 			 ORDER BY updated_at DESC
 			 LIMIT ?`,
 		)
-		.all(AGENT_ID, limit) as StaleEntity[];
+		.all(agentId, limit) as StaleEntity[];
 }
 
-function loadFacts(db: ReadDb, entityId: string, limit: number): readonly string[] {
+function loadFacts(db: ReadDb, agentId: string, entityId: string, limit: number): readonly string[] {
 	const rows = db
 		.prepare(
 			`SELECT ea.content
@@ -85,11 +85,11 @@ function loadFacts(db: ReadDb, entityId: string, limit: number): readonly string
 			 ORDER BY ea.updated_at DESC
 			 LIMIT ?`,
 		)
-		.all(entityId, AGENT_ID, limit) as Array<{ content: string }>;
+		.all(entityId, agentId, limit) as Array<{ content: string }>;
 	return rows.map((r) => r.content);
 }
 
-function loadTopEntities(db: ReadDb, excludeId: string, limit: number): readonly GraphEntity[] {
+function loadTopEntities(db: ReadDb, agentId: string, excludeId: string, limit: number): readonly GraphEntity[] {
 	return db
 		.prepare(
 			`SELECT id, name, entity_type, mentions
@@ -98,10 +98,10 @@ function loadTopEntities(db: ReadDb, excludeId: string, limit: number): readonly
 			 ORDER BY mentions DESC
 			 LIMIT ?`,
 		)
-		.all(excludeId, AGENT_ID, limit) as GraphEntity[];
+		.all(excludeId, agentId, limit) as GraphEntity[];
 }
 
-function loadExistingTargets(db: ReadDb, entityId: string): ReadonlySet<string> {
+function loadExistingTargets(db: ReadDb, agentId: string, entityId: string): ReadonlySet<string> {
 	const rows = db
 		.prepare(
 			`SELECT dst.name AS target_name
@@ -110,18 +110,41 @@ function loadExistingTargets(db: ReadDb, entityId: string): ReadonlySet<string> 
 			   AND dst.agent_id = ?
 			 WHERE dep.source_entity_id = ? AND dep.agent_id = ?`,
 		)
-		.all(AGENT_ID, entityId, AGENT_ID) as Array<{ target_name: string }>;
+		.all(agentId, entityId, agentId) as Array<{ target_name: string }>;
 	return new Set(rows.map((r) => r.target_name));
 }
 
-function markSynthesized(accessor: DbAccessor, entityId: string): void {
+function loadLatestExtractionProgressAt(accessor: DbAccessor, agentId: string): number | undefined {
+	return accessor.withReadDb((db) => {
+		const row = db
+			.prepare(
+				`SELECT MAX(CAST(strftime('%s', j.completed_at) AS INTEGER) * 1000) AS last_progress_at
+				 FROM memory_jobs j
+				 JOIN memories m ON m.id = j.memory_id
+				 WHERE j.status = 'completed'
+				   AND j.job_type IN ('extract', 'extraction')
+				   AND j.completed_at IS NOT NULL
+				   AND m.agent_id = ?`,
+			)
+			// NOTE: strftime('%s') truncates to 1-second resolution.
+			// At the default 30-minute stall window this is negligible (<0.1%).
+			// For very small stall windows (≤10 s), the rounding may cause
+			// ±1 tick of jitter near the boundary.
+			// Bun bundles SQLite ≥ 3.39 (2022), which parses +HH:MM offsets
+			// in strftime correctly. Older SQLite returns NULL — the guard
+			// below handles this by falling back to undefined (no stall).
+			.get(agentId) as unknown;
+		if (typeof row !== "object" || row === null) return undefined;
+		const raw = (row as Record<string, unknown>).last_progress_at;
+		const value = typeof raw === "number" ? raw : null;
+		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+	});
+}
+
+function markSynthesized(accessor: DbAccessor, agentId: string, entityId: string): void {
 	const now = new Date().toISOString();
 	accessor.withWriteTx((db) => {
-		db.prepare("UPDATE entities SET last_synthesized_at = ? WHERE id = ? AND agent_id = ?").run(
-			now,
-			entityId,
-			AGENT_ID,
-		);
+		db.prepare("UPDATE entities SET last_synthesized_at = ? WHERE id = ? AND agent_id = ?").run(now, entityId, agentId);
 	});
 }
 
@@ -205,28 +228,87 @@ function validateResults(parsed: unknown): readonly SynthesisResult[] {
 // Tick
 // ---------------------------------------------------------------------------
 
-async function tick(deps: DependencySynthesisDeps): Promise<void> {
-	const cfg = deps.pipelineCfg.structural;
+export function shouldRunDependencySynthesis(
+	now: number,
+	lastExtractionProgressAt: number | undefined,
+	maxStallMs: number | undefined,
+): boolean {
+	if (maxStallMs === undefined || maxStallMs <= 0) return true;
+	// Missing, never-ran, or epoch timestamps are not treated as stalls.
+	if (lastExtractionProgressAt === undefined || lastExtractionProgressAt <= 0) return true;
+	return now - lastExtractionProgressAt <= maxStallMs;
+}
 
-	const stale = deps.accessor.withReadDb((db) => findStaleEntities(db, cfg.dependencyBatchSize));
+export function resolveExtractionProgressAt(
+	workerProgressAt: number | undefined,
+	durableProgressAt: number | undefined,
+): number | undefined {
+	const worker = typeof workerProgressAt === "number" && workerProgressAt > 0 ? workerProgressAt : undefined;
+	const durable = typeof durableProgressAt === "number" && durableProgressAt > 0 ? durableProgressAt : undefined;
+	if (worker == null) return durable;
+	if (durable == null) return worker;
+	return Math.max(worker, durable);
+}
+
+export function shouldLoadDurableExtractionProgress(
+	now: number,
+	workerProgressAt: number | undefined,
+	freshnessMs: number,
+): boolean {
+	if (typeof workerProgressAt !== "number" || !Number.isFinite(workerProgressAt) || workerProgressAt <= 0) return true;
+	return now - workerProgressAt > freshnessMs;
+}
+
+export function durableExtractionProgressFreshnessMs(synthesisIntervalMs: number, maxStallMs: number): number {
+	return Math.min(synthesisIntervalMs, Math.max(1, Math.floor(maxStallMs / 2)));
+}
+
+export async function runDependencySynthesisTick(deps: DependencySynthesisDeps): Promise<void> {
+	const cfg = deps.pipelineCfg.structural;
+	const maxStallMs = cfg.synthesisMaxStallMs;
+	const extractionStats = deps.getExtractionStats?.();
+	const now = Date.now();
+	const workerProgressAt = extractionStats?.lastProgressAt;
+	const durableProgressAt =
+		maxStallMs > 0 &&
+		shouldLoadDurableExtractionProgress(
+			now,
+			workerProgressAt,
+			durableExtractionProgressFreshnessMs(cfg.synthesisIntervalMs, maxStallMs),
+		)
+			? loadLatestExtractionProgressAt(deps.accessor, deps.agentId)
+			: undefined;
+	const lastProgressAt = maxStallMs > 0 ? resolveExtractionProgressAt(workerProgressAt, durableProgressAt) : undefined;
+	if (!shouldRunDependencySynthesis(now, lastProgressAt, maxStallMs)) {
+		logger.debug("dependency-synthesis", "Skipping tick while extraction pipeline is stalled", {
+			stalledMs: now - (lastProgressAt ?? 0),
+			maxStallMs,
+			pending: extractionStats?.pending,
+		});
+		return;
+	}
+
+	const stale = deps.accessor.withReadDb((db) => findStaleEntities(db, deps.agentId, cfg.dependencyBatchSize));
 	if (stale.length === 0) return;
 
 	for (const entity of stale) {
-		const facts = deps.accessor.withReadDb((db) => loadFacts(db, entity.id, cfg.synthesisMaxFacts));
+		const facts = deps.accessor.withReadDb((db) => loadFacts(db, deps.agentId, entity.id, cfg.synthesisMaxFacts));
 
 		if (facts.length === 0) {
-			markSynthesized(deps.accessor, entity.id);
+			markSynthesized(deps.accessor, deps.agentId, entity.id);
 			continue;
 		}
 
-		const candidates = deps.accessor.withReadDb((db) => loadTopEntities(db, entity.id, cfg.synthesisTopEntities));
+		const candidates = deps.accessor.withReadDb((db) =>
+			loadTopEntities(db, deps.agentId, entity.id, cfg.synthesisTopEntities),
+		);
 
 		if (candidates.length === 0) {
-			markSynthesized(deps.accessor, entity.id);
+			markSynthesized(deps.accessor, deps.agentId, entity.id);
 			continue;
 		}
 
-		const existing = deps.accessor.withReadDb((db) => loadExistingTargets(db, entity.id));
+		const existing = deps.accessor.withReadDb((db) => loadExistingTargets(db, deps.agentId, entity.id));
 
 		const prompt = buildSynthesisPrompt(entity, facts, candidates, existing);
 
@@ -250,12 +332,12 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 			const canonical = result.target.trim().toLowerCase().replace(/\s+/g, " ");
 			const target = deps.accessor.withReadDb(
 				(db) =>
-					db.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1").get(canonical) as
-						| { id: string }
-						| undefined,
+					db
+						.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? AND id != ? LIMIT 1")
+						.get(canonical, deps.agentId, entity.id) as { id: string } | undefined,
 			);
 
-			if (!target || target.id === entity.id) continue;
+			if (!target) continue;
 
 			try {
 				const normalized = result.reason.trim();
@@ -266,7 +348,7 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 				upsertDependency(deps.accessor, {
 					sourceEntityId: entity.id,
 					targetEntityId: target.id,
-					agentId: AGENT_ID,
+					agentId: deps.agentId,
 					dependencyType: result.dep_type as DependencyType,
 					strength: 0.5,
 					confidence: 0.5,
@@ -285,7 +367,7 @@ async function tick(deps: DependencySynthesisDeps): Promise<void> {
 		// Only mark synthesized if there was nothing to do or at least one
 		// upsert succeeded — otherwise the entity retries on the next tick.
 		if (results.length === 0 || created > 0) {
-			markSynthesized(deps.accessor, entity.id);
+			markSynthesized(deps.accessor, deps.agentId, entity.id);
 		}
 
 		if (created > 0) {
@@ -315,7 +397,7 @@ export function startDependencySynthesisWorker(deps: DependencySynthesisDeps): D
 	timer = setInterval(() => {
 		if (!running || ticking) return;
 		ticking = true;
-		tick(deps)
+		runDependencySynthesisTick(deps)
 			.catch((e) => {
 				logger.warn("dependency-synthesis", "Tick error", {
 					error: String(e),
@@ -331,6 +413,7 @@ export function startDependencySynthesisWorker(deps: DependencySynthesisDeps): D
 		intervalMs: interval,
 		topEntities: deps.pipelineCfg.structural.synthesisTopEntities,
 		maxFacts: deps.pipelineCfg.structural.synthesisMaxFacts,
+		maxStallMs: deps.pipelineCfg.structural.synthesisMaxStallMs,
 	});
 
 	return {

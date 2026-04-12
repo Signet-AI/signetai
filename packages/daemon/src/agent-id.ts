@@ -21,6 +21,11 @@ export function resolveAgentId(body: { agentId?: string; sessionKey?: string }):
 	return "default";
 }
 
+export function resolveDaemonAgentId(env: NodeJS.ProcessEnv = process.env): string {
+	const agentId = env.SIGNET_AGENT_ID?.trim();
+	return resolveAgentId({ agentId });
+}
+
 function parseScopeValue(value: unknown): string | null {
 	if (typeof value !== "string") return null;
 	const text = value.trim();

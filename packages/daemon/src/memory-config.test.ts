@@ -806,6 +806,107 @@ describe("loadPipelineConfig", () => {
 		expect(result.feedback.decayIntervalSessions).toBe(25);
 	});
 
+	it("loads dependency synthesis stall circuit breaker config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: 90_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(90_000);
+	});
+
+	it("preserves zero as the dependency synthesis stall disable value", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: 0,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(0);
+	});
+
+	it("preserves zero through dependencySynthesis.maxStallMs alias", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					dependencySynthesis: {
+						maxStallMs: 0,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(0);
+	});
+
+	it("does not let negative dependency synthesis stall config disable the gate", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: -1,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(DEFAULT_PIPELINE_V2.structural.synthesisMaxStallMs);
+	});
+
+	it("supports dependencySynthesis.maxStallMs as a config alias", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					dependencySynthesis: {
+						maxStallMs: 120_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(120_000);
+	});
+
+	it("supports dependencySynthesis.synthesisMaxStallMs as a config alias", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					dependencySynthesis: {
+						synthesisMaxStallMs: 120_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(120_000);
+	});
+
+	it("prefers structural.synthesisMaxStallMs over dependencySynthesis.maxStallMs", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: 60_000,
+					},
+					dependencySynthesis: {
+						maxStallMs: 300_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(60_000);
+	});
+
 	it("treats non-boolean truthy values as defaults (not coerced)", () => {
 		const result = loadPipelineConfig({
 			memory: {

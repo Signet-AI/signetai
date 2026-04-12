@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::constants::{DEFAULT_EMBEDDING_DIMENSIONS, DEFAULT_HYBRID_ALPHA, DEFAULT_PORT};
 
+const MAX_SYNTHESIS_STALL_MS: u64 = 24 * 60 * 60_000;
+
 // ---------------------------------------------------------------------------
 // Daemon runtime config (resolved from env + agent.yaml)
 // ---------------------------------------------------------------------------
@@ -133,7 +135,7 @@ fn load_manifest(base: &Path) -> Result<Option<AgentManifest>, ManifestLoadError
             return Err(ManifestLoadError::Recoverable(format!(
                 "failed to read {}: {err}",
                 path.to_string_lossy()
-            )))
+            )));
         }
     };
     let raw: serde_yml::Value = serde_yml::from_str(&content)
@@ -161,10 +163,7 @@ fn parse_manifest_result(content: &str) -> Result<AgentManifest, String> {
     parse_manifest_from_raw(content, &raw)
 }
 
-fn parse_manifest_from_raw(
-    content: &str,
-    raw: &serde_yml::Value,
-) -> Result<AgentManifest, String> {
+fn parse_manifest_from_raw(content: &str, raw: &serde_yml::Value) -> Result<AgentManifest, String> {
     let manifest: AgentManifest =
         serde_yml::from_str(content).map_err(|err| format!("manifest shape error: {err}"))?;
     normalize_manifest(manifest, raw)
@@ -185,6 +184,7 @@ fn normalize_manifest(
     normalize_pipeline_worker(pipeline, raw_pipeline);
     normalize_pipeline_reranker(pipeline, raw_pipeline);
     normalize_pipeline_synthesis(pipeline, raw_pipeline)?;
+    normalize_pipeline_structural(pipeline, raw_pipeline);
     Ok(manifest)
 }
 
@@ -290,10 +290,24 @@ fn normalize_pipeline_worker(pipeline: &mut PipelineV2Config, raw: Option<&serde
     }
 }
 
-fn normalize_pipeline_reranker(
-    pipeline: &mut PipelineV2Config,
-    raw: Option<&serde_yml::Value>,
-) {
+fn normalize_pipeline_structural(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
+    let structural_max_stall_ms = raw
+        .and_then(|value| raw_child(value, "structural"))
+        .and_then(|value| raw_u64(value, "synthesisMaxStallMs"));
+    let dependency_synthesis_max_stall_ms = raw
+        .and_then(|value| raw_child(value, "dependencySynthesis"))
+        .and_then(|value| {
+            // raw_u64 rejects negative YAML integers, preserving the default
+            // instead of treating them as the zero-disable sentinel.
+            raw_u64(value, "maxStallMs").or_else(|| raw_u64(value, "synthesisMaxStallMs"))
+        });
+    let synthesis_max_stall_ms = structural_max_stall_ms.or(dependency_synthesis_max_stall_ms);
+    if let Some(value) = synthesis_max_stall_ms {
+        pipeline.structural.synthesis_max_stall_ms = value.min(MAX_SYNTHESIS_STALL_MS);
+    }
+}
+
+fn normalize_pipeline_reranker(pipeline: &mut PipelineV2Config, raw: Option<&serde_yml::Value>) {
     let nested = raw
         .and_then(|value| raw_child(value, "reranker"))
         .and_then(|value| raw_child(value, "useExtractionModel"))
@@ -332,23 +346,19 @@ fn normalize_pipeline_synthesis(
         .and_then(|value| raw_string(value, "model"));
     let endpoint = raw
         .and_then(|value| raw_child(value, "synthesis"))
-        .and_then(|value| {
-            raw_string(value, "endpoint").or_else(|| raw_string(value, "base_url"))
-        });
+        .and_then(|value| raw_string(value, "endpoint").or_else(|| raw_string(value, "base_url")));
     let timeout = raw
         .and_then(|value| raw_child(value, "synthesis"))
         .and_then(|value| raw_u64(value, "timeout"));
     let provider_won = provider.is_some();
 
-    pipeline.synthesis.provider = provider
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            if inherits_extraction {
-                extraction.provider.clone()
-            } else {
-                fallback.provider.clone()
-            }
-        });
+    pipeline.synthesis.provider = provider.map(ToOwned::to_owned).unwrap_or_else(|| {
+        if inherits_extraction {
+            extraction.provider.clone()
+        } else {
+            fallback.provider.clone()
+        }
+    });
     pipeline.synthesis.model = model.map(ToOwned::to_owned).unwrap_or_else(|| {
         if provider_won {
             default_pipeline_model(&pipeline.synthesis.provider).to_string()
@@ -472,7 +482,14 @@ fn is_valid_env_key(key: &str) -> bool {
 fn is_pipeline_provider(value: &str) -> bool {
     matches!(
         value,
-        "none" | "ollama" | "claude-code" | "opencode" | "codex" | "anthropic" | "openrouter" | "command"
+        "none"
+            | "ollama"
+            | "claude-code"
+            | "opencode"
+            | "codex"
+            | "anthropic"
+            | "openrouter"
+            | "command"
     )
 }
 
@@ -612,8 +629,8 @@ impl Default for EmbeddingConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        network_mode_from_bind, parse_manifest, parse_manifest_result, resolve_network_binding,
-        should_fail_fast_for_manifest_error_context, PipelineV2Config,
+        PipelineV2Config, network_mode_from_bind, parse_manifest, parse_manifest_result,
+        resolve_network_binding, should_fail_fast_for_manifest_error_context,
     };
 
     #[test]
@@ -963,6 +980,78 @@ memory:
             .expect("pipeline config");
         assert_eq!(flat_pipeline.worker.max_load_per_cpu, 0.55);
         assert_eq!(flat_pipeline.worker.overload_backoff_ms, 42_000);
+    }
+
+    #[test]
+    fn structural_synthesis_max_stall_ms_parses_zero() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    structural:
+      synthesisMaxStallMs: 0
+"#,
+        )
+        .expect("parse manifest");
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(pipeline.structural.synthesis_max_stall_ms, 0);
+    }
+
+    #[test]
+    fn structural_synthesis_max_stall_ms_clamps_to_24_hours() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    structural:
+      synthesisMaxStallMs: 9999999999999
+"#,
+        )
+        .expect("parse manifest");
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(pipeline.structural.synthesis_max_stall_ms, 24 * 60 * 60_000);
+    }
+
+    #[test]
+    fn dependency_synthesis_max_stall_ms_alias_loads_structural_stall_gate() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    dependencySynthesis:
+      maxStallMs: 120000
+"#,
+        )
+        .expect("parse manifest");
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(pipeline.structural.synthesis_max_stall_ms, 120_000);
+    }
+
+    #[test]
+    fn dependency_synthesis_synthesis_max_stall_ms_alias_loads_structural_stall_gate() {
+        let manifest = parse_manifest(
+            r#"
+memory:
+  pipelineV2:
+    dependencySynthesis:
+      synthesisMaxStallMs: 120000
+"#,
+        )
+        .expect("parse manifest");
+        let pipeline = manifest
+            .memory
+            .and_then(|memory| memory.pipeline_v2)
+            .expect("pipeline config");
+        assert_eq!(pipeline.structural.synthesis_max_stall_ms, 120_000);
     }
 
     #[test]
@@ -1628,6 +1717,7 @@ pub struct StructuralConfig {
     pub synthesis_interval_ms: u64,
     pub synthesis_top_entities: usize,
     pub synthesis_max_facts: usize,
+    pub synthesis_max_stall_ms: u64,
 }
 
 impl Default for StructuralConfig {
@@ -1641,6 +1731,7 @@ impl Default for StructuralConfig {
             synthesis_interval_ms: 60_000,
             synthesis_top_entities: 20,
             synthesis_max_facts: 10,
+            synthesis_max_stall_ms: 30 * 60_000,
         }
     }
 }

@@ -20,7 +20,8 @@ import { type StructuralClassifyHandle, startStructuralClassifyWorker } from "./
 import { type StructuralDependencyHandle, startStructuralDependencyWorker } from "./structural-dependency";
 import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
-import { type WorkerHandle, type WorkerStats, startWorker } from "./worker";
+import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
+
 
 export { enqueueExtractionJob } from "./worker";
 export type { WorkerStats } from "./worker";
@@ -115,6 +116,7 @@ export function startPipeline(
 	embeddingCfg: EmbeddingConfig,
 	fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	searchCfg: { alpha: number; top_k: number; min_score: number },
+	agentId: string,
 	providerTracker?: ProviderTracker,
 	analytics?: AnalyticsCollector,
 	telemetry?: TelemetryCollector,
@@ -193,8 +195,21 @@ export function startPipeline(
 		if (!dependencySynthesisHandle && pipelineCfg.structural.synthesisEnabled) {
 			dependencySynthesisHandle = startDependencySynthesisWorker({
 				accessor,
+				agentId,
 				provider,
 				pipelineCfg,
+				getExtractionStats: () => {
+					const stats: WorkerStats | undefined = workerHandle?.stats;
+					if (!stats) return undefined;
+					const { lastProgressAt, pending } = stats;
+					return {
+						lastProgressAt,
+						pending,
+					} satisfies WorkerProgressStats;
+				},
+				// NOTE: The extraction worker is a singleton — its stats are
+				// global, not per-agent. The stall gate measures overall
+				// extraction health rather than agent-specific progress.
 			});
 		}
 	}

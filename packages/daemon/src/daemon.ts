@@ -25,7 +25,7 @@ import {
 import { watch } from "chokidar";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { resolveAgentId } from "./agent-id";
+import { resolveAgentId, resolveDaemonAgentId } from "./agent-id";
 import {
 	type TokenRole,
 	type TokenScope,
@@ -2132,6 +2132,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			memoryCfg.embedding,
 			fetchEmbedding,
 			memoryCfg.search,
+			resolveDaemonAgentId(),
 			providerTracker,
 			analyticsCollector,
 			telemetry,

@@ -186,6 +186,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 		synthesisIntervalMs: 60_000,
 		synthesisTopEntities: 20,
 		synthesisMaxFacts: 10,
+		synthesisMaxStallMs: 30 * 60_000,
 		supersessionEnabled: true,
 		supersessionSweepEnabled: true,
 		supersessionSemanticFallback: true,
@@ -255,7 +256,13 @@ class MemoryConfigValidationError extends Error {}
 
 function clampPositive(raw: unknown, min: number, max: number, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+	// Bounds are inclusive; a few config fields intentionally use 0 as a disable sentinel.
 	return Math.max(min, Math.min(max, raw));
+}
+
+function clampNonNegative(raw: unknown, max: number, fallback: number): number {
+	if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return fallback;
+	return Math.min(max, raw);
 }
 
 function parseOptionalPositive(raw: unknown, min: number, max: number): number | undefined {
@@ -391,6 +398,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const synthesisRaw = raw.synthesis as Record<string, unknown> | undefined;
 	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
 	const structuralRaw = raw.structural as Record<string, unknown> | undefined;
+	const dependencySynthesisRaw = raw.dependencySynthesis as Record<string, unknown> | undefined;
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
 	const writeGateRaw = raw.writeGate as Record<string, unknown> | undefined;
@@ -842,6 +850,13 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				d.structural.synthesisTopEntities,
 			),
 			synthesisMaxFacts: clampPositive(structuralRaw?.synthesisMaxFacts, 3, 50, d.structural.synthesisMaxFacts),
+			synthesisMaxStallMs: clampNonNegative(
+				structuralRaw?.synthesisMaxStallMs ??
+					dependencySynthesisRaw?.maxStallMs ??
+					dependencySynthesisRaw?.synthesisMaxStallMs,
+				24 * 60 * 60_000,
+				d.structural.synthesisMaxStallMs,
+			),
 			supersessionEnabled: resolveBool(structuralRaw?.supersessionEnabled, undefined, d.structural.supersessionEnabled),
 			supersessionSweepEnabled: resolveBool(
 				structuralRaw?.supersessionSweepEnabled,

@@ -485,6 +485,29 @@ from extracted facts and uses them to boost search relevance.
 | `boostTimeoutMs` | `500` | 50-5000 ms | Timeout for graph lookup during search |
 
 
+### Structural Analysis (`structural`)
+
+Structural workers classify extracted facts into entity aspects, extract
+direct entity dependencies from facts, and synthesize cross-entity
+dependency edges from the existing graph.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `enabled` | `true` | — | Enable structural classification and dependency workers |
+| `classifyBatchSize` | `8` | 1-20 | Max facts per entity classification call |
+| `dependencyBatchSize` | `5` | 1-10 | Max stale entities or dependency jobs per worker tick |
+| `pollIntervalMs` | `10000` | 2000-120000 ms | Structural job polling interval |
+| `synthesisEnabled` | `true` | — | Enable cross-entity dependency synthesis |
+| `synthesisIntervalMs` | `60000` | 10000-600000 ms | Dependency synthesis polling interval |
+| `synthesisTopEntities` | `20` | 5-100 | Candidate entities considered per synthesis call |
+| `synthesisMaxFacts` | `10` | 3-50 | Facts included for the focal entity |
+| `synthesisMaxStallMs` | `1800000` | 0-86400000 ms | Pause dependency synthesis when extraction has made no successful progress for this long; set `0` to disable the circuit breaker |
+
+The aliases `dependencySynthesis.maxStallMs` and
+`dependencySynthesis.synthesisMaxStallMs` are accepted for
+`structural.synthesisMaxStallMs`.
+
+
 ### Hints (`hints`)
 
 Prospective indexing generates hypothetical future queries at write
