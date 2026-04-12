@@ -181,6 +181,7 @@ async fn tick(
 
         let results = parse_results(&raw.text);
         let mut created = 0usize;
+        let agent_id_owned = agent_id.to_string();
 
         for result in &results {
             let canonical = result.target.trim().to_lowercase();
@@ -198,7 +199,7 @@ async fn tick(
 
             let src = entity.id.clone();
             let tgt = target_id;
-            let agent_id = agent_id.to_string();
+            let agent_id = agent_id_owned.clone();
             let dep_type = result.dep_type.clone();
             // Mirror TS normalization: trim before fallback check so whitespace-only
             // model output doesn't bypass the related_to reason enforcement.
