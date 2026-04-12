@@ -890,6 +890,23 @@ describe("loadPipelineConfig", () => {
 		expect(result.structural.synthesisMaxStallMs).toBe(120_000);
 	});
 
+	it("prefers structural.synthesisMaxStallMs over dependencySynthesis.maxStallMs", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					structural: {
+						synthesisMaxStallMs: 60_000,
+					},
+					dependencySynthesis: {
+						maxStallMs: 300_000,
+					},
+				},
+			},
+		});
+
+		expect(result.structural.synthesisMaxStallMs).toBe(60_000);
+	});
+
 	it("treats non-boolean truthy values as defaults (not coerced)", () => {
 		const result = loadPipelineConfig({
 			memory: {

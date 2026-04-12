@@ -279,7 +279,7 @@ export async function runDependencySynthesisTick(deps: DependencySynthesisDeps):
 	const lastProgressAt = maxStallMs > 0 ? resolveExtractionProgressAt(workerProgressAt, durableProgressAt) : undefined;
 	if (!shouldRunDependencySynthesis(now, lastProgressAt, maxStallMs)) {
 		logger.debug("dependency-synthesis", "Skipping tick while extraction pipeline is stalled", {
-			stalledMs: now - lastProgressAt,
+			stalledMs: now - (lastProgressAt ?? 0),
 			maxStallMs,
 			pending: extractionStats?.pending,
 		});
