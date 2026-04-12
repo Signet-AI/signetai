@@ -212,6 +212,7 @@ export interface PipelineExtractionConfig {
 	readonly endpoint?: string;
 	readonly timeout: number;
 	readonly minConfidence: number;
+	readonly structuredOutput?: boolean;
 	readonly command?: PipelineCommandConfig;
 	readonly escalation?: PipelineEscalationConfig;
 	readonly rateLimit?: ProviderRateLimitConfig;
