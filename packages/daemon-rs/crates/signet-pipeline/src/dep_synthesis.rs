@@ -392,6 +392,7 @@ mod tests {
             .expect("query succeeded");
         assert!(result.is_some());
         let ts = result.unwrap();
+        // 2026-04-12T00:01:00Z = 1775952060 epoch seconds * 1000
         assert_eq!(ts, 1_775_952_060_000);
         handle.abort();
     }
@@ -442,6 +443,7 @@ mod tests {
             .expect("query succeeded");
         assert!(result.is_some());
         let ts = result.unwrap();
+        // 2026-04-12T00:01:00+00:00 = 1775952060 epoch seconds * 1000
         assert_eq!(ts, 1_775_952_060_000);
         handle.abort();
     }
