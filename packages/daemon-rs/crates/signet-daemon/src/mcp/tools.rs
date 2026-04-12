@@ -77,6 +77,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
                     "agent_id": { "type": "string", "description": "Agent id scope (requires matching session_key for non-default)" },
                     "visibility": { "type": "string", "enum": ["global", "private", "archived"], "description": "Memory visibility (requires session_key for non-default)" },
                     "scope": { "type": "string", "description": "Optional scope partition key (requires session_key when set)" },
+                    "pinned": { "type": "boolean", "description": "Pin this memory — prevents decay, bypasses 0.95^days aging" },
                 },
                 "required": ["content"],
             }),
@@ -115,6 +116,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
                     "content": { "type": "string", "description": "New content" },
                     "importance": { "type": "number" },
                     "tags": { "type": "array", "items": { "type": "string" } },
+                    "pinned": { "type": "boolean", "description": "Pin or unpin this memory" },
                 },
                 "required": ["id"],
             }),
@@ -465,6 +467,7 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let pinned = args.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
     if session_key.is_none() && (visibility != "global" || scope.is_some()) {
         return ToolCallResult::error(
             "non-default visibility/scope requires session_key".to_string(),
@@ -497,7 +500,7 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
                 why: None,
                 project: None,
                 importance,
-                pinned: false,
+                pinned,
                 source_type: None,
                 source_id: None,
                 idempotency_key: None,
@@ -719,6 +722,7 @@ mod tests {
         assert!(props.contains_key("agent_id"));
         assert!(props.contains_key("visibility"));
         assert!(props.contains_key("scope"));
+        assert!(props.contains_key("pinned"));
     }
 
     #[test]
