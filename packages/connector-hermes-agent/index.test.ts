@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HermesAgentConnector } from "./src/index.js";
@@ -11,6 +11,7 @@ const originalEnv = {
 	SIGNET_AGENT_ID: process.env.SIGNET_AGENT_ID,
 	SIGNET_AGENT_WORKSPACE: process.env.SIGNET_AGENT_WORKSPACE,
 	SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
+	SIGNET_SKIP_AGENT_REGISTER: process.env.SIGNET_SKIP_AGENT_REGISTER,
 };
 
 let tmpRoot = "";
@@ -37,6 +38,7 @@ beforeEach(() => {
 	delete process.env.SIGNET_AGENT_WORKSPACE;
 	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
 	delete process.env.SIGNET_DAEMON_URL;
+	process.env.SIGNET_SKIP_AGENT_REGISTER = "1";
 });
 
 afterEach(() => {
@@ -45,6 +47,7 @@ afterEach(() => {
 	restoreEnv("HERMES_HOME");
 	restoreEnv("SIGNET_AGENT_ID");
 	restoreEnv("SIGNET_DAEMON_URL");
+	restoreEnv("SIGNET_SKIP_AGENT_REGISTER");
 	if (tmpRoot) {
 		rmSync(tmpRoot, { recursive: true, force: true });
 	}
@@ -134,6 +137,27 @@ describe("HermesAgentConnector.install()", () => {
 		expect(result.configsPatched).toContain(join(hermesHome, ".env"));
 		expect(envContent).toContain("SIGNET_AGENT_ID=dot");
 		expect(envContent).toContain(`SIGNET_AGENT_WORKSPACE=${join(tmpRoot, "agents", "dot")}`);
+	});
+});
+
+describe("Hermes Agent bundled plugin", () => {
+	it("advertises canonical Signet memory tool names", () => {
+		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
+
+		expect(plugin).toContain('"name": "memory_search"');
+		expect(plugin).toContain('"name": "memory_store"');
+		expect(plugin).toContain('"name": "memory_get"');
+		expect(plugin).toContain('"name": "memory_list"');
+		expect(plugin).not.toContain('"name": "signet_search"');
+		expect(plugin).toContain('if tool_name in ("memory_search", "recall", "signet_search")');
+	});
+
+	it("does not force agentId into explicit recall requests", () => {
+		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
+
+		expect(client).toContain("if agent_scoped and self._agent_id:");
+		expect(client).toContain('body["agentId"] = self._agent_id');
+		expect(client).not.toContain('"agentId": self._agent_id,\\n        }\\n        if min_score');
 	});
 });
 
