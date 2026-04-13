@@ -39,6 +39,13 @@ Environment variables:
 | `memory_forget` | Soft-delete a memory |
 | `recall` / `remember` | Compatibility aliases for search/store |
 
+`memory_store` exposes the full Signet remember surface, including:
+
+- `content`, `type`, `importance`, `tags`, `pinned`, and `project`
+- `hints` for prospective recall hints and alternate phrasings
+- `transcript` for lossless source text alongside the saved memory
+- `structured.entities`, `structured.aspects`, and `structured.hints` for callers that already extracted graph-ready memory metadata
+
 ## How It Works
 
 The plugin bridges Hermes Agent's memory lifecycle to the Signet daemon:
