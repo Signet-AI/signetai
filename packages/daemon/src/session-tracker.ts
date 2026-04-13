@@ -36,7 +36,9 @@ const CLEANUP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const WARN_BEFORE_MS = 30 * 60 * 1000; // warn 30 min before expiry
 
 const sessions = new Map<string, SessionClaim>();
-const bypassedSessions = new Set<string>();
+/** Key → expiresAt timestamp. Entries without a matching session claim are
+ *  evicted by `cleanupStaleSessions` once their TTL elapses. */
+const bypassedSessions = new Map<string, number>();
 /** Sessions that have already received an expiry warning — avoid per-hook spam. */
 const warnedSessions = new Set<string>();
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
@@ -148,14 +150,18 @@ export function getSessionPath(sessionKey: string): RuntimePath | undefined {
 // ---------------------------------------------------------------------------
 
 /** Enable bypass for a session — hooks return empty no-op responses. */
-export function bypassSession(sessionKey: string, opts?: { readonly allowUnknown?: boolean }): boolean {
+export function bypassSession(
+	sessionKey: string,
+	opts?: { readonly allowUnknown?: boolean; readonly ttlMs?: number },
+): boolean {
 	const key = normalizeSessionKey(sessionKey);
 	if (!sessions.has(key) && opts?.allowUnknown !== true) {
 		logger.warn("session-tracker", "Bypass requested for unknown session", { sessionKey: key });
 		return false;
 	}
-	bypassedSessions.add(key);
-	logger.info("session-tracker", "Session bypassed", { sessionKey: key });
+	const ttl = opts?.ttlMs ?? STALE_SESSION_MS;
+	bypassedSessions.set(key, Date.now() + ttl);
+	logger.debug("session-tracker", "Session bypassed", { sessionKey: key });
 	return true;
 }
 
@@ -164,17 +170,24 @@ export function unbypassSession(sessionKey: string): void {
 	const key = normalizeSessionKey(sessionKey);
 	const removed = bypassedSessions.delete(key);
 	if (removed) {
-		logger.info("session-tracker", "Session bypass removed", { sessionKey: key });
+		logger.debug("session-tracker", "Session bypass removed", { sessionKey: key });
 	}
 }
 
 /** Check whether a session is currently bypassed. */
 export function isSessionBypassed(sessionKey: string): boolean {
-	return bypassedSessions.has(normalizeSessionKey(sessionKey));
+	const key = normalizeSessionKey(sessionKey);
+	const expiresAt = bypassedSessions.get(key);
+	if (expiresAt === undefined) return false;
+	if (Date.now() > expiresAt) {
+		bypassedSessions.delete(key);
+		return false;
+	}
+	return true;
 }
 
-/** Get the set of all bypassed session keys. */
-export function getBypassedSessionKeys(): ReadonlySet<string> {
+/** Get all bypassed session keys with their expiry timestamps. */
+export function getBypassedSessionKeys(): ReadonlyMap<string, number> {
 	return bypassedSessions;
 }
 
@@ -195,7 +208,7 @@ export function getActiveSessions(): readonly SessionInfo[] {
 			runtimePath: claim.runtimePath,
 			claimedAt: claim.claimedAt,
 			expiresAt: new Date(claim.expiresAt).toISOString(),
-			bypassed: bypassedSessions.has(key),
+			bypassed: isSessionBypassed(key),
 		});
 	}
 
@@ -243,7 +256,7 @@ export function renewSession(sessionKey: string): string | null {
 }
 
 /**
- * Remove expired session claims.
+ * Remove expired session claims and expired bypass-only entries.
  */
 function cleanupStaleSessions(): void {
 	const now = Date.now();
@@ -263,12 +276,25 @@ function cleanupStaleSessions(): void {
 		}
 	}
 
+	for (const [key, expiresAt] of bypassedSessions) {
+		if (now > expiresAt) {
+			bypassedSessions.delete(key);
+			cleaned++;
+		}
+	}
+
 	if (cleaned > 0) {
 		logger.info("session-tracker", "Cleaned stale sessions", {
 			cleaned,
 			remaining: sessions.size,
+			bypassOnly: bypassedSessions.size,
 		});
 	}
+}
+
+/** Exposed for tests — runs the cleanup cycle synchronously. */
+export function runStaleCleanup(): void {
+	cleanupStaleSessions();
 }
 
 /** Start periodic stale-session cleanup. */
