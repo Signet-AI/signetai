@@ -3,6 +3,8 @@ import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
 
+const MEMORY_RECALL_TIMEOUT_MS = 30_000;
+
 interface MemoryDeps {
 	readonly ensureDaemonForSecrets: () => Promise<boolean>;
 	readonly secretApiCall: (
@@ -164,21 +166,26 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
 			const spinner = ora("Searching memories...").start();
-			const { ok, data } = await deps.secretApiCall("POST", "/api/memory/recall", {
-				query,
-				keywordQuery: options.keywordQuery,
-				limit: options.limit,
-				project: options.project,
-				type: options.type,
-				tags: options.tags,
-				who: options.who,
-				pinned: options.pinned === true ? true : undefined,
-				importance_min: options.importanceMin,
-				since: options.since,
-				until: options.until,
-				expand: options.expand === true ? true : undefined,
-				...(options.agent ? { agentId: options.agent } : {}),
-			});
+			const { ok, data } = await deps.secretApiCall(
+				"POST",
+				"/api/memory/recall",
+				{
+					query,
+					keywordQuery: options.keywordQuery,
+					limit: options.limit,
+					project: options.project,
+					type: options.type,
+					tags: options.tags,
+					who: options.who,
+					pinned: options.pinned === true ? true : undefined,
+					importance_min: options.importanceMin,
+					since: options.since,
+					until: options.until,
+					expand: options.expand === true ? true : undefined,
+					...(options.agent ? { agentId: options.agent } : {}),
+				},
+				MEMORY_RECALL_TIMEOUT_MS,
+			);
 
 			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
 			if (!ok || typeof err === "string") {

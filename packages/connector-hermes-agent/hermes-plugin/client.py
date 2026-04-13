@@ -25,6 +25,7 @@ _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 3850
 _TIMEOUT_SECS = 5
 _LONG_TIMEOUT_SECS = 15
+_RECALL_TIMEOUT_SECS = 30
 
 
 def _sanitize(value: str) -> str:
@@ -195,6 +196,7 @@ class SignetClient:
                 "agentId": self._agent_id,
                 "project": project,
             },
+            timeout=_LONG_TIMEOUT_SECS,
         )
 
     def session_end(
@@ -360,7 +362,7 @@ class SignetClient:
         if agent_scoped and self._agent_id:
             body["agentId"] = self._agent_id
 
-        result = self._post("/api/memory/recall", body)
+        result = self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)
         if (
             result
             and score_min is not None

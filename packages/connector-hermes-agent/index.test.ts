@@ -159,6 +159,14 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(client).toContain('body["agentId"] = self._agent_id');
 		expect(client).not.toContain('"agentId": self._agent_id,\\n        }\\n        if min_score');
 	});
+
+	it("uses longer timeouts for recall paths", () => {
+		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
+
+		expect(client).toContain("_RECALL_TIMEOUT_SECS = 30");
+		expect(client).toContain('timeout=_LONG_TIMEOUT_SECS,');
+		expect(client).toContain('self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)');
+	});
 });
 
 describe("HermesAgentConnector.uninstall()", () => {
