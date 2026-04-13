@@ -1717,7 +1717,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Detect whether a 4xx error body indicates an unknown/unregistered
  * agent.  Checks Zod-style `issues[].path` first (structured), then
- * falls back to substring matching on the raw body text.
+ * falls back to an exact `"unknown agent"` substring check.
  */
 function isAgentRejection(body: string, agent: string | undefined): boolean {
 	if (!agent) return false;
@@ -1733,7 +1733,7 @@ function isAgentRejection(body: string, agent: string | undefined): boolean {
 		// empty
 	}
 	const lower = body.toLowerCase();
-	return lower.includes("unknown agent") || (lower.includes("agent") && lower.includes("not found"));
+	return lower.includes("unknown agent");
 }
 
 function parseOpenCodeTokens(value: unknown): OpenCodeTokens | undefined {
@@ -2202,6 +2202,17 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						if (retryParsed) return retryParsed;
 					}
 					const ollamaFallback = await tryOllamaFallback(prompt, opts, "agent-not-found-retry-failed");
+					if (ollamaFallback) return ollamaFallback;
+					return buildOpenCodeFallbackResponse();
+				}
+				// Concurrent sibling: another caller already disabled the agent
+				// but this request was in-flight with the old body.  Treat as
+				// soft failure — fall back instead of throwing.
+				if (!agentSupported && isAgentRejection(body, cfg.agent)) {
+					logger.warn("pipeline", "OpenCode agent rejection on already-disabled agent; falling back", {
+						status: res.status,
+					});
+					const ollamaFallback = await tryOllamaFallback(prompt, opts, "concurrent-agent-rejection");
 					if (ollamaFallback) return ollamaFallback;
 					return buildOpenCodeFallbackResponse();
 				}
