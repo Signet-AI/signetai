@@ -768,6 +768,39 @@ describe("createOpenCodeProvider", () => {
 		expect(capturedBody.agent).toBeUndefined();
 	});
 
+	it("generate() retries without agent on agent-not-found 4xx", async () => {
+		let callCount = 0;
+		let retryBody: Record<string, unknown> = {};
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				callCount++;
+				return Response.json({
+					id: `ses_agent_fallback_${callCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			const parsed = JSON.parse(init?.body as string);
+			if (parsed.agent) {
+				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
+			}
+			retryBody = parsed;
+			return Response.json(openCodeResponse("recovered"));
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			model: "google/gemini-2.5-flash",
+		});
+		const result = await provider.generate("extract this");
+
+		expect(result).toBe("recovered");
+		expect(retryBody.agent).toBeUndefined();
+	});
+
 	it("generate() omits format field when enableStructuredOutput is false", async () => {
 		let capturedBody: Record<string, unknown> = {};
 		mockFetch(async (url, init) => {

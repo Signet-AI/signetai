@@ -1969,13 +1969,14 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	}
 
 	let structuredOutputSupported = cfg.enableStructuredOutput !== false;
+	let agentSupported = !!cfg.agent;
 
 	function buildMessageBody(prompt: string, structured?: boolean): string {
 		const body: Record<string, unknown> = {
 			parts: [{ type: "text", text: prompt }],
 			model: { providerID, modelID },
 		};
-		if (cfg.agent) {
+		if (agentSupported && cfg.agent) {
 			body.agent = cfg.agent;
 		}
 		// Per-call system override does not re-inflate the signet-pipeline
@@ -2153,6 +2154,31 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						sessionId: retrySid,
 					});
 					const ollamaFallback = await tryOllamaFallback(prompt, opts, "post-response-malformed-after-http-retry");
+					if (ollamaFallback) return ollamaFallback;
+					return buildOpenCodeFallbackResponse();
+				}
+				// Agent not registered — user upgraded without re-running
+				// `signet install`. Disable agent and retry without it.
+				if (agentSupported && body.includes(cfg.agent ?? "")) {
+					logger.warn("pipeline", "OpenCode rejected pipeline agent; retrying without agent", {
+						status: res.status,
+						agent: cfg.agent,
+					});
+					agentSupported = false;
+					sessionId = null;
+					const retrySid = await createSession();
+					sessionId = retrySid;
+					const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: buildMessageBody(prompt, true),
+						signal: controller.signal,
+					});
+					if (retryRes.ok) {
+						const retryParsed = await parsePostResponse(retryRes, retrySid);
+						if (retryParsed) return retryParsed;
+					}
+					const ollamaFallback = await tryOllamaFallback(prompt, opts, "agent-not-found-retry-failed");
 					if (ollamaFallback) return ollamaFallback;
 					return buildOpenCodeFallbackResponse();
 				}
