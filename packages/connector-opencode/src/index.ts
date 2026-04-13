@@ -195,7 +195,7 @@ export class OpenCodeConnector extends BaseConnector {
 	readonly name = "OpenCode";
 	readonly harnessId = "opencode";
 
-	private getOpenCodePath(): string {
+	protected getOpenCodePath(): string {
 		return join(homedir(), ".config", "opencode");
 	}
 
@@ -277,6 +277,9 @@ export class OpenCodeConnector extends BaseConnector {
 		// Register Signet MCP server in OpenCode config
 		this.registerMcpServer(opencodePath);
 
+		// Register pipeline agent for lightweight extraction sessions
+		this.registerPipelineAgent(opencodePath);
+
 		// Symlink skills directory
 		const skillsSource = join(expandedBasePath, "skills");
 		const skillsDest = join(opencodePath, "skills");
@@ -313,6 +316,7 @@ export class OpenCodeConnector extends BaseConnector {
 		this.migrateFromLegacy(opencodePath);
 		this.removePlugin(opencodePath);
 		this.removeMcpServer(opencodePath);
+		this.removePipelineAgent(opencodePath);
 
 		return { filesRemoved };
 	}
@@ -521,6 +525,64 @@ export class OpenCodeConnector extends BaseConnector {
 				}
 				atomicWriteJson(configPath, config);
 			}
+		}
+	}
+
+	private static readonly PIPELINE_AGENT_KEY = "signet-pipeline";
+
+	private static readonly PIPELINE_AGENT_CONFIG: JsonObject = {
+		prompt:
+			"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.",
+		permission: { "*": "deny" },
+		hidden: true,
+		steps: 1,
+		mode: "all",
+	};
+
+	private registerPipelineAgent(opencodePath: string): void {
+		for (const configPath of this.getConfigCandidates(opencodePath)) {
+			if (!existsSync(configPath)) continue;
+
+			let config: JsonObject;
+			try {
+				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
+			} catch {
+				continue;
+			}
+
+			const agents = isJsonObject(config.agent) ? { ...(config.agent as JsonObject) } : {};
+			agents[OpenCodeConnector.PIPELINE_AGENT_KEY] = { ...OpenCodeConnector.PIPELINE_AGENT_CONFIG };
+			config.agent = agents;
+			atomicWriteJson(configPath, config);
+			return;
+		}
+	}
+
+	private removePipelineAgent(opencodePath: string): void {
+		for (const configPath of this.getConfigCandidates(opencodePath)) {
+			if (!existsSync(configPath)) continue;
+
+			let config: JsonObject;
+			try {
+				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
+			} catch {
+				continue;
+			}
+
+			if (!isJsonObject(config.agent)) continue;
+
+			const agents = config.agent as JsonObject;
+			if (!(OpenCodeConnector.PIPELINE_AGENT_KEY in agents)) continue;
+
+			const { [OpenCodeConnector.PIPELINE_AGENT_KEY]: _, ...rest } = agents;
+			if (Object.keys(rest).length === 0) {
+				const { agent: __, ...configWithoutAgent } = config;
+				atomicWriteJson(configPath, configWithoutAgent);
+			} else {
+				config.agent = rest;
+				atomicWriteJson(configPath, config);
+			}
+			return;
 		}
 	}
 
