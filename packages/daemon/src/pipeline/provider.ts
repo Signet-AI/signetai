@@ -17,6 +17,7 @@ import {
 	type LlmGenerateResult,
 	type LlmProvider,
 	OPENCODE_PIPELINE_AGENT,
+	OPENCODE_PIPELINE_SYSTEM_PROMPT,
 	type PipelineExtractionConfig,
 	type ProviderRateLimitConfig,
 } from "@signet/core";
@@ -1977,9 +1978,11 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		if (cfg.agent) {
 			body.agent = cfg.agent;
 		}
+		// Per-call system override does not re-inflate the signet-pipeline
+		// agent's stripped context.  Measured: ~4,844 input tokens total
+		// vs ~47k with the default agent (90% reduction).
 		if (structured && structuredOutputSupported) {
-			body.system =
-				"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";
+			body.system = OPENCODE_PIPELINE_SYSTEM_PROMPT;
 			body.format = {
 				type: "json_schema",
 				schema: OPENCODE_JSON_SCHEMA,

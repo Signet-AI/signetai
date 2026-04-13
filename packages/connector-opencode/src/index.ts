@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { OPENCODE_PIPELINE_AGENT, expandHome, hasValidIdentity } from "@signet/core";
+import { OPENCODE_PIPELINE_AGENT, OPENCODE_PIPELINE_SYSTEM_PROMPT, expandHome, hasValidIdentity } from "@signet/core";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 
 // ============================================================================
@@ -266,6 +266,7 @@ export class OpenCodeConnector extends BaseConnector {
 		const pluginFilePath = this.getPluginFilePath(opencodePath);
 		writeFileSync(pluginFilePath, PLUGIN_BUNDLE);
 		filesWritten.push(pluginFilePath);
+		this.ensureConfigFile(opencodePath);
 		this.registerPlugin(opencodePath);
 
 		// Generate AGENTS.md from identity files
@@ -529,8 +530,7 @@ export class OpenCodeConnector extends BaseConnector {
 	}
 
 	private static readonly PIPELINE_AGENT_CONFIG: JsonObject = {
-		prompt:
-			"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.",
+		prompt: OPENCODE_PIPELINE_SYSTEM_PROMPT,
 		permission: { "*": "deny" },
 		hidden: true,
 		steps: 1,
@@ -554,14 +554,6 @@ export class OpenCodeConnector extends BaseConnector {
 			atomicWriteJson(configPath, config);
 			return;
 		}
-
-		// No existing config found — create opencode.json so the agent is
-		// available on fresh installs where no config file exists yet.
-		const fallback = join(opencodePath, "opencode.json");
-		mkdirSync(opencodePath, { recursive: true });
-		atomicWriteJson(fallback, {
-			agent: { [OPENCODE_PIPELINE_AGENT]: { ...OpenCodeConnector.PIPELINE_AGENT_CONFIG } },
-		});
 	}
 
 	private removePipelineAgent(opencodePath: string): void {
@@ -590,6 +582,14 @@ export class OpenCodeConnector extends BaseConnector {
 			}
 			return;
 		}
+	}
+
+	private ensureConfigFile(opencodePath: string): void {
+		for (const candidate of this.getConfigCandidates(opencodePath)) {
+			if (existsSync(candidate)) return;
+		}
+		mkdirSync(opencodePath, { recursive: true });
+		atomicWriteJson(join(opencodePath, "opencode.json"), {});
 	}
 
 	private getConfigCandidates(opencodePath: string): string[] {

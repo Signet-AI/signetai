@@ -207,6 +207,15 @@ describe("OpenCodeConnector — pipeline agent registration", () => {
 
 		const configPath = join(freshOcPath, "opencode.json");
 		const config = JSON.parse(readFileSync(configPath, "utf-8"));
+		// ensureConfigFile creates the empty file before registerPlugin,
+		// registerMcpServer, and registerPipelineAgent — all three entries
+		// must be present to prove the ordering fix works.
 		expect(config.agent["signet-pipeline"]).toEqual(EXPECTED_AGENT);
+		expect(config.mcp).toBeDefined();
+		expect(config.mcp.signet).toBeDefined();
+		expect(config.mcp.signet.type).toBe("local");
+		expect(config.mcp.signet.enabled).toBe(true);
+		expect(Array.isArray(config.plugin)).toBe(true);
+		expect(config.plugin.length).toBeGreaterThan(0);
 	});
 });
