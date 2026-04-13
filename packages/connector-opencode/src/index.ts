@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { expandHome, hasValidIdentity } from "@signet/core";
+import { OPENCODE_PIPELINE_AGENT, expandHome, hasValidIdentity } from "@signet/core";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 
 // ============================================================================
@@ -528,8 +528,6 @@ export class OpenCodeConnector extends BaseConnector {
 		}
 	}
 
-	private static readonly PIPELINE_AGENT_KEY = "signet-pipeline";
-
 	private static readonly PIPELINE_AGENT_CONFIG: JsonObject = {
 		prompt:
 			"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.",
@@ -551,11 +549,19 @@ export class OpenCodeConnector extends BaseConnector {
 			}
 
 			const agents = isJsonObject(config.agent) ? { ...(config.agent as JsonObject) } : {};
-			agents[OpenCodeConnector.PIPELINE_AGENT_KEY] = { ...OpenCodeConnector.PIPELINE_AGENT_CONFIG };
+			agents[OPENCODE_PIPELINE_AGENT] = { ...OpenCodeConnector.PIPELINE_AGENT_CONFIG };
 			config.agent = agents;
 			atomicWriteJson(configPath, config);
 			return;
 		}
+
+		// No existing config found — create opencode.json so the agent is
+		// available on fresh installs where no config file exists yet.
+		const fallback = join(opencodePath, "opencode.json");
+		mkdirSync(opencodePath, { recursive: true });
+		atomicWriteJson(fallback, {
+			agent: { [OPENCODE_PIPELINE_AGENT]: { ...OpenCodeConnector.PIPELINE_AGENT_CONFIG } },
+		});
 	}
 
 	private removePipelineAgent(opencodePath: string): void {
@@ -572,9 +578,9 @@ export class OpenCodeConnector extends BaseConnector {
 			if (!isJsonObject(config.agent)) continue;
 
 			const agents = config.agent as JsonObject;
-			if (!(OpenCodeConnector.PIPELINE_AGENT_KEY in agents)) continue;
+			if (!(OPENCODE_PIPELINE_AGENT in agents)) continue;
 
-			const { [OpenCodeConnector.PIPELINE_AGENT_KEY]: _, ...rest } = agents;
+			const { [OPENCODE_PIPELINE_AGENT]: _, ...rest } = agents;
 			if (Object.keys(rest).length === 0) {
 				const { agent: __, ...configWithoutAgent } = config;
 				atomicWriteJson(configPath, configWithoutAgent);

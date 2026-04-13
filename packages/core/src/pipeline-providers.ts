@@ -1,3 +1,5 @@
+export const OPENCODE_PIPELINE_AGENT = "signet-pipeline";
+
 export const PIPELINE_PROVIDER_CHOICES = [
 	"none",
 	"ollama",

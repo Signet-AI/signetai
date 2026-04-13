@@ -197,4 +197,16 @@ describe("OpenCodeConnector — pipeline agent registration", () => {
 		const config = JSON.parse(readFileSync(configPath, "utf-8"));
 		expect(config.agent["signet-pipeline"]).toEqual(EXPECTED_AGENT);
 	});
+
+	it("install creates opencode.json when no config file exists", async () => {
+		writeIdentity(tmpRoot);
+		const freshOcPath = join(tmpRoot, ".config", "opencode-fresh");
+		mkdirSync(freshOcPath, { recursive: true });
+
+		await new TestableConnector(freshOcPath).install(tmpRoot);
+
+		const configPath = join(freshOcPath, "opencode.json");
+		const config = JSON.parse(readFileSync(configPath, "utf-8"));
+		expect(config.agent["signet-pipeline"]).toEqual(EXPECTED_AGENT);
+	});
 });

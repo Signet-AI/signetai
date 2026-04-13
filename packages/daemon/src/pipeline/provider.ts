@@ -16,6 +16,7 @@ import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	type LlmGenerateResult,
 	type LlmProvider,
+	OPENCODE_PIPELINE_AGENT,
 	type PipelineExtractionConfig,
 	type ProviderRateLimitConfig,
 } from "@signet/core";
@@ -1548,6 +1549,7 @@ export interface OpenCodeProviderConfig {
 	readonly baseUrl: string;
 	readonly model: string;
 	readonly defaultTimeoutMs: number;
+	readonly agent?: string;
 	readonly enableOllamaFallback: boolean;
 	readonly ollamaFallbackModel?: string;
 	readonly ollamaFallbackBaseUrl: string;
@@ -1559,6 +1561,7 @@ const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
 	baseUrl: "http://127.0.0.1:4096",
 	model: "anthropic/claude-haiku-4-5-20251001",
 	defaultTimeoutMs: 60000,
+	agent: OPENCODE_PIPELINE_AGENT,
 	enableOllamaFallback: true,
 	ollamaFallbackModel: undefined,
 	ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
@@ -1970,8 +1973,10 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		const body: Record<string, unknown> = {
 			parts: [{ type: "text", text: prompt }],
 			model: { providerID, modelID },
-			agent: "signet-pipeline",
 		};
+		if (cfg.agent) {
+			body.agent = cfg.agent;
+		}
 		if (structured && structuredOutputSupported) {
 			body.system =
 				"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";

@@ -83,6 +83,7 @@ export type {
 } from "./types";
 export {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
+	OPENCODE_PIPELINE_AGENT,
 	PIPELINE_PROVIDER_CHOICES,
 	defaultPipelineModel,
 	isPipelineProvider,

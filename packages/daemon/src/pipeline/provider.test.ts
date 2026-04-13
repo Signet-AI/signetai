@@ -741,6 +741,33 @@ describe("createOpenCodeProvider", () => {
 		expect(capturedBody.agent).toBe("signet-pipeline");
 	});
 
+	it("generate() omits agent when config.agent is empty", async () => {
+		let capturedBody: Record<string, unknown> = {};
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_no_agent",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			capturedBody = JSON.parse(init?.body as string);
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			model: "google/gemini-2.5-flash",
+			agent: "",
+		});
+		await provider.generate("extract this");
+
+		expect(capturedBody.agent).toBeUndefined();
+	});
+
 	it("generate() omits format field when enableStructuredOutput is false", async () => {
 		let capturedBody: Record<string, unknown> = {};
 		mockFetch(async (url, init) => {
