@@ -9,6 +9,7 @@ const originalEnv = {
 	HERMES_REPO: process.env.HERMES_REPO,
 	HERMES_HOME: process.env.HERMES_HOME,
 	SIGNET_AGENT_ID: process.env.SIGNET_AGENT_ID,
+	SIGNET_AGENT_WORKSPACE: process.env.SIGNET_AGENT_WORKSPACE,
 	SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
 };
 
@@ -32,6 +33,8 @@ beforeEach(() => {
 	delete process.env.HERMES_HOME;
 	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
 	delete process.env.SIGNET_AGENT_ID;
+	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
+	delete process.env.SIGNET_AGENT_WORKSPACE;
 	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
 	delete process.env.SIGNET_DAEMON_URL;
 });
@@ -114,6 +117,23 @@ describe("HermesAgentConnector.install()", () => {
 		expect(existsSync(envPath)).toBe(true);
 		const envContent = await Bun.file(envPath).text();
 		expect(envContent).toContain("SIGNET_DAEMON_URL=http://127.0.0.1:9999");
+	});
+
+	it("derives SIGNET_AGENT_WORKSPACE for named agents", async () => {
+		const hermesRepo = join(tmpRoot, "hermes-agent");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		mkdirSync(join(tmpRoot, "agents", "dot"), { recursive: true });
+		const hermesHome = join(tmpRoot, ".hermes");
+		process.env.HERMES_REPO = hermesRepo;
+		process.env.HERMES_HOME = hermesHome;
+		process.env.SIGNET_AGENT_ID = "dot";
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		const envContent = await Bun.file(join(hermesHome, ".env")).text();
+		expect(result.configsPatched).toContain(join(hermesHome, ".env"));
+		expect(envContent).toContain("SIGNET_AGENT_ID=dot");
+		expect(envContent).toContain(`SIGNET_AGENT_WORKSPACE=${join(tmpRoot, "agents", "dot")}`);
 	});
 });
 

@@ -199,7 +199,18 @@ export class HermesAgentConnector extends BaseConnector {
 			}
 			// Always write SIGNET_AGENT_ID — never allow the plugin to fall back to the
 			// shared "default" scope (AGENTS.md: never hardcode "default" for scoped paths).
-			signetVars.SIGNET_AGENT_ID = (process.env.SIGNET_AGENT_ID?.trim() || "hermes-agent").replace(/[\r\n]+/g, "");
+			const signetAgentId = (process.env.SIGNET_AGENT_ID?.trim() || "hermes-agent").replace(/[\r\n]+/g, "");
+			signetVars.SIGNET_AGENT_ID = signetAgentId;
+
+			const explicitAgentWorkspace = process.env.SIGNET_AGENT_WORKSPACE?.trim();
+			if (explicitAgentWorkspace) {
+				signetVars.SIGNET_AGENT_WORKSPACE = expandHome(explicitAgentWorkspace).replace(/[\r\n]+/g, "");
+			} else if (signetAgentId && signetAgentId !== "hermes-agent" && signetAgentId !== "default") {
+				const agentWorkspace = join(expandedBasePath, "agents", signetAgentId);
+				if (existsSync(agentWorkspace)) {
+					signetVars.SIGNET_AGENT_WORKSPACE = agentWorkspace;
+				}
+			}
 
 			// Persist auth token so Hermes can reach a non-localhost daemon.
 			// Warn if absent and SIGNET_DAEMON_URL points to a remote host.
@@ -276,7 +287,7 @@ export class HermesAgentConnector extends BaseConnector {
 			try {
 				let envContent = readFileSync(envPath, "utf-8");
 				let changed = false;
-				for (const key of ["SIGNET_DAEMON_URL", "SIGNET_AGENT_ID"]) {
+				for (const key of ["SIGNET_DAEMON_URL", "SIGNET_AGENT_ID", "SIGNET_AGENT_WORKSPACE"]) {
 					const pattern = new RegExp(`^${key}=.*\n?`, "gm");
 					if (pattern.test(envContent)) {
 						envContent = envContent.replace(pattern, "");
