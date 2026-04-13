@@ -1970,6 +1970,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		const body: Record<string, unknown> = {
 			parts: [{ type: "text", text: prompt }],
 			model: { providerID, modelID },
+			agent: "signet-pipeline",
 		};
 		if (structured && structuredOutputSupported) {
 			body.system =
