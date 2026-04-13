@@ -683,9 +683,13 @@ Hermes lifecycle.
 
 | Tool | Description |
 |------|-------------|
-| `signet_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
-| `signet_store` | Store a fact/preference/decision with auto entity extraction |
-| `signet_profile` | Broad overview of stored memories and working context |
+| `memory_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
+| `memory_store` | Store a fact/preference/decision with auto entity extraction |
+| `memory_get` | Retrieve a memory by ID |
+| `memory_list` | List memories with optional filters |
+| `memory_modify` | Edit an existing memory |
+| `memory_forget` | Soft-delete a memory |
+| `recall` / `remember` | Compatibility aliases for search/store |
 
 ### Supported hooks
 

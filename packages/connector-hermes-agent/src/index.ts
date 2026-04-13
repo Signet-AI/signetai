@@ -133,6 +133,48 @@ function isProviderConfigured(hermesHome: string): boolean {
 	);
 }
 
+async function ensureNamedAgentRegistered(
+	daemonUrl: string,
+	agentId: string,
+	warnings: string[],
+): Promise<void> {
+	if (!agentId || agentId === "default" || agentId === "hermes-agent") return;
+	if (process.env.SIGNET_SKIP_AGENT_REGISTER === "1") return;
+
+	const baseUrl = daemonUrl.replace(/\/+$/, "");
+	try {
+		const getResp = await fetch(`${baseUrl}/api/agents/${encodeURIComponent(agentId)}`, {
+			signal: AbortSignal.timeout(1_000),
+		});
+		if (getResp.ok) return;
+	} catch {
+		// Daemon may be offline; the POST below will produce the user-facing warning.
+	}
+
+	try {
+		const resp = await fetch(`${baseUrl}/api/agents`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				name: agentId,
+				read_policy: "shared",
+				policy_group: null,
+			}),
+			signal: AbortSignal.timeout(1_000),
+		});
+		if (!resp.ok) {
+			const body = await resp.text();
+			warnings.push(`Could not register Signet agent '${agentId}' with shared memory policy: ${body.slice(0, 200)}`);
+		}
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		warnings.push(
+			`Could not register Signet agent '${agentId}' because the daemon was unreachable. ` +
+				`Run: signet agent create ${agentId} --memory shared (${msg})`,
+		);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Connector
 // ---------------------------------------------------------------------------
@@ -186,6 +228,11 @@ export class HermesAgentConnector extends BaseConnector {
 
 		// 2. Write env config for the Signet daemon connection
 		const envPath = join(hermesHome, ".env");
+		let configuredSignetAgentId = "hermes-agent";
+		const configuredDaemonUrl = (process.env.SIGNET_DAEMON_URL?.trim() || "http://localhost:3850").replace(
+			/[\r\n]+/g,
+			"",
+		);
 		try {
 			let envContent = "";
 			if (existsSync(envPath)) {
@@ -200,6 +247,7 @@ export class HermesAgentConnector extends BaseConnector {
 			// Always write SIGNET_AGENT_ID — never allow the plugin to fall back to the
 			// shared "default" scope (AGENTS.md: never hardcode "default" for scoped paths).
 			const signetAgentId = (process.env.SIGNET_AGENT_ID?.trim() || "hermes-agent").replace(/[\r\n]+/g, "");
+			configuredSignetAgentId = signetAgentId;
 			signetVars.SIGNET_AGENT_ID = signetAgentId;
 
 			const explicitAgentWorkspace = process.env.SIGNET_AGENT_WORKSPACE?.trim();
@@ -246,6 +294,8 @@ export class HermesAgentConnector extends BaseConnector {
 			const msg = e instanceof Error ? e.message : String(e);
 			warnings.push(`Failed to update .env: ${msg}`);
 		}
+
+		await ensureNamedAgentRegistered(configuredDaemonUrl, configuredSignetAgentId, warnings);
 
 		// 3. Provide guidance on completing setup
 		if (!isProviderConfigured(hermesHome)) {
