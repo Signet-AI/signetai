@@ -110,6 +110,12 @@ fn build_signet_system_prompt() -> &'static str {
     "[signet active]\n\
 You have persistent memory managed by Signet.\n\
 \n\
+Memory Check Loop:\n\
+- when to use: before commands, file edits, architectural choices, bug fixes, continuation work, user-preference-sensitive answers, or anything that may depend on prior decisions\n\
+- procedure: check injected context first, then run 1-3 targeted recalls with mcp__signet__memory_search; expand session lineage with mcp__signet__lcm_expand or known entities with mcp__signet__knowledge_expand and mcp__signet__knowledge_expand_session when needed\n\
+- pitfalls: do not treat a missing automatic memory match as proof no prior context exists; do not trust memory blindly when repo, files, or live system state can verify it; do not spam broad recalls for trivial self-contained prompts\n\
+- verification: before acting, know what context you found, what remains unknown, and whether it is safe to proceed\n\
+\n\
 Memory tools:\n\
 - mcp__signet__memory_search: search stored memories by keyword or meaning\n\
 - mcp__signet__lcm_expand: expand a session summary into its full lineage and linked memories\n\
@@ -812,6 +818,11 @@ fn build_prompt_recall_inject(metadata_header: &str, sources: &[String]) -> Stri
     let mut parts = vec![
         metadata_header.trim_end().to_string(),
         String::new(),
+        "## Memory Check".to_string(),
+        String::new(),
+        "Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with /recall or memory_search, then expand with lcm_expand or knowledge_expand when needed."
+            .to_string(),
+        String::new(),
         "## Relevant Memory".to_string(),
         String::new(),
     ];
@@ -820,11 +831,17 @@ fn build_prompt_recall_inject(metadata_header: &str, sources: &[String]) -> Stri
     parts.push(String::new());
 
     parts.push(
-        "if you need deeper history, use /recall or memory_search. if you learn something durable, save it with /remember or memory_store."
-            .to_string(),
+        "If you learn something durable, save it with /remember or memory_store.".to_string(),
     );
 
     format!("{}\n", parts.join("\n").trim_end())
+}
+
+fn build_no_strong_memory_match_inject(metadata_header: &str) -> String {
+    format!(
+        "{}\n\n## Memory Check\n\nNo strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions.\n",
+        metadata_header.trim_end()
+    )
 }
 
 pub async fn prompt_submit(
@@ -980,7 +997,7 @@ pub async fn prompt_submit(
         return (
             StatusCode::OK,
             Json(serde_json::json!({
-                "inject": metadata_header,
+                "inject": build_no_strong_memory_match_inject(&metadata_header),
                 "memoryCount": 0,
                 "queryTerms": query_terms,
             })),
@@ -1256,7 +1273,7 @@ pub async fn prompt_submit(
             }
 
             Ok(serde_json::json!({
-                "inject": metadata_header,
+                "inject": build_no_strong_memory_match_inject(&metadata_header),
                 "memoryCount": 0,
                 "queryTerms": query_terms_for_resp,
             }))
@@ -3122,10 +3139,16 @@ mod tests {
             body["engine"],
             serde_json::Value::String("temporal-fallback".to_string())
         );
+        assert!(inject.contains("## Memory Check"));
         assert!(inject.contains("## Relevant Memory"));
         assert!(inject.contains("[thread node-1]"));
-        assert!(inject.contains("prompt submit observability review now uses structured recall formatting"));
-        assert!(inject.contains("if you need deeper history, use /recall or memory_search"));
+        assert!(
+            inject.contains(
+                "prompt submit observability review now uses structured recall formatting"
+            )
+        );
+        assert!(inject.contains("Use the memories below as starting context before acting"));
+        assert!(inject.contains("run 1-3 targeted recalls with /recall or memory_search"));
         assert!(!inject.contains("[signet:recall"));
 
         drop(state);
@@ -3530,7 +3553,12 @@ Assistant: here's the checklist",
 
     #[test]
     fn build_signet_system_prompt_mentions_transcript_artifacts() {
-        assert!(build_signet_system_prompt().contains("linked summary and transcript artifacts"));
+        let prompt = build_signet_system_prompt();
+        assert!(prompt.contains("linked summary and transcript artifacts"));
+        assert!(prompt.contains("Memory Check Loop"));
+        assert!(prompt.contains("before commands, file edits, architectural choices"));
+        assert!(prompt.contains("run 1-3 targeted recalls with mcp__signet__memory_search"));
+        assert!(prompt.contains("missing automatic memory match as proof no prior context exists"));
     }
 
     #[test]

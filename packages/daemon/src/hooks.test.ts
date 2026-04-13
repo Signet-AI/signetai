@@ -26,6 +26,11 @@ describe("buildSignetSystemPrompt", () => {
 		expect(prompt).toContain("mcp__signet__secret_list");
 		expect(prompt).toContain("mcp__signet__secret_exec");
 		expect(prompt).toContain("linked summary and transcript artifacts");
+		expect(prompt).toContain("Memory Check Loop");
+		expect(prompt).toContain("before commands, file edits, architectural choices");
+		expect(prompt).toContain("run 1-3 targeted recalls with mcp__signet__memory_search");
+		expect(prompt).toContain("do not treat a missing automatic memory match as proof no prior context exists");
+		expect(prompt).toContain("before acting, know what context you found");
 	});
 });
 
@@ -337,9 +342,9 @@ describe("normalizeSessionTranscript", () => {
 
 describe("selectWithTokenBudget", () => {
 	const rows = [
-		{ content: "alpha ".repeat(50) },   // ~50 tokens
-		{ content: "beta ".repeat(50) },    // ~50 tokens
-		{ content: "gamma ".repeat(200) },  // ~200 tokens
+		{ content: "alpha ".repeat(50) }, // ~50 tokens
+		{ content: "beta ".repeat(50) }, // ~50 tokens
+		{ content: "gamma ".repeat(200) }, // ~200 tokens
 	];
 
 	it("selects rows up to the token budget", () => {

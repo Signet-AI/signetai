@@ -17,8 +17,8 @@ Hooks are HTTP endpoints exposed by the Signet [[daemon]]. Harnesses call them a
 
 | Hook | When | Purpose |
 |------|------|---------|
-| `session-start` | New session begins | Inject memories and identity into context |
-| `user-prompt-submit` | Before each user turn | Prefer structured recall, then temporal fallback, then transcript fallback when needed |
+| `session-start` | New session begins | Inject memories, identity, and the Memory Check Loop into context |
+| `user-prompt-submit` | Before each user turn | Inject lightweight per-turn Memory Check guidance plus structured, temporal, or transcript recall when needed |
 | `session-end` | Session finishes | Persist transcript lineage and queue session summary |
 | `pre-compaction` | Before context compaction | Get summary guidelines |
 | `compaction-complete` | After compaction | Save a first-class compaction artifact into the temporal DAG |
@@ -108,7 +108,12 @@ Called when a new agent session begins. Returns memories and context formatted f
 }
 ```
 
-The `inject` field is ready-to-use text for prepending to the system prompt. It includes identity, memories, and recent context formatted as markdown.
+The `inject` field is ready-to-use text for prepending to the system prompt. It includes identity, memories, recent context, and the Memory Check Loop formatted as markdown.
+
+The Memory Check Loop tells agents when prior context may matter, how to run
+1-3 targeted recalls, what pitfalls to avoid, and how to verify they are
+grounded before acting. It is intentionally behavioral prompt shaping, not a
+new hook schema or recall algorithm.
 
 ### Configuration
 
@@ -126,6 +131,31 @@ hooks:
 Memory scoring uses: `score = importance × (1 - recencyBias) + recency × recencyBias`
 
 where recency is `1 / (1 + age_in_days)`.
+
+---
+
+## User Prompt Submit Hook
+
+**`POST /api/hooks/user-prompt-submit`**
+
+Called before each user turn is handed to the model. Returns lightweight
+context for the current prompt.
+
+The hook always includes current date/time metadata and per-turn Memory Check
+guidance unless the session is bypassed. When automatic recall finds useful
+context, the response also includes a `## Relevant Memory` block. When no
+strong automatic match is found, the response says so explicitly and reminds
+the agent to run targeted Signet recall before acting if the request depends
+on prior context, preferences, project history, or unresolved work.
+
+Recall order is:
+
+1. structured memory recall,
+2. temporal thread-head fallback,
+3. transcript fallback.
+
+The guidance is meant to prevent agents from treating an empty automatic
+inject as proof that no prior context exists.
 
 ---
 
