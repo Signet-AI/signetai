@@ -830,7 +830,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 				d.procedural.enrichMinDescription,
 			),
 			reconcileIntervalMs: clampPositive(
-				proceduralRaw?.reconcileIntervalMs,p
+				proceduralRaw?.reconcileIntervalMs,
 				10000,
 				600000,
 				d.procedural.reconcileIntervalMs,
