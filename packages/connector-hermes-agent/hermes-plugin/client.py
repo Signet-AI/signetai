@@ -296,6 +296,9 @@ class SignetClient:
         memory_type: str = "",
         pinned: Optional[bool] = None,
         project: str = "",
+        hints: Optional[List[str]] = None,
+        transcript: str = "",
+        structured: Optional[Dict[str, Any]] = None,
         who: str = "hermes-agent",
     ) -> Optional[Dict[str, Any]]:
         """Store a memory via the daemon API."""
@@ -314,7 +317,13 @@ class SignetClient:
             body["pinned"] = pinned
         if project:
             body["project"] = project
-        return self._post("/api/memory/remember", body)
+        if hints:
+            body["hints"] = hints
+        if transcript:
+            body["transcript"] = transcript
+        if structured:
+            body["structured"] = structured
+        return self._post("/api/memory/remember", body, timeout=_LONG_TIMEOUT_SECS)
 
     def recall(
         self,

@@ -677,6 +677,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				importance: z.number().optional().describe("Importance score 0-1"),
 				tags: z.string().optional().describe("Comma-separated tags for categorization"),
 				pinned: z.boolean().optional().describe("Pin this memory — prevents decay, bypasses 0.95^days aging"),
+				hints: z
+					.array(z.string())
+					.optional()
+					.describe("Prospective recall hints and alternate phrasings for retrieving this memory later"),
 				transcript: z
 					.string()
 					.optional()
@@ -698,10 +702,15 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 						aspects: z
 							.array(
 								z.object({
-									entity: z.string(),
+									entityName: z.string(),
 									aspect: z.string(),
-									value: z.string(),
-									confidence: z.number().optional(),
+									attributes: z.array(
+										z.object({
+											content: z.string(),
+											confidence: z.number().optional(),
+											importance: z.number().optional(),
+										}),
+									),
 								}),
 							)
 							.optional(),
@@ -714,7 +723,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ content, type, importance, tags, transcript, structured, pinned }) => {
+		async ({ content, type, importance, tags, hints, transcript, structured, pinned }) => {
 			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
 			let body = content;
 			if (tags) {
@@ -726,6 +735,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				body: {
 					content: body,
 					importance,
+					hints,
 					transcript,
 					structured,
 					pinned,

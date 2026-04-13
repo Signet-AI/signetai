@@ -330,6 +330,42 @@ describe("createMcpServer", () => {
 			const body = JSON.parse(cap.body ?? "{}");
 			expect(body.pinned).toBe(true);
 		});
+
+		it("passes hints, transcript, and structured graph payloads through to remember", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(200, { id: "structured-1", hints_written: 2, structured: true }, cap);
+
+			await callTool(server, "memory_store", {
+				content: "Nicholai prefers Signet memory tools.",
+				hints: ["durable memory preference", "which memory tools should be used"],
+				transcript: "user: please use Signet memory tools only",
+				structured: {
+					entities: [
+						{
+							source: "Nicholai",
+							relationship: "prefers",
+							target: "Signet memory tools",
+							confidence: 0.95,
+						},
+					],
+					aspects: [
+						{
+							entityName: "Nicholai",
+							aspect: "memory preference",
+							attributes: [{ content: "prefers Signet memory tools", confidence: 0.95 }],
+						},
+					],
+					hints: ["Nicholai durable facts"],
+				},
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.hints).toEqual(["durable memory preference", "which memory tools should be used"]);
+			expect(body.transcript).toBe("user: please use Signet memory tools only");
+			expect(body.structured.entities[0].target).toBe("Signet memory tools");
+			expect(body.structured.aspects[0].entityName).toBe("Nicholai");
+			expect(body.structured.aspects[0].attributes[0].content).toBe("prefers Signet memory tools");
+		});
 	});
 
 	describe("memory_get", () => {

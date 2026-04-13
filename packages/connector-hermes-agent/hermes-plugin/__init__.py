@@ -69,6 +69,43 @@ MEMORY_SEARCH_SCHEMA = {
     },
 }
 
+STRUCTURED_ENTITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "source": {"type": "string", "description": "Source entity name."},
+        "sourceType": {"type": "string", "description": "Optional source entity type."},
+        "relationship": {"type": "string", "description": "Relationship from source to target."},
+        "target": {"type": "string", "description": "Target entity name."},
+        "targetType": {"type": "string", "description": "Optional target entity type."},
+        "confidence": {"type": "number", "description": "Optional confidence score 0-1."},
+    },
+    "required": ["source", "relationship", "target"],
+}
+
+STRUCTURED_ATTRIBUTE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "content": {"type": "string", "description": "Attribute or constraint text."},
+        "confidence": {"type": "number", "description": "Optional confidence score 0-1."},
+        "importance": {"type": "number", "description": "Optional importance score 0-1."},
+    },
+    "required": ["content"],
+}
+
+STRUCTURED_ASPECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entityName": {"type": "string", "description": "Entity the aspect belongs to."},
+        "aspect": {"type": "string", "description": "Aspect name, e.g. preference, workflow, constraint."},
+        "attributes": {
+            "type": "array",
+            "items": STRUCTURED_ATTRIBUTE_SCHEMA,
+            "description": "Facts, constraints, or attributes for this aspect.",
+        },
+    },
+    "required": ["entityName", "aspect", "attributes"],
+}
+
 MEMORY_STORE_SCHEMA = {
     "name": "memory_store",
     "description": "Save a new memory to Signet.",
@@ -81,6 +118,36 @@ MEMORY_STORE_SCHEMA = {
             "tags": {"type": "string", "description": "Comma-separated tags for categorization."},
             "pinned": {"type": "boolean", "description": "Pin this memory so it does not decay."},
             "project": {"type": "string", "description": "Optional project path. Defaults to the active Hermes Signet workspace."},
+            "hints": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Prospective recall hints and alternate phrasings for retrieving this memory later.",
+            },
+            "transcript": {
+                "type": "string",
+                "description": "Raw source text or conversation transcript to preserve alongside this memory.",
+            },
+            "structured": {
+                "type": "object",
+                "description": "Pre-extracted structured data. When provided, Signet can persist graph links and hints directly.",
+                "properties": {
+                    "entities": {
+                        "type": "array",
+                        "items": STRUCTURED_ENTITY_SCHEMA,
+                        "description": "Entity relationships to link to this memory.",
+                    },
+                    "aspects": {
+                        "type": "array",
+                        "items": STRUCTURED_ASPECT_SCHEMA,
+                        "description": "Entity aspects and attributes to persist for graph recall.",
+                    },
+                    "hints": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Prospective recall hints and alternate phrasings.",
+                    },
+                },
+            },
         },
         "required": ["content"],
     },
@@ -678,6 +745,17 @@ class SignetMemoryProvider(MemoryProvider):
                 return [t.strip() for t in value.split(",") if t.strip()]
             return [str(value).strip()] if str(value).strip() else None
 
+        def _string_list(value: Any) -> Optional[List[str]]:
+            if value is None or value == "":
+                return None
+            if isinstance(value, list):
+                items = [str(item).strip() for item in value if str(item).strip()]
+                return items or None
+            if isinstance(value, str):
+                stripped = value.strip()
+                return [stripped] if stripped else None
+            return None
+
         def _search(search_args: Dict[str, Any]) -> str:
             query = str(search_args.get("query", "")).strip()
             if not query:
@@ -714,6 +792,9 @@ class SignetMemoryProvider(MemoryProvider):
             if importance is None:
                 importance = 0.5
             importance = max(0.0, min(1.0, importance))
+            structured = store_args.get("structured")
+            if not isinstance(structured, dict):
+                structured = None
             result = self._client.remember(
                 content,
                 importance=importance,
@@ -721,6 +802,9 @@ class SignetMemoryProvider(MemoryProvider):
                 memory_type=str(store_args.get("type", "") or ""),
                 pinned=store_args.get("pinned") if isinstance(store_args.get("pinned"), bool) else None,
                 project=str(store_args.get("project", "") or self._project),
+                hints=_string_list(store_args.get("hints")),
+                transcript=str(store_args.get("transcript", "") or ""),
+                structured=structured,
                 who="hermes-agent",
             )
             if not result:

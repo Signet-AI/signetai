@@ -167,6 +167,25 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(client).toContain('timeout=_LONG_TIMEOUT_SECS,');
 		expect(client).toContain('self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)');
 	});
+
+	it("exposes the complete Signet memory_store schema", () => {
+		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
+		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
+
+		expect(plugin).toContain('"hints"');
+		expect(plugin).toContain('"transcript"');
+		expect(plugin).toContain('"structured"');
+		expect(plugin).toContain('"entityName"');
+		expect(plugin).toContain('"attributes"');
+		expect(plugin).toContain("Prospective recall hints");
+		expect(plugin).toContain('hints=_string_list(store_args.get("hints"))');
+		expect(plugin).toContain('transcript=str(store_args.get("transcript", "") or "")');
+		expect(plugin).toContain("structured=structured");
+		expect(client).toContain("hints: Optional[List[str]] = None");
+		expect(client).toContain('body["hints"] = hints');
+		expect(client).toContain('body["transcript"] = transcript');
+		expect(client).toContain('body["structured"] = structured');
+	});
 });
 
 describe("HermesAgentConnector.uninstall()", () => {
