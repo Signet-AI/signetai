@@ -20,6 +20,7 @@ import {
 	type ProviderRateLimitConfig,
 } from "@signet/core";
 import { logger } from "../logger";
+import { bypassSession, unbypassSession } from "../session-tracker";
 import { trimTrailingSlash } from "./url";
 
 // ---------------------------------------------------------------------------
@@ -1954,7 +1955,10 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		if (typeof id !== "string") {
 			throw new Error("OpenCode session response missing 'id' field");
 		}
-		logger.debug("pipeline", "OpenCode session created", { id });
+		// Bypass hooks for our own pipeline sessions so the OpenCode plugin
+		// does not trigger memory recall back to the daemon (circular loop).
+		bypassSession(id, { allowUnknown: true });
+		logger.debug("pipeline", "OpenCode session created", { id, bypassed: true });
 		return id;
 	}
 
@@ -2112,6 +2116,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					// Use createSession() (not getOrCreateSession()) so concurrent callers
 					// each get their own session, preventing message ordering issues from
 					// two callers POSTing to the same session ID simultaneously.
+					if (sessionId) unbypassSession(sessionId);
 					const retrySid = await createSession();
 					// Known: concurrent callers both writing sessionId here is a benign
 					// last-writer-wins race — each caller uses its own retrySid local for
@@ -2131,6 +2136,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				const body = consumedBody ?? (await res.text().catch(() => ""));
 				// Session expired/invalid — reset and retry once
 				if (res.status === 404 || res.status === 410) {
+					if (sessionId) unbypassSession(sessionId);
 					sessionId = null;
 					const retrySid = await getOrCreateSession();
 					const retryRes = await postMessage(retrySid);
@@ -2154,6 +2160,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			if (parsed) return parsed;
 
 			// Malformed successful payload — reset session and retry once
+			if (sessionId) unbypassSession(sessionId);
 			sessionId = null;
 			const retrySid = await getOrCreateSession();
 			const retryRes = await postMessage(retrySid);
@@ -2173,6 +2180,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					sessionId: retrySid,
 				});
 				structuredOutputSupported = false;
+				if (sessionId) unbypassSession(sessionId);
 				sessionId = null;
 				const fallbackSid = await createSession();
 				sessionId = fallbackSid;
