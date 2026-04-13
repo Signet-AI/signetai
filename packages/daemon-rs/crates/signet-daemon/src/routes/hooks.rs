@@ -839,7 +839,7 @@ fn build_prompt_recall_inject(metadata_header: &str, sources: &[String]) -> Stri
 
 fn build_no_strong_memory_match_inject(metadata_header: &str) -> String {
     format!(
-        "{}\n\n## Memory Check\n\nNo strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions.\n",
+        "{}\n\n## Memory Check\n\nNo strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions.\n\nIf you learn something durable, save it with /remember or memory_store.\n",
         metadata_header.trim_end()
     )
 }
@@ -2769,8 +2769,8 @@ mod tests {
 
     use super::{
         CHECKPOINT_MIN_DELTA, CompactionCompleteBody, PromptSubmitBody, SessionEndBody,
-        build_signet_system_prompt, compaction_complete, extract_delta,
-        normalize_session_transcript, parse_visibility, prompt_submit,
+        build_no_strong_memory_match_inject, build_signet_system_prompt, compaction_complete,
+        extract_delta, normalize_session_transcript, parse_visibility, prompt_submit,
         require_session_scope_for_write, resolve_audit_token, resolve_compaction_project,
         resolve_remember_agent, session_agent_id, session_end, session_transcript_content,
         strip_untrusted_metadata, upsert_session_transcript,
@@ -2793,6 +2793,16 @@ mod tests {
             }
             path.extension().and_then(|ext| ext.to_str()) == Some("md")
         })
+    }
+
+    #[test]
+    fn no_strong_memory_match_inject_keeps_save_hint() {
+        let inject = build_no_strong_memory_match_inject("# Current Date & Time\nnow\n");
+
+        assert!(inject.contains("## Memory Check"));
+        assert!(inject.contains("No strong automatic memory match was injected"));
+        assert!(inject.contains("run 1-3 targeted Signet recalls before executing commands"));
+        assert!(inject.contains("save it with /remember or memory_store"));
     }
 
     fn test_state(name: &str) -> (Arc<AppState>, tokio::task::JoinHandle<()>, TempDir) {

@@ -556,6 +556,8 @@ function buildNoStrongMemoryMatchInject(metadataHeader: string): string {
 ## Memory Check
 
 No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions.
+
+If you learn something durable, save it with /remember or memory_store.
 `;
 }
 
@@ -2523,6 +2525,8 @@ export async function handleUserPromptSubmit(
 		);
 	}
 
+	// `metadataHeader` is deliberately built before this try/catch so even
+	// recall failures can return the per-turn Memory Check guidance.
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const recallLimit = submitCfg.recallLimit ?? 10;

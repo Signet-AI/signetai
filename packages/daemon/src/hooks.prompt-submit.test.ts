@@ -133,6 +133,7 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(result.inject).toContain("## Memory Check");
 		expect(result.inject).toContain("No strong automatic memory match was injected");
 		expect(result.inject).toContain("run 1-3 targeted Signet recalls before executing commands");
+		expect(result.inject).toContain("save it with /remember or memory_store");
 		const submitCalls = infoMock.mock.calls.filter((call) => call[1] === "User prompt submit");
 		expect(submitCalls).toHaveLength(1);
 		const payload = submitCalls[0]?.[2];
@@ -311,10 +312,32 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(result.inject).toContain("Current Date & Time");
 		expect(result.inject).toContain("## Memory Check");
 		expect(result.inject).toContain("No strong automatic memory match was injected");
+		expect(result.inject).toContain("save it with /remember or memory_store");
 		expect(result.inject).not.toContain("[signet:recall");
 		const submitCalls = infoMock.mock.calls.filter((call) => call[1] === "User prompt submit");
 		expect(submitCalls).toHaveLength(1);
 		const payload = submitCalls[0]?.[2];
 		expect(payload?.engine).toBe("low-confidence");
+	});
+
+	it("returns Memory Check guidance when hybrid recall fails", async () => {
+		hybridRecallMock.mockRejectedValueOnce(new Error("synthetic recall failure"));
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "vscode-custom-agent",
+				userMessage: "show memory failure behavior",
+				sessionKey: "session-recall-failure",
+			},
+			makeDeps(),
+		);
+
+		expect(result.memoryCount).toBe(0);
+		expect(result.inject).toContain("Current Date & Time");
+		expect(result.inject).toContain("## Memory Check");
+		expect(result.inject).toContain("No strong automatic memory match was injected");
+		expect(result.inject).toContain("run 1-3 targeted Signet recalls before executing commands");
+		expect(result.inject).toContain("save it with /remember or memory_store");
+		expect(errorMock).toHaveBeenCalledTimes(1);
 	});
 });

@@ -146,7 +146,9 @@ guidance unless the session is bypassed. When automatic recall finds useful
 context, the response also includes a `## Relevant Memory` block. When no
 strong automatic match is found, the response says so explicitly and reminds
 the agent to run targeted Signet recall before acting if the request depends
-on prior context, preferences, project history, or unresolved work.
+on prior context, preferences, project history, or unresolved work. Both
+matched and no-strong-match paths also remind the agent to save durable facts
+with `/remember` or `memory_store`.
 
 Recall order is:
 
