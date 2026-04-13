@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	applyTokenBudget,
 	buildSignetSystemPrompt,
+	handleSessionStart,
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript,
@@ -31,6 +32,56 @@ describe("buildSignetSystemPrompt", () => {
 		expect(prompt).toContain("run 1-3 targeted recalls with mcp__signet__memory_search");
 		expect(prompt).toContain("do not treat a missing automatic memory match as proof no prior context exists");
 		expect(prompt).toContain("before acting, know what context you found");
+	});
+});
+
+describe("handleSessionStart multi-agent identity", () => {
+	let agentsDir = "";
+	let previousSignetPath: string | undefined;
+
+	beforeAll(() => {
+		previousSignetPath = process.env.SIGNET_PATH;
+		agentsDir = mkdtempSync(join(tmpdir(), "signet-hooks-agent-identity-"));
+	});
+
+	beforeEach(() => {
+		closeDbAccessor();
+		rmSync(agentsDir, { recursive: true, force: true });
+		mkdirSync(join(agentsDir, "agents", "dot"), { recursive: true });
+		process.env.SIGNET_PATH = agentsDir;
+		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
+		writeFileSync(join(agentsDir, "AGENTS.md"), "You are Rose.");
+		writeFileSync(join(agentsDir, "IDENTITY.md"), "name: Rose\nrole: Solvr Assistant\n");
+		writeFileSync(join(agentsDir, "agents", "dot", "AGENTS.md"), "You are Dot.");
+		writeFileSync(join(agentsDir, "agents", "dot", "IDENTITY.md"), 'You are Dorothy "Dot" Ashby.\n');
+	});
+
+	afterEach(() => {
+		closeDbAccessor();
+	});
+
+	afterAll(() => {
+		rmSync(agentsDir, { recursive: true, force: true });
+		if (previousSignetPath === undefined) {
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
+			return;
+		}
+		process.env.SIGNET_PATH = previousSignetPath;
+	});
+
+	it("loads agent-scoped identity files for session-start", async () => {
+		const result = await handleSessionStart({
+			harness: "hermes-agent",
+			sessionKey: `dot-test-${Date.now()}`,
+			agentId: "dot",
+			project: join(agentsDir, "agents", "dot"),
+			runtimePath: "plugin",
+		});
+
+		expect(result.identity.name).toBe('Dorothy "Dot" Ashby');
+		expect(result.inject).toContain("You are Dot.");
+		expect(result.inject).toContain('You are Dorothy "Dot" Ashby.');
+		expect(result.inject).not.toContain("You are Rose.");
 	});
 });
 

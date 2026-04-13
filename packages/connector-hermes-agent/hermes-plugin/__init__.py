@@ -13,6 +13,7 @@ Config:
   - SIGNET_HOST / SIGNET_PORT env vars (default: localhost:3850)
   - SIGNET_DAEMON_URL env var for full URL override
   - SIGNET_AGENT_ID env var for agent scoping (default: "hermes-agent")
+  - SIGNET_AGENT_WORKSPACE env var for the active named-agent workspace
 """
 
 from __future__ import annotations
@@ -102,6 +103,32 @@ PROFILE_SCHEMA = {
 }
 
 ALL_TOOL_SCHEMAS = [SEARCH_SCHEMA, STORE_SCHEMA, PROFILE_SCHEMA]
+
+
+def _sanitize_env(value: str) -> str:
+    return value.strip().replace("\r", "").replace("\n", "")
+
+
+def _resolve_agent_workspace(agent_id: str, kwargs: Dict[str, Any]) -> str:
+    """Resolve the project/workspace path sent to Signet hooks.
+
+    Named Signet agents can have their own workspace at
+    $SIGNET_PATH/agents/{agent_id}. Prefer that workspace so daemon
+    session-start can load the agent's scoped identity files.
+    """
+    explicit = _sanitize_env(os.environ.get("SIGNET_AGENT_WORKSPACE", ""))
+    if explicit:
+        return str(Path(explicit).expanduser())
+
+    signet_path = _sanitize_env(os.environ.get("SIGNET_PATH", ""))
+    agents_root = Path(signet_path).expanduser() if signet_path else Path.home() / ".agents"
+    if agent_id and agent_id != "default":
+        candidate = agents_root / "agents" / agent_id
+        if candidate.exists():
+            return str(candidate)
+
+    fallback = kwargs.get("cwd", kwargs.get("project", os.getcwd()))
+    return str(Path(str(fallback)).expanduser())
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +236,7 @@ class SignetMemoryProvider(MemoryProvider):
             return
 
         self._session_key = session_id or "hermes-default"
-        self._project = kwargs.get("cwd", kwargs.get("project", os.getcwd()))
+        self._project = _resolve_agent_workspace(agent_id, kwargs)
 
         # Call session-start hook — get identity + memories + inject
         result = self._client.session_start(

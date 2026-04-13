@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildAgentMemoryConfig, normalizeAgentRosterEntry } from "../agents";
+import { buildAgentMemoryConfig, getAgentIdentityFiles, normalizeAgentRosterEntry } from "../agents";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	readStaticIdentity,
@@ -105,6 +105,20 @@ describe("parseSimpleYaml", () => {
 });
 
 describe("agent roster helpers", () => {
+	test("resolves agent-local identity files before root fallbacks", () => {
+		mkdirSync(join(TMP, "agents", "dot"), { recursive: true });
+		writeFileSync(join(TMP, "AGENTS.md"), "root agents");
+		writeFileSync(join(TMP, "USER.md"), "root user");
+		writeFileSync(join(TMP, "agents", "dot", "AGENTS.md"), "dot agents");
+		writeFileSync(join(TMP, "agents", "dot", "IDENTITY.md"), "dot identity");
+
+		expect(getAgentIdentityFiles("dot", TMP)).toMatchObject({
+			"AGENTS.md": join(TMP, "agents", "dot", "AGENTS.md"),
+			"IDENTITY.md": join(TMP, "agents", "dot", "IDENTITY.md"),
+			"USER.md": join(TMP, "USER.md"),
+		});
+	});
+
 	test("normalizes canonical nested memory policies", () => {
 		expect(
 			normalizeAgentRosterEntry({

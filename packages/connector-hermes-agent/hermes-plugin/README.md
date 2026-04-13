@@ -25,6 +25,7 @@ Environment variables:
 - `SIGNET_DAEMON_URL` — Full daemon URL (default: `http://localhost:3850`)
 - `SIGNET_HOST` / `SIGNET_PORT` — Host and port separately
 - `SIGNET_AGENT_ID` — Agent scope identifier (default: `default`)
+- `SIGNET_AGENT_WORKSPACE` — Optional named-agent workspace path (for example `~/.agents/agents/dot`)
 
 ## Tools
 
