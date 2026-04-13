@@ -1714,6 +1714,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
+/**
+ * Detect whether a 4xx error body indicates an unknown/unregistered
+ * agent.  Checks Zod-style `issues[].path` first (structured), then
+ * falls back to substring matching on the raw body text.
+ */
+function isAgentRejection(body: string, agent: string | undefined): boolean {
+	if (!agent) return false;
+	try {
+		const parsed: unknown = JSON.parse(body);
+		if (isRecord(parsed)) {
+			const issues = Array.isArray(parsed.issues) ? parsed.issues : [];
+			if (issues.some((i): boolean => isRecord(i) && Array.isArray(i.path) && i.path[0] === "agent")) {
+				return true;
+			}
+		}
+	} catch {
+		// empty
+	}
+	const lower = body.toLowerCase();
+	return lower.includes("unknown agent") || (lower.includes("agent") && lower.includes("not found"));
+}
+
 function parseOpenCodeTokens(value: unknown): OpenCodeTokens | undefined {
 	if (!isRecord(value)) return undefined;
 
@@ -2159,15 +2181,15 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				}
 				// Agent not registered — user upgraded without re-running
 				// `signet install`. Disable agent and retry without it.
-				if (agentSupported && body.includes(cfg.agent ?? "")) {
+				// Guard: set agentSupported=false before async work so
+				// concurrent callers skip this branch immediately.
+				if (agentSupported && isAgentRejection(body, cfg.agent)) {
+					agentSupported = false;
 					logger.warn("pipeline", "OpenCode rejected pipeline agent; retrying without agent", {
 						status: res.status,
 						agent: cfg.agent,
 					});
-					agentSupported = false;
-					sessionId = null;
 					const retrySid = await createSession();
-					sessionId = retrySid;
 					const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -2175,6 +2197,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						signal: controller.signal,
 					});
 					if (retryRes.ok) {
+						sessionId = retrySid;
 						const retryParsed = await parsePostResponse(retryRes, retrySid);
 						if (retryParsed) return retryParsed;
 					}

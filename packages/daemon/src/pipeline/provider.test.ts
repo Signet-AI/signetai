@@ -768,14 +768,14 @@ describe("createOpenCodeProvider", () => {
 		expect(capturedBody.agent).toBeUndefined();
 	});
 
-	it("generate() retries without agent on agent-not-found 4xx", async () => {
-		let callCount = 0;
-		let retryBody: Record<string, unknown> = {};
+	it("generate() retries without agent on agent-not-found 4xx and stays disabled", async () => {
+		let sessionCount = 0;
+		let lastBody: Record<string, unknown> = {};
 		mockFetch(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
-				callCount++;
+				sessionCount++;
 				return Response.json({
-					id: `ses_agent_fallback_${callCount}`,
+					id: `ses_agent_fallback_${sessionCount}`,
 					slug: "test",
 					projectID: "p",
 					directory: "/tmp",
@@ -787,7 +787,7 @@ describe("createOpenCodeProvider", () => {
 			if (parsed.agent) {
 				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
 			}
-			retryBody = parsed;
+			lastBody = parsed;
 			return Response.json(openCodeResponse("recovered"));
 		});
 
@@ -795,10 +795,13 @@ describe("createOpenCodeProvider", () => {
 			baseUrl: "http://localhost:9999",
 			model: "google/gemini-2.5-flash",
 		});
-		const result = await provider.generate("extract this");
+		const first = await provider.generate("extract this");
+		expect(first).toBe("recovered");
+		expect(lastBody.agent).toBeUndefined();
 
-		expect(result).toBe("recovered");
-		expect(retryBody.agent).toBeUndefined();
+		const second = await provider.generate("extract that");
+		expect(second).toBe("recovered");
+		expect(lastBody.agent).toBeUndefined();
 	});
 
 	it("generate() omits format field when enableStructuredOutput is false", async () => {
