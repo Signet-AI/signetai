@@ -2079,7 +2079,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 								ollamaFallbackBaseUrl: synthesisOllamaFallbackBaseUrl,
 								ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
 								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-								enableStructuredOutput: memoryCfg.pipelineV2.extraction.structuredOutput,
+								enableStructuredOutput: memoryCfg.pipelineV2.synthesis.structuredOutput,
 							})
 						: effectiveSynthesisProvider === "codex"
 							? createCodexProvider({

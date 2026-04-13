@@ -393,6 +393,7 @@ export interface PipelineSynthesisConfig {
 	readonly timeout: number;
 	readonly maxTokens: number;
 	readonly idleGapMinutes: number;
+	readonly structuredOutput?: boolean;
 	readonly rateLimit?: ProviderRateLimitConfig;
 }
 

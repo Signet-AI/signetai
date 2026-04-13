@@ -809,6 +809,12 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 			timeout: resolvedSynthesisTimeout,
 			maxTokens: clampPositive(synthesisRaw?.maxTokens ?? synthesisRaw?.max_tokens, 1000, 32000, d.synthesis.maxTokens),
 			idleGapMinutes: clampPositive(synthesisRaw?.idleGapMinutes, 1, 1440, d.synthesis.idleGapMinutes),
+			structuredOutput: (() => {
+				const candidate = synthesisRaw?.structuredOutput;
+				if (typeof candidate === "boolean") return candidate;
+				const extractionCandidate = extractionRaw?.structuredOutput;
+				return typeof extractionCandidate === "boolean" ? extractionCandidate : undefined;
+			})(),
 			rateLimit: parseRateLimitConfig(synthesisRaw?.rateLimit),
 		},
 		procedural: {

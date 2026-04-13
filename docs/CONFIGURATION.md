@@ -435,6 +435,7 @@ defaults (`ollama` + default synthesis model/timeout) instead.
 | `model` | inherited from extraction when omitted | — | Model name for the configured provider |
 | `endpoint` | inherited from extraction when omitted | — | Optional base URL override for Ollama, OpenCode, or OpenRouter |
 | `timeout` | inherited from extraction when omitted | 5000-300000 ms | Summary generation timeout |
+| `structuredOutput` | inherited from extraction when omitted | — | Send JSON schema in the `format` field of LLM requests. Set `false` when the synthesis provider rejects structured output (e.g. GitHub Copilot API). Falls back to `extraction.structuredOutput` when omitted. |
 | `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max synthesis-provider calls per hour; set `0` to disable rate limiting |
 | `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |
 | `rateLimit.waitTimeoutMs` | `5000` when `rateLimit` is set | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
