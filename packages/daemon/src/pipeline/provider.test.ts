@@ -1652,9 +1652,7 @@ describe("createOpenCodeProvider — session creation vs semaphore ordering", ()
 	it("slow session creation causes timeout when total time exceeds budget", async () => {
 		// Session creation takes 300ms, timeout is 400ms. Only 100ms remains
 		// for the actual LLM call. If the LLM call takes 200ms, the overall
-		// time (500ms) exceeds the 400ms timeout and should abort.
-		// BUG: deadline is computed AFTER session creation, so the call gets
-		// an extra 300ms for free (session time not counted).
+		// request must abort because session time counts toward the deadline.
 		const sessionDelayMs = 300;
 		const messageDelayMs = 200;
 
@@ -1695,9 +1693,69 @@ describe("createOpenCodeProvider — session creation vs semaphore ordering", ()
 		await expect(provider.generate("test", { timeoutMs: 400 })).rejects.toThrow(/timeout/i);
 		const elapsed = performance.now() - start;
 
-		// Total should be ~400ms (session 300ms + abort at 100ms remaining).
-		// If session time is not counted, it would succeed at ~500ms total.
-		expect(elapsed).toBeLessThan(600);
+		// Session (300ms) + partial LLM call aborted at ~100ms remaining = ~400ms total.
+		// Must not exceed the 400ms budget by more than scheduling jitter.
+		expect(elapsed).toBeLessThan(500);
+	});
+});
+
+describe("createOpenCodeProvider — retry session creation respects deadline", () => {
+	afterEach(() => restoreFetch());
+
+	it("format-rejection retry aborts session creation when deadline is nearly exhausted", async () => {
+		// First call: fast session + 422 format rejection.
+		// Second call: slow session creation (500ms) should abort because
+		// only ~200ms of the 600ms budget remains after the first round-trip.
+		let sessionCount = 0;
+
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				sessionCount++;
+				if (sessionCount > 1) {
+					// Second session creation is slow
+					await new Promise<void>((resolve, reject) => {
+						const timer = setTimeout(() => resolve(), 500);
+						const signal = init?.signal;
+						if (signal) {
+							signal.addEventListener("abort", () => {
+								clearTimeout(timer);
+								reject(new DOMException("aborted", "AbortError"));
+							});
+						}
+					});
+				}
+				return Response.json({
+					id: `ses_retry_${sessionCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			if (url.includes("/message")) {
+				// First message: 422 with format rejection (takes ~300ms)
+				await new Promise((r) => setTimeout(r, 300));
+				return new Response(
+					JSON.stringify({ issues: [{ path: ["format"], message: "unsupported" }] }),
+					{ status: 422 },
+				);
+			}
+			return new Response("not found", { status: 404 });
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 600,
+		});
+
+		const start = performance.now();
+		await expect(provider.generate("test", { timeoutMs: 600 })).rejects.toThrow(/timeout/i);
+		const elapsed = performance.now() - start;
+
+		// Must abort within budget (600ms) + jitter, not 300 + 500 = 800ms.
+		expect(elapsed).toBeLessThan(750);
+		expect(sessionCount).toBe(2);
 	});
 });
 

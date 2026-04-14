@@ -2158,12 +2158,16 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		}
 	}
 
-	async function createSession(): Promise<string> {
+	async function createSession(remainingMs?: number): Promise<string> {
+		const timeoutMs =
+			remainingMs !== undefined
+				? Math.max(1, Math.min(remainingMs, 10_000))
+				: 10_000;
 		const res = await fetch(`${cfg.baseUrl}/session`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ title: "signet-extraction" }),
-			signal: AbortSignal.timeout(10000),
+			signal: AbortSignal.timeout(timeoutMs),
 		});
 
 		if (!res.ok) {
@@ -2183,9 +2187,9 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		return id;
 	}
 
-	async function getOrCreateSession(): Promise<string> {
+	async function getOrCreateSession(remainingMs?: number): Promise<string> {
 		if (sessionId) return sessionId;
-		sessionId = await createSession();
+		sessionId = await createSession(remainingMs);
 		return sessionId;
 	}
 
@@ -2221,7 +2225,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
 
-		const sid = await getOrCreateSession();
+		const sid = await getOrCreateSession(deadline - performance.now());
 		// Refresh bypass TTL on reused sessions so bypass-only entries do not
 		// expire while the provider is still actively sending messages.
 		bypassSession(sid, { allowUnknown: true });
@@ -2323,7 +2327,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 
 				const retryWithNewSession = async (): Promise<OpenCodeMessageResponse | null> => {
 					sessionId = null;
-					const retrySid = await getOrCreateSession();
+					const retrySid = await getOrCreateSession(deadline - performance.now());
 					const retryRes = await postMessage(retrySid);
 					if (!retryRes.ok) {
 						const retryBody = await retryRes.text().catch(() => "");
@@ -2355,7 +2359,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 							structuredOutputSupported = false;
 						}
 						consumedBody = null;
-						const retrySid = await createSession();
+						const retrySid = await createSession(deadline - performance.now());
 						sessionId = retrySid;
 						res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 							method: "POST",
@@ -2384,7 +2388,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 							status: res.status,
 							agent: cfg.agent,
 						});
-						const retrySid = await createSession();
+						const retrySid = await createSession(deadline - performance.now());
 						const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
@@ -2424,7 +2428,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					});
 					structuredOutputSupported = false;
 					sessionId = null;
-					const fallbackSid = await createSession();
+					const fallbackSid = await createSession(deadline - performance.now());
 					sessionId = fallbackSid;
 					const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
 						method: "POST",
