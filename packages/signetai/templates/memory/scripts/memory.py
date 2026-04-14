@@ -175,11 +175,14 @@ def load_session_start(project: str | None = None):
     if selected:
         ids = [r["id"] for r in selected]
         placeholders = ",".join("?" * len(ids))
-        db.execute(f"""
+        db.execute(
+            f"""
             UPDATE memories
             SET last_accessed = datetime('now'), access_count = access_count + 1
             WHERE id IN ({placeholders})
-        """, ids)
+        """,
+            ids,
+        )
         db.commit()
 
         output.append("")
@@ -207,14 +210,15 @@ def load_prompt(project: str | None = None):
 
     db = get_db()
 
-    words = re.findall(r'\b\w{3,}\b', keywords.lower())
+    words = re.findall(r"\b\w{3,}\b", keywords.lower())
     if not words:
         return
 
     fts_query = " OR ".join(words[:10])
 
     try:
-        rows = db.execute("""
+        rows = db.execute(
+            """
             SELECT m.id, m.content, m.tags, m.importance, m.pinned
             FROM memories_fts fts
             JOIN memories m ON fts.rowid = m.id
@@ -222,7 +226,9 @@ def load_prompt(project: str | None = None):
               AND (m.project = ? OR m.project = 'global' OR m.project IS NULL)
             ORDER BY rank
             LIMIT 15
-        """, (fts_query, project)).fetchall()
+        """,
+            (fts_query, project),
+        ).fetchall()
     except sqlite3.OperationalError:
         db.close()
         return
@@ -230,8 +236,9 @@ def load_prompt(project: str | None = None):
     score_sql = effective_score_sql()
     filtered = []
     for row in rows:
-        eff = db.execute(f"SELECT ({score_sql}) as s FROM memories WHERE id = ?",
-                        (row["id"],)).fetchone()["s"]
+        eff = db.execute(
+            f"SELECT ({score_sql}) as s FROM memories WHERE id = ?", (row["id"],)
+        ).fetchone()["s"]
         if eff > 0.3 or row["pinned"]:
             filtered.append(dict(row) | {"eff_score": eff})
 
@@ -241,11 +248,14 @@ def load_prompt(project: str | None = None):
     if selected:
         ids = [r["id"] for r in selected]
         placeholders = ",".join("?" * len(ids))
-        db.execute(f"""
+        db.execute(
+            f"""
             UPDATE memories
             SET last_accessed = datetime('now'), access_count = access_count + 1
             WHERE id IN ({placeholders})
-        """, ids)
+        """,
+            ids,
+        )
         db.commit()
 
         output = ["[relevant memories]"]
@@ -256,7 +266,9 @@ def load_prompt(project: str | None = None):
     db.close()
 
 
-def save_explicit(who: str = "claude-code", project: str | None = None, content: str | None = None):
+def save_explicit(
+    who: str = "claude-code", project: str | None = None, content: str | None = None
+):
     if content:
         stdin_data = content.strip()
     else:
@@ -279,7 +291,7 @@ def save_explicit(who: str = "claude-code", project: str | None = None, content:
         pinned = 1
         why = "explicit-critical"
 
-    tag_match = re.match(r'^\[([^\]]+)\]:\s*(.+)$', content, re.DOTALL)
+    tag_match = re.match(r"^\[([^\]]+)\]:\s*(.+)$", content, re.DOTALL)
     if tag_match:
         tags = normalize_tags(tag_match.group(1))
         content = tag_match.group(2).strip()
@@ -300,10 +312,25 @@ def save_explicit(who: str = "claude-code", project: str | None = None, content:
     db = get_db()
     now = datetime.now().isoformat()
     memory_id = str(uuid.uuid4())
-    cursor = db.execute("""
+    db.execute(
+        """
         INSERT INTO memories (id, content, who, why, project, importance, type, tags, pinned, updated_at, updated_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (memory_id, content, who, why, project, importance, mem_type, tags, pinned, now, who))
+    """,
+        (
+            memory_id,
+            content,
+            who,
+            why,
+            project,
+            importance,
+            mem_type,
+            tags,
+            pinned,
+            now,
+            who,
+        ),
+    )
     db.commit()
     db.close()
 
@@ -311,7 +338,7 @@ def save_explicit(who: str = "claude-code", project: str | None = None, content:
     try:
         from embeddings import embed
         from vector_store import insert_vector
-        
+
         vector, _ = embed(content)
         insert_vector(str(memory_id), vector)
         print(f"saved + embedded: {content[:50]}...")
@@ -371,22 +398,25 @@ def save_auto():
 
         now = datetime.now().isoformat()
         memory_id = str(uuid.uuid4())
-        db.execute("""
+        db.execute(
+            """
             INSERT INTO memories (id, content, who, why, project, session_id, importance, type, tags, updated_at, updated_by)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            memory_id,
-            mem["content"],
-            "claude-code",
-            f"auto-{mem.get('type', 'fact')}",
-            cwd,
-            session_id,
-            mem.get("importance", 0.5),
-            mem.get("type", "fact"),
-            normalize_tags(mem.get("tags")),
-            now,
-            "claude-code"
-        ))
+        """,
+            (
+                memory_id,
+                mem["content"],
+                "claude-code",
+                f"auto-{mem.get('type', 'fact')}",
+                cwd,
+                session_id,
+                mem.get("importance", 0.5),
+                mem.get("type", "fact"),
+                normalize_tags(mem.get("tags")),
+                now,
+                "claude-code",
+            ),
+        )
         saved += 1
 
     db.commit()
@@ -423,11 +453,11 @@ Transcript:
             ["ollama", "run", "qwen3:4b", prompt],
             capture_output=True,
             text=True,
-            timeout=45
+            timeout=45,
         )
 
         output = result.stdout.strip()
-        json_match = re.search(r'\[[\s\S]*?\]', output)
+        json_match = re.search(r"\[[\s\S]*?\]", output)
         if json_match:
             memories = json.loads(json_match.group())
             # enforce importance cap for auto-extracted
@@ -443,16 +473,19 @@ Transcript:
 
 def is_duplicate(db: sqlite3.Connection, content: str) -> bool:
     try:
-        words = re.findall(r'\b\w{4,}\b', content.lower())[:5]
+        words = re.findall(r"\b\w{4,}\b", content.lower())[:5]
         if not words:
             return False
 
         fts_query = " AND ".join(words)
-        rows = db.execute("""
+        rows = db.execute(
+            """
             SELECT content FROM memories_fts
             WHERE memories_fts MATCH ?
             LIMIT 5
-        """, (fts_query,)).fetchall()
+        """,
+            (fts_query,),
+        ).fetchall()
 
         for row in rows:
             existing = row["content"].lower()
@@ -470,24 +503,28 @@ def query_memories(search: str, limit: int = 20):
     """Query memories using hybrid search (vector + BM25)"""
     try:
         from hybrid_search import search_with_fallback
-        
+
         results = search_with_fallback(search, limit)
-        
+
         if not results:
             print("no memories found")
             return
-        
+
         for r in results:
-            tags = f" [{r['tags']}]" if r['tags'] else ""
-            pinned = " [pinned]" if r['pinned'] else ""
-            source = "hybrid" if r['vector_score'] > 0 and r['bm25_score'] > 0 else (
-                "vector" if r['vector_score'] > 0 else "keyword"
+            tags = f" [{r['tags']}]" if r["tags"] else ""
+            pinned = " [pinned]" if r["pinned"] else ""
+            source = (
+                "hybrid"
+                if r["vector_score"] > 0 and r["bm25_score"] > 0
+                else ("vector" if r["vector_score"] > 0 else "keyword")
             )
-            
+
             print(f"[{r['hybrid_score']:.2f}|{source}] {r['content']}{tags}{pinned}")
-            print(f"       type: {r['type']} | who: {r['who']} | project: {r['project'] or 'global'}")
+            print(
+                f"       type: {r['type']} | who: {r['who']} | project: {r['project'] or 'global'}"
+            )
             print()
-    
+
     except ImportError:
         # Fallback to old FTS-only search if hybrid search not available
         query_memories_fts_only(search, limit)
@@ -501,24 +538,33 @@ def query_memories_fts_only(search: str, limit: int = 20):
     results = []
 
     try:
-        fts_rows = db.execute("""
+        fts_rows = db.execute(
+            """
             SELECT m.*, rank as fts_rank
             FROM memories_fts fts
             JOIN memories m ON fts.rowid = m.id
             WHERE memories_fts MATCH ?
             ORDER BY rank
             LIMIT ?
-        """, (search, limit)).fetchall()
+        """,
+            (search, limit),
+        ).fetchall()
         results.extend(fts_rows)
     except sqlite3.OperationalError:
         pass
 
-    tag_rows = db.execute("""
+    safe_search = (
+        search.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+    tag_rows = db.execute(
+        """
         SELECT * FROM memories
-        WHERE LOWER(tags) LIKE ?
+        WHERE LOWER(tags) LIKE ? ESCAPE '\\'
         ORDER BY importance DESC
         LIMIT ?
-    """, (f"%{search.lower()}%", limit)).fetchall()
+    """,
+        (f"%{safe_search}%", limit),
+    ).fetchall()
 
     seen_ids = {r["id"] for r in results}
     for row in tag_rows:
@@ -532,8 +578,9 @@ def query_memories_fts_only(search: str, limit: int = 20):
 
     scored = []
     for row in results:
-        eff = db.execute(f"SELECT ({score_sql}) as s FROM memories WHERE id = ?",
-                        (row["id"],)).fetchone()["s"]
+        eff = db.execute(
+            f"SELECT ({score_sql}) as s FROM memories WHERE id = ?", (row["id"],)
+        ).fetchone()["s"]
         scored.append(dict(row) | {"eff_score": eff})
 
     scored.sort(key=lambda x: x["eff_score"], reverse=True)
@@ -542,7 +589,9 @@ def query_memories_fts_only(search: str, limit: int = 20):
         tags = f" [{row['tags']}]" if row["tags"] else ""
         pinned = " [pinned]" if row["pinned"] else ""
         print(f"[{row['eff_score']:.2f}] {row['content']}{tags}{pinned}")
-        print(f"       type: {row['type']} | who: {row['who']} | project: {row['project'] or 'global'}")
+        print(
+            f"       type: {row['type']} | who: {row['who']} | project: {row['project'] or 'global'}"
+        )
         print()
 
     db.close()
@@ -581,7 +630,7 @@ def migrate_markdown():
         content = md_file.read_text()
         filename = md_file.stem
 
-        if re.match(r'^\d{4}-\d{2}-\d{2}$', filename):
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", filename):
             memories = parse_dated_memory(content, filename)
         else:
             memories = parse_topical_memory(content, filename)
@@ -592,21 +641,24 @@ def migrate_markdown():
 
             now = datetime.now().isoformat()
             memory_id = str(uuid.uuid4())
-            db.execute("""
+            db.execute(
+                """
                 INSERT INTO memories (id, content, who, why, project, importance, type, tags, updated_at, updated_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                memory_id,
-                mem["content"],
-                "claude-code",
-                "migrated",
-                mem.get("project"),
-                mem.get("importance", 0.6),
-                mem.get("type", "fact"),
-                normalize_tags(mem.get("tags")),
-                now,
-                "migration"
-            ))
+            """,
+                (
+                    memory_id,
+                    mem["content"],
+                    "claude-code",
+                    "migrated",
+                    mem.get("project"),
+                    mem.get("importance", 0.6),
+                    mem.get("type", "fact"),
+                    normalize_tags(mem.get("tags")),
+                    now,
+                    "migration",
+                ),
+            )
             migrated += 1
 
     db.commit()
@@ -652,17 +704,23 @@ def parse_dated_memory(content: str, date: str) -> list:
                 elif "decided" in fact.lower() or "chose" in fact.lower():
                     mem_type = "decision"
                     importance = 0.7
-                elif "issue" in fact.lower() or "bug" in fact.lower() or "error" in fact.lower():
+                elif (
+                    "issue" in fact.lower()
+                    or "bug" in fact.lower()
+                    or "error" in fact.lower()
+                ):
                     mem_type = "issue"
                 elif "learned" in fact.lower() or "takeaway" in fact.lower():
                     mem_type = "learning"
 
-                memories.append({
-                    "content": fact,
-                    "type": mem_type,
-                    "importance": importance,
-                    "tags": ",".join(tags) if tags else None
-                })
+                memories.append(
+                    {
+                        "content": fact,
+                        "type": mem_type,
+                        "importance": importance,
+                        "tags": ",".join(tags) if tags else None,
+                    }
+                )
 
     return memories
 
@@ -677,15 +735,22 @@ def parse_topical_memory(content: str, topic: str) -> list:
         if not line or line.startswith("=") or line.startswith("---------"):
             continue
 
-        if line.startswith("-") or line.startswith("1.") or line.startswith("2.") or line.startswith("3."):
-            fact = re.sub(r'^[\d\.\-\*]+\s*', '', line).strip()
+        if (
+            line.startswith("-")
+            or line.startswith("1.")
+            or line.startswith("2.")
+            or line.startswith("3.")
+        ):
+            fact = re.sub(r"^[\d\.\-\*]+\s*", "", line).strip()
             if len(fact) > 10:
-                memories.append({
-                    "content": fact,
-                    "type": "preference" if "prefer" in topic.lower() else "fact",
-                    "importance": 0.7,
-                    "tags": topic.lower().replace("-", ",").replace("_", ",")
-                })
+                memories.append(
+                    {
+                        "content": fact,
+                        "type": "preference" if "prefer" in topic.lower() else "fact",
+                        "importance": 0.7,
+                        "tags": topic.lower().replace("-", ",").replace("_", ","),
+                    }
+                )
 
     return memories
 
@@ -697,7 +762,9 @@ def main():
     subparsers.add_parser("init", help="initialize database")
 
     load_parser = subparsers.add_parser("load", help="load memories")
-    load_parser.add_argument("--mode", choices=["session-start", "prompt"], required=True)
+    load_parser.add_argument(
+        "--mode", choices=["session-start", "prompt"], required=True
+    )
     load_parser.add_argument("--project", help="project path")
 
     save_parser = subparsers.add_parser("save", help="save memory")

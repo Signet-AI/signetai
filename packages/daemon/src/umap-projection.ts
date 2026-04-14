@@ -7,6 +7,7 @@
 import { createRequire } from "node:module";
 import { UMAP } from "umap-js";
 import type { ReadDb, WriteDb } from "./db-accessor";
+import { escapeLike } from "./sql-utils";
 
 // Try to load native Rust accelerators, fall back to pure TS
 let nativeKnn: typeof import("@signet/native") | null = null;
@@ -322,9 +323,9 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 	const query = filters.query?.trim();
 	if (query && query.length > 0) {
-		const pattern = `%${query}%`;
+		const pattern = `%${escapeLike(query)}%`;
 		parts.push(
-			"(m.content LIKE ? OR m.tags LIKE ? OR m.who LIKE ? OR m.type LIKE ? OR m.source_type LIKE ? OR m.source_id LIKE ?)",
+			"(m.content LIKE ? ESCAPE '\\' OR m.tags LIKE ? ESCAPE '\\' OR m.who LIKE ? ESCAPE '\\' OR m.type LIKE ? ESCAPE '\\' OR m.source_type LIKE ? ESCAPE '\\' OR m.source_id LIKE ? ESCAPE '\\')",
 		);
 		params.push(pattern, pattern, pattern, pattern, pattern, pattern);
 	}
@@ -349,8 +350,8 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 	const tagValues = normalizeFilterValues(filters.tags);
 	for (const tag of tagValues) {
-		parts.push("m.tags LIKE ?");
-		params.push(`%${tag}%`);
+		parts.push("m.tags LIKE ? ESCAPE '\\'");
+		params.push(`%${escapeLike(tag)}%`);
 	}
 
 	if (typeof filters.pinned === "boolean") {
@@ -386,6 +387,7 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 interface ProjectionRowsResult {
 	readonly rows: EmbeddingRow[];
+	/** Stable DB COUNT using typeof(e.vector)='blob' for dashboard display; over-fetch-by-1 sentinel for hasMore. */
 	readonly total: number;
 	readonly offset: number;
 	readonly limit: number;
@@ -400,16 +402,11 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 
 	const { clause, params } = buildProjectionWhere(query.filters);
 
-	const totalRow = db.prepare(`SELECT COUNT(*) AS count ${EMBEDDINGS_FROM_SQL}${clause}`).get(...params) as
-		| { count?: number }
-		| undefined;
-	const total = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
-
 	let sql = `${EMBEDDINGS_SELECT_SQL} ${EMBEDDINGS_FROM_SQL}${clause} ORDER BY m.created_at DESC`;
 	const rowParams: unknown[] = [...params];
 	if (requestedLimit !== null) {
 		sql += " LIMIT ? OFFSET ?";
-		rowParams.push(requestedLimit, offset);
+		rowParams.push(requestedLimit + 1, offset);
 	} else if (offset > 0) {
 		sql += " LIMIT -1 OFFSET ?";
 		rowParams.push(offset);
@@ -417,10 +414,31 @@ function loadProjectionRows(db: ReadDb, query: ProjectionQuery): ProjectionRowsR
 
 	const rawRows = db.prepare(sql).all(...rowParams) as Record<string, unknown>[];
 	const rows = rawRows.map(toEmbeddingRow).filter((row): row is EmbeddingRow => row !== null);
-	const limit = requestedLimit ?? Math.max(0, total - offset);
-	const hasMore = offset + rows.length < total;
+	const trimmedRows = requestedLimit !== null ? rows.slice(0, requestedLimit) : rows;
 
-	return { rows, total, offset, limit, hasMore };
+	let effectiveTotal: number;
+	let hasMore: boolean;
+
+	if (requestedLimit !== null) {
+		hasMore = rows.length > requestedLimit;
+
+		const countClause = `${EMBEDDINGS_FROM_SQL}${clause} AND typeof(e.vector) = 'blob'`;
+		const totalRow = db.prepare(`SELECT COUNT(*) AS count ${countClause}`).get(...params) as
+			| { count?: number }
+			| undefined;
+		effectiveTotal = totalRow !== undefined && typeof totalRow.count === "number" ? totalRow.count : 0;
+
+		if (rawRows.length !== rows.length && !hasMore) {
+			hasMore = offset + trimmedRows.length < effectiveTotal;
+		}
+	} else {
+		effectiveTotal = rows.length + offset;
+		hasMore = false;
+	}
+
+	const limit = requestedLimit ?? Math.max(0, effectiveTotal - offset);
+
+	return { rows: trimmedRows, total: effectiveTotal, offset, limit, hasMore };
 }
 
 function buildNodesFromRows(

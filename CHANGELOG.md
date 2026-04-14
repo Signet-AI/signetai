@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-14
+- Bug fixes: five correctness bugs found via sqmd structural review.
+
 ### 2026-04-13
 - Bug fixes: prompt agents to check memory before acting; enable Signet pipeline through GitHub Copilot providers.
 
@@ -27,12 +30,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: align recall surfaces and validate prospective hint retrieval.
 - Docs: sync root-derived docs.
 
-### 2026-04-07
-- Features: manage workspace source checkout; add token-bucket rate limiting for remote LLM providers; Discord community CTAs + /join opt-in page.
-- Bug fixes: harden transcript capture and summary inputs.
-- Refactoring: extract routes from daemon.ts into separate modules.
-
 ## Release Ledger
+
+## [0.98.17] - 2026-04-14
+
+Release summary: 1 bug fix.
+Tag range: `v0.98.16..v0.98.17`.
+
+### Bug Fixes
+
+- **daemon,openclaw,cli**: five correctness bugs found via sqmd structural review (#503)
 
 ## [0.98.16] - 2026-04-13
 

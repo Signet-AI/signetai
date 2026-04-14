@@ -873,11 +873,15 @@ function textResult(text: string, details?: Record<string, unknown>): OpenClawTo
 // have a stable messageCount to key on).
 const SESSIONLESS_DEDUPE_MS = 1_000;
 
-function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = SESSIONLESS_DEDUPE_MS): void {
+export function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = SESSIONLESS_DEDUPE_MS): void {
+	const expired: string[] = [];
 	for (const [key, ts] of map) {
 		if (now - ts > ttlMs) {
-			map.delete(key);
+			expired.push(key);
 		}
+	}
+	for (const key of expired) {
+		map.delete(key);
 	}
 }
 
