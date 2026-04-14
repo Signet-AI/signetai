@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, mock } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getBypassedSessionKeys, resetSessions } from "../session-tracker";
 import {
 	DEFAULT_OLLAMA_FALLBACK_MAX_CONTEXT_TOKENS,
 	createClaudeCodeProvider,
@@ -1241,6 +1242,39 @@ describe("createOpenCodeProvider", () => {
 	it("generate() parses github-copilot provider/model format", () => {
 		const provider = createOpenCodeProvider({ model: "github-copilot/gpt-4o" });
 		expect(provider.name).toBe("opencode:github-copilot/gpt-4o");
+	});
+
+	it("generate() refreshes bypass TTL on reused session", async () => {
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_bypass_refresh",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		await provider.generate("prompt 1");
+
+		const expiryAfterFirst = getBypassedSessionKeys().get("ses_bypass_refresh");
+		expect(expiryAfterFirst).toBeDefined();
+		if (expiryAfterFirst === undefined) return;
+
+		Bun.sleepSync(10);
+		await provider.generate("prompt 2");
+
+		const expiryAfterSecond = getBypassedSessionKeys().get("ses_bypass_refresh");
+		expect(expiryAfterSecond).toBeDefined();
+		if (expiryAfterSecond === undefined) return;
+		expect(expiryAfterSecond).toBeGreaterThan(expiryAfterFirst);
+
+		resetSessions();
 	});
 });
 

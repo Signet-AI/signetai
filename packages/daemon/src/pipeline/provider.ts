@@ -2025,6 +2025,9 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	): Promise<OpenCodeMessageResponse> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const sid = await getOrCreateSession();
+		// Refresh bypass TTL on reused sessions so bypass-only entries do not
+		// expire while the provider is still actively sending messages.
+		bypassSession(sid, { allowUnknown: true });
 
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), timeoutMs);
