@@ -173,9 +173,13 @@ Wizard steps:
 1. **Agent Name** - What to call your agent
 2. **Harnesses** - Which AI platforms you use:
    - Claude Code (Anthropic CLI)
+   - Codex
    - OpenCode
    - OpenClaw
-   - Codex
+   - Oh My Pi
+   - Pi
+   - Hermes Agent
+   - Forge
 3. **OpenClaw Workspace** - Appears only when an existing OpenClaw config
    is detected; workspace is patched only if you opt in, and setup warns
    that uninstalling OpenClaw can delete this workspace unless backups exist

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { buildAgentMemoryConfig, getAgentIdentityFiles, normalizeAgentRosterEntry } from "../agents";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+	detectExistingSetup,
 	readStaticIdentity,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
@@ -12,9 +13,18 @@ import {
 import { parseSimpleYaml } from "../yaml";
 
 const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
+const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
 
 beforeEach(() => mkdirSync(TMP, { recursive: true }));
-afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+afterEach(() => {
+	if (ORIGINAL_HERMES_REPO === undefined) {
+		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+		delete process.env.HERMES_REPO;
+	} else {
+		process.env.HERMES_REPO = ORIGINAL_HERMES_REPO;
+	}
+	rmSync(TMP, { recursive: true, force: true });
+});
 
 describe("readStaticIdentity", () => {
 	test("returns null when dir does not exist", () => {
@@ -101,6 +111,18 @@ describe("readStaticIdentity", () => {
 describe("parseSimpleYaml", () => {
 	test("degrades malformed YAML to an empty object", () => {
 		expect(parseSimpleYaml("agent:\n  name: [unterminated")).toEqual({});
+	});
+});
+
+describe("detectExistingSetup", () => {
+	test("detects Hermes Agent before the Signet memory plugin is installed", () => {
+		const hermesRepo = join(TMP, "hermes-agent");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		process.env.HERMES_REPO = hermesRepo;
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.hermesAgent).toBe(true);
 	});
 });
 
