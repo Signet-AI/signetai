@@ -235,7 +235,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	hints: {
 		enabled: true,
 		max: 5,
-		timeout: 30000,
+		timeout: 60000,
 		maxTokens: 256,
 		poll: 5000,
 	},
@@ -965,7 +965,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		hints: {
 			enabled: resolveBool(hintsRaw?.enabled, undefined, d.hints?.enabled ?? true),
 			max: clampPositive(hintsRaw?.max, 1, 10, d.hints?.max ?? 5),
-			timeout: clampPositive(hintsRaw?.timeout, 5000, 120000, d.hints?.timeout ?? 30000),
+			timeout: clampPositive(hintsRaw?.timeout, 5000, 120000, d.hints?.timeout ?? 60000),
 			maxTokens: clampPositive(hintsRaw?.maxTokens, 64, 1024, d.hints?.maxTokens ?? 256),
 			poll: clampPositive(hintsRaw?.poll, 1000, 60000, d.hints?.poll ?? 5000),
 		},

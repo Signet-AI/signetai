@@ -715,6 +715,155 @@ describe("createOpenCodeProvider", () => {
 		expect(typeof capturedBody.system).toBe("string");
 	});
 
+	it("generate() sends signet-pipeline agent in request body", async () => {
+		let capturedBody: Record<string, unknown> = {};
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_agent",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			capturedBody = JSON.parse(init?.body as string);
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			model: "google/gemini-2.5-flash",
+		});
+		await provider.generate("extract this");
+
+		expect(capturedBody.agent).toBe("signet-pipeline");
+	});
+
+	it("generate() omits agent when config.agent is empty", async () => {
+		let capturedBody: Record<string, unknown> = {};
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_no_agent",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			capturedBody = JSON.parse(init?.body as string);
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			model: "google/gemini-2.5-flash",
+			agent: "",
+		});
+		await provider.generate("extract this");
+
+		expect(capturedBody.agent).toBeUndefined();
+	});
+
+	it("generate() retries without agent on agent-not-found 4xx and stays disabled", async () => {
+		let sessionCount = 0;
+		let lastBody: Record<string, unknown> = {};
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				sessionCount++;
+				return Response.json({
+					id: `ses_agent_fallback_${sessionCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			const parsed = JSON.parse(init?.body as string);
+			if (parsed.agent) {
+				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
+			}
+			lastBody = parsed;
+			return Response.json(openCodeResponse("recovered"));
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			model: "google/gemini-2.5-flash",
+		});
+		const first = await provider.generate("extract this");
+		expect(first).toBe("recovered");
+		expect(lastBody.agent).toBeUndefined();
+
+		const second = await provider.generate("extract that");
+		expect(second).toBe("recovered");
+		expect(lastBody.agent).toBeUndefined();
+	});
+
+	it("generate() falls back when agent-rejection 400 arrives after agent already disabled", async () => {
+		let sessionCount = 0;
+		let agentSeen = false;
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				sessionCount++;
+				return Response.json({
+					id: `ses_concurrent_${sessionCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			const parsed = JSON.parse(init?.body as string);
+			if (parsed.agent) {
+				agentSeen = true;
+				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
+			}
+			if (!agentSeen) {
+				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
+			}
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			model: "google/gemini-2.5-flash",
+		});
+		const first = await provider.generate("extract first");
+		expect(first).toBe("ok");
+
+		// Agent is now disabled.  Mock returns 400 with agent-rejection
+		// text for every message request.  The !agentSupported branch
+		// must catch this and fall back instead of throwing.
+		sessionCount = 0;
+		agentSeen = false;
+		let threw = false;
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_sibling",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
+		});
+		try {
+			await provider.generate("extract sibling");
+		} catch {
+			threw = true;
+		}
+		expect(threw).toBe(false);
+	});
+
 	it("generate() omits format field when enableStructuredOutput is false", async () => {
 		let capturedBody: Record<string, unknown> = {};
 		mockFetch(async (url, init) => {

@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-base",
-  "version": "0.98.17",
+  "version": "0.98.18",
   "description": "Base class for Signet harness connectors",
   "type": "module",
   "main": "./dist/index.js",

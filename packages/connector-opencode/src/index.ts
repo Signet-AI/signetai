@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { expandHome, hasValidIdentity } from "@signet/core";
+import { OPENCODE_PIPELINE_AGENT, OPENCODE_PIPELINE_SYSTEM_PROMPT, expandHome, hasValidIdentity } from "@signet/core";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
 
 // ============================================================================
@@ -195,7 +195,7 @@ export class OpenCodeConnector extends BaseConnector {
 	readonly name = "OpenCode";
 	readonly harnessId = "opencode";
 
-	private getOpenCodePath(): string {
+	protected getOpenCodePath(): string {
 		return join(homedir(), ".config", "opencode");
 	}
 
@@ -266,6 +266,7 @@ export class OpenCodeConnector extends BaseConnector {
 		const pluginFilePath = this.getPluginFilePath(opencodePath);
 		writeFileSync(pluginFilePath, PLUGIN_BUNDLE);
 		filesWritten.push(pluginFilePath);
+		this.ensureConfigFile(opencodePath);
 		this.registerPlugin(opencodePath);
 
 		// Generate AGENTS.md from identity files
@@ -276,6 +277,9 @@ export class OpenCodeConnector extends BaseConnector {
 
 		// Register Signet MCP server in OpenCode config
 		this.registerMcpServer(opencodePath);
+
+		// Register pipeline agent for lightweight extraction sessions
+		this.registerPipelineAgent(opencodePath);
 
 		// Symlink skills directory
 		const skillsSource = join(expandedBasePath, "skills");
@@ -313,6 +317,7 @@ export class OpenCodeConnector extends BaseConnector {
 		this.migrateFromLegacy(opencodePath);
 		this.removePlugin(opencodePath);
 		this.removeMcpServer(opencodePath);
+		this.removePipelineAgent(opencodePath);
 
 		return { filesRemoved };
 	}
@@ -522,6 +527,69 @@ export class OpenCodeConnector extends BaseConnector {
 				atomicWriteJson(configPath, config);
 			}
 		}
+	}
+
+	private static readonly PIPELINE_AGENT_CONFIG: JsonObject = {
+		prompt: OPENCODE_PIPELINE_SYSTEM_PROMPT,
+		permission: { "*": "deny" },
+		hidden: true,
+		steps: 1,
+		mode: "all",
+	};
+
+	private registerPipelineAgent(opencodePath: string): void {
+		for (const configPath of this.getConfigCandidates(opencodePath)) {
+			if (!existsSync(configPath)) continue;
+
+			let config: JsonObject;
+			try {
+				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
+			} catch {
+				continue;
+			}
+
+			const agents = isJsonObject(config.agent) ? { ...(config.agent as JsonObject) } : {};
+			agents[OPENCODE_PIPELINE_AGENT] = { ...OpenCodeConnector.PIPELINE_AGENT_CONFIG };
+			config.agent = agents;
+			atomicWriteJson(configPath, config);
+			return;
+		}
+	}
+
+	private removePipelineAgent(opencodePath: string): void {
+		for (const configPath of this.getConfigCandidates(opencodePath)) {
+			if (!existsSync(configPath)) continue;
+
+			let config: JsonObject;
+			try {
+				config = parseJsonOrJsonc(readFileSync(configPath, "utf-8"));
+			} catch {
+				continue;
+			}
+
+			if (!isJsonObject(config.agent)) continue;
+
+			const agents = config.agent as JsonObject;
+			if (!(OPENCODE_PIPELINE_AGENT in agents)) continue;
+
+			const { [OPENCODE_PIPELINE_AGENT]: _, ...rest } = agents;
+			if (Object.keys(rest).length === 0) {
+				const { agent: __, ...configWithoutAgent } = config;
+				atomicWriteJson(configPath, configWithoutAgent);
+			} else {
+				config.agent = rest;
+				atomicWriteJson(configPath, config);
+			}
+			return;
+		}
+	}
+
+	private ensureConfigFile(opencodePath: string): void {
+		for (const candidate of this.getConfigCandidates(opencodePath)) {
+			if (existsSync(candidate)) return;
+		}
+		mkdirSync(opencodePath, { recursive: true });
+		atomicWriteJson(join(opencodePath, "opencode.json"), {});
 	}
 
 	private getConfigCandidates(opencodePath: string): string[] {

@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-14
-- Bug fixes: five correctness bugs found via sqmd structural review.
+- Bug fixes: reduce OpenCode session overhead for pipeline jobs; five correctness bugs found via sqmd structural review.
 
 ### 2026-04-13
 - Bug fixes: prompt agents to check memory before acting; enable Signet pipeline through GitHub Copilot providers.
@@ -31,6 +31,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: sync root-derived docs.
 
 ## Release Ledger
+
+## [0.98.18] - 2026-04-14
+
+Release summary: 1 bug fix.
+Tag range: `v0.98.17..v0.98.18`.
+
+### Bug Fixes
+
+- **pipeline**: reduce OpenCode session overhead for pipeline jobs (#505)
 
 ## [0.98.17] - 2026-04-14
 

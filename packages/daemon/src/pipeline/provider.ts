@@ -16,6 +16,8 @@ import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	type LlmGenerateResult,
 	type LlmProvider,
+	OPENCODE_PIPELINE_AGENT,
+	OPENCODE_PIPELINE_SYSTEM_PROMPT,
 	type PipelineExtractionConfig,
 	type ProviderRateLimitConfig,
 } from "@signet/core";
@@ -1549,6 +1551,7 @@ export interface OpenCodeProviderConfig {
 	readonly baseUrl: string;
 	readonly model: string;
 	readonly defaultTimeoutMs: number;
+	readonly agent?: string;
 	readonly enableOllamaFallback: boolean;
 	readonly ollamaFallbackModel?: string;
 	readonly ollamaFallbackBaseUrl: string;
@@ -1560,6 +1563,7 @@ const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
 	baseUrl: "http://127.0.0.1:4096",
 	model: "anthropic/claude-haiku-4-5-20251001",
 	defaultTimeoutMs: 60000,
+	agent: OPENCODE_PIPELINE_AGENT,
 	enableOllamaFallback: true,
 	ollamaFallbackModel: undefined,
 	ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
@@ -1709,6 +1713,28 @@ const OPENCODE_JSON_SCHEMA: Record<string, unknown> = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+/**
+ * Detect whether a 4xx error body indicates an unknown/unregistered
+ * agent.  Checks Zod-style `issues[].path` first (structured), then
+ * requires both `"unknown agent"` and the agent name in the body text.
+ */
+function isAgentRejection(body: string, agent: string | undefined): boolean {
+	if (!agent) return false;
+	try {
+		const parsed: unknown = JSON.parse(body);
+		if (isRecord(parsed)) {
+			const issues = Array.isArray(parsed.issues) ? parsed.issues : [];
+			if (issues.some((i): boolean => isRecord(i) && Array.isArray(i.path) && i.path[0] === "agent")) {
+				return true;
+			}
+		}
+	} catch {
+		// empty
+	}
+	const lower = body.toLowerCase();
+	return lower.includes("unknown agent") && !!agent && lower.includes(agent.toLowerCase());
 }
 
 function parseOpenCodeTokens(value: unknown): OpenCodeTokens | undefined {
@@ -1969,15 +1995,21 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	}
 
 	let structuredOutputSupported = cfg.enableStructuredOutput !== false;
+	let agentSupported = !!cfg.agent;
 
 	function buildMessageBody(prompt: string, structured?: boolean): string {
 		const body: Record<string, unknown> = {
 			parts: [{ type: "text", text: prompt }],
 			model: { providerID, modelID },
 		};
+		if (agentSupported && cfg.agent) {
+			body.agent = cfg.agent;
+		}
+		// Per-call system override does not re-inflate the signet-pipeline
+		// agent's stripped context.  Measured: ~4,844 input tokens total
+		// vs ~47k with the default agent (90% reduction).
 		if (structured && structuredOutputSupported) {
-			body.system =
-				"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";
+			body.system = OPENCODE_PIPELINE_SYSTEM_PROMPT;
 			body.format = {
 				type: "json_schema",
 				schema: OPENCODE_JSON_SCHEMA,
@@ -2150,6 +2182,46 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						sessionId: retrySid,
 					});
 					const ollamaFallback = await tryOllamaFallback(prompt, opts, "post-response-malformed-after-http-retry");
+					if (ollamaFallback) return ollamaFallback;
+					return buildOpenCodeFallbackResponse();
+				}
+				// Agent not registered — user upgraded without re-running
+				// `signet install`. Disable agent and retry without it.
+				// Guard: set agentSupported=false before async work so
+				// concurrent callers skip this branch immediately.
+				if (agentSupported && isAgentRejection(body, cfg.agent)) {
+					agentSupported = false;
+					logger.warn("pipeline", "OpenCode rejected pipeline agent; retrying without agent", {
+						status: res.status,
+						agent: cfg.agent,
+					});
+					const retrySid = await createSession();
+					const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: buildMessageBody(prompt, true),
+						signal: controller.signal,
+					});
+					if (retryRes.ok) {
+						sessionId = retrySid;
+						const retryParsed = await parsePostResponse(retryRes, retrySid);
+						if (retryParsed) return retryParsed;
+					}
+					// Retry failed — discard both the rejected and retry sessions
+					// so the next call starts fresh instead of reusing a stale id.
+					sessionId = null;
+					const ollamaFallback = await tryOllamaFallback(prompt, opts, "agent-not-found-retry-failed");
+					if (ollamaFallback) return ollamaFallback;
+					return buildOpenCodeFallbackResponse();
+				}
+				// Concurrent sibling: another caller already disabled the agent
+				// but this request was in-flight with the old body.  Treat as
+				// soft failure — fall back instead of throwing.
+				if (!agentSupported && isAgentRejection(body, cfg.agent)) {
+					logger.warn("pipeline", "OpenCode agent rejection on already-disabled agent; falling back", {
+						status: res.status,
+					});
+					const ollamaFallback = await tryOllamaFallback(prompt, opts, "concurrent-agent-rejection");
 					if (ollamaFallback) return ollamaFallback;
 					return buildOpenCodeFallbackResponse();
 				}

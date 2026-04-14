@@ -388,6 +388,16 @@ export function parseRawExtractionOutput(rawOutput: string): ExtractionResult {
 
 	const parsed = parseExtractionOutput(rawOutput);
 	if (parsed === null) {
+		// Known failure mode: some providers (e.g. OpenCode with gpt-5-mini)
+		// occasionally return plain text instead of JSON — especially when
+		// the input content itself contains question-like text (e.g. hint
+		// questions from a previous pipeline pass). The model's instruction-
+		// following fails and it "answers the questions" instead of extracting
+		// facts. This is a model behavior issue, not a parsing bug.
+		//
+		// Impact is low: the memory still exists but won't get enriched with
+		// extracted facts/entities for this pass. Hints and other pipeline
+		// stages operate independently and are unaffected.
 		const jsonStr = stripFences(rawOutput);
 		logger.warn("pipeline", "Failed to parse extraction JSON", {
 			preview: jsonStr.slice(0, 500),
