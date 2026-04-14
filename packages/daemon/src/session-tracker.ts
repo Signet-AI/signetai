@@ -159,7 +159,7 @@ export function bypassSession(
 		logger.warn("session-tracker", "Bypass requested for unknown session", { sessionKey: key });
 		return false;
 	}
-	const ttl = opts?.ttlMs ?? STALE_SESSION_MS;
+	const ttl = Number.isFinite(opts?.ttlMs) && opts.ttlMs > 0 ? opts.ttlMs : STALE_SESSION_MS;
 	bypassedSessions.set(key, Date.now() + ttl);
 	logger.debug("session-tracker", "Session bypassed", { sessionKey: key });
 	return true;
@@ -250,6 +250,12 @@ export function renewSession(sessionKey: string): string | null {
 		return null;
 	}
 	claim.expiresAt = Date.now() + STALE_SESSION_MS;
+	// Keep bypass TTL aligned with the session TTL so bypassed sessions
+	// do not leak after renewal extends the session lifetime.
+	const existing = bypassedSessions.get(key);
+	if (existing !== undefined) {
+		bypassedSessions.set(key, claim.expiresAt);
+	}
 	warnedSessions.delete(key);
 	logger.info("session-tracker", "Session renewed", { sessionKey: key });
 	return new Date(claim.expiresAt).toISOString();
