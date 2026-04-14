@@ -7,6 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-14
+- Features: add llama.cpp as default fallback runtime provider.
 - Bug fixes: reduce OpenCode session overhead for pipeline jobs; five correctness bugs found via sqmd structural review.
 
 ### 2026-04-13
@@ -31,6 +32,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: sync root-derived docs.
 
 ## Release Ledger
+
+## [0.99.0] - 2026-04-14
+
+Release summary: 1 feature.
+Tag range: `v0.98.18..v0.99.0`.
+
+### Features
+
+- **daemon**: add llama.cpp as default fallback runtime provider (#499)
 
 ## [0.98.18] - 2026-04-14
 

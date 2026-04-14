@@ -1,6 +1,6 @@
 {
   "name": "@signet/pi-extension-base",
-  "version": "0.98.18",
+  "version": "0.99.0",
   "description": "Shared runtime utilities for Signet harness extensions (helpers, transcript, types, lifecycle, session state)",
   "type": "module",
   "main": "./src/index.ts",
