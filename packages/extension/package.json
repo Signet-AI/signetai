@@ -1,6 +1,6 @@
 {
   "name": "@signet/extension",
-  "version": "0.98.16",
+  "version": "0.98.17",
   "private": true,
   "description": "Signet browser extension for Chrome and Firefox",
   "scripts": {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { loadMemoryConfig } from "./memory-config";
-import { hybridRecall } from "./memory-search";
+import { buildAgentScopeClause, hybridRecall } from "./memory-search";
 
 describe("hybridRecall", () => {
 	let dir = "";
@@ -416,5 +416,66 @@ describe("hybridRecall", () => {
 		);
 
 		expect(result.results.map((row) => row.id)).not.toContain("mem-pinned-only");
+	});
+
+	it("escapes LIKE metacharacters in tag filter values", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, tags, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, ?, 'test')`,
+			).run("mem-like-escape", "tagged memory", "important,work", now, now);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, tags, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, ?, 'test')`,
+			).run("mem-like-other", "percent memory", "other", now, now);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = false;
+		cfg.pipelineV2.traversal.enabled = false;
+		cfg.pipelineV2.reranker.enabled = false;
+
+		const result = await hybridRecall(
+			{
+				query: "tagged",
+				keywordQuery: "tagged",
+				limit: 10,
+				agentId: "default",
+				readPolicy: "isolated",
+				tags: "%",
+			},
+			cfg,
+			async () => null,
+		);
+
+		const ids = result.results.map((row) => row.id);
+		expect(ids).not.toContain("mem-like-escape");
+		expect(ids).not.toContain("mem-like-other");
+	});
+});
+
+describe("buildAgentScopeClause regression tests", () => {
+	it("falls back to isolated scope when policy is 'group' but policyGroup is null", () => {
+		const result = buildAgentScopeClause("agent-x", "group", null);
+		expect(result.sql).toBe(" AND m.agent_id = ? AND m.visibility != 'archived'");
+		expect(result.args).toEqual(["agent-x"]);
+	});
+
+	it("uses group scope when both readPolicy and policyGroup are provided", () => {
+		const result = buildAgentScopeClause("agent-x", "group", "team-a");
+		expect(result.sql).toContain("policy_group = ?");
+		expect(result.args).toEqual(["team-a", "agent-x"]);
+	});
+
+	it("uses shared scope for readPolicy 'shared'", () => {
+		const result = buildAgentScopeClause("agent-x", "shared", null);
+		expect(result.sql).toContain("m.visibility = 'global'");
+		expect(result.args).toEqual(["agent-x"]);
 	});
 });

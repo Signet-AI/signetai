@@ -22,7 +22,7 @@ mock.module("@signet/core", () => ({
 // Import after mock so the module picks up the stub.
 const signet = await import("./index");
 const signetPlugin = signet.default;
-const { memoryStore, _resetRegistration, _sanitization } = signet;
+const { memoryStore, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = { name: string; label?: string; description?: string };
@@ -2208,5 +2208,29 @@ describe("installSdkSanitizer", () => {
 		expect(resolveAnthropicBase()).toBeUndefined();
 		const cleanup = installSdkSanitizer();
 		cleanup();
+	});
+});
+
+describe("cleanupTimedMap regression", () => {
+	it("deletes all expired entries without modifying non-expired ones", () => {
+		const map = new Map<string, number>([
+			["expired-1", 100],
+			["expired-2", 200],
+			["current", 900],
+		]);
+		cleanupTimedMap(map, 1000, 500);
+		expect(map.has("expired-1")).toBe(false);
+		expect(map.has("expired-2")).toBe(false);
+		expect(map.has("current")).toBe(true);
+	});
+
+	it("handles empty map and all-expired map without errors", () => {
+		const empty = new Map<string, number>();
+		cleanupTimedMap(empty, 1000, 500);
+		expect(empty.size).toBe(0);
+
+		const allExpired = new Map<string, number>([["a", 100], ["b", 200]]);
+		cleanupTimedMap(allExpired, 1000, 500);
+		expect(allExpired.size).toBe(0);
 	});
 });

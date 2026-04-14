@@ -1,6 +1,7 @@
 import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
+import { escapeLike } from "./sql-utils";
 import { deriveThreadKey, deriveThreadLabel } from "./thread-heads";
 
 interface TemporalRow {
@@ -44,10 +45,6 @@ function tableExists(name: string): boolean {
 
 function clean(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
-}
-
-function escapeLike(text: string): string {
-	return text.replace(/([\\%_])/g, "\\$1");
 }
 
 function buildExcerpt(content: string, query: string): string {

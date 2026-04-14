@@ -20,6 +20,7 @@ import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker"
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
 import { FTS_STOP } from "./pipeline/stop-words";
+import { escapeLike } from "./sql-utils";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -101,13 +102,13 @@ export function buildAgentScopeClause(
 			args: [agentId],
 		};
 	}
-	if (readPolicy === "group") {
+	if (readPolicy === "group" && policyGroup) {
 		return {
 			sql: " AND ((m.visibility = 'global' AND m.agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR m.agent_id = ?) AND m.visibility != 'archived'",
 			args: [policyGroup, agentId],
 		};
 	}
-	// 'isolated' or unknown — own memories only
+	// 'isolated', 'group' without policyGroup, or unknown — own memories only
 	return {
 		sql: " AND m.agent_id = ? AND m.visibility != 'archived'",
 		args: [agentId],
@@ -149,8 +150,8 @@ function buildFilterClause(params: RecallParams): FilterClause {
 			.split(",")
 			.map((s) => s.trim())
 			.filter(Boolean)) {
-			parts.push("m.tags LIKE ?");
-			args.push(`%${t}%`);
+			parts.push("m.tags LIKE ? ESCAPE '\\'");
+			args.push(`%${escapeLike(t)}%`);
 		}
 	}
 	if (params.who) {
