@@ -85,7 +85,7 @@ describe("daemon status contract", () => {
 		expect(extraction).toBeDefined();
 		expect(typeof extraction?.resolved).toBe("string");
 		expect(typeof extraction?.effective).toBe("string");
-		expect(extraction?.fallbackProvider === "ollama" || extraction?.fallbackProvider === "none").toBe(true);
+		expect(extraction?.fallbackProvider === "ollama" || extraction?.fallbackProvider === "llama-cpp" || extraction?.fallbackProvider === "none").toBe(true);
 		expect(
 			extraction?.status === "active" ||
 				extraction?.status === "degraded" ||

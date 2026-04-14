@@ -11,7 +11,12 @@ import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
-import { hasCommand, preflightOllamaEmbedding, promptOpenAIEmbeddingModel } from "./setup-providers.js";
+import {
+	hasCommand,
+	hasLlamaCppServer,
+	preflightOllamaEmbedding,
+	promptOpenAIEmbeddingModel,
+} from "./setup-providers.js";
 import {
 	DEPLOYMENT_TYPE_CHOICES,
 	type DeploymentTypeChoice,
@@ -115,7 +120,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const hasCodexCommand = hasCommand("codex");
 	const hasOllamaCommand = hasCommand("ollama");
 	const hasOpenCodeCommand = hasCommand("opencode");
+	const llamaCppServerAvailable = await hasLlamaCppServer();
 	const availableToolExtractionProviders: ExtractionProviderChoice[] = [];
+	if (llamaCppServerAvailable) availableToolExtractionProviders.push("llama-cpp");
 	if (hasClaudeCommand) availableToolExtractionProviders.push("claude-code");
 	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
 	if (hasOllamaCommand) availableToolExtractionProviders.push("ollama");
@@ -542,6 +549,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			message: "How should memories be embedded for search?",
 			choices: [
 				{ value: "native", name: "Built-in (recommended, no setup required)" },
+				{ value: "llama-cpp", name: "llama.cpp (local — nomic-embed-text)" },
 				{ value: "ollama", name: "Ollama (local, requires ollama install)" },
 				{ value: "openai", name: "OpenAI API" },
 				{ value: "none", name: "Skip embeddings for now" },
@@ -555,6 +563,31 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	if (embeddingProvider === "native") {
 		embeddingModel = "nomic-embed-text-v1.5";
 		embeddingDimensions = 768;
+	} else if (embeddingProvider === "llama-cpp") {
+		if (nonInteractive) {
+			const configuredModel =
+				deps.normalizeStringValue(options.embeddingModel) ||
+				deps.normalizeStringValue(existingEmbedding.model) ||
+				"nomic-embed-text";
+			embeddingModel = configuredModel;
+			embeddingDimensions = getEmbeddingDimensions(configuredModel);
+		} else {
+			console.log();
+			const model = await select({
+				message: "Which embedding model?",
+				choices: [
+					{ value: "nomic-embed-text", name: "nomic-embed-text (768d, recommended)" },
+					{ value: "all-minilm", name: "all-minilm (384d, faster)" },
+					{ value: "mxbai-embed-large", name: "mxbai-embed-large (1024d, better quality)" },
+				],
+			});
+			embeddingModel = model;
+			embeddingDimensions = getEmbeddingDimensions(model);
+			if (!llamaCppServerAvailable) {
+				console.log(chalk.yellow("  No llama.cpp server detected on http://localhost:8080."));
+				console.log(chalk.yellow("  Embeddings will fail until llama.cpp is running."));
+			}
+		}
 	} else if (embeddingProvider === "ollama") {
 		if (nonInteractive) {
 			const configuredModel =
@@ -632,6 +665,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log(chalk.yellow(`  Warning: ${EXTRACTION_SAFETY_WARNING}`));
 		console.log();
 		const choices = [
+			{
+				value: "llama-cpp",
+				name: `llama.cpp (local, recommended — qwen3.5:4b minimum)${detectedProvider === "llama-cpp" ? " — detected" : ""}`,
+			},
 			{
 				value: "claude-code",
 				name: `Claude Code (Haiku, recommended if you already have Pro/Max)${detectedProvider === "claude-code" ? " — detected" : ""}`,

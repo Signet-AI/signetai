@@ -9,10 +9,11 @@ import { getAgentPresenceForSession } from "../cross-agent";
 import { getDbAccessor } from "../db-accessor";
 import {
 	fetchEmbedding,
+	findLlamaCppEmbeddingModel,
 	resolveEmbeddingApiKey,
 	resolveEmbeddingBaseUrl,
 	resolveOllamaUrl,
-	setNativeFallbackToOllama,
+	setNativeFallbackProvider,
 } from "../embedding-fetch";
 import { logger } from "../logger";
 import type { EmbeddingConfig } from "../memory-config";
@@ -24,7 +25,7 @@ import {
 import { authConfig } from "./state";
 
 export interface EmbeddingStatus {
-	provider: "native" | "ollama" | "openai" | "none";
+	provider: "native" | "ollama" | "openai" | "llama-cpp" | "none";
 	model: string;
 	available: boolean;
 	modelCached?: boolean;
@@ -914,28 +915,59 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 			} else {
 				logger.warn("embedding", `Native provider unavailable: ${nativeStatus.error ?? "unknown"}`);
 				try {
-					const ollamaRes = await fetch(`${resolveOllamaUrl().replace(/\/$/, "")}/api/tags`, {
-						method: "GET",
-						signal: AbortSignal.timeout(3000),
-					});
-					if (ollamaRes.ok) {
-						const ollamaData = (await ollamaRes.json()) as { models?: { name: string }[] };
-						const models = ollamaData.models ?? [];
-						const hasNomic = models.some((m) => m.name.startsWith("nomic-embed-text"));
-						if (hasNomic) {
-							status.available = true;
-							status.dimensions = 768;
-							status.error = "Native unavailable — using ollama fallback";
-							setNativeFallbackToOllama(true);
-							logger.info("embedding", "Ollama fallback available — will use ollama for embeddings");
+					let fallbackUsed = false;
+
+					const discoveredModel = await findLlamaCppEmbeddingModel();
+					if (discoveredModel) {
+						status.available = true;
+						status.dimensions = 768;
+						status.error = `Native unavailable — using llama.cpp fallback (model: ${discoveredModel})`;
+						setNativeFallbackProvider("llama-cpp", discoveredModel);
+						fallbackUsed = true;
+						logger.info("embedding", `llama.cpp fallback available with ${discoveredModel} — will use for embeddings`);
+					}
+
+					if (!fallbackUsed) {
+						const ollamaRes = await fetch(`${resolveOllamaUrl().replace(/\/$/, "")}/api/tags`, {
+							method: "GET",
+							signal: AbortSignal.timeout(3000),
+						});
+						if (ollamaRes.ok) {
+							const ollamaData = (await ollamaRes.json()) as { models?: { name: string }[] };
+							const models = ollamaData.models ?? [];
+							const hasNomic = models.some((m) => m.name.startsWith("nomic-embed-text"));
+							if (hasNomic) {
+								status.available = true;
+								status.dimensions = 768;
+								status.error = "Native unavailable — using ollama fallback";
+								setNativeFallbackProvider("ollama");
+								logger.info("embedding", "Ollama fallback available — will use ollama for embeddings");
+							} else {
+								status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama available but nomic-embed-text not found.`;
+							}
 						} else {
-							status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama available but nomic-embed-text not found.`;
+							status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama not available.`;
 						}
-					} else {
-						status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama not available.`;
 					}
 				} catch {
-					status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama not reachable.`;
+					status.error = `Native: ${nativeStatus.error ?? "not ready"}. Local providers not reachable.`;
+				}
+			}
+		} else if (cfg.provider === "llama-cpp") {
+			const res = await fetch(`${cfg.base_url.replace(/\/$/, "")}/v1/models`, {
+				method: "GET",
+				signal: AbortSignal.timeout(5000),
+			});
+
+			if (!res.ok) {
+				status.error = `llama.cpp server returned ${res.status}`;
+			} else {
+				const testResult = await fetchEmbedding("test", cfg);
+				if (testResult) {
+					status.available = true;
+					status.dimensions = testResult.length;
+				} else {
+					status.error = "llama.cpp server reachable but embedding failed";
 				}
 			}
 		} else if (cfg.provider === "ollama") {

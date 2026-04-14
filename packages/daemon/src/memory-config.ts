@@ -15,7 +15,7 @@ import { type AuthConfig, parseAuthConfig } from "./auth/config";
 import { logger } from "./logger";
 
 export interface EmbeddingConfig {
-	provider: "native" | "ollama" | "openai" | "none";
+	provider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
 	model: string;
 	dimensions: number;
 	base_url: string;
@@ -59,9 +59,9 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 	semanticContradictionEnabled: true,
 	semanticContradictionTimeoutMs: 120000,
 	extraction: {
-		provider: "ollama",
-		fallbackProvider: "ollama",
-		model: "qwen3:4b",
+		provider: "llama-cpp",
+		fallbackProvider: "llama-cpp",
+		model: "qwen3.5:4b",
 		strength: "low",
 		endpoint: undefined,
 		timeout: DEFAULT_PIPELINE_TIMEOUT_MS,
@@ -242,6 +242,7 @@ export const DEFAULT_PIPELINE_V2: PipelineV2Config = {
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+export const DEFAULT_LLAMACPP_BASE_URL = "http://localhost:8080";
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
 export interface ResolvedMemoryConfig {
@@ -279,15 +280,18 @@ function isExtractionStrength(v: unknown): v is "low" | "medium" | "high" {
 	return typeof v === "string" && ["low", "medium", "high"].includes(v);
 }
 
-function isExtractionFallbackProvider(v: unknown): v is "ollama" | "none" {
-	return v === "ollama" || v === "none";
+function isExtractionFallbackProvider(v: unknown): v is "llama-cpp" | "ollama" | "none" {
+	return v === "llama-cpp" || v === "ollama" || v === "none";
 }
 
-function resolveExtractionFallbackProvider(raw: unknown, fallback: "ollama" | "none"): "ollama" | "none" {
+function resolveExtractionFallbackProvider(
+	raw: unknown,
+	fallback: "llama-cpp" | "ollama" | "none",
+): "llama-cpp" | "ollama" | "none" {
 	if (raw === undefined || raw === null) return fallback;
 	if (isExtractionFallbackProvider(raw)) return raw;
 	throw new MemoryConfigValidationError(
-		`Invalid extraction fallbackProvider "${String(raw)}"; expected "ollama" or "none"`,
+		`Invalid extraction fallbackProvider "${String(raw)}"; expected "llama-cpp", "ollama", or "none"`,
 	);
 }
 
@@ -443,14 +447,14 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	const flatProviderWon = isExtractionProvider(flatProvider);
 	const nestedProviderWon = isExtractionProvider(nestedProvider);
 	// Model-only flat key: no provider set anywhere, but extractionModel is
-	// present.  Default to "ollama" so the model isn't silently discarded.
+	// present.  Default to "llama-cpp" so the model isn't silently discarded.
 	const flatModelOnly = !flatProviderWon && !nestedProviderWon && typeof flatModel === "string";
 	const resolvedProvider: ProviderKind = flatProviderWon
 		? flatProvider
 		: nestedProviderWon
 			? nestedProvider
 			: flatModelOnly
-				? "ollama"
+				? "llama-cpp"
 				: d.extraction.provider;
 	const resolvedModel = flatProviderWon
 		? resolveModel(resolvedProvider, flatModel)
@@ -1033,7 +1037,9 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			if (emb.provider === "none") {
 				defaults.embedding.provider = "none";
 			} else if (emb.provider) {
-				defaults.embedding.provider = emb.provider as "native" | "ollama" | "openai";
+				const rawProvider = String(emb.provider);
+				defaults.embedding.provider =
+					rawProvider === "local" ? "native" : (rawProvider as "native" | "llama-cpp" | "ollama" | "openai");
 				defaults.embedding.model = (emb.model as string | undefined) ?? defaults.embedding.model;
 				defaults.embedding.dimensions = Number.parseInt(String(emb.dimensions ?? "768"), 10);
 				const explicitBaseUrl =
@@ -1044,6 +1050,11 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0
 							? explicitBaseUrl
 							: DEFAULT_OLLAMA_BASE_URL;
+				} else if (defaults.embedding.provider === "llama-cpp") {
+					defaults.embedding.base_url =
+						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0
+							? explicitBaseUrl
+							: DEFAULT_LLAMACPP_BASE_URL;
 				} else if (defaults.embedding.provider === "openai") {
 					defaults.embedding.base_url =
 						typeof explicitBaseUrl === "string" && explicitBaseUrl.trim().length > 0

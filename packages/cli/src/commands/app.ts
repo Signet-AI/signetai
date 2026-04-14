@@ -62,12 +62,12 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		)
 		.option(
 			"--embedding-provider <provider>",
-			"Embedding provider in non-interactive mode (native, ollama, openai, none)",
+			"Embedding provider in non-interactive mode (native, llama-cpp, ollama, openai, none)",
 		)
 		.option("--embedding-model <model>", "Embedding model in non-interactive mode")
 		.option(
 			"--extraction-provider <provider>",
-			"Extraction provider in non-interactive mode (claude-code, codex, ollama, opencode, openrouter, none)",
+			"Extraction provider in non-interactive mode (claude-code, codex, llama-cpp, ollama, opencode, openrouter, none)",
 		)
 		.option("--extraction-model <model>", "Extraction model in non-interactive mode")
 		.option("--search-balance <alpha>", "Search balance alpha in non-interactive mode (0-1)")

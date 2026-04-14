@@ -163,7 +163,7 @@ export class TokenBucketRateLimiter {
 	}
 }
 
-type RemoteProvider = Exclude<PipelineExtractionConfig["provider"], "none" | "ollama" | "command">;
+type RemoteProvider = Exclude<PipelineExtractionConfig["provider"], "none" | "llama-cpp" | "ollama" | "command">;
 
 const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 	"claude-code",
@@ -593,6 +593,156 @@ export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): Ll
 				return res.ok;
 			} catch {
 				logger.debug("pipeline", "Ollama not available");
+				return false;
+			}
+		},
+	};
+}
+
+// ---------------------------------------------------------------------------
+// llama.cpp via OpenAI-compatible HTTP API
+// ---------------------------------------------------------------------------
+
+export interface LlamaCppProviderConfig {
+	readonly model?: string;
+	readonly baseUrl: string;
+	readonly defaultTimeoutMs: number;
+	readonly maxContextTokens?: number;
+}
+
+const DEFAULT_LLAMACPP_CONFIG = {
+	baseUrl: "http://127.0.0.1:8080",
+	defaultTimeoutMs: 90000,
+};
+
+interface LlamaCppMessage {
+	readonly content?: string | readonly LlamaCppContentPart[];
+}
+
+interface LlamaCppChoice {
+	readonly message?: LlamaCppMessage;
+}
+
+interface LlamaCppUsage {
+	readonly prompt_tokens?: number;
+	readonly completion_tokens?: number;
+}
+
+interface LlamaCppResponse {
+	readonly choices?: readonly LlamaCppChoice[];
+	readonly usage?: LlamaCppUsage;
+}
+
+function extractLlamaCppText(content: string | readonly LlamaCppContentPart[] | undefined): string {
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	const parts: string[] = [];
+	for (const part of content) {
+		if (part?.type !== "text") continue;
+		if (typeof part.text !== "string") continue;
+		const text = part.text.trim();
+		if (text.length > 0) parts.push(text);
+	}
+	return parts.join("\n").trim();
+}
+
+export function createLlamaCppProvider(config?: Partial<LlamaCppProviderConfig>): LlmProvider {
+	const cfg = {
+		baseUrl: trimTrailingSlash(config?.baseUrl ?? DEFAULT_LLAMACPP_CONFIG.baseUrl),
+		defaultTimeoutMs: config?.defaultTimeoutMs ?? DEFAULT_LLAMACPP_CONFIG.defaultTimeoutMs,
+		maxContextTokens: normalizePositiveInt(config?.maxContextTokens),
+	};
+	const model = typeof config?.model === "string" && config.model.trim().length > 0
+		? config.model.trim()
+		: "qwen3.5:4b";
+
+	async function callLlamaCpp(
+		prompt: string,
+		opts?: { timeoutMs?: number; maxTokens?: number },
+	): Promise<{ text: string; usage: LlamaCppUsage | null }> {
+		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+		const maxTokens = opts?.maxTokens ?? 4096;
+		const url = `${cfg.baseUrl}/v1/chat/completions`;
+		const bodyObj: Record<string, unknown> = {
+			model,
+			messages: [{ role: "user", content: prompt }],
+			max_tokens: maxTokens,
+			stream: false,
+		};
+		if (cfg.maxContextTokens !== undefined) {
+			bodyObj.num_ctx = cfg.maxContextTokens;
+		}
+		const body = JSON.stringify(bodyObj);
+
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+		try {
+			const options: Record<string, number> = {};
+			if (cfg.maxContextTokens !== undefined) options.num_ctx = cfg.maxContextTokens;
+
+			const res = await fetch(url, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body,
+				signal: controller.signal,
+			});
+
+			if (!res.ok) {
+				const detail = await res.text().catch(() => "");
+				throw new Error(`llama.cpp HTTP ${res.status}: ${detail.slice(0, 300)}`);
+			}
+
+			const data = (await res.json()) as LlamaCppResponse;
+			const first = Array.isArray(data.choices) ? data.choices[0] : undefined;
+			const text = extractLlamaCppText(first?.message?.content);
+			if (text.length === 0) {
+				throw new Error("llama.cpp returned empty response");
+			}
+			return { text, usage: data.usage ?? null };
+		} catch (e) {
+			if (e instanceof DOMException && e.name === "AbortError") {
+				throw new Error(`llama.cpp timeout after ${timeoutMs}ms`);
+			}
+			throw e;
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	return {
+		name: `llama-cpp:${model}`,
+
+		async generate(prompt, opts): Promise<string> {
+			const { text } = await callLlamaCpp(prompt, opts);
+			return text;
+		},
+
+		async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
+			const { text, usage } = await callLlamaCpp(prompt, opts);
+			return {
+				text,
+				usage: usage
+					? {
+							inputTokens: usage.prompt_tokens ?? null,
+							outputTokens: usage.completion_tokens ?? null,
+							cacheReadTokens: null,
+							cacheCreationTokens: null,
+							totalCost: null,
+							totalDurationMs: null,
+						}
+					: null,
+			};
+		},
+
+		async available(): Promise<boolean> {
+			try {
+				const res = await fetch(`${cfg.baseUrl}/v1/models`, {
+					signal: AbortSignal.timeout(3000),
+				});
+				return res.ok;
+			} catch {
+				logger.debug("pipeline", "llama.cpp not available");
 				return false;
 			}
 		},

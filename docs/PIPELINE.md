@@ -531,6 +531,12 @@ returning a `Promise<boolean>`.
 
 Two implementations are shipped:
 
+**LlamaCppProvider** calls the llama.cpp server via its OpenAI-compatible
+`POST /v1/chat/completions` endpoint. The default base URL is
+`http://localhost:8080` and the default model is `qwen3.5:4b`. No
+authentication is required. The `available` check uses a 3-second timeout
+against `GET /v1/models`.
+
 **OllamaProvider** calls the Ollama HTTP API at `POST /api/generate` with
 `stream: false`. The default base URL is `http://localhost:11434` and the
 default model is `qwen3:4b` (deprecated — see below). `nemotron-3-nano:4b` is the
@@ -545,7 +551,7 @@ For live prompt harness commands, see
 **ClaudeCodeProvider** invokes the Claude Code CLI as a subprocess:
 `claude -p <prompt> --model <model> --no-session-persistence --output-format text`.
 The default model is `haiku`. Timeout is 60,000 ms. This provider is
-available as a fallback when Ollama is not running locally but the
+available as a fallback when no local LLM server is running but the
 Claude Code CLI is present on PATH.
 
 The interface is intentionally minimal — no streaming, no chat history, no
@@ -1024,8 +1030,8 @@ Extraction safety note:
 
 ```yaml
 extraction:
-  provider: ollama               # "none" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter" | "command"
-  model: qwen3:4b
+  provider: llama-cpp            # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter" | "command"
+  model: qwen3.5:4b
   timeout: 90000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
   structuredOutput: true         # send JSON schema in format field; set false for providers that reject it (e.g. GitHub Copilot)
@@ -1039,8 +1045,8 @@ extraction:
 
 synthesis:
   enabled: true
-  provider: ollama               # same provider choices as extraction, except "command"
-  model: qwen3:4b
+  provider: llama-cpp            # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
+  model: qwen3.5:4b
   timeout: 120000                # ms, range 5000–300000
   # when omitted entirely, synthesis falls back to extraction provider/model
   # except extraction.provider=command, which falls back to synthesis defaults
@@ -1181,8 +1187,8 @@ memory:
     enabled: true
     semanticContradictionEnabled: true
     extraction:
-      provider: ollama
-      model: qwen3:4b
+      provider: llama-cpp
+      model: qwen3.5:4b
     graph:
       enabled: true
     autonomous:

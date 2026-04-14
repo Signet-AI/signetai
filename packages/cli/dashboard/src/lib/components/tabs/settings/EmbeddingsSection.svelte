@@ -12,10 +12,12 @@ const selectContentClass =
 const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+const DEFAULT_LLAMACPP_BASE_URL = "http://localhost:8080";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
 const EMBEDDING_PROVIDER_OPTIONS = [
 	{ value: "native", label: "native (built-in)" },
+	{ value: "llama-cpp", label: "llama.cpp" },
 	{ value: "ollama", label: "ollama" },
 	{ value: "openai", label: "openai" },
 	{ value: "none", label: "none (disable vectors)" },
@@ -23,6 +25,11 @@ const EMBEDDING_PROVIDER_OPTIONS = [
 
 const EMBEDDING_MODEL_PRESETS = {
 	native: [{ value: "nomic-embed-text-v1.5", label: "nomic-embed-text-v1.5", dimensions: 768 }],
+	"llama-cpp": [
+		{ value: "nomic-embed-text", label: "nomic-embed-text (recommended)", dimensions: 768 },
+		{ value: "all-minilm", label: "all-minilm", dimensions: 384 },
+		{ value: "mxbai-embed-large", label: "mxbai-embed-large", dimensions: 1024 },
+	],
 	ollama: [
 		{ value: "nomic-embed-text", label: "nomic-embed-text (recommended)", dimensions: 768 },
 		{ value: "all-minilm", label: "all-minilm", dimensions: 384 },
@@ -62,6 +69,7 @@ function isKnownPreset(model: string): boolean {
 }
 
 function defaultBaseUrlForProvider(provider: EmbeddingProvider): string {
+	if (provider === "llama-cpp") return DEFAULT_LLAMACPP_BASE_URL;
 	if (provider === "ollama") return DEFAULT_OLLAMA_BASE_URL;
 	if (provider === "openai") return DEFAULT_OPENAI_BASE_URL;
 	return "";
@@ -82,6 +90,7 @@ function setProviderDefaults(provider: EmbeddingProvider): void {
 	if (
 		currentBaseUrl === "" ||
 		currentBaseUrl === DEFAULT_OLLAMA_BASE_URL ||
+		currentBaseUrl === DEFAULT_LLAMACPP_BASE_URL ||
 		currentBaseUrl === DEFAULT_OPENAI_BASE_URL
 	) {
 		st.sSetStr([...embPath(), "base_url"], nextBaseUrl);
@@ -160,8 +169,8 @@ function handleModelPresetChange(v: string | undefined): void {
 				</div>
 			</FormField>
 
-			{#if embeddingProvider() === "ollama" || embeddingProvider() === "openai"}
-				<FormField label="Base URL" description="Ollama defaults to http://localhost:11434. OpenAI defaults to https://api.openai.com/v1. Switching providers keeps the matching default unless you override it.">
+			{#if embeddingProvider() === "llama-cpp" || embeddingProvider() === "ollama" || embeddingProvider() === "openai"}
+				<FormField label="Base URL" description="llama.cpp defaults to http://localhost:8080. Ollama defaults to http://localhost:11434. OpenAI defaults to https://api.openai.com/v1. Switching providers keeps the matching default unless you override it.">
 					<Input
 						value={st.sStr([...embPath(), "base_url"])}
 						oninput={(e) => st.sSetStr([...embPath(), "base_url"], e.currentTarget.value)}

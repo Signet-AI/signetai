@@ -681,7 +681,7 @@ describe("resolveSummaryProvider", () => {
 		expect(provider.name).toBe("codex:gpt-5-codex-mini");
 	});
 
-	it("falls back to ollama when synthesis codex is configured but CLI is unavailable", async () => {
+	it("falls back to llama-cpp when synthesis codex is configured but CLI is unavailable", async () => {
 		Bun.which = (() => null) as typeof Bun.which;
 		const dir = makeAgentsDir(`memory:
   pipelineV2:
@@ -691,7 +691,7 @@ describe("resolveSummaryProvider", () => {
 `);
 
 		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
-		expect(provider.name.startsWith("ollama:")).toBe(true);
+		expect(provider.name.startsWith("llama-cpp:")).toBe(true);
 	});
 
 	it("falls back to resolved extraction config when synthesis is absent", async () => {

@@ -95,6 +95,11 @@ export function normalizeRuntimeBaseUrl(url: string | undefined, fallback: strin
 	}
 }
 
+export function resolveRegistryLlamaCppBaseUrl(provider: string, endpoint: string | undefined): string | undefined {
+	if (provider !== "llama-cpp") return undefined;
+	return normalizeRuntimeBaseUrl(endpoint, "http://127.0.0.1:8080");
+}
+
 export function resolveRegistryOllamaBaseUrl(provider: string, endpoint: string | undefined): string | undefined {
 	if (provider !== "ollama") return undefined;
 	return normalizeRuntimeBaseUrl(endpoint, "http://127.0.0.1:11434");
@@ -190,6 +195,7 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
 export type RuntimeProviderName =
 	| "none"
 	| "ollama"
+	| "llama-cpp"
 	| "claude-code"
 	| "opencode"
 	| "codex"
@@ -200,6 +206,7 @@ export type RuntimeProviderName =
 export type RuntimeSynthesisProviderName =
 	| "none"
 	| "ollama"
+	| "llama-cpp"
 	| "claude-code"
 	| "codex"
 	| "opencode"
@@ -211,7 +218,7 @@ export interface ProviderRuntimeResolution {
 		configured: string | null;
 		resolved: RuntimeProviderName;
 		effective: RuntimeProviderName;
-		fallbackProvider: "ollama" | "none";
+		fallbackProvider: "llama-cpp" | "ollama" | "none";
 		status: "active" | "degraded" | "blocked" | "disabled" | "paused";
 		degraded: boolean;
 		fallbackApplied: boolean;
@@ -231,7 +238,7 @@ export const providerRuntimeResolution: ProviderRuntimeResolution = {
 		configured: null,
 		resolved: "claude-code",
 		effective: "claude-code",
-		fallbackProvider: "ollama",
+		fallbackProvider: "llama-cpp",
 		status: "active",
 		degraded: false,
 		fallbackApplied: false,

@@ -1,6 +1,6 @@
-import type { EmbeddingConfig } from "./memory-config";
-import { DEFAULT_OPENAI_BASE_URL, DEFAULT_OLLAMA_BASE_URL } from "./memory-config";
 import { logger } from "./logger";
+import type { EmbeddingConfig } from "./memory-config";
+import { DEFAULT_LLAMACPP_BASE_URL, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OPENAI_BASE_URL } from "./memory-config";
 import { getSecret } from "./secrets.js";
 
 export function resolveOllamaUrl(): string {
@@ -15,11 +15,37 @@ export function resolveOllamaUrl(): string {
 	}
 }
 
-let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
-let nativeFallbackToOllama = false;
+export const LLAMACPP_FALLBACK_EMBEDDING_MODELS = ["nomic-embed-text", "all-minilm", "mxbai-embed-large"] as const;
+export type LlamaCppEmbeddingModel = (typeof LLAMACPP_FALLBACK_EMBEDDING_MODELS)[number];
 
-export function setNativeFallbackToOllama(value: boolean): void {
-	nativeFallbackToOllama = value;
+export async function findLlamaCppEmbeddingModel(
+	baseUrl = DEFAULT_LLAMACPP_BASE_URL,
+): Promise<LlamaCppEmbeddingModel | null> {
+	try {
+		const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/models`, {
+			method: "GET",
+			signal: AbortSignal.timeout(3000),
+		});
+		if (!res.ok) return null;
+		const raw = (await res.json()) as { data?: Array<{ id?: string }> };
+		const loaded = new Set((raw.data ?? []).map((m) => m.id?.trim()).filter(Boolean));
+		for (const model of LLAMACPP_FALLBACK_EMBEDDING_MODELS) {
+			if (loaded.has(model)) return model;
+		}
+	} catch {}
+	return null;
+}
+
+let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
+let nativeFallbackProvider: "llama-cpp" | "ollama" | null = null;
+let nativeFallbackModel: LlamaCppEmbeddingModel | null = null;
+
+export function setNativeFallbackProvider(
+	provider: "llama-cpp" | "ollama" | null,
+	model?: LlamaCppEmbeddingModel | null,
+): void {
+	nativeFallbackProvider = provider;
+	nativeFallbackModel = model ?? null;
 }
 
 async function fetchOllamaEmbedding(text: string, baseUrl: string, model: string): Promise<number[] | null> {
@@ -43,6 +69,9 @@ async function fetchOllamaEmbedding(text: string, baseUrl: string, model: string
 export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
 	if (cfg.provider === "openai") {
 		return cfg.base_url.trim() || DEFAULT_OPENAI_BASE_URL;
+	}
+	if (cfg.provider === "llama-cpp") {
+		return cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
 	}
 	return cfg.base_url;
 }
@@ -72,8 +101,22 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 	if (cfg.provider === "none") return null;
 	try {
 		if (cfg.provider === "native") {
-			if (nativeFallbackToOllama) {
+			if (nativeFallbackProvider === "ollama") {
 				return await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text");
+			}
+			if (nativeFallbackProvider === "llama-cpp") {
+				const fallbackModel = nativeFallbackModel ?? "nomic-embed-text";
+				const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ input: text, model: fallbackModel }),
+					signal: AbortSignal.timeout(5000),
+				});
+				if (llamaCppRes.ok) {
+					const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
+					if (data.data?.[0]?.embedding) return data.data[0].embedding;
+				}
+				return null;
 			}
 			try {
 				if (!cachedNativeEmbed) {
@@ -84,14 +127,41 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 			} catch (nativeErr) {
 				logger.warn(
 					"embedding",
-					`Native embedding failed, attempting ollama fallback: ${
+					`Native embedding failed, attempting local fallback: ${
 						nativeErr instanceof Error ? nativeErr.message : String(nativeErr)
 					}`,
 				);
 				try {
+					const discoveredModel = await findLlamaCppEmbeddingModel();
+					if (!discoveredModel) {
+						logger.warn("embedding", "llama.cpp server reachable but no supported embedding model loaded");
+					} else {
+						const llamaCppRes = await fetch(`${DEFAULT_LLAMACPP_BASE_URL.replace(/\/$/, "")}/v1/embeddings`, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ input: text, model: discoveredModel }),
+							signal: AbortSignal.timeout(5000),
+						});
+						if (llamaCppRes.ok) {
+							nativeFallbackProvider = "llama-cpp";
+							nativeFallbackModel = discoveredModel;
+							const data = (await llamaCppRes.json()) as { data?: Array<{ embedding: number[] }> };
+							if (data.data?.[0]?.embedding) {
+								logger.info(
+									"embedding",
+									`llama.cpp fallback succeeded (model: ${discoveredModel}) — will use llama.cpp for remaining embeddings this session`,
+								);
+								return data.data[0].embedding;
+							}
+						}
+					}
+				} catch {
+					logger.warn("embedding", "llama.cpp fallback not reachable");
+				}
+				try {
 					const result = await fetchOllamaEmbedding(text, resolveOllamaUrl(), "nomic-embed-text");
 					if (result !== null) {
-						nativeFallbackToOllama = true;
+						nativeFallbackProvider = "ollama";
 						logger.info(
 							"embedding",
 							"Ollama fallback succeeded — will use ollama for remaining embeddings this session",
@@ -107,6 +177,25 @@ export async function fetchEmbedding(text: string, cfg: EmbeddingConfig): Promis
 		}
 		if (cfg.provider === "ollama") {
 			return await fetchOllamaEmbedding(text, cfg.base_url, cfg.model);
+		}
+
+		if (cfg.provider === "llama-cpp") {
+			const baseUrl = cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
+			const res = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/embeddings`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ model: cfg.model, input: text }),
+				signal: AbortSignal.timeout(30000),
+			});
+			if (!res.ok) {
+				logger.warn("embedding", "llama.cpp embedding request failed", {
+					status: res.status,
+					model: cfg.model,
+				});
+				return null;
+			}
+			const data = (await res.json()) as { data: Array<{ embedding: number[] }> };
+			return data.data?.[0]?.embedding ?? null;
 		}
 
 		const apiKey = await resolveEmbeddingApiKey(cfg.api_key);

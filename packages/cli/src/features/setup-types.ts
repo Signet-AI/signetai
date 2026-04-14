@@ -1,5 +1,5 @@
 import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core";
-import type { OpenClawRuntimeChoice } from "./setup-shared.js";
+import type { EmbeddingProviderChoice, ExtractionProviderChoice, OpenClawRuntimeChoice } from "./setup-shared.js";
 
 export interface SetupWizardOptions {
 	path?: string;
@@ -67,10 +67,10 @@ export interface FreshSetupConfig {
 	readonly openclawRuntimePath: OpenClawRuntimeChoice;
 	readonly configureOpenClawWs: boolean;
 	readonly openclawConfigCount: number;
-	readonly embeddingProvider: "native" | "ollama" | "openai" | "none";
+	readonly embeddingProvider: EmbeddingProviderChoice;
 	readonly embeddingModel: string;
 	readonly embeddingDimensions: number;
-	readonly extractionProvider: "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
+	readonly extractionProvider: ExtractionProviderChoice;
 	readonly extractionModel: string;
 	readonly searchBalance: number;
 	readonly searchTopK: number;

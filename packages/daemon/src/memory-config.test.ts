@@ -559,8 +559,8 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		// No provider set → defaults to "ollama"; flat model must propagate
-		expect(result.extraction.provider).toBe("ollama");
+		// No provider set → defaults to "llama-cpp"; flat model must propagate
+		expect(result.extraction.provider).toBe("llama-cpp");
 		expect(result.extraction.model).toBe("qwen3:8b");
 	});
 

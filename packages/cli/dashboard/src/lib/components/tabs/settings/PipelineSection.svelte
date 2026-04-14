@@ -34,10 +34,11 @@ const selectContentClass =
 const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
 
 const EXTRACTION_SAFETY_TEXT =
-	"intended usage: claude code on haiku, codex cli on gpt mini with a pro/max subscription, or local ollama at qwen3:4b or larger. remote api extraction can stack up extreme fees fast. set provider to none on a vps if you do not want background extraction.";
+	"intended usage: claude code on haiku, codex cli on gpt mini with a pro/max subscription, or local providers (llama.cpp or ollama) at qwen3.5:4b or larger. remote api extraction can stack up extreme fees fast. set provider to none on a vps if you do not want background extraction.";
 
 const EXTRACTION_PROVIDER_OPTIONS = [
 	{ value: "none", label: "none (disable extraction)" },
+	{ value: "llama-cpp", label: "llama-cpp" },
 	{ value: "ollama", label: "ollama" },
 	{ value: "claude-code", label: "claude-code" },
 	{ value: "codex", label: "codex" },
@@ -48,6 +49,11 @@ const EXTRACTION_PROVIDER_OPTIONS = [
 
 // Hardcoded fallback presets — used when the registry API is unavailable
 const FALLBACK_MODEL_PRESETS: Record<string, Array<{ value: string; label: string }>> = {
+	"llama-cpp": [
+		{ value: "qwen3.5:4b", label: "qwen3.5:4b" },
+		{ value: "qwen3:8b", label: "qwen3:8b" },
+		{ value: "llama-3.1-8b", label: "Llama 3.1 8B" },
+	],
 	ollama: [
 		{ value: "qwen3:4b", label: "qwen3:4b" },
 		{ value: "glm-4.7-flash", label: "glm-4.7-flash" },
@@ -132,6 +138,9 @@ function pickPreferredModel(provider: string, presets: Array<{ value: string; la
 	}
 	if (provider === "ollama") {
 		return vals.find((v) => v === "qwen3:4b") ?? vals[0] ?? "";
+	}
+	if (provider === "llama-cpp") {
+		return vals.find((v) => v === "qwen3.5:4b") ?? vals[0] ?? "";
 	}
 	if (provider === "opencode") {
 		return (

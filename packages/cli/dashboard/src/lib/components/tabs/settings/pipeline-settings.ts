@@ -64,7 +64,7 @@ export function resolveSynthesisProvider(agent: unknown): PipelineProviderChoice
 	if (isPipelineProvider(flat)) return flat;
 	const nested = readString(pipeline, "extraction", "provider");
 	if (isPipelineProvider(nested)) return nested;
-	return "ollama";
+	return "llama-cpp";
 }
 
 export function resolveSynthesisModel(agent: unknown): string {

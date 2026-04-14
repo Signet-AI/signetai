@@ -298,7 +298,7 @@ export const PIPELINE_NODES: readonly PipelineNodeDef[] = [
 		logCategories: ["llm"],
 		diagnosticDomain: "provider",
 		icon: "brain",
-		description: "Ollama qwen3:4b (or configured provider)",
+		description: "llama.cpp qwen3.5:4b (or configured provider)",
 	},
 ] as const;
 

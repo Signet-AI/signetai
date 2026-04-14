@@ -3,8 +3,8 @@ import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core
 import chalk from "chalk";
 
 export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "oh-my-pi" | "pi" | "codex" | "forge" | "hermes-agent";
-export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
-export type ExtractionProviderChoice = "claude-code" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
+export type EmbeddingProviderChoice = "native" | "llama-cpp" | "ollama" | "openai" | "none";
+export type ExtractionProviderChoice = "claude-code" | "llama-cpp" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
 export type DeploymentTypeChoice = "local" | "vps" | "server";
 export interface ResolveSetupExtractionProviderOptions {
@@ -27,9 +27,10 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"forge",
 	"hermes-agent",
 ];
-export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "ollama", "openai", "none"];
+export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "llama-cpp", "ollama", "openai", "none"];
 export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
 	"claude-code",
+	"llama-cpp",
 	"ollama",
 	"opencode",
 	"codex",
@@ -40,6 +41,7 @@ export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plug
 export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
 const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["claude-code", "codex", "opencode"];
 const DETECTED_EXTRACTION_PROVIDER_ORDER: readonly ExtractionProviderChoice[] = [
+	"llama-cpp",
 	"claude-code",
 	"codex",
 	"ollama",

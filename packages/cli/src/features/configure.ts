@@ -296,6 +296,8 @@ async function configureEmbedding(yaml: string): Promise<string> {
 	const provider = await select({
 		message: "Embedding provider:",
 		choices: [
+			{ value: "native", name: "Built-in (recommended, no setup required)" },
+			{ value: "llama-cpp", name: "llama.cpp (local)" },
 			{ value: "ollama", name: "Ollama (local)" },
 			{ value: "openai", name: "OpenAI API" },
 			{ value: "none", name: "Disable embeddings" },
@@ -309,7 +311,10 @@ async function configureEmbedding(yaml: string): Promise<string> {
 	let model = "nomic-embed-text";
 	let dims = 768;
 
-	if (provider === "ollama") {
+	if (provider === "native") {
+		model = "nomic-embed-text-v1.5";
+		console.log("  Embedding model: nomic-embed-text-v1.5 (768d)");
+	} else if (provider === "llama-cpp") {
 		const selected = await select({
 			message: "Model:",
 			choices: [
@@ -320,7 +325,18 @@ async function configureEmbedding(yaml: string): Promise<string> {
 		});
 		model = selected;
 		dims = selected === "all-minilm" ? 384 : selected === "mxbai-embed-large" ? 1024 : 768;
-	} else {
+	} else if (provider === "ollama") {
+		const selected = await select({
+			message: "Model:",
+			choices: [
+				{ value: "nomic-embed-text", name: "nomic-embed-text (768d)" },
+				{ value: "all-minilm", name: "all-minilm (384d)" },
+				{ value: "mxbai-embed-large", name: "mxbai-embed-large (1024d)" },
+			],
+		});
+		model = selected;
+		dims = selected === "all-minilm" ? 384 : selected === "mxbai-embed-large" ? 1024 : 768;
+	} else if (provider === "openai") {
 		const selected = await select({
 			message: "Model:",
 			choices: [
@@ -330,6 +346,8 @@ async function configureEmbedding(yaml: string): Promise<string> {
 		});
 		model = selected;
 		dims = selected === "text-embedding-3-large" ? 3072 : 1536;
+	} else {
+		console.log(`  Warning: unhandled embedding provider '${provider}', using defaults.`);
 	}
 
 	if (yaml.includes("embedding:")) {

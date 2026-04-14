@@ -272,7 +272,7 @@ The daemon runs a plugin-first memory pipeline in
 - Connectors send `x-signet-runtime-path: plugin|legacy`.
 - The session tracker allows one active runtime path per session and
   returns `409` on conflict.
-- Default extraction model: `qwen3:4b` via Ollama.
+- Default extraction model: `qwen3.5:4b` via llama.cpp.
 - Stages: extraction -> decision -> optional knowledge graph ->
   retention decay -> document ingest -> maintenance -> session summary.
 - Modes: `shadowMode`, `mutationsFrozen`, `graphEnabled`,

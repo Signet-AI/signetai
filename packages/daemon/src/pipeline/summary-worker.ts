@@ -33,6 +33,7 @@ import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
+	createLlamaCppProvider,
 	createOllamaProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
@@ -1436,11 +1437,22 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 	const timeout = cfg.pipelineV2.synthesis.timeout;
 	const endpoint = cfg.pipelineV2.synthesis.endpoint;
 	const ollamaMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
-	const fallback = () =>
-		createOllamaProvider({
-			defaultTimeoutMs: timeout,
-			maxContextTokens: ollamaMaxContextTokens,
-		});
+	const rawFallback = cfg.pipelineV2.extraction.fallbackProvider;
+	const fallbackProvider = rawFallback === "llama-cpp" ? "llama-cpp" : rawFallback === "none" ? null : "ollama";
+	const fallback = () => {
+		if (!fallbackProvider) {
+			throw new Error("Synthesis fallback disabled (fallbackProvider: none)");
+		}
+		return fallbackProvider === "llama-cpp"
+			? createLlamaCppProvider({
+					defaultTimeoutMs: timeout,
+					baseUrl: "http://127.0.0.1:8080",
+				})
+			: createOllamaProvider({
+					defaultTimeoutMs: timeout,
+					maxContextTokens: ollamaMaxContextTokens,
+				});
+	};
 	switch (p) {
 		case "none":
 			throw new Error("Summary worker requires an LLM provider but synthesis.provider is 'none'");
@@ -1456,7 +1468,7 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 			if (!apiKey) {
 				logger.error(
 					"summary-worker",
-					"ANTHROPIC_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set ANTHROPIC_API_KEY`",
+					`ANTHROPIC_API_KEY not found for summary worker — falling back to ${fallbackProvider}. Set via env or 'signet secrets set ANTHROPIC_API_KEY'`,
 				);
 				return fallback();
 			}
@@ -1474,7 +1486,7 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 			if (!apiKey) {
 				logger.error(
 					"summary-worker",
-					"OPENROUTER_API_KEY not found for summary worker — falling back to ollama. Set via env or `signet secrets set OPENROUTER_API_KEY`",
+					`OPENROUTER_API_KEY not found for summary worker — falling back to ${fallbackProvider}. Set via env or 'signet secrets set OPENROUTER_API_KEY'`,
 				);
 				return fallback();
 			}
@@ -1490,13 +1502,16 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 		case "claude-code": {
 			const provider = createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
 			if (await provider.available()) return provider;
-			logger.warn("summary-worker", "Claude Code CLI not available for summary worker — falling back to ollama");
+			logger.warn(
+				"summary-worker",
+				`Claude Code CLI not available for summary worker — falling back to ${fallbackProvider}`,
+			);
 			return fallback();
 		}
 		case "codex": {
 			const provider = createCodexProvider({ model: model || "gpt-5-codex-mini", defaultTimeoutMs: timeout });
 			if (await provider.available()) return provider;
-			logger.warn("summary-worker", "Codex CLI not available for summary worker — falling back to ollama");
+			logger.warn("summary-worker", `Codex CLI not available for summary worker — falling back to ${fallbackProvider}`);
 			return fallback();
 		}
 		case "opencode":
@@ -1507,6 +1522,12 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 				ollamaFallbackMaxContextTokens: ollamaMaxContextTokens,
 				defaultTimeoutMs: timeout,
 				enableStructuredOutput: cfg.pipelineV2.synthesis.structuredOutput,
+			});
+		case "llama-cpp":
+			return createLlamaCppProvider({
+				model: model || "qwen3.5:4b",
+				baseUrl: endpoint ?? "http://127.0.0.1:8080",
+				defaultTimeoutMs: timeout,
 			});
 		default:
 			return createOllamaProvider({

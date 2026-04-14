@@ -427,7 +427,7 @@ export interface IdentityResponse {
 // Embeddings types
 
 export interface EmbeddingStatusResponse {
-	readonly provider: "native" | "ollama" | "openai" | "none";
+	readonly provider: "native" | "ollama" | "openai" | "llama-cpp" | "none";
 	readonly model: string;
 	readonly available: boolean;
 	readonly dimensions?: number;

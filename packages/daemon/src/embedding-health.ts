@@ -14,7 +14,7 @@ import type { EmbeddingConfig } from "./memory-config";
 // ---------------------------------------------------------------------------
 
 interface EmbeddingStatus {
-	readonly provider: "native" | "ollama" | "openai" | "none";
+	readonly provider: "native" | "ollama" | "openai" | "llama-cpp" | "none";
 	readonly model: string;
 	readonly available: boolean;
 	readonly dimensions?: number;
@@ -81,9 +81,11 @@ function checkProviderAvailable(providerStatus: EmbeddingStatus): EmbeddingCheck
 		fix:
 			providerStatus.provider === "native"
 				? "Check disk space and network connectivity for initial model download"
-				: providerStatus.provider === "ollama"
-					? "Start ollama with `ollama serve` or check that the model is pulled"
-					: "Verify your OpenAI API key and network connectivity",
+				: providerStatus.provider === "llama-cpp"
+					? "Start llama.cpp server or check that the embedding model is loaded"
+					: providerStatus.provider === "ollama"
+						? "Start ollama with `ollama serve` or check that the model is pulled"
+						: "Verify your OpenAI API key and network connectivity",
 	};
 }
 

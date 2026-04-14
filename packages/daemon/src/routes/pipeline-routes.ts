@@ -47,6 +47,7 @@ import {
 	providerRuntimeResolution,
 	readEnvTrimmed,
 	readPipelineMode,
+	resolveRegistryLlamaCppBaseUrl,
 	resolveRegistryOllamaBaseUrl,
 	resolveRegistryOpenRouterBaseUrl,
 	restartPipelineRuntimeRef,
@@ -432,6 +433,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			anthropicKey,
 			openRouterKey,
 			resolveRegistryOpenRouterBaseUrl(cfg.pipelineV2.extraction.provider, cfg.pipelineV2.extraction.endpoint),
+			resolveRegistryLlamaCppBaseUrl(cfg.pipelineV2.extraction.provider, cfg.pipelineV2.extraction.endpoint),
 		);
 		return c.json({
 			models: getModelsByProvider(),

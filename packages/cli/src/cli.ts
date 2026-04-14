@@ -727,7 +727,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-function embeddingProvider(basePath: string): "native" | "ollama" | "openai" | "none" {
+function embeddingProvider(basePath: string): "native" | "llama-cpp" | "ollama" | "openai" | "none" {
 	const paths = ["agent.yaml", "AGENT.yaml", "config.yaml"].map((name) => join(basePath, name));
 	for (const path of paths) {
 		if (!existsSync(path)) continue;
@@ -737,7 +737,7 @@ function embeddingProvider(basePath: string): "native" | "ollama" | "openai" | "
 			const direct = parsed.embedding;
 			if (isRecord(direct) && typeof direct.provider === "string") {
 				const provider = direct.provider;
-				if (provider === "native" || provider === "ollama" || provider === "openai" || provider === "none") {
+				if (provider === "native" || provider === "llama-cpp" || provider === "ollama" || provider === "openai" || provider === "none") {
 					return provider;
 				}
 			}
@@ -746,7 +746,7 @@ function embeddingProvider(basePath: string): "native" | "ollama" | "openai" | "
 				const nested = mem.embeddings;
 				if (isRecord(nested) && typeof nested.provider === "string") {
 					const provider = nested.provider;
-					if (provider === "native" || provider === "ollama" || provider === "openai" || provider === "none") {
+					if (provider === "native" || provider === "llama-cpp" || provider === "ollama" || provider === "openai" || provider === "none") {
 						return provider;
 					}
 				}
@@ -754,7 +754,7 @@ function embeddingProvider(basePath: string): "native" | "ollama" | "openai" | "
 			const legacy = parsed.embeddings;
 			if (isRecord(legacy) && typeof legacy.provider === "string") {
 				const provider = legacy.provider;
-				if (provider === "native" || provider === "ollama" || provider === "openai" || provider === "none") {
+				if (provider === "native" || provider === "llama-cpp" || provider === "ollama" || provider === "openai" || provider === "none") {
 					return provider;
 				}
 			}
