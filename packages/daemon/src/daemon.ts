@@ -2428,6 +2428,18 @@ process.on("SIGTERM", () => {
 
 process.on("uncaughtException", (err) => {
 	logger.error("daemon", "Uncaught exception", err);
+	if (shuttingDown) return;
+	setShuttingDown(true);
+	cleanup().finally(() => process.exit(1));
+});
+
+process.on("unhandledRejection", (reason) => {
+	logger.error("daemon", "Unhandled rejection", {
+		error: reason instanceof Error ? reason : String(reason),
+		stack: reason instanceof Error ? reason.stack : undefined,
+	});
+	if (shuttingDown) return;
+	setShuttingDown(true);
 	cleanup().finally(() => process.exit(1));
 });
 

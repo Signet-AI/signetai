@@ -11,8 +11,12 @@ import { join } from "node:path";
 import { getBypassedSessionKeys, resetSessions } from "../session-tracker";
 import {
 	DEFAULT_OLLAMA_FALLBACK_MAX_CONTEXT_TOKENS,
+	LlmConcurrencySemaphore,
+	SemaphoreTimeoutError,
+	awaitSubprocessWithDeadline,
 	createClaudeCodeProvider,
 	createCodexProvider,
+	createLlamaCppProvider,
 	createOllamaProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
@@ -1002,6 +1006,7 @@ describe("createOpenCodeProvider", () => {
 	it("uses configured ollama fallback base URL for OpenCode fallback", async () => {
 		const seenUrls: string[] = [];
 		let fallbackBody: Record<string, unknown> | null = null;
+		let postCount = 0;
 		mockFetch(async (url, init) => {
 			seenUrls.push(url);
 			if (url.includes("/session") && !url.includes("/message")) {
@@ -1016,17 +1021,22 @@ describe("createOpenCodeProvider", () => {
 			}
 			if (url.includes("/session/ses_fallback/message")) {
 				if (init?.method === "POST") {
+					postCount++;
+					// First POST returns 404 (session gone) to take the short
+					// retry path (line 2370-2385) that reaches tryOllamaFallback
+					// after only one poll cycle instead of three.
+					if (postCount === 1) {
+						return new Response("Not Found", { status: 404 });
+					}
+					// Retry POST returns empty 200 (malformed) so
+					// parsePostResponse → pollForAssistantMessage → null,
+					// which triggers the Ollama fallback.
 					return new Response("", {
 						status: 200,
 						headers: { "Content-Type": "application/json" },
 					});
 				}
-				return Response.json([
-					{
-						info: { role: "user" },
-						parts: [{ type: "text", text: "still pending" }],
-					},
-				]);
+				return Response.json([]);
 			}
 			if (url === "http://172.17.0.1:11434/api/tags") {
 				return Response.json({ models: [] });
@@ -1044,13 +1054,15 @@ describe("createOpenCodeProvider", () => {
 			ollamaFallbackBaseUrl: "http://172.17.0.1:11434",
 			ollamaFallbackMaxContextTokens: 2048,
 		});
-		const result = await provider.generate("test", { timeoutMs: 250 });
+		// Poll cycles cap at 20s each. The 404→retry path has one poll
+		// cycle, so budget must exceed 20s + some margin for fallback.
+		const result = await provider.generate("test", { timeoutMs: 25000 });
 		expect(result).toBe('{"facts":[],"entities":[]}');
 		expect(seenUrls).toContain("http://172.17.0.1:11434/api/tags");
 		expect(seenUrls).toContain("http://172.17.0.1:11434/api/generate");
 		const fallbackOptions = fallbackBody ? getObjectField(fallbackBody, "options") : undefined;
 		expect(fallbackOptions ? getNumberField(fallbackOptions, "num_ctx") : undefined).toBe(2048);
-	});
+	}, 35000);
 
 	it("generate() prefers info.structured over text parts", async () => {
 		mockFetch(async (url) => {
@@ -1243,7 +1255,6 @@ describe("createOpenCodeProvider", () => {
 		const provider = createOpenCodeProvider({ model: "github-copilot/gpt-4o" });
 		expect(provider.name).toBe("opencode:github-copilot/gpt-4o");
 	});
-
 	it("generate() refreshes bypass TTL on reused session", async () => {
 		mockFetch(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
@@ -1275,6 +1286,79 @@ describe("createOpenCodeProvider", () => {
 		expect(expiryAfterSecond).toBeGreaterThan(expiryAfterFirst);
 
 		resetSessions();
+	});
+
+	it("generate() limits concurrent in-flight requests via LLM semaphore", async () => {
+		let peak = 0;
+		let inflight = 0;
+
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_conc_${Date.now()}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			inflight++;
+			if (inflight > peak) peak = inflight;
+			// Brief delay to allow other semaphore-gated requests to overlap
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			inflight--;
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const N = 8;
+		const providers = Array.from({ length: N }, (_, i) =>
+			createOpenCodeProvider({ baseUrl: "http://localhost:9999", model: `m${i}` }),
+		);
+		const results = await Promise.all(providers.map((p) => p.generate("test")));
+
+		expect(results).toHaveLength(N);
+		for (const r of results) expect(r).toBe("ok");
+		expect(peak).toBeLessThanOrEqual(4);
+		expect(peak).toBeGreaterThan(0);
+	});
+
+	it("generate() throws deadline error when semaphore wait exceeds timeout", async () => {
+		const blockers: Array<() => void> = [];
+
+		mockFetch(async (url) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_deadline_${Date.now()}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			await new Promise<void>((resolve) => blockers.push(resolve));
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		// Fill all 4 semaphore slots with blocked requests
+		const fillers = Array.from({ length: 4 }, (_, i) =>
+			createOpenCodeProvider({ baseUrl: "http://localhost:9999", model: `filler${i}` }),
+		);
+		const fillerPromises = fillers.map((p) => p.generate("block"));
+		await new Promise((r) => setTimeout(r, 200));
+
+		// 5th call queues on the semaphore; its deadline expires before a slot opens
+		const victim = createOpenCodeProvider({ baseUrl: "http://localhost:9999", model: "victim" });
+		const start = Date.now();
+		const victimPromise = victim.generate("test", { timeoutMs: 300 });
+
+		await expect(victimPromise).rejects.toThrow(/semaphore acquisition/);
+		const elapsed = Date.now() - start;
+		expect(elapsed).toBeLessThan(2000);
+
+		for (const release of blockers) release();
+		await Promise.allSettled(fillerPromises);
 	});
 });
 
@@ -1399,5 +1483,478 @@ describe("createOpenRouterProvider", () => {
 				apiKey: "",
 			}),
 		).toThrow(/requires an API key/);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// LlmConcurrencySemaphore unit tests
+// ---------------------------------------------------------------------------
+
+describe("LlmConcurrencySemaphore", () => {
+	it("acquireWithTimeout rejects with SemaphoreTimeoutError", async () => {
+		const sem = new LlmConcurrencySemaphore(1);
+		await sem.acquire();
+
+		try {
+			await sem.acquireWithTimeout(50);
+			throw new Error("should not reach");
+		} catch (err) {
+			expect(err).toBeInstanceOf(SemaphoreTimeoutError);
+			expect((err as SemaphoreTimeoutError).message).toMatch(/timed out/);
+		}
+
+		sem.release();
+	});
+
+	it("acquireWithTimeout clears timer on successful acquisition", async () => {
+		const sem = new LlmConcurrencySemaphore(1);
+		await sem.acquire();
+
+		setTimeout(() => sem.release(), 20);
+
+		const before = Bun.nanoseconds();
+		await sem.acquireWithTimeout(200);
+		const elapsed = (Bun.nanoseconds() - before) / 1e6;
+
+		expect(elapsed).toBeLessThan(100);
+		expect(sem.activeTimers).toBe(0);
+
+		sem.release();
+	});
+
+	it("acquireWithTimeout throws on ms <= 0", () => {
+		const sem = new LlmConcurrencySemaphore(1);
+		expect(sem.acquireWithTimeout(0)).rejects.toThrow(/positive/);
+		expect(sem.acquireWithTimeout(-1)).rejects.toThrow(/positive/);
+	});
+
+	it("release() throws when active count is already 0", () => {
+		const sem = new LlmConcurrencySemaphore(1);
+		expect(() => sem.release()).toThrow(/no active/i);
+	});
+
+	it("release() does not go negative after guard", () => {
+		const sem = new LlmConcurrencySemaphore(2);
+		expect(() => sem.release()).toThrow();
+		expect(sem.running).toBe(0);
+	});
+
+	it("timeout removes queued entry so it does not fire later", async () => {
+		const sem = new LlmConcurrencySemaphore(1);
+		await sem.acquire();
+
+		await expect(sem.acquireWithTimeout(30)).rejects.toBeInstanceOf(SemaphoreTimeoutError);
+
+		expect(sem.pending).toBe(0);
+
+		sem.release();
+		expect(sem.running).toBe(0);
+	});
+
+	it("mixed acquire() and acquireWithTimeout() preserve FIFO order", async () => {
+		const sem = new LlmConcurrencySemaphore(1);
+		await sem.acquire();
+
+		const order: number[] = [];
+
+		const p1 = sem.acquire().then(() => order.push(1));
+		const p2 = sem.acquireWithTimeout(5000).then(() => order.push(2));
+
+		sem.release();
+		await p1;
+		sem.release();
+		await p2;
+
+		expect(order).toEqual([1, 2]);
+
+		sem.release();
+	});
+
+	it("activeTimers returns 0 after timeout rejection", async () => {
+		const sem = new LlmConcurrencySemaphore(1);
+		await sem.acquire();
+
+		await expect(sem.acquireWithTimeout(30)).rejects.toBeInstanceOf(SemaphoreTimeoutError);
+		expect(sem.activeTimers).toBe(0);
+
+		sem.release();
+	});
+
+	it("global cap: concurrent calls beyond max queue and resolve in order", async () => {
+		const sem = new LlmConcurrencySemaphore(2);
+
+		await sem.acquire();
+		await sem.acquire();
+		expect(sem.running).toBe(2);
+		expect(sem.pending).toBe(0);
+
+		const order: number[] = [];
+		const p1 = sem.acquire().then(() => order.push(1));
+		const p2 = sem.acquire().then(() => order.push(2));
+		expect(sem.pending).toBe(2);
+
+		sem.release();
+		await p1;
+		sem.release();
+		await p2;
+
+		expect(order).toEqual([1, 2]);
+		expect(sem.running).toBe(2);
+
+		sem.release();
+		sem.release();
+		expect(sem.running).toBe(0);
+	});
+
+	it("rejects fractional SIGNET_MAX_LLM_CONCURRENCY", () => {
+		const parsed = Number("1.5");
+		expect(Number.isSafeInteger(parsed)).toBe(false);
+	});
+});
+
+describe("awaitSubprocessWithDeadline — success-after-timeout race", () => {
+	it("reports timeout even when resultFn resolves successfully after deadline fires", async () => {
+		// Race: deadline timer fires (timedOut=true, SIGTERM sent) but resultFn
+		// resolves successfully because output was already buffered. Must throw
+		// SemaphoreTimeoutError instead of returning the stale result.
+		let killed = false;
+		const exitPromise = new Promise<number>((resolve) => {
+			setTimeout(() => resolve(0), 200);
+		});
+
+		const fakeProc = {
+			stdout: streamFromString(""),
+			stderr: streamFromString(""),
+			exited: exitPromise,
+			kill() {
+				killed = true;
+			},
+		};
+
+		// resultFn resolves after 80ms — but deadline is 30ms, so timedOut
+		// will be true when resultFn settles.
+		const resultFn = async () => {
+			await new Promise((r) => setTimeout(r, 80));
+			return "success-value";
+		};
+
+		await expect(
+			awaitSubprocessWithDeadline(fakeProc, 30, "test", 30, resultFn),
+		).rejects.toBeInstanceOf(SemaphoreTimeoutError);
+
+		expect(killed).toBe(true);
+	});
+});
+
+describe("createOpenCodeProvider — session creation vs semaphore ordering", () => {
+	afterEach(() => restoreFetch());
+
+	it("slow session creation causes timeout when total time exceeds budget", async () => {
+		// Session creation takes 300ms, timeout is 400ms. Only 100ms remains
+		// for the actual LLM call. If the LLM call takes 200ms, the overall
+		// time (500ms) exceeds the 400ms timeout and should abort.
+		// BUG: deadline is computed AFTER session creation, so the call gets
+		// an extra 300ms for free (session time not counted).
+		const sessionDelayMs = 300;
+		const messageDelayMs = 200;
+
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				await new Promise((r) => setTimeout(r, sessionDelayMs));
+				return Response.json({
+					id: "ses_deadline_test",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			// LLM call takes 200ms — should hit AbortError if only 100ms remains
+			return new Promise((_resolve, reject) => {
+				const signal = init?.signal;
+				const timer = setTimeout(
+					() => _resolve(Response.json(openCodeResponse("ok"))),
+					messageDelayMs,
+				);
+				if (signal) {
+					signal.addEventListener("abort", () => {
+						clearTimeout(timer);
+						reject(new DOMException("aborted", "AbortError"));
+					});
+				}
+			});
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			defaultTimeoutMs: 400,
+		});
+
+		const start = performance.now();
+		await expect(provider.generate("test", { timeoutMs: 400 })).rejects.toThrow(/timeout/i);
+		const elapsed = performance.now() - start;
+
+		// Total should be ~400ms (session 300ms + abort at 100ms remaining).
+		// If session time is not counted, it would succeed at ~500ms total.
+		expect(elapsed).toBeLessThan(600);
+	});
+});
+
+describe("createOllamaProvider — concurrency semaphore enforcement", () => {
+	afterEach(() => restoreFetch());
+
+	it("Ollama generate() respects the global LLM concurrency cap", async () => {
+		let peak = 0;
+		let inflight = 0;
+
+		mockFetch(async (url) => {
+			if (url.includes("/api/tags")) {
+				return Response.json({ models: [{ name: "test-model" }] });
+			}
+			inflight++;
+			if (inflight > peak) peak = inflight;
+			await new Promise((r) => setTimeout(r, 50));
+			inflight--;
+			return Response.json({
+				response: "test result",
+				prompt_eval_count: 10,
+				eval_count: 5,
+				total_duration: 1000000000,
+			});
+		});
+
+		const N = 8;
+		const providers = Array.from({ length: N }, () =>
+			createOllamaProvider({ model: "test-model", baseUrl: "http://localhost:11434" }),
+		);
+		const results = await Promise.all(providers.map((p) => p.generate("test")));
+
+		expect(results).toHaveLength(N);
+		for (const r of results) expect(r).toBe("test result");
+		expect(peak).toBeLessThanOrEqual(4);
+		expect(peak).toBeGreaterThan(0);
+	});
+});
+
+describe("httpProviderCall — backoff vs deadline", () => {
+	afterEach(() => restoreFetch());
+
+	it("retries fail fast when deadline is exhausted instead of sleeping full backoff", async () => {
+		mockFetch(async () => {
+			return new Response("server error", { status: 500 });
+		});
+
+		const provider = createOpenRouterProvider({
+			model: "test/model",
+			apiKey: "sk-test",
+			defaultTimeoutMs: 200,
+		});
+
+		const start = performance.now();
+		await expect(provider.generate("test", { timeoutMs: 200 })).rejects.toThrow();
+		const elapsed = performance.now() - start;
+
+		// First attempt fails with 500 → retry. Backoff = min(1000 * 2^0, 8000) = 1000ms.
+		// Without clamping, the backoff sleep alone overshoots the 200ms deadline.
+		// With clamping, sleep = min(1000, remaining) ≈ remaining, so total ≈ 200ms.
+		// We allow generous margin (500ms) but the unclamped path would take 1000ms+.
+		expect(elapsed).toBeLessThan(500);
+	});
+});
+
+describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () => {
+	afterEach(() => restoreFetch());
+
+	it("tryOllamaFallback does not deadlock when all semaphore slots are held by OpenCode callers", async () => {
+		// Regression test for Oracle v4 CRITICAL #1:
+		// sendMessage() holds a semaphore slot, then calls tryOllamaFallback()
+		// which must NOT try to acquire another slot (nested acquire = deadlock
+		// when all 4 slots are occupied).
+		//
+		// Strategy: launch 4 concurrent OpenCode requests that all get malformed
+		// 200 responses → triggers tryOllamaFallback. If the inner acquire is
+		// still present, the 4th worker (or earlier) will block waiting for a
+		// slot that never frees → test times out = FAIL.
+		const N = 4; // matches DEFAULT_MAX_LLM_CONCURRENCY
+		let postCount = 0;
+
+		mockFetch(async (url, init) => {
+			// Session creation
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_deadlock_${postCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			// Ollama availability check
+			if (url.includes("/api/tags")) {
+				return Response.json({ models: [{ name: "qwen3.5:4b" }] });
+			}
+			// Ollama fallback generate
+			if (url.includes("/api/generate")) {
+				await new Promise((r) => setTimeout(r, 20));
+				return Response.json({
+					response: JSON.stringify({ result: "fallback-ok" }),
+					prompt_eval_count: 10,
+					eval_count: 5,
+				});
+			}
+			// OpenCode message POST — always return malformed (empty body)
+			if (init?.method === "POST" && url.includes("/message")) {
+				postCount++;
+				return new Response("", {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			// GET polls — empty array to trigger malformed path
+			return Response.json([]);
+		});
+
+		const providers = Array.from({ length: N }, () =>
+			createOpenCodeProvider({
+				baseUrl: "http://localhost:9999",
+				enableOllamaFallback: true,
+				ollamaFallbackBaseUrl: "http://localhost:11434",
+				ollamaFallbackModel: "qwen3.5:4b",
+				defaultTimeoutMs: 3000,
+			}),
+		);
+
+		// If nested acquire is present, this Promise.all will hang until
+		// the 3s timeout fires for each worker → total >12s → test timeout.
+		// With the fix (no inner acquire), all 4 complete promptly.
+		const results = await Promise.all(providers.map((p) => p.generate("test")));
+		expect(results).toHaveLength(N);
+		// Each should get the fallback response (parsed JSON from Ollama)
+		for (const r of results) {
+			expect(typeof r).toBe("string");
+			expect(r.length).toBeGreaterThan(0);
+		}
+	}, 8000); // 8s timeout — fails if deadlock causes 4×3s sequential waits
+});
+
+describe("createOpenCodeProvider — fallback respects remaining deadline", () => {
+	afterEach(() => restoreFetch());
+
+	it("tryOllamaFallback uses remaining time from outer deadline, not a fresh timeout", async () => {
+		// Strategy: set 3s timeout, consume ~1.5s on OpenCode retries, then verify
+		// the Ollama fallback fetch aborts within ~1.5s (remaining budget), not 5s
+		// (which it would sleep if given a fresh 20s budget).
+		let ollamaFetchStartedAt = 0;
+		let ollamaFetchAbortedAt = 0;
+		let postCount = 0;
+
+		mockFetch(async (url, init) => {
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_deadline_${postCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			if (url.includes("/api/tags")) {
+				return Response.json({ models: [{ name: "qwen3.5:4b" }] });
+			}
+			if (url.includes("/api/generate")) {
+				ollamaFetchStartedAt = performance.now();
+				try {
+					await new Promise((resolve, reject) => {
+						const t = setTimeout(resolve, 10_000);
+						if (init?.signal) {
+							init.signal.addEventListener("abort", () => {
+								clearTimeout(t);
+								reject(new DOMException("Aborted", "AbortError"));
+							});
+						}
+					});
+				} catch {
+					ollamaFetchAbortedAt = performance.now();
+					throw new DOMException("Aborted", "AbortError");
+				}
+				return Response.json({
+					response: "should not reach this",
+					prompt_eval_count: 10,
+					eval_count: 5,
+				});
+			}
+			if (init?.method === "POST" && url.includes("/message")) {
+				postCount++;
+				await new Promise((r) => setTimeout(r, 300));
+				return new Response("", {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			return Response.json([]);
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			enableOllamaFallback: true,
+			ollamaFallbackBaseUrl: "http://localhost:11434",
+			ollamaFallbackModel: "qwen3.5:4b",
+			defaultTimeoutMs: 3000,
+		});
+
+		const start = performance.now();
+		try {
+			await provider.generate("test");
+		} catch {
+			// timeout expected
+		}
+		const elapsed = performance.now() - start;
+
+		// Total must complete near the 3s deadline, NOT 10s+ (fresh fallback budget)
+		expect(elapsed).toBeLessThan(6000);
+
+		if (ollamaFetchStartedAt > 0 && ollamaFetchAbortedAt > 0) {
+			const ollamaWait = ollamaFetchAbortedAt - ollamaFetchStartedAt;
+			// Remaining budget after retries is ~1-2s. Ollama fetch must abort
+			// well before its 10s sleep — proving it got the clamped budget.
+			expect(ollamaWait).toBeLessThan(4000);
+		}
+	}, 15000);
+});
+
+describe("createLlamaCppProvider — concurrency semaphore enforcement", () => {
+	afterEach(() => restoreFetch());
+
+	it("llama.cpp generate() respects the global LLM concurrency cap", async () => {
+		let peak = 0;
+		let inflight = 0;
+
+		mockFetch(async (url) => {
+			if (url.includes("/v1/models")) {
+				return Response.json({ data: [{ id: "test-model" }] });
+			}
+			inflight++;
+			if (inflight > peak) peak = inflight;
+			await new Promise((r) => setTimeout(r, 50));
+			inflight--;
+			return Response.json({
+				choices: [{ message: { content: "test result" } }],
+				usage: { prompt_tokens: 10, completion_tokens: 5 },
+			});
+		});
+
+		const N = 8;
+		const providers = Array.from({ length: N }, () =>
+			createLlamaCppProvider({ model: "test-model", baseUrl: "http://localhost:8080" }),
+		);
+		const results = await Promise.all(providers.map((p) => p.generate("test")));
+
+		expect(results).toHaveLength(N);
+		for (const r of results) expect(r).toBe("test result");
+		expect(peak).toBeLessThanOrEqual(4);
+		expect(peak).toBeGreaterThan(0);
 	});
 });

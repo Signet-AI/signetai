@@ -159,7 +159,8 @@ export function bypassSession(
 		logger.warn("session-tracker", "Bypass requested for unknown session", { sessionKey: key });
 		return false;
 	}
-	const ttl = Number.isFinite(opts?.ttlMs) && opts.ttlMs > 0 ? opts.ttlMs : STALE_SESSION_MS;
+	const ttlMs = opts?.ttlMs;
+	const ttl = typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : STALE_SESSION_MS;
 	bypassedSessions.set(key, Date.now() + ttl);
 	logger.debug("session-tracker", "Session bypassed", { sessionKey: key });
 	return true;

@@ -47,6 +47,7 @@ export type LogCategory =
 	| "maintenance" // Autonomous maintenance worker
 	| "retention" // Retention worker (decay + cold archival)
 	| "summary-condensation" // Session summary DAG condensation
+	| "session-tracker" // Runtime-path session ownership + bypass TTL tracking
 	| "system" // System events
 	| "update" // Auto-update cycle
 	| "probe" // MCP server auto-probe (Signet OS)

@@ -26,19 +26,31 @@ import { bypassSession } from "../session-tracker";
 import { trimTrailingSlash } from "./url";
 
 // ---------------------------------------------------------------------------
-// Global concurrency semaphore for CLI subprocess providers
+// Global concurrency semaphore for all LLM providers
 // ---------------------------------------------------------------------------
 // Prevents starvation when multiple pipeline workers (extraction,
-// structural-classify, summary, etc.) all spawn `claude -p` or `codex`
-// subprocesses simultaneously. Without this, 10+ concurrent processes
-// can cause API rate limiting and timeout cascades.
+// structural-classify, summary, etc.) all issue LLM calls simultaneously
+// — whether via CLI subprocesses or HTTP providers like OpenCode.
+// Without this, 10+ concurrent calls can cause memory bloat, API rate
+// limiting, and timeout cascades.
 
-const DEFAULT_MAX_CONCURRENT_SUBPROCESSES = 4;
+const DEFAULT_MAX_LLM_CONCURRENCY = 4;
 
-class SubprocessSemaphore {
+export class SemaphoreTimeoutError extends Error {
+	readonly timeoutMs: number;
+
+	constructor(ms: number, reason?: string) {
+		super(reason ?? `semaphore acquisition timed out after ${ms}ms`);
+		this.name = "SemaphoreTimeoutError";
+		this.timeoutMs = ms;
+	}
+}
+
+export class LlmConcurrencySemaphore {
 	private readonly max: number;
 	private active = 0;
 	private readonly queue: Array<() => void> = [];
+	private timers = 0;
 
 	constructor(max: number) {
 		this.max = max;
@@ -57,7 +69,41 @@ class SubprocessSemaphore {
 		});
 	}
 
+	async acquireWithTimeout(ms: number): Promise<void> {
+		if (ms <= 0) {
+			throw new SemaphoreTimeoutError(ms, "timeout must be positive");
+		}
+		if (this.active < this.max) {
+			this.active++;
+			return;
+		}
+		return new Promise<void>((resolve, reject) => {
+			let settled = false;
+			this.timers++;
+			const timer = setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				this.timers--;
+				const idx = this.queue.indexOf(entry);
+				if (idx !== -1) this.queue.splice(idx, 1);
+				reject(new SemaphoreTimeoutError(ms));
+			}, ms);
+			const entry = (): void => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				this.timers--;
+				this.active++;
+				resolve();
+			};
+			this.queue.push(entry);
+		});
+	}
+
 	release(): void {
+		if (this.active <= 0) {
+			throw new Error("LlmConcurrencySemaphore.release(): no active acquisitions to release");
+		}
 		this.active--;
 		const next = this.queue.shift();
 		if (next) next();
@@ -70,21 +116,25 @@ class SubprocessSemaphore {
 	get running(): number {
 		return this.active;
 	}
+
+	get activeTimers(): number {
+		return this.timers;
+	}
 }
 
-const subprocessSemaphore = new SubprocessSemaphore(
+const llmSemaphore = new LlmConcurrencySemaphore(
 	process.env.SIGNET_MAX_LLM_CONCURRENCY !== undefined
 		? (() => {
-				const parsed = Number(process.env.SIGNET_MAX_LLM_CONCURRENCY);
-				if (!Number.isFinite(parsed)) {
-					logger.warn("pipeline", "SIGNET_MAX_LLM_CONCURRENCY is not a valid number, using default", {
-						value: process.env.SIGNET_MAX_LLM_CONCURRENCY,
-					});
-					return DEFAULT_MAX_CONCURRENT_SUBPROCESSES;
-				}
-				return Math.max(1, parsed);
+			const parsed = Number(process.env.SIGNET_MAX_LLM_CONCURRENCY);
+			if (!Number.isSafeInteger(parsed) || parsed < 1) {
+				logger.warn("pipeline", "SIGNET_MAX_LLM_CONCURRENCY is not a valid positive integer, using default", {
+					value: process.env.SIGNET_MAX_LLM_CONCURRENCY,
+				});
+				return DEFAULT_MAX_LLM_CONCURRENCY;
+			}
+			return parsed;
 			})()
-		: DEFAULT_MAX_CONCURRENT_SUBPROCESSES,
+		: DEFAULT_MAX_LLM_CONCURRENCY,
 );
 
 // ---------------------------------------------------------------------------
@@ -254,16 +304,233 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
 }
 
 /**
- * Run an async function guarded by the global subprocess semaphore.
- * Ensures no more than N concurrent CLI subprocess calls across all workers.
+ * Run an async function guarded by the global LLM concurrency semaphore.
+ * Ensures no more than N concurrent LLM calls across all providers and workers.
  */
-async function withSemaphore<T>(fn: () => Promise<T>): Promise<T> {
-	await subprocessSemaphore.acquire();
+async function withLlmConcurrency<T>(
+	fn: () => Promise<T>,
+	timeoutMs?: number,
+	label?: string,
+): Promise<T> {
+	try {
+		if (timeoutMs !== undefined) {
+			await llmSemaphore.acquireWithTimeout(timeoutMs);
+		} else {
+			await llmSemaphore.acquire();
+		}
+	} catch (err) {
+		if (err instanceof SemaphoreTimeoutError && label) {
+			throw new SemaphoreTimeoutError(
+				err.timeoutMs,
+				`${label} timeout after ${err.timeoutMs}ms (semaphore acquisition)`,
+			);
+		}
+		throw err;
+	}
 	try {
 		return await fn();
 	} finally {
-		subprocessSemaphore.release();
+		llmSemaphore.release();
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Shared HTTP provider helpers
+// ---------------------------------------------------------------------------
+// Generic retry loop, error-body parsing, and usage mapping shared by
+// Anthropic and OpenRouter (and partially by Claude Code).
+
+interface ApiErrorBody {
+	readonly error?: {
+		readonly type?: string;
+		readonly message?: string;
+		readonly code?: number | string;
+	};
+}
+
+function parseApiErrorDetail(rawBody: string, includeType = false): string {
+	const fallback = rawBody.slice(0, 300);
+	try {
+		const parsed = JSON.parse(rawBody) as ApiErrorBody;
+		if (parsed.error?.message) {
+			return includeType
+				? `${parsed.error.type ?? "error"}: ${parsed.error.message}`
+				: parsed.error.message;
+		}
+	} catch {
+		// Use raw body
+	}
+	return fallback;
+}
+
+/** Sentinel error type for failures that should never be retried
+ *  (auth errors, timeouts, empty responses, non-transient HTTP 4xx). */
+class NonRetryableError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "NonRetryableError";
+	}
+}
+
+function isRetryableStatus(status: number): boolean {
+	// 429 = rate limited, 500 = internal error, 502/503/504 = transient gateway,
+	// 529 = overloaded. Don't retry 501 (not implemented) or other 5xx.
+	return status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 529;
+}
+
+/** Minimal content-part shape shared by llama.cpp and OpenRouter responses. */
+interface ContentTextPart {
+	readonly type?: string;
+	readonly text?: string;
+}
+
+/** Extract text from a chat-completion content field (string or parts array).
+ *  Shared by llama.cpp and OpenRouter providers. */
+function extractContentText(content: string | readonly ContentTextPart[] | undefined): string {
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	const parts: string[] = [];
+	for (const part of content) {
+		if (part?.type !== "text") continue;
+		if (typeof part.text !== "string") continue;
+		const text = part.text.trim();
+		if (text.length > 0) parts.push(text);
+	}
+	return parts.join("\n").trim();
+}
+
+interface HttpRetryConfig {
+	readonly label: string;
+	readonly timeoutMs: number;
+	readonly maxRetries: number;
+}
+
+interface HttpAttemptContext {
+	readonly attempt: number;
+	readonly maxRetries: number;
+	readonly controller: AbortController;
+	setLastError(e: Error): void;
+}
+
+type HttpAttemptResult<T> =
+	| { readonly retry: true }
+	| { readonly retry: false; readonly value: T };
+
+async function httpProviderCall<T>(
+	config: HttpRetryConfig,
+	attemptFn: (ctx: HttpAttemptContext) => Promise<HttpAttemptResult<T>>,
+): Promise<T> {
+	// Mutable ref prevents TypeScript from narrowing away closure mutations
+	const state: { lastError: Error | null } = { lastError: null };
+	const { label, timeoutMs, maxRetries } = config;
+	const deadline = performance.now() + timeoutMs;
+
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		if (attempt > 0) {
+			const remainingBudget = deadline - performance.now();
+			if (remainingBudget <= 0) {
+				const reason = state.lastError
+					? `last error: ${state.lastError.message}`
+					: "no successful attempt";
+				throw new Error(
+					`${label} timeout after ${timeoutMs}ms (deadline exceeded before retry backoff; ${reason})`,
+				);
+			}
+			const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 8000, remainingBudget);
+			await new Promise((r) => setTimeout(r, backoffMs));
+			logger.debug("pipeline", `${label} API retry`, {
+				attempt,
+				maxRetries,
+				backoffMs,
+			});
+		}
+
+		if (deadline - performance.now() <= 0) {
+			const reason = state.lastError
+				? `last error: ${state.lastError.message}`
+				: "no successful attempt";
+			throw new Error(
+				`${label} timeout after ${timeoutMs}ms (deadline exceeded before attempt ${attempt}; ${reason})`,
+			);
+		}
+
+		const result = await withLlmConcurrency(
+			async () => {
+				const remainingMs = deadline - performance.now();
+				if (remainingMs <= 0) {
+					const reason = state.lastError
+						? `last error: ${state.lastError.message}`
+						: "no successful attempt";
+					throw new Error(
+						`${label} timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore; ${reason})`,
+					);
+				}
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), remainingMs);
+				try {
+					return await attemptFn({
+						attempt,
+						maxRetries,
+						controller,
+						setLastError(e: Error) {
+							state.lastError = e;
+						},
+					});
+				} catch (e) {
+					if (e instanceof DOMException && e.name === "AbortError") {
+						throw new NonRetryableError(`${label} timeout after ${timeoutMs}ms`);
+					}
+					if (e instanceof NonRetryableError) throw e;
+					state.lastError = e instanceof Error ? e : new Error(String(e));
+					if (attempt < maxRetries) {
+						logger.warn("pipeline", `${label} API network error`, {
+							attempt,
+							error: state.lastError.message.slice(0, 100),
+						});
+						return { retry: true } as const;
+					}
+					throw state.lastError;
+				} finally {
+					clearTimeout(timer);
+				}
+			},
+			Math.max(1, deadline - performance.now()),
+			label.toLowerCase(),
+		);
+
+		if ("value" in result) return result.value;
+	}
+
+	throw state.lastError ?? new Error(`${label} call failed after retries`);
+}
+
+// ---------------------------------------------------------------------------
+// Shared Anthropic-style usage mapping (Claude Code CLI + Anthropic HTTP)
+// ---------------------------------------------------------------------------
+
+interface AnthropicStyleUsage {
+	readonly input_tokens?: number;
+	readonly output_tokens?: number;
+	readonly cache_creation_input_tokens?: number;
+	readonly cache_read_input_tokens?: number;
+}
+
+function mapAnthropicUsage(
+	usage: AnthropicStyleUsage | null | undefined,
+	extra?: {
+		readonly totalCost?: number | null;
+		readonly totalDurationMs?: number | null;
+	},
+): LlmGenerateResult["usage"] {
+	if (!usage) return null;
+	return {
+		inputTokens: usage.input_tokens ?? null,
+		outputTokens: usage.output_tokens ?? null,
+		cacheReadTokens: usage.cache_read_input_tokens ?? null,
+		cacheCreationTokens: usage.cache_creation_input_tokens ?? null,
+		totalCost: extra?.totalCost ?? null,
+		totalDurationMs: extra?.totalDurationMs ?? null,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +640,68 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 	};
 }
 
+// ---------------------------------------------------------------------------
+// Subprocess deadline helper
+// ---------------------------------------------------------------------------
+// Runs a result-extracting callback against a spawned subprocess, racing
+// against a deadline. On timeout: SIGTERM → grace period → SIGKILL.
+//
+// INVARIANT: the returned promise settles only AFTER `proc.exited` resolves,
+// so callers wrapped in `withLlmConcurrency` won't release the semaphore
+// until the child process is actually dead.
+
+const SUBPROCESS_KILL_GRACE_MS = 2000;
+
+export async function awaitSubprocessWithDeadline<T>(
+	proc: SpawnResult,
+	remainingMs: number,
+	label: string,
+	originalTimeoutMs: number,
+	resultFn: (p: SpawnResult) => Promise<T>,
+): Promise<T> {
+	if (remainingMs <= 0) {
+		proc.kill("SIGTERM");
+		await proc.exited.catch(() => {});
+		throw new SemaphoreTimeoutError(
+			originalTimeoutMs,
+			`${label} timeout after ${originalTimeoutMs}ms (deadline exceeded before subprocess work)`,
+		);
+	}
+
+	let timedOut = false;
+	const deadlineTimer = setTimeout(() => {
+		timedOut = true;
+		proc.kill("SIGTERM");
+	}, remainingMs);
+	let graceTimer: ReturnType<typeof setTimeout> | undefined;
+
+	try {
+		const result = await resultFn(proc);
+		clearTimeout(deadlineTimer);
+		if (timedOut) {
+			graceTimer = setTimeout(() => proc.kill("SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
+			await proc.exited.catch(() => {});
+			clearTimeout(graceTimer);
+			throw new SemaphoreTimeoutError(
+				originalTimeoutMs,
+				`${label} timeout after ${originalTimeoutMs}ms (result arrived after deadline)`,
+			);
+		}
+		return result;
+	} catch (err) {
+		clearTimeout(deadlineTimer);
+		if (!timedOut) throw err;
+		// Timeout fired — SIGTERM sent. Wait for exit with SIGKILL backstop.
+		graceTimer = setTimeout(() => proc.kill("SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
+		await proc.exited.catch(() => {});
+		clearTimeout(graceTimer);
+		throw new SemaphoreTimeoutError(
+			originalTimeoutMs,
+			`${label} timeout after ${originalTimeoutMs}ms`,
+		);
+	}
+}
+
 function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
 	readonly env: Record<string, string | undefined>;
 	cleanup(): void;
@@ -468,12 +797,7 @@ function normalizePositiveInt(value: number | undefined): number | undefined {
 }
 
 export function resolveDefaultOllamaFallbackModel(): string {
-	const raw = process.env.SIGNET_OLLAMA_FALLBACK_MODEL;
-	if (typeof raw === "string") {
-		const trimmed = raw.trim();
-		if (trimmed.length > 0) return trimmed;
-	}
-	return DEFAULT_OLLAMA_FALLBACK_MODEL;
+	return process.env.SIGNET_OLLAMA_FALLBACK_MODEL?.trim() || DEFAULT_OLLAMA_FALLBACK_MODEL;
 }
 
 // Reads SIGNET_OLLAMA_FALLBACK_MAX_CTX (kept for backwards compatibility).
@@ -495,6 +819,42 @@ interface OllamaGenerateResponse {
 	readonly eval_duration?: number;
 }
 
+interface OllamaRawOpts {
+	readonly baseUrl: string;
+	readonly model: string;
+	readonly prompt: string;
+	readonly timeoutMs: number;
+	readonly signal: AbortSignal;
+	readonly options?: Record<string, number>;
+	readonly extraBody?: Record<string, unknown>;
+}
+
+async function callOllamaRaw(raw: OllamaRawOpts): Promise<OllamaGenerateResponse> {
+	const res = await fetch(`${raw.baseUrl}/api/generate`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			model: raw.model,
+			prompt: raw.prompt,
+			stream: false,
+			...raw.extraBody,
+			...(raw.options && Object.keys(raw.options).length > 0 ? { options: raw.options } : {}),
+		}),
+		signal: raw.signal,
+	});
+
+	if (!res.ok) {
+		const body = await res.text().catch(() => "");
+		throw new Error(`Ollama HTTP ${res.status}: ${body.slice(0, 200)}`);
+	}
+
+	const data = (await res.json()) as OllamaGenerateResponse;
+	if (typeof data.response !== "string") {
+		throw new Error("Ollama returned no response field");
+	}
+	return data;
+}
+
 export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): LlmProvider {
 	const rawModel = config?.model;
 	const model =
@@ -512,46 +872,33 @@ export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): Ll
 	): Promise<OllamaGenerateResponse> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 
-		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), timeoutMs);
+		return withLlmConcurrency(async () => {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-		try {
-			const options: Record<string, number> = {};
-			if (opts?.maxTokens) options.num_predict = opts.maxTokens;
-			if (cfg.maxContextTokens !== undefined) {
-				options.num_ctx = cfg.maxContextTokens;
-			}
-			const res = await fetch(`${cfg.baseUrl}/api/generate`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
+			try {
+				const options: Record<string, number> = {};
+				if (opts?.maxTokens) options.num_predict = opts.maxTokens;
+				if (cfg.maxContextTokens !== undefined) {
+					options.num_ctx = cfg.maxContextTokens;
+				}
+				return await callOllamaRaw({
+					baseUrl: cfg.baseUrl,
 					model: cfg.model,
 					prompt,
-					stream: false,
-					...(Object.keys(options).length > 0 ? { options } : {}),
-				}),
-				signal: controller.signal,
-			});
-
-			if (!res.ok) {
-				const body = await res.text().catch(() => "");
-				throw new Error(`Ollama HTTP ${res.status}: ${body.slice(0, 200)}`);
+					timeoutMs,
+					signal: controller.signal,
+					options,
+				});
+			} catch (e) {
+				if (e instanceof DOMException && e.name === "AbortError") {
+					throw new Error(`Ollama timeout after ${timeoutMs}ms`);
+				}
+				throw e;
+			} finally {
+				clearTimeout(timer);
 			}
-
-			const data = (await res.json()) as OllamaGenerateResponse;
-			if (typeof data.response !== "string") {
-				throw new Error("Ollama returned no response field");
-			}
-
-			return data;
-		} catch (e) {
-			if (e instanceof DOMException && e.name === "AbortError") {
-				throw new Error(`Ollama timeout after ${timeoutMs}ms`);
-			}
-			throw e;
-		} finally {
-			clearTimeout(timer);
-		}
+		}, timeoutMs, "ollama");
 	}
 
 	return {
@@ -616,7 +963,7 @@ const DEFAULT_LLAMACPP_CONFIG = {
 };
 
 interface LlamaCppMessage {
-	readonly content?: string | readonly LlamaCppContentPart[];
+	readonly content?: string | readonly ContentTextPart[];
 }
 
 interface LlamaCppChoice {
@@ -631,19 +978,6 @@ interface LlamaCppUsage {
 interface LlamaCppResponse {
 	readonly choices?: readonly LlamaCppChoice[];
 	readonly usage?: LlamaCppUsage;
-}
-
-function extractLlamaCppText(content: string | readonly LlamaCppContentPart[] | undefined): string {
-	if (typeof content === "string") return content.trim();
-	if (!Array.isArray(content)) return "";
-	const parts: string[] = [];
-	for (const part of content) {
-		if (part?.type !== "text") continue;
-		if (typeof part.text !== "string") continue;
-		const text = part.text.trim();
-		if (text.length > 0) parts.push(text);
-	}
-	return parts.join("\n").trim();
 }
 
 export function createLlamaCppProvider(config?: Partial<LlamaCppProviderConfig>): LlmProvider {
@@ -674,40 +1008,42 @@ export function createLlamaCppProvider(config?: Partial<LlamaCppProviderConfig>)
 		}
 		const body = JSON.stringify(bodyObj);
 
-		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), timeoutMs);
+		return withLlmConcurrency(async () => {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-		try {
-			const options: Record<string, number> = {};
-			if (cfg.maxContextTokens !== undefined) options.num_ctx = cfg.maxContextTokens;
+			try {
+				const options: Record<string, number> = {};
+				if (cfg.maxContextTokens !== undefined) options.num_ctx = cfg.maxContextTokens;
 
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body,
-				signal: controller.signal,
-			});
+				const res = await fetch(url, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body,
+					signal: controller.signal,
+				});
 
-			if (!res.ok) {
-				const detail = await res.text().catch(() => "");
-				throw new Error(`llama.cpp HTTP ${res.status}: ${detail.slice(0, 300)}`);
+				if (!res.ok) {
+					const detail = await res.text().catch(() => "");
+					throw new Error(`llama.cpp HTTP ${res.status}: ${detail.slice(0, 300)}`);
+				}
+
+				const data = (await res.json()) as LlamaCppResponse;
+				const first = Array.isArray(data.choices) ? data.choices[0] : undefined;
+				const text = extractContentText(first?.message?.content);
+				if (text.length === 0) {
+					throw new Error("llama.cpp returned empty response");
+				}
+				return { text, usage: data.usage ?? null };
+			} catch (e) {
+				if (e instanceof DOMException && e.name === "AbortError") {
+					throw new Error(`llama.cpp timeout after ${timeoutMs}ms`);
+				}
+				throw e;
+			} finally {
+				clearTimeout(timer);
 			}
-
-			const data = (await res.json()) as LlamaCppResponse;
-			const first = Array.isArray(data.choices) ? data.choices[0] : undefined;
-			const text = extractLlamaCppText(first?.message?.content);
-			if (text.length === 0) {
-				throw new Error("llama.cpp returned empty response");
-			}
-			return { text, usage: data.usage ?? null };
-		} catch (e) {
-			if (e instanceof DOMException && e.name === "AbortError") {
-				throw new Error(`llama.cpp timeout after ${timeoutMs}ms`);
-			}
-			throw e;
-		} finally {
-			clearTimeout(timer);
-		}
+		}, timeoutMs, "llama-cpp");
 	}
 
 	return {
@@ -782,8 +1118,14 @@ export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConf
 		outputFormat: "text" | "json",
 		opts?: { timeoutMs?: number; maxTokens?: number },
 	): Promise<string> {
-		return withSemaphore(async () => {
-			const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+		const deadline = performance.now() + timeoutMs;
+
+		return withLlmConcurrency(async () => {
+			const remainingMs = deadline - performance.now();
+			if (remainingMs <= 0) {
+				throw new Error(`claude-code timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
+			}
 
 			const args = ["-p", prompt, "--model", cfg.model, "--no-session-persistence", "--output-format", outputFormat];
 
@@ -808,46 +1150,11 @@ export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConf
 				env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
 			});
 
-			// Race the subprocess against a timeout. On timeout we kill the
-			// process and reject immediately instead of waiting for streams
-			// to drain — a hanging subprocess may never close its stdio.
-			const SIGKILL_GRACE_MS = 2000;
-
-			const timeoutPromise = new Promise<never>((_resolve, reject) => {
-				let killTimer: ReturnType<typeof setTimeout> | null = null;
-				const timer = setTimeout(() => {
-					// SIGTERM first, SIGKILL after grace period
-					try {
-						proc.kill("SIGTERM");
-					} catch {
-						/* already exited */
-					}
-					killTimer = setTimeout(() => {
-						try {
-							proc.kill("SIGKILL");
-						} catch {
-							/* already dead */
-						}
-					}, SIGKILL_GRACE_MS);
-					reject(new Error(`claude-code timeout after ${timeoutMs}ms`));
-				}, timeoutMs);
-				// Clear both timers if the process exits on its own
-				proc.exited
-					.then(() => {
-						clearTimeout(timer);
-						if (killTimer) clearTimeout(killTimer);
-					})
-					.catch(() => {
-						clearTimeout(timer);
-						if (killTimer) clearTimeout(killTimer);
-					});
-			});
-
-			const resultPromise = (async (): Promise<string> => {
+			return awaitSubprocessWithDeadline(proc, remainingMs, "claude-code", timeoutMs, async (p) => {
 				const [stdout, stderr, exitCode] = await Promise.all([
-					new Response(proc.stdout).text().catch(() => ""),
-					new Response(proc.stderr).text().catch(() => ""),
-					proc.exited.catch(() => -1),
+					new Response(p.stdout).text().catch(() => ""),
+					new Response(p.stderr).text().catch(() => ""),
+					p.exited.catch(() => -1),
 				]);
 
 				if (exitCode !== 0) {
@@ -860,15 +1167,8 @@ export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConf
 				}
 
 				return result;
-			})();
-
-			// Guard against unhandled rejection if resultPromise rejects
-			// after the timeout wins the race (e.g. subprocess exit error
-			// after SIGKILL). The no-op catch prevents crashing the process.
-			resultPromise.catch(() => {});
-
-			return Promise.race([resultPromise, timeoutPromise]);
-		});
+			});
+		}, timeoutMs, "claude-code");
 	}
 
 	return {
@@ -899,19 +1199,11 @@ export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConf
 			}
 
 			const text = parsed.result ?? raw;
-			const u = parsed.usage;
 			return {
 				text,
-				usage: u
-					? {
-							inputTokens: u.input_tokens ?? null,
-							outputTokens: u.output_tokens ?? null,
-							cacheReadTokens: u.cache_read_input_tokens ?? null,
-							cacheCreationTokens: u.cache_creation_input_tokens ?? null,
-							totalCost: parsed.cost_usd ?? null,
-							totalDurationMs: null,
-						}
-					: null,
+				usage: mapAnthropicUsage(parsed.usage, {
+					totalCost: parsed.cost_usd ?? null,
+				}),
 			};
 		},
 
@@ -977,34 +1269,12 @@ interface AnthropicContentBlock {
 	readonly text?: string;
 }
 
-interface AnthropicErrorBody {
-	readonly type?: string;
-	readonly error?: {
-		readonly type?: string;
-		readonly message?: string;
-	};
-}
 
 interface AnthropicResponse {
 	readonly id?: string;
 	readonly content?: readonly AnthropicContentBlock[];
 	readonly usage?: AnthropicUsage;
 	readonly stop_reason?: string;
-}
-
-/** Sentinel error type for failures that should never be retried
- *  (auth errors, timeouts, empty responses, non-transient HTTP 4xx). */
-class NonRetryableError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "NonRetryableError";
-	}
-}
-
-function isRetryableStatus(status: number): boolean {
-	// 429 = rate limited, 500 = internal error, 502/503/504 = transient gateway,
-	// 529 = overloaded. Don't retry 501 (not implemented) or other 5xx.
-	return status === 429 || status === 500 || status === 502 || status === 503 || status === 504 || status === 529;
 }
 
 export function createAnthropicProvider(config?: Partial<AnthropicProviderConfig>): LlmProvider {
@@ -1030,144 +1300,67 @@ export function createAnthropicProvider(config?: Partial<AnthropicProviderConfig
 			messages: [{ role: "user", content: prompt }],
 		});
 
-		let lastError: Error | null = null;
-		// Use a single absolute deadline so retries cannot exceed the
-		// configured timeout.
-		const deadline = Date.now() + timeoutMs;
-
-		for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
-			if (attempt > 0) {
-				// Exponential backoff happens OUTSIDE the semaphore so idle
-				// sleep doesn't block other providers from using the slot.
-				const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 8000);
-				await new Promise((r) => setTimeout(r, backoffMs));
-
-				logger.debug("pipeline", "Anthropic API retry", {
-					attempt,
-					maxRetries: cfg.maxRetries,
-					backoffMs,
+		return httpProviderCall<{ text: string; usage: AnthropicUsage | null }>(
+			{ label: "Anthropic", timeoutMs, maxRetries: cfg.maxRetries },
+			async ({ attempt, maxRetries, controller, setLastError }) => {
+				const res = await fetch(url, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-api-key": cfg.apiKey,
+						"anthropic-version": ANTHROPIC_API_VERSION,
+					},
+					body,
+					signal: controller.signal,
 				});
-			}
 
-			// Pre-check deadline before waiting on semaphore
-			if (deadline - Date.now() <= 0) {
-				const reason = lastError ? `last error: ${lastError.message}` : "no successful attempt";
-				throw new Error(
-					`Anthropic timeout after ${timeoutMs}ms (deadline exceeded before attempt ${attempt}; ${reason})`,
-				);
-			}
+				if (!res.ok) {
+					const rawBody = await res.text().catch(() => "");
+					const detail = parseApiErrorDetail(rawBody, true);
 
-			// Acquire semaphore only for the actual API call, release
-			// immediately after so backoff sleep doesn't hold a slot.
-			const result = await withSemaphore(async () => {
-				// Recompute remaining time AFTER semaphore acquisition so
-				// contention delay is accounted for in the abort timer.
-				const remainingMs = deadline - Date.now();
-				if (remainingMs <= 0) {
-					const reason = lastError ? `last error: ${lastError.message}` : "no successful attempt";
-					throw new Error(
-						`Anthropic timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore; ${reason})`,
-					);
-				}
-				const controller = new AbortController();
-				const timer = setTimeout(() => controller.abort(), remainingMs);
-
-				try {
-					const res = await fetch(url, {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							"x-api-key": cfg.apiKey,
-							"anthropic-version": ANTHROPIC_API_VERSION,
-						},
-						body,
-						signal: controller.signal,
-					});
-
-					if (!res.ok) {
-						const rawBody = await res.text().catch(() => "");
-						let errorDetail = rawBody.slice(0, 300);
-
-						// Parse structured error if available
-						try {
-							const parsed = JSON.parse(rawBody) as AnthropicErrorBody;
-							if (parsed.error?.message) {
-								errorDetail = `${parsed.error.type ?? "error"}: ${parsed.error.message}`;
-							}
-						} catch {
-							// Use raw body
-						}
-
-						if (res.status === 401) {
-							throw new NonRetryableError(`Anthropic auth failed (401): ${errorDetail}. Check your ANTHROPIC_API_KEY.`);
-						}
-
-						if (isRetryableStatus(res.status) && attempt < cfg.maxRetries) {
-							lastError = new Error(`Anthropic HTTP ${res.status}: ${errorDetail}`);
-							logger.warn("pipeline", "Anthropic API retryable error", {
-								status: res.status,
-								attempt,
-								detail: errorDetail.slice(0, 100),
-							});
-							return { retry: true } as const;
-						}
-
-						throw new NonRetryableError(`Anthropic HTTP ${res.status}: ${errorDetail}`);
-					}
-
-					const data = (await res.json()) as AnthropicResponse;
-
-					// Extract text from content blocks
-					const textParts: string[] = [];
-					if (Array.isArray(data.content)) {
-						for (const block of data.content) {
-							if (block.type === "text" && typeof block.text === "string") {
-								textParts.push(block.text);
-							}
-						}
-					}
-
-					const text = textParts.join("\n").trim();
-					if (text.length === 0) {
+					if (res.status === 401) {
 						throw new NonRetryableError(
-							`Anthropic returned empty response (stop_reason: ${data.stop_reason ?? "unknown"})`,
+							`Anthropic auth failed (401): ${detail}. Check your ANTHROPIC_API_KEY.`,
 						);
 					}
 
-					return { retry: false, text, usage: data.usage ?? null } as const;
-				} catch (e) {
-					if (e instanceof DOMException && e.name === "AbortError") {
-						throw new NonRetryableError(`Anthropic timeout after ${timeoutMs}ms`);
-					}
-
-					// Non-retryable errors use the typed sentinel —
-					// no substring matching needed.
-					if (e instanceof NonRetryableError) {
-						throw e;
-					}
-
-					lastError = e instanceof Error ? e : new Error(String(e));
-
-					if (attempt < cfg.maxRetries) {
-						logger.warn("pipeline", "Anthropic API network error", {
+					if (isRetryableStatus(res.status) && attempt < maxRetries) {
+						setLastError(new Error(`Anthropic HTTP ${res.status}: ${detail}`));
+						logger.warn("pipeline", "Anthropic API retryable error", {
+							status: res.status,
 							attempt,
-							error: lastError.message.slice(0, 100),
+							detail: detail.slice(0, 100),
 						});
 						return { retry: true } as const;
 					}
 
-					throw lastError;
-				} finally {
-					clearTimeout(timer);
+					throw new NonRetryableError(`Anthropic HTTP ${res.status}: ${detail}`);
 				}
-			});
 
-			if (!result.retry) {
-				return { text: result.text, usage: result.usage };
-			}
-		}
+				const data = (await res.json()) as AnthropicResponse;
 
-		throw lastError ?? new Error("Anthropic call failed after retries");
+				const textParts: string[] = [];
+				if (Array.isArray(data.content)) {
+					for (const block of data.content) {
+						if (block.type === "text" && typeof block.text === "string") {
+							textParts.push(block.text);
+						}
+					}
+				}
+
+				const text = textParts.join("\n").trim();
+				if (text.length === 0) {
+					throw new NonRetryableError(
+						`Anthropic returned empty response (stop_reason: ${data.stop_reason ?? "unknown"})`,
+					);
+				}
+
+				return {
+					retry: false,
+					value: { text, usage: data.usage ?? null },
+				} as const;
+			},
+		);
 	}
 
 	return {
@@ -1180,19 +1373,7 @@ export function createAnthropicProvider(config?: Partial<AnthropicProviderConfig
 
 		async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
 			const { text, usage } = await callAnthropic(prompt, opts);
-			return {
-				text,
-				usage: usage
-					? {
-							inputTokens: usage.input_tokens ?? null,
-							outputTokens: usage.output_tokens ?? null,
-							cacheReadTokens: usage.cache_read_input_tokens ?? null,
-							cacheCreationTokens: usage.cache_creation_input_tokens ?? null,
-							totalCost: null,
-							totalDurationMs: null,
-						}
-					: null,
-			};
+			return { text, usage: mapAnthropicUsage(usage) };
 		},
 
 		async available(): Promise<boolean> {
@@ -1242,14 +1423,9 @@ const DEFAULT_OPENROUTER_CONFIG: OpenRouterProviderConfig = {
 	title: undefined,
 };
 
-interface OpenRouterContentPart {
-	readonly type?: string;
-	readonly text?: string;
-}
-
 interface OpenRouterChoice {
 	readonly message?: {
-		readonly content?: string | readonly OpenRouterContentPart[];
+		readonly content?: string | readonly ContentTextPart[];
 	};
 }
 
@@ -1262,29 +1438,10 @@ interface OpenRouterUsage {
 	};
 }
 
-interface OpenRouterErrorBody {
-	readonly error?: {
-		readonly message?: string;
-		readonly code?: number | string;
-	};
-}
 
 interface OpenRouterResponse {
 	readonly choices?: readonly OpenRouterChoice[];
 	readonly usage?: OpenRouterUsage;
-}
-
-function extractOpenRouterText(content: string | readonly OpenRouterContentPart[] | undefined): string {
-	if (typeof content === "string") return content.trim();
-	if (!Array.isArray(content)) return "";
-	const parts: string[] = [];
-	for (const part of content) {
-		if (part?.type !== "text") continue;
-		if (typeof part.text !== "string") continue;
-		const text = part.text.trim();
-		if (text.length > 0) parts.push(text);
-	}
-	return parts.join("\n").trim();
 }
 
 export function createOpenRouterProvider(config?: Partial<OpenRouterProviderConfig>): LlmProvider {
@@ -1313,128 +1470,62 @@ export function createOpenRouterProvider(config?: Partial<OpenRouterProviderConf
 			max_tokens: maxTokens,
 		});
 
-		let lastError: Error | null = null;
-		const deadline = Date.now() + timeoutMs;
-
-		for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
-			if (attempt > 0) {
-				const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 8000);
-				await new Promise((r) => setTimeout(r, backoffMs));
-				logger.debug("pipeline", "OpenRouter API retry", {
-					attempt,
-					maxRetries: cfg.maxRetries,
-					backoffMs,
-				});
-			}
-
-			if (deadline - Date.now() <= 0) {
-				const reason = lastError ? `last error: ${lastError.message}` : "no successful attempt";
-				throw new Error(
-					`OpenRouter timeout after ${timeoutMs}ms (deadline exceeded before attempt ${attempt}; ${reason})`,
-				);
-			}
-
-			const result = await withSemaphore(async () => {
-				const remainingMs = deadline - Date.now();
-				if (remainingMs <= 0) {
-					const reason = lastError ? `last error: ${lastError.message}` : "no successful attempt";
-					throw new Error(
-						`OpenRouter timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore; ${reason})`,
-					);
+		return httpProviderCall<{ text: string; usage: OpenRouterUsage | null }>(
+			{ label: "OpenRouter", timeoutMs, maxRetries: cfg.maxRetries },
+			async ({ attempt, maxRetries, controller, setLastError }) => {
+				const headers: Record<string, string> = {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${cfg.apiKey}`,
+				};
+				if (cfg.referer) headers["HTTP-Referer"] = cfg.referer;
+				if (cfg.title) {
+					headers["X-OpenRouter-Title"] = cfg.title;
+					headers["X-Title"] = cfg.title;
 				}
 
-				const controller = new AbortController();
-				const timer = setTimeout(() => controller.abort(), remainingMs);
+				const res = await fetch(url, {
+					method: "POST",
+					headers,
+					body,
+					signal: controller.signal,
+				});
 
-				try {
-					const headers: Record<string, string> = {
-						"Content-Type": "application/json",
-						Authorization: `Bearer ${cfg.apiKey}`,
-					};
-					if (cfg.referer) headers["HTTP-Referer"] = cfg.referer;
-					if (cfg.title) {
-						headers["X-OpenRouter-Title"] = cfg.title;
-						headers["X-Title"] = cfg.title;
+				if (!res.ok) {
+					const rawBody = await res.text().catch(() => "");
+					const detail = parseApiErrorDetail(rawBody);
+
+					if (res.status === 401 || res.status === 403) {
+						throw new NonRetryableError(
+							`OpenRouter auth failed (${res.status}): ${detail}. Check your OPENROUTER_API_KEY.`,
+						);
 					}
 
-					const res = await fetch(url, {
-						method: "POST",
-						headers,
-						body,
-						signal: controller.signal,
-					});
-
-					if (!res.ok) {
-						const rawBody = await res.text().catch(() => "");
-						let detail = rawBody.slice(0, 300);
-						try {
-							const parsed = JSON.parse(rawBody) as OpenRouterErrorBody;
-							if (parsed.error?.message) {
-								detail = parsed.error.message;
-							}
-						} catch {
-							// Use raw body snippet
-						}
-
-						if (res.status === 401 || res.status === 403) {
-							throw new NonRetryableError(
-								`OpenRouter auth failed (${res.status}): ${detail}. Check your OPENROUTER_API_KEY.`,
-							);
-						}
-
-						if (isRetryableStatus(res.status) && attempt < cfg.maxRetries) {
-							lastError = new Error(`OpenRouter HTTP ${res.status}: ${detail}`);
-							logger.warn("pipeline", "OpenRouter API retryable error", {
-								status: res.status,
-								attempt,
-								detail: detail.slice(0, 100),
-							});
-							return { retry: true } as const;
-						}
-
-						throw new NonRetryableError(`OpenRouter HTTP ${res.status}: ${detail}`);
-					}
-
-					const data = (await res.json()) as OpenRouterResponse;
-					const first = Array.isArray(data.choices) ? data.choices[0] : undefined;
-					const text = extractOpenRouterText(first?.message?.content);
-					if (text.length === 0) {
-						throw new NonRetryableError("OpenRouter returned empty response");
-					}
-
-					return {
-						retry: false,
-						text,
-						usage: data.usage ?? null,
-					} as const;
-				} catch (e) {
-					if (e instanceof DOMException && e.name === "AbortError") {
-						throw new NonRetryableError(`OpenRouter timeout after ${timeoutMs}ms`);
-					}
-					if (e instanceof NonRetryableError) {
-						throw e;
-					}
-
-					lastError = e instanceof Error ? e : new Error(String(e));
-					if (attempt < cfg.maxRetries) {
-						logger.warn("pipeline", "OpenRouter API network error", {
+					if (isRetryableStatus(res.status) && attempt < maxRetries) {
+						setLastError(new Error(`OpenRouter HTTP ${res.status}: ${detail}`));
+						logger.warn("pipeline", "OpenRouter API retryable error", {
+							status: res.status,
 							attempt,
-							error: lastError.message.slice(0, 100),
+							detail: detail.slice(0, 100),
 						});
 						return { retry: true } as const;
 					}
-					throw lastError;
-				} finally {
-					clearTimeout(timer);
+
+					throw new NonRetryableError(`OpenRouter HTTP ${res.status}: ${detail}`);
 				}
-			});
 
-			if (!result.retry) {
-				return { text: result.text, usage: result.usage };
-			}
-		}
+				const data = (await res.json()) as OpenRouterResponse;
+				const first = Array.isArray(data.choices) ? data.choices[0] : undefined;
+				const text = extractContentText(first?.message?.content);
+				if (text.length === 0) {
+					throw new NonRetryableError("OpenRouter returned empty response");
+				}
 
-		throw lastError ?? new Error("OpenRouter call failed after retries");
+				return {
+					retry: false,
+					value: { text, usage: data.usage ?? null },
+				} as const;
+			},
+		);
 	}
 
 	return {
@@ -1571,8 +1662,14 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 		prompt: string,
 		opts?: { timeoutMs?: number; maxTokens?: number },
 	): Promise<LlmGenerateResult> {
-		return withSemaphore(async () => {
-			const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+		const deadline = performance.now() + timeoutMs;
+
+		return withLlmConcurrency(async () => {
+			const remainingMs = deadline - performance.now();
+			if (remainingMs <= 0) {
+				throw new Error(`codex timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
+			}
 			const args = [
 				"exec",
 				"--skip-git-repo-check",
@@ -1607,44 +1704,11 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 			}
 			proc.exited.finally(() => sterile.cleanup());
 
-			// Race the subprocess against a timeout. On timeout we kill the
-			// process and reject immediately instead of waiting for streams
-			// to drain — a hanging subprocess may never close its stdio.
-			const SIGKILL_GRACE_MS = 2000;
-
-			const timeoutPromise = new Promise<never>((_resolve, reject) => {
-				let killTimer: ReturnType<typeof setTimeout> | null = null;
-				const timer = setTimeout(() => {
-					try {
-						proc.kill("SIGTERM");
-					} catch {
-						/* already exited */
-					}
-					killTimer = setTimeout(() => {
-						try {
-							proc.kill("SIGKILL");
-						} catch {
-							/* already dead */
-						}
-					}, SIGKILL_GRACE_MS);
-					reject(new Error(`codex timeout after ${timeoutMs}ms`));
-				}, timeoutMs);
-				proc.exited
-					.then(() => {
-						clearTimeout(timer);
-						if (killTimer) clearTimeout(killTimer);
-					})
-					.catch(() => {
-						clearTimeout(timer);
-						if (killTimer) clearTimeout(killTimer);
-					});
-			});
-
-			const resultPromise = (async (): Promise<LlmGenerateResult> => {
+			return awaitSubprocessWithDeadline(proc, remainingMs, "codex", timeoutMs, async (p) => {
 				const [stdout, stderr, exitCode] = await Promise.all([
-					new Response(proc.stdout).text().catch(() => ""),
-					new Response(proc.stderr).text().catch(() => ""),
-					proc.exited.catch(() => -1),
+					new Response(p.stdout).text().catch(() => ""),
+					new Response(p.stderr).text().catch(() => ""),
+					p.exited.catch(() => -1),
 				]);
 
 				if (exitCode !== 0) {
@@ -1652,14 +1716,8 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 					throw new Error(`codex exit ${exitCode}: ${detail.slice(0, 500)}`);
 				}
 				return parseCodexJsonl(stdout);
-			})();
-
-			// Guard against unhandled rejection if resultPromise rejects
-			// after the timeout wins the race.
-			resultPromise.catch(() => {});
-
-			return Promise.race([resultPromise, timeoutPromise]);
-		});
+			});
+		}, timeoutMs, "codex");
 	}
 
 	return {
@@ -1781,9 +1839,9 @@ export async function ensureOpenCodeServer(port: number): Promise<boolean> {
 	});
 
 	// Wait up to 8s for the server to become healthy
-	const deadline = Date.now() + 8000;
+	const deadline = performance.now() + 8000;
 	let healthy = false;
-	while (Date.now() < deadline) {
+	while (performance.now() < deadline) {
 		await new Promise((r) => setTimeout(r, 500));
 		try {
 			const res = await fetch(healthUrl, { signal: AbortSignal.timeout(1500) });
@@ -1820,11 +1878,6 @@ export function stopOpenCodeServer(): void {
 }
 
 // -- OpenCode response types --
-
-interface OpenCodeTextPart {
-	readonly type: "text";
-	readonly text: string;
-}
 
 interface OpenCodeTokens {
 	readonly input?: number;
@@ -2029,12 +2082,16 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		return ollamaFallbackProvider;
 	}
 
+	// INVARIANT: only called from inside sendMessage()'s withLlmConcurrency block.
+	// Must NOT acquire the semaphore again (nested acquire = self-deadlock under load).
 	async function tryOllamaFallback(
 		prompt: string,
-		opts: { timeoutMs?: number; maxTokens?: number } | undefined,
+		remainingMs: number,
+		opts: { maxTokens?: number } | undefined,
 		reason: string,
 	): Promise<OpenCodeMessageResponse | null> {
 		if (!cfg.enableOllamaFallback) return null;
+		if (remainingMs <= 0) return null;
 
 		const provider = getOllamaFallbackProvider();
 		if (!(await provider.available())) {
@@ -2046,42 +2103,30 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		}
 
 		try {
-			const fallbackOpts = {
-				timeoutMs: Math.min(opts?.timeoutMs ?? cfg.defaultTimeoutMs, 20000),
-				maxTokens: opts?.maxTokens ?? 512,
-			};
+			const timeoutMs = Math.min(remainingMs, 20_000);
+			const maxTokens = opts?.maxTokens ?? 512;
+
 			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), fallbackOpts.timeoutMs);
+			const timer = setTimeout(() => controller.abort(), timeoutMs);
 			let resultText = "";
 			let inputTokens: number | null = null;
 			let outputTokens: number | null = null;
 			try {
 				const options: Record<string, number> = {
-					num_predict: fallbackOpts.maxTokens,
+					num_predict: maxTokens,
 				};
 				if (cfg.ollamaFallbackMaxContextTokens !== undefined) {
 					options.num_ctx = cfg.ollamaFallbackMaxContextTokens;
 				}
-				const res = await fetch(`${cfg.ollamaFallbackBaseUrl}/api/generate`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						model: cfg.ollamaFallbackModel,
-						prompt,
-						stream: false,
-						format: "json",
-						think: false,
-						options,
-					}),
+				const data = await callOllamaRaw({
+					baseUrl: cfg.ollamaFallbackBaseUrl,
+					model: cfg.ollamaFallbackModel,
+					prompt,
+					timeoutMs,
 					signal: controller.signal,
+					options,
+					extraBody: { format: "json", think: false },
 				});
-
-				if (!res.ok) {
-					const body = await res.text().catch(() => "");
-					throw new Error(`Ollama HTTP ${res.status}: ${body.slice(0, 200)}`);
-				}
-
-				const data = (await res.json()) as OllamaGenerateResponse;
 				resultText = typeof data.response === "string" ? data.response.trim() : "";
 				inputTokens = typeof data.prompt_eval_count === "number" ? data.prompt_eval_count : null;
 				outputTokens = typeof data.eval_count === "number" ? data.eval_count : null;
@@ -2102,7 +2147,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					},
 				},
 				parts: [{ type: "text", text: resultText }],
-			};
+			} as OpenCodeMessageResponse;
 		} catch (e) {
 			logger.warn("pipeline", "OpenCode fallback to Ollama failed", {
 				reason,
@@ -2174,154 +2219,109 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		opts?: { timeoutMs?: number; maxTokens?: number },
 	): Promise<OpenCodeMessageResponse> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
+		const deadline = performance.now() + timeoutMs;
+
 		const sid = await getOrCreateSession();
 		// Refresh bypass TTL on reused sessions so bypass-only entries do not
 		// expire while the provider is still actively sending messages.
 		bypassSession(sid, { allowUnknown: true });
 
-		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), timeoutMs);
+		return withLlmConcurrency(async () => {
+			const remaining = deadline - performance.now();
+			if (remaining <= 0) {
+				throw new Error(`OpenCode timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
+			}
 
-		try {
-			const postMessage = async (sid: string): Promise<Response> =>
-				fetch(`${cfg.baseUrl}/session/${sid}/message`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: buildMessageBody(prompt, true),
-					signal: controller.signal,
-				});
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), remaining);
 
-			const listMessages = async (sid: string): Promise<Response> =>
-				fetch(`${cfg.baseUrl}/session/${sid}/message`, {
-					method: "GET",
-					signal: controller.signal,
-				});
+			try {
+				const postMessage = async (sid: string): Promise<Response> =>
+					fetch(`${cfg.baseUrl}/session/${sid}/message`, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: buildMessageBody(prompt, true),
+						signal: controller.signal,
+					});
 
-			const parseResponsePayload = async (res: Response): Promise<unknown> => {
-				const text = await res.text().catch(() => "");
-				if (text.trim().length === 0) return null;
-				try {
-					return JSON.parse(text);
-				} catch {
-					return null;
-				}
-			};
+				const listMessages = async (sid: string): Promise<Response> =>
+					fetch(`${cfg.baseUrl}/session/${sid}/message`, {
+						method: "GET",
+						signal: controller.signal,
+					});
 
-			const parseMessagePayload = (
-				payload: unknown,
-				forSessionId: string,
-				source: "post" | "poll",
-			): OpenCodeMessageResponse | null => {
-				const single = parseOpenCodeMessageResponse(payload);
-				if (single && hasUsableOpenCodeText(single)) {
-					return single;
-				}
+				const parseResponsePayload = async (res: Response): Promise<unknown> => {
+					const text = await res.text().catch(() => "");
+					if (text.trim().length === 0) return null;
+					try {
+						return JSON.parse(text);
+					} catch {
+						return null;
+					}
+				};
 
-				const list = parseOpenCodeMessageList(payload);
-				if (list.length > 0) {
-					const selected = selectLatestAssistantMessage(list);
-					if (selected) return selected;
-					if (source === "post") {
-						logger.warn("pipeline", "OpenCode payload had no assistant text yet", {
+				const parseMessagePayload = (
+					payload: unknown,
+					forSessionId: string,
+					source: "post" | "poll",
+				): OpenCodeMessageResponse | null => {
+					const single = parseOpenCodeMessageResponse(payload);
+					if (single && hasUsableOpenCodeText(single)) {
+						return single;
+					}
+
+					const list = parseOpenCodeMessageList(payload);
+					if (list.length > 0) {
+						const selected = selectLatestAssistantMessage(list);
+						if (selected) return selected;
+						if (source === "post") {
+							logger.warn("pipeline", "OpenCode payload had no assistant text yet", {
+								sessionId: forSessionId,
+							});
+						}
+						return null;
+					}
+
+					if (single && source === "post") {
+						logger.warn("pipeline", "OpenCode response contained no usable text parts", {
+							sessionId: forSessionId,
+						});
+					} else if (source === "post") {
+						logger.warn("pipeline", "OpenCode response missing expected fields", {
 							sessionId: forSessionId,
 						});
 					}
+
 					return null;
-				}
+				};
 
-				if (single && source === "post") {
-					logger.warn("pipeline", "OpenCode response contained no usable text parts", {
-						sessionId: forSessionId,
-					});
-				} else if (source === "post") {
-					logger.warn("pipeline", "OpenCode response missing expected fields", {
-						sessionId: forSessionId,
-					});
-				}
-
-				return null;
-			};
-
-			const pollForAssistantMessage = async (forSessionId: string): Promise<OpenCodeMessageResponse | null> => {
-				const deadline = Date.now() + Math.max(1000, Math.min(timeoutMs, 20000));
-				while (Date.now() < deadline) {
-					const res = await listMessages(forSessionId);
-					if (res.ok) {
-						const payload = await parseResponsePayload(res);
-						const parsed = parseMessagePayload(payload, forSessionId, "poll");
-						if (parsed) return parsed;
+				// Use remaining time after semaphore acquisition for poll deadline
+				const pollForAssistantMessage = async (forSessionId: string): Promise<OpenCodeMessageResponse | null> => {
+					const pollRemaining = deadline - performance.now();
+					const pollDeadline = performance.now() + Math.max(1000, Math.min(pollRemaining, 20000));
+					while (performance.now() < pollDeadline) {
+						const res = await listMessages(forSessionId);
+						if (res.ok) {
+							const payload = await parseResponsePayload(res);
+							const parsed = parseMessagePayload(payload, forSessionId, "poll");
+							if (parsed) return parsed;
+						}
+						await new Promise((resolve) => setTimeout(resolve, 250));
 					}
-					await new Promise((resolve) => setTimeout(resolve, 250));
-				}
-				return null;
-			};
+					return null;
+				};
 
-			const parsePostResponse = async (
-				res: Response,
-				forSessionId: string,
-			): Promise<OpenCodeMessageResponse | null> => {
-				const payload = await parseResponsePayload(res);
-				const parsed = parseMessagePayload(payload, forSessionId, "post");
-				if (parsed) return parsed;
-				return pollForAssistantMessage(forSessionId);
-			};
+				const parsePostResponse = async (
+					res: Response,
+					forSessionId: string,
+				): Promise<OpenCodeMessageResponse | null> => {
+					const payload = await parseResponsePayload(res);
+					const parsed = parseMessagePayload(payload, forSessionId, "post");
+					if (parsed) return parsed;
+					return pollForAssistantMessage(forSessionId);
+				};
 
-			let res = await postMessage(sid);
-			let consumedBody: string | null = null;
-
-			// Older OpenCode versions may not support the format field.
-			// 422 is the Hono/Zod schema validation rejection for unknown fields.
-			// Check status/body before reading structuredOutputSupported so that
-			// concurrent callers both hitting 422 both retry correctly — if A sets
-			// structuredOutputSupported=false first, B must still retry rather than
-			// fall through to the throw path.
-			if (!res.ok && res.status === 422) {
-				consumedBody = await res.text().catch(() => "");
-				// Parse the Hono/Zod rejection body to check whether "format" is the
-				// offending field. Unambiguous vs. substring matching and immune to
-				// future body shape changes that happen to contain "format" elsewhere.
-				const isFormatRejection = (() => {
-					try {
-						const parsed: unknown = JSON.parse(consumedBody);
-						if (!isRecord(parsed)) return false;
-						const issues = Array.isArray(parsed.issues) ? parsed.issues : [];
-						return issues.some((i): boolean => isRecord(i) && Array.isArray(i.path) && i.path[0] === "format");
-					} catch {
-						return false;
-					}
-				})();
-				if (isFormatRejection) {
-					if (structuredOutputSupported) {
-						logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
-							status: res.status,
-						});
-						structuredOutputSupported = false;
-					}
-					consumedBody = null;
-					// Use createSession() (not getOrCreateSession()) so concurrent callers
-					// each get their own session, preventing message ordering issues from
-					// two callers POSTing to the same session ID simultaneously.
-					// Old session stays bypassed — TTL-backed cleanup in session-tracker
-					// evicts stale bypass entries automatically.
-					const retrySid = await createSession();
-					// Known: concurrent callers both writing sessionId here is a benign
-					// last-writer-wins race — each caller uses its own retrySid local for
-					// the fetch below, so both retries are safe. The losing session is
-					// abandoned on the server (resource waste, not a correctness issue).
-					sessionId = retrySid;
-					res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: buildMessageBody(prompt, false),
-						signal: controller.signal,
-					});
-				}
-			}
-
-			if (!res.ok) {
-				const body = consumedBody ?? (await res.text().catch(() => ""));
-				// Session expired/invalid — reset and retry once
-				if (res.status === 404 || res.status === 410) {
+				const retryWithNewSession = async (): Promise<OpenCodeMessageResponse | null> => {
 					sessionId = null;
 					const retrySid = await getOrCreateSession();
 					const retryRes = await postMessage(retrySid);
@@ -2329,110 +2329,130 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						const retryBody = await retryRes.text().catch(() => "");
 						throw new Error(`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`);
 					}
-					const retryParsed = await parsePostResponse(retryRes, retrySid);
-					if (retryParsed) return retryParsed;
-					logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
-						sessionId: retrySid,
-					});
-					const ollamaFallback = await tryOllamaFallback(prompt, opts, "post-response-malformed-after-http-retry");
-					if (ollamaFallback) return ollamaFallback;
-					return buildOpenCodeFallbackResponse();
+					return parsePostResponse(retryRes, retrySid);
+				};
+
+				let res = await postMessage(sid);
+				let consumedBody: string | null = null;
+
+				if (!res.ok && res.status === 422) {
+					consumedBody = await res.text().catch(() => "");
+					const isFormatRejection = (() => {
+						try {
+							const parsed: unknown = JSON.parse(consumedBody);
+							if (!isRecord(parsed)) return false;
+							const issues = Array.isArray(parsed.issues) ? parsed.issues : [];
+							return issues.some((i): boolean => isRecord(i) && Array.isArray(i.path) && i.path[0] === "format");
+						} catch {
+							return false;
+						}
+					})();
+					if (isFormatRejection) {
+						if (structuredOutputSupported) {
+							logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
+								status: res.status,
+							});
+							structuredOutputSupported = false;
+						}
+						consumedBody = null;
+						const retrySid = await createSession();
+						sessionId = retrySid;
+						res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: buildMessageBody(prompt, false),
+							signal: controller.signal,
+						});
+					}
 				}
-				// Agent not registered — user upgraded without re-running
-				// `signet install`. Disable agent and retry without it.
-				// Guard: set agentSupported=false before async work so
-				// concurrent callers skip this branch immediately.
-				if (agentSupported && isAgentRejection(body, cfg.agent)) {
-					agentSupported = false;
-					logger.warn("pipeline", "OpenCode rejected pipeline agent; retrying without agent", {
-						status: res.status,
-						agent: cfg.agent,
+
+				if (!res.ok) {
+					const body = consumedBody ?? (await res.text().catch(() => ""));
+					if (res.status === 404 || res.status === 410) {
+						const retryParsed = await retryWithNewSession();
+						if (retryParsed) return retryParsed;
+						logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
+							sessionId,
+						});
+						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "post-response-malformed-after-http-retry");
+						if (ollamaFallback) return ollamaFallback;
+						return buildOpenCodeFallbackResponse();
+					}
+					if (agentSupported && isAgentRejection(body, cfg.agent)) {
+						agentSupported = false;
+						logger.warn("pipeline", "OpenCode rejected pipeline agent; retrying without agent", {
+							status: res.status,
+							agent: cfg.agent,
+						});
+						const retrySid = await createSession();
+						const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: buildMessageBody(prompt, true),
+							signal: controller.signal,
+						});
+						if (retryRes.ok) {
+							sessionId = retrySid;
+							const retryParsed = await parsePostResponse(retryRes, retrySid);
+							if (retryParsed) return retryParsed;
+						}
+						sessionId = null;
+						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "agent-not-found-retry-failed");
+						if (ollamaFallback) return ollamaFallback;
+						return buildOpenCodeFallbackResponse();
+					}
+					if (!agentSupported && isAgentRejection(body, cfg.agent)) {
+						logger.warn("pipeline", "OpenCode agent rejection on already-disabled agent; falling back", {
+							status: res.status,
+						});
+						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "concurrent-agent-rejection");
+						if (ollamaFallback) return ollamaFallback;
+						return buildOpenCodeFallbackResponse();
+					}
+					throw new Error(`OpenCode HTTP ${res.status}: ${body.slice(0, 200)}`);
+				}
+
+				const parsed = await parsePostResponse(res, sid);
+				if (parsed) return parsed;
+
+				const retryParsed = await retryWithNewSession();
+				if (retryParsed) return retryParsed;
+
+				if (structuredOutputSupported) {
+					logger.info("pipeline", "Consecutive malformed 200 responses; disabling structured output", {
+						sessionId,
 					});
-					const retrySid = await createSession();
-					const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+					structuredOutputSupported = false;
+					sessionId = null;
+					const fallbackSid = await createSession();
+					sessionId = fallbackSid;
+					const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-						body: buildMessageBody(prompt, true),
+						body: buildMessageBody(prompt, false),
 						signal: controller.signal,
 					});
-					if (retryRes.ok) {
-						sessionId = retrySid;
-						const retryParsed = await parsePostResponse(retryRes, retrySid);
-						if (retryParsed) return retryParsed;
+					if (fallbackRes.ok) {
+						const fallbackParsed = await parsePostResponse(fallbackRes, fallbackSid);
+						if (fallbackParsed) return fallbackParsed;
 					}
-					// Retry failed — discard both the rejected and retry sessions
-					// so the next call starts fresh instead of reusing a stale id.
-					sessionId = null;
-					const ollamaFallback = await tryOllamaFallback(prompt, opts, "agent-not-found-retry-failed");
-					if (ollamaFallback) return ollamaFallback;
-					return buildOpenCodeFallbackResponse();
 				}
-				// Concurrent sibling: another caller already disabled the agent
-				// but this request was in-flight with the old body.  Treat as
-				// soft failure — fall back instead of throwing.
-				if (!agentSupported && isAgentRejection(body, cfg.agent)) {
-					logger.warn("pipeline", "OpenCode agent rejection on already-disabled agent; falling back", {
-						status: res.status,
-					});
-					const ollamaFallback = await tryOllamaFallback(prompt, opts, "concurrent-agent-rejection");
-					if (ollamaFallback) return ollamaFallback;
-					return buildOpenCodeFallbackResponse();
-				}
-				throw new Error(`OpenCode HTTP ${res.status}: ${body.slice(0, 200)}`);
-			}
 
-			const parsed = await parsePostResponse(res, sid);
-			if (parsed) return parsed;
-
-			// Malformed successful payload — reset session and retry once
-			sessionId = null;
-			const retrySid = await getOrCreateSession();
-			const retryRes = await postMessage(retrySid);
-			if (!retryRes.ok) {
-				const retryBody = await retryRes.text().catch(() => "");
-				throw new Error(`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`);
-			}
-			const retryParsed = await parsePostResponse(retryRes, retrySid);
-			if (retryParsed) return retryParsed;
-
-			// Two consecutive malformed 200s with structured output enabled is a
-			// strong signal that the upstream provider rejects the format field
-			// but wraps the rejection in a 200 (e.g. GitHub Copilot). Disable
-			// structured output and try once more before falling back.
-			if (structuredOutputSupported) {
-				logger.info("pipeline", "Consecutive malformed 200 responses; disabling structured output", {
-					sessionId: retrySid,
+				logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
+					sessionId,
 				});
-				structuredOutputSupported = false;
-				sessionId = null;
-				const fallbackSid = await createSession();
-				sessionId = fallbackSid;
-				const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: buildMessageBody(prompt, false),
-					signal: controller.signal,
-				});
-				if (fallbackRes.ok) {
-					const fallbackParsed = await parsePostResponse(fallbackRes, fallbackSid);
-					if (fallbackParsed) return fallbackParsed;
+				const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "post-response-malformed-after-session-reset");
+				if (ollamaFallback) return ollamaFallback;
+				return buildOpenCodeFallbackResponse();
+			} catch (e) {
+				if (e instanceof DOMException && e.name === "AbortError") {
+					throw new Error(`OpenCode timeout after ${timeoutMs}ms`);
 				}
+				throw e;
+			} finally {
+				clearTimeout(timer);
 			}
-
-			logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
-				sessionId: retrySid,
-			});
-			const ollamaFallback = await tryOllamaFallback(prompt, opts, "post-response-malformed-after-session-reset");
-			if (ollamaFallback) return ollamaFallback;
-			return buildOpenCodeFallbackResponse();
-		} catch (e) {
-			if (e instanceof DOMException && e.name === "AbortError") {
-				throw new Error(`OpenCode timeout after ${timeoutMs}ms`);
-			}
-			throw e;
-		} finally {
-			clearTimeout(timer);
-		}
+		}, timeoutMs, "opencode");
 	}
 
 	return {
