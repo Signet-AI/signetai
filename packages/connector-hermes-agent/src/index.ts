@@ -163,6 +163,13 @@ async function ensureNamedAgentRegistered(daemonUrl: string, agentId: string, wa
 			signal: AbortSignal.timeout(1_000),
 		});
 		if (getResp.ok) return;
+		if (getResp.status !== 404) {
+			const body = await getResp.text();
+			warnings.push(
+				`Could not check Signet agent '${agentId}' before registration: HTTP ${getResp.status} ${body.slice(0, 200)}`,
+			);
+			return;
+		}
 	} catch {
 		// Daemon may be offline; the POST below will produce the user-facing warning.
 	}

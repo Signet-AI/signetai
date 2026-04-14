@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildAgentMemoryConfig, getAgentIdentityFiles, normalizeAgentRosterEntry } from "../agents";
+import { buildAgentMemoryConfig, getAgentIdentityFiles, normalizeAgentRosterEntry, scaffoldAgent } from "../agents";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	detectExistingSetup,
@@ -139,6 +139,16 @@ describe("agent roster helpers", () => {
 			"IDENTITY.md": join(TMP, "agents", "dot", "IDENTITY.md"),
 			"USER.md": join(TMP, "USER.md"),
 		});
+	});
+
+	test("scaffolds only SOUL.md and IDENTITY.md for named agents", () => {
+		scaffoldAgent("dot", TMP);
+		const agentDir = join(TMP, "agents", "dot");
+
+		expect(existsSync(join(agentDir, "SOUL.md"))).toBe(true);
+		expect(existsSync(join(agentDir, "IDENTITY.md"))).toBe(true);
+		expect(existsSync(join(agentDir, "AGENTS.md"))).toBe(false);
+		expect(existsSync(join(agentDir, "MEMORY.md"))).toBe(false);
 	});
 
 	test("normalizes canonical nested memory policies", () => {

@@ -393,7 +393,7 @@ class SignetClient:
             result["results"] = kept
             meta = result.get("meta")
             if isinstance(meta, dict):
-                result["meta"] = {**meta, "totalReturned": len(kept)}
+                result["meta"] = {**meta, "totalReturned": len(kept), "noHits": len(kept) == 0}
         return result
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:

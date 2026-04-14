@@ -195,6 +195,35 @@ describe("HermesAgentConnector.install()", () => {
 			globalThis.fetch = originalFetch;
 		}
 	});
+
+	it("does not try to create a named agent when the existence check fails with non-404", async () => {
+		const originalFetch = globalThis.fetch;
+		const calls: Array<{ url: string; init?: RequestInit }> = [];
+		globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			calls.push({ url: String(url), init });
+			return new Response("unauthorized", { status: 401 });
+		}) as typeof fetch;
+
+		try {
+			const hermesRepo = join(tmpRoot, "hermes-agent");
+			mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+			const hermesHome = join(tmpRoot, ".hermes");
+			process.env.HERMES_REPO = hermesRepo;
+			process.env.HERMES_HOME = hermesHome;
+			process.env.SIGNET_AGENT_ID = "dot";
+			// biome-ignore lint/performance/noDelete: this test exercises registration
+			delete process.env.SIGNET_SKIP_AGENT_REGISTER;
+
+			const result = await new HermesAgentConnector().install(tmpRoot);
+
+			expect(result.success).toBe(true);
+			expect(calls).toHaveLength(1);
+			expect(calls[0]?.url).toContain("/api/agents/dot");
+			expect(result.warnings.some((w) => w.includes("HTTP 401"))).toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
 });
 
 describe("Hermes Agent bundled plugin", () => {
@@ -243,7 +272,11 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(client).toContain('body["transcript"] = transcript');
 		expect(client).toContain('body["structured"] = structured');
 		expect(client).toContain("def _read_json_response");
+		expect(client).toContain("if not body:");
+		expect(client).toContain("TimeoutError, ValueError");
 		expect(client).toContain('float(row.get("score") or 0.0)');
+		expect(client).toContain('"noHits": len(kept) == 0');
+		expect(plugin).toContain('agent_id not in ("default", "hermes-agent")');
 	});
 });
 

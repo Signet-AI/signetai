@@ -249,7 +249,7 @@ def _resolve_agent_workspace(agent_id: str, kwargs: Dict[str, Any]) -> str:
 
     signet_path = _sanitize_env(os.environ.get("SIGNET_PATH", ""))
     agents_root = Path(signet_path).expanduser() if signet_path else Path.home() / ".agents"
-    if agent_id and agent_id != "default":
+    if agent_id and agent_id not in ("default", "hermes-agent"):
         candidate = agents_root / "agents" / agent_id
         if candidate.exists():
             return str(candidate)
