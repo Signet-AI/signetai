@@ -26,6 +26,8 @@ Environment variables:
 - `SIGNET_HOST` / `SIGNET_PORT` — Host and port separately
 - `SIGNET_AGENT_ID` — Agent scope identifier (default: `hermes-agent`)
 - `SIGNET_AGENT_WORKSPACE` — Optional named-agent workspace path (for example `~/.agents/agents/dot`)
+- `SIGNET_AGENT_READ_POLICY` — Optional named-agent memory policy for first registration: `shared` (default), `isolated`, or `group`
+- `SIGNET_AGENT_POLICY_GROUP` — Required when `SIGNET_AGENT_READ_POLICY=group`
 
 ## Tools
 

@@ -1058,10 +1058,15 @@ The default agent uses `shared` policy for backward compatibility — existing
 installs see all their memories unchanged.
 
 **Identity inheritance** — each agent can have its own identity files under
-`$SIGNET_WORKSPACE/agents/{name}/`. Only `SOUL.md` and `IDENTITY.md` are
-expected to be overridden; all other files (`AGENTS.md`, `USER.md`, etc.)
-inherit from the workspace root. The daemon's file watcher monitors
-`$SIGNET_WORKSPACE/agents/` and triggers a harness sync on change.
+`$SIGNET_WORKSPACE/agents/{name}/`. On session start, the daemon checks the
+agent directory first for the standard identity files (`AGENTS.md`, `SOUL.md`,
+`IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`, `MEMORY.md`,
+`BOOTSTRAP.md`) and falls back to the workspace root when an agent-local file
+does not exist. This lets named agents override prompt identity and working
+memory without copying the whole workspace. If no agent-local `MEMORY.md`
+exists, the shared root `MEMORY.md` remains the working-memory projection for
+that agent. The daemon's file watcher monitors `$SIGNET_WORKSPACE/agents/`
+and triggers a harness sync on change.
 
 **OpenClaw session keys** — OpenClaw encodes the agent ID in session keys as
 `agent:{id}:{rest}`. The daemon's `resolveAgentId()` helper auto-parses this

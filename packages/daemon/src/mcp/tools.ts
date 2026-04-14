@@ -93,6 +93,38 @@ interface MarketplaceProxyState {
 	contextKey: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeStructuredMemoryPayload(value: unknown): unknown {
+	if (!isRecord(value)) return value;
+	const aspects = value.aspects;
+	if (!Array.isArray(aspects)) return value;
+
+	return {
+		...value,
+		aspects: aspects.map((aspect) => {
+			if (!isRecord(aspect)) return aspect;
+			if (typeof aspect.entityName === "string" && Array.isArray(aspect.attributes)) return aspect;
+			if (typeof aspect.entity === "string" && typeof aspect.aspect === "string" && typeof aspect.value === "string") {
+				return {
+					entityName: aspect.entity,
+					aspect: aspect.aspect,
+					attributes: [
+						{
+							content: aspect.value,
+							...(typeof aspect.confidence === "number" ? { confidence: aspect.confidence } : {}),
+							...(typeof aspect.importance === "number" ? { importance: aspect.importance } : {}),
+						},
+					],
+				};
+			}
+			return aspect;
+		}),
+	};
+}
+
 interface DaemonResponse<T> {
 	readonly ok: true;
 	readonly data: T;
@@ -701,17 +733,26 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 							.optional(),
 						aspects: z
 							.array(
-								z.object({
-									entityName: z.string(),
-									aspect: z.string(),
-									attributes: z.array(
-										z.object({
-											content: z.string(),
-											confidence: z.number().optional(),
-											importance: z.number().optional(),
-										}),
-									),
-								}),
+								z.union([
+									z.object({
+										entityName: z.string(),
+										aspect: z.string(),
+										attributes: z.array(
+											z.object({
+												content: z.string(),
+												confidence: z.number().optional(),
+												importance: z.number().optional(),
+											}),
+										),
+									}),
+									z.object({
+										entity: z.string(),
+										aspect: z.string(),
+										value: z.string(),
+										confidence: z.number().optional(),
+										importance: z.number().optional(),
+									}),
+								]),
 							)
 							.optional(),
 						hints: z.array(z.string()).optional(),
@@ -729,6 +770,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (tags) {
 				body = `[${tags}]: ${content}`;
 			}
+			const normalizedStructured = normalizeStructuredMemoryPayload(structured);
 
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/remember", {
 				method: "POST",
@@ -737,7 +779,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance,
 					hints,
 					transcript,
-					structured,
+					structured: normalizedStructured,
 					pinned,
 				},
 			});

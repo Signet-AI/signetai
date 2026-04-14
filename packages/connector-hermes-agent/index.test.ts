@@ -11,6 +11,10 @@ const originalEnv = {
 	SIGNET_AGENT_ID: process.env.SIGNET_AGENT_ID,
 	SIGNET_AGENT_WORKSPACE: process.env.SIGNET_AGENT_WORKSPACE,
 	SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
+	SIGNET_TOKEN: process.env.SIGNET_TOKEN,
+	SIGNET_AGENT_READ_POLICY: process.env.SIGNET_AGENT_READ_POLICY,
+	SIGNET_AGENT_MEMORY_POLICY: process.env.SIGNET_AGENT_MEMORY_POLICY,
+	SIGNET_AGENT_POLICY_GROUP: process.env.SIGNET_AGENT_POLICY_GROUP,
 	SIGNET_SKIP_AGENT_REGISTER: process.env.SIGNET_SKIP_AGENT_REGISTER,
 };
 
@@ -38,6 +42,14 @@ beforeEach(() => {
 	delete process.env.SIGNET_AGENT_WORKSPACE;
 	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
 	delete process.env.SIGNET_DAEMON_URL;
+	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
+	delete process.env.SIGNET_TOKEN;
+	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
+	delete process.env.SIGNET_AGENT_READ_POLICY;
+	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
+	delete process.env.SIGNET_AGENT_MEMORY_POLICY;
+	// biome-ignore lint/performance/noDelete: ensure no stale value from outer env
+	delete process.env.SIGNET_AGENT_POLICY_GROUP;
 	process.env.SIGNET_SKIP_AGENT_REGISTER = "1";
 });
 
@@ -46,7 +58,12 @@ afterEach(() => {
 	restoreEnv("HERMES_REPO");
 	restoreEnv("HERMES_HOME");
 	restoreEnv("SIGNET_AGENT_ID");
+	restoreEnv("SIGNET_AGENT_WORKSPACE");
 	restoreEnv("SIGNET_DAEMON_URL");
+	restoreEnv("SIGNET_TOKEN");
+	restoreEnv("SIGNET_AGENT_READ_POLICY");
+	restoreEnv("SIGNET_AGENT_MEMORY_POLICY");
+	restoreEnv("SIGNET_AGENT_POLICY_GROUP");
 	restoreEnv("SIGNET_SKIP_AGENT_REGISTER");
 	if (tmpRoot) {
 		rmSync(tmpRoot, { recursive: true, force: true });
@@ -138,6 +155,46 @@ describe("HermesAgentConnector.install()", () => {
 		expect(envContent).toContain("SIGNET_AGENT_ID=dot");
 		expect(envContent).toContain(`SIGNET_AGENT_WORKSPACE=${join(tmpRoot, "agents", "dot")}`);
 	});
+
+	it("uses SIGNET_TOKEN and configured read policy when registering named agents", async () => {
+		const originalFetch = globalThis.fetch;
+		const calls: Array<{ url: string; init?: RequestInit }> = [];
+		globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/api/agents/dot")) {
+				return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+			}
+			return new Response(JSON.stringify({ id: "dot" }), { status: 201 });
+		}) as typeof fetch;
+
+		try {
+			const hermesRepo = join(tmpRoot, "hermes-agent");
+			mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+			const hermesHome = join(tmpRoot, ".hermes");
+			process.env.HERMES_REPO = hermesRepo;
+			process.env.HERMES_HOME = hermesHome;
+			process.env.SIGNET_AGENT_ID = "dot";
+			process.env.SIGNET_TOKEN = " test-token \n";
+			process.env.SIGNET_AGENT_READ_POLICY = "isolated";
+			// biome-ignore lint/performance/noDelete: this test exercises registration
+			delete process.env.SIGNET_SKIP_AGENT_REGISTER;
+
+			const result = await new HermesAgentConnector().install(tmpRoot);
+
+			expect(result.success).toBe(true);
+			expect(calls).toHaveLength(2);
+			for (const call of calls) {
+				expect(new Headers(call.init?.headers).get("Authorization")).toBe("Bearer test-token");
+			}
+			expect(JSON.parse(String(calls[1]?.init?.body))).toMatchObject({
+				name: "dot",
+				read_policy: "isolated",
+				policy_group: null,
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
 });
 
 describe("Hermes Agent bundled plugin", () => {
@@ -164,7 +221,7 @@ describe("Hermes Agent bundled plugin", () => {
 		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
 
 		expect(client).toContain("_RECALL_TIMEOUT_SECS = 30");
-		expect(client).toContain('timeout=_LONG_TIMEOUT_SECS,');
+		expect(client).toContain("timeout=_LONG_TIMEOUT_SECS,");
 		expect(client).toContain('self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)');
 	});
 
@@ -185,6 +242,8 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(client).toContain('body["hints"] = hints');
 		expect(client).toContain('body["transcript"] = transcript');
 		expect(client).toContain('body["structured"] = structured');
+		expect(client).toContain("def _read_json_response");
+		expect(client).toContain('float(row.get("score") or 0.0)');
 	});
 });
 

@@ -366,6 +366,34 @@ describe("createMcpServer", () => {
 			expect(body.structured.aspects[0].entityName).toBe("Nicholai");
 			expect(body.structured.aspects[0].attributes[0].content).toBe("prefers Signet memory tools");
 		});
+
+		it("normalizes legacy structured aspect tuples before forwarding to remember", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(200, { id: "legacy-structured-1", structured: true }, cap);
+
+			await callTool(server, "memory_store", {
+				content: "Legacy structured tuple.",
+				structured: {
+					aspects: [
+						{
+							entity: "Nicholai",
+							aspect: "memory preference",
+							value: "prefers Signet memory tools",
+							confidence: 0.9,
+						},
+					],
+				},
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.structured.aspects).toEqual([
+				{
+					entityName: "Nicholai",
+					aspect: "memory preference",
+					attributes: [{ content: "prefers Signet memory tools", confidence: 0.9 }],
+				},
+			]);
+		});
 	});
 
 	describe("memory_get", () => {

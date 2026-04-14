@@ -43,6 +43,14 @@ def _resolve_base_url() -> str:
     return f"http://{host}:{port}"
 
 
+def _read_json_response(resp) -> Dict[str, Any]:
+    """Read a daemon response, treating empty successful bodies as an empty object."""
+    body = resp.read()
+    if not body:
+        return {}
+    return json.loads(body.decode("utf-8"))
+
+
 class SignetClient:
     """HTTP client for the Signet daemon API."""
 
@@ -87,7 +95,7 @@ class SignetClient:
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                return _read_json_response(resp)
         except urllib.error.HTTPError as e:
             body_text = ""
             try:
@@ -96,7 +104,7 @@ class SignetClient:
                 logger.debug("Signet POST %s: failed to read error body: %s", path, read_err)
             logger.debug("Signet POST %s returned %d: %s", path, e.code, body_text)
             return None
-        except (urllib.error.URLError, OSError, TimeoutError) as e:
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
             logger.debug("Signet POST %s failed: %s", path, e)
             return None
 
@@ -111,8 +119,8 @@ class SignetClient:
         req = urllib.request.Request(url, headers=self._headers(), method="GET")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError) as e:
+                return _read_json_response(resp)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
             logger.debug("Signet GET %s failed: %s", path, e)
             return None
 
@@ -129,8 +137,8 @@ class SignetClient:
         req = urllib.request.Request(url, data=data, headers=self._headers(), method="PATCH")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError) as e:
+                return _read_json_response(resp)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
             logger.debug("Signet PATCH %s failed: %s", path, e)
             return None
 
@@ -145,8 +153,8 @@ class SignetClient:
         req = urllib.request.Request(url, headers=self._headers(), method="DELETE")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError) as e:
+                return _read_json_response(resp)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
             logger.debug("Signet DELETE %s failed: %s", path, e)
             return None
 
@@ -379,7 +387,7 @@ class SignetClient:
         ):
             kept = [
                 row for row in result["results"]
-                if not isinstance(row, dict) or float(row.get("score", 0.0)) >= score_min
+                if not isinstance(row, dict) or float(row.get("score") or 0.0) >= score_min
             ]
             result = dict(result)
             result["results"] = kept

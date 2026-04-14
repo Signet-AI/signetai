@@ -742,7 +742,8 @@ All harnesses target the same model:
 
 - one agent
 - many sessions / branches
-- one shared `MEMORY.md` head
+- one shared root `MEMORY.md` head, with optional agent-local `MEMORY.md`
+  overrides for named agents
 - structured retrieval first
 - transcripts as fallback / deep history
 - compaction artifacts feeding the same temporal DAG
