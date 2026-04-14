@@ -1717,7 +1717,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Detect whether a 4xx error body indicates an unknown/unregistered
  * agent.  Checks Zod-style `issues[].path` first (structured), then
- * falls back to an exact `"unknown agent"` substring check.
+ * requires both `"unknown agent"` and the agent name in the body text.
  */
 function isAgentRejection(body: string, agent: string | undefined): boolean {
 	if (!agent) return false;
@@ -1733,7 +1733,7 @@ function isAgentRejection(body: string, agent: string | undefined): boolean {
 		// empty
 	}
 	const lower = body.toLowerCase();
-	return lower.includes("unknown agent");
+	return lower.includes("unknown agent") && !!agent && lower.includes(agent.toLowerCase());
 }
 
 function parseOpenCodeTokens(value: unknown): OpenCodeTokens | undefined {
@@ -2201,6 +2201,9 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						const retryParsed = await parsePostResponse(retryRes, retrySid);
 						if (retryParsed) return retryParsed;
 					}
+					// Retry failed — discard both the rejected and retry sessions
+					// so the next call starts fresh instead of reusing a stale id.
+					sessionId = null;
 					const ollamaFallback = await tryOllamaFallback(prompt, opts, "agent-not-found-retry-failed");
 					if (ollamaFallback) return ollamaFallback;
 					return buildOpenCodeFallbackResponse();

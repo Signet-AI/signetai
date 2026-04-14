@@ -804,7 +804,7 @@ describe("createOpenCodeProvider", () => {
 		expect(lastBody.agent).toBeUndefined();
 	});
 
-	it("generate() falls back instead of throwing when agent already disabled and rejection arrives", async () => {
+	it("generate() falls back when agent-rejection 400 arrives after agent already disabled", async () => {
 		let sessionCount = 0;
 		let agentSeen = false;
 		mockFetch(async (url, init) => {
@@ -824,9 +824,6 @@ describe("createOpenCodeProvider", () => {
 				agentSeen = true;
 				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
 			}
-			// After agent is disabled, still return 400 with agent-rejection
-			// body to simulate a concurrent in-flight request that was built
-			// before the flag flipped.
 			if (!agentSeen) {
 				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
 			}
@@ -837,13 +834,12 @@ describe("createOpenCodeProvider", () => {
 			baseUrl: "http://localhost:9999",
 			model: "google/gemini-2.5-flash",
 		});
-		// First call triggers the agent-recovery path (agentSupported → false)
 		const first = await provider.generate("extract first");
 		expect(first).toBe("ok");
 
-		// Simulate the concurrent sibling: agent is already disabled,
-		// but the mock returns a 400 with agent-rejection body.
-		// This must fall back gracefully, not throw.
+		// Agent is now disabled.  Mock returns 400 with agent-rejection
+		// text for every message request.  The !agentSupported branch
+		// must catch this and fall back instead of throwing.
 		sessionCount = 0;
 		agentSeen = false;
 		let threw = false;
@@ -858,8 +854,6 @@ describe("createOpenCodeProvider", () => {
 					version: "1",
 				});
 			}
-			// Always return agent rejection regardless of body — simulates
-			// a request built before agentSupported was flipped.
 			return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
 		});
 		try {
