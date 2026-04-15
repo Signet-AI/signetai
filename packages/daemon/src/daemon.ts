@@ -103,6 +103,13 @@ import { detectDrift } from "./predictor-comparison";
 import { getPredictorState } from "./predictor-state";
 import { type RepairContext, structuralBackfill } from "./repair-actions";
 import {
+	getResourceSnapshot,
+	logFdSnapshot,
+	startEventLoopMonitor,
+	startFdPollMonitor,
+	stopResourceMonitors,
+} from "./resource-monitor";
+import {
 	AGENTS_DIR,
 	ALLOWED_ORIGINS,
 	BIND_HOST,
@@ -339,6 +346,7 @@ app.get("/health", (c) => {
 			extractionPending: extraction.stats?.pending ?? 0,
 			extractionBackoffMs: extraction.stats?.backoffMs ?? 0,
 		},
+		resources: getResourceSnapshot(),
 	});
 });
 
@@ -2375,6 +2383,8 @@ async function cleanup() {
 		checkpointPruneTimer = undefined;
 		setCheckpointPruneTimer(undefined);
 	}
+	stopResourceMonitors();
+	logFdSnapshot("cleanup-start");
 	if (telemetryRef) {
 		try {
 			await telemetryRef.stop();
@@ -2408,7 +2418,9 @@ async function cleanup() {
 	closeDbAccessor();
 
 	if (watcher) {
+		logFdSnapshot("pre-cleanup-watcher");
 		watcher.close();
+		logFdSnapshot("post-cleanup-watcher");
 	}
 
 	if (existsSync(PID_FILE)) {
@@ -2457,6 +2469,9 @@ async function main() {
 
 	initDbAccessor(MEMORY_DB, { agentsDir: AGENTS_DIR });
 	startSessionCleanup();
+	logFdSnapshot("post-db-init");
+	startEventLoopMonitor();
+	startFdPollMonitor();
 
 	syncAgentRoster(AGENTS_DIR);
 
@@ -2475,6 +2490,7 @@ async function main() {
 
 	startFileWatcher();
 	logger.info("watcher", "File watcher started");
+	logFdSnapshot("post-watcher");
 
 	await ensureArchitectureDoc();
 
@@ -2527,6 +2543,7 @@ async function main() {
 	}
 
 	await startPipelineRuntime(memoryCfg, telemetryCollector);
+	logFdSnapshot("post-pipeline");
 
 	initCheckpointFlush(getDbAccessor());
 
@@ -2618,6 +2635,7 @@ async function main() {
 			port: info.port,
 		});
 		logger.info("daemon", "Daemon ready");
+		logFdSnapshot("server-ready");
 
 		const healthStampPath = join(DAEMON_DIR, "last-healthy-start");
 		try {

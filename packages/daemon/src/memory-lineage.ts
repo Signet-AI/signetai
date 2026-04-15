@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import type { LlmProvider } from "@signet/core";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
-import type { LlmProvider } from "@signet/core";
 import { getAgentScope } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
+import { logger } from "./logger";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
 import { isNoiseSession, isTempProject } from "./session-noise";
@@ -287,7 +288,10 @@ function tokenCount(text: string): number {
 }
 
 function joinParts(parts: ReadonlyArray<string>): string {
-	return parts.filter((part) => part.trim().length > 0).join("\n\n").trimEnd();
+	return parts
+		.filter((part) => part.trim().length > 0)
+		.join("\n\n")
+		.trimEnd();
 }
 
 function renderSection(section: ProjectionSection): string {
@@ -537,14 +541,19 @@ function listCanonicalFiles(): string[] {
 export function reindexMemoryArtifacts(agentId?: string): void {
 	const scope = agentId?.trim() || null;
 	const files = listCanonicalFiles();
+	const stopTimer = logger.time("resources", "reindexMemoryArtifacts");
 
 	try {
 		const ready = getDbAccessor().withReadDb((db) => {
 			const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifacts'`).get();
 			return row !== undefined;
 		});
-		if (!ready) return;
+		if (!ready) {
+			stopTimer({ fileCount: files.length });
+			return;
+		}
 	} catch {
+		stopTimer({ fileCount: files.length });
 		return;
 	}
 
@@ -580,6 +589,8 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 		if (!isValidArtifact(path, parsed.frontmatter, body)) continue;
 		upsertArtifactRow(path, parsed.frontmatter, body);
 	}
+
+	stopTimer({ fileCount: files.length });
 }
 
 function isValidArtifact(path: string, frontmatter: Record<string, unknown>, body: string): boolean {
@@ -1212,9 +1223,7 @@ function renderLedgerSection(
 	if (best > 0) {
 		const kept = sessions.slice(0, best);
 		const block = renderCount(best);
-		const refs = kept
-			.map((session) => session.manifestPath)
-			.filter((path): path is string => typeof path === "string");
+		const refs = kept.map((session) => session.manifestPath).filter((path): path is string => typeof path === "string");
 		return {
 			block,
 			refs,
@@ -1422,12 +1431,12 @@ export function purgeCanonicalNoiseSessions(agentId: string, reason: string): nu
 				 ORDER BY session_token`,
 				)
 				.all(agentId) as Array<{
-					session_token: string;
-					session_id: string;
-					session_key: string | null;
-					project: string | null;
-					harness: string | null;
-				}>,
+				session_token: string;
+				session_id: string;
+				session_key: string | null;
+				project: string | null;
+				harness: string | null;
+			}>,
 	);
 	const groups = new Map<
 		string,
@@ -1470,4 +1479,3 @@ export function purgeCanonicalNoiseSessionsOnce(agentId: string, reason: string)
 export function resetProjectionPurgeState(): void {
 	purgeSeen.clear();
 }
-
