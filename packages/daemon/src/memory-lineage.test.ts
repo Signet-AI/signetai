@@ -9,6 +9,7 @@ import {
 	MEMORY_PROJECTION_MAX_TOKENS,
 	purgeCanonicalNoiseSessions,
 	purgeCanonicalNoiseSessionsOnce,
+	reindexMemoryArtifacts,
 	renderMemoryProjection,
 	resetProjectionPurgeState,
 	writeSummaryArtifact,
@@ -234,5 +235,152 @@ describe("memory-lineage", () => {
 					.get("tok-mixed") as { count: number },
 		);
 		expect(count.count).toBe(2);
+	});
+
+	describe("reindexMemoryArtifacts incremental", () => {
+		it("first boot: empty cache + empty DB → full scan", async () => {
+			await addSummary({ sessionId: "scan-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+			await addSummary({ sessionId: "scan-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
+
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ?").run("default");
+			});
+
+			reindexMemoryArtifacts("default");
+
+			const count = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?")
+						.get("default") as { count: number },
+			);
+			expect(count.count).toBe(4);
+		});
+
+		it("second call with no mtime change → no-op", async () => {
+			await addSummary({ sessionId: "no-op", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+
+			reindexMemoryArtifacts("default");
+
+			const before = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path, updated_at
+							 FROM memory_artifacts
+							 WHERE agent_id = ?
+							 ORDER BY source_path ASC`,
+						)
+						.all("default") as Array<{ source_path: string; updated_at: string }>,
+			);
+
+			await Bun.sleep(5);
+			reindexMemoryArtifacts("default");
+
+			const after = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path, updated_at
+							 FROM memory_artifacts
+							 WHERE agent_id = ?
+							 ORDER BY source_path ASC`,
+						)
+						.all("default") as Array<{ source_path: string; updated_at: string }>,
+			);
+
+			expect(after).toEqual(before);
+		});
+
+		it("new file added → picked up on next call", async () => {
+			await addSummary({ sessionId: "new-file-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+			reindexMemoryArtifacts("default");
+
+			const baseline = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?")
+						.get("default") as { count: number },
+			);
+
+			await addSummary({ sessionId: "new-file-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("DELETE FROM memory_artifacts WHERE session_id = ?").run("new-file-b");
+			});
+
+			reindexMemoryArtifacts("default");
+
+			const after = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?")
+						.get("default") as { count: number },
+			);
+
+			expect(after.count).toBe(baseline.count + 2);
+		});
+
+		it("deleted file → removed from DB", async () => {
+			await addSummary({ sessionId: "delete-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+			await addSummary({ sessionId: "delete-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
+			reindexMemoryArtifacts("default");
+
+			const target = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path
+							 FROM memory_artifacts
+							 WHERE agent_id = ?
+							   AND source_kind = 'manifest'
+							   AND session_id = ?`,
+						)
+						.get("default", "delete-b") as { source_path: string },
+			);
+
+			rmSync(join(dir, target.source_path), { force: true });
+			reindexMemoryArtifacts("default");
+
+			const row = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT source_path FROM memory_artifacts WHERE source_path = ?")
+						.get(target.source_path) as { source_path: string } | null,
+			);
+
+			expect(row).toBeNull();
+		});
+
+		it("cold cache + existing DB rows → mtime=0 triggers re-read", async () => {
+			const agentId = "cache-cold";
+			const oldStamp = "2000-01-01T00:00:00.000Z";
+			await writeSummaryArtifact({
+				agentId,
+				sessionId: "cold-cache-session",
+				sessionKey: "cold-cache-session",
+				project: "/home/nicholai/signet/signetai",
+				harness: "codex",
+				capturedAt: new Date().toISOString(),
+				startedAt: null,
+				endedAt: null,
+				summary: "Cold cache should trigger incremental refresh when DB already has rows.",
+			});
+
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("UPDATE memory_artifacts SET updated_at = ? WHERE agent_id = ?").run(oldStamp, agentId);
+			});
+
+			reindexMemoryArtifacts(agentId);
+
+			const rows = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT updated_at FROM memory_artifacts WHERE agent_id = ?")
+						.all(agentId) as Array<{ updated_at: string }>,
+			);
+
+			expect(rows.length).toBeGreaterThan(0);
+			expect(rows.every((row) => row.updated_at !== oldStamp)).toBe(true);
+		});
 	});
 });
