@@ -39,6 +39,10 @@ const artifactIndexCache = new Map<string, Map<string, number>>();
 // Changed manifest paths from last reindexMemoryArtifacts call — read by renderMemoryProjection
 let lastChangedManifests: Set<string> | undefined;
 
+// Tracks which manifest rel paths were referenced in the previous ledger render
+// so syncManifestRefs can detect and clear stale refs after ledger clipping
+let prevLedgerRefs: Set<string> | undefined;
+
 function getProjectionTokenizer(): Tiktoken {
 	if (projTok) return projTok;
 	projTok = new Tiktoken(cl100k_base);
@@ -568,13 +572,22 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 	}
 
 	if (cache.size === 0) {
-		const existingCount = getDbAccessor().withReadDb((db) => {
-			const row = scope
-				? db.prepare("SELECT COUNT(*) as n FROM memory_artifacts WHERE agent_id = ?").get(scope)
-				: db.prepare("SELECT COUNT(*) as n FROM memory_artifacts").get();
-			return (row as { n: number }).n;
+		// Seed from DB paths too so files deleted while daemon was down get detected
+		const dbPaths = getDbAccessor().withReadDb((db) => {
+			const rows = scope
+				? (db.prepare("SELECT DISTINCT source_path FROM memory_artifacts WHERE agent_id = ?").all(scope) as Array<{
+						source_path: string;
+					}>)
+				: (db.prepare("SELECT DISTINCT source_path FROM memory_artifacts").all() as Array<{
+						source_path: string;
+					}>);
+			return rows;
 		});
-		if (existingCount > 0) {
+		if (dbPaths.length > 0) {
+			const root = getAgentsDir();
+			for (const row of dbPaths) {
+				cache.set(join(root, row.source_path), 0);
+			}
 			for (const path of files) {
 				cache.set(path, 0);
 			}
@@ -1315,9 +1328,20 @@ function syncManifestRefs(refs: ReadonlyArray<string>, changedManifests?: Readon
 	const set = new Set(refs);
 	let files: string[];
 	if (changedManifests !== undefined) {
-		if (changedManifests.size === 0) return;
-		files = [...changedManifests];
+		const absFiles = new Set(changedManifests);
+		if (prevLedgerRefs) {
+			const root = getAgentsDir();
+			for (const rel of prevLedgerRefs) {
+				if (!set.has(rel)) {
+					absFiles.add(join(root, rel));
+				}
+			}
+		}
+		prevLedgerRefs = set;
+		if (absFiles.size === 0) return;
+		files = [...absFiles];
 	} else {
+		prevLedgerRefs = set;
 		files = listCanonicalFiles().filter((path) => path.endsWith("--manifest.md"));
 	}
 	for (const path of files) {
@@ -1531,4 +1555,7 @@ export function purgeCanonicalNoiseSessionsOnce(agentId: string, reason: string)
 
 export function resetProjectionPurgeState(): void {
 	purgeSeen.clear();
+	artifactIndexCache.clear();
+	lastChangedManifests = undefined;
+	prevLedgerRefs = undefined;
 }

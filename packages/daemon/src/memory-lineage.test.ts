@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Tiktoken } from "js-tiktoken/lite";
@@ -395,6 +395,66 @@ describe("memory-lineage", () => {
 
 		expect(warm.content).toBe(cold.content);
 		expect(warm.fileCount).toBe(cold.fileCount);
+	});
+
+	it("cold-start cache reconciles DB rows for files deleted while daemon was down", async () => {
+		await addSummary({ sessionId: "ghost-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+		await addSummary({ sessionId: "ghost-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
+		reindexMemoryArtifacts("default");
+
+		const target = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_path
+						 FROM memory_artifacts
+						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?`,
+					)
+					.get("default", "ghost-b") as { source_path: string },
+		);
+
+		rmSync(join(dir, target.source_path), { force: true });
+		resetProjectionPurgeState();
+
+		reindexMemoryArtifacts("default");
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT source_path FROM memory_artifacts WHERE source_path = ?")
+					.get(target.source_path) as { source_path: string } | null,
+		);
+		expect(row).toBeNull();
+	});
+
+	it("clears stale memory_md_refs on manifests that drop out of the ledger", async () => {
+		await addSummary({ sessionId: "ref-a", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
+		await addSummary({ sessionId: "ref-b", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+
+		renderMemoryProjection("default");
+
+		const manifestRow = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_path
+						 FROM memory_artifacts
+						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?`,
+					)
+					.get("default", "ref-b") as { source_path: string },
+		);
+		const manifestPath = join(dir, manifestRow.source_path);
+		const before = readFileSync(manifestPath, "utf8");
+		expect(before).toContain("Session Ledger");
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DELETE FROM memory_artifacts WHERE session_id = ?").run("ref-b");
+		});
+
+		renderMemoryProjection("default");
+
+		const after = readFileSync(manifestPath, "utf8");
+		expect(after).not.toContain("Session Ledger");
 	});
 });
 });
