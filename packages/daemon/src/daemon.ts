@@ -2447,7 +2447,8 @@ async function main() {
 	startFdPollMonitor();
 
 	const { extensionPath } = getVectorRuntimeStatus();
-	const workerPath = join(import.meta.dir, "synthesis-render-worker.ts");
+	const bundled = join(import.meta.dir, "synthesis-render-worker.js");
+	const workerPath = existsSync(bundled) ? bundled : join(import.meta.dir, "synthesis-render-worker.ts");
 	const synthWorker = new Worker(workerPath);
 	synthWorker.postMessage({ type: "init", dbPath: MEMORY_DB, vecExtensionPath: extensionPath ?? "" });
 	let synthWorkerReady = false;
