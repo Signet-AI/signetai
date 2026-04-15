@@ -615,18 +615,27 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 		const parsed = parseFrontmatterDocument(readFileSync(path, "utf8"));
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
 		if (scope && nextAgent !== scope) {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(relativePath(path));
+			});
 			cache.set(path, mtime);
 			continue;
 		}
 		const match = path.match(/--([a-z2-7]{16})--/);
 		const sessionToken = match?.[1];
 		if (sessionToken && tombstones.has(sessionToken)) {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(relativePath(path));
+			});
 			cache.set(path, mtime);
 			changedPaths.add(path);
 			continue;
 		}
 		const body = normalizeMarkdownBody(parsed.body);
 		if (!isValidArtifact(path, parsed.frontmatter, body)) {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(relativePath(path));
+			});
 			cache.set(path, mtime);
 			changedPaths.add(path);
 			continue;
