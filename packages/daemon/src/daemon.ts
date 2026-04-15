@@ -2449,32 +2449,54 @@ async function main() {
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(import.meta.dir, "synthesis-render-worker.js");
 	const workerPath = existsSync(bundled) ? bundled : join(import.meta.dir, "synthesis-render-worker.ts");
-	const synthWorker = new Worker(workerPath);
-	synthWorker.postMessage({ type: "init", dbPath: MEMORY_DB, vecExtensionPath: extensionPath ?? "" });
+	let synthWorker: Worker | null = null;
+	try {
+		synthWorker = new Worker(workerPath);
+	} catch (err) {
+		logger.warn("daemon", "synthesis worker creation failed — using sync rendering", err instanceof Error ? err : undefined);
+	}
 	let synthWorkerReady = false;
-	await new Promise<void>((res, rej) => {
-		const timer = setTimeout(() => {
-			logger.warn("daemon", "synthesis worker init timed out — falling back to sync rendering");
-			rej(new Error("synthesis worker init timeout"));
-		}, 10_000);
-		synthWorker.once("message", (msg: unknown) => {
-			clearTimeout(timer);
-			if (isReadyResponse(msg)) {
-				synthWorkerReady = true;
-				res();
-			} else {
-				rej(new Error("unexpected init response"));
-			}
-		});
-	}).catch((err) => {
-		logger.warn("daemon", "synthesis worker failed", err instanceof Error ? err : undefined);
-		synthWorker.terminate().catch((e) => {
-			logger.debug("daemon", "synthesis worker terminate failed", {
-				error: e instanceof Error ? e.message : String(e),
+	if (synthWorker) {
+		const w = synthWorker;
+		w.postMessage({ type: "init", dbPath: MEMORY_DB, vecExtensionPath: extensionPath ?? "" });
+		await new Promise<void>((res, rej) => {
+			const timer = setTimeout(() => {
+				rej(new Error("synthesis worker init timeout"));
+			}, 10_000);
+			// Attach error/exit handlers during init to prevent unhandled
+			// 'error' events from crashing the main thread (EventEmitter
+			// convention: unhandled 'error' re-throws in the listener context).
+			const onErr = (err: unknown): void => {
+				clearTimeout(timer);
+				rej(err instanceof Error ? err : new Error(String(err)));
+			};
+			const onExit = (code: number): void => {
+				clearTimeout(timer);
+				rej(new Error(`worker exited during init (code=${code})`));
+			};
+			w.on("error", onErr);
+			w.on("exit", onExit);
+			w.once("message", (msg: unknown) => {
+				clearTimeout(timer);
+				w.removeListener("error", onErr);
+				w.removeListener("exit", onExit);
+				if (isReadyResponse(msg)) {
+					synthWorkerReady = true;
+					res();
+				} else {
+					rej(new Error("unexpected init response"));
+				}
+			});
+		}).catch((err) => {
+			logger.warn("daemon", "synthesis worker failed", err instanceof Error ? err : undefined);
+			w.terminate().catch((e) => {
+				logger.debug("daemon", "synthesis worker terminate failed", {
+					error: e instanceof Error ? e.message : String(e),
+				});
 			});
 		});
-	});
-	if (synthWorkerReady) {
+	}
+	if (synthWorker && synthWorkerReady) {
 		setSynthesisRenderWorker(synthWorker);
 		synthWorker.on("error", (err) => {
 			logger.error("daemon", "synthesis worker error", err);
