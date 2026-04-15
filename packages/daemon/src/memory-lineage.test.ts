@@ -379,8 +379,22 @@ describe("memory-lineage", () => {
 						.all(agentId) as Array<{ updated_at: string }>,
 			);
 
-			expect(rows.length).toBeGreaterThan(0);
-			expect(rows.every((row) => row.updated_at !== oldStamp)).toBe(true);
-		});
+		expect(rows.length).toBeGreaterThan(0);
+		expect(rows.every((row) => row.updated_at !== oldStamp)).toBe(true);
 	});
+
+	it("renderMemoryProjection output is identical on cold vs warm call", async () => {
+		await addSummary({ sessionId: "parity-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+		await addSummary({ sessionId: "parity-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
+
+		// Cold call: cache is empty, full reindex runs
+		const cold = renderMemoryProjection("default");
+
+		// Warm call: cache is populated, incremental reindex skips all files
+		const warm = renderMemoryProjection("default");
+
+		expect(warm.content).toBe(cold.content);
+		expect(warm.fileCount).toBe(cold.fileCount);
+	});
+});
 });
