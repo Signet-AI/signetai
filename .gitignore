@@ -82,4 +82,7 @@ web/.dev.vars*
 packages/predictor/target/
 packages/daemon-rs/target/
 
+# Worktrees
+.worktrees/
+
 
