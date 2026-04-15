@@ -1091,10 +1091,17 @@ async function importExistingMemoryFiles(): Promise<number> {
 
 	let files: string[];
 	try {
-		files = readdirSync(memoryDir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md");
+		files = readdirSync(memoryDir)
+			.filter((f) => f.endsWith(".md") && f !== "MEMORY.md")
+			.filter((f) => !ARTIFACT_FILENAME_RE.test(f) && !MEMORY_BACKUP_FILENAME_RE.test(f));
 	} catch (e) {
 		const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
 		logger.error("daemon", "Failed to read memory directory", undefined, errDetails);
+		return 0;
+	}
+
+	if (files.length === 0) {
+		logger.debug("daemon", "importExistingMemoryFiles: all files are artifacts/backups, skipping");
 		return 0;
 	}
 
