@@ -58,7 +58,8 @@ export type LogCategory =
 	| "os-agent" // OS page-agent (visual GUI automation)
 	| "mcp-analytics" // MCP invocation analytics
 	| "config" // Configuration loading and resolution
-	| "resources"; // FD / event-loop resource monitoring
+	| "resources" // FD / event-loop resource monitoring
+    | "shadow"; // Shadow logs for sensitive data (not written to disk, only emitted for real-time streaming)
 
 export interface LogEntry {
 	timestamp: string;

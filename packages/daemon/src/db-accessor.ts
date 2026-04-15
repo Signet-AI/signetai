@@ -95,6 +95,72 @@ function configurePragmas(db: Database): void {
 	db.exec("PRAGMA temp_store = MEMORY");
 }
 
+function toRecordOrUndefined(row: unknown): Record<string, unknown> | undefined {
+	if (typeof row !== "object" || row === null) return undefined;
+	return row as Record<string, unknown>;
+}
+
+function toMigrationDb(db: Database): {
+	exec(sql: string): void;
+	prepare(sql: string): {
+		run(...args: unknown[]): void;
+		get(...args: unknown[]): Record<string, unknown> | undefined;
+		all(...args: unknown[]): Record<string, unknown>[];
+	};
+} {
+	return {
+		exec(sql: string): void {
+			db.exec(sql);
+		},
+		prepare(sql: string) {
+			const stmt = db.prepare(sql);
+			return {
+				run(...args: unknown[]): void {
+					if (args.length > 0) {
+						throw new Error("toMigrationDb statement.run does not support bind args");
+					}
+					stmt.run();
+				},
+				get(...args: unknown[]): Record<string, unknown> | undefined {
+					if (args.length > 0) {
+						throw new Error("toMigrationDb statement.get does not support bind args");
+					}
+					return toRecordOrUndefined(stmt.get());
+				},
+				all(...args: unknown[]): Record<string, unknown>[] {
+					if (args.length > 0) {
+						throw new Error("toMigrationDb statement.all does not support bind args");
+					}
+					const rows = stmt.all();
+					return rows
+						.map((row) => toRecordOrUndefined(row))
+						.filter((row): row is Record<string, unknown> => row !== undefined);
+				},
+			};
+		},
+	};
+}
+
+function toFtsSchemaQueryDb(db: Database): {
+	prepare(sql: string): {
+		get(...args: unknown[]): Record<string, unknown> | undefined;
+	};
+} {
+	return {
+		prepare(sql: string) {
+			const stmt = db.prepare(sql);
+			return {
+				get(...args: unknown[]): Record<string, unknown> | undefined {
+					if (args.length > 0) {
+						throw new Error("toFtsSchemaQueryDb statement.get does not support bind args");
+					}
+					return toRecordOrUndefined(stmt.get());
+				},
+			};
+		},
+	};
+}
+
 // Cached extension path — resolved once at startup
 let vecExtPath: string | null | undefined;
 
@@ -385,7 +451,7 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 	loadVecExtension(writeConn);
 
 	// Back up before migrations if there are pending changes
-	if (existsSync(path) && hasPendingMigrations(writeConn)) {
+	if (existsSync(path) && hasPendingMigrations(toMigrationDb(writeConn))) {
 		const row = writeConn.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as
 			| { version: number }
 			| undefined;
@@ -395,7 +461,7 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 
 	// Run schema migrations — this is the sole schema authority.
 	// Failures here are fatal: the daemon must not start on bad schema.
-	runMigrations(writeConn);
+	runMigrations(toMigrationDb(writeConn));
 
 	// Ensure FTS5 virtual table exists — may be missing on upgrades from
 	// older installs where the table was dropped or never created.
@@ -427,6 +493,21 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 	accessor = createAccessor(writeConn);
 }
 
+export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string): void {
+	if (accessor !== null) throw new Error("DbAccessor already initialised");
+
+	dbPath = dbPathParam;
+	vecExtPath = vecExtensionPath;
+
+	const writeConn = new Database(dbPathParam);
+	configurePragmas(writeConn);
+	writeConn.loadExtension(vecExtensionPath);
+
+	vecLoaded = true;
+	vecLoadError = null;
+	accessor = createAccessor(writeConn);
+}
+
 // ---------------------------------------------------------------------------
 // FTS table creation (self-healing for upgrades)
 // ---------------------------------------------------------------------------
@@ -437,7 +518,7 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
  * which silently harms lexical recall quality for conversational cues.
  */
 export function ensureFtsTable(db: Database): void {
-	const sql = readMemoriesFtsSql(db);
+	const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 
 	if (sql === null) {
 		console.log("[db-accessor] memories_fts missing — recreating FTS5 table");

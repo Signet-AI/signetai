@@ -7,7 +7,6 @@ import {
 	type AgentMessage,
 	type AgentMessageType,
 	createAgentMessage,
-	getAgentPresenceForSession,
 	isMessageVisibleToAgent,
 	listAgentMessages,
 	listAgentPresence,
@@ -38,9 +37,9 @@ import {
 	writeMemoryMd,
 } from "../hooks.js";
 import { logger } from "../logger";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { loadMemoryConfig } from "../memory-config";
 import { writeCompactionArtifact } from "../memory-lineage.js";
-import { type RecallParams, hybridRecall } from "../memory-search";
+import { hybridRecall } from "../memory-search";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
 import { isNoiseSession } from "../session-noise";
 import {
@@ -334,7 +333,7 @@ function registerSessionEnd(app: Hono): void {
 			}
 
 			try {
-				const result = await handleSessionEnd(body);
+				const result = handleSessionEnd(body);
 				return c.json(result);
 			} finally {
 				if (sessionKey) {
@@ -1127,7 +1126,7 @@ function registerSynthesis(app: Hono): void {
 			if (scopedAgent.error) {
 				return c.json({ error: scopedAgent.error }, 403);
 			}
-			const result = handleSynthesisRequest(body, { agentId: scopedAgent.agentId });
+			const result = await handleSynthesisRequest(body, { agentId: scopedAgent.agentId, writeToDisk: false });
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Synthesis request failed", e as Error);

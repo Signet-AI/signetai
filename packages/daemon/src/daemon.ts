@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync,
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { createAdaptorServer } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
@@ -40,7 +41,7 @@ import { migrateConfig } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { normalizeAndHashContent } from "./content-normalization";
 import { clearAllPresence } from "./cross-agent";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert } from "./db-helpers";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
@@ -167,6 +168,11 @@ import { registerConnectorRoutes } from "./routes/connectors-routes.js";
 import { mountEventBusRoutes } from "./routes/event-bus.js";
 import { getGitStatus, gitSync, scheduleAutoCommit, startGitSyncTimer, stopGitSyncTimer } from "./routes/git-sync.js";
 import { registerHooksRoutes } from "./routes/hooks-routes.js";
+import {
+	getSynthesisWorker as getSynthesisRenderWorker,
+	setSynthesisWorker as setSynthesisRenderWorker,
+} from "./hooks";
+import { isReadyResponse } from "./synthesis-worker-protocol";
 import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
 import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
 import { mountMarketplaceRoutes } from "./routes/marketplace.js";
@@ -636,6 +642,27 @@ mountMarketplaceReviewsRoutes(app);
 mountChangelogRoutes(app);
 mountOsChatRoutes(app);
 mountOsAgentRoutes(app);
+
+// ============================================================================
+// CLI preflight check
+// ============================================================================
+
+/** Spawn a CLI with --version and return true if it exits 0. */
+async function checkCliAvailable(
+	binary: string,
+	extraEnv?: Record<string, string>,
+): Promise<boolean> {
+	const exitCode = await new Promise<number>((resolve) => {
+		const proc = spawn(binary, ["--version"], {
+			stdio: "pipe",
+			windowsHide: true,
+			env: { ...process.env, SIGNET_NO_HOOKS: "1", ...extraEnv },
+		});
+		proc.on("close", (code) => resolve(code ?? 1));
+		proc.on("error", () => resolve(1));
+	});
+	return exitCode === 0;
+}
 
 // ============================================================================
 // Dashboard static serving
@@ -1661,45 +1688,15 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		const resolvedClaude = Bun.which("claude");
 		if (resolvedClaude === null) {
 			markExtractionUnavailable("Claude Code CLI not found during extraction startup preflight");
-		} else {
-			try {
-				const exitCode = await new Promise<number>((resolve) => {
-					const proc = spawn(resolvedClaude, ["--version"], {
-						stdio: "pipe",
-						windowsHide: true,
-						env: { ...process.env, SIGNET_NO_HOOKS: "1" },
-					});
-					proc.on("close", (code) => resolve(code ?? 1));
-					proc.on("error", () => resolve(1));
-				});
-				if (exitCode !== 0) throw new Error("non-zero exit");
-			} catch {
-				markExtractionUnavailable("Claude Code CLI failed extraction startup preflight");
-			}
+		} else if (!(await checkCliAvailable(resolvedClaude))) {
+			markExtractionUnavailable("Claude Code CLI failed extraction startup preflight");
 		}
 	} else if (effectiveExtractionProvider === "codex") {
 		const resolvedCodex = Bun.which("codex");
 		if (resolvedCodex === null) {
 			markExtractionUnavailable("Codex CLI not found during extraction startup preflight");
-		} else {
-			try {
-				const exitCode = await new Promise<number>((resolve) => {
-					const proc = spawn(resolvedCodex, ["--version"], {
-						stdio: "pipe",
-						windowsHide: true,
-						env: {
-							...process.env,
-							SIGNET_NO_HOOKS: "1",
-							SIGNET_CODEX_BYPASS_WRAPPER: "1",
-						},
-					});
-					proc.on("close", (code) => resolve(code ?? 1));
-					proc.on("error", () => resolve(1));
-				});
-				if (exitCode !== 0) throw new Error("non-zero exit");
-			} catch {
-				markExtractionUnavailable("Codex CLI failed extraction startup preflight");
-			}
+		} else if (!(await checkCliAvailable(resolvedCodex, { SIGNET_CODEX_BYPASS_WRAPPER: "1" }))) {
+			markExtractionUnavailable("Codex CLI failed extraction startup preflight");
 		}
 	}
 	const keyCache = new Map<"ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY", string | undefined>();
@@ -2053,7 +2050,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			}
 		} else if (effectiveSynthesisProvider === "claude-code") {
 			const resolvedClaude = Bun.which("claude");
-			if (resolvedClaude === null) {
+			if (resolvedClaude === null || !(await checkCliAvailable(resolvedClaude))) {
 				if (synthesisFallback) {
 					logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
 					effectiveSynthesisProvider = synthesisFallback;
@@ -2061,62 +2058,16 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 					logger.warn("config", "Claude Code CLI not found, fallback disabled (fallbackProvider: none)");
 					effectiveSynthesisProvider = "none";
 				}
-			} else {
-				try {
-					const exitCode = await new Promise<number>((resolve) => {
-						const proc = spawn(resolvedClaude, ["--version"], {
-							stdio: "pipe",
-							windowsHide: true,
-							env: { ...process.env, SIGNET_NO_HOOKS: "1" },
-						});
-						proc.on("close", (code) => resolve(code ?? 1));
-						proc.on("error", () => resolve(1));
-					});
-					if (exitCode !== 0) throw new Error("non-zero exit");
-				} catch {
-					if (synthesisFallback) {
-						logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
-						effectiveSynthesisProvider = synthesisFallback;
-					} else {
-						logger.warn("config", "Claude Code CLI not found, fallback disabled (fallbackProvider: none)");
-						effectiveSynthesisProvider = "none";
-					}
-				}
 			}
 		} else if (effectiveSynthesisProvider === "codex") {
 			const resolvedCodex = Bun.which("codex");
-			if (resolvedCodex === null) {
+			if (resolvedCodex === null || !(await checkCliAvailable(resolvedCodex, { SIGNET_CODEX_BYPASS_WRAPPER: "1" }))) {
 				if (synthesisFallback) {
 					logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
 					effectiveSynthesisProvider = synthesisFallback;
 				} else {
 					logger.warn("config", "Codex CLI not found, fallback disabled (fallbackProvider: none)");
 					effectiveSynthesisProvider = "none";
-				}
-			} else {
-				try {
-					const exitCode = await new Promise<number>((resolve) => {
-						const proc = spawn(resolvedCodex, ["--version"], {
-							stdio: "pipe",
-							windowsHide: true,
-							env: {
-								...process.env,
-								SIGNET_NO_HOOKS: "1",
-								SIGNET_CODEX_BYPASS_WRAPPER: "1",
-							},
-						});
-						proc.on("close", (code) => resolve(code ?? 1));
-						proc.on("error", () => resolve(1));
-					});
-					if (exitCode !== 0) throw new Error("non-zero exit");
-				} catch {
-					if (synthesisFallback) {
-						logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
-						effectiveSynthesisProvider = synthesisFallback;
-					} else {
-						logger.warn("config", "Codex CLI not found, fallback disabled (fallbackProvider: none)");
-						effectiveSynthesisProvider = "none";
-					}
 				}
 			}
 		}
@@ -2427,6 +2378,16 @@ async function cleanup() {
 	await stopGitSyncTimer();
 	stopUpdateTimer();
 
+	const renderWorker = getSynthesisRenderWorker();
+	if (renderWorker !== null) {
+		setSynthesisRenderWorker(null);
+		renderWorker.terminate().catch((e) => {
+			logger.debug("daemon", "render worker terminate failed", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		});
+	}
+
 	closeDbAccessor();
 
 	if (watcher) {
@@ -2484,6 +2445,45 @@ async function main() {
 	logFdSnapshot("post-db-init");
 	startEventLoopMonitor();
 	startFdPollMonitor();
+
+	const { extensionPath } = getVectorRuntimeStatus();
+	const workerPath = join(import.meta.dir, "synthesis-render-worker.ts");
+	const synthWorker = new Worker(workerPath);
+	synthWorker.postMessage({ type: "init", dbPath: MEMORY_DB, vecExtensionPath: extensionPath ?? "" });
+	let synthWorkerReady = false;
+	await new Promise<void>((res, rej) => {
+		const timer = setTimeout(() => {
+			logger.warn("daemon", "synthesis worker init timed out — falling back to sync rendering");
+			rej(new Error("synthesis worker init timeout"));
+		}, 10_000);
+		synthWorker.once("message", (msg: unknown) => {
+			clearTimeout(timer);
+			if (isReadyResponse(msg)) {
+				synthWorkerReady = true;
+				res();
+			} else {
+				rej(new Error("unexpected init response"));
+			}
+		});
+	}).catch((err) => {
+		logger.warn("daemon", "synthesis worker failed", err instanceof Error ? err : undefined);
+		synthWorker.terminate().catch((e) => {
+			logger.debug("daemon", "synthesis worker terminate failed", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		});
+	});
+	if (synthWorkerReady) {
+		setSynthesisRenderWorker(synthWorker);
+		synthWorker.on("error", (err) => {
+			logger.error("daemon", "synthesis worker error", err);
+			setSynthesisRenderWorker(null);
+		});
+		synthWorker.on("exit", (code) => {
+			logger.warn("daemon", `synthesis worker exited with code ${code}`);
+			setSynthesisRenderWorker(null);
+		});
+	}
 
 	syncAgentRoster(AGENTS_DIR);
 
