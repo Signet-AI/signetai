@@ -1254,6 +1254,12 @@ async function syncClaudeMemoryFile(filePath: string): Promise<number> {
 }
 
 function startFileWatcher() {
+	// Do NOT watch the memory/ directory directly — Bun's fs.watch()
+	// opens one O_RDONLY FD per file in a watched directory and never
+	// releases them on close(), leaking ~8 000 FDs with canonical
+	// artifacts present.  All .md files inside memory/ are either
+	// canonical artifacts or backup files, both already excluded by
+	// the ignored matcher, so no watcher events would fire anyway.
 	watcher = watch(
 		[
 			join(AGENTS_DIR, "agent.yaml"),
@@ -1263,7 +1269,6 @@ function startFileWatcher() {
 			join(AGENTS_DIR, "IDENTITY.md"),
 			join(AGENTS_DIR, "USER.md"),
 			join(AGENTS_DIR, "SIGNET-ARCHITECTURE.md"),
-			join(AGENTS_DIR, "memory"),
 			join(AGENTS_DIR, "agents"),
 		],
 		{
