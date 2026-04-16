@@ -19,7 +19,6 @@ import type { Worker } from "node:worker_threads";
 import { parseSimpleYaml } from "@signet/core";
 import { getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
-import { isObject, isRenderError, isRenderResult } from "./synthesis-worker-protocol";
 import {
 	clearContinuity,
 	consumeState,
@@ -89,6 +88,7 @@ import { isNoiseSession } from "./session-noise";
 import { getExpiryWarning } from "./session-tracker";
 import { getSessionTranscriptContent, searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { isObject, isRenderError, isRenderResult } from "./synthesis-worker-protocol";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
 import { getUpdateSummary } from "./update-system";
@@ -3622,30 +3622,74 @@ export async function handleSynthesisRequest(
 
 	const requestId = randomUUID();
 	const w: Worker = worker;
-	return new Promise<SynthesisResponse>((resolve) => {
-		const timer = setTimeout(() => {
+	return new Promise<SynthesisResponse>((resolve, reject) => {
+		let settled = false;
+
+		function cleanup(): void {
+			clearTimeout(timer);
 			w.off("message", handler);
-			logger.warn("hooks", "Synthesis render worker timed out");
-			resolve({ harness: "daemon", model: "projection", prompt: "", fileCount: 0 });
+			w.off("error", onError);
+			w.off("exit", onExit);
+		}
+
+		function fail(message: string, error?: Error): void {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			setSynthesisWorker(null);
+			w.terminate().catch((err) => {
+				logger.debug("hooks", "Synthesis render worker terminate failed", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
+			reject(error ?? new Error(message));
+		}
+
+		function onError(err: Error): void {
+			logger.error("hooks", "Synthesis render worker failed", err);
+			fail("Synthesis render worker failed", err);
+		}
+
+		function onExit(code: number): void {
+			if (settled) return;
+			const err = new Error(`Synthesis render worker exited before responding (code=${code})`);
+			logger.error("hooks", err.message, err);
+			fail(err.message, err);
+		}
+
+		const timer = setTimeout(() => {
+			const err = new Error("Synthesis render worker timed out");
+			logger.warn("hooks", err.message);
+			fail(err.message, err);
 		}, 30_000);
 
 		function handler(msg: unknown): void {
 			if (!isObject(msg)) return;
 			if (msg.requestId !== requestId) return;
-			clearTimeout(timer);
-			w.off("message", handler);
+			if (settled) return;
 			if (isRenderResult(msg)) {
+				settled = true;
+				cleanup();
 				if (opts?.writeToDisk === true) {
 					writeMemoryMd(msg.content, { agentId });
 				}
-				resolve({ harness: "daemon", model: "projection", prompt: msg.content, fileCount: msg.fileCount, indexBlock: msg.indexBlock });
+				resolve({
+					harness: "daemon",
+					model: "projection",
+					prompt: msg.content,
+					fileCount: msg.fileCount,
+					indexBlock: msg.indexBlock,
+				});
 			} else if (isRenderError(msg)) {
-				logger.error("hooks", `Synthesis render worker error: ${msg.error}`);
-				resolve({ harness: "daemon", model: "projection", prompt: "", fileCount: 0 });
+				const err = new Error(`Synthesis render worker error: ${msg.error}`);
+				logger.error("hooks", err.message, err);
+				fail(err.message, err);
 			}
 		}
 
 		w.on("message", handler);
+		w.once("error", onError);
+		w.once("exit", onExit);
 		w.postMessage({ type: "render", agentId, requestId });
 	});
 }

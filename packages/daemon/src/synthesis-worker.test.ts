@@ -4,18 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { findSqliteVecExtension } from "@signet/core";
-import {
-	closeDbAccessor,
-	getDbAccessor,
-	hasDbAccessor,
-	initDbAccessorLite,
-} from "./db-accessor";
-import {
-	type SynthesisRequest,
-	getSynthesisWorker,
-	handleSynthesisRequest,
-	setSynthesisWorker,
-} from "./hooks";
+import { closeDbAccessor, getDbAccessor, hasDbAccessor, initDbAccessorLite } from "./db-accessor";
+import { type SynthesisRequest, getSynthesisWorker, handleSynthesisRequest, setSynthesisWorker } from "./hooks";
 
 const AGENTS_DIR = process.env.SIGNET_PATH?.trim() || join(homedir(), ".agents");
 const DB_PATH = join(AGENTS_DIR, "memory", "memories.db");
@@ -23,11 +13,7 @@ const VEC_EXT_PATH = findSqliteVecExtension();
 const DB_AVAILABLE = existsSync(DB_PATH) && VEC_EXT_PATH !== null;
 const WORKER_PATH = join(import.meta.dir, "synthesis-render-worker.ts");
 
-function waitForWorkerMessage<T>(
-	worker: Worker,
-	pred: (m: T) => boolean,
-	timeout = 10_000,
-): Promise<T> {
+function waitForWorkerMessage<T>(worker: Worker, pred: (m: T) => boolean, timeout = 10_000): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const timer = setTimeout(() => {
 			worker.off("message", handler);
@@ -78,9 +64,7 @@ describe("initDbAccessorLite", () => {
 		initDbAccessorLite(DB_PATH, VEC_EXT_PATH as string);
 		const acc = getDbAccessor();
 		const result = acc.withReadDb((db) => {
-			return db.prepare("SELECT COUNT(*) AS n FROM memories").get() as
-				| { n: number }
-				| undefined;
+			return db.prepare("SELECT COUNT(*) AS n FROM memories").get() as { n: number } | undefined;
 		});
 		expect(result).toBeTruthy();
 		expect(typeof result?.n).toBe("number");
@@ -94,9 +78,7 @@ describe("initDbAccessorLite", () => {
 		initDbAccessorLite(DB_PATH, VEC_EXT_PATH as string);
 		const acc = getDbAccessor();
 		const result = acc.withReadDb((db) => {
-			return db.prepare("SELECT vec_version() AS v").get() as
-				| { v: string }
-				| undefined;
+			return db.prepare("SELECT vec_version() AS v").get() as { v: string } | undefined;
 		});
 		expect(result).toBeTruthy();
 		expect(typeof result?.v).toBe("string");
@@ -109,9 +91,7 @@ describe("initDbAccessorLite", () => {
 			return;
 		}
 		initDbAccessorLite(DB_PATH, VEC_EXT_PATH as string);
-		expect(() => initDbAccessorLite(DB_PATH, VEC_EXT_PATH as string)).toThrow(
-			"DbAccessor already initialised",
-		);
+		expect(() => initDbAccessorLite(DB_PATH, VEC_EXT_PATH as string)).toThrow("DbAccessor already initialised");
 	});
 });
 
@@ -259,10 +239,7 @@ describe("handleSynthesisRequest", () => {
 			console.warn("SKIP: real DB not available");
 			return;
 		}
-		tmpDir = join(
-			homedir(),
-			`.signet-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-		);
+		tmpDir = join(homedir(), `.signet-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(join(tmpDir, "memory"), { recursive: true });
 		process.env.SIGNET_PATH = tmpDir;
 
@@ -299,6 +276,35 @@ describe("handleSynthesisRequest", () => {
 		expect(resp.harness).toBe("daemon");
 		expect(resp.model).toBe("projection");
 	}, 60_000);
+
+	test("worker render errors reject instead of returning an empty success", async () => {
+		const worker = new Worker(
+			`
+				const { parentPort } = require("node:worker_threads");
+				parentPort.on("message", (msg) => {
+					if (msg.type === "render") {
+						parentPort.postMessage({
+							type: "error",
+							requestId: msg.requestId,
+							error: "boom",
+						});
+					}
+				});
+			`,
+			{ eval: true },
+		);
+		setSynthesisWorker(worker);
+
+		try {
+			const req: SynthesisRequest = { trigger: "scheduled" };
+			await expect(handleSynthesisRequest(req, { agentId: "default" })).rejects.toThrow(
+				"Synthesis render worker error: boom",
+			);
+			expect(getSynthesisWorker()).toBeNull();
+		} finally {
+			await worker.terminate();
+		}
+	});
 
 	test("regression: getSynthesisWorker returns null after setSynthesisWorker(null)", () => {
 		setSynthesisWorker(null);
