@@ -31,7 +31,8 @@ export function registerDaemonCommands(program: Command, deps: DaemonDeps): void
 	const restart = daemonCmd
 		.command("restart")
 		.description("Restart the daemon")
-		.option("--no-openclaw", "Skip OpenClaw restart prompt")
+		.option("--no-sync", "Skip signet sync prompt")
+		.option("--no-openclaw", "Deprecated alias for --no-sync")
 		.action(deps.doRestart);
 	withPath(restart);
 
@@ -68,7 +69,8 @@ export function registerDaemonCommands(program: Command, deps: DaemonDeps): void
 	const restartAlias = program
 		.command("restart")
 		.description("Restart the daemon (alias for: signet daemon restart)")
-		.option("--no-openclaw", "Skip OpenClaw restart prompt")
+		.option("--no-sync", "Skip signet sync prompt")
+		.option("--no-openclaw", "Deprecated alias for --no-sync")
 		.action(deps.doRestart);
 	withPath(restartAlias);
 

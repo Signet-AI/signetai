@@ -10,6 +10,7 @@ export interface StatusOptions extends PathOptions {
 
 export interface RestartOptions extends PathOptions {
 	openclaw?: boolean;
+	sync?: boolean;
 }
 
 export interface LogOptions extends PathOptions {

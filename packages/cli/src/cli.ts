@@ -737,7 +737,13 @@ function embeddingProvider(basePath: string): "native" | "llama-cpp" | "ollama" 
 			const direct = parsed.embedding;
 			if (isRecord(direct) && typeof direct.provider === "string") {
 				const provider = direct.provider;
-				if (provider === "native" || provider === "llama-cpp" || provider === "ollama" || provider === "openai" || provider === "none") {
+				if (
+					provider === "native" ||
+					provider === "llama-cpp" ||
+					provider === "ollama" ||
+					provider === "openai" ||
+					provider === "none"
+				) {
 					return provider;
 				}
 			}
@@ -746,7 +752,13 @@ function embeddingProvider(basePath: string): "native" | "llama-cpp" | "ollama" 
 				const nested = mem.embeddings;
 				if (isRecord(nested) && typeof nested.provider === "string") {
 					const provider = nested.provider;
-					if (provider === "native" || provider === "llama-cpp" || provider === "ollama" || provider === "openai" || provider === "none") {
+					if (
+						provider === "native" ||
+						provider === "llama-cpp" ||
+						provider === "ollama" ||
+						provider === "openai" ||
+						provider === "none"
+					) {
 						return provider;
 					}
 				}
@@ -754,7 +766,13 @@ function embeddingProvider(basePath: string): "native" | "llama-cpp" | "ollama" 
 			const legacy = parsed.embeddings;
 			if (isRecord(legacy) && typeof legacy.provider === "string") {
 				const provider = legacy.provider;
-				if (provider === "native" || provider === "llama-cpp" || provider === "ollama" || provider === "openai" || provider === "none") {
+				if (
+					provider === "native" ||
+					provider === "llama-cpp" ||
+					provider === "ollama" ||
+					provider === "openai" ||
+					provider === "none"
+				) {
 					return provider;
 				}
 			}
@@ -1250,6 +1268,19 @@ const healthDeps = {
 	signetLogo,
 };
 
+const runSyncTemplates = (basePath = AGENTS_DIR): Promise<void> =>
+	syncTemplates({
+		agentsDir: basePath,
+		configureHarnessHooks,
+		getSkillsSourceDir,
+		getTemplatesDir,
+		signetLogo,
+		syncBuiltinSkills,
+		syncNativeEmbeddingModel,
+		syncPredictorBinary,
+		syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
+	});
+
 const daemonDeps = {
 	agentsDir: AGENTS_DIR,
 	defaultPort: DEFAULT_PORT,
@@ -1262,6 +1293,7 @@ const daemonDeps = {
 	sleep,
 	startDaemon,
 	stopDaemon,
+	syncTemplates: runSyncTemplates,
 };
 
 registerAppCommands(program, {
@@ -1307,18 +1339,7 @@ registerAppCommands(program, {
 		}),
 	showDoctor: (options) => showDoctor(options, healthDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
-	syncTemplates: () =>
-		syncTemplates({
-			agentsDir: AGENTS_DIR,
-			configureHarnessHooks,
-			getSkillsSourceDir,
-			getTemplatesDir,
-			signetLogo,
-			syncBuiltinSkills,
-			syncNativeEmbeddingModel,
-			syncPredictorBinary,
-			syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
-		}),
+	syncTemplates: runSyncTemplates,
 });
 
 registerDaemonCommands(program, {
