@@ -277,7 +277,12 @@ describe("handleSynthesisRequest", () => {
 		expect(resp.model).toBe("projection");
 	}, 60_000);
 
-	test("worker render errors reject instead of returning an empty success", async () => {
+	test("worker render errors fall back to sync rendering instead of returning an empty success", async () => {
+		if (!DB_AVAILABLE) {
+			console.warn("SKIP: real DB not available");
+			return;
+		}
+		initDbAccessorLite(DB_PATH, VEC_EXT_PATH as string);
 		const worker = new Worker(
 			`
 				const { parentPort } = require("node:worker_threads");
@@ -297,9 +302,12 @@ describe("handleSynthesisRequest", () => {
 
 		try {
 			const req: SynthesisRequest = { trigger: "scheduled" };
-			await expect(handleSynthesisRequest(req, { agentId: "default" })).rejects.toThrow(
-				"Synthesis render worker error: boom",
-			);
+			const resp = await handleSynthesisRequest(req, { agentId: "default" });
+
+			expect(resp.harness).toBe("daemon");
+			expect(resp.model).toBe("projection");
+			expect(typeof resp.prompt).toBe("string");
+			expect(typeof resp.fileCount).toBe("number");
 			expect(getSynthesisWorker()).toBeNull();
 		} finally {
 			await worker.terminate();

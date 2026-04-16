@@ -3632,7 +3632,7 @@ export async function handleSynthesisRequest(
 			w.off("exit", onExit);
 		}
 
-		function fail(message: string, error?: Error): void {
+		function fallbackToSync(message: string, error?: Error): void {
 			if (settled) return;
 			settled = true;
 			cleanup();
@@ -3642,25 +3642,40 @@ export async function handleSynthesisRequest(
 					error: err instanceof Error ? err.message : String(err),
 				});
 			});
-			reject(error ?? new Error(message));
+			logger.warn("hooks", "Synthesis render worker failed, falling back to synchronous render", error ?? { message });
+			try {
+				const rendered = renderMemoryProjection(agentId);
+				if (opts?.writeToDisk === true) {
+					writeMemoryMd(rendered.content, { agentId });
+				}
+				resolve({
+					harness: "daemon",
+					model: "projection",
+					prompt: rendered.content,
+					fileCount: rendered.fileCount,
+					indexBlock: rendered.indexBlock,
+				});
+			} catch (err) {
+				reject(err instanceof Error ? err : new Error(String(err)));
+			}
 		}
 
 		function onError(err: Error): void {
 			logger.error("hooks", "Synthesis render worker failed", err);
-			fail("Synthesis render worker failed", err);
+			fallbackToSync("Synthesis render worker failed", err);
 		}
 
 		function onExit(code: number): void {
 			if (settled) return;
 			const err = new Error(`Synthesis render worker exited before responding (code=${code})`);
 			logger.error("hooks", err.message, err);
-			fail(err.message, err);
+			fallbackToSync(err.message, err);
 		}
 
 		const timer = setTimeout(() => {
 			const err = new Error("Synthesis render worker timed out");
 			logger.warn("hooks", err.message);
-			fail(err.message, err);
+			fallbackToSync(err.message, err);
 		}, 30_000);
 
 		function handler(msg: unknown): void {
@@ -3683,7 +3698,7 @@ export async function handleSynthesisRequest(
 			} else if (isRenderError(msg)) {
 				const err = new Error(`Synthesis render worker error: ${msg.error}`);
 				logger.error("hooks", err.message, err);
-				fail(err.message, err);
+				fallbackToSync(err.message, err);
 			}
 		}
 

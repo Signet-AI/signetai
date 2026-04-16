@@ -161,6 +161,10 @@ import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
 import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
 import { closeWidgetProvider, initWidgetProvider } from "./widget-llm";
 
+import {
+	getSynthesisWorker as getSynthesisRenderWorker,
+	setSynthesisWorker as setSynthesisRenderWorker,
+} from "./hooks";
 import { mountMcpRoute } from "./mcp/route.js";
 import { mountAppTrayRoutes } from "./routes/app-tray.js";
 import { mountChangelogRoutes } from "./routes/changelog.js";
@@ -168,11 +172,6 @@ import { registerConnectorRoutes } from "./routes/connectors-routes.js";
 import { mountEventBusRoutes } from "./routes/event-bus.js";
 import { getGitStatus, gitSync, scheduleAutoCommit, startGitSyncTimer, stopGitSyncTimer } from "./routes/git-sync.js";
 import { registerHooksRoutes } from "./routes/hooks-routes.js";
-import {
-	getSynthesisWorker as getSynthesisRenderWorker,
-	setSynthesisWorker as setSynthesisRenderWorker,
-} from "./hooks";
-import { isReadyResponse } from "./synthesis-worker-protocol";
 import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
 import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
 import { mountMarketplaceRoutes } from "./routes/marketplace.js";
@@ -190,6 +189,7 @@ import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
 import { checkEmbeddingProvider, getConfiguredProviderHints } from "./routes/utils.js";
 import { mountWidgetRoutes } from "./routes/widget.js";
+import { isReadyResponse } from "./synthesis-worker-protocol";
 import {
 	MAX_UPDATE_INTERVAL_SECONDS,
 	MIN_UPDATE_INTERVAL_SECONDS,
@@ -648,10 +648,7 @@ mountOsAgentRoutes(app);
 // ============================================================================
 
 /** Spawn a CLI with --version and return true if it exits 0. */
-async function checkCliAvailable(
-	binary: string,
-	extraEnv?: Record<string, string>,
-): Promise<boolean> {
+async function checkCliAvailable(binary: string, extraEnv?: Record<string, string>): Promise<boolean> {
 	const exitCode = await new Promise<number>((resolve) => {
 		const proc = spawn(binary, ["--version"], {
 			stdio: "pipe",
@@ -749,6 +746,9 @@ let watcher: ReturnType<typeof watch> | null = null;
 
 // Track ingested files to avoid re-processing (path -> content hash)
 const ingestedMemoryFiles = new Map<string, string>();
+const MEMORY_IMPORT_POLL_MS = 30_000;
+let memoryImportTimer: ReturnType<typeof setInterval> | null = null;
+let memoryImportInFlight = false;
 
 // Track synced memories to avoid duplicates
 const syncedClaudeMemories = new Set<string>();
@@ -1147,6 +1147,31 @@ async function importExistingMemoryFiles(): Promise<number> {
 	return totalChunks;
 }
 
+function startMemoryImportPoller(): void {
+	if (memoryImportTimer !== null) return;
+	memoryImportTimer = setInterval(() => {
+		if (memoryImportInFlight) return;
+		memoryImportInFlight = true;
+		importExistingMemoryFiles()
+			.catch((e) => {
+				const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+				logger.error("daemon", "Failed to import memory files", undefined, errDetails);
+			})
+			.finally(() => {
+				memoryImportInFlight = false;
+			});
+	}, MEMORY_IMPORT_POLL_MS);
+	memoryImportTimer.unref?.();
+	logger.debug("watcher", "Started memory import poller", { intervalMs: MEMORY_IMPORT_POLL_MS });
+}
+
+function stopMemoryImportPoller(): void {
+	if (memoryImportTimer === null) return;
+	clearInterval(memoryImportTimer);
+	memoryImportTimer = null;
+	memoryImportInFlight = false;
+}
+
 function startClaudeMemoryWatcher() {
 	const claudeProjectsDir = join(homedir(), ".claude", "projects");
 	if (!existsSync(claudeProjectsDir)) return;
@@ -1284,9 +1309,9 @@ function startFileWatcher() {
 	// Do NOT watch the memory/ directory directly — Bun's fs.watch()
 	// opens one O_RDONLY FD per file in a watched directory and never
 	// releases them on close(), leaking ~8 000 FDs with canonical
-	// artifacts present.  All .md files inside memory/ are either
-	// canonical artifacts or backup files, both already excluded by
-	// the ignored matcher, so no watcher events would fire anyway.
+	// artifacts present. Canonical artifacts and backups are intentionally
+	// ignored; rare legacy non-artifact memory markdown imports are handled
+	// by the lightweight poller started after daemon readiness.
 	watcher = watch(
 		[
 			join(AGENTS_DIR, "agent.yaml"),
@@ -2335,6 +2360,7 @@ async function cleanup() {
 		clearTimeout(syncTimer);
 		syncTimer = null;
 	}
+	stopMemoryImportPoller();
 
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
@@ -2453,7 +2479,11 @@ async function main() {
 	try {
 		synthWorker = new Worker(workerPath);
 	} catch (err) {
-		logger.warn("daemon", "synthesis worker creation failed — using sync rendering", err instanceof Error ? err : undefined);
+		logger.warn(
+			"daemon",
+			"synthesis worker creation failed — using sync rendering",
+			err instanceof Error ? err : undefined,
+		);
 	}
 	let synthWorkerReady = false;
 	if (synthWorker) {
@@ -2703,6 +2733,7 @@ async function main() {
 			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
 			logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
 		});
+		startMemoryImportPoller();
 
 		const claudeProjectsDir = join(homedir(), ".claude", "projects");
 		if (existsSync(claudeProjectsDir)) {
