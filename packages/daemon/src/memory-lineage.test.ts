@@ -70,7 +70,7 @@ describe("memory-lineage", () => {
 		closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 		if (prev === undefined) {
-			delete process.env.SIGNET_PATH;
+			process.env.SIGNET_PATH = undefined;
 			return;
 		}
 		process.env.SIGNET_PATH = prev;
@@ -142,10 +142,7 @@ describe("memory-lineage", () => {
 		expect(rows[0]?.project).toBe("/home/nicholai/signet/signetai");
 
 		const tombstones = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(`SELECT reason FROM memory_artifact_tombstones`)
-					.all() as Array<{ reason: string }>,
+			(db) => db.prepare("SELECT reason FROM memory_artifact_tombstones").all() as Array<{ reason: string }>,
 		);
 		expect(tombstones).toEqual([{ reason: "test cleanup" }]);
 	});
@@ -230,9 +227,9 @@ describe("memory-lineage", () => {
 
 		const count = getDbAccessor().withReadDb(
 			(db) =>
-				db
-					.prepare(`SELECT COUNT(*) AS count FROM memory_artifacts WHERE session_token = ?`)
-					.get("tok-mixed") as { count: number },
+				db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE session_token = ?").get("tok-mixed") as {
+					count: number;
+				},
 		);
 		expect(count.count).toBe(2);
 	});
@@ -250,9 +247,9 @@ describe("memory-lineage", () => {
 
 			const count = getDbAccessor().withReadDb(
 				(db) =>
-					db
-						.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?")
-						.get("default") as { count: number },
+					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("default") as {
+						count: number;
+					},
 			);
 			expect(count.count).toBe(4);
 		});
@@ -298,9 +295,9 @@ describe("memory-lineage", () => {
 
 			const baseline = getDbAccessor().withReadDb(
 				(db) =>
-					db
-						.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?")
-						.get("default") as { count: number },
+					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("default") as {
+						count: number;
+					},
 			);
 
 			await addSummary({ sessionId: "new-file-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
@@ -312,12 +309,46 @@ describe("memory-lineage", () => {
 
 			const after = getDbAccessor().withReadDb(
 				(db) =>
-					db
-						.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?")
-						.get("default") as { count: number },
+					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("default") as {
+						count: number;
+					},
 			);
 
 			expect(after.count).toBe(baseline.count + 2);
+		});
+
+		it("scoped reindex does not delete rows for another agent with the same source_path", async () => {
+			const stamp = new Date(Date.now() - 60_000).toISOString();
+			await writeSummaryArtifact({
+				agentId: "other-agent",
+				sessionId: "other-agent-session",
+				sessionKey: "other-agent-session",
+				project: "/home/nicholai/signet/signetai",
+				harness: "codex",
+				capturedAt: stamp,
+				startedAt: stamp,
+				endedAt: stamp,
+				summary:
+					"Resolved projection pressure for other-agent-session in packages/daemon/src/memory-lineage.ts and verified scoped reindex deletes stayed isolated.",
+			});
+
+			const before = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("other-agent") as {
+						count: number;
+					},
+			);
+			expect(before.count).toBeGreaterThan(0);
+
+			reindexMemoryArtifacts("default");
+
+			const after = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("other-agent") as {
+						count: number;
+					},
+			);
+			expect(after.count).toBe(before.count);
 		});
 
 		it("deleted file → removed from DB", async () => {
@@ -343,9 +374,9 @@ describe("memory-lineage", () => {
 
 			const row = getDbAccessor().withReadDb(
 				(db) =>
-					db
-						.prepare("SELECT source_path FROM memory_artifacts WHERE source_path = ?")
-						.get(target.source_path) as { source_path: string } | null,
+					db.prepare("SELECT source_path FROM memory_artifacts WHERE source_path = ?").get(target.source_path) as {
+						source_path: string;
+					} | null,
 			);
 
 			expect(row).toBeNull();
@@ -374,87 +405,87 @@ describe("memory-lineage", () => {
 
 			const rows = getDbAccessor().withReadDb(
 				(db) =>
-					db
-						.prepare("SELECT updated_at FROM memory_artifacts WHERE agent_id = ?")
-						.all(agentId) as Array<{ updated_at: string }>,
+					db.prepare("SELECT updated_at FROM memory_artifacts WHERE agent_id = ?").all(agentId) as Array<{
+						updated_at: string;
+					}>,
 			);
 
-		expect(rows.length).toBeGreaterThan(0);
-		expect(rows.every((row) => row.updated_at !== oldStamp)).toBe(true);
-	});
-
-	it("renderMemoryProjection output is identical on cold vs warm call", async () => {
-		await addSummary({ sessionId: "parity-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
-		await addSummary({ sessionId: "parity-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
-
-		// Cold call: cache is empty, full reindex runs
-		const cold = renderMemoryProjection("default");
-
-		// Warm call: cache is populated, incremental reindex skips all files
-		const warm = renderMemoryProjection("default");
-
-		expect(warm.content).toBe(cold.content);
-		expect(warm.fileCount).toBe(cold.fileCount);
-	});
-
-	it("cold-start cache reconciles DB rows for files deleted while daemon was down", async () => {
-		await addSummary({ sessionId: "ghost-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
-		await addSummary({ sessionId: "ghost-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
-		reindexMemoryArtifacts("default");
-
-		const target = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT source_path
-						 FROM memory_artifacts
-						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?`,
-					)
-					.get("default", "ghost-b") as { source_path: string },
-		);
-
-		rmSync(join(dir, target.source_path), { force: true });
-		resetProjectionPurgeState();
-
-		reindexMemoryArtifacts("default");
-
-		const row = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare("SELECT source_path FROM memory_artifacts WHERE source_path = ?")
-					.get(target.source_path) as { source_path: string } | null,
-		);
-		expect(row).toBeNull();
-	});
-
-	it("clears stale memory_md_refs on manifests that drop out of the ledger", async () => {
-		await addSummary({ sessionId: "ref-a", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
-		await addSummary({ sessionId: "ref-b", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
-
-		renderMemoryProjection("default");
-
-		const manifestRow = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT source_path
-						 FROM memory_artifacts
-						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?`,
-					)
-					.get("default", "ref-b") as { source_path: string },
-		);
-		const manifestPath = join(dir, manifestRow.source_path);
-		const before = readFileSync(manifestPath, "utf8");
-		expect(before).toContain("Session Ledger");
-
-		getDbAccessor().withWriteTx((db) => {
-			db.prepare("DELETE FROM memory_artifacts WHERE session_id = ?").run("ref-b");
+			expect(rows.length).toBeGreaterThan(0);
+			expect(rows.every((row) => row.updated_at !== oldStamp)).toBe(true);
 		});
 
-		renderMemoryProjection("default");
+		it("renderMemoryProjection output is identical on cold vs warm call", async () => {
+			await addSummary({ sessionId: "parity-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+			await addSummary({ sessionId: "parity-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
 
-		const after = readFileSync(manifestPath, "utf8");
-		expect(after).not.toContain("Session Ledger");
+			// Cold call: cache is empty, full reindex runs
+			const cold = renderMemoryProjection("default");
+
+			// Warm call: cache is populated, incremental reindex skips all files
+			const warm = renderMemoryProjection("default");
+
+			expect(warm.content).toBe(cold.content);
+			expect(warm.fileCount).toBe(cold.fileCount);
+		});
+
+		it("cold-start cache reconciles DB rows for files deleted while daemon was down", async () => {
+			await addSummary({ sessionId: "ghost-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+			await addSummary({ sessionId: "ghost-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
+			reindexMemoryArtifacts("default");
+
+			const target = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path
+						 FROM memory_artifacts
+						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?`,
+						)
+						.get("default", "ghost-b") as { source_path: string },
+			);
+
+			rmSync(join(dir, target.source_path), { force: true });
+			resetProjectionPurgeState();
+
+			reindexMemoryArtifacts("default");
+
+			const row = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT source_path FROM memory_artifacts WHERE source_path = ?").get(target.source_path) as {
+						source_path: string;
+					} | null,
+			);
+			expect(row).toBeNull();
+		});
+
+		it("clears stale memory_md_refs on manifests that drop out of the ledger", async () => {
+			await addSummary({ sessionId: "ref-a", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
+			await addSummary({ sessionId: "ref-b", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+
+			renderMemoryProjection("default");
+
+			const manifestRow = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path
+						 FROM memory_artifacts
+						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?`,
+						)
+						.get("default", "ref-b") as { source_path: string },
+			);
+			const manifestPath = join(dir, manifestRow.source_path);
+			const before = readFileSync(manifestPath, "utf8");
+			expect(before).toContain("Session Ledger");
+
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("DELETE FROM memory_artifacts WHERE session_id = ?").run("ref-b");
+			});
+
+			renderMemoryProjection("default");
+
+			const after = readFileSync(manifestPath, "utf8");
+			expect(after).not.toContain("Session Ledger");
+		});
 	});
-});
 });

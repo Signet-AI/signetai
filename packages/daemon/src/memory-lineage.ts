@@ -548,6 +548,17 @@ function listCanonicalFiles(): string[] {
 		.sort();
 }
 
+function deleteArtifactRowsForPath(path: string, agentId: string | null): void {
+	const sourcePath = relativePath(path);
+	getDbAccessor().withWriteTx((db) => {
+		if (agentId) {
+			db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(sourcePath, agentId);
+			return;
+		}
+		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(sourcePath);
+	});
+}
+
 export function reindexMemoryArtifacts(agentId?: string): void {
 	const scope = agentId?.trim() || null;
 	const files = listCanonicalFiles();
@@ -615,27 +626,21 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 		const parsed = parseFrontmatterDocument(readFileSync(path, "utf8"));
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
 		if (scope && nextAgent !== scope) {
-			getDbAccessor().withWriteTx((db) => {
-				db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(relativePath(path));
-			});
+			deleteArtifactRowsForPath(path, scope);
 			cache.set(path, mtime);
 			continue;
 		}
 		const match = path.match(/--([a-z2-7]{16})--/);
 		const sessionToken = match?.[1];
 		if (sessionToken && tombstones.has(sessionToken)) {
-			getDbAccessor().withWriteTx((db) => {
-				db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(relativePath(path));
-			});
+			deleteArtifactRowsForPath(path, scope);
 			cache.set(path, mtime);
 			changedPaths.add(path);
 			continue;
 		}
 		const body = normalizeMarkdownBody(parsed.body);
 		if (!isValidArtifact(path, parsed.frontmatter, body)) {
-			getDbAccessor().withWriteTx((db) => {
-				db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(relativePath(path));
-			});
+			deleteArtifactRowsForPath(path, scope);
 			cache.set(path, mtime);
 			changedPaths.add(path);
 			continue;
@@ -647,9 +652,7 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 
 	for (const path of cache.keys()) {
 		if (fileSet.has(path)) continue;
-		getDbAccessor().withWriteTx((db) => {
-			db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(relativePath(path));
-		});
+		deleteArtifactRowsForPath(path, scope);
 		cache.delete(path);
 		changedPaths.add(path);
 	}

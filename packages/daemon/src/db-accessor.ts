@@ -116,22 +116,13 @@ function toMigrationDb(db: Database): {
 			const stmt = db.prepare(sql);
 			return {
 				run(...args: unknown[]): void {
-					if (args.length > 0) {
-						throw new Error("toMigrationDb statement.run does not support bind args");
-					}
-					stmt.run();
+					stmt.run(...args);
 				},
 				get(...args: unknown[]): Record<string, unknown> | undefined {
-					if (args.length > 0) {
-						throw new Error("toMigrationDb statement.get does not support bind args");
-					}
-					return toRecordOrUndefined(stmt.get());
+					return toRecordOrUndefined(stmt.get(...args));
 				},
 				all(...args: unknown[]): Record<string, unknown>[] {
-					if (args.length > 0) {
-						throw new Error("toMigrationDb statement.all does not support bind args");
-					}
-					const rows = stmt.all();
+					const rows = stmt.all(...args);
 					return rows
 						.map((row) => toRecordOrUndefined(row))
 						.filter((row): row is Record<string, unknown> => row !== undefined);
@@ -151,10 +142,7 @@ function toFtsSchemaQueryDb(db: Database): {
 			const stmt = db.prepare(sql);
 			return {
 				get(...args: unknown[]): Record<string, unknown> | undefined {
-					if (args.length > 0) {
-						throw new Error("toFtsSchemaQueryDb statement.get does not support bind args");
-					}
-					return toRecordOrUndefined(stmt.get());
+					return toRecordOrUndefined(stmt.get(...args));
 				},
 			};
 		},
