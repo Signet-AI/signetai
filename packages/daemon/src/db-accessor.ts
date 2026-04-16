@@ -501,10 +501,21 @@ export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string
 
 	const writeConn = new Database(dbPathParam);
 	configurePragmas(writeConn);
-	writeConn.loadExtension(vecExtensionPath);
 
-	vecLoaded = true;
-	vecLoadError = null;
+	if (vecExtensionPath) {
+		try {
+			writeConn.loadExtension(vecExtensionPath);
+			vecLoaded = true;
+			vecLoadError = null;
+		} catch (e) {
+			vecLoaded = false;
+			vecLoadError = e instanceof Error ? e.message : String(e);
+		}
+	} else {
+		vecLoaded = false;
+		vecLoadError = "no extension path provided";
+	}
+
 	accessor = createAccessor(writeConn);
 }
 
