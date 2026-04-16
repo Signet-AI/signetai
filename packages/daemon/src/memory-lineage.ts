@@ -36,12 +36,11 @@ const purgeSeen = new Set<string>();
 // Incremental index cache: outer key = agentId or "*" for global, inner key = absolute path, value = mtimeMs
 const artifactIndexCache = new Map<string, Map<string, number>>();
 
-// Changed manifest paths from last reindexMemoryArtifacts call — read by renderMemoryProjection
-let lastChangedManifests: Set<string> | undefined;
+// Changed manifest paths from last reindexMemoryArtifacts call — read by renderMemoryProjection, keyed by agentId
+const lastChangedManifestsByAgent = new Map<string, Set<string>>();
 
-// Tracks which manifest rel paths were referenced in the previous ledger render
-// so syncManifestRefs can detect and clear stale refs after ledger clipping
-let prevLedgerRefs: Set<string> | undefined;
+// Tracks which manifest rel paths were referenced in the previous ledger render per agent
+const prevLedgerRefsByAgent = new Map<string, Set<string>>();
 
 function getProjectionTokenizer(): Tiktoken {
 	if (projTok) return projTok;
@@ -566,7 +565,7 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 	const cacheKey = scope ?? "*";
 	const cache = artifactIndexCache.get(cacheKey) ?? new Map<string, number>();
 	const changedPaths = new Set<string>();
-	lastChangedManifests = undefined;
+	lastChangedManifestsByAgent.delete(cacheKey);
 
 	try {
 		const ready = getDbAccessor().withReadDb((db) => {
@@ -657,7 +656,7 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 		changedPaths.add(path);
 	}
 
-	lastChangedManifests = new Set([...changedPaths].filter((path) => path.endsWith("--manifest.md")));
+	lastChangedManifestsByAgent.set(cacheKey, new Set([...changedPaths].filter((path) => path.endsWith("--manifest.md"))));
 	artifactIndexCache.set(cacheKey, cache);
 
 	stopTimer({ fileCount: files.length });
@@ -1336,24 +1335,25 @@ function renderIndexSection(indexBlock: string, base: ReadonlyArray<string>): st
 	return "";
 }
 
-function syncManifestRefs(refs: ReadonlyArray<string>, changedManifests?: ReadonlySet<string>): void {
+function syncManifestRefs(refs: ReadonlyArray<string>, changedManifests: ReadonlySet<string> | undefined, agentId: string): void {
 	const set = new Set(refs);
 	let files: string[];
 	if (changedManifests !== undefined) {
 		const absFiles = new Set(changedManifests);
-		if (prevLedgerRefs) {
+		const prev = prevLedgerRefsByAgent.get(agentId);
+		if (prev) {
 			const root = getAgentsDir();
-			for (const rel of prevLedgerRefs) {
+			for (const rel of prev) {
 				if (!set.has(rel)) {
 					absFiles.add(join(root, rel));
 				}
 			}
 		}
-		prevLedgerRefs = set;
+		prevLedgerRefsByAgent.set(agentId, set);
 		if (absFiles.size === 0) return;
 		files = [...absFiles];
 	} else {
-		prevLedgerRefs = set;
+		prevLedgerRefsByAgent.set(agentId, set);
 		files = listCanonicalFiles().filter((path) => path.endsWith("--manifest.md"));
 	}
 	for (const path of files) {
@@ -1386,8 +1386,8 @@ export function renderMemoryProjection(agentId = "default"): {
 	indexBlock: string;
 } {
 	reindexMemoryArtifacts(agentId);
-	const changedManifests = lastChangedManifests;
-	lastChangedManifests = undefined;
+	const changedManifests = lastChangedManifestsByAgent.get(agentId);
+	lastChangedManifestsByAgent.delete(agentId);
 	const memories = readTopMemories(agentId);
 	const threadHeads = readThreadHeads(agentId);
 	const nodes = readTemporalNodes(agentId);
@@ -1432,7 +1432,7 @@ export function renderMemoryProjection(agentId = "default"): {
 		}),
 	];
 	const ledgerBlock = renderLedgerSection(ledger, parts);
-	syncManifestRefs(ledgerBlock.refs, changedManifests);
+	syncManifestRefs(ledgerBlock.refs, changedManifests, agentId);
 	parts.push(ledgerBlock.block);
 	const trimmedIndex = renderIndexSection(indexBlock, parts);
 	if (trimmedIndex.length > 0) {
@@ -1568,6 +1568,6 @@ export function purgeCanonicalNoiseSessionsOnce(agentId: string, reason: string)
 export function resetProjectionPurgeState(): void {
 	purgeSeen.clear();
 	artifactIndexCache.clear();
-	lastChangedManifests = undefined;
-	prevLedgerRefs = undefined;
+	lastChangedManifestsByAgent.clear();
+	prevLedgerRefsByAgent.clear();
 }

@@ -488,4 +488,74 @@ describe("memory-lineage", () => {
 			expect(after).not.toContain("Session Ledger");
 		});
 	});
+
+	it("isolates prevLedgerRefs across agents", async () => {
+		const stamp = (minutesAgo: number): string => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+
+		await writeSummaryArtifact({
+			agentId: "alice",
+			sessionId: "alice-s1",
+			sessionKey: "alice-s1",
+			project: "/proj/alice",
+			harness: "codex",
+			capturedAt: stamp(3),
+			startedAt: stamp(3),
+			endedAt: stamp(3),
+			summary: "Alice session one work.",
+		});
+		await writeSummaryArtifact({
+			agentId: "alice",
+			sessionId: "alice-s2",
+			sessionKey: "alice-s2",
+			project: "/proj/alice",
+			harness: "codex",
+			capturedAt: stamp(2),
+			startedAt: stamp(2),
+			endedAt: stamp(2),
+			summary: "Alice session two work.",
+		});
+		await writeSummaryArtifact({
+			agentId: "bob",
+			sessionId: "bob-s1",
+			sessionKey: "bob-s1",
+			project: "/proj/bob",
+			harness: "codex",
+			capturedAt: stamp(1),
+			startedAt: stamp(1),
+			endedAt: stamp(1),
+			summary: "Bob session one work.",
+		});
+
+		const aliceResult1 = renderMemoryProjection("alice");
+		expect(aliceResult1.content).toContain("alice-s1");
+
+		const bobResult1 = renderMemoryProjection("bob");
+		expect(bobResult1.content).toContain("bob-s1");
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DELETE FROM memory_artifacts WHERE session_id = ? AND agent_id = ?").run("alice-s2", "alice");
+		});
+
+		const aliceResult2 = renderMemoryProjection("alice");
+
+		const bobResult2 = renderMemoryProjection("bob");
+		expect(bobResult2.content).toContain("bob-s1");
+
+		const bobManifest = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_path FROM memory_artifacts
+						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?`,
+					)
+					.get("bob", "bob-s1") as { source_path: string } | null,
+		);
+		if (bobManifest) {
+			const content = readFileSync(join(dir, bobManifest.source_path), "utf8");
+			expect(content).toContain("Session Ledger");
+		}
+
+		expect(aliceResult2.content).not.toContain("bob-s1");
+		expect(bobResult2.content).not.toContain("alice-s1");
+	});
 });
