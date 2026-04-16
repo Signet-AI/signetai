@@ -70,7 +70,7 @@ describe("memory-lineage", () => {
 		closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 		if (prev === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 			return;
 		}
 		process.env.SIGNET_PATH = prev;
