@@ -60,13 +60,50 @@ jobs:
         run: |
           set -euo pipefail
           mode="${SIGNING_MODE_INPUT}"
-          if [ "${mode}" = "auto" ]; then
-            mode="self-signed"
-            if [[ "${{ matrix.runner }}" == macos-* ]] && [ -n "${APPLE_CERTIFICATE:-}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD:-}" ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
-              mode="official"
+          runner="${{ matrix.runner }}"
+          has_official=0
+          requires_signing=0
+          missing=()
+
+          require_secret() {
+            name="$1"
+            value="$2"
+            if [ -z "${value}" ]; then
+              missing+=("${name}")
             fi
-            if [ "${{ matrix.runner }}" = "windows-latest" ] && [ -n "${WINDOWS_CERTIFICATE:-}" ] && [ -n "${WINDOWS_CERTIFICATE_PASSWORD:-}" ]; then
+          }
+
+          if [[ "${runner}" == macos-* ]]; then
+            requires_signing=1
+            require_secret APPLE_CERTIFICATE "${APPLE_CERTIFICATE:-}"
+            require_secret APPLE_CERTIFICATE_PASSWORD "${APPLE_CERTIFICATE_PASSWORD:-}"
+            require_secret APPLE_SIGNING_IDENTITY "${APPLE_SIGNING_IDENTITY:-}"
+          elif [ "${runner}" = "windows-latest" ]; then
+            requires_signing=1
+            require_secret WINDOWS_CERTIFICATE "${WINDOWS_CERTIFICATE:-}"
+            require_secret WINDOWS_CERTIFICATE_PASSWORD "${WINDOWS_CERTIFICATE_PASSWORD:-}"
+          fi
+
+          if [ "${requires_signing}" -eq 1 ] && [ "${#missing[@]}" -eq 0 ]; then
+            has_official=1
+          fi
+
+          if [ "${mode}" = "official" ] && [ "${requires_signing}" -eq 0 ]; then
+            echo "::notice::Official signing is not applicable for ${runner}; using unsigned Linux packaging"
+            mode="self-signed"
+          fi
+
+          if [ "${mode}" = "official" ] && [ "${requires_signing}" -eq 1 ] && [ "${has_official}" -ne 1 ]; then
+            printf '::error::signing_mode=official but required signing secrets are missing: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+          if [ "${mode}" = "auto" ]; then
+            if [ "${has_official}" -eq 1 ]; then
               mode="official"
+            else
+              mode="self-signed"
+              printf '::warning::Official signing secrets missing, falling back to self-signed mode: %s\n' "${missing[*]}"
             fi
           fi
           if [ "${mode}" != "official" ] && [ "${mode}" != "self-signed" ]; then
@@ -116,7 +153,7 @@ jobs:
         run: cd packages/desktop && bun run build:desktop -- --${{ matrix.arch }}
 
       - name: Generate AUR metadata
-        if: matrix.runner == 'ubuntu-22.04'
+        if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/')
         run: |
           set -euo pipefail
           APPIMAGE="$(find packages/desktop/release -name '*.AppImage' | head -n 1)"
@@ -126,9 +163,6 @@ jobs:
           fi
           SHA="$(sha256sum "${APPIMAGE}" | awk '{print $1}')"
           VER="${GITHUB_REF_NAME#v}"
-          if [ -z "${VER}" ] || [ "${VER}" = "${GITHUB_REF_NAME}" ]; then
-            VER="$(node -p "require('./package.json').version")"
-          fi
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VER}/$(basename "${APPIMAGE}")"
           bash deploy/aur/generate-pkgbuild.sh "${VER}" "${URL}" "${SHA}"
 
@@ -146,7 +180,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload AUR metadata
-        if: matrix.runner == 'ubuntu-22.04'
+        if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: aur-metadata
@@ -168,6 +202,7 @@ jobs:
 
   validate-aur:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
