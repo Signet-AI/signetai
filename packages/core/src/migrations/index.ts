@@ -63,6 +63,7 @@ import { up as taskAgentScope } from "./054-task-agent-scope";
 import { up as dreamingState } from "./055-dreaming-state";
 import { up as agentScopedContentHash } from "./056-agent-scoped-content-hash";
 import { up as memoriesFtsTokenizerRepair } from "./057-memories-fts-tokenizer-repair";
+import { up as knowledgeGraphIndices } from "./058-knowledge-graph-indices";
 
 // -- Public interface consumed by Database.init() --
 
@@ -545,6 +546,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 57,
 		name: "memories-fts-tokenizer-repair",
 		up: memoriesFtsTokenizerRepair,
+	},
+	{
+		version: 58,
+		name: "knowledge-graph-indices",
+		up: knowledgeGraphIndices,
 	},
 ];
 
