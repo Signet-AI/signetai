@@ -344,6 +344,31 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(startHandler.timeout).toBe(20);
 	});
 
+	test("preserves unrelated top-level keys when refreshing only Signet hooks", async () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify({
+				_signet: true,
+				version: 1,
+				metadata: { owner: "third-party" },
+				hooks: {
+					SessionStart: [
+						{ _signet: true, hooks: [{ type: "command", command: "signet hook session-start -H codex", timeout: 10 }] },
+					],
+				},
+			}),
+		);
+
+		await connector().install(tempHome);
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
+		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
+
+		expect(json.version).toBe(1);
+		expect(json.metadata).toEqual({ owner: "third-party" });
+		expect(startHandler.timeout).toBe(20);
+	});
+
 	test("refreshes node-shim Signet hook commands without duplicating entries", async () => {
 		writeFileSync(
 			hooksPath,

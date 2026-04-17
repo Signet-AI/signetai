@@ -358,7 +358,8 @@ export class CodexConnector extends BaseConnector {
 				writeHooksFile(hooksPath, merged);
 				warnings.push("Merged Signet hooks into existing hooks.json — existing hooks preserved");
 			} else {
-				writeHooksFile(hooksPath, buildHooksFile(signetArgs));
+				const signet = buildHooksFile(signetArgs);
+				writeHooksFile(hooksPath, { ...cleaned, _signet: true, hooks: signet.hooks });
 			}
 		} else {
 			writeHooksFile(hooksPath, buildHooksFile(signetArgs));
