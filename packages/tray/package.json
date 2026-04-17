@@ -1,27 +1,25 @@
 {
-  "name": "@signet/tray",
-  "version": "0.100.1",
-  "private": true,
-  "description": "Shared tray and menu bar state utilities for Signet desktop shells",
-  "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
-  "files": [
-    "dist"
-  ],
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json --watch",
-    "test": "bun test",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
-  },
-  "devDependencies": {
-    "typescript": "^5.7.0"
-  }
+	"name": "@signet/tray",
+	"version": "0.100.1",
+	"private": true,
+	"description": "Shared tray and menu bar state utilities for Signet desktop shells",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
+	"files": ["dist"],
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"dev": "tsc -p tsconfig.json --watch",
+		"test": "bun test",
+		"typecheck": "tsc -p tsconfig.json --noEmit"
+	},
+	"devDependencies": {
+		"typescript": "^5.7.0"
+	}
 }
