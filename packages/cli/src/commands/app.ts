@@ -120,5 +120,5 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 	program
 		.command("sync")
 		.description("Sync hooks, extensions, built-in templates, and skills")
-		.action(deps.syncTemplates);
+		.action(() => deps.syncTemplates());
 }
