@@ -124,10 +124,12 @@ export class DaemonManager {
 			return this.status();
 		}
 
-		if (this.#child && this.#owned) {
-			this.#child.kill("SIGTERM");
-		} else {
-			return this.status();
+		const child = this.#child;
+		if (!child || !this.#owned) return this.status();
+
+		child.kill("SIGTERM");
+		if (!(await this.#waitForExit(child, 5000))) {
+			throw new Error("Owned daemon did not exit within 5 seconds");
 		}
 
 		for (let i = 0; i < 30; i += 1) {
@@ -135,15 +137,15 @@ export class DaemonManager {
 			await sleep(100);
 		}
 
-		this.#owned = false;
-		this.#child = null;
 		return this.status();
 	}
 
 	async restart(): Promise<DesktopDaemonStatus> {
-		await this.stop();
+		const stopped = await this.stop();
+		if (stopped.running) {
+			throw new Error(`Cannot restart daemon because port ${this.port} is still occupied`);
+		}
 		await sleep(500);
-		this.#owned = true;
 		return this.start();
 	}
 
@@ -159,6 +161,17 @@ export class DaemonManager {
 		this.#stderr?.end();
 		this.#stdout = null;
 		this.#stderr = null;
+	}
+
+	#waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+		if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => resolve(false), timeoutMs);
+			child.once("exit", () => {
+				clearTimeout(timer);
+				resolve(true);
+			});
+		});
 	}
 
 	#spawn(): void {

@@ -285,6 +285,7 @@ export class DesktopTray {
 				preload: preloadPath(),
 				contextIsolation: true,
 				nodeIntegration: false,
+				sandbox: true,
 			},
 		});
 		win
