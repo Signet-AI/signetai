@@ -778,6 +778,7 @@ export function listKnowledgeEntities(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
 						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'attribute'
 						  AND attr.status = 'active'
@@ -786,6 +787,7 @@ export function listKnowledgeEntities(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
 						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'constraint'
 						  AND attr.status = 'active'
@@ -833,6 +835,7 @@ export function getKnowledgeEntityDetail(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
 						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'attribute'
 						  AND attr.status = 'active'
@@ -841,6 +844,7 @@ export function getKnowledgeEntityDetail(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
 						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'constraint'
 						  AND attr.status = 'active'
