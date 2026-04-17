@@ -32,6 +32,73 @@ afterEach(() => {
 	}
 });
 
+describe("syncTemplates workspace detection", () => {
+	it("succeeds when agentsDir is a valid directory (regression: #515-related wiring)", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sync-workspace-"));
+		const basePath = join(root, "agents");
+
+		try {
+			process.env.HOME = root;
+			mkdirSync(basePath, { recursive: true });
+			const logs: string[] = [];
+			const origLog = console.log;
+			console.log = (...args: unknown[]) => logs.push(args.join(" "));
+
+			await syncTemplates({
+				agentsDir: basePath,
+				configureHarnessHooks: mock(async () => {}),
+				getSkillsSourceDir: () => join(root, "skills-src"),
+				getTemplatesDir: () => join(root, "templates"),
+				signetLogo: () => "signet",
+				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
+				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
+				syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
+				syncWorkspaceSourceRepo: async () => ({
+					status: "current",
+					path: join(basePath, "signetai"),
+					message: "current",
+					branch: "main",
+					defaultBranch: "main",
+				}),
+			});
+
+			console.log = origLog;
+			const output = logs.join("\n");
+			expect(output).not.toContain("No Signet installation found");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reports missing installation when agentsDir does not exist", async () => {
+		const logs: string[] = [];
+		const origLog = console.log;
+		console.log = (...args: unknown[]) => logs.push(args.join(" "));
+
+		await syncTemplates({
+			agentsDir: `/tmp/signet-nonexistent-${Date.now()}`,
+			configureHarnessHooks: mock(async () => {}),
+			getSkillsSourceDir: () => "/tmp",
+			getTemplatesDir: () => "/tmp",
+			signetLogo: () => "signet",
+			syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
+			syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
+			syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
+			syncWorkspaceSourceRepo: async () => ({
+				status: "current",
+				path: "/tmp",
+				message: "current",
+				branch: "main",
+				defaultBranch: "main",
+			}),
+		});
+
+		console.log = origLog;
+		const output = logs.join("\n");
+		expect(output).toContain("No Signet installation found");
+	});
+});
+
 describe("syncTemplates openclaw migration", () => {
 	it("migrates legacy-only openclaw configs to the plugin path during sync", async () => {
 		const root = mkdtempSync(join(tmpdir(), "sync-openclaw-"));

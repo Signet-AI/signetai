@@ -1268,9 +1268,9 @@ const healthDeps = {
 	signetLogo,
 };
 
-const runSyncTemplates = (basePath = AGENTS_DIR): Promise<void> =>
+const runSyncTemplates = (): Promise<void> =>
 	syncTemplates({
-		agentsDir: basePath,
+		agentsDir: AGENTS_DIR,
 		configureHarnessHooks,
 		getSkillsSourceDir,
 		getTemplatesDir,
