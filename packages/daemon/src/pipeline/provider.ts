@@ -1772,7 +1772,7 @@ const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
 	model: "anthropic/claude-haiku-4-5-20251001",
 	defaultTimeoutMs: 60000,
 	agent: OPENCODE_PIPELINE_AGENT,
-	enableOllamaFallback: true,
+	enableOllamaFallback: false,
 	ollamaFallbackModel: undefined,
 	ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
 	ollamaFallbackMaxContextTokens: undefined,

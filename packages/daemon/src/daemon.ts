@@ -1816,6 +1816,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
 				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
 				enableStructuredOutput: memoryCfg.pipelineV2.extraction.structuredOutput,
+				enableOllamaFallback: extractionFallbackProvider !== "none",
 			});
 		}
 		if (provider === "claude-code") {
@@ -2167,6 +2168,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 								ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
 								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
 								enableStructuredOutput: memoryCfg.pipelineV2.synthesis.structuredOutput,
+								enableOllamaFallback: synthesisFallback !== null,
 							})
 						: effectiveSynthesisProvider === "codex"
 							? createCodexProvider({
