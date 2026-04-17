@@ -833,10 +833,17 @@ harness session:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `recallLimit` | `10` | Number of memories to inject |
+| `recallLimit` | `50` | Number of memories to inject |
+| `candidatePoolLimit` | `100` | Number of candidate memories to rank before token budgeting |
 | `includeIdentity` | `true` | Include agent name and description |
 | `includeRecentContext` | `true` | Include `MEMORY.md` content |
 | `recencyBias` | `0.7` | Weight toward recent vs. important memories (0-1) |
+| `maxInjectTokens` | `12000` | Maximum session-start injection budget after context assembly |
+
+Predicted context from recent session summaries is scoped to the active
+project. If the harness does not provide a project path, Signet skips
+predicted-context FTS at session start to avoid global broad-term scans
+over large memory stores.
 
 `hooks.preCompaction` controls what is included when the harness triggers
 a pre-compaction summary:
@@ -873,7 +880,7 @@ editing the config file is impractical.
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
-| `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start hook timeout in ms for Signet-managed clients and generated Claude Code hook configs |
+| `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start daemon wait budget in ms for Signet-managed clients. Generated Claude Code hook config writes this value directly. Generated Codex hook config rounds up to seconds and adds 5 seconds of harness grace |
 | `SIGNET_FETCH_TIMEOUT` | `15000` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset |
 | `SIGNET_PROMPT_SUBMIT_TIMEOUT` | `5000` | Prompt-submit daemon wait budget in ms; OpenCode uses this value directly, generated Claude Code hook config writes this value + 2000 ms grace |
 | `SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS` | — | Comma-separated host allowlist for Anthropic endpoint overrides used during credentialed startup preflight (supports entries like `proxy.example.com` and `*.example.com`) |
