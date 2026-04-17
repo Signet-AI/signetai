@@ -183,6 +183,9 @@ let embedFn: EmbedFn | null = null;
 let initPromise: Promise<void> | null = null;
 let initError: string | null = null;
 let modelCached = false;
+let lastInitFailure = 0;
+
+const INIT_RETRY_COOLDOWN_MS = 300_000;
 
 // ---------------------------------------------------------------------------
 // Cache directory
@@ -200,6 +203,9 @@ function getCacheDir(): string {
 async function ensureInitialized(): Promise<void> {
 	if (embedFn) return;
 	if (initPromise) return initPromise;
+	if (lastInitFailure > 0 && Date.now() - lastInitFailure < INIT_RETRY_COOLDOWN_MS) {
+		throw new Error(initError ?? "Native embedding init on cooldown");
+	}
 	initPromise = doInit();
 	return initPromise;
 }
@@ -248,7 +254,8 @@ async function doInit(): Promise<void> {
 		logger.info("native-embedding", `Ready — ${EXPECTED_DIMS}-dim embeddings`);
 	} catch (err) {
 		initError = err instanceof Error ? err.message : String(err);
-		initPromise = null; // allow retry on next call
+		initPromise = null;
+		lastInitFailure = Date.now();
 		logger.error("native-embedding", `Init failed: ${initError}`);
 		throw err;
 	}
@@ -294,12 +301,13 @@ export async function shutdownNativeProvider(): Promise<void> {
 				// best-effort
 			}
 		}
-		embedFn = null;
-		initPromise = null;
-		initError = null;
-		modelCached = false;
 		logger.info("native-embedding", "Provider shut down");
 	}
+	embedFn = null;
+	initPromise = null;
+	initError = null;
+	modelCached = false;
+	lastInitFailure = 0;
 }
 
 export function getNativeProviderStatus(): NativeProviderSnapshot {
