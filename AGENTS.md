@@ -188,7 +188,8 @@ bun test packages/daemon/src/pipeline/worker.test.ts
 | `@signet/pi-extension-base` | Shared Pi/OMP extension utilities (raw TS) | node |
 | `@signet/pi-extension` | Pi extension/runtime bundle | node |
 | `@signetai/signet-memory-openclaw` | OpenClaw runtime adapter | node |
-| `@signet/tray` | Desktop shell / packaging | node |
+| `@signet/desktop` | Electron desktop shell / packaging | node |
+| `@signet/tray` | Shared tray/menu bar state utilities | node |
 | `signetai` | Meta-package bundling CLI + daemon | - |
 | `@signet/web` | Marketing website | cloudflare |
 | `@signet/native` | Native accelerators | node |
@@ -208,7 +209,8 @@ bun test packages/daemon/src/pipeline/worker.test.ts
   expectations.
 - **`@signet/connector-*`**: install-time harness integrations. Distinct
   from daemon-side runtime connector code.
-- **`@signet/tray`**: desktop packaging and local runtime shell.
+- **`@signet/desktop`**: Electron desktop packaging and local runtime shell.
+- **`@signet/tray`**: shared tray/menu bar state utilities only.
 - **`@signet/web`**: Astro static marketing site on Cloudflare Pages.
   Use the `signet-design` skill for visual changes.
 

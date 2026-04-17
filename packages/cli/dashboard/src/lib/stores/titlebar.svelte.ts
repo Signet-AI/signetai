@@ -6,18 +6,16 @@
  *   "windows" — minimize/maximize/close on the right, left-aligned title
  *   "none"    — no titlebar, pure content (chromeless)
  *
- * Only active inside the Tauri desktop shell. In a normal browser session
+ * Only active inside the desktop shell. In a normal browser session
  * this store always resolves to "none" so the web dashboard never renders
  * a phantom titlebar offset.
  */
 
+import { getDesktopShell, isDesktopShell } from "$lib/desktop-shell";
+
 export type DecorationMode = "macos" | "windows" | "none";
 
-const STORAGE_KEY = "signet-decoration-mode";
-
-function isTauriShell(): boolean {
-	return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+const STORAGE_KEY = "signet-desktop-decoration-mode";
 
 function detectOS(): DecorationMode {
 	if (typeof navigator === "undefined") return "none";
@@ -28,14 +26,23 @@ function detectOS(): DecorationMode {
 	return "windows";
 }
 
+function usesNativeFrame(): boolean {
+	return getDesktopShell()?.nativeFrame ?? false;
+}
+
+function defaultMode(): DecorationMode {
+	return usesNativeFrame() ? "none" : detectOS();
+}
+
 function loadMode(): DecorationMode {
-	if (!isTauriShell()) return "none";
-	if (typeof localStorage === "undefined") return detectOS();
+	if (!isDesktopShell()) return "none";
+	if (usesNativeFrame()) return "none";
+	if (typeof localStorage === "undefined") return defaultMode();
 	const stored = localStorage.getItem(STORAGE_KEY);
 	if (stored === "macos" || stored === "windows" || stored === "none") {
 		return stored;
 	}
-	return detectOS();
+	return defaultMode();
 }
 
 let mode = $state<DecorationMode>(loadMode());
@@ -50,12 +57,15 @@ export const titlebar = {
 			localStorage.setItem(STORAGE_KEY, v);
 		}
 	},
+	get nativeFrame() {
+		return usesNativeFrame();
+	},
 	get visible() {
-		return mode !== "none";
+		return !usesNativeFrame() && mode !== "none";
 	},
 	/** Height in logical pixels — matches native OS chrome */
 	get height() {
-		if (mode === "none") return 0;
+		if (usesNativeFrame() || mode === "none") return 0;
 		return mode === "macos" ? 28 : 32;
 	},
 };

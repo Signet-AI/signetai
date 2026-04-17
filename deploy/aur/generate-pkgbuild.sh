@@ -25,11 +25,11 @@ cat > "${OUT_DIR}/PKGBUILD" <<EOF
 pkgname=signet-desktop-bin
 pkgver=${VER}
 pkgrel=1
-pkgdesc='Signet desktop application (Tauri) with bundled daemon runtime'
+pkgdesc='Signet Electron desktop application with bundled daemon runtime'
 arch=('x86_64')
 url='https://github.com/Signet-AI/signetai'
 license=('Apache')
-depends=('glibc' 'gtk3' 'webkit2gtk-4.1')
+depends=('glibc' 'gtk3' 'nss' 'libxss')
 optdepends=('libayatana-appindicator: tray icon support')
 source=("${ASSET}::${URL}")
 sha256sums=('${SHA}')
@@ -44,7 +44,7 @@ EOF
 
 cat > "${OUT_DIR}/.SRCINFO" <<EOF
 pkgbase = signet-desktop-bin
-	pkgdesc = Signet desktop application (Tauri) with bundled daemon runtime
+	pkgdesc = Signet Electron desktop application with bundled daemon runtime
 	pkgver = ${VER}
 	pkgrel = 1
 	url = https://github.com/Signet-AI/signetai
@@ -52,7 +52,8 @@ pkgbase = signet-desktop-bin
 	license = Apache
 	depends = glibc
 	depends = gtk3
-	depends = webkit2gtk-4.1
+	depends = nss
+	depends = libxss
 	optdepends = libayatana-appindicator: tray icon support
 	source = ${ASSET}::${URL}
 	sha256sums = ${SHA}

@@ -2,23 +2,26 @@
   "name": "@signet/tray",
   "version": "0.100.1",
   "private": true,
-  "description": "Signet desktop application",
-  "scripts": {
-    "build:dashboard": "cd ../cli/dashboard && bun run build",
-    "build:ts": "node build-ts.mjs",
-    "build:daemon": "cargo build --manifest-path ../daemon-rs/Cargo.toml --release -p signet-daemon",
-    "stage:daemon": "node scripts/stage-daemon.mjs",
-    "build:desktop": "bun run build:daemon && bun run stage:daemon && TAURI_CONFIG='{\"bundle\":{\"externalBin\":[\"binaries/signet-daemon\"]}}' bun run build",
-    "dev": "tauri dev",
-    "build": "tauri build",
-    "tauri": "tauri"
+  "description": "Shared tray and menu bar state utilities for Signet desktop shells",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
   },
-  "dependencies": {
-    "@signet/sdk": "workspace:*",
-    "@tauri-apps/api": "^2.5.0"
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "bun test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.5.0",
     "typescript": "^5.7.0"
   }
 }

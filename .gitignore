@@ -33,6 +33,7 @@ tmp/
 **/src/*.d.ts.map
 **/src/**/*.d.ts
 **/src/**/*.d.ts.map
+!packages/cli/dashboard/src/global.d.ts
 
 # Environment
 .env
@@ -86,3 +87,8 @@ packages/daemon-rs/target/
 .worktrees/
 
 
+
+# Desktop app generated resources
+packages/desktop/dist/
+packages/desktop/resources/
+!packages/desktop/icons/*.png

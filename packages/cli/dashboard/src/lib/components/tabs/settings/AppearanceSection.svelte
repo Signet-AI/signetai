@@ -1,6 +1,7 @@
 <script lang="ts">
 import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
+import { isDesktopShell } from "$lib/desktop-shell";
 import { type DecorationMode, titlebar } from "$lib/stores/titlebar.svelte";
 import { uiScale } from "$lib/stores/ui-scale.svelte";
 import AppWindowMac from "@lucide/svelte/icons/app-window-mac";
@@ -10,7 +11,7 @@ import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
 import ZoomIn from "@lucide/svelte/icons/zoom-in";
 import ZoomOut from "@lucide/svelte/icons/zoom-out";
 
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const isDesktop = isDesktopShell();
 
 const modes: { id: DecorationMode; label: string; icon: typeof Monitor; desc: string }[] = [
 	{ id: "macos", label: "macOS", icon: AppWindowMac, desc: "Traffic light buttons, centered title" },
@@ -20,8 +21,8 @@ const modes: { id: DecorationMode; label: string; icon: typeof Monitor; desc: st
 </script>
 
 <FormSection description="Local display preferences. These settings are stored in your browser and not synced.">
-	{#if isTauri}
-		<FormField label="Window decorations" description="Controls how the window titlebar and controls are rendered.">
+	{#if isDesktop}
+		<FormField label="Window decorations" description="Controls how the Signet desktop titlebar and window controls are rendered.">
 			<div class="mode-grid">
 				{#each modes as mode (mode.id)}
 					<button

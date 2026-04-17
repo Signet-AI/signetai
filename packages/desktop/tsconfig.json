@@ -5,13 +5,13 @@
 		"module": "NodeNext",
 		"moduleResolution": "NodeNext",
 		"strict": true,
-		"declaration": true,
-		"declarationMap": true,
+		"declaration": false,
 		"sourceMap": true,
 		"outDir": "dist",
 		"rootDir": "src",
 		"noEmit": false,
-		"types": ["node"]
+		"types": ["node", "electron"],
+		"declarationMap": false
 	},
 	"include": ["src/**/*.ts"]
 }

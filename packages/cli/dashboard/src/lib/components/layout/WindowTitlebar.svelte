@@ -1,4 +1,5 @@
 <script lang="ts">
+import { getDesktopShell, isDesktopShell } from "$lib/desktop-shell";
 import { type DecorationMode, titlebar } from "$lib/stores/titlebar.svelte";
 import AppWindowMac from "@lucide/svelte/icons/app-window-mac";
 import Copy from "@lucide/svelte/icons/copy";
@@ -8,60 +9,36 @@ import Monitor from "@lucide/svelte/icons/monitor";
 import Square from "@lucide/svelte/icons/square";
 import X from "@lucide/svelte/icons/x";
 
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const isDesktop = isDesktopShell();
 
 let maximized = $state(false);
+// biome-ignore lint/style/useConst: Svelte state is reassigned by event handlers.
 let hovered = $state(false);
 
-// Tauri window API — lazy loaded to avoid errors in browser
-let windowApi: typeof import("@tauri-apps/api/window") | null = null;
-
-async function ensureApi() {
-	if (!isTauri) return null;
-	if (!windowApi) {
-		windowApi = await import("@tauri-apps/api/window");
-	}
-	return windowApi;
-}
-
-// Track maximized state via resize event (no polling).
-// onResized fires synchronously on maximize/restore/resize.
-// Guard: if teardown happens while init() is still awaiting, check
-// `cancelled` after onResized resolves and immediately unlisten.
 $effect(() => {
-	if (!isTauri) return;
-	let unlisten: (() => void) | null = null;
+	if (!isDesktop) return;
+	let off: (() => void) | null = null;
 	let cancelled = false;
 
 	async function init() {
-		const api = await ensureApi();
-		if (!api || cancelled) return;
-		const win = api.getCurrentWindow();
-		maximized = await win.isMaximized();
-		const stop = await win.onResized(async () => {
-			if (cancelled) return;
-			maximized = await win.isMaximized();
+		const shell = getDesktopShell();
+		if (!shell || cancelled) return;
+		maximized = await shell.isMaximized();
+		off = shell.onWindowStateChange((state) => {
+			maximized = state.maximized;
 		});
-		// If teardown ran while we were awaiting onResized, unlisten immediately
-		if (cancelled) {
-			stop();
-			return;
-		}
-		unlisten = stop;
 	}
 
 	init();
 	return () => {
 		cancelled = true;
-		unlisten?.();
+		off?.();
 	};
 });
 
 // Native dimensions in logical pixels, scaled to match OS chrome.
 // macOS: 28px titlebar, 12px traffic lights, 8px gap
 // Windows: 32px titlebar, 46x32px caption buttons
-// We scale relative to 1x baseline so higher DPI displays get
-// correctly proportioned chrome.
 const MACOS_HEIGHT = 28;
 const MACOS_DOT = 12;
 const MACOS_GAP = 8;
@@ -74,21 +51,16 @@ const dotGap = $derived(MACOS_GAP);
 const winBtnWidth = $derived(WIN_BTN_W);
 
 async function minimize() {
-	const api = await ensureApi();
-	if (!api) return;
-	await api.getCurrentWindow().minimize();
+	await getDesktopShell()?.minimize();
 }
 
 async function toggleMaximize() {
-	const api = await ensureApi();
-	if (!api) return;
-	await api.getCurrentWindow().toggleMaximize();
+	await getDesktopShell()?.toggleMaximize();
+	maximized = (await getDesktopShell()?.isMaximized()) ?? maximized;
 }
 
 async function close() {
-	const api = await ensureApi();
-	if (!api) return;
-	await api.getCurrentWindow().close();
+	await getDesktopShell()?.close();
 }
 
 function cycleMode() {
@@ -106,17 +78,17 @@ const modeLabel: Record<DecorationMode, string> = {
 const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mode === "windows" ? Monitor : EyeOff);
 </script>
 
-{#if isTauri && !titlebar.visible}
+{#if isDesktop && !titlebar.nativeFrame && !titlebar.visible}
 	<!-- "none" mode: invisible drag strip so the window stays movable.
 	     Without this, `decorations: false` + no titlebar = permanently stuck. -->
-	<div class="titlebar__drag-strip" data-tauri-drag-region></div>
+	<div class="titlebar__drag-strip" data-desktop-drag-region></div>
 {/if}
 
-{#if isTauri && titlebar.visible}
+{#if isDesktop && titlebar.visible}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="titlebar titlebar--{titlebar.mode}"
-		data-tauri-drag-region
+		data-desktop-drag-region
 		style="--tb-h: {barHeight}px; --tb-dot: {dotSize}px; --tb-dot-gap: {dotGap}px; --tb-win-btn: {winBtnWidth}px;"
 		onmouseenter={() => (hovered = true)}
 		onmouseleave={() => (hovered = false)}
@@ -161,7 +133,7 @@ const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mo
 			</div>
 
 			<img src="/logo-dark.png" alt="" class="titlebar__logo" width="14" height="14" aria-hidden="true" />
-			<span class="titlebar__title" data-tauri-drag-region>SIGNET</span>
+			<span class="titlebar__title" data-desktop-drag-region>SIGNET</span>
 
 			<div class="titlebar__spacer">
 				<button
@@ -185,7 +157,7 @@ const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mo
 					<ModeIcon size={12} />
 				</button>
 				<img src="/logo-dark.png" alt="" class="titlebar__logo" width="14" height="14" aria-hidden="true" />
-				<span class="titlebar__title" data-tauri-drag-region>SIGNET</span>
+				<span class="titlebar__title" data-desktop-drag-region>SIGNET</span>
 			</div>
 
 			<div class="titlebar__controls titlebar__controls--windows">
@@ -237,6 +209,7 @@ const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mo
 
 	/* ── Drag strip for "none" mode — keeps window movable when titlebar is hidden ── */
 	.titlebar__drag-strip {
+		-webkit-app-region: drag;
 		position: fixed;
 		top: 0;
 		left: 0;
@@ -247,6 +220,7 @@ const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mo
 
 	/* ── Shared titlebar ── */
 	.titlebar {
+		-webkit-app-region: drag;
 		display: flex;
 		align-items: center;
 		height: var(--tb-h);
@@ -279,6 +253,7 @@ const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mo
 	}
 
 	.titlebar__mode-btn {
+		-webkit-app-region: no-drag;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -323,6 +298,7 @@ const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mo
 	}
 
 	.traffic-light {
+		-webkit-app-region: no-drag;
 		width: var(--tb-dot);
 		height: var(--tb-dot);
 		border-radius: 50%;
@@ -396,6 +372,7 @@ const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mo
 	}
 
 	.win-btn {
+		-webkit-app-region: no-drag;
 		display: flex;
 		align-items: center;
 		justify-content: center;

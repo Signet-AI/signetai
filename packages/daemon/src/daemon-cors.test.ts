@@ -31,7 +31,7 @@ memory:
 
 	afterAll(() => {
 		if (prev === undefined) {
-			delete process.env.SIGNET_PATH;
+			process.env.SIGNET_PATH = undefined;
 		}
 		if (prev !== undefined) process.env.SIGNET_PATH = prev;
 		rmSync(dir, { recursive: true, force: true });
@@ -52,6 +52,15 @@ memory:
 		});
 
 		expect(res.headers.get("access-control-allow-origin")).toBeNull();
+	});
+
+	it("keeps Electron desktop app origin allowlisted", async () => {
+		const origin = "app://signet";
+		const res = await app.request("http://localhost/health", {
+			headers: { Origin: origin },
+		});
+
+		expect(res.headers.get("access-control-allow-origin")).toBe(origin);
 	});
 
 	it("keeps localhost dev origins allowlisted", async () => {

@@ -169,8 +169,7 @@ const _ALLOWED_ORIGINS = new Set([
 	"http://127.0.0.1:3850",
 	"http://localhost:5173",
 	"http://127.0.0.1:5173",
-	"tauri://localhost",
-	"http://tauri.localhost",
+	"app://signet",
 ]);
 export const ALLOWED_ORIGINS = _ALLOWED_ORIGINS;
 
