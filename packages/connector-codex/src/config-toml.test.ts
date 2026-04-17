@@ -378,6 +378,39 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(signetHandlers[0]?.timeout).toBe(20);
 	});
 
+	test("preserves third-party commands that only mention hook subcommands", async () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify({
+				hooks: {
+					SessionStart: [
+						{
+							hooks: [
+								{
+									type: "command",
+									command: "python ./scripts/custom-reviewer.py --note ' hook session-start '",
+									timeout: 7,
+								},
+							],
+						},
+					],
+				},
+			}),
+		);
+
+		await connector().install(tempHome);
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
+		const commands = hooks.SessionStart.flatMap((group) =>
+			((group as Record<string, unknown>).hooks as Record<string, unknown>[]).map(
+				(handler) => handler.command as string,
+			),
+		);
+
+		expect(commands).toContain("python ./scripts/custom-reviewer.py --note ' hook session-start '");
+		expect(commands.some((command) => command === "signet hook session-start -H codex")).toBe(true);
+	});
+
 	test("does not use array-form command (regression: issue #481)", async () => {
 		await connector().install(tempHome);
 		const json = readHooksJson();

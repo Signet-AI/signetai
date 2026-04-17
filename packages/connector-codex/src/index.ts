@@ -115,17 +115,28 @@ function writeHooksFile(path: string, file: HooksFile): void {
 	atomicWriteJson(path, file);
 }
 
-const SIGNET_HOOK_PREFIXES = [
-	"signet hook session-start",
-	"signet hook user-prompt-submit",
-	"signet hook session-end",
-] as const;
-const SIGNET_HOOK_COMMAND_MARKERS = [" hook session-start", " hook user-prompt-submit", " hook session-end"] as const;
+const SIGNET_HOOK_SUBCOMMANDS = ["session-start", "user-prompt-submit", "session-end"] as const;
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function isSignetHookCommand(cmd: string): boolean {
-	return (
-		SIGNET_HOOK_PREFIXES.some((s) => cmd.startsWith(s)) || SIGNET_HOOK_COMMAND_MARKERS.some((s) => cmd.includes(s))
-	);
+	const normalized = cmd.trim().replace(/\s+/g, " ");
+	return SIGNET_HOOK_SUBCOMMANDS.some((subcommand) => {
+		const hook = `hook\\s+${escapeRegExp(subcommand)}\\b`;
+		const bare = new RegExp(`^(?:signet|signet\\.(?:cmd|ps1|bat|exe))\\s+${hook}`, "i");
+		if (bare.test(normalized)) return true;
+
+		const quotedBare = new RegExp(`^["'][^"']*[\\\\/]signet(?:\\.(?:cmd|ps1|bat|exe))?["']\\s+${hook}`, "i");
+		if (quotedBare.test(normalized)) return true;
+
+		const nodeShim = new RegExp(
+			`^(?:"[^"]*[\\\\/]?node(?:\\.exe)?"|'[^']*[\\\\/]?node(?:\\.exe)?'|\\S*[\\\\/]?node(?:\\.exe)?)\\s+(?:"[^"]*[\\\\/]signet\\.js"|'[^']*[\\\\/]signet\\.js'|\\S*[\\\\/]signet\\.js)\\s+${hook}`,
+			"i",
+		);
+		return nodeShim.test(normalized);
+	});
 }
 
 function isSignetMatcherGroup(group: unknown): boolean {
