@@ -50,6 +50,7 @@ jobs:
 
       - name: Resolve signing mode
         id: signing
+        shell: bash
         env:
           SIGNING_MODE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'auto' }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -115,6 +116,7 @@ jobs:
 
       - name: Configure Electron signing
         if: steps.signing.outputs.mode == 'official'
+        shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}

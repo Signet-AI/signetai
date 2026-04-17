@@ -31,7 +31,8 @@ memory:
 
 	afterAll(() => {
 		if (prev === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			// biome-ignore lint/performance/noDelete: deleting env keys avoids stringifying undefined in process.env.
+			delete process.env.SIGNET_PATH;
 		}
 		if (prev !== undefined) process.env.SIGNET_PATH = prev;
 		rmSync(dir, { recursive: true, force: true });

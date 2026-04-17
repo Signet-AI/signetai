@@ -51,6 +51,7 @@ export class DaemonManager {
 	readonly baseUrl = `http://localhost:${this.port}`;
 	#child: ChildProcess | null = null;
 	#owned = false;
+	#startPromise: Promise<DesktopDaemonStatus> | null = null;
 
 	async probe(timeoutMs = 1200): Promise<HealthStatus | null> {
 		const { signal, cancel } = controllerSignal(timeoutMs);
@@ -85,13 +86,23 @@ export class DaemonManager {
 	}
 
 	async ensureStarted(): Promise<DesktopDaemonStatus> {
+		if (this.#startPromise) return this.#startPromise;
+		this.#startPromise = this.#ensureStarted();
+		try {
+			return await this.#startPromise;
+		} finally {
+			this.#startPromise = null;
+		}
+	}
+
+	async #ensureStarted(): Promise<DesktopDaemonStatus> {
 		const existing = await this.probe();
 		if (existing) {
 			this.#owned = false;
 			return this.status();
 		}
 
-		this.#spawn();
+		if (!this.#child) this.#spawn();
 		for (let i = 0; i < 60; i += 1) {
 			const health = await this.probe(500);
 			if (health) return this.status();
