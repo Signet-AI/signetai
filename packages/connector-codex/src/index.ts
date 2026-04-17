@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { expandHome } from "@signet/core";
+import { expandHome, resolveSessionStartTimeoutMs } from "@signet/core";
 
 // ---------------------------------------------------------------------------
 // Signet command resolution
@@ -47,6 +47,9 @@ function resolveSignetMcp(): { command: string; args: string[] } {
 // ---------------------------------------------------------------------------
 
 const HOOK_EVENT_KEYS = ["SessionStart", "UserPromptSubmit", "Stop"] as const;
+const CODEX_SESSION_START_GRACE_SECONDS = 5;
+const PROMPT_SUBMIT_TIMEOUT_SECONDS = 5;
+const SESSION_END_TIMEOUT_SECONDS = 30;
 
 interface MatcherGroup {
 	_signet?: boolean;
@@ -66,6 +69,16 @@ interface HooksFile {
 	[key: string]: unknown;
 }
 
+function readTimeoutEnv(name: string): string {
+	const value = process.env[name];
+	return typeof value === "string" ? value.trim() : "";
+}
+
+function resolveCodexSessionStartTimeoutSeconds(): number {
+	const raw = readTimeoutEnv("SIGNET_SESSION_START_TIMEOUT") || readTimeoutEnv("SIGNET_FETCH_TIMEOUT");
+	return Math.ceil(resolveSessionStartTimeoutMs(raw) / 1000) + CODEX_SESSION_START_GRACE_SECONDS;
+}
+
 function buildHooksFile(signetArgs: string[]): HooksFile {
 	const cmd = (subcommand: string, secs: number): MatcherGroup => ({
 		_signet: true,
@@ -74,9 +87,9 @@ function buildHooksFile(signetArgs: string[]): HooksFile {
 	return {
 		_signet: true,
 		hooks: {
-			SessionStart: [cmd("session-start", 10)],
-			UserPromptSubmit: [cmd("user-prompt-submit", 5)],
-			Stop: [cmd("session-end", 30)],
+			SessionStart: [cmd("session-start", resolveCodexSessionStartTimeoutSeconds())],
+			UserPromptSubmit: [cmd("user-prompt-submit", PROMPT_SUBMIT_TIMEOUT_SECONDS)],
+			Stop: [cmd("session-end", SESSION_END_TIMEOUT_SECONDS)],
 		},
 	};
 }
@@ -102,11 +115,29 @@ function writeHooksFile(path: string, file: HooksFile): void {
 	atomicWriteJson(path, file);
 }
 
-const SIGNET_HOOK_PREFIXES = [
-	"signet hook session-start",
-	"signet hook user-prompt-submit",
-	"signet hook session-end",
-] as const;
+const SIGNET_HOOK_SUBCOMMANDS = ["session-start", "user-prompt-submit", "session-end"] as const;
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isSignetHookCommand(cmd: string): boolean {
+	const normalized = cmd.trim().replace(/\s+/g, " ");
+	return SIGNET_HOOK_SUBCOMMANDS.some((subcommand) => {
+		const hook = `hook\\s+${escapeRegExp(subcommand)}\\b`;
+		const bare = new RegExp(`^(?:signet|signet\\.(?:cmd|ps1|bat|exe))\\s+${hook}`, "i");
+		if (bare.test(normalized)) return true;
+
+		const quotedBare = new RegExp(`^["'][^"']*[\\\\/]signet(?:\\.(?:cmd|ps1|bat|exe))?["']\\s+${hook}`, "i");
+		if (quotedBare.test(normalized)) return true;
+
+		const nodeShim = new RegExp(
+			`^(?:"[^"]*[\\\\/]?node(?:\\.exe)?"|'[^']*[\\\\/]?node(?:\\.exe)?'|\\S*[\\\\/]?node(?:\\.exe)?)\\s+(?:"[^"]*[\\\\/]signet\\.js"|'[^']*[\\\\/]signet\\.js'|\\S*[\\\\/]signet\\.js)\\s+${hook}`,
+			"i",
+		);
+		return nodeShim.test(normalized);
+	});
+}
 
 function isSignetMatcherGroup(group: unknown): boolean {
 	if (typeof group !== "object" || group === null) return false;
@@ -117,7 +148,7 @@ function isSignetMatcherGroup(group: unknown): boolean {
 		if (typeof handler !== "object" || handler === null) continue;
 		const cmd = (handler as Record<string, unknown>).command;
 		if (typeof cmd !== "string") continue;
-		if (SIGNET_HOOK_PREFIXES.some((s) => cmd.startsWith(s))) return true;
+		if (isSignetHookCommand(cmd)) return true;
 	}
 	return false;
 }
@@ -131,7 +162,7 @@ function isLegacySignetMatcherGroup(group: unknown): boolean {
 		const cmd = (handler as Record<string, unknown>).command;
 		if (Array.isArray(cmd)) {
 			const joined = cmd.join(" ");
-			if (SIGNET_HOOK_PREFIXES.some((s) => joined.startsWith(s))) return true;
+			if (isSignetHookCommand(joined)) return true;
 		}
 	}
 	return false;
@@ -313,13 +344,12 @@ export class CodexConnector extends BaseConnector {
 
 		if (existing) {
 			const migrated = migrateLegacyHooksFile(existing, signetArgs);
-			const hasHooks = migrated.hooks && Object.keys(migrated.hooks).length > 0;
-			if (isSignetOwned(migrated) && hasHooks) {
-				writeHooksFile(hooksPath, migrated);
-			} else if (!isSignetOwned(migrated) && hasHooks) {
+			const cleaned = removeSignetEntries(migrated);
+			const hasHooks = cleaned.hooks && Object.keys(cleaned.hooks).length > 0;
+			if (hasHooks) {
 				const signet = buildHooksFile(signetArgs);
-				const merged: HooksFile = { ...migrated, _signet: true };
-				merged.hooks = { ...(migrated.hooks as Record<string, MatcherGroup[]>) };
+				const merged: HooksFile = { ...cleaned, _signet: true };
+				merged.hooks = { ...(cleaned.hooks as Record<string, MatcherGroup[]>) };
 				for (const key of HOOK_EVENT_KEYS) {
 					const current = merged.hooks[key] ?? [];
 					const ours = signet.hooks?.[key] ?? [];
@@ -328,7 +358,8 @@ export class CodexConnector extends BaseConnector {
 				writeHooksFile(hooksPath, merged);
 				warnings.push("Merged Signet hooks into existing hooks.json — existing hooks preserved");
 			} else {
-				writeHooksFile(hooksPath, buildHooksFile(signetArgs));
+				const signet = buildHooksFile(signetArgs);
+				writeHooksFile(hooksPath, { ...cleaned, _signet: true, hooks: signet.hooks });
 			}
 		} else {
 			writeHooksFile(hooksPath, buildHooksFile(signetArgs));

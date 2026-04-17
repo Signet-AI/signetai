@@ -245,6 +245,12 @@ registers as an MCP server so Codex can call `signet_remember` and
 4. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
 5. The MCP server exposes `memory_store`, `memory_search`, and other memory tools that Codex can invoke directly during sessions.
 
+Codex `SessionStart` hook timeout defaults to 20 seconds: the Signet CLI
+waits up to `SIGNET_SESSION_START_TIMEOUT` (`15000` ms by default) for
+the daemon, and the generated Codex hook config adds 5 seconds of harness
+grace. Rerun `signet setup` or `signet connect codex` after upgrading to
+rewrite an existing `~/.codex/hooks.json`.
+
 Codex matches the session-start, prompt-submit, and session-end path, but
 it does **not** currently expose the same compaction lifecycle fidelity as
 Claude Code or OpenCode.

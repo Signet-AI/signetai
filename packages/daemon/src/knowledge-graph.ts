@@ -755,30 +755,51 @@ export function listKnowledgeEntities(
 			args.push(`%${params.query.trim().toLowerCase()}%`);
 		}
 
+		// Paginate entity IDs first, then compute counts only for the page.
+		// This avoids materializing GROUP BY + ORDER BY across every entity in
+		// the agent scope before LIMIT can apply, which is prohibitive on graphs
+		// with tens of thousands of entities. See Signet-AI/signetai#515.
 		const rows = db
 			.prepare(
-				`SELECT
+				`WITH page AS (
+					SELECT e.id
+					FROM entities e
+					WHERE ${conditions.join(" AND ")}
+					ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC, e.updated_at DESC, e.name ASC
+					LIMIT ? OFFSET ?
+				)
+				SELECT
 					e.*,
-					COUNT(DISTINCT asp.id) AS aspect_count,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
-					END) AS attribute_count,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
-					END) AS constraint_count,
-					COUNT(DISTINCT dep.id) AS dependency_count
-				 FROM entities e
-				 LEFT JOIN entity_aspects asp
-				   ON asp.entity_id = e.id AND asp.agent_id = e.agent_id
-				 LEFT JOIN entity_attributes attr
-				   ON attr.aspect_id = asp.id AND attr.agent_id = e.agent_id
-				 LEFT JOIN entity_dependencies dep
-				   ON dep.agent_id = e.agent_id
-				  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
-				 WHERE ${conditions.join(" AND ")}
-				 GROUP BY e.id
-				 ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC, e.updated_at DESC, e.name ASC
-				 LIMIT ? OFFSET ?`,
+					(
+						SELECT COUNT(*) FROM entity_aspects asp
+						WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+					) AS aspect_count,
+					(
+						SELECT COUNT(*) FROM entity_attributes attr
+						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
+						  AND attr.agent_id = e.agent_id
+						  AND attr.kind = 'attribute'
+						  AND attr.status = 'active'
+					) AS attribute_count,
+					(
+						SELECT COUNT(*) FROM entity_attributes attr
+						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
+						  AND attr.agent_id = e.agent_id
+						  AND attr.kind = 'constraint'
+						  AND attr.status = 'active'
+					) AS constraint_count,
+					(
+						SELECT COUNT(*) FROM entity_dependencies dep
+						WHERE dep.agent_id = e.agent_id
+						  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
+					) AS dependency_count
+				 FROM page p
+				 JOIN entities e ON e.id = p.id
+				 ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC, e.updated_at DESC, e.name ASC`,
 			)
 			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
 
@@ -798,33 +819,46 @@ export function getKnowledgeEntityDetail(
 	agentId: string,
 ): KnowledgeEntityDetail | null {
 	return accessor.withReadDb((db) => {
+		// Scalar subqueries per count avoid GROUP BY materialization across
+		// the (LEFT JOIN aspects x attributes x dependencies) cartesian, which
+		// produces the same pathological shape as listKnowledgeEntities even
+		// when filtered to a single entity id. See Signet-AI/signetai#515.
 		const row = db
 			.prepare(
 				`SELECT
 					e.*,
-					COUNT(DISTINCT asp.id) AS aspect_count,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
-					END) AS attribute_count,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
-					END) AS constraint_count,
-					COUNT(DISTINCT CASE
-						WHEN dep.source_entity_id = e.id THEN dep.id
-					END) AS outgoing_dependency_count,
-					COUNT(DISTINCT CASE
-						WHEN dep.target_entity_id = e.id THEN dep.id
-					END) AS incoming_dependency_count
+					(
+						SELECT COUNT(*) FROM entity_aspects asp
+						WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+					) AS aspect_count,
+					(
+						SELECT COUNT(*) FROM entity_attributes attr
+						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
+						  AND attr.agent_id = e.agent_id
+						  AND attr.kind = 'attribute'
+						  AND attr.status = 'active'
+					) AS attribute_count,
+					(
+						SELECT COUNT(*) FROM entity_attributes attr
+						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
+						  AND attr.agent_id = e.agent_id
+						  AND attr.kind = 'constraint'
+						  AND attr.status = 'active'
+					) AS constraint_count,
+					(
+						SELECT COUNT(*) FROM entity_dependencies dep
+						WHERE dep.agent_id = e.agent_id AND dep.source_entity_id = e.id
+					) AS outgoing_dependency_count,
+					(
+						SELECT COUNT(*) FROM entity_dependencies dep
+						WHERE dep.agent_id = e.agent_id AND dep.target_entity_id = e.id
+					) AS incoming_dependency_count
 				 FROM entities e
-				 LEFT JOIN entity_aspects asp
-				   ON asp.entity_id = e.id AND asp.agent_id = e.agent_id
-				 LEFT JOIN entity_attributes attr
-				   ON attr.aspect_id = asp.id AND attr.agent_id = e.agent_id
-				 LEFT JOIN entity_dependencies dep
-				   ON dep.agent_id = e.agent_id
-				  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
-				 WHERE e.id = ? AND e.agent_id = ?
-				 GROUP BY e.id`,
+				 WHERE e.id = ? AND e.agent_id = ?`,
 			)
 			.get(entityId, agentId) as Record<string, unknown> | undefined;
 
@@ -971,18 +1005,16 @@ export function getEntityDependenciesDetailed(
 
 export function getKnowledgeStats(accessor: DbAccessor, agentId: string): KnowledgeStats {
 	return accessor.withReadDb((db) => {
+		// Drive the join from the (narrower) agent-scoped entities side rather
+		// than scanning every memory with a correlated EXISTS. Same result,
+		// dramatically smaller search space on large corpora.
+		// See Signet-AI/signetai#515.
 		const scopedMemoryRows = db
 			.prepare(
-				`SELECT COUNT(DISTINCT m.id) as n
-				 FROM memories m
-				 WHERE m.is_deleted = 0
-				   AND EXISTS (
-				     SELECT 1
-				     FROM memory_entity_mentions mem
-				     JOIN entities e ON e.id = mem.entity_id
-				     WHERE mem.memory_id = m.id
-				       AND e.agent_id = ?
-				   )`,
+				`SELECT COUNT(DISTINCT mem.memory_id) as n
+				 FROM memory_entity_mentions mem
+				 JOIN entities e ON e.id = mem.entity_id AND e.agent_id = ?
+				 JOIN memories m ON m.id = mem.memory_id AND m.is_deleted = 0`,
 			)
 			.get(agentId) as { n: number };
 		const entityCount = db.prepare("SELECT COUNT(*) as n FROM entities WHERE agent_id = ?").get(agentId) as {

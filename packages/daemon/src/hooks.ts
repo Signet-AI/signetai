@@ -124,6 +124,54 @@ function getMemoryDbPath(): string {
 /** Tracks which sessions have already received a full session-start inject. */
 const sessionStartSeen = new Map<string, number>();
 
+const DEFAULT_SESSION_START_MAX_INJECT_TOKENS = 12_000;
+const PREDICTED_CONTEXT_TERM_LIMIT = 6;
+const PREDICTED_CONTEXT_STOPWORDS: ReadonlySet<string> = new Set([
+	"able",
+	"about",
+	"after",
+	"again",
+	"also",
+	"back",
+	"been",
+	"before",
+	"being",
+	"check",
+	"code",
+	"could",
+	"from",
+	"have",
+	"into",
+	"issue",
+	"just",
+	"like",
+	"more",
+	"need",
+	"only",
+	"path",
+	"should",
+	"that",
+	"their",
+	"them",
+	"then",
+	"there",
+	"these",
+	"they",
+	"this",
+	"time",
+	"user",
+	"want",
+	"were",
+	"what",
+	"when",
+	"where",
+	"which",
+	"with",
+	"work",
+	"would",
+	"your",
+]);
+
 /** Sliding window of recently-injected memory IDs per session (prompt-submit). */
 const PROMPT_DEDUP_WINDOW = 5;
 const promptDedupRecent = new Map<string, Array<Set<string>>>();
@@ -919,26 +967,19 @@ function getPredictedContextMemories(
 	policyGroup: string | null = null,
 ): ScoredMemory[] {
 	if (!existsSync(getMemoryDbPath())) return [];
+	if (!project || project.trim().length === 0) return [];
 
 	try {
-		// Get recent session summaries for this project
+		// Get recent session summaries for this project only. Global predictive
+		// FTS is too broad for session-start latency on large memory stores.
 		const summaryRows = getDbAccessor().withReadDb((db) => {
-			if (project) {
-				return db
-					.prepare(
-						`SELECT transcript FROM summary_jobs
-						 WHERE project = ? AND status = 'completed' AND agent_id = ?
-						 ORDER BY created_at DESC LIMIT 5`,
-					)
-					.all(project, agentId) as Array<{ transcript: string }>;
-			}
 			return db
 				.prepare(
 					`SELECT transcript FROM summary_jobs
-					 WHERE status = 'completed' AND agent_id = ?
+					 WHERE project = ? AND status = 'completed' AND agent_id = ?
 					 ORDER BY created_at DESC LIMIT 5`,
 				)
-				.all(agentId) as Array<{ transcript: string }>;
+				.all(project, agentId) as Array<{ transcript: string }>;
 		});
 
 		if (summaryRows.length === 0) return [];
@@ -951,7 +992,7 @@ function getPredictedContextMemories(
 				.toLowerCase()
 				.replace(/[^a-z0-9\s]/g, " ")
 				.split(/\s+/)
-				.filter((w) => w.length >= 4);
+				.filter((w) => w.length >= 4 && !PREDICTED_CONTEXT_STOPWORDS.has(w));
 			const seen = new Set<string>();
 			for (const w of words) {
 				if (seen.has(w)) continue;
@@ -964,7 +1005,7 @@ function getPredictedContextMemories(
 		const recurring = [...termFreq.entries()]
 			.filter(([_, count]) => count >= 2)
 			.sort((a, b) => b[1] - a[1])
-			.slice(0, 10)
+			.slice(0, PREDICTED_CONTEXT_TERM_LIMIT)
 			.map(([term]) => term);
 
 		if (recurring.length === 0) return [];
@@ -983,11 +1024,12 @@ function getPredictedContextMemories(
 						 JOIN memories m ON memories_fts.rowid = m.rowid
 						 WHERE memories_fts MATCH ?
 						   AND m.is_deleted = 0
+						   AND m.project = ?
 						   ${scope.sql}
 						 ORDER BY bm25(memories_fts)
 						 LIMIT ?`,
 					)
-					.all(ftsQuery, ...scope.args, limit * 2) as Array<{
+					.all(ftsQuery, project, ...scope.args, limit * 2) as Array<{
 					id: string;
 					content: string;
 					type: string;
@@ -1102,6 +1144,7 @@ function getDefaultConfig(): HooksConfig {
 			includeIdentity: true,
 			includeRecentContext: true,
 			recencyBias: 0.7,
+			maxInjectTokens: DEFAULT_SESSION_START_MAX_INJECT_TOKENS,
 		},
 		userPromptSubmit: {
 			enabled: true,
@@ -1581,7 +1624,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		);
 	}
 	const rawTokenBudget =
-		config.maxInjectTokens ?? (config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
+		config.maxInjectTokens ??
+		(config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : DEFAULT_SESSION_START_MAX_INJECT_TOKENS);
 	if (rawTokenBudget <= 0) {
 		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
 			configured: rawTokenBudget,
@@ -1904,7 +1948,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		traversalConstraints,
 		traversalTimedOut,
 		injectTokens: countTokens(inject),
-		inject,
+		injectChars: inject.length,
 		durationMs: duration,
 	});
 

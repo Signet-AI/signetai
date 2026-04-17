@@ -862,6 +862,7 @@ hooks:
 	});
 
 	test.serial("predictive context honors shared visibility", async () => {
+		const project = "/tmp/shared-prediction";
 		createMemoryDb([
 			...Array.from({ length: 51 }, (_, i) => ({
 				content: `Noise memory ${i}`,
@@ -874,6 +875,7 @@ hooks:
 				importance: 0.2,
 				agent_id: "agent-owner",
 				visibility: "global",
+				project,
 			},
 		]);
 		upsertAgent("agent-shared", "shared");
@@ -888,7 +890,7 @@ hooks:
 			"job-1",
 			"sess-1",
 			"codex",
-			null,
+			project,
 			"agent-shared",
 			"We discussed shardaware rollout planning for the release train.",
 			"2026-03-25T10:00:00.000Z",
@@ -903,7 +905,7 @@ hooks:
 			"job-2",
 			"sess-2",
 			"codex",
-			null,
+			project,
 			"agent-shared",
 			"We revisited shardaware rollout coordination and deployment notes.",
 			"2026-03-25T11:00:00.000Z",
@@ -914,9 +916,91 @@ hooks:
 		const result = await handleSessionStart({
 			harness: "test",
 			agentId: "agent-shared",
+			project,
 		});
 
 		expect(result.memories.some((memory) => memory.content === "Shared shardaware rollout memory")).toBe(true);
+	});
+
+	test.serial("predictive context ignores recurring stopwords", async () => {
+		const project = "/tmp/stopword-prediction";
+		createMemoryDb([
+			{
+				content: "user path issue check this that with only",
+				importance: 0.1,
+				project,
+			},
+		]);
+
+		const db = openTestDb();
+		for (let i = 1; i <= 2; i += 1) {
+			db.prepare(
+				`INSERT INTO summary_jobs (
+					id, session_key, harness, project, agent_id, transcript,
+					status, attempts, max_attempts, created_at, completed_at
+				) VALUES (?, ?, ?, ?, 'default', ?, 'completed', 1, 3, ?, ?)`,
+			).run(
+				`stopword-job-${i}`,
+				`stopword-sess-${i}`,
+				"codex",
+				project,
+				"user path issue check this that with only",
+				`2026-03-25T1${i}:00:00.000Z`,
+				`2026-03-25T1${i}:01:00.000Z`,
+			);
+		}
+		db.close();
+
+		const result = await handleSessionStart({ harness: "test", project });
+
+		expect(result.memories.some((memory) => memory.content === "user path issue check this that with only")).toBe(
+			false,
+		);
+	});
+
+	test.serial("predictive context is scoped to the active project", async () => {
+		const projectA = "/tmp/prediction-a";
+		const projectB = "/tmp/prediction-b";
+		createMemoryDb([
+			...Array.from({ length: 51 }, (_, i) => ({
+				content: `High priority noise ${i}`,
+				importance: 0.95,
+			})),
+			{
+				content: "Project A shardaware rollout memory",
+				importance: 0.1,
+				project: projectA,
+			},
+			{
+				content: "Project B shardaware rollout memory",
+				importance: 0.1,
+				project: projectB,
+			},
+		]);
+
+		const db = openTestDb();
+		for (let i = 1; i <= 2; i += 1) {
+			db.prepare(
+				`INSERT INTO summary_jobs (
+					id, session_key, harness, project, agent_id, transcript,
+					status, attempts, max_attempts, created_at, completed_at
+				) VALUES (?, ?, ?, ?, 'default', ?, 'completed', 1, 3, ?, ?)`,
+			).run(
+				`project-job-${i}`,
+				`project-sess-${i}`,
+				"codex",
+				projectA,
+				"shardaware rollout coordination stayed active across sessions.",
+				`2026-03-25T1${i}:00:00.000Z`,
+				`2026-03-25T1${i}:01:00.000Z`,
+			);
+		}
+		db.close();
+
+		const result = await handleSessionStart({ harness: "test", project: projectA });
+
+		expect(result.memories.some((memory) => memory.content === "Project A shardaware rollout memory")).toBe(true);
+		expect(result.memories.some((memory) => memory.content === "Project B shardaware rollout memory")).toBe(false);
 	});
 });
 
