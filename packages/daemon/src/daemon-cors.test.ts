@@ -31,6 +31,7 @@ memory:
 
 	afterAll(() => {
 		if (prev === undefined) {
+			// biome-ignore lint/performance/noDelete: deleting env keys avoids stringifying undefined in process.env.
 			delete process.env.SIGNET_PATH;
 		}
 		if (prev !== undefined) process.env.SIGNET_PATH = prev;
@@ -52,6 +53,15 @@ memory:
 		});
 
 		expect(res.headers.get("access-control-allow-origin")).toBeNull();
+	});
+
+	it("keeps Electron desktop app origin allowlisted", async () => {
+		const origin = "app://signet";
+		const res = await app.request("http://localhost/health", {
+			headers: { Origin: origin },
+		});
+
+		expect(res.headers.get("access-control-allow-origin")).toBe(origin);
 	});
 
 	it("keeps localhost dev origins allowlisted", async () => {

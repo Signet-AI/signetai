@@ -3,14 +3,13 @@
  * Handles communication with the Signet daemon
  */
 
+import { desktopApiBase } from "$lib/desktop-shell";
 import type { ModelRegistryEntry } from "@signet/core";
 import { marked } from "marked";
 
-// When served by the daemon (production) or Vite dev server (proxied), use relative URLs.
-// Tauri needs an absolute URL since it serves from a different origin.
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const tauriHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
-export const API_BASE = isTauri ? `http://${tauriHost}:3850` : "";
+// When served by the daemon or Vite dev server, use relative URLs.
+// The Electron desktop shell loads from file://, so it needs an absolute daemon URL.
+export const API_BASE = desktopApiBase();
 
 export interface Memory {
 	id: string;

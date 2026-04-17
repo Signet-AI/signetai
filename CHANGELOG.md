@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-17
-- Features: add plugin SDK core v1 secrets registry.
+- Features: replace Tauri shell with Electron app; add plugin SDK core v1 secrets registry.
 - Bug fixes: wire enableOllamaFallback config and add native embedding init cooldown; prevent session-start hook timeouts.
 - Performance: paginate entity IDs before counting to avoid full GROUP BY.
 - Docs: add recall confidence gate record; define plugin sdk core v1.
@@ -34,6 +34,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: refresh public Signet positioning.
 
 ## Release Ledger
+
+## [0.101.0] - 2026-04-17
+
+Release summary: 1 feature.
+Tag range: `v0.100.1..v0.101.0`.
+
+### Features
+
+- **desktop**: replace Tauri shell with Electron app (#519)
 
 ## [0.100.1] - 2026-04-17
 

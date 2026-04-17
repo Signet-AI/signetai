@@ -62,8 +62,9 @@ API during OpenCode sessions.
 It bridges OpenClaw's plugin interface to the daemon API for memory
 operations during conversations.
 
-`@signet/tray` is the system tray application. It provides a native
-desktop UI for daemon status, quick actions, and notifications.
+`@signet/desktop` is the Electron desktop application. It provides the native
+desktop UI, menu bar tray, bundled daemon runtime, quick actions, and notifications.
+`@signet/tray` is a shared tray/menu state utility package only.
 
 `predictor` is the predictive memory scorer sidecar, written in Rust.
 It implements autograd, checkpointing, and data loading for real-time

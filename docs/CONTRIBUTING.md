@@ -74,7 +74,7 @@ packages/
 ├── opencode-plugin/       # @signet/opencode-plugin — OpenCode runtime plugin (bundled)
 ├── adapters/openclaw/     # @signetai/signet-memory-openclaw — OpenClaw runtime adapter
 ├── native/                # @signet/native — native embedding accelerators (Rust)
-├── tray/                  # @signet/tray — Tauri system tray application
+├── desktop/               # @signet/desktop — Electron desktop application
 ├── extension/             # @signet/extension — browser extension (popup, highlight-to-remember)
 ├── signetai/              # signetai — meta-package bundling CLI + daemon
 └── web/                   # @signet/web — marketing site (Cloudflare Pages)
