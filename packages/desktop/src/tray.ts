@@ -119,6 +119,8 @@ export class DesktopTray {
 	#lastMemoryCount: number | null = null;
 	#lastMemoryCountTime: number | null = null;
 	#ingestionRate: number | null = null;
+	#polling = false;
+	#pollAgain = false;
 
 	constructor(daemon: DaemonManager, openDashboard: () => void) {
 		this.#daemon = daemon;
@@ -135,14 +137,32 @@ export class DesktopTray {
 	stop(): void {
 		if (this.#timer) clearTimeout(this.#timer);
 		this.#timer = null;
+		this.#pollAgain = false;
 		this.#tray?.destroy();
 		this.#tray = null;
 	}
 
 	async poll(): Promise<void> {
-		const state = await this.#state();
-		this.apply(buildTrayUpdate(state));
-		this.#timer = setTimeout(() => void this.poll(), state.kind === "running" ? 5000 : 2000);
+		if (this.#polling) {
+			this.#pollAgain = true;
+			return;
+		}
+		if (this.#timer) clearTimeout(this.#timer);
+		this.#timer = null;
+		this.#polling = true;
+		let delay = 2000;
+		try {
+			const state = await this.#state();
+			this.apply(buildTrayUpdate(state));
+			delay = state.kind === "running" ? 5000 : 2000;
+		} finally {
+			this.#polling = false;
+			if (this.#tray) {
+				const nextDelay = this.#pollAgain ? 0 : delay;
+				this.#pollAgain = false;
+				this.#timer = setTimeout(() => void this.poll(), nextDelay);
+			}
+		}
 	}
 
 	apply(update: TrayUpdate): void {

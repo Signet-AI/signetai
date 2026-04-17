@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync } from "node:fs";
+import { type WriteStream, createWriteStream, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { app } from "electron";
 import { bunPath, daemonEntry, daemonRoot } from "./paths.js";
@@ -52,6 +52,8 @@ export class DaemonManager {
 	#child: ChildProcess | null = null;
 	#owned = false;
 	#startPromise: Promise<DesktopDaemonStatus> | null = null;
+	#stdout: WriteStream | null = null;
+	#stderr: WriteStream | null = null;
 
 	async probe(timeoutMs = 1200): Promise<HealthStatus | null> {
 		const { signal, cancel } = controllerSignal(timeoutMs);
@@ -124,14 +126,8 @@ export class DaemonManager {
 
 		if (this.#child && this.#owned) {
 			this.#child.kill("SIGTERM");
-		} else if (health.pid > 0) {
-			try {
-				process.kill(health.pid, "SIGTERM");
-			} catch (err) {
-				throw new Error(
-					`Failed to stop daemon process ${health.pid}: ${err instanceof Error ? err.message : String(err)}`,
-				);
-			}
+		} else {
+			return this.status();
 		}
 
 		for (let i = 0; i < 30; i += 1) {
@@ -158,6 +154,13 @@ export class DaemonManager {
 		this.#owned = false;
 	}
 
+	#closeLogs(): void {
+		this.#stdout?.end();
+		this.#stderr?.end();
+		this.#stdout = null;
+		this.#stderr = null;
+	}
+
 	#spawn(): void {
 		const entry = daemonEntry();
 		if (!existsSync(entry)) {
@@ -166,13 +169,14 @@ export class DaemonManager {
 
 		const logDir = join(app.getPath("userData"), "logs");
 		mkdirSync(logDir, { recursive: true });
-		const stdout = createWriteStream(join(logDir, "daemon.out.log"), { flags: "a" });
-		const stderr = createWriteStream(join(logDir, "daemon.err.log"), { flags: "a" });
+		this.#closeLogs();
+		this.#stdout = createWriteStream(join(logDir, "daemon.out.log"), { flags: "a" });
+		this.#stderr = createWriteStream(join(logDir, "daemon.err.log"), { flags: "a" });
 
 		this.#child = spawn(bunPath(), [entry], {
 			cwd: daemonRoot(),
 			detached: false,
-			stdio: ["ignore", stdout, stderr],
+			stdio: ["ignore", this.#stdout, this.#stderr],
 			env: {
 				...process.env,
 				SIGNET_PORT: String(this.port),
@@ -183,6 +187,7 @@ export class DaemonManager {
 		this.#child.once("exit", () => {
 			this.#child = null;
 			this.#owned = false;
+			this.#closeLogs();
 		});
 	}
 }
