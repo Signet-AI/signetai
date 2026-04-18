@@ -3,6 +3,7 @@
 	"files": {
 		"ignore": [
 			"references/**",
+			"memorybench/**",
 			"**/dist/**",
 			"**/node_modules/**",
 			"**/.svelte-kit/**",

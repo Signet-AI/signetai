@@ -1,0 +1,15 @@
+.claude/
+/supermemory/
+/supermemory_assets/
+/node_modules
+/data/
+/rmscripts/
+
+.env
+.env.local
+
+# UI
+ui/node_modules/
+ui/.next/
+ui/tsconfig.tsbuildinfo
+.DS_Store
