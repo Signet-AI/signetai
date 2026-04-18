@@ -253,7 +253,7 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
 			`rateLimit config ignored for provider "${provider.name}" — only remote/paid providers are throttled`,
 			{
 				provider: provider.name,
-				allowedProviders: [...RATE_LIMIT_PROVIDERS],
+				allowedProviders: Array.from(RATE_LIMIT_PROVIDERS),
 			},
 		);
 		return provider;
@@ -548,8 +548,11 @@ interface SpawnResult {
 }
 
 // Module-level helper to avoid allocating a new closure per spawnHidden call.
+// Readable.toWeb() yields Uint8Array at runtime but Node/bun types
+// return ReadableStream<any>, which doesn't overlap with the generic
+// Uint8Array<ArrayBufferLike> form.  Bridge through unknown.
 const toWebStream = (nodeStream: import("node:stream").Readable): ReadableStream<Uint8Array> =>
-	Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+	Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
 
 function spawnHidden(cmd: string[], options?: { env?: Record<string, string | undefined> }): SpawnResult {
 	// Resolve the binary via Bun.which() so that .cmd wrappers on Windows
