@@ -4,87 +4,71 @@
  * Background service for memory, API, and dashboard hosting
  */
 
-import type { ChildProcess } from "node:child_process";
-import { execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { appendFileSync, copyFileSync } from "node:fs";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { Worker } from "node:worker_threads";
-import { createAdaptorServer } from "@hono/node-server";
-import { serveStatic } from "@hono/node-server/serve-static";
+import type {ChildProcess} from "node:child_process";
+import {spawn} from "node:child_process";
+import {createHash} from "node:crypto";
+import {
+	appendFileSync,
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	statSync,
+	unlinkSync,
+	writeFileSync
+} from "node:fs";
+import {homedir} from "node:os";
+import {basename, dirname, join} from "node:path";
+import {fileURLToPath} from "node:url";
+import {Worker} from "node:worker_threads";
+import {createAdaptorServer} from "@hono/node-server";
+import {serveStatic} from "@hono/node-server/serve-static";
 import {
 	type AgentDefinition,
 	buildArchitectureDoc,
-	networkModeFromBindHost,
 	normalizeAgentRosterEntry,
 	parseSimpleYaml,
 	stripSignetBlock,
 } from "@signet/core";
-import { watch } from "chokidar";
-import { Hono } from "hono";
-import { cors } from "hono/cors";
-import { resolveAgentId, resolveDaemonAgentId } from "./agent-id";
+import {watch} from "chokidar";
+import {Hono} from "hono";
+import {cors} from "hono/cors";
+import {resolveAgentId, resolveDaemonAgentId} from "./agent-id";
 import {
-	type TokenRole,
-	type TokenScope,
-	checkScope,
 	createAuthMiddleware,
 	createToken,
 	requirePermission,
 	requireRateLimit,
+	type TokenRole,
+	type TokenScope,
 } from "./auth";
-import { bindWithRetry } from "./bind-with-retry";
-import { migrateConfig } from "./config-migration";
-import { listConnectors } from "./connectors/registry";
-import { normalizeAndHashContent } from "./content-normalization";
-import { clearAllPresence } from "./cross-agent";
-import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
-import { syncVecDeleteBySourceId, syncVecInsert } from "./db-helpers";
-import { fetchEmbedding } from "./embedding-fetch";
-import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
-import { getAllFeatureFlags, initFeatureFlags } from "./feature-flags";
-import { writeFileIfChangedAsync } from "./file-sync";
-import { syncAgentWorkspaces } from "./identity-sync";
-import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
-import { type LogEntry, logger } from "./logger";
-import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import {bindWithRetry} from "./bind-with-retry";
+import {migrateConfig} from "./config-migration";
+import {listConnectors} from "./connectors/registry";
+import {clearAllPresence} from "./cross-agent";
+import {closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor} from "./db-accessor";
+import {fetchEmbedding} from "./embedding-fetch";
+import {type EmbeddingTrackerHandle, startEmbeddingTracker} from "./embedding-tracker";
+import {getAllFeatureFlags, initFeatureFlags} from "./feature-flags";
+import {writeFileIfChangedAsync} from "./file-sync";
+import {syncAgentWorkspaces} from "./identity-sync";
+import {closeLlmProvider, getLlmProvider, initLlmProvider} from "./llm";
+import {logger} from "./logger";
+import {loadMemoryConfig, type ResolvedMemoryConfig} from "./memory-config";
 import {
 	DEFAULT_RETENTION,
-	enqueueDocumentIngestJob,
 	ensureRetentionWorker,
-	getDreamingPasses,
-	getDreamingState,
-	getDreamingWorker,
 	getPipelineWorkerStatus,
-	getSynthesisWorker,
-	nudgeExtractionWorker,
-	readLastSynthesisTime,
 	setDreamingWorker,
 	startPipeline,
 	stopPipeline,
 } from "./pipeline";
-import { AlreadyRunningError, type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
-import { deadLetterExtractionJob, deadLetterPendingExtractionJobs } from "./pipeline/extraction-fallback";
-import { getGraphBoostIds } from "./pipeline/graph-search";
+import {type DreamingWorkerHandle, startDreamingWorker} from "./pipeline/dreaming-worker";
+import {deadLetterPendingExtractionJobs} from "./pipeline/extraction-fallback";
+import {invalidateTraversalCache,} from "./pipeline/graph-traversal";
+import {initModelRegistry, stopModelRegistry,} from "./pipeline/model-registry";
 import {
-	getTraversalStatus,
-	invalidateTraversalCache,
-	resolveFocalEntities,
-	traverseKnowledgeGraph,
-} from "./pipeline/graph-traversal";
-import {
-	getAvailableModels,
-	getModelsByProvider,
-	getRegistryStatus,
-	initModelRegistry,
-	refreshRegistry,
-	stopModelRegistry,
-} from "./pipeline/model-registry";
-import {
-	DEFAULT_OLLAMA_FALLBACK_MODEL,
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -97,12 +81,10 @@ import {
 	stopOpenCodeServer,
 	withRateLimit,
 } from "./pipeline/provider";
-import { resolveRuntimeModel } from "./pipeline/provider-resolution";
-import { startReconciler } from "./pipeline/skill-reconciler";
-import { type PredictorClient, createPredictorClient } from "./predictor-client";
-import { detectDrift } from "./predictor-comparison";
-import { getPredictorState } from "./predictor-state";
-import { type RepairContext, structuralBackfill } from "./repair-actions";
+import {resolveRuntimeModel} from "./pipeline/provider-resolution";
+import {startReconciler} from "./pipeline/skill-reconciler";
+import {createPredictorClient, type PredictorClient} from "./predictor-client";
+import {type RepairContext, structuralBackfill} from "./repair-actions";
 import {
 	getResourceSnapshot,
 	logFdSnapshot,
@@ -112,33 +94,26 @@ import {
 } from "./resource-monitor";
 import {
 	AGENTS_DIR,
-	ALLOWED_ORIGINS,
+	analyticsCollector,
+	authAdminLimiter,
+	authConfig,
+	authSecret,
 	BIND_HOST,
+	bindAbort,
 	CURRENT_VERSION,
 	DAEMON_DIR,
 	HOST,
 	INTERNAL_SELF_HOST,
-	LOG_DIR,
-	MEMORY_DB,
-	NETWORK_MODE,
-	PID_FILE,
-	PORT,
-	analyticsCollector,
-	authAdminLimiter,
-	authBatchForgetLimiter,
-	authConfig,
-	authCrossAgentMessageLimiter,
-	authForgetLimiter,
-	authModifyLimiter,
-	authSecret,
-	bindAbort,
 	invalidateDiagnosticsCache,
 	isAllowedOrigin,
 	isManagedOpenCodeLocalEndpoint,
+	LOG_DIR,
+	MEMORY_DB,
 	normalizeRuntimeBaseUrl,
+	PID_FILE,
+	PORT,
 	providerRuntimeResolution,
 	providerTracker,
-	queueExtractionJob,
 	readEnvTrimmed,
 	redactUrlForLogs,
 	reloadAuthState,
@@ -152,60 +127,44 @@ import {
 	setTelemetryRef,
 	shuttingDown,
 } from "./routes/state.js";
-import { isHarnessAvailable, startSchedulerWorker } from "./scheduler/index.js";
-import { getSecret, hasSecret } from "./secrets.js";
-import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
-import { releaseAllSessions, startSessionCleanup, stopSessionCleanup } from "./session-tracker";
-import { createSingleFlightRunner } from "./single-flight-runner";
-import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
-import { type TelemetryCollector, type TelemetryEventType, createTelemetryCollector } from "./telemetry";
-import { closeWidgetProvider, initWidgetProvider } from "./widget-llm";
+import {startSchedulerWorker} from "./scheduler";
+import {getSecret} from "./secrets.js";
+import {flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints} from "./session-checkpoints";
+import {releaseAllSessions, startSessionCleanup, stopSessionCleanup} from "./session-tracker";
+import {createSingleFlightRunner} from "./single-flight-runner";
+import {closeSynthesisProvider, initSynthesisProvider} from "./synthesis-llm";
+import {createTelemetryCollector, type TelemetryCollector} from "./telemetry";
+import {closeWidgetProvider, initWidgetProvider} from "./widget-llm";
 
-import {
-	getSynthesisWorker as getSynthesisRenderWorker,
-	setSynthesisWorker as setSynthesisRenderWorker,
-} from "./hooks";
-import { mountMcpRoute } from "./mcp/route.js";
-import { mountAppTrayRoutes } from "./routes/app-tray.js";
-import { mountChangelogRoutes } from "./routes/changelog.js";
-import { registerConnectorRoutes } from "./routes/connectors-routes.js";
-import { mountEventBusRoutes } from "./routes/event-bus.js";
-import { getGitStatus, gitSync, scheduleAutoCommit, startGitSyncTimer, stopGitSyncTimer } from "./routes/git-sync.js";
-import { registerHooksRoutes } from "./routes/hooks-routes.js";
-import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
-import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
-import { mountMarketplaceRoutes } from "./routes/marketplace.js";
-import { mountMcpAnalyticsRoutes } from "./routes/mcp-analytics.js";
-import { registerMemoryRoutes } from "./routes/memory-routes.js";
-import { registerMiscRoutes } from "./routes/misc-routes.js";
-import { mountOsAgentRoutes } from "./routes/os-agent.js";
-import { mountOsChatRoutes } from "./routes/os-chat.js";
-import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
-import { registerPluginRoutes } from "./routes/plugins-routes.js";
-import { registerRepairRoutes } from "./routes/repair-routes.js";
-import { registerSecretRoutes } from "./routes/secrets-routes.js";
-import { registerSessionRoutes } from "./routes/session-routes.js";
-import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
-import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
-import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
-import { checkEmbeddingProvider, getConfiguredProviderHints } from "./routes/utils.js";
-import { mountWidgetRoutes } from "./routes/widget.js";
-import { isReadyResponse } from "./synthesis-worker-protocol";
-import {
-	MAX_UPDATE_INTERVAL_SECONDS,
-	MIN_UPDATE_INTERVAL_SECONDS,
-	type UpdateConfig,
-	checkForUpdates as checkForUpdatesImpl,
-	getUpdateState,
-	initUpdateSystem,
-	parseBooleanFlag,
-	parseUpdateInterval,
-	runUpdate as runUpdateImpl,
-	setUpdateConfig,
-	startUpdateTimer,
-	stopUpdateTimer,
-} from "./update-system";
-import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
+import {getSynthesisWorker as getSynthesisRenderWorker, setSynthesisWorker as setSynthesisRenderWorker,} from "./hooks";
+import {mountMcpRoute} from "./mcp";
+import {mountAppTrayRoutes} from "./routes/app-tray.js";
+import {mountChangelogRoutes} from "./routes/changelog.js";
+import {registerConnectorRoutes} from "./routes/connectors-routes.js";
+import {mountEventBusRoutes} from "./routes/event-bus.js";
+import {getGitStatus, gitSync, scheduleAutoCommit, startGitSyncTimer, stopGitSyncTimer} from "./routes/git-sync.js";
+import {registerHooksRoutes} from "./routes/hooks-routes.js";
+import {registerKnowledgeRoutes} from "./routes/knowledge-routes.js";
+import {mountMarketplaceReviewsRoutes} from "./routes/marketplace-reviews.js";
+import {mountMarketplaceRoutes} from "./routes/marketplace.js";
+import {mountMcpAnalyticsRoutes} from "./routes/mcp-analytics.js";
+import {registerMemoryRoutes} from "./routes/memory-routes.js";
+import {registerMiscRoutes} from "./routes/misc-routes.js";
+import {mountOsAgentRoutes} from "./routes/os-agent.js";
+import {mountOsChatRoutes} from "./routes/os-chat.js";
+import {registerPipelineRoutes} from "./routes/pipeline-routes.js";
+import {registerPluginRoutes} from "./routes/plugins-routes.js";
+import {registerRepairRoutes} from "./routes/repair-routes.js";
+import {registerSecretRoutes} from "./routes/secrets-routes.js";
+import {registerSessionRoutes} from "./routes/session-routes.js";
+import {mountSkillAnalyticsRoutes} from "./routes/skill-analytics.js";
+import {mountSkillsRoutes, setFetchEmbedding} from "./routes/skills.js";
+import {registerTelemetryRoutes} from "./routes/telemetry-routes.js";
+import {checkEmbeddingProvider, getConfiguredProviderHints} from "./routes/utils.js";
+import {mountWidgetRoutes} from "./routes/widget.js";
+import {isReadyResponse} from "./synthesis-worker-protocol";
+import {getUpdateState, initUpdateSystem, startUpdateTimer, stopUpdateTimer,} from "./update-system";
+import {createAgentsWatcherIgnoreMatcher} from "./watcher-ignore";
 
 let httpServer: ReturnType<typeof createAdaptorServer> | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
@@ -409,214 +368,6 @@ app.post("/api/auth/token", async (c) => {
 	const token = createToken(authSecret, { sub: `token:${role}`, scope, role: role as TokenRole }, ttl);
 	const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
 	return c.json({ token, expiresAt });
-});
-
-// ============================================================================
-// Route-level permission guards
-// ============================================================================
-
-app.use("/api/memory/remember", async (c, next) => {
-	return requirePermission("remember", authConfig)(c, next);
-});
-app.use("/api/memory/save", async (c, next) => {
-	return requirePermission("remember", authConfig)(c, next);
-});
-app.use("/api/hook/remember", async (c, next) => {
-	return requirePermission("remember", authConfig)(c, next);
-});
-app.use("/api/memory/recall", async (c, next) => {
-	return requirePermission("recall", authConfig)(c, next);
-});
-app.use("/api/memory/search", async (c, next) => {
-	return requirePermission("recall", authConfig)(c, next);
-});
-app.use("/memory/search", async (c, next) => {
-	return requirePermission("recall", authConfig)(c, next);
-});
-app.use("/memory/similar", async (c, next) => {
-	return requirePermission("recall", authConfig)(c, next);
-});
-app.use("/api/memory/timeline", async (c, next) => {
-	return requirePermission("recall", authConfig)(c, next);
-});
-app.use("/api/sessions/summaries", async (c, next) => {
-	return requirePermission("recall", authConfig)(c, next);
-});
-app.use("/api/knowledge/expand", async (c, next) => {
-	return requirePermission("recall", authConfig)(c, next);
-});
-app.use("/api/knowledge/expand/session", async (c, next) => {
-	return requirePermission("recall", authConfig)(c, next);
-});
-app.use("/api/graph/impact", async (c, next) => {
-	return requirePermission("recall", authConfig)(c, next);
-});
-
-app.use("/api/memory/modify", async (c, next) => {
-	const perm = requirePermission("modify", authConfig);
-	const rate = requireRateLimit("modify", authModifyLimiter, authConfig);
-	await perm(c, async () => {
-		await rate(c, next);
-	});
-});
-
-app.use("/api/memory/forget", async (c, next) => {
-	const perm = requirePermission("forget", authConfig);
-	const rate = requireRateLimit("batchForget", authBatchForgetLimiter, authConfig);
-	await perm(c, async () => {
-		await rate(c, next);
-	});
-});
-
-app.use("/api/memory/:id/recover", async (c, next) => {
-	return requirePermission("recover", authConfig)(c, next);
-});
-
-app.use("/api/documents", async (c, next) => {
-	return requirePermission("documents", authConfig)(c, next);
-});
-app.use("/api/documents/*", async (c, next) => {
-	return requirePermission("documents", authConfig)(c, next);
-});
-
-app.use("/api/connectors", async (c, next) => {
-	if (c.req.method === "GET") return next();
-	return requirePermission("admin", authConfig)(c, next);
-});
-app.use("/api/connectors/*", async (c, next) => {
-	if (c.req.method === "GET") return next();
-	return requirePermission("admin", authConfig)(c, next);
-});
-
-app.use("/api/diagnostics", async (c, next) => {
-	return requirePermission("diagnostics", authConfig)(c, next);
-});
-app.use("/api/diagnostics/*", async (c, next) => {
-	return requirePermission("diagnostics", authConfig)(c, next);
-});
-
-app.use("/api/analytics", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
-});
-app.use("/api/analytics/*", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
-});
-app.use("/api/mcp/analytics", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
-});
-app.use("/api/mcp/analytics/*", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
-});
-app.use("/api/skills/analytics", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
-});
-app.use("/api/skills/analytics/*", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
-});
-
-app.use("/api/cross-agent", async (c, next) => {
-	if (c.req.method === "GET") {
-		return requirePermission("recall", authConfig)(c, next);
-	}
-	return requirePermission("remember", authConfig)(c, next);
-});
-app.use("/api/cross-agent/*", async (c, next) => {
-	if (c.req.method === "GET") {
-		return requirePermission("recall", authConfig)(c, next);
-	}
-	return requirePermission("remember", authConfig)(c, next);
-});
-app.use("/api/cross-agent/messages", async (c, next) => {
-	if (c.req.method !== "POST") {
-		await next();
-		return;
-	}
-	return requireRateLimit("cross-agent-message", authCrossAgentMessageLimiter, authConfig)(c, next);
-});
-
-app.use("/api/predictor/*", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
-});
-app.use("/api/timeline/*", async (c, next) => {
-	return requirePermission("analytics", authConfig)(c, next);
-});
-
-app.use("/api/repair/*", async (c, next) => {
-	return requirePermission("admin", authConfig)(c, next);
-});
-
-app.use("/api/plugins", async (c, next) => {
-	return requirePermission("admin", authConfig)(c, next);
-});
-app.use("/api/plugins/*", async (c, next) => {
-	return requirePermission("admin", authConfig)(c, next);
-});
-
-app.use("/api/secrets", async (c, next) => {
-	return requirePermission("admin", authConfig)(c, next);
-});
-app.use("/api/secrets/*", async (c, next) => {
-	return requirePermission("admin", authConfig)(c, next);
-});
-
-app.use("/api/git/*", async (c, next) => {
-	return requirePermission("admin", authConfig)(c, next);
-});
-
-app.use("/api/troubleshoot/*", async (c, next) => {
-	return requirePermission("admin", authConfig)(c, next);
-});
-
-const MAX_CONFIG_BYTES = 1_048_576;
-app.use("/api/config", async (c, next) => {
-	if (c.req.method === "POST") {
-		const cl = c.req.header("content-length");
-		if (cl && Number(cl) > MAX_CONFIG_BYTES) {
-			return c.json({ error: `payload exceeds ${MAX_CONFIG_BYTES} byte limit` }, 413);
-		}
-		return requirePermission("admin", authConfig)(c, next);
-	}
-	return next();
-});
-
-app.use("/api/memory/:id", async (c, next) => {
-	if (authConfig.mode !== "local" && (c.req.method === "PATCH" || c.req.method === "DELETE")) {
-		const auth = c.get("auth");
-		if (auth?.claims?.scope?.project) {
-			const memoryId = c.req.param("id");
-			const row = getDbAccessor().withReadDb(
-				(db) =>
-					db.prepare("SELECT project FROM memories WHERE id = ?").get(memoryId) as
-						| { project: string | null }
-						| undefined,
-			);
-			if (row) {
-				const decision = checkScope(auth.claims, { project: row.project ?? undefined }, authConfig.mode);
-				if (!decision.allowed) {
-					return c.json({ error: decision.reason ?? "scope violation" }, 403);
-				}
-			}
-		}
-	}
-
-	if (c.req.method === "PATCH") {
-		const perm = requirePermission("modify", authConfig);
-		const rate = requireRateLimit("modify", authModifyLimiter, authConfig);
-		return perm(c, async () => {
-			await rate(c, next);
-		});
-	}
-	if (c.req.method === "DELETE") {
-		const perm = requirePermission("forget", authConfig);
-		const rate = requireRateLimit("forget", authForgetLimiter, authConfig);
-		return perm(c, async () => {
-			await rate(c, next);
-		});
-	}
-	if (c.req.method === "GET") {
-		return requirePermission("recall", authConfig)(c, next);
-	}
-	return next();
 });
 
 // ============================================================================

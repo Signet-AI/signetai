@@ -1,9 +1,19 @@
 import type { Hono } from "hono";
+import { requirePermission } from "../auth";
 import { queryPluginAuditEvents } from "../plugins/audit.js";
 import type { PluginHostV1 } from "../plugins/index.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
+import { authConfig } from "./state.js";
 
 export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {
+	// Permission guards
+	app.use("/api/plugins", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/plugins/*", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+
 	app.get("/api/plugins", (c) => {
 		return c.json({ plugins: host.list() });
 	});

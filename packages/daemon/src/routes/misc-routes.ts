@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
+import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { CRON_PRESETS, computeNextRun, isHarnessAvailable, resolveSkillPrompt, resolveTaskModel, validateCron } from "../scheduler";
@@ -16,7 +17,7 @@ import {
 	runUpdate as runUpdateImpl,
 	setUpdateConfig,
 } from "../update-system.js";
-import { AGENTS_DIR } from "./state.js";
+import { AGENTS_DIR, authConfig } from "./state.js";
 import { parseOptionalString, resolveScopedAgentId, shouldEnforceAuthScope, toRecord } from "./utils.js";
 
 const MAX_CONFIG_BYTES = 1_048_576;
@@ -31,6 +32,17 @@ interface AgentRow {
 }
 
 export function registerMiscRoutes(app: Hono): void {
+	app.use("/api/config", async (c, next) => {
+		if (c.req.method === "POST") {
+			const cl = c.req.header("content-length");
+			if (cl && Number(cl) > MAX_CONFIG_BYTES) {
+				return c.json({ error: `payload exceeds ${MAX_CONFIG_BYTES} byte limit` }, 413);
+			}
+			return requirePermission("admin", authConfig)(c, next);
+		}
+		return next();
+	});
+
 	app.get("/api/logs", (c) => {
 		const limit = Number.parseInt(c.req.query("limit") || "100", 10);
 		const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;

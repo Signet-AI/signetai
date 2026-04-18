@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
+import { requirePermission } from "../auth";
 import type { ErrorStage } from "../analytics.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { getDiagnostics } from "../diagnostics.js";
@@ -20,6 +21,7 @@ import {
 	AGENTS_DIR,
 	CURRENT_VERSION,
 	analyticsCollector,
+	authConfig,
 	buildPredictorHealthParams,
 	getUpdateState,
 	invalidateDiagnosticsCache,
@@ -29,6 +31,16 @@ import {
 } from "./state.js";
 
 export function registerTelemetryRoutes(app: Hono): void {
+	app.use("/api/analytics", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+	app.use("/api/analytics/*", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+	app.use("/api/timeline/*", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+
 	app.get("/api/analytics/usage", (c) => {
 		return c.json(analyticsCollector.getUsage());
 	});

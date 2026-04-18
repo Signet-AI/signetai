@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { vectorSearch } from "@signet/core";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
-import { requirePermission, requireRateLimit } from "../auth";
+import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { normalizeAndHashContent } from "../content-normalization";
 import { getDbAccessor } from "../db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
@@ -26,6 +26,7 @@ import {
 	PROJECTION_ERROR_TTL_MS,
 	authBatchForgetLimiter,
 	authConfig,
+	authForgetLimiter,
 	authModifyLimiter,
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
@@ -152,6 +153,46 @@ export function registerMemoryRoutes(app: Hono): void {
 	// =========================================================================
 	app.use("/api/memory/jobs", async (c, next) => {
 		return requirePermission("documents", authConfig)(c, next);
+	});
+
+	app.use("/api/memory/:id", async (c, next) => {
+		if (authConfig.mode !== "local" && (c.req.method === "PATCH" || c.req.method === "DELETE")) {
+			const auth = c.get("auth");
+			if (auth?.claims?.scope?.project) {
+				const memoryId = c.req.param("id");
+				const row = getDbAccessor().withReadDb(
+					(db) =>
+						db.prepare("SELECT project FROM memories WHERE id = ?").get(memoryId) as
+							| { project: string | null }
+							| undefined,
+				);
+				if (row) {
+					const decision = checkScope(auth.claims, { project: row.project ?? undefined }, authConfig.mode);
+					if (!decision.allowed) {
+						return c.json({ error: decision.reason ?? "scope violation" }, 403);
+					}
+				}
+			}
+		}
+
+		if (c.req.method === "PATCH") {
+			const perm = requirePermission("modify", authConfig);
+			const rate = requireRateLimit("modify", authModifyLimiter, authConfig);
+			return perm(c, async () => {
+				await rate(c, next);
+			});
+		}
+		if (c.req.method === "DELETE") {
+			const perm = requirePermission("forget", authConfig);
+			const rate = requireRateLimit("forget", authForgetLimiter, authConfig);
+			return perm(c, async () => {
+				await rate(c, next);
+			});
+		}
+		if (c.req.method === "GET") {
+			return requirePermission("recall", authConfig)(c, next);
+		}
+		return next();
 	});
 
 	// =========================================================================

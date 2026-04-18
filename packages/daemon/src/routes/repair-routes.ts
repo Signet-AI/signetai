@@ -1,4 +1,5 @@
 import type { Context, Hono } from "hono";
+import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { fetchEmbedding } from "../embedding-fetch.js";
 import { linkMemoryToEntities } from "../inline-entity-linker.js";
@@ -25,7 +26,7 @@ import {
 	resyncVectorIndex,
 	structuralBackfill,
 } from "../repair-actions.js";
-import { AGENTS_DIR, repairLimiter } from "./state.js";
+import { AGENTS_DIR, authConfig, repairLimiter } from "./state.js";
 
 function resolveRepairContext(c: Context): RepairContext {
 	const reason = c.req.header("x-signet-reason") ?? "manual repair";
@@ -48,6 +49,14 @@ function repairHttpStatus(result: RepairResult): number {
 }
 
 export function registerRepairRoutes(app: Hono): void {
+	// Permission guards
+	app.use("/api/repair/*", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/troubleshoot/*", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+
 	app.post("/api/repair/requeue-dead", (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const ctx = resolveRepairContext(c);

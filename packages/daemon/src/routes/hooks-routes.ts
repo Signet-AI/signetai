@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
+import { requirePermission, requireRateLimit } from "../auth";
 import {
 	type AgentMessage,
 	type AgentMessageType,
@@ -54,7 +55,7 @@ import {
 	renewSession,
 } from "../session-tracker.js";
 import { upsertThreadHead } from "../thread-heads";
-import { AGENTS_DIR, INTERNAL_SELF_HOST, MEMORY_DB, PORT, harnessLastSeen } from "./state";
+import { AGENTS_DIR, INTERNAL_SELF_HOST, MEMORY_DB, PORT, authConfig, authCrossAgentMessageLimiter, harnessLastSeen } from "./state";
 import {
 	parseOptionalBoolean,
 	parseOptionalInt,
@@ -1222,6 +1223,26 @@ function registerSynthesis(app: Hono): void {
 }
 
 export function registerHooksRoutes(app: Hono): void {
+	app.use("/api/cross-agent", async (c, next) => {
+		if (c.req.method === "GET") {
+			return requirePermission("recall", authConfig)(c, next);
+		}
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/cross-agent/*", async (c, next) => {
+		if (c.req.method === "GET") {
+			return requirePermission("recall", authConfig)(c, next);
+		}
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/cross-agent/messages", async (c, next) => {
+		if (c.req.method !== "POST") {
+			await next();
+			return;
+		}
+		return requireRateLimit("cross-agent-message", authCrossAgentMessageLimiter, authConfig)(c, next);
+	});
+
 	registerSessionStart(app);
 	registerUserPromptSubmit(app);
 	registerSessionEnd(app);

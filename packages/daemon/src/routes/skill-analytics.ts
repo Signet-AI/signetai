@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { requirePermission } from "../auth";
 import type { ReadDb } from "../db-accessor.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
@@ -97,6 +98,13 @@ export function querySkillAnalytics(
 }
 
 export function mountSkillAnalyticsRoutes(app: Hono): void {
+	app.use("/api/skills/analytics", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+	app.use("/api/skills/analytics/*", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+
 	app.get("/api/skills/analytics", (c) => {
 		const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
 		if (scoped.error) return c.json({ error: scoped.error }, 403);

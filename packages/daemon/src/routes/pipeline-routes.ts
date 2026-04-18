@@ -101,6 +101,16 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 }
 
 export function registerPipelineRoutes(app: Hono): void {
+	app.use("/api/diagnostics", async (c, next) => {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.use("/api/diagnostics/*", async (c, next) => {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.use("/api/predictor/*", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+
 	app.get("/api/status", (c) => {
 		const config = loadMemoryConfig(AGENTS_DIR);
 		const workerStatus = getPipelineWorkerStatus();

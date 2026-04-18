@@ -1,10 +1,12 @@
 import type { Context, Hono } from "hono";
+import { requirePermission } from "../auth";
 import { logger } from "../logger.js";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "../onepassword.js";
 import { recordPluginAuditEvent } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index.js";
 import type { PluginHostV1 } from "../plugins/index.js";
 import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "../secrets.js";
+import { authConfig } from "./state.js";
 
 function parseOptionalString(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
@@ -62,6 +64,14 @@ async function resolveOnePasswordToken(explicitToken?: string): Promise<string> 
 }
 
 export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {
+	// Permission guards
+	app.use("/api/secrets", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/secrets/*", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+
 	app.get("/api/secrets", (c) => {
 		const denied = rejectIfCapabilityDenied(c, host, ["secrets:list"]);
 		if (denied) return denied;
