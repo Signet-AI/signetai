@@ -10,6 +10,7 @@
   "author": "Signet AI",
   "license": "Apache-2.0",
   "workspaces": [
+    "memorybench",
     "packages/*",
     "packages/adapters/*",
     "packages/cli/dashboard",
@@ -43,7 +44,8 @@
     "deploy:web": "cd web && bun run deploy",
     "changelog": "bun scripts/changelog.ts",
     "test:prompt:structural": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/structural-dependency.test.ts",
-    "test:prompt:synthesis": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/dependency-synthesis.test.ts"
+    "test:prompt:synthesis": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/dependency-synthesis.test.ts",
+    "bench": "bun scripts/bench-memory.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
