@@ -51,6 +51,14 @@ def _read_json_response(resp) -> Dict[str, Any]:
     return json.loads(body.decode("utf-8"))
 
 
+def _safe_score(value: Any) -> float:
+    """Coerce daemon result scores without failing recall on malformed rows."""
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class SignetClient:
     """HTTP client for the Signet daemon API."""
 
@@ -387,7 +395,7 @@ class SignetClient:
         ):
             kept = [
                 row for row in result["results"]
-                if not isinstance(row, dict) or float(row.get("score") or 0.0) >= score_min
+                if not isinstance(row, dict) or _safe_score(row.get("score")) >= score_min
             ]
             result = dict(result)
             result["results"] = kept

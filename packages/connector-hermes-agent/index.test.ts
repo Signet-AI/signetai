@@ -263,6 +263,14 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(client).toContain('self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)');
 	});
 
+	it("treats malformed recall scores as zero during score_min filtering", () => {
+		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
+
+		expect(client).toContain("def _safe_score(value: Any) -> float:");
+		expect(client).toContain("except (TypeError, ValueError):");
+		expect(client).toContain('if not isinstance(row, dict) or _safe_score(row.get("score")) >= score_min');
+	});
+
 	it("does not expose hard-delete force to Hermes memory_forget", () => {
 		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
 		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
@@ -295,7 +303,7 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(client).toContain("def _read_json_response");
 		expect(client).toContain("if not body:");
 		expect(client).toContain("TimeoutError, ValueError");
-		expect(client).toContain('float(row.get("score") or 0.0)');
+		expect(client).toContain('_safe_score(row.get("score"))');
 		expect(client).toContain('"noHits": len(kept) == 0');
 		expect(plugin).toContain('agent_id not in ("default", "hermes-agent")');
 	});
