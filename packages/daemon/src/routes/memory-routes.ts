@@ -832,7 +832,7 @@ export function registerMemoryRoutes(app: Hono): void {
 						aspects: body.structured?.aspects ?? [],
 						sourceMemoryId: id,
 						content: body.content,
-						agentId: "default",
+						agentId,
 						now,
 					}),
 				);
@@ -864,7 +864,7 @@ export function registerMemoryRoutes(app: Hono): void {
 						for (const hint of allHints) {
 							const h = typeof hint === "string" ? hint.trim() : "";
 							if (h.length < 5 || h.length > 300) continue;
-							stmt.run(crypto.randomUUID(), id, "default", h, now);
+							stmt.run(crypto.randomUUID(), id, agentId, h, now);
 							hintsWritten++;
 						}
 					});
@@ -879,7 +879,7 @@ export function registerMemoryRoutes(app: Hono): void {
 			// --- Default path: inline entity linking + async pipeline ---
 			try {
 				const linkResult = getDbAccessor().withWriteTx((db) =>
-					linkMemoryToEntities(db, id, normalizedContent.storageContent, "default"),
+					linkMemoryToEntities(db, id, normalizedContent.storageContent, agentId),
 				);
 				entitiesLinked = linkResult.linked;
 				if (linkResult.linked > 0) {
@@ -927,7 +927,7 @@ export function registerMemoryRoutes(app: Hono): void {
 						for (const hint of body.hints ?? []) {
 							const h = typeof hint === "string" ? hint.trim() : "";
 							if (h.length < 5 || h.length > 300) continue;
-							stmt.run(crypto.randomUUID(), id, "default", h, now);
+							stmt.run(crypto.randomUUID(), id, agentId, h, now);
 							hintsWritten++;
 						}
 					});

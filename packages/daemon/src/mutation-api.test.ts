@@ -67,6 +67,8 @@ describe("mutation API routes", () => {
     enabled: false
     shadowMode: false
     allowUpdateDelete: true
+    hints:
+      enabled: true
 `,
 		);
 		process.env.SIGNET_PATH = agentsDir;
@@ -140,6 +142,103 @@ describe("mutation API routes", () => {
 			expect(res.status).toBe(400);
 			expect(json.error).toBe("tags must be a string, string array, or null");
 		}
+	});
+
+	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Nicholai uses Signet for benchmark memory.",
+				agentId: "bench-agent",
+				structured: {
+					entities: [
+						{
+							source: "Nicholai",
+							sourceType: "person",
+							relationship: "uses",
+							target: "Signet",
+							targetType: "system",
+							confidence: 0.95,
+						},
+					],
+					aspects: [
+						{
+							entityName: "Nicholai",
+							aspect: "tools",
+							attributes: [{ content: "Nicholai uses Signet for benchmark memory.", confidence: 0.95 }],
+						},
+					],
+					hints: ["What does Nicholai use for benchmark memory?"],
+				},
+			}),
+		});
+		const json = (await res.json()) as {
+			id?: string;
+			structured?: boolean;
+			entities_linked?: number;
+			hints_written?: number;
+		};
+
+		expect(res.status).toBe(200);
+		expect(json.structured).toBe(true);
+		expect(json.entities_linked).toBeGreaterThan(0);
+		expect(json.hints_written).toBe(1);
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT ea.content
+						 FROM entities e
+						 JOIN entity_aspects asp ON asp.entity_id = e.id
+						 JOIN entity_attributes ea ON ea.aspect_id = asp.id
+						 WHERE e.agent_id = ? AND e.canonical_name = ?`,
+					)
+					.get("bench-agent", "nicholai") as { content: string } | undefined,
+		);
+		expect(row?.content).toBe("Nicholai uses Signet for benchmark memory.");
+
+		const hint = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT hint FROM memory_hints WHERE agent_id = ? AND memory_id = ?").get("bench-agent", json.id) as
+					| { hint: string }
+					| undefined,
+		);
+		expect(hint?.hint).toBe("What does Nicholai use for benchmark memory?");
+	});
+
+	it("POST /api/memory/remember scopes inline entity linking and client hints to the requested agent", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Nicholai keeps MemoryBench results out of committed benchmark artifacts.",
+				agentId: "inline-agent",
+				hints: ["What does Nicholai keep out of committed benchmark artifacts?"],
+			}),
+		});
+		const json = (await res.json()) as { id?: string; entities_linked?: number; hints_written?: number };
+
+		expect(res.status).toBe(200);
+		expect(json.entities_linked).toBeGreaterThan(0);
+		expect(json.hints_written).toBe(1);
+
+		const entity = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ?")
+					.get("nicholai", "inline-agent") as { id: string } | undefined,
+		);
+		expect(entity).toBeDefined();
+
+		const hint = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT hint FROM memory_hints WHERE memory_id = ? AND agent_id = ?").get(json.id, "inline-agent") as
+					| { hint: string }
+					| undefined,
+		);
+		expect(hint?.hint).toBe("What does Nicholai keep out of committed benchmark artifacts?");
 	});
 
 	it("PATCH /api/memory/:id requires reason", async () => {

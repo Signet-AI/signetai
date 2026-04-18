@@ -23,7 +23,9 @@ so developers can run it while iterating. The command prints the exact
 MemoryBench command and run id before executing.
 
 MemoryBench reports scores by question type in `report.json`, so the default
-run gives a clean per-type breakdown without extra commands.
+run gives a clean per-type breakdown without extra commands. Benchmark reports
+and run artifacts stay under ignored paths and should not be committed until the
+team explicitly decides to publish a score.
 
 ## Larger runs
 
@@ -84,7 +86,7 @@ The wrapper sets `SIGNET_PATH` and `HOME` to temporary benchmark directories
 before starting the daemon. This prevents production memory, Claude project
 memory, and user identity files from being mounted into benchmark runs.
 
-The MemoryBench Signet provider also scopes every write and search with:
+The MemoryBench Signet provider scopes every write and search with:
 
 ```text
 agentId: memorybench
@@ -103,15 +105,25 @@ The default `signet` provider uses the public Signet daemon HTTP API:
 - search: `POST /api/memory/recall`
 - health: `GET /health`
 
+During ingest, the provider performs MemoryBench-side structured extraction
+from each session, then calls the full remember endpoint with:
+
+- extracted memory content
+- structured entities
+- structured aspects and attributes
+- hint questions
+- source metadata and per-question scope
+- the lossless source transcript
+
+The isolated daemon does not run background extraction or synthesis workers for
+benchmark ingestion. Those stages stay disabled so the benchmark is not racing
+async background work or depending on local daemon timing. Graph and traversal
+are enabled only so recall can use the structured data that was explicitly sent
+to `/api/memory/remember`.
+
 MemoryBench still performs the answer and judge phases itself. This keeps the
 benchmark comparable with the other providers and avoids benchmark-specific
 changes to MemoryBench scoring logic.
-
-The default isolated daemon disables background extraction/synthesis workers in
-its generated `agent.yaml`. That makes the developer benchmark a retrieval-path
-benchmark over daemon-ingested benchmark sessions. If we add full extraction
-benchmarks later, they should use a separate mode and report that mode in the
-run metadata rather than changing MemoryBench's scoring code.
 
 ## Environment knobs
 
@@ -124,10 +136,17 @@ SIGNET_BENCH_JUDGE=<model>          Default judge model, default gpt-4o.
 SIGNET_BENCH_ANSWERING_MODEL=<m>    Default answering model, default gpt-4o.
 SIGNET_BENCH_SAMPLE_PER_TYPE=<n>    Default dev sample size, default 1.
 SIGNET_BENCH_EMBEDDING_PROVIDER=<p> Generated daemon embedding provider, default native.
+SIGNET_BENCH_EMBEDDING_MODEL=<m>    Generated daemon embedding model.
+SIGNET_BENCH_EMBEDDING_DIMENSIONS=<n> Generated daemon embedding dimensions.
+SIGNET_BENCH_AGENT_ID=<id>          Signet agent scope, default memorybench.
+SIGNET_BENCH_PROJECT=<name>         Signet project scope, default memorybench.
+SIGNET_BENCH_REQUEST_TIMEOUT_MS=<n> Daemon request timeout, default 60000.
+MEMORYBENCH_EXTRACTION_MODEL=<m>    Structured extraction model, default gpt-4o.
 ```
 
 ## Reports
 
 MemoryBench writes checkpoints and reports under `memorybench/data/runs/`.
 That directory is ignored by Git. Reports should be attached to PRs or release
-notes when benchmark numbers are used to justify a memory-system change.
+notes only when benchmark numbers are being used to justify a memory-system
+change.

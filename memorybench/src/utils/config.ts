@@ -33,7 +33,7 @@ export function getProviderConfig(provider: string): { apiKey: string; baseUrl?:
     case "rag":
       return { apiKey: config.openaiApiKey } // RAG provider uses OpenAI for embeddings
     case "signet":
-      return { apiKey: "none", baseUrl: config.signetBaseUrl }
+      return { apiKey: config.openaiApiKey, baseUrl: config.signetBaseUrl }
     default:
       throw new Error(`Unknown provider: ${provider}`)
   }
