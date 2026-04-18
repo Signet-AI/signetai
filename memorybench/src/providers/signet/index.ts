@@ -26,7 +26,6 @@ interface SignetRecallResult {
 
 interface SignetRecallResponse {
   results?: SignetRecallResult[]
-  sources?: Record<string, string>
   error?: string
 }
 
@@ -226,7 +225,7 @@ export class SignetProvider implements Provider {
         scope: options.containerTag,
         agentId: this.agentId,
         project: this.project,
-        expand: true,
+        expand: false,
       }),
     })
 
@@ -234,11 +233,7 @@ export class SignetProvider implements Provider {
       throw new Error(`Signet recall failed: ${response.error}`)
     }
 
-    const results = await this.hydrateTruncatedResults(response.results ?? [])
-    if (response.sources && Object.keys(response.sources).length > 0) {
-      results.push({ _sources: response.sources })
-    }
-    return results
+    return response.results ?? []
   }
 
   async clear(containerTag: string): Promise<void> {
@@ -257,28 +252,6 @@ export class SignetProvider implements Provider {
       ids.push(...result.ids)
       if (!embedded) pending.push(...result.ids)
     }
-  }
-
-  private async hydrateTruncatedResults(
-    results: SignetRecallResult[]
-  ): Promise<SignetRecallResult[]> {
-    return Promise.all(
-      results.map(async (result) => {
-        if (!result.truncated || typeof result.id !== "string" || result.id.includes(":")) {
-          return result
-        }
-        try {
-          const full = await this.request<{ content?: string }>(`/api/memory/${result.id}`, {
-            method: "GET",
-          })
-          return typeof full.content === "string"
-            ? { ...result, content: full.content, truncated: false }
-            : result
-        } catch {
-          return result
-        }
-      })
-    )
   }
 
   private async request<T>(path: string, init: RequestInit): Promise<T> {

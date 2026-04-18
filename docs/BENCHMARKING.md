@@ -102,7 +102,7 @@ That scope is per question, matching MemoryBench's provider isolation model.
 The default `signet` provider uses the public Signet daemon HTTP API:
 
 - ingest: `POST /api/memory/remember`
-- search: `POST /api/memory/recall`
+- search: `POST /api/memory/recall` with `expand: false`
 - health: `GET /health`
 
 During ingest, the provider performs MemoryBench-side structured extraction
@@ -119,7 +119,8 @@ The isolated daemon does not run background extraction or synthesis workers for
 benchmark ingestion. Those stages stay disabled so the benchmark is not racing
 async background work or depending on local daemon timing. Graph and traversal
 are enabled only so recall can use the structured data that was explicitly sent
-to `/api/memory/remember`.
+to `/api/memory/remember`. Recall does not expand raw source transcripts into
+the answering prompt by default.
 
 MemoryBench still performs the answer and judge phases itself. This keeps the
 benchmark comparable with the other providers and avoids benchmark-specific
