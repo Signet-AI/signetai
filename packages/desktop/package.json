@@ -1,75 +1,67 @@
 {
-  "name": "@signet/desktop",
-  "version": "0.101.1",
-  "private": true,
-  "description": "Electron desktop distribution layer for Signet",
-  "type": "module",
-  "main": "dist/main.js",
-  "scripts": {
-    "build:tray": "cd ../tray && bun run build",
-    "build:dashboard": "cd ../daemon && bun run build:dashboard",
-    "build:daemon": "cd ../daemon && bun run build",
-    "build:main": "tsc -p tsconfig.json",
-    "stage:runtime": "node scripts/stage-runtime.mjs",
-    "build": "bun run build:main",
-    "build:desktop": "bun run build:tray && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder",
-    "dev": "bun run build:tray && bun run build:dashboard && bun run build:main && electron .",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "bun test"
-  },
-  "dependencies": {
-    "@signet/tray": "workspace:*"
-  },
-  "devDependencies": {
-    "@types/node": "^24.5.2",
-    "electron": "^41.2.1",
-    "electron-builder": "^26.8.1",
-    "typescript": "^5.7.0"
-  },
-  "build": {
-    "appId": "ai.signet.app",
-    "productName": "Signet",
-    "artifactName": "Signet-${version}-${os}-${arch}.${ext}",
-    "asar": true,
-    "npmRebuild": false,
-    "files": [
-      "dist/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "resources",
-        "to": "."
-      },
-      {
-        "from": "icons",
-        "to": "icons"
-      }
-    ],
-    "mac": {
-      "category": "public.app-category.productivity",
-      "icon": "icons/icon.icns",
-      "target": [
-        "dmg"
-      ]
-    },
-    "win": {
-      "icon": "icons/icon.ico",
-      "target": [
-        "nsis"
-      ]
-    },
-    "linux": {
-      "category": "Utility",
-      "icon": "icons/icon.png",
-      "target": [
-        "AppImage",
-        "deb"
-      ]
-    },
-    "directories": {
-      "output": "release"
-    }
-  },
-  "author": "Signet AI <hello@signetai.sh>"
+	"name": "@signet/desktop",
+	"version": "0.101.1",
+	"private": true,
+	"description": "Electron desktop distribution layer for Signet",
+	"homepage": "https://signetai.sh",
+	"type": "module",
+	"main": "dist/main.js",
+	"scripts": {
+		"build:core": "cd ../core && bun run build",
+		"build:tray": "cd ../tray && bun run build",
+		"build:dashboard": "cd ../daemon && bun run build:dashboard",
+		"build:daemon": "cd ../daemon && bun run build",
+		"build:main": "tsc -p tsconfig.json",
+		"stage:runtime": "node scripts/stage-runtime.mjs",
+		"build": "bun run build:main",
+		"build:desktop": "bun run build:core && bun run build:tray && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder",
+		"dev": "bun run build:tray && bun run build:dashboard && bun run build:main && electron .",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"@signet/tray": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/node": "^24.5.2",
+		"electron": "^41.2.1",
+		"electron-builder": "^26.8.1",
+		"typescript": "^5.7.0"
+	},
+	"build": {
+		"appId": "ai.signet.app",
+		"productName": "Signet",
+		"artifactName": "Signet-${version}-${os}-${arch}.${ext}",
+		"asar": true,
+		"npmRebuild": false,
+		"files": ["dist/**/*", "package.json"],
+		"extraResources": [
+			{
+				"from": "resources",
+				"to": "."
+			},
+			{
+				"from": "icons",
+				"to": "icons"
+			}
+		],
+		"mac": {
+			"category": "public.app-category.productivity",
+			"icon": "icons/icon.icns",
+			"target": ["dmg"]
+		},
+		"win": {
+			"icon": "icons/icon.ico",
+			"target": ["nsis"]
+		},
+		"linux": {
+			"category": "Utility",
+			"icon": "icons/icon.png",
+			"target": ["AppImage", "deb"]
+		},
+		"directories": {
+			"output": "release"
+		}
+	},
+	"author": "Signet AI <hello@signetai.sh>"
 }
