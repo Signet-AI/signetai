@@ -8,7 +8,6 @@ import type {ChildProcess} from "node:child_process";
 import {spawn} from "node:child_process";
 import {createHash} from "node:crypto";
 import {
-	appendFileSync,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
@@ -34,10 +33,8 @@ import {
 } from "@signet/core";
 import {watch} from "chokidar";
 import {Hono} from "hono";
-import {cors} from "hono/cors";
 import {resolveAgentId, resolveDaemonAgentId} from "./agent-id";
 import {
-	createAuthMiddleware,
 	createToken,
 	requirePermission,
 	requireRateLimit,
@@ -56,6 +53,7 @@ import {writeFileIfChangedAsync} from "./file-sync";
 import {syncAgentWorkspaces} from "./identity-sync";
 import {closeLlmProvider, getLlmProvider, initLlmProvider} from "./llm";
 import {logger} from "./logger";
+import {registerGlobalMiddleware} from "./middleware";
 import {loadMemoryConfig, type ResolvedMemoryConfig} from "./memory-config";
 import {
 	DEFAULT_RETENTION,
@@ -106,7 +104,6 @@ import {
 	HOST,
 	INTERNAL_SELF_HOST,
 	invalidateDiagnosticsCache,
-	isAllowedOrigin,
 	isManagedOpenCodeLocalEndpoint,
 	LOG_DIR,
 	MEMORY_DB,
@@ -196,84 +193,7 @@ export function recordPredictorLatency(operation: "predictor_score" | "predictor
 
 export const app = new Hono();
 
-// ============================================================================
-// Middleware
-// ============================================================================
-
-app.use(
-	"*",
-	cors({
-		origin: (origin) => (isAllowedOrigin(origin) ? origin : null),
-		credentials: true,
-	}),
-);
-
-app.use("*", async (c, next) => {
-	if (shuttingDown && c.req.path !== "/health") {
-		c.status(503);
-		return c.json({ error: "shutting down" });
-	}
-	return next();
-});
-
-app.use("*", async (c, next) => {
-	if (authConfig.mode !== "local" && !authSecret) {
-		c.status(503);
-		return c.json({ error: "server initializing" });
-	}
-	const mw = createAuthMiddleware(authConfig, authSecret);
-	return mw(c, next);
-});
-
-app.use("*", async (c, next) => {
-	const start = Date.now();
-	await next();
-	const duration = Date.now() - start;
-	logger.api.request(c.req.method, c.req.path, c.res.status, duration);
-	const actor = c.req.header("x-signet-actor");
-	analyticsCollector.recordRequest(c.req.method, c.req.path, c.res.status, duration, actor ?? undefined);
-	const p = c.req.path;
-	if (p.includes("/remember") || p.includes("/save")) {
-		analyticsCollector.recordLatency("remember", duration);
-	} else if (p.includes("/recall") || p.includes("/search") || p.includes("/similar")) {
-		analyticsCollector.recordLatency("recall", duration);
-	} else if (p.includes("/modify") || p.includes("/forget") || p.includes("/recover")) {
-		analyticsCollector.recordLatency("mutate", duration);
-	}
-});
-
-app.use("*", async (c, next) => {
-	const method = c.req.method;
-	const bodyP = ["POST", "PUT", "PATCH"].includes(method)
-		? c.req.text().catch(() => undefined)
-		: Promise.resolve(undefined);
-	await next();
-	if (!shadowProcess) return;
-	const reqPath = c.req.path;
-	const search = new URL(c.req.url).search;
-	const primaryStatus = c.res.status;
-	bodyP
-		.then((rawBody) =>
-			fetch(`http://localhost:3851${reqPath}${search}`, {
-				method,
-				headers: Object.fromEntries(c.req.raw.headers),
-				body: rawBody,
-				signal: AbortSignal.timeout(5000),
-			}),
-		)
-		.then((shadow) => {
-			if (primaryStatus !== shadow.status) {
-				appendDivergence(AGENTS_DIR, {
-					path: reqPath,
-					method,
-					primaryStatus,
-					shadowStatus: shadow.status,
-				});
-			}
-			return shadow.body?.cancel();
-		})
-		.catch(() => {});
-});
+registerGlobalMiddleware(app, { getShadowProcess: () => shadowProcess });
 
 // ============================================================================
 // Health + Features
@@ -1204,11 +1124,6 @@ function setupShadowDb(agentsDir: string): string {
 	return shadowRoot;
 }
 
-function appendDivergence(agentsDir: string, entry: Record<string, unknown>) {
-	const logPath = join(agentsDir, ".daemon", "logs", "shadow-divergences.jsonl");
-	appendFileSync(logPath, `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`);
-}
-
 // ============================================================================
 // Pipeline runtime
 // ============================================================================
@@ -1233,7 +1148,7 @@ async function stopPipelineRuntime(): Promise<void> {
 
 	if (skillReconcilerHandle) {
 		try {
-			await skillReconcilerHandle.stop();
+			skillReconcilerHandle.stop();
 		} catch {}
 		skillReconcilerHandle = null;
 	}
@@ -2179,7 +2094,7 @@ async function cleanup() {
 
 	if (watcher) {
 		logFdSnapshot("pre-cleanup-watcher");
-		watcher.close();
+		await watcher.close();
 		logFdSnapshot("post-cleanup-watcher");
 	}
 
