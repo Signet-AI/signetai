@@ -78,8 +78,10 @@ Available providers for storing and retrieving memories:
                  Requires: OPENAI_API_KEY (for memory extraction via gpt-4o-mini + embeddings)
 
   signet         Signet daemon provider
-                 Uses the public Signet daemon HTTP API against an isolated benchmark workspace.
-                 Requires: SIGNET_BENCH_DAEMON_URL or use the repo-level 'bun run bench' wrapper.
+                 Uses structured extraction plus the public Signet daemon HTTP API
+                 against an isolated benchmark workspace.
+                 Requires: OPENAI_API_KEY and SIGNET_BENCH_DAEMON_URL, or use
+                 the repo-level 'bun run bench' wrapper.
 
 Usage:
   -p supermemory    Use Supermemory as the memory provider

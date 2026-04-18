@@ -1,10 +1,12 @@
+import { createOpenAI } from "@ai-sdk/openai"
+import { extractStructuredMemories } from "../../prompts/extraction"
 import type {
-  Provider,
-  ProviderConfig,
+  IndexingProgressCallback,
   IngestOptions,
   IngestResult,
+  Provider,
+  ProviderConfig,
   SearchOptions,
-  IndexingProgressCallback,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
@@ -14,8 +16,17 @@ const DEFAULT_AGENT_ID = "memorybench"
 const DEFAULT_PROJECT = "memorybench"
 const DEFAULT_TIMEOUT_MS = 60_000
 
+interface SignetRecallResult {
+  id?: string
+  content?: string
+  truncated?: boolean
+  source?: string
+  [key: string]: unknown
+}
+
 interface SignetRecallResponse {
-  results?: unknown[]
+  results?: SignetRecallResult[]
+  sources?: Record<string, string>
   error?: string
 }
 
@@ -23,6 +34,7 @@ interface SignetRememberResponse {
   id?: string
   ids?: string[]
   chunked?: boolean
+  embedded?: boolean
   error?: string
 }
 
@@ -35,20 +47,21 @@ function readPositiveInt(name: string, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
-function formatSession(session: UnifiedSession): string {
+function formatTranscript(session: UnifiedSession): string {
   const date =
     (session.metadata?.formattedDate as string | undefined) ||
     (session.metadata?.date as string | undefined) ||
-    "Unknown date"
+    ""
+  const raw = session.messages.map((m) => `${m.speaker || m.role}: ${m.content}`).join("\n")
+  return date ? `[${date}]\n${raw}` : raw
+}
 
-  const body = session.messages
-    .map((message) => {
-      const speaker = message.speaker ? `${message.speaker} ` : ""
-      return `${speaker}${message.role}: ${message.content}`
-    })
-    .join("\n\n")
-
-  return [`# MemoryBench Session ${session.sessionId}`, `Date: ${date}`, "", body].join("\n")
+function hasStructuredData(result: Awaited<ReturnType<typeof extractStructuredMemories>>): boolean {
+  return (
+    result.structured.entities.length > 0 ||
+    result.structured.hints.length > 0 ||
+    (result.structured.aspects?.length ?? 0) > 0
+  )
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
@@ -64,20 +77,17 @@ async function parseJson<T>(response: Response): Promise<T> {
 /**
  * Signet daemon provider.
  *
- * This adapter deliberately uses the public daemon HTTP API instead of reaching
- * into MemoryBench scoring or Signet internals. The benchmark harness still owns
- * datasets, answer generation, judging, checkpointing, and reports.
+ * The adapter keeps MemoryBench's scoring and judging intact, but uses the full
+ * remember endpoint surface: extracted memory content, structured entities /
+ * aspects / attributes / hints, scoped metadata, and lossless transcripts.
  */
 export class SignetProvider implements Provider {
   name = "signet"
   prompts = SIGNET_PROMPTS
-  concurrency = {
-    default: 8,
-    ingest: 2,
-    search: 8,
-  }
+  concurrency = { default: 10, ingest: 5, search: 8 }
 
   private baseUrl = ""
+  private openai: ReturnType<typeof createOpenAI> | null = null
   private agentId = process.env.SIGNET_BENCH_AGENT_ID || DEFAULT_AGENT_ID
   private project = process.env.SIGNET_BENCH_PROJECT || DEFAULT_PROJECT
   private timeoutMs = readPositiveInt("SIGNET_BENCH_REQUEST_TIMEOUT_MS", DEFAULT_TIMEOUT_MS)
@@ -89,38 +99,61 @@ export class SignetProvider implements Provider {
         "Signet provider requires SIGNET_BENCH_DAEMON_URL or SIGNET_BASE_URL. Use `bun run bench` to start an isolated daemon automatically."
       )
     }
+    if (!config.apiKey || config.apiKey === "none") {
+      throw new Error("Signet provider requires OPENAI_API_KEY for structured extraction")
+    }
 
     this.baseUrl = trimTrailingSlash(baseUrl)
-    const health = await this.request<{ status?: string; agentsDir?: string }>("/health", {
-      method: "GET",
-    })
+    this.openai = createOpenAI({ apiKey: config.apiKey })
+
+    const health = await this.request<{ status?: string; agentsDir?: string; version?: string }>(
+      "/health",
+      { method: "GET" }
+    )
     if (health.status !== "healthy") {
       throw new Error(`Signet daemon is not healthy: ${JSON.stringify(health)}`)
     }
 
     logger.info(
-      `Initialized Signet provider (${this.baseUrl}, agent=${this.agentId}, workspace=${health.agentsDir || "unknown"})`
+      `Initialized Signet provider (${this.baseUrl}, agent=${this.agentId}, workspace=${health.agentsDir || "unknown"}, version=${health.version || "unknown"})`
     )
   }
 
   async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
-    const documentIds: string[] = []
+    if (!this.openai) throw new Error("Provider not initialized")
+
+    const ids: string[] = []
+    const pending: string[] = []
 
     for (const session of sessions) {
+      let extracted: Awaited<ReturnType<typeof extractStructuredMemories>>
+      try {
+        extracted = await extractStructuredMemories(this.openai, session)
+      } catch (error) {
+        logger.warn(`Structured extraction failed for session ${session.sessionId}: ${error}`)
+        continue
+      }
+
       const sourceId = `${options.containerTag}:${session.sessionId}`
+      const transcript = formatTranscript(session)
+      const structured = hasStructuredData(extracted) ? extracted.structured : undefined
+
       const result = await this.request<SignetRememberResponse>("/api/memory/remember", {
         method: "POST",
         body: JSON.stringify({
-          content: formatSession(session),
+          content: extracted.content,
           who: "memorybench",
           project: this.project,
-          importance: 0.5,
-          tags: `memorybench,${options.containerTag},${session.sessionId}`,
+          importance: 0.6,
+          tags: `memorybench,${options.containerTag},${session.sessionId},structured`,
           sourceType: "memorybench-session",
           sourceId,
           scope: options.containerTag,
           agentId: this.agentId,
           visibility: "global",
+          transcript,
+          hints: structured?.hints,
+          structured,
         }),
       })
 
@@ -128,14 +161,13 @@ export class SignetProvider implements Provider {
         throw new Error(`Signet remember failed for ${session.sessionId}: ${result.error}`)
       }
 
-      if (Array.isArray(result.ids)) {
-        documentIds.push(...result.ids)
-      } else if (typeof result.id === "string") {
-        documentIds.push(result.id)
-      }
+      this.collectMemoryIds(result, ids, pending)
     }
 
-    return { documentIds }
+    logger.debug(
+      `Ingested ${sessions.length} session(s) as ${ids.length} structured Signet memories for ${options.containerTag}`
+    )
+    return { documentIds: ids, taskIds: pending.length > 0 ? pending : undefined }
   }
 
   async awaitIndexing(
@@ -143,15 +175,45 @@ export class SignetProvider implements Provider {
     _containerTag: string,
     onProgress?: IndexingProgressCallback
   ): Promise<void> {
-    // /api/memory/remember does the synchronous write before returning. Embedding
-    // availability is reported per saved memory by the daemon and falls back to
-    // keyword recall if vectors are unavailable, so there is no provider-side
-    // async indexing job to wait on here.
-    onProgress?.({
-      completedIds: result.documentIds,
-      failedIds: [],
-      total: result.documentIds.length,
-    })
+    if (!result.taskIds || result.taskIds.length === 0) {
+      onProgress?.({
+        completedIds: result.documentIds,
+        failedIds: [],
+        total: result.documentIds.length,
+      })
+      return
+    }
+
+    const remaining = new Set(result.taskIds)
+    const completed = result.documentIds.filter((id) => !remaining.has(id))
+    const failed: string[] = []
+    let delay = 500
+
+    for (let attempt = 0; attempt < 60 && remaining.size > 0; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, delay))
+
+      for (const id of [...remaining]) {
+        try {
+          const memory = await this.request<{ embedding_model?: string }>(`/api/memory/${id}`, {
+            method: "GET",
+          })
+          if (memory.embedding_model) {
+            remaining.delete(id)
+            completed.push(id)
+          }
+        } catch {
+          remaining.delete(id)
+          failed.push(id)
+        }
+      }
+
+      onProgress?.({ completedIds: completed, failedIds: failed, total: result.documentIds.length })
+      delay = Math.min(delay * 1.5, 5000)
+    }
+
+    if (remaining.size > 0) {
+      logger.warn(`${remaining.size} Signet memories did not finish embedding within timeout`)
+    }
   }
 
   async search(query: string, options: SearchOptions): Promise<unknown[]> {
@@ -159,10 +221,12 @@ export class SignetProvider implements Provider {
       method: "POST",
       body: JSON.stringify({
         query,
-        limit: options.limit || 10,
+        limit: Math.max(options.limit || 10, 10),
+        threshold: options.threshold || 0.3,
         scope: options.containerTag,
         agentId: this.agentId,
         project: this.project,
+        expand: true,
       }),
     })
 
@@ -170,12 +234,50 @@ export class SignetProvider implements Provider {
       throw new Error(`Signet recall failed: ${response.error}`)
     }
 
-    return Array.isArray(response.results) ? response.results : []
+    const results = await this.hydrateTruncatedResults(response.results ?? [])
+    if (response.sources && Object.keys(response.sources).length > 0) {
+      results.push({ _sources: response.sources })
+    }
+    return results
   }
 
   async clear(containerTag: string): Promise<void> {
     logger.info(
       `Signet provider clear skipped for ${containerTag}; isolated daemon workspace owns cleanup`
+    )
+  }
+
+  private collectMemoryIds(result: SignetRememberResponse, ids: string[], pending: string[]): void {
+    const embedded = result.embedded === true
+    if (typeof result.id === "string") {
+      ids.push(result.id)
+      if (!embedded) pending.push(result.id)
+    }
+    if (Array.isArray(result.ids)) {
+      ids.push(...result.ids)
+      if (!embedded) pending.push(...result.ids)
+    }
+  }
+
+  private async hydrateTruncatedResults(
+    results: SignetRecallResult[]
+  ): Promise<SignetRecallResult[]> {
+    return Promise.all(
+      results.map(async (result) => {
+        if (!result.truncated || typeof result.id !== "string" || result.id.includes(":")) {
+          return result
+        }
+        try {
+          const full = await this.request<{ content?: string }>(`/api/memory/${result.id}`, {
+            method: "GET",
+          })
+          return typeof full.content === "string"
+            ? { ...result, content: full.content, truncated: false }
+            : result
+        } catch {
+          return result
+        }
+      })
     )
   }
 
@@ -196,7 +298,7 @@ export class SignetProvider implements Provider {
       if (!response.ok) {
         const error =
           data && typeof data === "object" && "error" in data
-            ? String(data.error)
+            ? String((data as { error?: unknown }).error)
             : response.statusText
         throw new Error(`${path} failed (${response.status}): ${error}`)
       }
