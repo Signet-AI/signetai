@@ -59,13 +59,7 @@ export function buildSignetAnswerPrompt(
   context: unknown[],
   questionDate?: string
 ): string {
-  // Extract sources map if attached by provider
-  const sourcesEntry = context.find(
-    (r) => r && typeof r === "object" && "_sources" in (r as Record<string, unknown>)
-  ) as { _sources: Record<string, string> } | undefined
-  const filtered = sourcesEntry ? context.filter((r) => r !== sourcesEntry) : context
-
-  const { traversal, search, graph } = buildSignetContext(filtered)
+  const { traversal, search, graph } = buildSignetContext(context)
 
   const traversalSection = traversal
     ? `\nGraph Context (structurally retrieved via entity relationships — high confidence):\n${traversal}\n`
@@ -75,24 +69,13 @@ export function buildSignetAnswerPrompt(
     ? `\n\nKnowledge Graph Context (aggregated entity facts — use for cross-referencing):\n${graph}`
     : ""
 
-  let sourcesSection = ""
-  if (sourcesEntry) {
-    const entries = Object.entries(sourcesEntry._sources)
-    if (entries.length > 0) {
-      const transcripts = entries
-        .map(([key, content]) => `[Session: ${key}]\n${content}`)
-        .join("\n\n---\n\n")
-      sourcesSection = `\n\nRaw Session Transcripts (complete original conversations, use to fill gaps in extracted memories):\n${transcripts}`
-    }
-  }
-
   return `You are a question-answering system. Based on the retrieved memories below, answer the question.
 
 Question: ${question}
 Question Date: ${questionDate || "Not specified"}
 ${traversalSection}
 Search Context (retrieved via text similarity):
-${search}${graphSection}${sourcesSection}
+${search}${graphSection}
 
 **How to Answer:**
 1. For simple factual questions, a single matching memory is sufficient — give a direct answer
@@ -100,7 +83,6 @@ ${search}${graphSection}${sourcesSection}
 3. For temporal questions, pay close attention to dates and time references. Resolve ALL relative dates ("next month", "last week") to absolute dates using the Question Date as anchor.
 4. Graph Context (entity relationships) is structurally reliable
 5. Knowledge Graph Context provides aggregated cross-referencing — use it to fill gaps
-6. If raw conversation transcripts are provided, use them to fill gaps left by extracted memories — they contain the complete original conversation
 
 Instructions:
 - Base your answer ONLY on the provided memories
