@@ -764,11 +764,7 @@ function readIdentityPath(filePath: string | undefined, charBudget: number): str
 	}
 }
 
-function readIdentityFile(
-	fileName: string,
-	charBudget: number,
-	identityFiles?: IdentityFileMap,
-): string | undefined {
+function readIdentityFile(fileName: string, charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
 	return readIdentityPath(identityFiles?.[fileName] ?? join(getAgentsDir(), fileName), charBudget);
 }
 

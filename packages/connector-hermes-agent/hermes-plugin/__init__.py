@@ -203,7 +203,6 @@ MEMORY_FORGET_SCHEMA = {
         "properties": {
             "id": {"type": "string", "description": "Memory ID to forget."},
             "reason": {"type": "string", "description": "Why this memory should be forgotten."},
-            "force": {"type": "boolean", "description": "Hard-delete instead of soft-delete, when supported."},
         },
         "required": ["id", "reason"],
     },
@@ -864,7 +863,6 @@ class SignetMemoryProvider(MemoryProvider):
                 result = self._client.forget_memory(
                     memory_id,
                     reason=reason,
-                    force=bool(args.get("force", False)),
                 )
                 return json.dumps(result if result else {"error": "Failed to forget memory."})
 

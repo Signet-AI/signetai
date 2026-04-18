@@ -251,7 +251,20 @@ describe("Hermes Agent bundled plugin", () => {
 
 		expect(client).toContain("_RECALL_TIMEOUT_SECS = 30");
 		expect(client).toContain("timeout=_LONG_TIMEOUT_SECS,");
+		expect(client).toMatch(/def user_prompt_submit[\s\S]+timeout=_RECALL_TIMEOUT_SECS,/);
 		expect(client).toContain('self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)');
+	});
+
+	it("does not expose hard-delete force to Hermes memory_forget", () => {
+		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
+		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
+
+		expect(plugin).toContain('"description": "Soft-delete a memory by ID."');
+		expect(plugin).not.toContain('"force"');
+		expect(plugin).not.toContain("force=bool");
+		expect(client).toContain("def forget_memory(");
+		expect(client).not.toContain("force: bool");
+		expect(client).not.toContain('"force": "true"');
 	});
 
 	it("exposes the complete Signet memory_store schema", () => {

@@ -204,7 +204,7 @@ class SignetClient:
                 "agentId": self._agent_id,
                 "project": project,
             },
-            timeout=_LONG_TIMEOUT_SECS,
+            timeout=_RECALL_TIMEOUT_SECS,
         )
 
     def session_end(
@@ -443,10 +443,9 @@ class SignetClient:
         memory_id: str,
         *,
         reason: str,
-        force: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Soft-delete a memory by ID."""
-        params = urllib.parse.urlencode({"reason": reason, **({"force": "true"} if force else {})})
+        params = urllib.parse.urlencode({"reason": reason})
         return self._delete(f"/api/memory/{urllib.parse.quote(memory_id)}?{params}")
 
     def search(
