@@ -11,7 +11,7 @@ import {
 	isPipelineProvider,
 	parseSimpleYaml,
 } from "@signet/core";
-import { type AuthConfig, parseAuthConfig } from "./auth/config";
+import { type AuthConfig, parseAuthConfig } from "./auth";
 import { logger } from "./logger";
 
 export interface EmbeddingConfig {
@@ -476,7 +476,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 	);
 	const resolvedFallbackProvider = resolveExtractionFallbackProvider(
 		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
-		d.extraction.fallbackProvider,
+		d.extraction.fallbackProvider ?? "llama-cpp",
 	);
 	const resolvedCommandConfig = parseCommandConfig(extractionRaw?.command ?? raw.extractionCommand);
 	if (resolvedProvider === "command" && !resolvedCommandConfig) {
@@ -490,9 +490,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): PipelineV2Con
 		);
 	}
 
-	const synthesisProviderWon = isSynthesisProvider(synthesisRaw?.provider);
-	const resolvedSynthesisProvider: SynthesisProviderKind = synthesisProviderWon
-		? synthesisRaw.provider
+	const rawSynthProvider = synthesisRaw?.provider;
+	const synthesisProviderWon = isSynthesisProvider(rawSynthProvider);
+	const resolvedSynthesisProvider: SynthesisProviderKind = isSynthesisProvider(rawSynthProvider)
+		? rawSynthProvider
 		: resolvedProvider === "command"
 			? d.synthesis.provider
 			: resolvedProvider;

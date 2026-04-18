@@ -294,6 +294,7 @@ export interface PipelineGuardrailsConfig {
 	readonly maxContentChars: number;
 	readonly chunkTargetChars: number;
 	readonly recallTruncateChars: number;
+	readonly contextBudgetChars: number;
 }
 
 export interface PipelineTelemetryConfig {
