@@ -374,7 +374,7 @@ export class HermesAgentConnector extends BaseConnector {
 			try {
 				let envContent = readFileSync(envPath, "utf-8");
 				let changed = false;
-				for (const key of ["SIGNET_DAEMON_URL", "SIGNET_AGENT_ID", "SIGNET_AGENT_WORKSPACE"]) {
+				for (const key of ["SIGNET_DAEMON_URL", "SIGNET_AGENT_ID", "SIGNET_AGENT_WORKSPACE", "SIGNET_TOKEN"]) {
 					const pattern = new RegExp(`^${key}=.*\n?`, "gm");
 					if (pattern.test(envContent)) {
 						envContent = envContent.replace(pattern, "");

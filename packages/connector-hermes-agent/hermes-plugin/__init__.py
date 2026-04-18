@@ -64,6 +64,10 @@ MEMORY_SEARCH_SCHEMA = {
                 "description": "Deprecated compatibility alias for importance_min; ignored when importance_min is set.",
             },
             "score_min": {"type": "number", "description": "Minimum recall score threshold, applied client-side."},
+            "agent_scoped": {
+                "type": "boolean",
+                "description": "When true, scope recall to SIGNET_AGENT_ID instead of searching shared effective memory.",
+            },
         },
         "required": ["query"],
     },
@@ -778,6 +782,7 @@ class SignetMemoryProvider(MemoryProvider):
                 keyword_query=str(search_args.get("keyword_query", "") or ""),
                 expand=bool(search_args.get("expand", False)),
                 score_min=_as_float(search_args.get("score_min")),
+                agent_scoped=bool(search_args.get("agent_scoped", False)),
             )
             if not result:
                 return json.dumps({"error": "Search failed or Signet daemon returned no response.", "results": []})

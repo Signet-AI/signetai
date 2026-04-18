@@ -246,6 +246,14 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(client).not.toContain('"agentId": self._agent_id,\\n        }\\n        if min_score');
 	});
 
+	it("lets explicit recall requests opt into agent scoping", () => {
+		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
+
+		expect(plugin).toContain('"agent_scoped"');
+		expect(plugin).toContain("scope recall to SIGNET_AGENT_ID");
+		expect(plugin).toContain('agent_scoped=bool(search_args.get("agent_scoped", False))');
+	});
+
 	it("uses longer timeouts for recall paths", () => {
 		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
 
@@ -308,6 +316,34 @@ describe("HermesAgentConnector.uninstall()", () => {
 		const pluginDir = join(hermesRepo, "plugins", "memory", "signet");
 		expect(result.filesRemoved).toContain(pluginDir);
 		expect(connector.isInstalled()).toBe(false);
+	});
+
+	it("removes persisted Signet env vars including SIGNET_TOKEN", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		const envPath = join(hermesHome, ".env");
+		writeFileSync(
+			envPath,
+			[
+				"KEEP_ME=1",
+				"SIGNET_DAEMON_URL=http://localhost:3850",
+				"SIGNET_AGENT_ID=dot",
+				"SIGNET_AGENT_WORKSPACE=/tmp/dot",
+				"SIGNET_TOKEN=secret-token",
+				"",
+			].join("\n"),
+		);
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().uninstall();
+
+		expect(result.configsPatched).toContain(envPath);
+		const envContent = readFileSync(envPath, "utf-8");
+		expect(envContent).toContain("KEEP_ME=1");
+		expect(envContent).not.toContain("SIGNET_DAEMON_URL");
+		expect(envContent).not.toContain("SIGNET_AGENT_ID");
+		expect(envContent).not.toContain("SIGNET_AGENT_WORKSPACE");
+		expect(envContent).not.toContain("SIGNET_TOKEN");
 	});
 });
 
