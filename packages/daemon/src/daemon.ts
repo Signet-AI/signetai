@@ -18,29 +18,20 @@ import {
 	writeFileSync
 } from "node:fs";
 import {homedir} from "node:os";
-import {basename, dirname, join} from "node:path";
-import {fileURLToPath} from "node:url";
+import {basename, join} from "node:path";
 import {Worker} from "node:worker_threads";
 import {createAdaptorServer} from "@hono/node-server";
-import {serveStatic} from "@hono/node-server/serve-static";
 import {
 	type AgentDefinition,
-	type PipelineSynthesisConfig,
 	buildArchitectureDoc,
 	normalizeAgentRosterEntry,
 	parseSimpleYaml,
+	type PipelineSynthesisConfig,
 	stripSignetBlock,
 } from "@signet/core";
 import {watch} from "chokidar";
 import {Hono} from "hono";
 import {resolveAgentId, resolveDaemonAgentId} from "./agent-id";
-import {
-	createToken,
-	requirePermission,
-	requireRateLimit,
-	type TokenRole,
-	type TokenScope,
-} from "./auth";
 import {bindWithRetry} from "./bind-with-retry";
 import {migrateConfig} from "./config-migration";
 import {listConnectors} from "./connectors/registry";
@@ -48,21 +39,14 @@ import {clearAllPresence} from "./cross-agent";
 import {closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor} from "./db-accessor";
 import {fetchEmbedding} from "./embedding-fetch";
 import {type EmbeddingTrackerHandle, startEmbeddingTracker} from "./embedding-tracker";
-import {getAllFeatureFlags, initFeatureFlags} from "./feature-flags";
+import {initFeatureFlags} from "./feature-flags";
 import {writeFileIfChangedAsync} from "./file-sync";
 import {syncAgentWorkspaces} from "./identity-sync";
 import {closeLlmProvider, getLlmProvider, initLlmProvider} from "./llm";
 import {logger} from "./logger";
 import {registerGlobalMiddleware} from "./middleware";
 import {loadMemoryConfig, type ResolvedMemoryConfig} from "./memory-config";
-import {
-	DEFAULT_RETENTION,
-	ensureRetentionWorker,
-	getPipelineWorkerStatus,
-	setDreamingWorker,
-	startPipeline,
-	stopPipeline,
-} from "./pipeline";
+import {DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline,} from "./pipeline";
 import {type DreamingWorkerHandle, startDreamingWorker} from "./pipeline/dreaming-worker";
 import {deadLetterPendingExtractionJobs} from "./pipeline/extraction-fallback";
 import {invalidateTraversalCache,} from "./pipeline/graph-traversal";
@@ -84,19 +68,10 @@ import {resolveRuntimeModel} from "./pipeline/provider-resolution";
 import {startReconciler} from "./pipeline/skill-reconciler";
 import {createPredictorClient, type PredictorClient} from "./predictor-client";
 import {type RepairContext, structuralBackfill} from "./repair-actions";
-import {
-	getResourceSnapshot,
-	logFdSnapshot,
-	startEventLoopMonitor,
-	startFdPollMonitor,
-	stopResourceMonitors,
-} from "./resource-monitor";
+import {logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors,} from "./resource-monitor";
 import {
 	AGENTS_DIR,
 	analyticsCollector,
-	authAdminLimiter,
-	authConfig,
-	authSecret,
 	BIND_HOST,
 	bindAbort,
 	CURRENT_VERSION,
@@ -137,10 +112,22 @@ import {closeWidgetProvider, initWidgetProvider} from "./widget-llm";
 import {getSynthesisWorker as getSynthesisRenderWorker, setSynthesisWorker as setSynthesisRenderWorker,} from "./hooks";
 import {mountMcpRoute} from "./mcp";
 import {mountAppTrayRoutes} from "./routes/app-tray.js";
+import {registerAuthRoutes} from "./routes/auth-routes.js";
 import {mountChangelogRoutes} from "./routes/changelog.js";
 import {registerConnectorRoutes} from "./routes/connectors-routes.js";
+import {setupDashboardRoutes} from "./routes/dashboard.js";
 import {mountEventBusRoutes} from "./routes/event-bus.js";
-import {getGitStatus, gitConfig, gitPull, gitPush, gitSync, scheduleAutoCommit, startGitSyncTimer, stopGitSyncTimer} from "./routes/git-sync.js";
+import {
+	getGitStatus,
+	gitConfig,
+	gitPull,
+	gitPush,
+	gitSync,
+	scheduleAutoCommit,
+	startGitSyncTimer,
+	stopGitSyncTimer
+} from "./routes/git-sync.js";
+import {mountHealthRoutes} from "./routes/health.js";
 import {registerHooksRoutes} from "./routes/hooks-routes.js";
 import {registerKnowledgeRoutes} from "./routes/knowledge-routes.js";
 import {mountMarketplaceReviewsRoutes} from "./routes/marketplace-reviews.js";
@@ -161,7 +148,7 @@ import {registerTelemetryRoutes} from "./routes/telemetry-routes.js";
 import {checkEmbeddingProvider, getConfiguredProviderHints} from "./routes/utils.js";
 import {mountWidgetRoutes} from "./routes/widget.js";
 import {isReadyResponse} from "./synthesis-worker-protocol";
-import {getUpdateState, initUpdateSystem, startUpdateTimer, stopUpdateTimer,} from "./update-system";
+import {initUpdateSystem, startUpdateTimer, stopUpdateTimer} from "./update-system";
 import {createAgentsWatcherIgnoreMatcher} from "./watcher-ignore";
 
 let httpServer: import("node:net").Server | null = null;
@@ -195,105 +182,9 @@ export const app = new Hono();
 
 registerGlobalMiddleware(app, { getShadowProcess: () => shadowProcess });
 
-// ============================================================================
-// Health + Features
-// ============================================================================
-
-app.get("/health", (c) => {
-	const us = getUpdateState();
-	let dbOk = false;
-	try {
-		getDbAccessor().withReadDb((db) => {
-			db.prepare("SELECT 1").get();
-			dbOk = true;
-		});
-	} catch {}
-	const workers = getPipelineWorkerStatus();
-	const extraction = workers.extraction;
-	const stalled =
-		extraction.running &&
-		extraction.stats !== undefined &&
-		extraction.stats.pending > 0 &&
-		Date.now() - extraction.stats.lastProgressAt > 60_000;
-
-	return c.json({
-		status: shuttingDown ? "shutting_down" : "healthy",
-		uptime: process.uptime(),
-		pid: process.pid,
-		version: CURRENT_VERSION,
-		port: PORT,
-		agentsDir: AGENTS_DIR,
-		db: dbOk,
-		shuttingDown,
-		updateAvailable: us.lastCheck?.updateAvailable ?? false,
-		pendingRestart: us.pendingRestartVersion !== null,
-		pipeline: {
-			extractionRunning: extraction.running,
-			extractionStalled: stalled,
-			extractionPending: extraction.stats?.pending ?? 0,
-			extractionBackoffMs: extraction.stats?.backoffMs ?? 0,
-		},
-		resources: getResourceSnapshot(),
-	});
-});
-
-app.get("/api/features", (c) => {
-	return c.json(getAllFeatureFlags());
-});
-
-// ============================================================================
-// MCP Server
-// ============================================================================
-
+mountHealthRoutes(app);
 mountMcpRoute(app);
-
-app.get("/api/auth/whoami", (c) => {
-	const auth = c.get("auth");
-	return c.json({
-		authenticated: auth?.authenticated ?? false,
-		claims: auth?.claims ?? null,
-		mode: authConfig.mode,
-	});
-});
-
-app.use("/api/auth/token", async (c, next) => {
-	const perm = requirePermission("admin", authConfig);
-	const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
-	await perm(c, async () => {
-		await rate(c, next);
-	});
-});
-
-app.post("/api/auth/token", async (c) => {
-	if (!authSecret) {
-		return c.json({ error: "auth secret not available (local mode?)" }, 400);
-	}
-
-	const payload = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
-	if (!payload) {
-		return c.json({ error: "invalid request body" }, 400);
-	}
-
-	const role = payload.role as string | undefined;
-	const validRoles: TokenRole[] = ["admin", "operator", "agent", "readonly"];
-	if (!role || !validRoles.includes(role as TokenRole)) {
-		return c.json({ error: `role must be one of: ${validRoles.join(", ")}` }, 400);
-	}
-
-	const scope = (payload.scope ?? {}) as TokenScope;
-	const ttl =
-		typeof payload.ttlSeconds === "number" && payload.ttlSeconds > 0
-			? payload.ttlSeconds
-			: authConfig.defaultTokenTtlSeconds;
-
-	const token = createToken(authSecret, { sub: `token:${role}`, scope, role: role as TokenRole }, ttl);
-	const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
-	return c.json({ token, expiresAt });
-});
-
-// ============================================================================
-// Register all route modules
-// ============================================================================
+registerAuthRoutes(app);
 
 registerMemoryRoutes(app);
 registerHooksRoutes(app);
@@ -323,12 +214,12 @@ mountMarketplaceReviewsRoutes(app);
 mountChangelogRoutes(app);
 mountOsChatRoutes(app);
 mountOsAgentRoutes(app);
+setupDashboardRoutes(app);
 
 // ============================================================================
 // CLI preflight check
 // ============================================================================
 
-/** Spawn a CLI with --version and return true if it exits 0. */
 async function checkCliAvailable(binary: string, extraEnv?: Record<string, string>): Promise<boolean> {
 	const exitCode = await new Promise<number>((resolve) => {
 		const proc = spawn(binary, ["--version"], {
@@ -341,83 +232,6 @@ async function checkCliAvailable(binary: string, extraEnv?: Record<string, strin
 	});
 	return exitCode === 0;
 }
-
-// ============================================================================
-// Dashboard static serving
-// ============================================================================
-
-function getDashboardCandidates(): string[] {
-	const __filename = fileURLToPath(import.meta.url);
-	const __dirname = dirname(__filename);
-
-	return [
-		join(__dirname, "..", "..", "cli", "dashboard", "build"),
-		join(__dirname, "..", "..", "..", "cli", "dashboard", "build"),
-		join(__dirname, "..", "dashboard"),
-		join(__dirname, "dashboard"),
-	];
-}
-
-function getDashboardPath(): string | null {
-	const candidates = getDashboardCandidates();
-
-	for (const candidate of candidates) {
-		if (existsSync(join(candidate, "index.html"))) {
-			return candidate;
-		}
-	}
-
-	return null;
-}
-
-function setupStaticServing() {
-	const dashboardPath = getDashboardPath();
-
-	if (dashboardPath) {
-		app.use("/*", async (c, next) => {
-			const path = c.req.path;
-			if (path.startsWith("/api/") || path === "/health" || path === "/sse") {
-				return next();
-			}
-			return serveStatic({
-				root: dashboardPath,
-				rewriteRequestPath: (p) => {
-					if (!p.includes(".") || p === "/") {
-						return "/index.html";
-					}
-					return p;
-				},
-			})(c, next);
-		});
-	} else {
-		logger.warn("daemon", "Dashboard not found - API-only mode", {
-			candidates: getDashboardCandidates(),
-		});
-		app.get("/", (c) => {
-			return c.html(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>Signet Daemon</title></head>
-        <body style="font-family: system-ui; max-width: 600px; margin: 50px auto; padding: 20px;">
-          <h1>◈ Signet Daemon</h1>
-          <p>The daemon is running, but the dashboard is not installed.</p>
-          <p>API endpoints:</p>
-          <ul>
-            <li><a href="/health">/health</a> - Health check</li>
-            <li><a href="/api/status">/api/status</a> - Daemon status</li>
-            <li><a href="/api/config">/api/config</a> - Config files</li>
-            <li><a href="/api/memories">/api/memories</a> - Memories</li>
-            <li><a href="/api/harnesses">/api/harnesses</a> - Harnesses</li>
-            <li><a href="/api/skills">/api/skills</a> - Skills</li>
-          </ul>
-        </body>
-        </html>
-      `);
-		});
-	}
-}
-
-setupStaticServing();
 
 // ============================================================================
 // File Watcher
