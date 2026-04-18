@@ -59,6 +59,9 @@ export type LogCategory =
 	| "os-agent" // OS page-agent (visual GUI automation)
 	| "mcp-analytics" // MCP invocation analytics
 	| "config" // Configuration loading and resolution
+	| "config-migration" // Legacy config migration on startup
+	| "dreaming" // Dreaming worker (background knowledge synthesis)
+	| "http" // HTTP server lifecycle
 	| "resources" // FD / event-loop resource monitoring
 	| "shadow"; // Shadow logs for sensitive data (not written to disk, only emitted for real-time streaming)
 

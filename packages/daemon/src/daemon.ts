@@ -26,6 +26,7 @@ import {createAdaptorServer} from "@hono/node-server";
 import {serveStatic} from "@hono/node-server/serve-static";
 import {
 	type AgentDefinition,
+	type PipelineSynthesisConfig,
 	buildArchitectureDoc,
 	normalizeAgentRosterEntry,
 	parseSimpleYaml,
@@ -142,7 +143,7 @@ import {mountAppTrayRoutes} from "./routes/app-tray.js";
 import {mountChangelogRoutes} from "./routes/changelog.js";
 import {registerConnectorRoutes} from "./routes/connectors-routes.js";
 import {mountEventBusRoutes} from "./routes/event-bus.js";
-import {getGitStatus, gitSync, scheduleAutoCommit, startGitSyncTimer, stopGitSyncTimer} from "./routes/git-sync.js";
+import {getGitStatus, gitConfig, gitPull, gitPush, gitSync, scheduleAutoCommit, startGitSyncTimer, stopGitSyncTimer} from "./routes/git-sync.js";
 import {registerHooksRoutes} from "./routes/hooks-routes.js";
 import {registerKnowledgeRoutes} from "./routes/knowledge-routes.js";
 import {mountMarketplaceReviewsRoutes} from "./routes/marketplace-reviews.js";
@@ -166,7 +167,7 @@ import {isReadyResponse} from "./synthesis-worker-protocol";
 import {getUpdateState, initUpdateSystem, startUpdateTimer, stopUpdateTimer,} from "./update-system";
 import {createAgentsWatcherIgnoreMatcher} from "./watcher-ignore";
 
-let httpServer: ReturnType<typeof createAdaptorServer> | null = null;
+let httpServer: import("node:net").Server | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let shadowProcess: ChildProcess | null = null;
 let predictorClientRef: PredictorClient | null = null;
@@ -381,7 +382,7 @@ registerRepairRoutes(app);
 registerConnectorRoutes(app);
 registerPluginRoutes(app);
 registerSecretRoutes(app);
-registerSessionRoutes(app, { getGitStatus, gitSync });
+registerSessionRoutes(app, { gitConfig, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync });
 registerPipelineRoutes(app);
 registerTelemetryRoutes(app);
 registerMiscRoutes(app);
@@ -1370,7 +1371,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		configured: providerHints.extraction,
 		resolved: memoryCfg.pipelineV2.extraction.provider,
 		effective: memoryCfg.pipelineV2.extraction.provider,
-		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider,
+		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider ?? "llama-cpp",
 		status: "active",
 		degraded: false,
 		fallbackApplied: false,
@@ -1399,7 +1400,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		});
 	}
 
-	const extractionFallbackProvider = memoryCfg.pipelineV2.extraction.fallbackProvider;
+	const extractionFallbackProvider = memoryCfg.pipelineV2.extraction.fallbackProvider ?? "llama-cpp";
 	let effectiveExtractionProvider = memoryCfg.pipelineV2.extraction.provider;
 	let extractionStatus: "active" | "degraded" | "blocked" | "disabled" | "paused" = "active";
 	let extractionDegraded = false;
@@ -1761,7 +1762,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	} else if (memoryCfg.pipelineV2.synthesis.provider === "none") {
 		logger.info("config", "Synthesis provider set to 'none', synthesis disabled");
 	} else if (memoryCfg.pipelineV2.synthesis.enabled) {
-		let effectiveSynthesisProvider = memoryCfg.pipelineV2.synthesis.provider;
+		let effectiveSynthesisProvider: PipelineSynthesisConfig["provider"] = memoryCfg.pipelineV2.synthesis.provider;
 		const synthesisFallback =
 			extractionFallbackProvider === "llama-cpp"
 				? "llama-cpp"
@@ -2205,10 +2206,12 @@ process.on("uncaughtException", (err) => {
 });
 
 process.on("unhandledRejection", (reason) => {
-	logger.error("daemon", "Unhandled rejection", {
-		error: reason instanceof Error ? reason : String(reason),
-		stack: reason instanceof Error ? reason.stack : undefined,
-	});
+	logger.error(
+		"daemon",
+		"Unhandled rejection",
+		reason instanceof Error ? reason : undefined,
+		reason instanceof Error ? undefined : { reason: String(reason) },
+	);
 	if (shuttingDown) return;
 	setShuttingDown(true);
 	cleanup().finally(() => process.exit(1));
@@ -2355,7 +2358,7 @@ async function main() {
 					telemetryRef.record("daemon.heartbeat", {
 						uptimeMs: Date.now() - daemonStartTime,
 						memoryCount,
-						connectorsActive: connectors.filter((cn) => cn.status === "active").length,
+						connectorsActive: connectors.filter((cn) => cn.status !== "error").length,
 						pipelineMode: readPipelineMode(liveCfg.pipelineV2),
 						extractionProvider: liveCfg.pipelineV2.extraction.provider,
 						embeddingProvider: liveCfg.embedding.provider,
@@ -2428,7 +2431,7 @@ async function main() {
 
 	const REQUEST_BODY_LIMIT = 10 * 1_048_576;
 	const { createServer: nodeCreateServer } = await import("node:http");
-	const createBoundedServer: typeof nodeCreateServer = (...args: Parameters<typeof nodeCreateServer>) => {
+	const createBoundedServer = (...args: Parameters<typeof nodeCreateServer>) => {
 		const server = nodeCreateServer(...args);
 		server.on("request", (req, res) => {
 			let bytes = 0;
@@ -2511,7 +2514,10 @@ async function main() {
 			createAdaptorServer({
 				fetch: app.fetch,
 				hostname: BIND_HOST,
-				createServer: createBoundedServer,
+				// Type assertion needed: arrow functions cannot satisfy overloaded
+			// function types. The wrapper passes all args through to nodeCreateServer
+			// so it is correct at runtime for every overload.
+			createServer: createBoundedServer as typeof nodeCreateServer,
 			}),
 		onBound: (server) => {
 			httpServer = server;
