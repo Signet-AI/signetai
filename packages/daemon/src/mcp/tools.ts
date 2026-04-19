@@ -175,6 +175,19 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"memory_forget",
 	"memory_feedback",
 	"knowledge_expand",
+	"knowledge_tree",
+	"knowledge_list_entities",
+	"knowledge_get_entity",
+	"knowledge_list_aspects",
+	"knowledge_list_groups",
+	"knowledge_list_claims",
+	"knowledge_list_attributes",
+	"entity_list",
+	"entity_get",
+	"entity_aspects",
+	"entity_groups",
+	"entity_claims",
+	"entity_attributes",
 	"knowledge_expand_session",
 	"lcm_expand",
 	"agent_peers",
@@ -1593,145 +1606,286 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 	);
 
+	const knowledgeTreeInput = z.object({
+		entity: z.string().optional().describe("Entity name, e.g. Nicholai or Signet. Omit to list entities first."),
+		depth: z.number().optional().describe("How deep to expand: 1=aspects, 2=groups, 3=claims. Default 3."),
+		max_aspects: z.number().optional().describe("Max aspects/rooms to return, default 20"),
+		max_groups: z.number().optional().describe("Max groups/dressers per aspect, default 20"),
+		max_claims: z.number().optional().describe("Max claims/drawers per group, default 50"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listEntitiesInput = z.object({
+		query: z.string().optional().describe("Optional entity name filter"),
+		type: z.string().optional().describe("Optional entity type filter"),
+		limit: z.number().optional().describe("Max entities to return, default 50"),
+		offset: z.number().optional().describe("Pagination offset, default 0"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const getEntityInput = z.object({
+		name: z.string().describe("Entity name, e.g. Nicholai or Signet"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listAspectsInput = z.object({
+		entity: z.string().describe("Entity name"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listGroupsInput = z.object({
+		entity: z.string().describe("Entity name"),
+		aspect: z.string().describe("Aspect/room name, e.g. food"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listClaimsInput = z.object({
+		entity: z.string().describe("Entity name"),
+		aspect: z.string().describe("Aspect/room name"),
+		group: z.string().describe("Group/dresser key, e.g. restaurants"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listAttributesInput = z.object({
+		entity: z.string().describe("Entity name"),
+		aspect: z.string().describe("Aspect/room name"),
+		group: z.string().describe("Group/dresser key"),
+		claim: z.string().describe("Claim/drawer key, e.g. favorite_restaurant"),
+		status: z.enum(["active", "superseded", "deleted", "all"]).optional().describe("Default active"),
+		kind: z.enum(["attribute", "constraint"]).optional(),
+		limit: z.number().optional().describe("Max attributes to return, default 50"),
+		offset: z.number().optional().describe("Pagination offset, default 0"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+
+	const fetchNavigation = async (path: string, params: URLSearchParams, label: string) => {
+		const query = params.toString();
+		const result = await daemonFetch<unknown>(baseUrl, query ? `${path}?${query}` : path);
+		if (!result.ok) return errorResult(`${label} failed: ${result.error}`);
+		return textResult(result.data);
+	};
+	const knowledgeTree = async ({
+		entity,
+		depth,
+		max_aspects,
+		max_groups,
+		max_claims,
+		agent_id,
+	}: z.infer<typeof knowledgeTreeInput>) => {
+		const params = new URLSearchParams();
+		if (!entity) {
+			if (max_aspects !== undefined) params.set("limit", String(max_aspects));
+			if (agent_id) params.set("agent_id", agent_id);
+			return fetchNavigation("/api/knowledge/navigation/entities", params, "Knowledge tree entity listing");
+		}
+		params.set("entity", entity);
+		if (depth !== undefined) params.set("depth", String(depth));
+		if (max_aspects !== undefined) params.set("max_aspects", String(max_aspects));
+		if (max_groups !== undefined) params.set("max_groups", String(max_groups));
+		if (max_claims !== undefined) params.set("max_claims", String(max_claims));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/tree", params, "Knowledge tree");
+	};
+	const listEntities = async ({ query, type, limit, offset, agent_id }: z.infer<typeof listEntitiesInput>) => {
+		const params = new URLSearchParams();
+		if (query) params.set("q", query);
+		if (type) params.set("type", type);
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (offset !== undefined) params.set("offset", String(offset));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/entities", params, "Entity list");
+	};
+	const getEntity = async ({ name, agent_id }: z.infer<typeof getEntityInput>) => {
+		const params = new URLSearchParams({ name });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/entity", params, "Entity get");
+	};
+	const listAspects = async ({ entity, agent_id }: z.infer<typeof listAspectsInput>) => {
+		const params = new URLSearchParams({ entity });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/aspects", params, "Entity aspects");
+	};
+	const listGroups = async ({ entity, aspect, agent_id }: z.infer<typeof listGroupsInput>) => {
+		const params = new URLSearchParams({ entity, aspect });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/groups", params, "Entity groups");
+	};
+	const listClaims = async ({ entity, aspect, group, agent_id }: z.infer<typeof listClaimsInput>) => {
+		const params = new URLSearchParams({ entity, aspect, group });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/claims", params, "Entity claims");
+	};
+	const listAttributes = async ({
+		entity,
+		aspect,
+		group,
+		claim,
+		status,
+		kind,
+		limit,
+		offset,
+		agent_id,
+	}: z.infer<typeof listAttributesInput>) => {
+		const params = new URLSearchParams({ entity, aspect, group, claim });
+		if (status) params.set("status", status);
+		if (kind) params.set("kind", kind);
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (offset !== undefined) params.set("offset", String(offset));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/attributes", params, "Entity attributes");
+	};
+
+	server.registerTool(
+		"knowledge_tree",
+		{
+			title: "Knowledge Tree",
+			description:
+				"Show a compact outline of the knowledge graph. " +
+				"Use this when you know an entity and need tool-visible structure before choosing what to read. " +
+				"It returns aspects/rooms, groups/dressers, claim drawers, counts, and active previews. " +
+				"Omit entity to list top-level entities first.",
+			inputSchema: knowledgeTreeInput,
+			annotations: { readOnlyHint: true },
+		},
+		knowledgeTree,
+	);
+
+	server.registerTool(
+		"knowledge_list_entities",
+		{
+			title: "Knowledge: List Entities",
+			description:
+				"List top-level knowledge graph entities, like folders or houses. " +
+				"Use this first when you do not know the exact entity name.",
+			inputSchema: listEntitiesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listEntities,
+	);
+
+	server.registerTool(
+		"knowledge_get_entity",
+		{
+			title: "Knowledge: Get Entity",
+			description:
+				"Resolve one entity by name and return its structural summary. " +
+				"Use knowledge_tree after this to scan the entity's rooms, dressers, and drawers.",
+			inputSchema: getEntityInput,
+			annotations: { readOnlyHint: true },
+		},
+		getEntity,
+	);
+
+	server.registerTool(
+		"knowledge_list_aspects",
+		{
+			title: "Knowledge: List Aspects",
+			description:
+				"List aspects, which are broad rooms under an entity. " +
+				"Use this before knowledge_list_groups when you want step-by-step navigation.",
+			inputSchema: listAspectsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAspects,
+	);
+
+	server.registerTool(
+		"knowledge_list_groups",
+		{
+			title: "Knowledge: List Groups",
+			description:
+				"List groups, which are dresser-like subdivisions inside an aspect. " +
+				"Use this to find the right subgroup before opening claim drawers.",
+			inputSchema: listGroupsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listGroups,
+	);
+
+	server.registerTool(
+		"knowledge_list_claims",
+		{
+			title: "Knowledge: List Claims",
+			description:
+				"List claim keys, which are drawers containing current and historical observations. " +
+				"Use this before knowledge_list_attributes when you need the actual saved notes.",
+			inputSchema: listClaimsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listClaims,
+	);
+
+	server.registerTool(
+		"knowledge_list_attributes",
+		{
+			title: "Knowledge: List Attributes",
+			description:
+				"List the saved observations inside one entity/aspect/group/claim path. " +
+				"Defaults to active/current rows; pass status=all when you need superseded history.",
+			inputSchema: listAttributesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAttributes,
+	);
+
 	server.registerTool(
 		"entity_list",
 		{
 			title: "List Entities",
-			description: "List knowledge graph entities with structural counts. Use this before drilling into aspects.",
-			inputSchema: z.object({
-				query: z.string().optional().describe("Optional entity name filter"),
-				type: z.string().optional().describe("Optional entity type filter"),
-				limit: z.number().optional().describe("Max entities to return, default 50"),
-				offset: z.number().optional().describe("Pagination offset, default 0"),
-				agent_id: z.string().optional().describe("Agent scope, default default"),
-			}),
+			description: "Compatibility alias for knowledge_list_entities.",
+			inputSchema: listEntitiesInput,
 			annotations: { readOnlyHint: true },
 		},
-		async ({ query, type, limit, offset, agent_id }) => {
-			const params = new URLSearchParams();
-			if (query) params.set("q", query);
-			if (type) params.set("type", type);
-			if (limit !== undefined) params.set("limit", String(limit));
-			if (offset !== undefined) params.set("offset", String(offset));
-			if (agent_id) params.set("agent_id", agent_id);
-			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/entities?${params}`);
-			if (!result.ok) return errorResult(`Entity list failed: ${result.error}`);
-			return textResult(result.data);
-		},
+		listEntities,
 	);
 
 	server.registerTool(
 		"entity_get",
 		{
 			title: "Get Entity",
-			description: "Resolve an entity by name and return its structural summary.",
-			inputSchema: z.object({
-				name: z.string().describe("Entity name, e.g. Nicholai or Signet"),
-				agent_id: z.string().optional().describe("Agent scope, default default"),
-			}),
+			description: "Compatibility alias for knowledge_get_entity.",
+			inputSchema: getEntityInput,
 			annotations: { readOnlyHint: true },
 		},
-		async ({ name, agent_id }) => {
-			const params = new URLSearchParams({ name });
-			if (agent_id) params.set("agent_id", agent_id);
-			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/entity?${params}`);
-			if (!result.ok) return errorResult(`Entity get failed: ${result.error}`);
-			return textResult(result.data);
-		},
+		getEntity,
 	);
 
 	server.registerTool(
 		"entity_aspects",
 		{
 			title: "List Entity Aspects",
-			description: "List rooms/aspects under an entity.",
-			inputSchema: z.object({
-				entity: z.string().describe("Entity name"),
-				agent_id: z.string().optional().describe("Agent scope, default default"),
-			}),
+			description: "Compatibility alias for knowledge_list_aspects.",
+			inputSchema: listAspectsInput,
 			annotations: { readOnlyHint: true },
 		},
-		async ({ entity, agent_id }) => {
-			const params = new URLSearchParams({ entity });
-			if (agent_id) params.set("agent_id", agent_id);
-			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/aspects?${params}`);
-			if (!result.ok) return errorResult(`Entity aspects failed: ${result.error}`);
-			return textResult(result.data);
-		},
+		listAspects,
 	);
 
 	server.registerTool(
 		"entity_groups",
 		{
 			title: "List Entity Groups",
-			description: "List dresser/group keys under an entity aspect.",
-			inputSchema: z.object({
-				entity: z.string().describe("Entity name"),
-				aspect: z.string().describe("Aspect name"),
-				agent_id: z.string().optional().describe("Agent scope, default default"),
-			}),
+			description: "Compatibility alias for knowledge_list_groups.",
+			inputSchema: listGroupsInput,
 			annotations: { readOnlyHint: true },
 		},
-		async ({ entity, aspect, agent_id }) => {
-			const params = new URLSearchParams({ entity, aspect });
-			if (agent_id) params.set("agent_id", agent_id);
-			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/groups?${params}`);
-			if (!result.ok) return errorResult(`Entity groups failed: ${result.error}`);
-			return textResult(result.data);
-		},
+		listGroups,
 	);
 
 	server.registerTool(
 		"entity_claims",
 		{
 			title: "List Entity Claims",
-			description: "List drawer/claim slots under an entity aspect group.",
-			inputSchema: z.object({
-				entity: z.string().describe("Entity name"),
-				aspect: z.string().describe("Aspect name"),
-				group: z.string().describe("Group key"),
-				agent_id: z.string().optional().describe("Agent scope, default default"),
-			}),
+			description: "Compatibility alias for knowledge_list_claims.",
+			inputSchema: listClaimsInput,
 			annotations: { readOnlyHint: true },
 		},
-		async ({ entity, aspect, group, agent_id }) => {
-			const params = new URLSearchParams({ entity, aspect, group });
-			if (agent_id) params.set("agent_id", agent_id);
-			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/claims?${params}`);
-			if (!result.ok) return errorResult(`Entity claims failed: ${result.error}`);
-			return textResult(result.data);
-		},
+		listClaims,
 	);
 
 	server.registerTool(
 		"entity_attributes",
 		{
 			title: "List Entity Attributes",
-			description: "List note/attribute observations under an entity aspect group claim path.",
-			inputSchema: z.object({
-				entity: z.string().describe("Entity name"),
-				aspect: z.string().describe("Aspect name"),
-				group: z.string().describe("Group key"),
-				claim: z.string().describe("Claim key"),
-				status: z.enum(["active", "superseded", "deleted", "all"]).optional().describe("Default active"),
-				kind: z.enum(["attribute", "constraint"]).optional(),
-				limit: z.number().optional().describe("Max attributes to return, default 50"),
-				offset: z.number().optional().describe("Pagination offset, default 0"),
-				agent_id: z.string().optional().describe("Agent scope, default default"),
-			}),
+			description: "Compatibility alias for knowledge_list_attributes.",
+			inputSchema: listAttributesInput,
 			annotations: { readOnlyHint: true },
 		},
-		async ({ entity, aspect, group, claim, status, kind, limit, offset, agent_id }) => {
-			const params = new URLSearchParams({ entity, aspect, group, claim });
-			if (status) params.set("status", status);
-			if (kind) params.set("kind", kind);
-			if (limit !== undefined) params.set("limit", String(limit));
-			if (offset !== undefined) params.set("offset", String(offset));
-			if (agent_id) params.set("agent_id", agent_id);
-			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/attributes?${params}`);
-			if (!result.ok) return errorResult(`Entity attributes failed: ${result.error}`);
-			return textResult(result.data);
-		},
+		listAttributes,
 	);
 
 	// ------------------------------------------------------------------

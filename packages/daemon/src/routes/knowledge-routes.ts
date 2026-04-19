@@ -10,6 +10,7 @@ import {
 	getEntityAspectsWithCounts,
 	getEntityDependenciesDetailed,
 	getEntityHealth,
+	getEntityKnowledgeTree,
 	getKnowledgeEntityByName,
 	getKnowledgeEntityDetail,
 	getKnowledgeGraphForConstellation,
@@ -29,6 +30,11 @@ import { AGENTS_DIR, authConfig } from "./state";
 import { resolveScopedAgentId, resolveScopedProject } from "./utils";
 
 export function registerKnowledgeRoutes(app: Hono): void {
+	const parseNavigationLimit = (value: string | undefined, fallback: number, max: number): number => {
+		const parsed = Number.parseInt(value ?? String(fallback), 10);
+		return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), max) : fallback;
+	};
+
 	app.get("/api/knowledge/entities", (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
@@ -76,6 +82,22 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		const entity = getKnowledgeEntityByName(getDbAccessor(), { agentId, name });
 		if (!entity) return c.json({ error: "Entity not found" }, 404);
 		return c.json(entity);
+	});
+
+	app.get("/api/knowledge/navigation/tree", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		const result = getEntityKnowledgeTree(getDbAccessor(), {
+			agentId,
+			entity,
+			maxAspects: parseNavigationLimit(c.req.query("max_aspects"), 20, 100),
+			maxGroups: parseNavigationLimit(c.req.query("max_groups"), 20, 100),
+			maxClaims: parseNavigationLimit(c.req.query("max_claims"), 50, 200),
+			depth: parseNavigationLimit(c.req.query("depth"), 3, 3),
+		});
+		if (!result) return c.json({ error: "Entity not found" }, 404);
+		return c.json(result);
 	});
 
 	app.get("/api/knowledge/navigation/aspects", (c) => {

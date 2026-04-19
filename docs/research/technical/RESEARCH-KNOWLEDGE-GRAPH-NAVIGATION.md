@@ -27,6 +27,7 @@ Signet should preserve its own graph model, but expose the same class of
 navigable operations:
 
 ```text
+knowledge_tree("Nicholai")
 entity.list()
 entity.get("Nicholai")
 entity.aspects("Nicholai")
@@ -60,3 +61,11 @@ Design implications:
    explicit way to request superseded history.
 5. Group and claim keys are stable machine handles, while display names can be
    layered on later.
+6. Tool names should optimize for agent visibility. A tool list should make the
+   traversal obvious without requiring the agent to infer that generic
+   `entity_*` tools are the knowledge graph browser.
+
+The compact tree view is the bridge between search and stepwise traversal. It
+does not replace precise list/read calls, but it gives an agent enough shape to
+choose the right aspect, group, and claim slot before spending context on the
+full attributes.

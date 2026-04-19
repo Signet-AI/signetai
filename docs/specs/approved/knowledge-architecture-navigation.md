@@ -60,11 +60,17 @@ Navigation reads are exposed under `/api/knowledge/navigation/*`:
 ```text
 GET /api/knowledge/navigation/entities
 GET /api/knowledge/navigation/entity?name=Nicholai
+GET /api/knowledge/navigation/tree?entity=Nicholai&depth=3
 GET /api/knowledge/navigation/aspects?entity=Nicholai
 GET /api/knowledge/navigation/groups?entity=Nicholai&aspect=food
 GET /api/knowledge/navigation/claims?entity=Nicholai&aspect=food&group=restaurants
 GET /api/knowledge/navigation/attributes?entity=Nicholai&aspect=food&group=restaurants&claim=favorite_restaurant
 ```
+
+The tree endpoint is the agent-friendly overview. It returns a bounded outline
+of one entity with aspects, groups, claim slots, counts, and active previews.
+`depth=1` stops at aspects, `depth=2` includes groups, and `depth=3` includes
+claim slots.
 
 Attribute reads default to active attributes. Passing `status=all` returns active
 and historical rows for that claim slot.
@@ -74,6 +80,13 @@ and historical rows for that claim slot.
 The daemon MCP server exposes matching read tools:
 
 ```text
+knowledge_tree
+knowledge_list_entities
+knowledge_get_entity
+knowledge_list_aspects
+knowledge_list_groups
+knowledge_list_claims
+knowledge_list_attributes
 entity_list
 entity_get
 entity_aspects
@@ -82,7 +95,10 @@ entity_claims
 entity_attributes
 ```
 
-Tools return compact JSON summaries and preserve `agent_id` scoping.
+The `knowledge_*` tools are the preferred agent-facing surface because the
+names make the domain and traversal order obvious in tool lists. The `entity_*`
+tools remain compatibility aliases. Tools return compact JSON summaries and
+preserve `agent_id` scoping.
 
 ## Success criteria
 
@@ -93,3 +109,5 @@ Tools return compact JSON summaries and preserve `agent_id` scoping.
 3. Supersession remains scoped and cannot clobber unrelated groups under the
    same aspect.
 4. Navigation tools are read-only and safe for regular agent exploration.
+5. Agents have an obvious first tool, `knowledge_tree`, for scanning graph
+   structure before choosing a narrower list/read operation.
