@@ -372,10 +372,6 @@ six questions in about 7 minutes wall time. The extraction/remember side average
 about 65 seconds per question. The remaining long pole was indexing wait on a
 couple of questions, not extraction.
 
-Do not publish or commit these score artifacts as official benchmark numbers.
-They are useful as a progress marker and regression target while the harness is
-still being integrated.
-
 ## What is being measured
 
 The default `signet` provider uses the public Signet daemon HTTP API:
