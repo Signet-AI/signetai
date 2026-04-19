@@ -43,7 +43,8 @@ Options:
   -j, --judge            Judge model (see 'help models')
   -r, --run-id           Run identifier
   -m, --answering-model  Answering model (default: ${DEFAULT_ANSWERING_MODEL})
-  -q, --question-id      Question ID (for test command)
+  -q, --question-id      Question ID (repeatable for run/ingest, required for test)
+  --question-ids-file    Read run/ingest question IDs from a newline-delimited file
   --force                Clear checkpoint and start fresh
 
 Run 'bun run src/index.ts help <topic>' for more details:

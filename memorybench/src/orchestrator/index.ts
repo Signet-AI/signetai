@@ -162,6 +162,17 @@ export class Orchestrator {
         `No ${benchmarkName} questions matched type filter: ${(questionTypes || []).join(", ")}`
       )
     }
+    if (questionIds && questionIds.length > 0) {
+      const availableQuestionIds = new Set(allQuestions.map((question) => question.questionId))
+      const missingQuestionIds = questionIds.filter(
+        (questionId) => !availableQuestionIds.has(questionId)
+      )
+      if (missingQuestionIds.length > 0) {
+        throw new Error(
+          `Question ids not found in ${benchmarkName}${questionTypes?.length ? " after type filtering" : ""}: ${missingQuestionIds.join(", ")}`
+        )
+      }
+    }
 
     if (this.checkpointManager.exists(runId) && !isNewRun) {
       checkpoint = this.checkpointManager.load(runId)!

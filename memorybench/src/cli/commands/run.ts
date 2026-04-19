@@ -8,6 +8,7 @@ import { getAvailableProviders } from "../../providers"
 import { getAvailableBenchmarks } from "../../benchmarks"
 import { listAvailableModels, DEFAULT_ANSWERING_MODEL } from "../../utils/models"
 import { logger } from "../../utils/logger"
+import { appendCsvValues, parseCommaSeparated, readIdListFile } from "../args"
 
 const DEFAULT_JUDGE_MODEL = "gpt-4o"
 
@@ -18,6 +19,7 @@ interface RunArgs {
   runId: string
   answeringModel?: string
   limit?: number
+  questionIds?: string[]
   questionTypes?: string[]
   sample?: number
   sampleType?: SampleType
@@ -31,14 +33,6 @@ function generateRunId(): string {
   const date = now.toISOString().slice(0, 10).replace(/-/g, "")
   const time = now.toISOString().slice(11, 19).replace(/:/g, "")
   return `run-${date}-${time}`
-}
-
-function parseQuestionTypes(value: string | undefined): string[] {
-  if (!value) return []
-  return value
-    .split(",")
-    .map((type) => type.trim())
-    .filter((type) => type.length > 0)
 }
 
 export function parseRunArgs(args: string[]): RunArgs | null {
@@ -59,8 +53,32 @@ export function parseRunArgs(args: string[]): RunArgs | null {
       parsed.answeringModel = args[++i]
     } else if (arg === "-l" || arg === "--limit") {
       parsed.limit = parseInt(args[++i], 10)
+    } else if (arg === "-q" || arg === "--question-id") {
+      const next = args[++i]
+      if (!next) {
+        logger.error(`${arg} requires a question id`)
+        return null
+      }
+      const questionIds = appendCsvValues(parsed.questionIds, next)
+      if (questionIds.length === (parsed.questionIds || []).length) {
+        logger.error("Question id filter cannot be empty")
+        return null
+      }
+      parsed.questionIds = questionIds
+    } else if (arg === "--question-ids-file") {
+      const next = args[++i]
+      if (!next) {
+        logger.error("--question-ids-file requires a path")
+        return null
+      }
+      const questionIds = [...(parsed.questionIds || []), ...readIdListFile(next)]
+      if (questionIds.length === (parsed.questionIds || []).length) {
+        logger.error("Question ids file cannot be empty")
+        return null
+      }
+      parsed.questionIds = questionIds
     } else if (arg === "-t" || arg === "--type" || arg === "--types") {
-      const questionTypes = parseQuestionTypes(args[++i])
+      const questionTypes = parseCommaSeparated(args[++i])
       if (questionTypes.length === 0) {
         logger.error("Question type filter cannot be empty")
         return null
@@ -135,6 +153,8 @@ export async function runCommand(args: string[]): Promise<void> {
       "  -r, --run-id           Run identifier (required for continuation, auto-generated for new runs)"
     )
     console.log(`  -m, --answering-model  Answering model (default: ${DEFAULT_ANSWERING_MODEL})`)
+    console.log("  -q, --question-id      Filter question id (repeat or comma-separate)")
+    console.log("  --question-ids-file    Read question ids from a newline-delimited file")
     console.log("  -t, --type             Filter question type (repeat or comma-separate)")
     console.log("  -s, --sample           Sample N questions per category")
     console.log("  --sample-type          Sample type: consecutive (default), random")
@@ -222,6 +242,7 @@ export async function runCommand(args: string[]): Promise<void> {
     judgeModel: parsed.judgeModel!,
     runId: parsed.runId,
     answeringModel: parsed.answeringModel,
+    questionIds: parsed.questionIds,
     questionTypes: parsed.questionTypes,
     sampling,
     concurrency: parsed.concurrency,

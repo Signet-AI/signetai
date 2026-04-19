@@ -6,12 +6,14 @@ import { orchestrator, CheckpointManager } from "../../orchestrator"
 import { getAvailableProviders } from "../../providers"
 import { getAvailableBenchmarks } from "../../benchmarks"
 import { logger } from "../../utils/logger"
+import { appendCsvValues, parseCommaSeparated, readIdListFile } from "../args"
 
 interface IngestArgs {
   provider?: string
   benchmark?: string
   runId: string
   limit?: number
+  questionIds?: string[]
   questionTypes?: string[]
   sample?: number
   sampleType?: SampleType
@@ -24,14 +26,6 @@ function generateRunId(): string {
   const date = now.toISOString().slice(0, 10).replace(/-/g, "")
   const time = now.toISOString().slice(11, 19).replace(/:/g, "")
   return `run-${date}-${time}`
-}
-
-function parseQuestionTypes(value: string | undefined): string[] {
-  if (!value) return []
-  return value
-    .split(",")
-    .map((type) => type.trim())
-    .filter((type) => type.length > 0)
 }
 
 export function parseIngestArgs(args: string[]): IngestArgs | null {
@@ -48,8 +42,32 @@ export function parseIngestArgs(args: string[]): IngestArgs | null {
       parsed.runId = args[++i]
     } else if (arg === "-l" || arg === "--limit") {
       parsed.limit = parseInt(args[++i], 10)
+    } else if (arg === "-q" || arg === "--question-id") {
+      const next = args[++i]
+      if (!next) {
+        logger.error(`${arg} requires a question id`)
+        return null
+      }
+      const questionIds = appendCsvValues(parsed.questionIds, next)
+      if (questionIds.length === (parsed.questionIds || []).length) {
+        logger.error("Question id filter cannot be empty")
+        return null
+      }
+      parsed.questionIds = questionIds
+    } else if (arg === "--question-ids-file") {
+      const next = args[++i]
+      if (!next) {
+        logger.error("--question-ids-file requires a path")
+        return null
+      }
+      const questionIds = [...(parsed.questionIds || []), ...readIdListFile(next)]
+      if (questionIds.length === (parsed.questionIds || []).length) {
+        logger.error("Question ids file cannot be empty")
+        return null
+      }
+      parsed.questionIds = questionIds
     } else if (arg === "-t" || arg === "--type" || arg === "--types") {
-      const questionTypes = parseQuestionTypes(args[++i])
+      const questionTypes = parseCommaSeparated(args[++i])
       if (questionTypes.length === 0) {
         logger.error("Question type filter cannot be empty")
         return null
@@ -106,6 +124,8 @@ export async function ingestCommand(args: string[]): Promise<void> {
     console.log(`  -p, --provider   Provider: ${getAvailableProviders().join(", ")}`)
     console.log(`  -b, --benchmark  Benchmark: ${getAvailableBenchmarks().join(", ")}`)
     console.log("  -r, --run-id     Run identifier")
+    console.log("  -q, --question-id Filter question id (repeat or comma-separate)")
+    console.log("  --question-ids-file Read question ids from a newline-delimited file")
     console.log("  -t, --type       Filter question type (repeat or comma-separate)")
     console.log("  -s, --sample     Sample N questions per category")
     console.log("  -l, --limit      Limit total number of questions to ingest")
@@ -174,6 +194,7 @@ export async function ingestCommand(args: string[]): Promise<void> {
     provider: parsed.provider as ProviderName,
     benchmark: parsed.benchmark as BenchmarkName,
     runId: parsed.runId,
+    questionIds: parsed.questionIds,
     questionTypes: parsed.questionTypes,
     sampling,
     concurrency: parsed.concurrency,

@@ -64,6 +64,18 @@ temporal-reasoning
 knowledge-update
 ```
 
+Run an explicit question set:
+
+```bash
+bun run bench -- --question-id 32260d93 --question-id 54026fce
+bun run bench:ingest -- --question-ids-file memorybench/config/autoresearch/longmemeval-canary-12.txt
+```
+
+`--question-id` is repeatable and also accepts comma-separated ids.
+`--question-ids-file` reads one id per line and ignores blank lines and
+`#` comments. Use this for fixed canaries so reruns test the same questions
+instead of whatever a fresh random sample happens to draw.
+
 Skip the workspace build when you already built locally:
 
 ```bash
@@ -297,6 +309,77 @@ the parts we are actively tuning.
 When reporting results from a cached workspace, say so plainly. The phrase we
 use internally is "warmed dev workspace." A production/comparable score must use
 a fresh isolated workspace and the intended production model configuration.
+
+## Autoresearch ratchet workflow
+
+The overnight random loop was useful for collecting failures, but it was not a
+self-improving research loop. It repeatedly sampled new twelve-question runs
+against the same code, so a good row could just mean the sample was easier. That
+kind of loop is exploration only. It can feed a failure queue, but it is not a
+scoreboard.
+
+The local autoresearch workflow uses a fixed LongMemEval canary instead:
+
+```text
+memorybench/config/autoresearch/longmemeval-canary-12.txt
+```
+
+The canary mixes known failure targets with stable controls across
+single-session preference, temporal reasoning, knowledge update, multi-session,
+single-session assistant, and single-session user questions. Keep that file
+stable unless we intentionally reset the scoreboard.
+
+The ratchet rule is boring on purpose:
+
+1. Pick one hypothesis.
+2. Make the smallest code or prompt change that tests it.
+3. Run the fixed canary against the same model split.
+4. Keep the patch only if the canary improves without known regressions.
+5. If a random exploration run finds a new skeleton, add it to the failure queue
+   or propose a canary update separately.
+
+Use the helper script for the mechanics:
+
+```bash
+bun scripts/autoresearch-memorybench.ts status
+bun scripts/autoresearch-memorybench.ts ids
+bun scripts/autoresearch-memorybench.ts triage --run-id <run-id> --write-queue
+bun scripts/autoresearch-memorybench.ts compare --base <old-run-id> --candidate <new-run-id>
+bun scripts/autoresearch-memorybench.ts run-canary
+```
+
+`run-canary` prints the exact two-stage local commands by default. Add
+`--execute` only when the local OpenAI-compatible model server is already
+running. The default local split is Gemma 4 E4B for ingestion through vLLM,
+Gemma 4 26B Q5 for answer/judge through llama.cpp, and Ollama
+`nomic-embed-text` for embeddings. It does not use OpenRouter.
+
+```bash
+bun scripts/autoresearch-memorybench.ts run-canary --execute
+```
+
+If vLLM and llama.cpp cannot be resident at the same time, run the phases
+separately:
+
+```bash
+bun scripts/autoresearch-memorybench.ts run-canary --ingest-only --execute
+# swap vLLM for llama.cpp
+bun scripts/autoresearch-memorybench.ts run-canary --skip-ingest --execute --run-id <same-run-id>
+```
+
+If they are on separate ports, pass `--ingest-base-url` and `--answer-base-url`.
+
+If a change only affects recall, ranking, context packing, answer prompting, or
+judging, reuse the warmed canary workspace and skip ingestion:
+
+```bash
+bun scripts/autoresearch-memorybench.ts run-canary --skip-ingest --execute
+```
+
+If a change affects extraction, the structured remember request shape, graph
+storage, embeddings, or indexing, invalidate the workspace and ingest again.
+That is the line between honest fast iteration and fooling ourselves. No need
+to laminate the pancake.
 
 ## Progress log
 
