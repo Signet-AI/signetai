@@ -19,37 +19,40 @@ import { join } from "node:path";
  *   points to the temp workspace from the very first evaluation.
  */
 
+const prevSignetPath = process.env.SIGNET_PATH;
 const tmpDir = join(tmpdir(), `signet-test-auth-coloc-${Date.now()}`);
 mkdirSync(join(tmpDir, "memory"), { recursive: true });
 mkdirSync(join(tmpDir, ".daemon"), { recursive: true });
 writeFileSync(join(tmpDir, ".daemon", "auth-secret"), "test-secret-key-32-bytes-min!!");
 writeFileSync(
 	join(tmpDir, "agent.yaml"),
-	[
-		"auth:",
-		"  mode: team",
-		"  rateLimits:",
-		"    forget:",
-		"      windowMs: 60000",
-		"      max: 30",
-		"    modify:",
-		"      windowMs: 60000",
-		"      max: 60",
-		"    batchForget:",
-		"      windowMs: 60000",
-		"      max: 5",
-		"    admin:",
-		"      windowMs: 60000",
-		"      max: 10",
-		"    recallLlm:",
-		"      windowMs: 60000",
-		"      max: 60",
-	].join("\n") + "\n",
+	`auth:
+  mode: team
+  rateLimits:
+    forget:
+      windowMs: 60000
+      max: 30
+    modify:
+      windowMs: 60000
+      max: 60
+    batchForget:
+      windowMs: 60000
+      max: 5
+    admin:
+      windowMs: 60000
+      max: 10
+    recallLlm:
+      windowMs: 60000
+      max: 60
+`,
 );
 process.env.SIGNET_PATH = tmpDir;
 
 afterAll(() => {
-	delete process.env.SIGNET_PATH;
+	if (prevSignetPath === undefined) {
+		Reflect.deleteProperty(process.env, "SIGNET_PATH");
+	}
+	if (prevSignetPath !== undefined) process.env.SIGNET_PATH = prevSignetPath;
 	rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -72,13 +75,28 @@ describe("auth guard co-location", () => {
 		return new Hono();
 	}
 
-	async function status(
-		app: InstanceType<typeof import("hono").Hono>,
-		method: string,
-		path: string,
-	): Promise<number> {
+	async function status(app: InstanceType<typeof import("hono").Hono>, method: string, path: string): Promise<number> {
 		const res = await app.request(path, { method });
 		return res.status;
+	}
+
+	function sessionDeps(): import("./routes/session-routes").SessionRoutesDeps {
+		return {
+			gitConfig: {
+				enabled: false,
+				autoCommit: false,
+				autoSync: false,
+				syncInterval: 0,
+				remote: "",
+				branch: "",
+			},
+			stopGitSyncTimer: async () => {},
+			startGitSyncTimer: () => {},
+			getGitStatus: async () => ({}),
+			gitPull: async () => ({}),
+			gitPush: async () => ({}),
+			gitSync: async () => ({}),
+		};
 	}
 
 	describe("memory routes have own guards", () => {
@@ -94,21 +112,35 @@ describe("auth guard co-location", () => {
 		it("GET /api/sessions/summaries returns 403 without auth", async () => {
 			const app = await makeApp();
 			const { registerSessionRoutes } = await import("./routes/session-routes");
-			registerSessionRoutes(app, {
-				getGitStatus: async () => ({}),
-				gitSync: async () => ({}),
-			} as any);
+			registerSessionRoutes(app, sessionDeps());
 			expect(await status(app, "GET", "/api/sessions/summaries")).toBe(403);
 		});
 
 		it("POST /api/git/sync returns 403 without auth", async () => {
 			const app = await makeApp();
 			const { registerSessionRoutes } = await import("./routes/session-routes");
-			registerSessionRoutes(app, {
-				getGitStatus: async () => ({}),
-				gitSync: async () => ({}),
-			} as any);
+			registerSessionRoutes(app, sessionDeps());
 			expect(await status(app, "POST", "/api/git/sync")).toBe(403);
+		});
+	});
+
+	describe("misc routes have config guards", () => {
+		it("POST /api/config returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			expect(await status(app, "POST", "/api/config")).toBe(403);
+		});
+
+		it("POST /api/config rejects oversized payloads before body parsing", async () => {
+			const app = await makeApp();
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			registerMiscRoutes(app);
+			const res = await app.request("/api/config", {
+				method: "POST",
+				headers: { "content-length": "1048577" },
+			});
+			expect(res.status).toBe(413);
 		});
 	});
 

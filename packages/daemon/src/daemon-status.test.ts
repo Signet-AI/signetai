@@ -32,7 +32,7 @@ describe("daemon status contract", () => {
 
 	afterAll(() => {
 		if (prev === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		}
 		if (prev !== undefined) process.env.SIGNET_PATH = prev;
 		rmSync(dir, { recursive: true, force: true });

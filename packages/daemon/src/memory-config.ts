@@ -56,6 +56,9 @@ export type ResolvedPipelineV2Config = Omit<PipelineV2Config, "extraction"> & {
 	readonly extraction: Omit<PipelineV2Config["extraction"], "fallbackProvider"> & {
 		readonly fallbackProvider: ExtractionFallbackProvider;
 	};
+	readonly guardrails: Omit<PipelineV2Config["guardrails"], "contextBudgetChars"> & {
+		readonly contextBudgetChars: number;
+	};
 };
 
 export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
