@@ -677,6 +677,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				importance: z.number().optional().describe("Importance score 0-1"),
 				tags: z.string().optional().describe("Comma-separated tags for categorization"),
 				pinned: z.boolean().optional().describe("Pin this memory — prevents decay, bypasses 0.95^days aging"),
+				createdAt: z
+					.string()
+					.optional()
+					.describe("Source ISO timestamp for imported/older memories; used for currentness and supersession."),
 				transcript: z
 					.string()
 					.optional()
@@ -698,10 +702,16 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 						aspects: z
 							.array(
 								z.object({
-									entity: z.string(),
+									entityName: z.string(),
+									entityType: z.string().optional(),
 									aspect: z.string(),
-									value: z.string(),
-									confidence: z.number().optional(),
+									attributes: z.array(
+										z.object({
+											content: z.string(),
+											confidence: z.number().optional(),
+											importance: z.number().optional(),
+										}),
+									),
 								}),
 							)
 							.optional(),
@@ -709,12 +719,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					})
 					.optional()
 					.describe(
-						"Pre-extracted structured data (entities, aspects, hints). Skips pipeline extraction when provided.",
+						"Pre-extracted structured data: entities, entity aspects with attributes, and hints. Skips pipeline extraction when provided.",
 					),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ content, type, importance, tags, transcript, structured, pinned }) => {
+		async ({ content, type, importance, tags, transcript, structured, pinned, createdAt }) => {
 			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
 			let body = content;
 			if (tags) {
@@ -729,6 +739,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					transcript,
 					structured,
 					pinned,
+					createdAt,
 				},
 			});
 

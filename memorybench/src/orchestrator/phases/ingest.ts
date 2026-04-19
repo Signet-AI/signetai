@@ -7,6 +7,40 @@ import { ConcurrentExecutor } from "../concurrent"
 import { resolveConcurrency } from "../../types/concurrency"
 
 const RATE_LIMIT_MS = 1000
+const DEFAULT_SESSION_CONCURRENCY = 1
+const MAX_SESSION_CONCURRENCY = 16
+
+function readBoundedPositiveInt(value: string | undefined, fallback: number, max: number): number {
+  const parsed = Number.parseInt(value ?? "", 10)
+  if (!Number.isInteger(parsed) || parsed < 1) return fallback
+  return Math.min(parsed, max)
+}
+
+export function resolveSessionConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+  return readBoundedPositiveInt(
+    env.MEMORYBENCH_SESSION_CONCURRENCY || env.SIGNET_BENCH_SESSION_CONCURRENCY,
+    DEFAULT_SESSION_CONCURRENCY,
+    MAX_SESSION_CONCURRENCY
+  )
+}
+
+function cloneIngestResult(result?: IngestResult): IngestResult {
+  return {
+    documentIds: [...(result?.documentIds || [])],
+    taskIds: [...(result?.taskIds || [])],
+  }
+}
+
+function appendIngestResult(target: IngestResult, source: IngestResult): void {
+  target.documentIds.push(...source.documentIds)
+  if (source.taskIds && source.taskIds.length > 0) {
+    target.taskIds = [...(target.taskIds || []), ...source.taskIds]
+  }
+}
+
+function finalizeIngestResult(result: IngestResult): IngestResult {
+  return result.taskIds && result.taskIds.length > 0 ? result : { documentIds: result.documentIds }
+}
 
 export async function runIngestPhase(
   provider: Provider,
@@ -60,48 +94,43 @@ export async function runIngestPhase(
       try {
         const completedSessions =
           checkpoint.questions[question.questionId].phases.ingest.completedSessions
-        const combinedResult: IngestResult = { documentIds: [], taskIds: [] }
-
-        for (const session of sessions) {
-          if (completedSessions.includes(session.sessionId)) {
-            continue
-          }
-
-          const result = await provider.ingest([session], { containerTag })
-
-          combinedResult.documentIds.push(...result.documentIds)
-          if (result.taskIds) {
-            combinedResult.taskIds!.push(...result.taskIds)
-          }
-
-          completedSessions.push(session.sessionId)
-          checkpointManager.updatePhase(checkpoint, question.questionId, "ingest", {
-            completedSessions,
-          })
-        }
-
-        if (combinedResult.taskIds && combinedResult.taskIds.length === 0) {
-          delete combinedResult.taskIds
-        }
-
         const existingResult = checkpoint.questions[question.questionId].phases.ingest.ingestResult
-        if (existingResult) {
-          combinedResult.documentIds = [
-            ...existingResult.documentIds,
-            ...combinedResult.documentIds,
-          ]
-          if (existingResult.taskIds || combinedResult.taskIds) {
-            combinedResult.taskIds = [
-              ...(existingResult.taskIds || []),
-              ...(combinedResult.taskIds || []),
-            ]
-          }
+        const combinedResult = cloneIngestResult(existingResult)
+        const pendingSessions = sessions.filter((session) => {
+          return !completedSessions.includes(session.sessionId)
+        })
+        const sessionConcurrency = resolveSessionConcurrency()
+
+        if (pendingSessions.length > 0 && sessionConcurrency > 1) {
+          logger.debug(
+            `Ingesting ${pendingSessions.length} session(s) for ${question.questionId} with session concurrency ${sessionConcurrency}`
+          )
         }
+
+        await ConcurrentExecutor.executeBatched({
+          items: pendingSessions,
+          concurrency: sessionConcurrency,
+          rateLimitMs: 0,
+          runId: checkpoint.runId,
+          phaseName: `ingest:${question.questionId}:sessions`,
+          executeTask: async ({ item: session }) => {
+            const result = await provider.ingest([session], { containerTag })
+            return { sessionId: session.sessionId, result }
+          },
+          onTaskComplete: (_context, sessionResult) => {
+            appendIngestResult(combinedResult, sessionResult.result)
+            completedSessions.push(sessionResult.sessionId)
+            checkpointManager.updatePhase(checkpoint, question.questionId, "ingest", {
+              completedSessions: [...completedSessions],
+              ingestResult: finalizeIngestResult(combinedResult),
+            })
+          },
+        })
 
         const durationMs = Date.now() - startTime
         checkpointManager.updatePhase(checkpoint, question.questionId, "ingest", {
           status: "completed",
-          ingestResult: combinedResult,
+          ingestResult: finalizeIngestResult(combinedResult),
           completedAt: new Date().toISOString(),
           durationMs,
         })

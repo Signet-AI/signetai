@@ -7,7 +7,7 @@ import type { Benchmark } from "../../types/benchmark"
 import type { RunCheckpoint } from "../../types/checkpoint"
 import type { Provider } from "../../types/provider"
 import { CheckpointManager } from "../checkpoint"
-import { config } from "../../utils/config"
+import { config, createConfiguredOpenAI } from "../../utils/config"
 import { logger } from "../../utils/logger"
 import { getModelConfig, ModelConfig, DEFAULT_ANSWERING_MODEL } from "../../utils/models"
 import { buildDefaultAnswerPrompt } from "../../prompts/defaults"
@@ -30,7 +30,7 @@ function getAnsweringModel(modelAlias: string): {
   switch (modelConfig.provider) {
     case "openai":
       return {
-        client: createOpenAI({ apiKey: config.openaiApiKey }),
+        client: createConfiguredOpenAI(config.openaiApiKey),
         modelConfig,
       }
     case "anthropic":

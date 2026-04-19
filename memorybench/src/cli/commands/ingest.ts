@@ -1,5 +1,7 @@
 import type { ProviderName } from "../../types/provider"
 import type { BenchmarkName } from "../../types/benchmark"
+import type { ConcurrencyConfig } from "../../types/concurrency"
+import type { SamplingConfig, SampleType } from "../../types/checkpoint"
 import { orchestrator, CheckpointManager } from "../../orchestrator"
 import { getAvailableProviders } from "../../providers"
 import { getAvailableBenchmarks } from "../../benchmarks"
@@ -9,6 +11,11 @@ interface IngestArgs {
   provider?: string
   benchmark?: string
   runId: string
+  limit?: number
+  questionTypes?: string[]
+  sample?: number
+  sampleType?: SampleType
+  concurrency?: ConcurrencyConfig
   force?: boolean
 }
 
@@ -19,8 +26,17 @@ function generateRunId(): string {
   return `run-${date}-${time}`
 }
 
+function parseQuestionTypes(value: string | undefined): string[] {
+  if (!value) return []
+  return value
+    .split(",")
+    .map((type) => type.trim())
+    .filter((type) => type.length > 0)
+}
+
 export function parseIngestArgs(args: string[]): IngestArgs | null {
   const parsed: Partial<IngestArgs> = {}
+  const concurrency: Partial<ConcurrencyConfig> = {}
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -30,6 +46,31 @@ export function parseIngestArgs(args: string[]): IngestArgs | null {
       parsed.benchmark = args[++i]
     } else if (arg === "-r" || arg === "--run-id") {
       parsed.runId = args[++i]
+    } else if (arg === "-l" || arg === "--limit") {
+      parsed.limit = parseInt(args[++i], 10)
+    } else if (arg === "-t" || arg === "--type" || arg === "--types") {
+      const questionTypes = parseQuestionTypes(args[++i])
+      if (questionTypes.length === 0) {
+        logger.error("Question type filter cannot be empty")
+        return null
+      }
+      parsed.questionTypes = [...(parsed.questionTypes || []), ...questionTypes]
+    } else if (arg === "-s" || arg === "--sample") {
+      parsed.sample = parseInt(args[++i], 10)
+    } else if (arg === "--sample-type") {
+      const type = args[++i] as SampleType
+      if (type === "consecutive" || type === "random") {
+        parsed.sampleType = type
+      } else {
+        logger.error(`Invalid sample type: ${type}. Valid types: consecutive, random`)
+        return null
+      }
+    } else if (arg === "--concurrency") {
+      concurrency.default = parseInt(args[++i], 10)
+    } else if (arg === "--concurrency-ingest") {
+      concurrency.ingest = parseInt(args[++i], 10)
+    } else if (arg === "--concurrency-indexing") {
+      concurrency.indexing = parseInt(args[++i], 10)
     } else if (arg === "--force") {
       parsed.force = true
     }
@@ -42,6 +83,10 @@ export function parseIngestArgs(args: string[]): IngestArgs | null {
 
   if (!parsed.runId) {
     parsed.runId = generateRunId()
+  }
+
+  if (Object.keys(concurrency).length > 0) {
+    parsed.concurrency = concurrency as ConcurrencyConfig
   }
 
   return parsed as IngestArgs
@@ -61,6 +106,12 @@ export async function ingestCommand(args: string[]): Promise<void> {
     console.log(`  -p, --provider   Provider: ${getAvailableProviders().join(", ")}`)
     console.log(`  -b, --benchmark  Benchmark: ${getAvailableBenchmarks().join(", ")}`)
     console.log("  -r, --run-id     Run identifier")
+    console.log("  -t, --type       Filter question type (repeat or comma-separate)")
+    console.log("  -s, --sample     Sample N questions per category")
+    console.log("  -l, --limit      Limit total number of questions to ingest")
+    console.log("  --concurrency N          Default concurrency for ingest/indexing")
+    console.log("  --concurrency-ingest N   Concurrency for ingest phase")
+    console.log("  --concurrency-indexing N Concurrency for indexing phase")
     console.log("  --force          Clear existing checkpoint and start fresh")
     return
   }
@@ -105,10 +156,27 @@ export async function ingestCommand(args: string[]): Promise<void> {
     }
   }
 
+  let sampling: SamplingConfig | undefined
+  if (parsed.sample) {
+    sampling = {
+      mode: "sample",
+      sampleType: parsed.sampleType || "consecutive",
+      perCategory: parsed.sample,
+    }
+  } else if (parsed.limit) {
+    sampling = {
+      mode: "limit",
+      limit: parsed.limit,
+    }
+  }
+
   await orchestrator.ingest({
     provider: parsed.provider as ProviderName,
     benchmark: parsed.benchmark as BenchmarkName,
     runId: parsed.runId,
+    questionTypes: parsed.questionTypes,
+    sampling,
+    concurrency: parsed.concurrency,
     force: parsed.force,
   })
 }

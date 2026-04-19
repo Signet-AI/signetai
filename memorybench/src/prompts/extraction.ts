@@ -5,6 +5,32 @@ import type { UnifiedSession } from "../types/unified"
 /** Model used for memory extraction */
 const EXTRACTION_MODEL = process.env.MEMORYBENCH_EXTRACTION_MODEL || "gpt-4o"
 
+function readPositiveInt(name: string, fallback: number): number {
+  const value = Number.parseInt(process.env[name] || "", 10)
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+const EXTRACTION_MAX_TOKENS = readPositiveInt("MEMORYBENCH_EXTRACTION_MAX_TOKENS", 1200)
+const STRUCTURED_EXTRACTION_MAX_TOKENS = readPositiveInt(
+  "MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS",
+  1800
+)
+
+function extractionModelSupportsTemperature(): boolean {
+  const model = EXTRACTION_MODEL.toLowerCase()
+  return !(
+    model.startsWith("inception/mercury") ||
+    model.startsWith("gpt-5") ||
+    model.startsWith("o1") ||
+    model.startsWith("o3") ||
+    model.startsWith("o4")
+  )
+}
+
+function extractionTemperature(): Record<string, number> {
+  return extractionModelSupportsTemperature() ? { temperature: 0 } : {}
+}
+
 /**
  * Build an extraction prompt that instructs the LLM to extract structured
  * memories from a conversation session. Produces MEMORY.md-style markdown
@@ -66,6 +92,9 @@ Specificity rules:
 - Include counts and quantities ("camped at beach, mountains, and forest" not just "camped at beach")
 - List all items when multiple are mentioned, do not summarize a list into a category
 - Retain proper nouns, titles, and specific names over generic descriptions
+- Preserve named products, apps, websites, streaming services, tools, brands, venues, works, and platforms even when they seem incidental
+- Treat recent named-service usage as memorable ("using Spotify lately", "watching on Netflix", "tracking in TripIt")
+- If a speaker says they have been using, listening, watching, reading, tracking, or syncing on a named service/app/platform lately or recently, write a separate fact naming that service explicitly. Do not fold it into a generic preference.
 
 Temporal rules:
 - The conversation took place on ${date}
@@ -97,8 +126,8 @@ export async function extractMemories(
   const params: Record<string, unknown> = {
     model: openai(EXTRACTION_MODEL),
     prompt,
-    maxTokens: 2000,
-    temperature: 0,
+    maxTokens: EXTRACTION_MAX_TOKENS,
+    ...extractionTemperature(),
   }
 
   const { text } = await generateText(params as Parameters<typeof generateText>[0])
@@ -107,7 +136,8 @@ export async function extractMemories(
 }
 
 /** Entity types for structured extraction */
-const ENTITY_TYPES = "person, project, system, tool, concept, skill, task, unknown"
+const ENTITY_TYPES =
+  "person, organization, place, project, system, service, tool, product, work, event, unknown"
 
 /** Aspect categories for structured extraction */
 const ASPECT_CATEGORIES =
@@ -119,6 +149,11 @@ const ASPECT_CATEGORIES =
  */
 export function buildStructuredPrompt(content: string): string {
   return `You are a knowledge graph extraction system. Given the following extracted memories, produce a structured JSON object with entities, aspects, and hints.
+
+Structured remembering model:
+- Entity: a durable referent that can be expanded by aspects and attributes.
+- Aspect: a stable facet of an entity, such as music preferences, commute routine, baking preferences, dining history, project tools, or temporal state.
+- Attribute: a specific sourced claim attached to an entity aspect.
 
 <memories>
 ${content}
@@ -143,8 +178,17 @@ Return a JSON object with this exact schema:
 Rules:
 - Entity types: ${ENTITY_TYPES}
 - Aspect categories: ${ASPECT_CATEGORIES}
-- Extract ALL entities mentioned (people, places, projects, tools, etc.)
-- For each entity, extract relevant aspects with specific factual attributes
+- Entities are durable referents, not just proper nouns.
+- Valid entities: named people, places, organizations, products, apps, websites, services, tools, brands, titled works, named projects, named events, and the scoped benchmark participants "Benchmark User" and "Benchmark Assistant".
+- For personal memories, map Speaker A, user, I, and me to the entity "Benchmark User".
+- For assistant-side memories, map Speaker B and assistant to the entity "Benchmark Assistant".
+- Generic personal preferences, routines, counts, and history belong as aspects/attributes of Benchmark User.
+- Invalid entities: common nouns without a stable referent, activities by themselves, dates by themselves, verbs, adjectives, stopwords, or markdown section headings.
+- Never emit section headings or fallbacks such as Key Facts, Preferences, Events, Relationships, Decisions, Plans, Properties, General, None, "no entities", or "no proper nouns" as entities.
+- If a memory has only generic user facts, use Benchmark User as the entity and attach those facts as aspects/attributes.
+- For each entity, extract relevant aspects with specific factual attributes.
+- Attach generic user facts to Benchmark User instead of dropping them.
+- Preserve temporal and update language in attributes, including "currently", "recently", "previously", dates, counts, and before/after relationships.
 - Generate 3-5 diverse hint questions per memory that it could help answer
 - Confidence: how certain the information is (0-1)
 - Importance: how significant the fact is for future recall (0-1)
@@ -176,13 +220,225 @@ interface StructuredExtraction {
   }
 }
 
-/** Parse JSON from LLM output, stripping code fences if present */
-function parseJson(raw: string): unknown {
+const ROLE_OR_GENERIC_ENTITY_NAMES = new Set([
+  "assistant",
+  "be",
+  "conversation",
+  "data",
+  "decision",
+  "decision patterns",
+  "decisions",
+  "event",
+  "events",
+  "fact",
+  "facts",
+  "friend",
+  "friends",
+  "aunt",
+  "general",
+  "i",
+  "key facts",
+  "me",
+  "museum",
+  "music",
+  "none",
+  "plan",
+  "plans",
+  "preference",
+  "preferences",
+  "properties",
+  "project",
+  "relationship",
+  "relationships",
+  "road trip",
+  "speaker",
+  "speaker a",
+  "speaker b",
+  "support group",
+  "task",
+  "the",
+  "user",
+  "week",
+  "you",
+])
+
+const GENERIC_ENTITY_TYPES = new Set(["concept", "skill", "task"])
+
+const NAMED_ENTITY_TYPES = new Set([
+  "event",
+  "organization",
+  "person",
+  "place",
+  "product",
+  "project",
+  "system",
+  "tool",
+  "service",
+  "work",
+])
+
+const GENERIC_PHRASE_PATTERNS = [
+  /\bspeaker\b/i,
+  /^\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}$/i,
+  /^(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{4}$/i,
+  /^none$/i,
+  /^no\s+(named\s+)?entities?$/i,
+  /^no\s+proper\s+nouns?$/i,
+  /^key\s+facts?$/i,
+  /^(decisions?|plans?|decisions?\s*&\s*plans?)$/i,
+  /^(preferences?|properties|relationships?|events?|general)$/i,
+  /\bfood truck\b/i,
+  /\bincome inequality\b/i,
+  /\bfinancial struggles\b/i,
+  /\blive streams?\b/i,
+  /\boutdoor gear\b/i,
+  /\bvegetarian food truck\b/i,
+  /\btop-rated food truck\b/i,
+  /\bcommon snack\b/i,
+  /\bpopular snack\b/i,
+  /\broad trip\b/i,
+  /\bsupport group\b/i,
+]
+
+function canonicalEntityName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ")
+}
+
+function normalizeStructuredEntityName(name: string): string {
+  const canonical = canonicalEntityName(name)
+  if (["speaker a", "user", "i", "me"].includes(canonical)) return "Benchmark User"
+  if (["speaker b", "assistant"].includes(canonical)) return "Benchmark Assistant"
+  return name.trim()
+}
+
+function hasNamedSignal(name: string): boolean {
+  const tokens = name.match(/[A-Za-z][A-Za-z0-9&.'-]*/g) ?? []
+  const capitalized = tokens.filter(
+    (token) =>
+      /^[A-Z][A-Za-z0-9&.'-]*$/.test(token) ||
+      /^[A-Z0-9]{2,}$/.test(token) ||
+      /[a-z][A-Z]/.test(token)
+  )
+  return (
+    capitalized.length > 0 || /\b[A-Z]{2,}\b/.test(name) || /\d/.test(name) || /\w+\.\w+/.test(name)
+  )
+}
+
+function hasStrongNamedSignal(name: string): boolean {
+  const tokens = name.match(/[A-Za-z][A-Za-z0-9&.'-]*/g) ?? []
+  const capitalized = tokens.filter(
+    (token) =>
+      /^[A-Z][A-Za-z0-9&.'-]*$/.test(token) ||
+      /^[A-Z0-9]{2,}$/.test(token) ||
+      /[a-z][A-Z]/.test(token)
+  )
+  return (
+    capitalized.length >= 2 ||
+    /\b[A-Z]{2,}\b/.test(name) ||
+    /\d/.test(name) ||
+    /\w+\.\w+/.test(name)
+  )
+}
+
+export function isAllowedStructuredEntityName(name: string, entityType?: string): boolean {
+  const trimmed = normalizeStructuredEntityName(name)
+  if (trimmed.length < 4) return false
+
+  const canonical = canonicalEntityName(trimmed)
+  if (ROLE_OR_GENERIC_ENTITY_NAMES.has(canonical)) return false
+  if (GENERIC_PHRASE_PATTERNS.some((pattern) => pattern.test(trimmed))) return false
+
+  const type = canonicalEntityName(entityType ?? "unknown")
+  if (GENERIC_ENTITY_TYPES.has(type)) return hasStrongNamedSignal(trimmed)
+  if (NAMED_ENTITY_TYPES.has(type)) return hasNamedSignal(trimmed)
+
+  return hasNamedSignal(trimmed)
+}
+
+function cleanEntityType(type: string | undefined): string | undefined {
+  const normalized = canonicalEntityName(type ?? "")
+  if (!normalized) return undefined
+  return normalized === "concept" ? "unknown" : normalized
+}
+
+function cleanConfidence(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0.7
+}
+
+function cleanImportance(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  return Math.min(Math.max(value, 0), 1)
+}
+
+export function sanitizeStructuredExtraction(
+  structured: StructuredExtraction["structured"]
+): StructuredExtraction["structured"] {
+  const entities = structured.entities
+    .map((entity) => ({
+      source: normalizeStructuredEntityName(entity.source),
+      sourceType: entity.sourceType?.trim(),
+      relationship: entity.relationship.trim(),
+      target: normalizeStructuredEntityName(entity.target),
+      targetType: entity.targetType?.trim(),
+      confidence: cleanConfidence(entity.confidence),
+    }))
+    .filter(
+      (entity) =>
+        entity.relationship.length > 0 &&
+        isAllowedStructuredEntityName(entity.source, entity.sourceType) &&
+        isAllowedStructuredEntityName(entity.target, entity.targetType)
+    )
+    .map((entity) => ({
+      ...entity,
+      sourceType: cleanEntityType(entity.sourceType),
+      targetType: cleanEntityType(entity.targetType),
+    }))
+
+  const aspects = structured.aspects
+    .map((aspect) => ({
+      entityName: normalizeStructuredEntityName(aspect.entityName),
+      aspect: aspect.aspect.trim(),
+      attributes: aspect.attributes
+        .map((attribute) => ({
+          content: attribute.content.trim(),
+          confidence: cleanConfidence(attribute.confidence),
+          importance: cleanImportance(attribute.importance),
+        }))
+        .filter((attribute) => attribute.content.length > 0),
+    }))
+    .filter(
+      (aspect) =>
+        aspect.aspect.length > 0 &&
+        aspect.attributes.length > 0 &&
+        isAllowedStructuredEntityName(aspect.entityName)
+    )
+
+  const hints = structured.hints
+    .map((hint) => hint.trim())
+    .filter(
+      (hint, index, all) => hint.length >= 5 && hint.length <= 300 && all.indexOf(hint) === index
+    )
+
+  return { entities, aspects, hints }
+}
+
+/** Parse JSON from LLM output, stripping code fences and surrounding chatter if present */
+export function parseJson(raw: string): unknown {
+  const trimmed = raw.trim()
   try {
-    return JSON.parse(raw)
+    return JSON.parse(trimmed)
   } catch {
-    const stripped = raw.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "")
-    return JSON.parse(stripped)
+    const stripped = trimmed.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "")
+    try {
+      return JSON.parse(stripped)
+    } catch {
+      const start = stripped.indexOf("{")
+      const end = stripped.lastIndexOf("}")
+      if (start >= 0 && end > start) {
+        return JSON.parse(stripped.slice(start, end + 1))
+      }
+      throw new Error("Could not parse structured extraction JSON")
+    }
   }
 }
 
@@ -200,8 +456,8 @@ export async function extractStructuredMemories(
   const params: Record<string, unknown> = {
     model: openai(EXTRACTION_MODEL),
     prompt,
-    maxTokens: 2000,
-    temperature: 0,
+    maxTokens: EXTRACTION_MAX_TOKENS,
+    ...extractionTemperature(),
   }
 
   const { text } = await generateText(params as Parameters<typeof generateText>[0])
@@ -210,8 +466,8 @@ export async function extractStructuredMemories(
   const structuredParams: Record<string, unknown> = {
     model: openai(EXTRACTION_MODEL),
     prompt: buildStructuredPrompt(content),
-    maxTokens: 3000,
-    temperature: 0,
+    maxTokens: STRUCTURED_EXTRACTION_MAX_TOKENS,
+    ...extractionTemperature(),
   }
 
   const { text: raw } = await generateText(structuredParams as Parameters<typeof generateText>[0])
@@ -220,11 +476,11 @@ export async function extractStructuredMemories(
   let structured: StructuredExtraction["structured"]
   try {
     const parsed = parseJson(raw.trim()) as StructuredExtraction["structured"]
-    structured = {
+    structured = sanitizeStructuredExtraction({
       entities: Array.isArray(parsed.entities) ? parsed.entities : [],
       aspects: Array.isArray(parsed.aspects) ? parsed.aspects : [],
       hints: Array.isArray(parsed.hints) ? parsed.hints : [],
-    }
+    })
   } catch {
     structured = fallback
   }

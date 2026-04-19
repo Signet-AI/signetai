@@ -92,3 +92,6 @@ packages/daemon-rs/target/
 packages/desktop/dist/
 packages/desktop/resources/
 !packages/desktop/icons/*.png
+
+# Local benchmark workspaces
+.bench/

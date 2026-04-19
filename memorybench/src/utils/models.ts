@@ -241,12 +241,18 @@ export function getModelConfig(alias: string): ModelConfig {
     return MODEL_CONFIGS[lowerAlias]
   }
 
-  // Fallback for unknown models - try to infer from prefix
+  // Fallback for unknown models - try to infer from prefix/name. Local
+  // OpenAI-compatible servers such as llama.cpp often reject temperature for
+  // GGUF models even though they expose an OpenAI-shaped API. Keep benchmark
+  // prompts deterministic by omitting unsupported temperature params.
   if (
-    alias.startsWith("gpt-5") ||
-    alias.startsWith("o1") ||
-    alias.startsWith("o3") ||
-    alias.startsWith("o4")
+    lowerAlias.startsWith("gpt-5") ||
+    lowerAlias.startsWith("o1") ||
+    lowerAlias.startsWith("o3") ||
+    lowerAlias.startsWith("o4") ||
+    lowerAlias.endsWith(".gguf") ||
+    lowerAlias.includes("gemma-4") ||
+    lowerAlias.includes("inception/mercury")
   ) {
     return {
       id: alias,
@@ -258,7 +264,7 @@ export function getModelConfig(alias: string): ModelConfig {
       defaultMaxTokens: 1000,
     }
   }
-  if (alias.startsWith("gpt-")) {
+  if (lowerAlias.startsWith("gpt-")) {
     return {
       id: alias,
       provider: "openai",
@@ -269,7 +275,7 @@ export function getModelConfig(alias: string): ModelConfig {
       defaultMaxTokens: 1000,
     }
   }
-  if (alias.startsWith("claude-")) {
+  if (lowerAlias.startsWith("claude-")) {
     return {
       id: alias,
       provider: "anthropic",
@@ -280,7 +286,7 @@ export function getModelConfig(alias: string): ModelConfig {
       defaultMaxTokens: 1000,
     }
   }
-  if (alias.startsWith("gemini-3")) {
+  if (lowerAlias.startsWith("gemini-3")) {
     return {
       id: alias,
       provider: "google",
@@ -291,7 +297,7 @@ export function getModelConfig(alias: string): ModelConfig {
       defaultMaxTokens: 1000,
     }
   }
-  if (alias.startsWith("gemini-")) {
+  if (lowerAlias.startsWith("gemini-")) {
     return {
       id: alias,
       provider: "google",

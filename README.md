@@ -221,7 +221,7 @@ What this result does show today:
 - the correct supporting memory typically surfaced near the top (MRR 0.615)
 - search-time recall operated without extra LLM inference calls
 
-See [Benchmarks](./docs/BENCHMARKS.md) for methodology, progression, and
+See [Benchmarks](./docs/BENCHMARKING.md) for methodology, progression, and
 how to run your own evaluation.
 
 ## Install (detailed)
@@ -384,7 +384,7 @@ Connectors
 - [API Reference](./docs/API.md)
 - [Knowledge Architecture](./docs/KNOWLEDGE-ARCHITECTURE.md)
 - [Knowledge Graph](./docs/KNOWLEDGE-GRAPH.md)
-- [Benchmarks](./docs/BENCHMARKS.md)
+- [Benchmarks](./docs/BENCHMARKING.md)
 - [Roadmap](./ROADMAP.md)
 
 ## Research

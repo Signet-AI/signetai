@@ -9,6 +9,7 @@ import type {
   IndexingProgressCallback,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
+import { createConfiguredOpenAI } from "../../utils/config"
 import { logger } from "../../utils/logger"
 import { HybridSearchEngine } from "./search"
 import type { Chunk } from "./search"
@@ -102,7 +103,7 @@ export class RAGProvider implements Provider {
     if (!this.apiKey) {
       throw new Error("RAG provider requires OPENAI_API_KEY for memory extraction and embeddings")
     }
-    this.openai = createOpenAI({ apiKey: this.apiKey })
+    this.openai = createConfiguredOpenAI(this.apiKey)
     logger.info("Initialized RAG memory provider (OpenClaw/QMD-style with LLM extraction + hybrid search)")
   }
 

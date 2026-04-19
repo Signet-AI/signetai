@@ -71,6 +71,14 @@ const FORGET_CONFIRM_THRESHOLD = 25;
 const SOFT_DELETE_RETENTION_DAYS = 30;
 const SOFT_DELETE_RETENTION_MS = SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
+function parseOptionalIsoTimestamp(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (!trimmed) return null;
+	const ts = new Date(trimmed);
+	return Number.isNaN(ts.getTime()) ? null : ts.toISOString();
+}
+
 function hasMemoriesSessionIdColumn(db: any): boolean {
 	if (hasMemoriesSessionIdColumnCache !== null) {
 		return hasMemoriesSessionIdColumnCache;
@@ -394,6 +402,7 @@ export function registerMemoryRoutes(app: Hono): void {
 			pinned?: boolean;
 			sourceType?: string;
 			sourceId?: string;
+			createdAt?: string;
 			scope?: string | null;
 			agentId?: string;
 			visibility?: "global" | "private" | "archived";
@@ -410,6 +419,7 @@ export function registerMemoryRoutes(app: Hono): void {
 				}>;
 				aspects?: Array<{
 					entityName: string;
+					entityType?: string;
 					aspect: string;
 					attributes: Array<{
 						content: string;
@@ -429,6 +439,10 @@ export function registerMemoryRoutes(app: Hono): void {
 
 		const raw = body.content?.trim();
 		if (!raw) return c.json({ error: "content is required" }, 400);
+		const requestedCreatedAt = parseOptionalIsoTimestamp(body.createdAt);
+		if (body.createdAt !== undefined && !requestedCreatedAt) {
+			return c.json({ error: "createdAt must be a valid ISO timestamp" }, 400);
+		}
 		const scope = body.scope ?? null;
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
 		const visibility = body.visibility === "private" ? "private" : "global";
@@ -634,6 +648,7 @@ export function registerMemoryRoutes(app: Hono): void {
 
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
+		const createdAt = requestedCreatedAt ?? now;
 		const normalizedContent = normalizeAndHashContent(parsed.content);
 		if (!normalizedContent.storageContent) {
 			return c.json({ error: "content is required" }, 400);
@@ -722,7 +737,7 @@ export function registerMemoryRoutes(app: Hono): void {
 					scope,
 					agentId,
 					visibility,
-					createdAt: now,
+					createdAt,
 				});
 				return { deduped: false as const };
 			});
@@ -833,7 +848,7 @@ export function registerMemoryRoutes(app: Hono): void {
 						sourceMemoryId: id,
 						content: body.content,
 						agentId,
-						now,
+						now: createdAt,
 					}),
 				);
 				entitiesLinked = result.mentionsLinked;
@@ -843,6 +858,7 @@ export function registerMemoryRoutes(app: Hono): void {
 					relations: result.relationsInserted,
 					aspects: result.aspectsCreated,
 					attributes: result.attributesCreated,
+					superseded: result.attributesSuperseded,
 					mentions: result.mentionsLinked,
 				});
 			} catch (e) {

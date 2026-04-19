@@ -208,6 +208,166 @@ describe("mutation API routes", () => {
 		expect(hint?.hint).toBe("What does Nicholai use for benchmark memory?");
 	});
 
+	it("POST /api/memory/remember creates entities from aspect-only structured payloads", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "The benchmark user has been using Spotify lately.",
+				agentId: "bench-agent",
+				structured: {
+					aspects: [
+						{
+							entityName: "MemoryBench User ccb36322",
+							entityType: "person",
+							aspect: "music preferences",
+							attributes: [
+								{
+									content: "MemoryBench User ccb36322 has been using Spotify lately.",
+									confidence: 0.9,
+									importance: 0.8,
+								},
+							],
+						},
+					],
+				},
+			}),
+		});
+		const json = (await res.json()) as { id?: string; structured?: boolean; entities_linked?: number };
+
+		expect(res.status).toBe(200);
+		expect(json.structured).toBe(true);
+		expect(json.entities_linked).toBeGreaterThan(0);
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT e.entity_type, asp.name AS aspect, ea.content
+						 FROM entities e
+						 JOIN entity_aspects asp ON asp.entity_id = e.id
+						 JOIN entity_attributes ea ON ea.aspect_id = asp.id
+						 WHERE e.agent_id = ? AND e.canonical_name = ?`,
+					)
+					.get("bench-agent", "memorybench user ccb36322") as
+					| { entity_type: string; aspect: string; content: string }
+					| undefined,
+		);
+
+		expect(row).toEqual({
+			entity_type: "person",
+			aspect: "music preferences",
+			content: "MemoryBench User ccb36322 has been using Spotify lately.",
+		});
+	});
+
+	it("POST /api/memory/remember uses source timestamps to supersede stale structured attributes", async () => {
+		const basePayload = {
+			agentId: "bench-agent",
+			structured: {
+				aspects: [
+					{
+						entityName: "MemoryBench User restaurants",
+						entityType: "person",
+						aspect: "dining history",
+						attributes: [
+							{
+								content: "MemoryBench User restaurants has tried three Korean restaurants.",
+								confidence: 0.9,
+								importance: 0.8,
+							},
+						],
+					},
+				],
+			},
+		};
+
+		const oldRes = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				...basePayload,
+				content: "The benchmark user had tried three Korean restaurants.",
+				createdAt: "2023-05-01T12:00:00.000Z",
+			}),
+		});
+		expect(oldRes.status).toBe(200);
+
+		const newRes = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				...basePayload,
+				content: "The benchmark user has now tried four Korean restaurants.",
+				createdAt: "2023-06-01T12:00:00.000Z",
+				structured: {
+					aspects: [
+						{
+							entityName: "MemoryBench User restaurants",
+							entityType: "person",
+							aspect: "dining history",
+							attributes: [
+								{
+									content: "MemoryBench User restaurants has now tried four Korean restaurants.",
+									confidence: 0.9,
+									importance: 0.8,
+								},
+							],
+						},
+					],
+				},
+			}),
+		});
+		expect(newRes.status).toBe(200);
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT ea.content, ea.status, replacement.content AS replacement
+						 FROM entities e
+						 JOIN entity_aspects asp ON asp.entity_id = e.id
+						 JOIN entity_attributes ea ON ea.aspect_id = asp.id
+						 LEFT JOIN entity_attributes replacement ON replacement.id = ea.superseded_by
+						 WHERE e.agent_id = ? AND e.canonical_name = ?
+						 ORDER BY ea.created_at`,
+					)
+					.all("bench-agent", "memorybench user restaurants") as Array<{
+					content: string;
+					status: string;
+					replacement: string | null;
+				}>,
+		);
+
+		expect(rows).toEqual([
+			{
+				content: "MemoryBench User restaurants has tried three Korean restaurants.",
+				status: "superseded",
+				replacement: "MemoryBench User restaurants has now tried four Korean restaurants.",
+			},
+			{
+				content: "MemoryBench User restaurants has now tried four Korean restaurants.",
+				status: "active",
+				replacement: null,
+			},
+		]);
+	});
+
+	it("POST /api/memory/remember rejects invalid source timestamps", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Invalid timestamp memory.",
+				createdAt: "not-a-date",
+			}),
+		});
+		const json = (await res.json()) as { error?: string };
+
+		expect(res.status).toBe(400);
+		expect(json.error).toBe("createdAt must be a valid ISO timestamp");
+	});
+
 	it("POST /api/memory/remember scopes inline entity linking and client hints to the requested agent", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",

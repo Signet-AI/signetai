@@ -284,6 +284,204 @@ describe("hybridRecall", () => {
 		expect(result.results.map((row) => row.id)).toContain("mem-null-vec");
 	});
 
+	it("keeps traversal-only evidence below directly anchored recall hits", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-direct-commute", "daily commute to work takes thirty minutes", now, now);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-traversal-food", "favorite food is swordfish at the corner restaurant", now, now);
+
+			db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at
+				) VALUES (?, ?, ?, 'concept', 'default', 5, ?, ?)`,
+			).run("ent-commute", "commute", "commute", now, now);
+
+			db.prepare(
+				`INSERT INTO entity_aspects (
+					id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
+				) VALUES (?, ?, 'default', 'context', 'context', 0.9, ?, ?)`,
+			).run("asp-commute", "ent-commute", now, now);
+
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at
+				) VALUES (?, ?, 'default', ?, 'attribute', ?, ?, 1, 1, 'active', ?, ?)`,
+			).run(
+				"attr-commute-food",
+				"asp-commute",
+				"mem-traversal-food",
+				"favorite food is swordfish at the corner restaurant",
+				"favorite food is swordfish at the corner restaurant",
+				now,
+				now,
+			);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = true;
+		cfg.pipelineV2.traversal.enabled = true;
+		cfg.pipelineV2.traversal.primary = true;
+		cfg.pipelineV2.reranker.enabled = false;
+
+		const result = await hybridRecall(
+			{
+				query: "commute to work",
+				keywordQuery: "commute to work",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			cfg,
+			async () => null,
+		);
+
+		const ids = result.results.map((row) => row.id);
+		expect(ids).toContain("mem-direct-commute");
+		expect(ids).toContain("mem-traversal-food");
+		expect(ids.indexOf("mem-direct-commute")).toBeLessThan(ids.indexOf("mem-traversal-food"));
+	});
+
+	it("uses prospective hints as their own evidence channel", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-spotify", "The user listens on Spotify during the workday.", now, now);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-netflix", "Netflix is a video streaming service for movies.", now, now);
+
+			db.prepare(
+				`INSERT INTO memory_hints (id, memory_id, agent_id, hint, created_at)
+				 VALUES (?, ?, 'default', ?, ?)`,
+			).run("hint-spotify", "mem-spotify", "What music streaming service has the user been using lately?", now);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = false;
+		cfg.pipelineV2.traversal.enabled = false;
+		cfg.pipelineV2.reranker.enabled = false;
+		cfg.pipelineV2.hints.enabled = true;
+
+		const result = await hybridRecall(
+			{
+				query: "What music streaming service have I been using lately?",
+				keywordQuery: "What music streaming service have I been using lately?",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			cfg,
+			async () => null,
+		);
+
+		expect(result.results[0]?.id).toBe("mem-spotify");
+		expect(result.results[0]?.source).toBe("hint");
+	});
+
+	it("dampens stale structured memories and annotates current replacements", async () => {
+		const oldDate = "2023-05-01T12:00:00.000Z";
+		const newDate = "2023-06-01T12:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-old-restaurants", "The user had tried three Korean restaurants.", oldDate, oldDate);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-new-restaurants", "The user has now tried four Korean restaurants.", newDate, newDate);
+
+			db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at
+				) VALUES (?, ?, ?, 'person', 'default', 2, ?, ?)`,
+			).run("ent-restaurants", "MemoryBench User restaurants", "memorybench user restaurants", oldDate, newDate);
+
+			db.prepare(
+				`INSERT INTO entity_aspects (
+					id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
+				) VALUES (?, ?, 'default', 'dining history', 'dining history', 0.9, ?, ?)`,
+			).run("asp-restaurants", "ent-restaurants", oldDate, newDate);
+
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+					confidence, importance, status, superseded_by, created_at, updated_at
+				) VALUES (?, 'asp-restaurants', 'default', ?, 'attribute', ?, ?, 1, 0.9, ?, ?, ?, ?)`,
+			).run(
+				"attr-old-restaurants",
+				"mem-old-restaurants",
+				"MemoryBench User restaurants has tried three Korean restaurants.",
+				"memorybench user restaurants has tried three korean restaurants",
+				"superseded",
+				"attr-new-restaurants",
+				oldDate,
+				newDate,
+			);
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+					confidence, importance, status, created_at, updated_at
+				) VALUES (?, 'asp-restaurants', 'default', ?, 'attribute', ?, ?, 1, 0.9, 'active', ?, ?)`,
+			).run(
+				"attr-new-restaurants",
+				"mem-new-restaurants",
+				"MemoryBench User restaurants has now tried four Korean restaurants.",
+				"memorybench user restaurants has now tried four korean restaurants",
+				newDate,
+				newDate,
+			);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = false;
+		cfg.pipelineV2.traversal.enabled = false;
+		cfg.pipelineV2.reranker.enabled = false;
+
+		const result = await hybridRecall(
+			{
+				query: "How many Korean restaurants has the user tried?",
+				keywordQuery: "How many Korean restaurants has the user tried?",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			cfg,
+			async () => null,
+		);
+
+		const ids = result.results.map((row) => row.id);
+		expect(ids.indexOf("mem-new-restaurants")).toBeLessThan(ids.indexOf("mem-old-restaurants"));
+		const stale = result.results.find((row) => row.id === "mem-old-restaurants");
+		expect(stale?.content).toContain("[Signet currentness]");
+		expect(stale?.content).toContain("Superseded structured facts");
+		expect(stale?.content).toContain("Current replacement: MemoryBench User restaurants has now tried four Korean restaurants.");
+	});
+
 	it("reapplies project filtering during hydration for traversal results", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
