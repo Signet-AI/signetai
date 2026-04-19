@@ -1339,7 +1339,7 @@ registerAppCommands(program, {
 		}),
 	showDoctor: (options) => showDoctor(options, healthDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
-	syncTemplates: runSyncTemplates,
+	syncTemplates: () => runSyncTemplates(),
 });
 
 registerDaemonCommands(program, {

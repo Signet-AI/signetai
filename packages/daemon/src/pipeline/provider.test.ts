@@ -1064,6 +1064,52 @@ describe("createOpenCodeProvider", () => {
 		expect(fallbackOptions ? getNumberField(fallbackOptions, "num_ctx") : undefined).toBe(2048);
 	}, 35000);
 
+	it("generate() does NOT attempt Ollama fallback when enableOllamaFallback is omitted (safe default)", async () => {
+		const seenUrls: string[] = [];
+		let postCount = 0;
+		mockFetch(async (url, init) => {
+			seenUrls.push(url);
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: "ses_no_fallback",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			if (url.includes("/session/ses_no_fallback/message")) {
+				if (init?.method === "POST") {
+					postCount++;
+					if (postCount === 1) {
+						return new Response("Not Found", { status: 404 });
+					}
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				return Response.json([]);
+			}
+			if (url.includes("11434")) {
+				return Response.json({ models: [] });
+			}
+			return new Response("unexpected url", { status: 500 });
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
+		});
+		try {
+			await provider.generate("test", { timeoutMs: 25000 });
+		} catch {
+			/* expected */
+		}
+		expect(seenUrls.some((u) => u.includes("11434"))).toBe(false);
+	}, 35000);
+
 	it("generate() prefers info.structured over text parts", async () => {
 		mockFetch(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {

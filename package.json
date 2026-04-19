@@ -1,6 +1,6 @@
 {
   "name": "signet",
-  "version": "0.100.0",
+  "version": "0.102.1",
   "private": true,
   "description": "Local-first identity, memory, and secrets for AI agents",
   "repository": {
@@ -29,7 +29,8 @@
     "build:signetai": "cd packages/signetai && bun run build",
     "build:publish": "bun run build:dashboard && bun run build:signetai",
     "build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
-    "build:desktop": "cd packages/tray && bun run build:desktop",
+    "build:desktop": "cd packages/desktop && bun run build:desktop",
+    "build:tray": "cd packages/tray && bun run build",
     "start": "cd packages/daemon && bun run start",
     "dev": "bun run --filter '*' dev",
     "test": "bun run --filter '*' test",

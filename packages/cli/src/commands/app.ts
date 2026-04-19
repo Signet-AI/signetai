@@ -57,7 +57,7 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--network-mode <mode>", "Daemon network mode in non-interactive mode (localhost, tailscale)")
 		.option(
 			"--harness <harness>",
-			"Harness to configure (repeatable or comma-separated: claude-code, codex, opencode, openclaw, oh-my-pi, forge)",
+			"Harness to configure (repeatable or comma-separated: claude-code, codex, opencode, openclaw, oh-my-pi, pi, hermes-agent, forge)",
 			deps.collectListOption,
 			[],
 		)
@@ -120,5 +120,5 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 	program
 		.command("sync")
 		.description("Sync hooks, extensions, built-in templates, and skills")
-		.action(deps.syncTemplates);
+		.action(() => deps.syncTemplates());
 }

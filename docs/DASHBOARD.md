@@ -186,6 +186,13 @@ prefer `signet secret put <NAME>`.
 registry. Click a skill name to read its full `SKILL.md` before
 installing. Already-installed skills are marked.
 
+The Skills tab also includes **Plugins**, a registry view for core and
+installed Signet extensions. It shows plugin state, health, capability
+grants, declared surfaces, prompt contribution diagnostics, and recent
+plugin audit events. Core plugins such as `signet.secrets` can be
+enabled or disabled there; disabling Signet Secrets blocks secret-owned
+surfaces but does not delete encrypted secrets from disk.
+
 
 API-Only Fallback
 -----------------

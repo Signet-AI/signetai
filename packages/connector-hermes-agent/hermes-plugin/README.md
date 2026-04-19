@@ -24,15 +24,29 @@ signet start   # ensure daemon is running
 Environment variables:
 - `SIGNET_DAEMON_URL` — Full daemon URL (default: `http://localhost:3850`)
 - `SIGNET_HOST` / `SIGNET_PORT` — Host and port separately
-- `SIGNET_AGENT_ID` — Agent scope identifier (default: `default`)
+- `SIGNET_AGENT_ID` — Agent scope identifier (default: `hermes-agent`)
+- `SIGNET_AGENT_WORKSPACE` — Optional named-agent workspace path (for example `~/.agents/agents/dot`)
+- `SIGNET_AGENT_READ_POLICY` — Optional named-agent memory policy for first registration: `shared` (default), `isolated`, or `group`
+- `SIGNET_AGENT_POLICY_GROUP` — Required when `SIGNET_AGENT_READ_POLICY=group`
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `signet_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
-| `signet_store` | Store a fact, preference, or decision to memory |
-| `signet_profile` | Broad overview of stored memories and context |
+| `memory_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
+| `memory_store` | Store a fact, preference, or decision to memory |
+| `memory_get` | Retrieve a memory by ID |
+| `memory_list` | List memories with optional filters |
+| `memory_modify` | Edit an existing memory |
+| `memory_forget` | Soft-delete a memory |
+| `recall` / `remember` | Compatibility aliases for search/store |
+
+`memory_store` exposes the full Signet remember surface, including:
+
+- `content`, `type`, `importance`, `tags`, `pinned`, and `project`
+- `hints` for prospective recall hints and alternate phrasings
+- `transcript` for lossless source text alongside the saved memory
+- `structured.entities`, `structured.aspects`, and `structured.hints` for callers that already extracted graph-ready memory metadata
 
 ## How It Works
 
@@ -44,4 +58,4 @@ The plugin bridges Hermes Agent's memory lifecycle to the Signet daemon:
 
 3. **Session end** — Sends the conversation transcript to Signet's session-end hook, which queues it for the memory pipeline: extraction, knowledge graph updates, retention decay, and MEMORY.md synthesis.
 
-4. **Explicit tools** — The agent can call `signet_search`, `signet_store`, and `signet_profile` directly during conversation for on-demand memory operations.
+4. **Explicit tools** — The agent can call canonical Signet tools such as `memory_search` and `memory_store` directly during conversation for on-demand memory operations. Legacy `signet_*` names are handled for compatibility but are not advertised to the model.

@@ -133,6 +133,85 @@ function isProviderConfigured(hermesHome: string): boolean {
 	);
 }
 
+function sanitizedEnv(name: string): string {
+	return (process.env[name]?.trim() || "").replace(/[\r\n]+/g, "");
+}
+
+type AgentReadPolicy = "isolated" | "shared" | "group";
+
+function configuredAgentReadPolicy(warnings: string[]): AgentReadPolicy {
+	const raw = sanitizedEnv("SIGNET_AGENT_READ_POLICY") || sanitizedEnv("SIGNET_AGENT_MEMORY_POLICY");
+	if (!raw) return "shared";
+	if (raw === "isolated" || raw === "shared" || raw === "group") return raw;
+	warnings.push(`Ignoring unsupported SIGNET_AGENT_READ_POLICY '${raw}'. Expected one of: isolated, shared, group.`);
+	return "shared";
+}
+
+async function ensureNamedAgentRegistered(daemonUrl: string, agentId: string, warnings: string[]): Promise<void> {
+	if (!agentId || agentId === "default" || agentId === "hermes-agent") return;
+	if (process.env.SIGNET_SKIP_AGENT_REGISTER === "1") return;
+
+	const baseUrl = daemonUrl.replace(/\/+$/, "");
+	const token = sanitizedEnv("SIGNET_TOKEN");
+	const headers: Record<string, string> = {};
+	if (token) {
+		headers.Authorization = `Bearer ${token}`;
+	}
+	try {
+		const getResp = await fetch(`${baseUrl}/api/agents/${encodeURIComponent(agentId)}`, {
+			headers,
+			signal: AbortSignal.timeout(1_000),
+		});
+		if (getResp.ok) return;
+		if (getResp.status !== 404) {
+			const body = await getResp.text();
+			warnings.push(
+				`Could not check Signet agent '${agentId}' before registration: HTTP ${getResp.status} ${body.slice(0, 200)}`,
+			);
+			return;
+		}
+	} catch {
+		// Daemon may be offline; the POST below will produce the user-facing warning.
+	}
+
+	const readPolicy = configuredAgentReadPolicy(warnings);
+	const policyGroup = readPolicy === "group" ? sanitizedEnv("SIGNET_AGENT_POLICY_GROUP") || null : null;
+	if (readPolicy === "group" && !policyGroup) {
+		warnings.push(
+			`SIGNET_AGENT_READ_POLICY=group requires SIGNET_AGENT_POLICY_GROUP. Registering '${agentId}' with isolated memory instead.`,
+		);
+	}
+	const effectiveReadPolicy: AgentReadPolicy = readPolicy === "group" && !policyGroup ? "isolated" : readPolicy;
+	const policyHint =
+		effectiveReadPolicy === "shared"
+			? `Run: signet agent create ${agentId} --memory shared, or use --memory isolated for private memory.`
+			: `Run: signet agent create ${agentId} --memory ${effectiveReadPolicy}.`;
+
+	try {
+		const resp = await fetch(`${baseUrl}/api/agents`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json", ...headers },
+			body: JSON.stringify({
+				name: agentId,
+				read_policy: effectiveReadPolicy,
+				policy_group: policyGroup,
+			}),
+			signal: AbortSignal.timeout(1_000),
+		});
+		if (!resp.ok) {
+			const body = await resp.text();
+			warnings.push(
+				`Could not register Signet agent '${agentId}' with ${effectiveReadPolicy} memory policy: ${body.slice(0, 200)}. ${policyHint}`,
+			);
+		}
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		warnings.push(
+			`Could not register Signet agent '${agentId}' because the daemon was unreachable. ` + `${policyHint} (${msg})`,
+		);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Connector
 // ---------------------------------------------------------------------------
@@ -186,6 +265,11 @@ export class HermesAgentConnector extends BaseConnector {
 
 		// 2. Write env config for the Signet daemon connection
 		const envPath = join(hermesHome, ".env");
+		let configuredSignetAgentId = "hermes-agent";
+		const configuredDaemonUrl = (process.env.SIGNET_DAEMON_URL?.trim() || "http://localhost:3850").replace(
+			/[\r\n]+/g,
+			"",
+		);
 		try {
 			let envContent = "";
 			if (existsSync(envPath)) {
@@ -195,16 +279,28 @@ export class HermesAgentConnector extends BaseConnector {
 			const signetVars: Record<string, string> = {};
 
 			if (process.env.SIGNET_DAEMON_URL) {
-				signetVars.SIGNET_DAEMON_URL = process.env.SIGNET_DAEMON_URL.replace(/[\r\n]+/g, "");
+				signetVars.SIGNET_DAEMON_URL = sanitizedEnv("SIGNET_DAEMON_URL");
 			}
 			// Always write SIGNET_AGENT_ID — never allow the plugin to fall back to the
 			// shared "default" scope (AGENTS.md: never hardcode "default" for scoped paths).
-			signetVars.SIGNET_AGENT_ID = (process.env.SIGNET_AGENT_ID?.trim() || "hermes-agent").replace(/[\r\n]+/g, "");
+			const signetAgentId = sanitizedEnv("SIGNET_AGENT_ID") || "hermes-agent";
+			configuredSignetAgentId = signetAgentId;
+			signetVars.SIGNET_AGENT_ID = signetAgentId;
+
+			const explicitAgentWorkspace = process.env.SIGNET_AGENT_WORKSPACE?.trim();
+			if (explicitAgentWorkspace) {
+				signetVars.SIGNET_AGENT_WORKSPACE = expandHome(explicitAgentWorkspace).replace(/[\r\n]+/g, "");
+			} else if (signetAgentId && signetAgentId !== "hermes-agent" && signetAgentId !== "default") {
+				const agentWorkspace = join(expandedBasePath, "agents", signetAgentId);
+				if (existsSync(agentWorkspace)) {
+					signetVars.SIGNET_AGENT_WORKSPACE = agentWorkspace;
+				}
+			}
 
 			// Persist auth token so Hermes can reach a non-localhost daemon.
 			// Warn if absent and SIGNET_DAEMON_URL points to a remote host.
 			if (process.env.SIGNET_TOKEN) {
-				signetVars.SIGNET_TOKEN = process.env.SIGNET_TOKEN.replace(/[\r\n]+/g, "");
+				signetVars.SIGNET_TOKEN = sanitizedEnv("SIGNET_TOKEN");
 			} else if (
 				process.env.SIGNET_DAEMON_URL &&
 				!process.env.SIGNET_DAEMON_URL.includes("localhost") &&
@@ -235,6 +331,8 @@ export class HermesAgentConnector extends BaseConnector {
 			const msg = e instanceof Error ? e.message : String(e);
 			warnings.push(`Failed to update .env: ${msg}`);
 		}
+
+		await ensureNamedAgentRegistered(configuredDaemonUrl, configuredSignetAgentId, warnings);
 
 		// 3. Provide guidance on completing setup
 		if (!isProviderConfigured(hermesHome)) {
@@ -276,7 +374,7 @@ export class HermesAgentConnector extends BaseConnector {
 			try {
 				let envContent = readFileSync(envPath, "utf-8");
 				let changed = false;
-				for (const key of ["SIGNET_DAEMON_URL", "SIGNET_AGENT_ID"]) {
+				for (const key of ["SIGNET_DAEMON_URL", "SIGNET_AGENT_ID", "SIGNET_AGENT_WORKSPACE", "SIGNET_TOKEN"]) {
 					const pattern = new RegExp(`^${key}=.*\n?`, "gm");
 					if (pattern.test(envContent)) {
 						envContent = envContent.replace(pattern, "");

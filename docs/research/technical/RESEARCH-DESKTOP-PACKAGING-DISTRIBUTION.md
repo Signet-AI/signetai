@@ -12,7 +12,7 @@ desktop builds for macOS, Windows, Ubuntu, and Arch?
 
 ## Current baseline
 
-- Desktop app exists in `packages/tray` (Tauri v2).
+- Desktop app exists in `packages/desktop` (Electron).
 - CI has a `desktop-build.yml` workflow that builds target matrices.
 - Linux builds currently rely on generic bundling; Arch channel
   automation is absent.

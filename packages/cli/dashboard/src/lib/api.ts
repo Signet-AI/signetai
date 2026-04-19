@@ -3,14 +3,13 @@
  * Handles communication with the Signet daemon
  */
 
+import { desktopApiBase } from "$lib/desktop-shell";
 import type { ModelRegistryEntry } from "@signet/core";
 import { marked } from "marked";
 
-// When served by the daemon (production) or Vite dev server (proxied), use relative URLs.
-// Tauri needs an absolute URL since it serves from a different origin.
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const tauriHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
-export const API_BASE = isTauri ? `http://${tauriHost}:3850` : "";
+// When served by the daemon or Vite dev server, use relative URLs.
+// The Electron desktop shell loads from file://, so it needs an absolute daemon URL.
+export const API_BASE = desktopApiBase();
 
 export interface Memory {
 	id: string;
@@ -1363,6 +1362,223 @@ export async function getSkillAnalytics(params?: {
 	const query = qs.toString();
 	const response = await fetch(`${API_BASE}/api/skills/analytics${query ? `?${query}` : ""}`);
 	if (!response.ok) throw new Error("Failed to fetch skill analytics");
+	return response.json();
+}
+
+// ============================================================================
+// Plugins API
+// ============================================================================
+
+export type PluginLifecycleState = "installed" | "blocked" | "active" | "degraded" | "disabled";
+export type PluginSource = "bundled" | "local" | "marketplace";
+export type PluginTrustTier = "core" | "verified" | "community" | "local-dev";
+export type PluginRuntimeLanguage = "typescript" | "rust";
+export type PluginRuntimeKind = "bundled-module" | "sidecar" | "wasi";
+export type PluginPromptTarget = "system" | "session-start" | "user-prompt-submit";
+export type PluginPromptMode = "append" | "context";
+export type PluginHealthStatus = "healthy" | "degraded" | "unhealthy";
+export type PluginAuditResult = "ok" | "denied" | "degraded" | "error";
+export type PluginAuditSource = "plugin-host" | "secrets-provider" | "secrets-routes";
+
+export interface PluginSurfaceBase {
+	readonly summary: string;
+	readonly requiredCapabilities: readonly string[];
+}
+
+export interface PluginRouteSummary extends PluginSurfaceBase {
+	readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+	readonly path: string;
+}
+
+export interface PluginCommandSummary extends PluginSurfaceBase {
+	readonly path: readonly string[];
+}
+
+export interface PluginToolSummary extends PluginSurfaceBase {
+	readonly name: string;
+	readonly title: string;
+}
+
+export interface PluginDashboardSummary extends PluginSurfaceBase {
+	readonly id: string;
+	readonly title: string;
+}
+
+export interface PluginSdkSummary extends PluginSurfaceBase {
+	readonly name: string;
+}
+
+export interface PluginConnectorSummary extends PluginSurfaceBase {
+	readonly id: string;
+	readonly title: string;
+}
+
+export interface PluginPromptSummary extends PluginSurfaceBase {
+	readonly id: string;
+	readonly target: PluginPromptTarget;
+	readonly mode: PluginPromptMode;
+	readonly priority: number;
+	readonly maxTokens: number;
+}
+
+export interface PluginSurfaceSummary {
+	readonly daemonRoutes: readonly PluginRouteSummary[];
+	readonly cliCommands: readonly PluginCommandSummary[];
+	readonly mcpTools: readonly PluginToolSummary[];
+	readonly dashboardPanels: readonly PluginDashboardSummary[];
+	readonly sdkClients: readonly PluginSdkSummary[];
+	readonly connectorCapabilities: readonly PluginConnectorSummary[];
+	readonly promptContributions: readonly PluginPromptSummary[];
+}
+
+export interface PluginHealth {
+	readonly status: PluginHealthStatus;
+	readonly message?: string;
+	readonly checkedAt: string;
+}
+
+export interface PluginRegistryRecord {
+	readonly id: string;
+	readonly name: string;
+	readonly version: string;
+	readonly publisher: string;
+	readonly source: PluginSource;
+	readonly trustTier: PluginTrustTier;
+	readonly enabled: boolean;
+	readonly state: PluginLifecycleState;
+	readonly stateReason?: string;
+	readonly declaredCapabilities: readonly string[];
+	readonly grantedCapabilities: readonly string[];
+	readonly pendingCapabilities: readonly string[];
+	readonly surfaces: PluginSurfaceSummary;
+	readonly health?: PluginHealth;
+	readonly installedAt: string;
+	readonly updatedAt: string;
+}
+
+export interface PluginManifest {
+	readonly id: string;
+	readonly name: string;
+	readonly version: string;
+	readonly publisher: string;
+	readonly description: string;
+	readonly runtime: {
+		readonly language: PluginRuntimeLanguage;
+		readonly kind: PluginRuntimeKind;
+		readonly entry?: string;
+		readonly protocol?: string;
+	};
+	readonly compatibility: {
+		readonly signet: string;
+		readonly pluginApi: string;
+	};
+	readonly trustTier: PluginTrustTier;
+	readonly capabilities: readonly string[];
+	readonly surfaces: PluginSurfaceSummary;
+	readonly docs: {
+		readonly homepage?: string;
+		readonly readme?: string;
+		readonly capabilities: Readonly<Record<string, { readonly summary: string; readonly description?: string }>>;
+	};
+}
+
+export interface PluginPromptContribution {
+	readonly id: string;
+	readonly pluginId: string;
+	readonly target: PluginPromptTarget;
+	readonly mode: PluginPromptMode;
+	readonly priority: number;
+	readonly maxTokens: number;
+	readonly content: string;
+}
+
+export interface PluginPromptContributionDiagnostic {
+	readonly contribution: PluginPromptContribution;
+	readonly included: boolean;
+	readonly reason?: string;
+	readonly missingCapabilities: readonly string[];
+}
+
+export interface PluginDiagnostics {
+	readonly record: PluginRegistryRecord;
+	readonly manifest: PluginManifest;
+	readonly activeSurfaces: PluginSurfaceSummary;
+	readonly plannedSurfaces: PluginSurfaceSummary;
+	readonly promptContributions: readonly PluginPromptContribution[];
+	readonly promptContributionDiagnostics: readonly PluginPromptContributionDiagnostic[];
+	readonly validationErrors: readonly string[];
+}
+
+export interface PluginAuditEvent {
+	readonly id: string;
+	readonly timestamp: string;
+	readonly pluginId: string;
+	readonly event: string;
+	readonly result: PluginAuditResult;
+	readonly source: PluginAuditSource;
+	readonly agentId?: string;
+	readonly data: Readonly<Record<string, unknown>>;
+}
+
+export interface PluginAuditListResponse {
+	readonly events: readonly PluginAuditEvent[];
+	readonly count: number;
+}
+
+export interface PluginListResponse {
+	readonly plugins: readonly PluginRegistryRecord[];
+}
+
+export interface PluginDiagnosticsResponse {
+	readonly plugin: PluginDiagnostics;
+}
+
+export interface PluginUpdateResponse {
+	readonly plugin: PluginRegistryRecord;
+}
+
+export interface PluginAuditQuery {
+	readonly pluginId?: string;
+	readonly event?: string;
+	readonly limit?: number;
+}
+
+export async function listPlugins(): Promise<PluginListResponse> {
+	const response = await fetch(`${API_BASE}/api/plugins`);
+	if (!response.ok) throw new Error("Failed to fetch plugins");
+	return response.json();
+}
+
+export async function getPlugin(id: string): Promise<PluginRegistryRecord> {
+	const response = await fetch(`${API_BASE}/api/plugins/${encodeURIComponent(id)}`);
+	if (!response.ok) throw new Error("Failed to fetch plugin");
+	return response.json();
+}
+
+export async function getPluginDiagnostics(id: string): Promise<PluginDiagnosticsResponse> {
+	const response = await fetch(`${API_BASE}/api/plugins/${encodeURIComponent(id)}/diagnostics`);
+	if (!response.ok) throw new Error("Failed to fetch plugin diagnostics");
+	return response.json();
+}
+
+export async function listPluginAuditEvents(params: PluginAuditQuery = {}): Promise<PluginAuditListResponse> {
+	const qs = new URLSearchParams();
+	if (params.pluginId) qs.set("pluginId", params.pluginId);
+	if (params.event) qs.set("event", params.event);
+	if (params.limit !== undefined) qs.set("limit", String(params.limit));
+	const query = qs.toString();
+	const response = await fetch(`${API_BASE}/api/plugins/audit${query ? `?${query}` : ""}`);
+	if (!response.ok) throw new Error("Failed to fetch plugin audit events");
+	return response.json();
+}
+
+export async function setPluginEnabled(id: string, enabled: boolean): Promise<PluginUpdateResponse> {
+	const response = await fetch(`${API_BASE}/api/plugins/${encodeURIComponent(id)}`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ enabled }),
+	});
+	if (!response.ok) throw new Error("Failed to update plugin");
 	return response.json();
 }
 

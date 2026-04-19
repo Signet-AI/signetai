@@ -6,9 +6,13 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-18
+- Features: add plugin registry panel.
+- Bug fixes: scope Signet memory to named agents; align desktop release build prerequisites.
+
 ### 2026-04-17
-- Features: add plugin SDK core v1 secrets registry.
-- Bug fixes: prevent session-start hook timeouts.
+- Features: replace Tauri shell with Electron app; add plugin SDK core v1 secrets registry.
+- Bug fixes: pass AGENTS_DIR directly in runSyncTemplates instead of accepting a parameter; wire enableOllamaFallback config and add native embedding init cooldown; prevent session-start hook timeouts.
 - Performance: paginate entity IDs before counting to avoid full GROUP BY.
 - Docs: add recall confidence gate record; define plugin sdk core v1.
 
@@ -30,10 +34,61 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: emit valid Codex hooks.json schema; gate dependency synthesis on extraction progress; expose pinned param in memory_store and memory_modify.
 - Docs: add Ostico as contributor; align generated site metadata.
 
-### 2026-04-11
-- Docs: refresh public Signet positioning.
-
 ## Release Ledger
+
+## [0.102.1] - 2026-04-18
+
+Release summary: 1 bug fix.
+Tag range: `v0.102.0..v0.102.1`.
+
+### Bug Fixes
+
+- **hermes**: scope Signet memory to named agents (#504)
+
+## [0.102.0] - 2026-04-18
+
+Release summary: 1 feature.
+Tag range: `v0.101.2..v0.102.0`.
+
+### Features
+
+- **dashboard**: add plugin registry panel (#524)
+
+## [0.101.2] - 2026-04-18
+
+Release summary: 1 bug fix.
+Tag range: `v0.101.1..v0.101.2`.
+
+### Bug Fixes
+
+- **ci**: align desktop release build prerequisites (#525)
+
+## [0.101.1] - 2026-04-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.101.0..v0.101.1`.
+
+### Bug Fixes
+
+- **cli**: pass AGENTS_DIR directly in runSyncTemplates instead of accepting a parameter (#523)
+
+## [0.101.0] - 2026-04-17
+
+Release summary: 1 feature.
+Tag range: `v0.100.1..v0.101.0`.
+
+### Features
+
+- **desktop**: replace Tauri shell with Electron app (#519)
+
+## [0.100.1] - 2026-04-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.100.0..v0.100.1`.
+
+### Bug Fixes
+
+- **daemon**: wire enableOllamaFallback config and add native embedding init cooldown (#520)
 
 ## [0.100.0] - 2026-04-17
 

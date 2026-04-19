@@ -363,7 +363,8 @@ Connectors
 | [`@signet/opencode-plugin`](./packages/opencode-plugin) | OpenCode runtime plugin — memory tools and session hooks |
 | [`@signetai/signet-memory-openclaw`](./packages/adapters/openclaw) | OpenClaw runtime plugin |
 | [`@signet/extension`](./packages/extension) | Browser extension for Chrome and Firefox |
-| [`@signet/tray`](./packages/tray) | Desktop system tray application |
+| [`@signet/desktop`](./packages/desktop) | Electron desktop application |
+| [`@signet/tray`](./packages/tray) | Shared tray/menu bar utilities |
 | [`@signet/native`](./packages/native) | Native accelerators |
 | [`predictor`](./packages/predictor) | Experimental Rust sidecar for learned relevance ranking |
 | [`signetai`](./packages/signetai) | Meta-package (`signet` binary) |

@@ -371,6 +371,40 @@ export function hermesAgentCandidateDirs(): readonly string[] {
 }
 
 /**
+ * Resolve the Hermes Agent repo directory.
+ *
+ * This detects a Hermes install before the Signet plugin has been copied in.
+ * It checks for the repo's `plugins/memory` tree rather than the Signet plugin
+ * file, so setup can offer and install the Hermes connector on first run.
+ */
+export function resolveHermesRepoPath(): string | null {
+	const hermesRepo = process.env.HERMES_REPO?.trim();
+	if (hermesRepo && existsSync(join(hermesRepo, "plugins", "memory"))) {
+		return hermesRepo;
+	}
+
+	for (const base of hermesAgentCandidateDirs()) {
+		if (existsSync(join(base, "plugins", "memory"))) return base;
+	}
+
+	try {
+		const hermesPath = execFileSync("which", ["hermes"], {
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 3000,
+		}).trim();
+		if (hermesPath) {
+			const repoDir = dirname(realpathSync(hermesPath));
+			if (existsSync(join(repoDir, "plugins", "memory"))) return repoDir;
+		}
+	} catch {
+		// hermes not in PATH
+	}
+
+	return null;
+}
+
+/**
  * Resolve the path to the Signet plugin file inside the Hermes Agent repo.
  *
  * Checks (in order): `HERMES_REPO` env var, four common install paths, then
@@ -385,30 +419,10 @@ export function hermesAgentCandidateDirs(): readonly string[] {
 export function resolveHermesRepoPluginPath(): string | null {
 	const pluginFile = join("plugins", "memory", "signet", "__init__.py");
 
-	const hermesRepo = process.env.HERMES_REPO?.trim();
-	if (hermesRepo) {
+	const hermesRepo = resolveHermesRepoPath();
+	if (hermesRepo !== null) {
 		const candidate = join(hermesRepo, pluginFile);
 		if (existsSync(candidate)) return candidate;
-	}
-
-	for (const base of hermesAgentCandidateDirs()) {
-		const candidate = join(base, pluginFile);
-		if (existsSync(candidate)) return candidate;
-	}
-
-	// Last resort: resolve hermes CLI → repo root via which(1)
-	try {
-		const hermesPath = execFileSync("which", ["hermes"], {
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "ignore"],
-			timeout: 3000,
-		}).trim();
-		if (hermesPath) {
-			const candidate = join(dirname(realpathSync(hermesPath)), pluginFile);
-			if (existsSync(candidate)) return candidate;
-		}
-	} catch {
-		// hermes not in PATH
 	}
 
 	return null;
@@ -465,7 +479,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			ohMyPi: isSignetManagedOhMyPiInstall() || existsSync(resolveOhMyPiAgentDir()),
 			pi: isSignetManagedPiInstall() || existsSync(resolvePiAgentDir()),
 			forge: isForgeInstalled(basePath, home),
-			hermesAgent: resolveHermesRepoPluginPath() !== null,
+			hermesAgent: resolveHermesRepoPath() !== null,
 		},
 	};
 }

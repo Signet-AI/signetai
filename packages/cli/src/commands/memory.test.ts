@@ -47,11 +47,13 @@ describe("registerMemoryCommands recall", () => {
 		};
 
 		let capturedBody: unknown;
+		let capturedTimeout: number | undefined;
 		const program = new Command();
 		registerMemoryCommands(program, {
 			ensureDaemonForSecrets: async () => true,
-			secretApiCall: async (_method, _path, body) => {
+			secretApiCall: async (_method, _path, body, timeoutMs) => {
 				capturedBody = body;
+				capturedTimeout = timeoutMs;
 				return {
 					ok: true,
 					data: {
@@ -113,6 +115,7 @@ describe("registerMemoryCommands recall", () => {
 			until: "2026-04-01",
 			expand: true,
 		});
+		expect(capturedTimeout).toBe(30_000);
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toContain('"high score row"');
 		expect(lines[0]).not.toContain('"low score row"');

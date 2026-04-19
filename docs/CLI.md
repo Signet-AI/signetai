@@ -123,7 +123,7 @@ Options:
 | `--name <name>` | Agent name in non-interactive mode |
 | `--description <description>` | Agent description in non-interactive mode |
 | `--deployment-type <type>` | Deployment context (`local`, `vps`, `server`) used for interactive guidance and non-interactive inferred defaults |
-| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `oh-my-pi`, `pi`, `codex`, `forge`) |
+| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `hermes-agent`, `oh-my-pi`, `pi`, `codex`, `forge`) |
 | `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) |
 | `--embedding-model <model>` | Non-interactive embedding model |
 | `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) |
@@ -173,9 +173,13 @@ Wizard steps:
 1. **Agent Name** - What to call your agent
 2. **Harnesses** - Which AI platforms you use:
    - Claude Code (Anthropic CLI)
+   - Codex
    - OpenCode
    - OpenClaw
-   - Codex
+   - Oh My Pi
+   - Pi
+   - Hermes Agent
+   - Forge
 3. **OpenClaw Workspace** - Appears only when an existing OpenClaw config
    is detected; workspace is patched only if you opt in, and setup warns
    that uninstalling OpenClaw can delete this workspace unless backups exist
