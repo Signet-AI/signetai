@@ -57,6 +57,7 @@ interface StoredAttribute {
 	readonly id: string;
 	readonly content: string;
 	readonly normalizedContent: string;
+	readonly claimKey: string;
 	readonly memoryId: string | null;
 	readonly createdAt: string;
 }
@@ -99,6 +100,17 @@ function tokenize(content: string): string[] {
 		.replace(/[^a-z0-9\s-]/g, " ")
 		.split(/\s+/)
 		.filter((token) => token.length >= 2);
+}
+
+function normalizeClaimKey(value: string | undefined): string | null {
+	const normalized = (value ?? "")
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.replace(/_{2,}/g, "_");
+	if (normalized.length < 3) return null;
+	return normalized.slice(0, 120);
 }
 
 function hasUpdateMarker(content: string): boolean {
@@ -147,17 +159,19 @@ function markSupersededSiblings(
 ): number {
 	const siblings = db
 		.prepare(
-			`SELECT id, content, normalized_content, memory_id, created_at
+			`SELECT id, content, normalized_content, claim_key, memory_id, created_at
 			 FROM entity_attributes
 			 WHERE aspect_id = ? AND agent_id = ?
+			   AND claim_key = ?
 			   AND id != ?
 			   AND kind = 'attribute'
 			   AND status = 'active'`,
 		)
-		.all(aspectId, agentId, attribute.id) as Array<{
+		.all(aspectId, agentId, attribute.claimKey, attribute.id) as Array<{
 		id: string;
 		content: string;
 		normalized_content: string;
+		claim_key: string;
 		memory_id: string | null;
 		created_at: string;
 	}>;
@@ -168,6 +182,7 @@ function markSupersededSiblings(
 			id: row.id,
 			content: row.content,
 			normalizedContent: row.normalized_content,
+			claimKey: row.claim_key,
 			memoryId: row.memory_id,
 			createdAt: row.created_at,
 		};
@@ -387,6 +402,7 @@ export interface StructuredAspect {
 	readonly entityType?: string;
 	readonly aspect: string;
 	readonly attributes: ReadonlyArray<{
+		readonly claimKey?: string;
 		readonly content: string;
 		readonly confidence?: number;
 		readonly importance?: number;
@@ -512,13 +528,14 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 			const confidence = attr.confidence ?? 0.7;
 			const importance = attr.importance ?? baseImportance;
 			const attributeId = crypto.randomUUID();
+			const claimKey = normalizeClaimKey(attr.claimKey);
 			try {
 				db.prepare(
 					`INSERT INTO entity_attributes
 					 (id, aspect_id, agent_id, memory_id, kind, content,
-					  normalized_content, confidence, importance, status,
+					  normalized_content, claim_key, confidence, importance, status,
 					  created_at, updated_at)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
 				).run(
 					attributeId,
 					stored.id,
@@ -527,19 +544,21 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 					kind,
 					attr.content,
 					normalized,
+					claimKey,
 					confidence,
 					importance,
 					input.now,
 					input.now,
 				);
 				attributesCreated++;
-				if (kind === "attribute") {
+				if (kind === "attribute" && claimKey !== null) {
 					attributesSuperseded += markSupersededSiblings(
 						db,
 						{
 							id: attributeId,
 							content: attr.content,
 							normalizedContent: normalized,
+							claimKey,
 							memoryId: input.sourceMemoryId,
 							createdAt: input.now,
 						},

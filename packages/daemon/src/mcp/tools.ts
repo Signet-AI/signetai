@@ -707,6 +707,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 									aspect: z.string(),
 									attributes: z.array(
 										z.object({
+											claimKey: z
+												.string()
+												.optional()
+												.describe("Stable identity for this claim within the entity/aspect, used for supersession."),
 											content: z.string(),
 											confidence: z.number().optional(),
 											importance: z.number().optional(),
