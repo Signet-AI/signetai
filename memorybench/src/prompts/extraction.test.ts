@@ -34,6 +34,8 @@ describe("structured extraction prompts", () => {
     expect(prompt).toContain("Entity: a durable referent")
     expect(prompt).toContain('map Speaker A, user, I, and me to the entity "Benchmark User"')
     expect(prompt).toContain("Generic personal preferences, routines, counts, and history belong")
+    expect(prompt).toContain("Every attribute MUST include claimKey")
+    expect(prompt).toContain("korean_restaurants_tried_count")
   })
 })
 
@@ -141,6 +143,7 @@ describe("structured extraction sanitizer", () => {
             {
               content:
                 "Speaker A has been listening to Arctic Monkeys and The Neighbourhood on Spotify lately.",
+              claimKey: "music_streaming_service_recent_usage",
               confidence: 0.9,
               importance: 0.8,
             },
@@ -174,7 +177,9 @@ describe("structured extraction sanitizer", () => {
     ])
     expect(sanitized.aspects).toHaveLength(2)
     expect(sanitized.aspects[0]?.entityName).toBe("Benchmark User")
+    expect(sanitized.aspects[0]?.attributes[0]?.claimKey).toBe("speaker_a_likes_indie_rock")
     expect(sanitized.aspects[1]?.entityName).toBe("Spotify")
+    expect(sanitized.aspects[1]?.attributes[0]?.claimKey).toBe("music_streaming_service_recent_usage")
     expect(sanitized.hints).toEqual([
       "What music streaming service has Speaker A been using lately?",
     ])

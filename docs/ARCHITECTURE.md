@@ -105,7 +105,7 @@ Harness hook fires (session-start / user-prompt / session-end)
       flat FTS5/vector search fills remaining slots,
       structured evidence shaping balances lexical, semantic,
       prospective hint, and traversal evidence,
-      currentness shaping dampens superseded structured facts,
+      currentness shaping dampens claim-key superseded structured facts,
       predictor path can rerank if available
 ```
 

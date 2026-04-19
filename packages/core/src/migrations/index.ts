@@ -64,6 +64,7 @@ import { up as dreamingState } from "./055-dreaming-state";
 import { up as agentScopedContentHash } from "./056-agent-scoped-content-hash";
 import { up as memoriesFtsTokenizerRepair } from "./057-memories-fts-tokenizer-repair";
 import { up as knowledgeGraphIndices } from "./058-knowledge-graph-indices";
+import { up as entityAttributeClaimKey } from "./059-entity-attribute-claim-key";
 
 // -- Public interface consumed by Database.init() --
 
@@ -551,6 +552,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 58,
 		name: "knowledge-graph-indices",
 		up: knowledgeGraphIndices,
+	},
+	{
+		version: 59,
+		name: "entity-attribute-claim-key",
+		up: entityAttributeClaimKey,
+		artifacts: {
+			columns: [{ table: "entity_attributes", column: "claim_key" }],
+		},
 	},
 ];
 

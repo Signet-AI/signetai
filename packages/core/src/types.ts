@@ -766,6 +766,7 @@ export interface EntityAttribute {
 	readonly kind: AttributeKind;
 	readonly content: string;
 	readonly normalizedContent: string;
+	readonly claimKey: string | null;
 	readonly confidence: number;
 	readonly importance: number;
 	readonly status: AttributeStatus;

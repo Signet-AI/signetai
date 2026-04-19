@@ -377,7 +377,8 @@ easy case, but the graph contract is broader and simpler:
 
 - entity: a durable referent that can be expanded
 - aspect: a stable facet of that entity
-- attribute: a sourced claim attached to an aspect
+- claim key: the specific updateable claim slot within an aspect
+- attribute: a sourced claim value attached to that claim slot
 
 For benchmark memories, generic personal facts should not be dropped just
 because they are not named products or places. They should be attached to a
@@ -395,6 +396,7 @@ Aspect: morning routine
 Attribute: getting ready takes about one hour
 
 Aspect: dining history
+Claim key: korean_restaurants_tried_count
 Attribute: tried three Korean restaurants recently on 2023-08-11
 Attribute: tried four Korean restaurants so far on 2023-09-30
 ```
@@ -407,14 +409,17 @@ background pipeline to invent graph structure.
 
 Temporal and update-sensitive attributes should preserve words like
 `currently`, `recently`, `previously`, counts, dates, and before/after
-relationships. The storage schema already has active/superseded status fields,
-so structured benchmark ingestion sends each session source timestamp into the
-remember endpoint. When a newer structured attribute on the same scoped
-entity/aspect conflicts with an older one, the daemon marks the older attribute
-as superseded and records the replacement attribute id. Recall then dampens
-memories whose structured facts are only stale and annotates returned context
-with a `[Signet currentness]` note so the answer model can prefer the current
-replacement instead of guessing from two conflicting memories.
+relationships. The storage schema has active/superseded status fields, so
+structured benchmark ingestion sends each session source timestamp into the
+remember endpoint. Supersession requires the same scoped entity, the same
+aspect, and the same claim key. Attributes without a claim key are saved as
+ordinary evidence and do not automatically supersede sibling attributes. When a
+newer structured attribute conflicts with an older attribute on the same claim
+key, the daemon marks the older attribute as superseded and records the
+replacement attribute id. Recall then dampens memories whose structured facts
+are only stale and annotates returned context with a `[Signet currentness]` note
+so the answer model can prefer the current replacement instead of guessing from
+two conflicting memories.
 
 MemoryBench still performs the answer and judge phases itself. This keeps the
 benchmark comparable with the other providers and avoids benchmark-specific

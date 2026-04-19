@@ -885,8 +885,12 @@ Structured currentness then applies a final correction before hydration.
 Active attributes remain eligible as current evidence, while memories whose
 structured attributes have been superseded are downweighted and annotated
 with a `[Signet currentness]` note that points to the replacement
-attribute when available. This keeps stale facts visible for historical
-questions without letting them win ordinary "what is current?" recall.
+attribute when available. Structured supersession is claim-scoped: a newer
+attribute can replace an older one only when it shares the same entity,
+aspect, and `claim_key`. Sibling events under the same aspect stay active
+unless the caller explicitly gives them the same claim key. This keeps stale
+facts visible for historical questions without letting them win ordinary
+"what is current?" recall.
 
 **Stage 1: Gravity dampening** penalizes results that arrived via a
 semantic path (vector, hybrid, or traversal) but share zero query-term

@@ -167,7 +167,7 @@ Return a JSON object with this exact schema:
   ],
   "aspects": [
     {"entityName": "Name", "aspect": "category", "attributes": [
-      {"content": "factual statement", "confidence": 0.9, "importance": 0.7}
+      {"claimKey": "stable_snake_case_claim_identity", "content": "factual statement", "confidence": 0.9, "importance": 0.7}
     ]}
   ],
   "hints": [
@@ -189,6 +189,9 @@ Rules:
 - For each entity, extract relevant aspects with specific factual attributes.
 - Attach generic user facts to Benchmark User instead of dropping them.
 - Preserve temporal and update language in attributes, including "currently", "recently", "previously", dates, counts, and before/after relationships.
+- Every attribute MUST include claimKey: a stable snake_case identity for the specific claim slot within the entity/aspect.
+- Use the same claimKey only when a newer attribute updates or replaces the same underlying claim. Example: "tried three Korean restaurants" and "has now tried four Korean restaurants" share "korean_restaurants_tried_count".
+- Unrelated events under the same entity/aspect MUST have different claimKey values. Example: "asked for a Parable of the Sower poem" and "asked for web-search privacy papers" must not share a key.
 - Generate 3-5 diverse hint questions per memory that it could help answer
 - Confidence: how certain the information is (0-1)
 - Importance: how significant the fact is for future recall (0-1)
@@ -211,6 +214,7 @@ interface StructuredExtraction {
       entityName: string
       aspect: string
       attributes: Array<{
+        claimKey?: string
         content: string
         confidence?: number
         importance?: number
@@ -370,6 +374,24 @@ function cleanImportance(value: number | undefined): number | undefined {
   return Math.min(Math.max(value, 0), 1)
 }
 
+function cleanClaimKey(value: string | undefined, content: string): string | undefined {
+  const raw = typeof value === "string" ? value : ""
+  const normalized = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_{2,}/g, "_")
+  if (normalized.length >= 3) return normalized.slice(0, 120)
+  const fallback = content
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_{2,}/g, "_")
+  return fallback.length >= 3 ? fallback.slice(0, 80) : undefined
+}
+
 export function sanitizeStructuredExtraction(
   structured: StructuredExtraction["structured"]
 ): StructuredExtraction["structured"] {
@@ -400,6 +422,7 @@ export function sanitizeStructuredExtraction(
       aspect: aspect.aspect.trim(),
       attributes: aspect.attributes
         .map((attribute) => ({
+          claimKey: cleanClaimKey(attribute.claimKey, attribute.content),
           content: attribute.content.trim(),
           confidence: cleanConfidence(attribute.confidence),
           importance: cleanImportance(attribute.importance),

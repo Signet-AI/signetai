@@ -382,9 +382,11 @@ time.
 
 Structured callers may also pass `structured.entities`, `structured.aspects`,
 and `structured.hints`. Aspect attributes are persisted directly under
-`entity_attributes`; newer conflicting attributes on the same entity/aspect can
-mark older attributes as `superseded` with `superseded_by` pointing at the
-replacement.
+`entity_attributes`. Include `claimKey` on each structured attribute when the
+claim can be updated over time. Supersession only runs within the same
+entity/aspect/claimKey, so unrelated events under one aspect do not replace each
+other. Newer conflicting attributes on the same claim can mark older attributes
+as `superseded` with `superseded_by` pointing at the replacement.
 
 **Response**
 

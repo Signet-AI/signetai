@@ -114,6 +114,7 @@ function normalizeStructuredMemoryPayload(value: unknown): unknown {
 					attributes: [
 						{
 							content: aspect.value,
+							...(typeof aspect.claimKey === "string" ? { claimKey: aspect.claimKey } : {}),
 							...(typeof aspect.confidence === "number" ? { confidence: aspect.confidence } : {}),
 							...(typeof aspect.importance === "number" ? { importance: aspect.importance } : {}),
 						},
@@ -744,6 +745,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 										aspect: z.string(),
 										attributes: z.array(
 											z.object({
+												claimKey: z
+													.string()
+													.optional()
+													.describe("Stable identity for this claim within the entity/aspect, used for supersession."),
 												content: z.string(),
 												confidence: z.number().optional(),
 												importance: z.number().optional(),
@@ -754,6 +759,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 										entity: z.string(),
 										aspect: z.string(),
 										value: z.string(),
+										claimKey: z.string().optional(),
 										confidence: z.number().optional(),
 										importance: z.number().optional(),
 									}),

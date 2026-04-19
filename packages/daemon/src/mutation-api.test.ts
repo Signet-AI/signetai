@@ -271,6 +271,7 @@ describe("mutation API routes", () => {
 						aspect: "dining history",
 						attributes: [
 							{
+								claimKey: "korean_restaurants_tried_count",
 								content: "MemoryBench User restaurants has tried three Korean restaurants.",
 								confidence: 0.9,
 								importance: 0.8,
@@ -307,6 +308,7 @@ describe("mutation API routes", () => {
 							aspect: "dining history",
 							attributes: [
 								{
+									claimKey: "korean_restaurants_tried_count",
 									content: "MemoryBench User restaurants has now tried four Korean restaurants.",
 									confidence: 0.9,
 									importance: 0.8,
@@ -349,6 +351,70 @@ describe("mutation API routes", () => {
 				status: "active",
 				replacement: null,
 			},
+		]);
+	});
+
+	it("POST /api/memory/remember does not supersede unrelated claims on the same aspect", async () => {
+		for (const payload of [
+			{
+				content: "The benchmark user asked for a Parable of the Sower poem.",
+				createdAt: "2023-05-01T12:00:00.000Z",
+				claimKey: "asked_for_parable_of_the_sower_poem",
+				attribute: "MemoryBench User events asked for a poem summarizing Octavia Butler's Parable of the Sower.",
+			},
+			{
+				content: "The benchmark user asked for web-search privacy papers.",
+				createdAt: "2023-05-02T12:00:00.000Z",
+				claimKey: "asked_for_web_search_privacy_papers",
+				attribute: "MemoryBench User events asked for research paper suggestions about web-search privacy.",
+			},
+		]) {
+			const res = await app.request("http://localhost/api/memory/remember", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					content: payload.content,
+					createdAt: payload.createdAt,
+					agentId: "bench-agent",
+					structured: {
+						aspects: [
+							{
+								entityName: "MemoryBench User events",
+								entityType: "person",
+								aspect: "events",
+								attributes: [
+									{
+										claimKey: payload.claimKey,
+										content: payload.attribute,
+										confidence: 0.9,
+										importance: 0.7,
+									},
+								],
+							},
+						],
+					},
+				}),
+			});
+			expect(res.status).toBe(200);
+		}
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT ea.claim_key, ea.status
+						 FROM entities e
+						 JOIN entity_aspects asp ON asp.entity_id = e.id
+						 JOIN entity_attributes ea ON ea.aspect_id = asp.id
+						 WHERE e.agent_id = ? AND e.canonical_name = ?
+						 ORDER BY ea.claim_key`,
+					)
+					.all("bench-agent", "memorybench user events") as Array<{ claim_key: string; status: string }>,
+		);
+
+		expect(rows).toEqual([
+			{ claim_key: "asked_for_parable_of_the_sower_poem", status: "active" },
+			{ claim_key: "asked_for_web_search_privacy_papers", status: "active" },
 		]);
 	});
 
