@@ -4,53 +4,53 @@
  * Background service for memory, API, and dashboard hosting
  */
 
-import type {ChildProcess} from "node:child_process";
-import {spawn} from "node:child_process";
-import {createHash} from "node:crypto";
+import type { ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	copyFileSync,
 	existsSync,
 	mkdirSync,
-	readdirSync,
 	readFileSync,
+	readdirSync,
 	statSync,
 	unlinkSync,
-	writeFileSync
+	writeFileSync,
 } from "node:fs";
-import {homedir} from "node:os";
-import {basename, join} from "node:path";
-import {Worker} from "node:worker_threads";
-import {createAdaptorServer} from "@hono/node-server";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
+import { Worker } from "node:worker_threads";
+import { createAdaptorServer } from "@hono/node-server";
 import {
 	type AgentDefinition,
+	type PipelineSynthesisConfig,
 	buildArchitectureDoc,
 	normalizeAgentRosterEntry,
 	parseSimpleYaml,
-	type PipelineSynthesisConfig,
 	stripSignetBlock,
 } from "@signet/core";
-import {watch} from "chokidar";
-import {Hono} from "hono";
-import {resolveAgentId, resolveDaemonAgentId} from "./agent-id";
-import {bindWithRetry} from "./bind-with-retry";
-import {migrateConfig} from "./config-migration";
-import {listConnectors} from "./connectors/registry";
-import {clearAllPresence} from "./cross-agent";
-import {closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor} from "./db-accessor";
-import {fetchEmbedding} from "./embedding-fetch";
-import {type EmbeddingTrackerHandle, startEmbeddingTracker} from "./embedding-tracker";
-import {initFeatureFlags} from "./feature-flags";
-import {writeFileIfChangedAsync} from "./file-sync";
-import {syncAgentWorkspaces} from "./identity-sync";
-import {closeLlmProvider, getLlmProvider, initLlmProvider} from "./llm";
-import {logger} from "./logger";
-import {registerGlobalMiddleware} from "./middleware";
-import {loadMemoryConfig, type ResolvedMemoryConfig} from "./memory-config";
-import {DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline,} from "./pipeline";
-import {type DreamingWorkerHandle, startDreamingWorker} from "./pipeline/dreaming-worker";
-import {deadLetterPendingExtractionJobs} from "./pipeline/extraction-fallback";
-import {invalidateTraversalCache,} from "./pipeline/graph-traversal";
-import {initModelRegistry, stopModelRegistry,} from "./pipeline/model-registry";
+import { watch } from "chokidar";
+import { Hono } from "hono";
+import { resolveAgentId, resolveDaemonAgentId } from "./agent-id";
+import { bindWithRetry } from "./bind-with-retry";
+import { migrateConfig } from "./config-migration";
+import { listConnectors } from "./connectors/registry";
+import { clearAllPresence } from "./cross-agent";
+import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
+import { fetchEmbedding } from "./embedding-fetch";
+import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
+import { initFeatureFlags } from "./feature-flags";
+import { writeFileIfChangedAsync } from "./file-sync";
+import { syncAgentWorkspaces } from "./identity-sync";
+import { closeLlmProvider, getLlmProvider, initLlmProvider } from "./llm";
+import { logger } from "./logger";
+import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { registerGlobalMiddleware } from "./middleware";
+import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
+import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
+import { deadLetterPendingExtractionJobs } from "./pipeline/extraction-fallback";
+import { invalidateTraversalCache } from "./pipeline/graph-traversal";
+import { initModelRegistry, stopModelRegistry } from "./pipeline/model-registry";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
@@ -64,27 +64,27 @@ import {
 	stopOpenCodeServer,
 	withRateLimit,
 } from "./pipeline/provider";
-import {resolveRuntimeModel} from "./pipeline/provider-resolution";
-import {startReconciler} from "./pipeline/skill-reconciler";
-import {createPredictorClient, type PredictorClient} from "./predictor-client";
-import {type RepairContext, structuralBackfill} from "./repair-actions";
-import {logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors,} from "./resource-monitor";
+import { resolveRuntimeModel } from "./pipeline/provider-resolution";
+import { startReconciler } from "./pipeline/skill-reconciler";
+import { type PredictorClient, createPredictorClient } from "./predictor-client";
+import { type RepairContext, structuralBackfill } from "./repair-actions";
+import { logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors } from "./resource-monitor";
 import {
 	AGENTS_DIR,
-	analyticsCollector,
 	BIND_HOST,
-	bindAbort,
 	CURRENT_VERSION,
 	DAEMON_DIR,
 	HOST,
 	INTERNAL_SELF_HOST,
-	invalidateDiagnosticsCache,
-	isManagedOpenCodeLocalEndpoint,
 	LOG_DIR,
 	MEMORY_DB,
-	normalizeRuntimeBaseUrl,
 	PID_FILE,
 	PORT,
+	analyticsCollector,
+	bindAbort,
+	invalidateDiagnosticsCache,
+	isManagedOpenCodeLocalEndpoint,
+	normalizeRuntimeBaseUrl,
 	providerRuntimeResolution,
 	providerTracker,
 	readEnvTrimmed,
@@ -100,23 +100,26 @@ import {
 	setTelemetryRef,
 	shuttingDown,
 } from "./routes/state.js";
-import {startSchedulerWorker} from "./scheduler";
-import {getSecret} from "./secrets.js";
-import {flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints} from "./session-checkpoints";
-import {releaseAllSessions, startSessionCleanup, stopSessionCleanup} from "./session-tracker";
-import {createSingleFlightRunner} from "./single-flight-runner";
-import {closeSynthesisProvider, initSynthesisProvider} from "./synthesis-llm";
-import {createTelemetryCollector, type TelemetryCollector} from "./telemetry";
-import {closeWidgetProvider, initWidgetProvider} from "./widget-llm";
+import { startSchedulerWorker } from "./scheduler";
+import { getSecret } from "./secrets.js";
+import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
+import { releaseAllSessions, startSessionCleanup, stopSessionCleanup } from "./session-tracker";
+import { createSingleFlightRunner } from "./single-flight-runner";
+import { closeSynthesisProvider, initSynthesisProvider } from "./synthesis-llm";
+import { type TelemetryCollector, createTelemetryCollector } from "./telemetry";
+import { closeWidgetProvider, initWidgetProvider } from "./widget-llm";
 
-import {getSynthesisWorker as getSynthesisRenderWorker, setSynthesisWorker as setSynthesisRenderWorker,} from "./hooks";
-import {mountMcpRoute} from "./mcp";
-import {mountAppTrayRoutes} from "./routes/app-tray.js";
-import {registerAuthRoutes} from "./routes/auth-routes.js";
-import {mountChangelogRoutes} from "./routes/changelog.js";
-import {registerConnectorRoutes} from "./routes/connectors-routes.js";
-import {setupDashboardRoutes} from "./routes/dashboard.js";
-import {mountEventBusRoutes} from "./routes/event-bus.js";
+import {
+	getSynthesisWorker as getSynthesisRenderWorker,
+	setSynthesisWorker as setSynthesisRenderWorker,
+} from "./hooks";
+import { mountMcpRoute } from "./mcp";
+import { mountAppTrayRoutes } from "./routes/app-tray.js";
+import { registerAuthRoutes } from "./routes/auth-routes.js";
+import { mountChangelogRoutes } from "./routes/changelog.js";
+import { registerConnectorRoutes } from "./routes/connectors-routes.js";
+import { setupDashboardRoutes } from "./routes/dashboard.js";
+import { mountEventBusRoutes } from "./routes/event-bus.js";
 import {
 	getGitStatus,
 	gitConfig,
@@ -125,31 +128,31 @@ import {
 	gitSync,
 	scheduleAutoCommit,
 	startGitSyncTimer,
-	stopGitSyncTimer
+	stopGitSyncTimer,
 } from "./routes/git-sync.js";
-import {mountHealthRoutes} from "./routes/health.js";
-import {registerHooksRoutes} from "./routes/hooks-routes.js";
-import {registerKnowledgeRoutes} from "./routes/knowledge-routes.js";
-import {mountMarketplaceReviewsRoutes} from "./routes/marketplace-reviews.js";
-import {mountMarketplaceRoutes} from "./routes/marketplace.js";
-import {mountMcpAnalyticsRoutes} from "./routes/mcp-analytics.js";
-import {registerMemoryRoutes} from "./routes/memory-routes.js";
-import {registerMiscRoutes} from "./routes/misc-routes.js";
-import {mountOsAgentRoutes} from "./routes/os-agent.js";
-import {mountOsChatRoutes} from "./routes/os-chat.js";
-import {registerPipelineRoutes} from "./routes/pipeline-routes.js";
-import {registerPluginRoutes} from "./routes/plugins-routes.js";
-import {registerRepairRoutes} from "./routes/repair-routes.js";
-import {registerSecretRoutes} from "./routes/secrets-routes.js";
-import {registerSessionRoutes} from "./routes/session-routes.js";
-import {mountSkillAnalyticsRoutes} from "./routes/skill-analytics.js";
-import {mountSkillsRoutes, setFetchEmbedding} from "./routes/skills.js";
-import {registerTelemetryRoutes} from "./routes/telemetry-routes.js";
-import {checkEmbeddingProvider, getConfiguredProviderHints} from "./routes/utils.js";
-import {mountWidgetRoutes} from "./routes/widget.js";
-import {isReadyResponse} from "./synthesis-worker-protocol";
-import {initUpdateSystem, startUpdateTimer, stopUpdateTimer} from "./update-system";
-import {createAgentsWatcherIgnoreMatcher} from "./watcher-ignore";
+import { mountHealthRoutes } from "./routes/health.js";
+import { registerHooksRoutes } from "./routes/hooks-routes.js";
+import { registerKnowledgeRoutes } from "./routes/knowledge-routes.js";
+import { mountMarketplaceReviewsRoutes } from "./routes/marketplace-reviews.js";
+import { mountMarketplaceRoutes } from "./routes/marketplace.js";
+import { mountMcpAnalyticsRoutes } from "./routes/mcp-analytics.js";
+import { registerMemoryRoutes } from "./routes/memory-routes.js";
+import { registerMiscRoutes } from "./routes/misc-routes.js";
+import { mountOsAgentRoutes } from "./routes/os-agent.js";
+import { mountOsChatRoutes } from "./routes/os-chat.js";
+import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
+import { registerPluginRoutes } from "./routes/plugins-routes.js";
+import { registerRepairRoutes } from "./routes/repair-routes.js";
+import { registerSecretRoutes } from "./routes/secrets-routes.js";
+import { registerSessionRoutes } from "./routes/session-routes.js";
+import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
+import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
+import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
+import { checkEmbeddingProvider, getConfiguredProviderHints } from "./routes/utils.js";
+import { mountWidgetRoutes } from "./routes/widget.js";
+import { isReadyResponse } from "./synthesis-worker-protocol";
+import { initUpdateSystem, startUpdateTimer, stopUpdateTimer } from "./update-system";
+import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
 
 let httpServer: import("node:net").Server | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
@@ -165,6 +168,13 @@ let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
+
+export function countConnectorsActive(connectors: readonly { readonly status: string }[]): number {
+	// ConnectorStatus is "idle" | "syncing" | "error"; there is no "active"
+	// state. The heartbeat field keeps its historical name, but means
+	// connectors that are registered and not currently errored.
+	return connectors.filter((cn) => cn.status !== "error").length;
+}
 
 export function getPredictorClient(): PredictorClient | null {
 	return predictorClientRef;
@@ -962,7 +972,7 @@ async function stopPipelineRuntime(): Promise<void> {
 
 	if (skillReconcilerHandle) {
 		try {
-			skillReconcilerHandle.stop();
+			await Promise.resolve(skillReconcilerHandle.stop());
 		} catch {}
 		skillReconcilerHandle = null;
 	}
@@ -1075,9 +1085,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
 	const extractionFallbackProvider = memoryCfg.pipelineV2.extraction.fallbackProvider;
-	if (extractionFallbackProvider === undefined) {
-		throw new Error("Extraction fallback provider must be configured; memory-config should always resolve this");
-	}
 	const validExtractionProviders = new Set([
 		"none",
 		"llama-cpp",
@@ -2092,7 +2099,7 @@ async function main() {
 					telemetryRef.record("daemon.heartbeat", {
 						uptimeMs: Date.now() - daemonStartTime,
 						memoryCount,
-						connectorsActive: connectors.filter((cn) => cn.status !== "error").length,
+						connectorsActive: countConnectorsActive(connectors),
 						pipelineMode: readPipelineMode(liveCfg.pipelineV2),
 						extractionProvider: liveCfg.pipelineV2.extraction.provider,
 						embeddingProvider: liveCfg.embedding.provider,
@@ -2249,9 +2256,9 @@ async function main() {
 				fetch: app.fetch,
 				hostname: BIND_HOST,
 				// Type assertion needed: arrow functions cannot satisfy overloaded
-			// function types. The wrapper passes all args through to nodeCreateServer
-			// so it is correct at runtime for every overload.
-			createServer: createBoundedServer as typeof nodeCreateServer,
+				// function types. The wrapper passes all args through to nodeCreateServer
+				// so it is correct at runtime for every overload.
+				createServer: createBoundedServer as typeof nodeCreateServer,
 			}),
 		onBound: (server) => {
 			httpServer = server;

@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import type { Hono } from "hono";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Hono } from "hono";
 
 let app: Hono;
 let dir = "";
 let prev: string | undefined;
+let countConnectorsActive: (connectors: readonly { readonly status: string }[]) => number;
 
 describe("daemon status contract", () => {
 	beforeAll(async () => {
@@ -23,12 +24,15 @@ describe("daemon status contract", () => {
 		process.env.SIGNET_PATH = dir;
 
 		const daemon = await import("./daemon");
+		const state = await import("./routes/state.js");
+		state.reloadAuthState(dir);
 		app = daemon.app;
+		countConnectorsActive = daemon.countConnectorsActive;
 	});
 
 	afterAll(() => {
 		if (prev === undefined) {
-			delete process.env.SIGNET_PATH;
+			process.env.SIGNET_PATH = undefined;
 		}
 		if (prev !== undefined) process.env.SIGNET_PATH = prev;
 		rmSync(dir, { recursive: true, force: true });
@@ -84,7 +88,11 @@ describe("daemon status contract", () => {
 		expect(extraction).toBeDefined();
 		expect(typeof extraction?.resolved).toBe("string");
 		expect(typeof extraction?.effective).toBe("string");
-		expect(extraction?.fallbackProvider === "ollama" || extraction?.fallbackProvider === "llama-cpp" || extraction?.fallbackProvider === "none").toBe(true);
+		expect(
+			extraction?.fallbackProvider === "ollama" ||
+				extraction?.fallbackProvider === "llama-cpp" ||
+				extraction?.fallbackProvider === "none",
+		).toBe(true);
 		expect(
 			extraction?.status === "active" ||
 				extraction?.status === "degraded" ||
@@ -96,5 +104,9 @@ describe("daemon status contract", () => {
 		expect(typeof extraction?.fallbackApplied).toBe("boolean");
 		expect(extraction).toHaveProperty("reason");
 		expect(extraction).toHaveProperty("since");
+	});
+
+	it("counts non-errored connectors as active for heartbeat telemetry", () => {
+		expect(countConnectorsActive([{ status: "idle" }, { status: "syncing" }, { status: "error" }])).toBe(2);
 	});
 });
