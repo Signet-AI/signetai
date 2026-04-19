@@ -252,6 +252,18 @@ export class Orchestrator {
         checkpoint.judge = judgeModel
         metadataChanged = true
       }
+      const byId = new Map(allQuestions.map((q) => [q.questionId, q]))
+      for (const questionId of checkpoint.targetQuestionIds ?? Object.keys(checkpoint.questions)) {
+        const q = byId.get(questionId)
+        if (!q) continue
+        const existing = checkpoint.questions[questionId]
+        const questionDate =
+          typeof q.metadata?.questionDate === "string" ? q.metadata.questionDate : undefined
+        if (existing && !existing.questionDate && questionDate) {
+          existing.questionDate = questionDate
+          metadataChanged = true
+        }
+      }
       if (metadataChanged) {
         this.checkpointManager.save(checkpoint)
       }
@@ -293,6 +305,8 @@ export class Orchestrator {
           question: q.question,
           groundTruth: q.groundTruth,
           questionType: q.questionType,
+          questionDate:
+            typeof q.metadata?.questionDate === "string" ? q.metadata.questionDate : undefined,
         })
       }
 

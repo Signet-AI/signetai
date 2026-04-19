@@ -297,7 +297,10 @@ export class SignetProvider implements Provider {
         scope: options.containerTag,
         agentId: this.agentId,
         project: this.project,
-        expand: false,
+        // Use Signet's lossless expansion surface during benchmarks.
+        // The daemon still ranks ordinary recall results first, but expanded
+        // results may include transcript-backed excerpts for retrieved sessions.
+        expand: true,
       }),
     })
 

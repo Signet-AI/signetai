@@ -105,7 +105,7 @@ export class CheckpointManager {
     // If we get here, all retries failed or it was a non-retriable error
     try {
       unlinkSync(tempPath)
-    } catch { }
+    } catch {}
     throw lastError
   }
 
@@ -195,22 +195,31 @@ export class CheckpointManager {
       questionDate?: string
     }
   ): void {
-    if (!checkpoint.questions[questionId]) {
-      checkpoint.questions[questionId] = {
-        questionId,
-        containerTag,
-        question: metadata.question,
-        groundTruth: metadata.groundTruth,
-        questionType: metadata.questionType,
-        questionDate: metadata.questionDate,
-        phases: {
-          ingest: { status: "pending", completedSessions: [] },
-          indexing: { status: "pending" },
-          search: { status: "pending" },
-          answer: { status: "pending" },
-          evaluate: { status: "pending" },
-        },
+    const existing = checkpoint.questions[questionId]
+    if (existing) {
+      existing.question = metadata.question
+      existing.groundTruth = metadata.groundTruth
+      existing.questionType = metadata.questionType
+      if (!existing.questionDate && metadata.questionDate) {
+        existing.questionDate = metadata.questionDate
       }
+      return
+    }
+
+    checkpoint.questions[questionId] = {
+      questionId,
+      containerTag,
+      question: metadata.question,
+      groundTruth: metadata.groundTruth,
+      questionType: metadata.questionType,
+      questionDate: metadata.questionDate,
+      phases: {
+        ingest: { status: "pending", completedSessions: [] },
+        indexing: { status: "pending" },
+        search: { status: "pending" },
+        answer: { status: "pending" },
+        evaluate: { status: "pending" },
+      },
     }
   }
 
@@ -284,12 +293,12 @@ export class CheckpointManager {
       evaluated: questions.filter((q) => q.phases.evaluate.status === "completed").length,
       ...(episodesTotal > 0
         ? {
-          indexingEpisodes: {
-            total: episodesTotal,
-            completed: episodesCompleted,
-            failed: episodesFailed,
-          },
-        }
+            indexingEpisodes: {
+              total: episodesTotal,
+              completed: episodesCompleted,
+              failed: episodesFailed,
+            },
+          }
         : {}),
     }
   }

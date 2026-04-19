@@ -61,6 +61,8 @@ export interface RecallResult {
 	truncated: boolean;
 	score: number;
 	source: string;
+	source_id?: string;
+	session_id?: string;
 	type: string;
 	tags: string | null;
 	pinned: boolean;
@@ -265,6 +267,38 @@ const BAKING_QUERY_EXPANSIONS = [
 	"texture",
 ] as const;
 
+const ENTERTAINMENT_QUERY_TRIGGERS = new Set([
+	"documentary",
+	"documentaries",
+	"film",
+	"films",
+	"movie",
+	"movies",
+	"netflix",
+	"show",
+	"shows",
+	"streaming",
+	"television",
+	"tv",
+	"watch",
+	"watching",
+]);
+
+const ENTERTAINMENT_QUERY_EXPANSIONS = [
+	"comedy",
+	"documentary",
+	"film",
+	"hulu",
+	"netflix",
+	"show",
+	"stand up",
+	"storytelling",
+	"streaming",
+	"television",
+	"tv",
+	"watchlist",
+] as const;
+
 function normalizeExpansionToken(raw: string): string {
 	const cleaned = raw
 		.toLowerCase()
@@ -288,12 +322,24 @@ export function expandRecallKeywordQuery(raw: string): string {
 		.map(normalizeExpansionToken)
 		.filter((token) => token.length >= 2 && !FTS_STOP.has(token));
 
-	if (!tokens.some((token) => BAKING_QUERY_TRIGGERS.has(token))) return raw;
-
+	const expansions: string[] = [];
 	const existing = new Set(tokens);
-	const additions = BAKING_QUERY_EXPANSIONS.filter((token) => !existing.has(normalizeExpansionToken(token)));
-	if (additions.length === 0) return raw;
-	return `${raw} ${additions.join(" ")}`;
+	const addMissing = (items: readonly string[]): void => {
+		for (const item of items) {
+			const normalized = normalizeExpansionToken(item);
+			if (!existing.has(normalized) && !expansions.includes(item)) expansions.push(item);
+		}
+	};
+
+	if (tokens.some((token) => BAKING_QUERY_TRIGGERS.has(token))) {
+		addMissing(BAKING_QUERY_EXPANSIONS);
+	}
+	if (tokens.some((token) => ENTERTAINMENT_QUERY_TRIGGERS.has(token))) {
+		addMissing(ENTERTAINMENT_QUERY_EXPANSIONS);
+	}
+
+	if (expansions.length === 0) return raw;
+	return `${raw} ${expansions.join(" ")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +499,135 @@ function annotateCurrentness(content: string, info: CurrentnessInfo | undefined)
 		}
 	}
 	return `${lines.join("\n")}\n\n${content}`;
+}
+
+interface TranscriptRecallHit {
+	readonly sessionKey: string;
+	readonly project: string | null;
+	readonly updatedAt: string;
+	readonly excerpt: string;
+	readonly rank: number;
+}
+
+function sessionIdFromSourceId(sourceId: string): string {
+	const index = sourceId.lastIndexOf(":");
+	return index >= 0 ? sourceId.slice(index + 1) : sourceId;
+}
+
+function transcriptExcerpt(content: string, query: string, maxChars = 650): string {
+	const clean = content.replace(/\s+/g, " ").trim();
+	if (clean.length <= maxChars) return clean;
+
+	const weakTerms = new Set([
+		"brand",
+		"brands",
+		"conversation",
+		"end",
+		"going",
+		"high",
+		"previous",
+		"recommend",
+		"recommendation",
+		"recommendations",
+		"remind",
+		"show",
+		"tonight",
+		"watch",
+		"wondering",
+	]);
+	const terms = expandRecallKeywordQuery(query)
+		.toLowerCase()
+		.split(/\W+/)
+		.map(normalizeExpansionToken)
+		.filter((term, index, all) => term.length >= 3 && !FTS_STOP.has(term) && all.indexOf(term) === index)
+		.sort((a, b) => Number(weakTerms.has(a)) - Number(weakTerms.has(b)) || b.length - a.length)
+		.slice(0, 12);
+	const lower = clean.toLowerCase();
+	let best = -1;
+	for (const term of terms) {
+		const index = lower.indexOf(term);
+		if (index !== -1) {
+			best = index;
+			break;
+		}
+	}
+
+	if (best === -1) return `${clean.slice(0, maxChars - 3).trim()}...`;
+	const start = Math.max(0, best - Math.floor(maxChars * 0.35));
+	const end = Math.min(clean.length, start + maxChars);
+	const prefix = start > 0 ? "..." : "";
+	const suffix = end < clean.length ? "..." : "";
+	return `${prefix}${clean.slice(start, end).trim()}${suffix}`;
+}
+
+function buildTranscriptRecallHits(
+	params: RecallParams,
+	query: string,
+	existingSourceIds: Set<string>,
+): TranscriptRecallHit[] {
+	if (!params.expand) return [];
+	const fts = sanitizeFtsQuery(query);
+	if (fts.length === 0) return [];
+
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const table = db
+				.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts_fts'`)
+				.get();
+			if (!table) return [];
+
+			const parts = [
+				"SELECT st.session_key, st.project, COALESCE(st.updated_at, st.created_at) AS updated_at,",
+				`st.content, snippet(session_transcripts_fts, 0, '', '', ' … ', 36) AS excerpt,`,
+				"bm25(session_transcripts_fts) AS rank",
+				"FROM session_transcripts_fts",
+				"JOIN session_transcripts st ON st.rowid = session_transcripts_fts.rowid",
+				"WHERE session_transcripts_fts MATCH ?",
+				"AND st.agent_id = ?",
+			];
+			const args: unknown[] = [fts, params.agentId ?? "default"];
+			if (params.project) {
+				parts.push("AND st.project = ?");
+				args.push(params.project);
+			}
+			if (params.scope !== undefined && params.scope !== null) {
+				parts.push(`AND st.session_key LIKE ? ESCAPE '\\'`);
+				args.push(`${escapeLike(params.scope)}:%`);
+			}
+			if (existingSourceIds.size > 0) {
+				const placeholders = [...existingSourceIds].map(() => "?").join(", ");
+				parts.push(`AND st.session_key NOT IN (${placeholders})`);
+				args.push(...existingSourceIds);
+			}
+			parts.push("ORDER BY rank ASC, updated_at DESC LIMIT ?");
+			args.push(Math.max(2, Math.min(3, params.limit ?? 10)));
+
+			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
+				session_key: string;
+				project: string | null;
+				updated_at: string;
+				content: string;
+				excerpt: string | null;
+				rank: number;
+			}>;
+
+			const maxRank = rows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
+			return rows
+				.map((row) => ({
+					sessionKey: row.session_key,
+					project: row.project,
+					updatedAt: row.updated_at,
+					excerpt: transcriptExcerpt(row.content || row.excerpt || "", query),
+					rank: maxRank > 0 ? Math.abs(row.rank) / maxRank : 0.2,
+				}))
+				.filter((row) => row.excerpt.length > 0);
+		});
+	} catch (e) {
+		logger.warn("memory", "Transcript recall fallback failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+		return [];
+	}
 }
 
 function cosineSimilarity(query: Float32Array, memory: Float32Array): number {
@@ -1170,6 +1345,40 @@ export async function hybridRecall(
 	const topIds = scored.slice(0, preHydrate).map((s) => s.id);
 
 	if (topIds.length === 0) {
+		const transcriptHits = buildTranscriptRecallHits(params, expandedQuery, new Set());
+		if (transcriptHits.length > 0) {
+			const results = transcriptHits.slice(0, limit).map((hit): RecallResult => {
+				const sessionId = sessionIdFromSourceId(hit.sessionKey);
+				return {
+					id: `transcript:${hit.sessionKey}`,
+					content: `[Transcript excerpt]\n${hit.excerpt}`,
+					content_length: hit.excerpt.length,
+					truncated: false,
+					score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
+					source: "transcript",
+					source_id: hit.sessionKey,
+					session_id: sessionId,
+					type: "transcript",
+					tags: params.scope ? `memorybench,${params.scope},${sessionId},transcript` : null,
+					pinned: false,
+					importance: 0.55,
+					who: "",
+					project: hit.project,
+					created_at: hit.updatedAt,
+					supplementary: true,
+				};
+			});
+			return {
+				results,
+				query,
+				method: "keyword",
+				meta: {
+					totalReturned: results.length,
+					hasSupplementary: true,
+					noHits: false,
+				},
+			};
+		}
 		return {
 			results: [],
 			query,
@@ -1258,6 +1467,7 @@ export async function hybridRecall(
 				truncated: isTruncated,
 				score: Math.round(s.score * 100) / 100,
 				source: s.source,
+				...(r.source_id ? { source_id: r.source_id, session_id: sessionIdFromSourceId(r.source_id) } : {}),
 				type: r.type,
 				tags: r.tags,
 				pinned: !!r.pinned,
@@ -1523,6 +1733,49 @@ export async function hybridRecall(
 		}
 	}
 
+	// --- Transcript recall fallback ---
+	// When the caller asks for expansion, raw transcripts are an allowed
+	// lossless backing source. Use them as a mechanical rescue channel for
+	// cases where the extracted memory compressed away the exact detail.
+	if (params.expand) {
+		const sourceIds = new Set(
+			results
+				.map((result) => rowMap.get(result.id)?.source_id ?? result.source_id)
+				.filter((sourceId): sourceId is string => typeof sourceId === "string" && sourceId.length > 0),
+		);
+		const transcriptHits = buildTranscriptRecallHits(params, expandedQuery, sourceIds);
+		const realScores = results.filter((row) => row.source !== "transcript").map((row) => row.score);
+		const maxTranscriptScore = realScores.length > 0 ? Math.max(0.01, Math.min(...realScores) - 0.01) : 0.5;
+		for (const hit of transcriptHits) {
+			const sessionId = sessionIdFromSourceId(hit.sessionKey);
+			const id = `transcript:${hit.sessionKey}`;
+			if (existingIds.has(id)) continue;
+			existingIds.add(id);
+			results.push({
+				id,
+				content: `[Transcript excerpt]\n${hit.excerpt}`,
+				content_length: hit.excerpt.length,
+				truncated: false,
+				score: Math.round(Math.max(0.01, Math.min(maxTranscriptScore, hit.rank)) * 100) / 100,
+				source: "transcript",
+				source_id: hit.sessionKey,
+				session_id: sessionId,
+				type: "transcript",
+				tags: params.scope ? `memorybench,${params.scope},${sessionId},transcript` : null,
+				pinned: false,
+				importance: 0.55,
+				who: "",
+				project: hit.project,
+				created_at: hit.updatedAt,
+				supplementary: true,
+			});
+		}
+		if (transcriptHits.length > 0) {
+			results.sort((a, b) => b.score - a.score);
+			if (results.length > limit) results.length = limit;
+		}
+	}
+
 	// --- Lossless expansion: fetch raw session transcripts ---
 	let sources: Record<string, string> | undefined;
 	if (params.expand) {
@@ -1549,6 +1802,21 @@ export async function hybridRecall(
 			}
 		} catch {
 			// Non-fatal — table may not exist pre-migration
+		}
+	}
+
+	if (params.expand && sources) {
+		for (const result of results.filter((row) => row.source !== "transcript").slice(0, Math.min(5, limit))) {
+			const sourceId = rowMap.get(result.id)?.source_id ?? result.source_id;
+			if (!sourceId) continue;
+			const transcript = sources[sourceId];
+			if (!transcript) continue;
+			const excerpt = transcriptExcerpt(transcript, expandedQuery);
+			if (!excerpt || result.content.includes(excerpt)) continue;
+			const content = `[Transcript excerpt]\n${excerpt}\n\n${result.content}`;
+			result.content = content.length > recallTruncate ? `${content.slice(0, recallTruncate)} [truncated]` : content;
+			result.content_length = content.length;
+			result.truncated = content.length > recallTruncate;
 		}
 	}
 

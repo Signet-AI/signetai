@@ -82,11 +82,13 @@ ${search}${graphSection}
 2. For multi-hop questions, synthesize across multiple memories
 3. For temporal questions, pay close attention to dates and time references. Resolve ALL relative dates ("next month", "last week") to absolute dates using the memory date or Question Date as anchor.
 4. When comparing relative lookbacks from the same anchor date, the longer lookback happened earlier (for example, "about a month ago" is earlier than "about three weeks ago").
-5. If a memory includes a [Signet currentness] note, treat superseded structured facts as historical and prefer the listed current replacement or current structured fact.
-6. Graph Context (entity relationships) is structurally reliable
-7. Knowledge Graph Context provides aggregated cross-referencing — use it to fill gaps
-8. For preference or advice questions, use retrieved preferences as grounding and give a concrete personalized suggestion. Do not merely repeat the user's known preference back to them.
-9. If the question asks for advice about something the memories say the user already tried or already likes, treat that as the starting point. Recommend a next step, pairing, variation, or technique that builds on it.
+5. If an older memory gives a count and a newer memory says the user added one or more items to the same collection, compute the current count instead of repeating the older count.
+6. If a memory includes a [Signet currentness] note, treat superseded structured facts as historical and prefer the listed current replacement or current structured fact.
+7. Graph Context (entity relationships) is structurally reliable
+8. Knowledge Graph Context provides aggregated cross-referencing — use it to fill gaps
+9. Transcript excerpts are lossless source snippets for retrieved sessions. Use them to recover exact names, counts, and dates that the extracted memory summary may have compressed.
+10. For preference or advice questions, use retrieved preferences as grounding and give a concrete personalized suggestion. Do not merely repeat the user's known preference back to them.
+11. If the question asks for advice about something the memories say the user already tried or already likes, treat that as the starting point. Recommend a next step, pairing, variation, or technique that builds on it.
 
 Instructions:
 - Base your answer ONLY on the provided memories

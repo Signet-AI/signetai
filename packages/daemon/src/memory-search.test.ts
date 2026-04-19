@@ -96,6 +96,7 @@ describe("hybridRecall", () => {
 		);
 
 		expect(result.results.map((row) => row.id)).toContain("mem-a");
+		expect(result.results.find((row) => row.id === "mem-a")?.content).toStartWith("[Transcript excerpt]");
 		expect(result.sources).toBeDefined();
 		expect(result.sources?.["sess-shared"]).toBe("agent-a transcript context");
 		expect(Object.values(result.sources ?? {})).not.toContain("agent-b transcript context");
@@ -467,6 +468,58 @@ describe("hybridRecall", () => {
 		expect(expandRecallKeywordQuery("chocolate chip cookies need something extra")).toContain("sugar");
 		const ids = result.results.map((row) => row.id);
 		expect(ids).toContain("mem-turbinado");
+	});
+
+	it("expands entertainment recommendation queries for media preferences", async () => {
+		expect(expandRecallKeywordQuery("Can you recommend a show or movie for me to watch tonight?")).toContain("netflix");
+		expect(expandRecallKeywordQuery("Can you recommend a show or movie for me to watch tonight?")).toContain(
+			"storytelling",
+		);
+	});
+
+	it("uses transcript fallback when extracted memory compressed away media details", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts (
+					session_key, content, harness, project, agent_id, created_at, updated_at
+				) VALUES (?, ?, 'memorybench-session', ?, ?, ?, ?)`,
+			).run(
+				"bench-scope:answer_0250ae1c",
+				`user: Can you recommend some stand-up comedy specials on Netflix with strong storytelling abilities?
+assistant: John Mulaney's Kid Gorgeous is an excellent example. Hasan Minhaj: Homecoming King and Mike Birbiglia: My Girlfriend's Boyfriend are strong storytelling specials.`,
+				"memorybench",
+				"default",
+				now,
+				now,
+			);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = false;
+		cfg.pipelineV2.traversal.enabled = false;
+		cfg.pipelineV2.reranker.enabled = false;
+
+		const result = await hybridRecall(
+			{
+				query: "Can you recommend a show or movie for me to watch tonight?",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				project: "memorybench",
+				scope: "bench-scope",
+				expand: true,
+			},
+			cfg,
+			async () => null,
+		);
+
+		expect(result.results[0]?.source).toBe("transcript");
+		expect(result.results[0]?.source_id).toBe("bench-scope:answer_0250ae1c");
+		expect(result.results[0]?.content).toContain("stand-up comedy specials on Netflix");
+		expect(result.results[0]?.tags).toContain("answer_0250ae1c");
 	});
 
 	it("dampens stale structured memories and annotates current replacements", async () => {

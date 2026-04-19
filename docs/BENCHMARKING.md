@@ -186,7 +186,10 @@ MemoryBench phase contract:
 - ingest extracted structured memories through `/api/memory/remember`
 - search with the orchestrator's requested limit, currently `10`
 - answer from bounded recall results only
-- do not append raw transcripts or hidden source context to the answer prompt
+- use `/api/memory/recall` with `expand: true`, so any lossless source snippets
+  come from the recall API surface itself, not a benchmark-side hidden context
+  channel
+- do not dump full raw transcripts into the answer prompt
 
 `supermemory-parity` uses the `signet-supermemory-parity` provider. It is not a
 publishable fair-score profile. It intentionally mirrors the upstream
@@ -401,7 +404,7 @@ as "music streaming service" matching a memory that says "Spotify."
 | `lme-openrouter-six-20260418T194618Z` | OpenRouter ingestion, pre-SEC recall                                                                     | 5/6, 83.3% |  100% | 0.625 | 0.734 |      761 ms |
 | `lme-sec-six-20260419T0339Z`          | OpenRouter ingestion, SEC recall, warmed dev workspace                                                   |  6/6, 100% |  100% | 0.917 | 0.930 |      848 ms |
 | `lme-dev-six-20260419T0818Z`          | Mercury-2 ingestion via OpenRouter, structured remember graph, Gemma 4 26B Q5 answer/judge via llama.cpp |  6/6, 100% |  100% | 0.889 | 0.873 |     1427 ms |
-| `lme-secpath-six-20260419T090700Z`    | Same warmed workspace, structured path evidence added as a SEC recall channel                           |  6/6, 100% |  100% | 0.833 | 0.857 |     1042 ms |
+| `lme-secpath-six-20260419T090700Z`    | Same warmed workspace, structured path evidence added as a SEC recall channel                            |  6/6, 100% |  100% | 0.833 | 0.857 |     1042 ms |
 
 The direct comparison is encouraging because the hit rate was already high, but
 the ranking was weak. SEC improved the order of the evidence, not just whether
@@ -503,11 +506,11 @@ The resulting run, `lme-local-vllm12-answer-refine-20260419T104059Z`, scored
 `1026 ms`, and `2246` average answer-context tokens on the same warmed local
 workspace. The local-only comparison now looks like this:
 
-| Run                                               | Setup                                                            |    Accuracy |  Hit@K |   F1 |   MRR |  NDCG | Mean search | Avg context |
-| ------------------------------------------------- | ---------------------------------------------------------------- | ----------: | -----: | ---: | ----: | ----: | ----------: | ----------: |
-| `lme-local-vllm12-20260419T091740Z`               | Local vLLM E4B ingest, 26B Q5 answer/judge, pre-baking/advice fix | 11/12, 91.7% |  83.3% | .418 | .639 | .679 |      969 ms |     2328 tok |
-| `lme-local-vllm12-answerprompt-20260419T102313Z`  | Baking/advice recall shaping plus initial advice prompt          | 12/12, 100% |  91.7% | .479 | .792 | .816 |     1026 ms |     2246 tok |
-| `lme-local-vllm12-answer-refine-20260419T104059Z` | Exact LongMemEval retrieval labels plus refined advice prompt    | 12/12, 100% | 100.0% | .548 | .833 | .889 |     1026 ms |     2246 tok |
+| Run                                               | Setup                                                             |     Accuracy |  Hit@K |   F1 |  MRR | NDCG | Mean search | Avg context |
+| ------------------------------------------------- | ----------------------------------------------------------------- | -----------: | -----: | ---: | ---: | ---: | ----------: | ----------: |
+| `lme-local-vllm12-20260419T091740Z`               | Local vLLM E4B ingest, 26B Q5 answer/judge, pre-baking/advice fix | 11/12, 91.7% |  83.3% | .418 | .639 | .679 |      969 ms |    2328 tok |
+| `lme-local-vllm12-answerprompt-20260419T102313Z`  | Baking/advice recall shaping plus initial advice prompt           |  12/12, 100% |  91.7% | .479 | .792 | .816 |     1026 ms |    2246 tok |
+| `lme-local-vllm12-answer-refine-20260419T104059Z` | Exact LongMemEval retrieval labels plus refined advice prompt     |  12/12, 100% | 100.0% | .548 | .833 | .889 |     1026 ms |    2246 tok |
 
 There is still a useful caveat here: this is a warmed local development
 workspace, not a publishable score. It is exactly the right fixture for tuning
@@ -515,12 +518,44 @@ recall and answer behavior without re-ingesting 575 sessions every time, but a
 public number should be regenerated from a fresh isolated workspace with the
 final production model choices.
 
+The fixed 12-question canary created for autoresearch is a separate fixture, so
+do not compare it directly against the random/warmed runs above. Its purpose is
+to keep the same known failure cases in front of us while changing one piece at
+a time. On that fixed set, the first local-only run exposed four concrete
+failures: compressed recommendation details, missing count-update arithmetic,
+weak temporal/currentness use, and low-confidence transcript fallbacks
+outranking stronger structured evidence. The follow-up kept transcript fallback
+as a bounded recall feature but capped transcript-only hits below real memory
+evidence and prepended short transcript excerpts to retrieved memory rows when
+`expand: true` is requested.
+
+That pass also fixed a harness bug: LongMemEval `question_date` was loaded from
+the dataset but not written into the run checkpoint, so temporal answer prompts
+were saying `Question Date: Not specified` on resumed runs. That was the real
+reason the Ibotta question could retrieve the right 16 April 2023 memory and
+still fail to answer "3 weeks ago." The checkpoint now stores question dates on
+new runs and backfills them when resuming older checkpoints.
+
+| Fixed canary run                                         | Setup                                                       |     Accuracy |  Hit@K |   F1 |  MRR | NDCG | Mean search | Avg context |
+| -------------------------------------------------------- | ----------------------------------------------------------- | -----------: | -----: | ---: | ---: | ---: | ----------: | ----------: |
+| `lme-canary12-vibes-20260419T163939Z`                    | Fixed 12Q local ingest, pre-transcript/date fixes           |  8/12, 66.7% |  91.7% | .607 | .819 | .842 |     1790 ms |    1841 tok |
+| `lme-canary12-vibes-20260419T163939Z-transcript-lite`    | Bounded transcript fallback, before score cap               | 10/12, 83.3% | 100.0% | .434 | .579 | .670 |     1894 ms |    2450 tok |
+| `lme-canary12-vibes-20260419T163939Z-transcript-capped`  | Transcript fallback capped below real memory evidence       | 11/12, 91.7% | 100.0% | .434 | .903 | .947 |     1924 ms |    2792 tok |
+| `lme-canary12-vibes-20260419T163939Z-transcript-datefix` | Transcript cap plus checkpoint `question_date` preservation |  12/12, 100% | 100.0% | .434 | .903 | .947 |     1866 ms |    2792 tok |
+
+The F1 drop in the fixed canary is expected from adding supplemental recall
+evidence. It means more non-answer evidence is visible, not that the answer
+path got worse. The important ranking metrics recovered after transcript hits
+were capped: `MRR` returned from `0.579` to `0.903`, and `NDCG` from `0.670` to
+`0.947`, while accuracy reached 12/12 once the missing question-date metadata
+was repaired.
+
 ## What is being measured
 
 The default `signet` provider uses the public Signet daemon HTTP API:
 
 - ingest: `POST /api/memory/remember`
-- search: `POST /api/memory/recall` with `expand: false`
+- search: `POST /api/memory/recall` with `expand: true`
 - health: `GET /health`
 
 During ingest, the provider performs MemoryBench-side structured extraction
@@ -540,8 +575,12 @@ are enabled only so recall can use the structured data that was explicitly sent
 to `/api/memory/remember`; `graph.extractionWritesEnabled` stays `false` so the
 async extractor cannot create benchmark graph structure. Prospective hint recall
 stays enabled because those hints are part of the structured remember payload,
-not a background extraction shortcut. Recall does not expand raw source
-transcripts into the answering prompt by default.
+not a background extraction shortcut. Recall may
+attach a bounded transcript excerpt to a retrieved memory, or add a
+low-confidence transcript-only supplemental hit, when `expand: true` is
+requested. Those snippets are returned by the recall API and capped so they
+cannot outrank real memory evidence; the benchmark harness does not append raw
+transcripts on its own.
 
 The isolated daemon also disables structural backfill/classification. Benchmark
 graph state must come from the explicit structured remember payload, not from

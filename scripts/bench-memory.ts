@@ -114,6 +114,7 @@ function hasSelection(args: string[]): boolean {
 			arg === "--sample" ||
 			arg === "-s" ||
 			arg === "--question-id" ||
+			arg === "--question-ids-file" ||
 			arg === "-q",
 	);
 }

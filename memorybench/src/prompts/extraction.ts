@@ -93,8 +93,11 @@ Specificity rules:
 - List all items when multiple are mentioned, do not summarize a list into a category
 - Retain proper nouns, titles, and specific names over generic descriptions
 - Preserve named products, apps, websites, streaming services, tools, brands, venues, works, and platforms even when they seem incidental
+- Preserve assistant-provided recommendations when the user asks for them. Include the named recommended items and the distinguishing reason the assistant gave, especially if the user later accepts or plans to check them out. Do not collapse a recommendation list into "the assistant provided recommendations."
+- Preserve named brands and products with their source materials or sourcing details when stated, such as "Veja uses wild rubber sourced from the Amazon rainforest."
 - Treat recent named-service usage as memorable ("using Spotify lately", "watching on Netflix", "tracking in TripIt")
-- If a speaker says they have been using, listening, watching, reading, tracking, or syncing on a named service/app/platform lately or recently, write a separate fact naming that service explicitly. Do not fold it into a generic preference.
+- If a speaker says they have just downloaded, started using, have been using, listening, watching, reading, tracking, or syncing on a named service/app/platform, write a separate dated fact naming that service explicitly. Do not fold it into a generic preference.
+- For collections and inventories, preserve counts and later additions as separate dated facts so current totals can be computed from old count plus new additions.
 
 Temporal rules:
 - The conversation took place on ${date}
