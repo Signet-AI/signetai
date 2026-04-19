@@ -1,6 +1,8 @@
 # Package, connector, adapter, and plugin build outputs.
 */dist/
 adapters/*/dist/
+*/src/extension-bundle.ts
+*/src/plugin-bundle.ts
 
 # Misplaced generated TypeScript declarations.
 **/src/**/*.d.ts
