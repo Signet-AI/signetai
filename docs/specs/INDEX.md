@@ -136,6 +136,7 @@ and market subdirectories). Reference repos live in `references/`.
 |---|---|---|
 | `memory-md-rolling-window-lineage` | RESEARCH-MEMORY-MD-ROLLING-WINDOW-LINKAGE, RESEARCH-LCM-ACP | How should MEMORY.md treat markdown summaries/transcripts/compactions as canonical history while keeping a strict rolling 30-day per-session ledger? |
 | `knowledge-architecture-schema` | RESEARCH-GITNEXUS-PATTERNS, RESEARCH-LCM-ACP | How should entities, aspects, and attributes be structured? |
+| `knowledge-architecture-navigation` | RESEARCH-KNOWLEDGE-GRAPH-NAVIGATION | How should agents browse large structured memory graphs without dumping the whole graph into context? |
 | `desire-paths-epic` | RESEARCH-LCM-ACP, RESEARCH-REFERENCE-REPOS | How does retrieval evolve from flat search to graph traversal? |
 | `predictive-memory-scorer` | MSAM-COMPARISON | How should scoring balance structural vs behavioral signals? |
 | `desire-paths-epic`, `retroactive-supersession` | RESEARCH-COMPETITIVE-SYSTEMS | What retrieval, lifecycle, and integration patterns from competing systems should be adopted? |
@@ -718,6 +719,7 @@ Legend:
 | `memory-md-rolling-window-lineage` | complete | `docs/specs/complete/memory-md-rolling-window-lineage.md` | `memory-md-temporal-head`, `lossless-working-memory-runtime`, `session-continuity-protocol` | - | Session-end transcripts, session-end summaries, and compactions now persist as canonical markdown artifacts with workspace-root-relative wikilinks; MEMORY.md is rendered programmatically from artifact frontmatter plus DB-native thread and temporal state, with fixed-budget clipping of oldest ledger rows and temp/test-session exclusion from projection surfaces. |
 | `procedural-memory-plan` | approved | `docs/specs/approved/procedural-memory-plan.md` | `memory-pipeline-v2` | `knowledge-architecture-schema` | P1 complete; P2 usage ledger + `skill_meta` usage updates shipped, with decay and broader retrieval follow-ups still remaining |
 | `knowledge-architecture-schema` | complete | `docs/specs/complete/knowledge-architecture-schema.md` | `memory-pipeline-v2`, `session-continuity-protocol`, `procedural-memory-plan` | `predictive-memory-scorer` | KA-1 through KA-6 fully implemented. Audit contract: `entity_dependency_history` captures all dependency mutations via DB-level triggers (`changed_by='db-trigger'`); `related_to` edges require a non-empty reason enforced at both app layer and DB BEFORE INSERT/UPDATE triggers. |
+| `knowledge-architecture-navigation` | approved | `docs/specs/approved/knowledge-architecture-navigation.md` | `knowledge-architecture-schema` | - | Entity/aspect/group/claim/attribute navigation surface for MCP and daemon API. |
 | `predictive-memory-scorer` | approved | `docs/specs/approved/predictive-memory-scorer.md` | `memory-pipeline-v2`, `knowledge-architecture-schema`, `session-continuity-protocol` | - | |
 | `multi-agent-support` | approved | `docs/specs/approved/multi-agent-support.md` | `memory-pipeline-v2` | - | |
 | `signet-runtime` | approved | `docs/specs/approved/signet-runtime.md` | `memory-pipeline-v2` | - | |

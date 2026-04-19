@@ -422,6 +422,7 @@ export function registerMemoryRoutes(app: Hono): void {
 					entityType?: string;
 					aspect: string;
 					attributes: Array<{
+						groupKey?: string;
 						claimKey?: string;
 						content: string;
 						confidence?: number;

@@ -6,13 +6,18 @@ import { getDbAccessor } from "../db-accessor";
 import { walkImpact } from "../graph-impact";
 import {
 	getAttributesForAspectFiltered,
+	getEntityAspectsByName,
 	getEntityAspectsWithCounts,
 	getEntityDependenciesDetailed,
 	getEntityHealth,
+	getKnowledgeEntityByName,
 	getKnowledgeEntityDetail,
 	getKnowledgeGraphForConstellation,
 	getKnowledgeStats,
 	getPinnedEntities,
+	listEntityAttributesByPath,
+	listEntityClaims,
+	listEntityGroups,
 	listKnowledgeEntities,
 	pinEntity,
 	resolveNamedEntity,
@@ -42,6 +47,104 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			limit,
 			offset,
 		});
+	});
+
+	app.get("/api/knowledge/navigation/entities", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
+		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
+		const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
+		const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
+
+		return c.json({
+			items: listKnowledgeEntities(getDbAccessor(), {
+				agentId,
+				type: c.req.query("type") ?? undefined,
+				query: c.req.query("q") ?? undefined,
+				limit,
+				offset,
+			}),
+			limit,
+			offset,
+		});
+	});
+
+	app.get("/api/knowledge/navigation/entity", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const name = c.req.query("name")?.trim();
+		if (!name) return c.json({ error: "name is required" }, 400);
+		const entity = getKnowledgeEntityByName(getDbAccessor(), { agentId, name });
+		if (!entity) return c.json({ error: "Entity not found" }, 404);
+		return c.json(entity);
+	});
+
+	app.get("/api/knowledge/navigation/aspects", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		const result = getEntityAspectsByName(getDbAccessor(), { agentId, entity });
+		if (!result) return c.json({ error: "Entity not found" }, 404);
+		return c.json(result);
+	});
+
+	app.get("/api/knowledge/navigation/groups", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		const result = listEntityGroups(getDbAccessor(), { agentId, entity, aspect });
+		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
+		return c.json(result);
+	});
+
+	app.get("/api/knowledge/navigation/claims", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		const result = listEntityClaims(getDbAccessor(), { agentId, entity, aspect, group });
+		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
+		return c.json(result);
+	});
+
+	app.get("/api/knowledge/navigation/attributes", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		const claim = c.req.query("claim")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		if (!claim) return c.json({ error: "claim is required" }, 400);
+		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
+		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
+		const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
+		const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
+		const kindQuery = c.req.query("kind");
+		const statusQuery = c.req.query("status");
+		const kind = kindQuery === "attribute" || kindQuery === "constraint" ? kindQuery : undefined;
+		const status =
+			statusQuery === "active" || statusQuery === "superseded" || statusQuery === "deleted" || statusQuery === "all"
+				? statusQuery
+				: undefined;
+		const result = listEntityAttributesByPath(getDbAccessor(), {
+			agentId,
+			entity,
+			aspect,
+			group,
+			claim,
+			kind,
+			status,
+			limit,
+			offset,
+		});
+		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
+		return c.json({ ...result, limit, offset });
 	});
 
 	app.post("/api/knowledge/entities/:id/pin", async (c) => {

@@ -151,6 +151,20 @@ specs:
       - "Entity graph traversal produces richer context than flat embedding search alone"
     decision: null
 
+  - id: knowledge-architecture-navigation
+    status: approved
+    path: docs/specs/approved/knowledge-architecture-navigation.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-KNOWLEDGE-GRAPH-NAVIGATION.md
+    success_criteria:
+      - "Agents can list entities, aspects, groups, claims, and attributes without loading the full constellation graph"
+      - "Attribute reads default to active observations while preserving explicit access to superseded history"
+    decision: null
+
   - id: predictive-memory-scorer
     status: approved
     path: docs/specs/approved/predictive-memory-scorer.md
