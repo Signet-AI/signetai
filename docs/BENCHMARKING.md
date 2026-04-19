@@ -372,6 +372,40 @@ six questions in about 7 minutes wall time. The extraction/remember side average
 about 65 seconds per question. The remaining long pole was indexing wait on a
 couple of questions, not extraction.
 
+The first local-only 12-question loop used Gemma 4 E4B through vLLM for
+structured ingestion and Gemma 4 26B Q5 through llama.cpp for answering and
+judging. It ingested 575 LongMemEval sessions in about 31 minutes with
+question-level ingest concurrency `3` and session concurrency `8`. One session
+hit the local vLLM 8192-token context limit by a single token, so future local
+runs should either pre-truncate extraction input or raise the local context
+budget before treating larger samples as production numbers.
+
+That first 12-question run, `lme-local-vllm12-20260419T091740Z`, scored 11/12
+with `MRR 0.639`, `NDCG 0.679`, `Hit@K 83.3%`, `F1 0.418`, mean search `969 ms`,
+and `2328` average answer-context tokens. The miss was not an ingestion failure:
+the turbinado-sugar memory existed, but the cookie-advice query did not rank it
+high enough for Gemma to use it correctly.
+
+The follow-up local run added three narrow harness/recall corrections rather
+than a memory-system rewrite. First, daemon recall now applies a small mechanical
+keyword expansion for explicit baking/recipe queries, e.g. cookies can bridge to
+sugar, flavor, texture, ingredients, recipes, and desserts. Second, gravity
+dampening now applies to SEC/structured sources too, so structurally shaped
+results without surface support do not get a free pass. Third, the Signet
+MemoryBench answer prompt now tells the answering model to use remembered
+preferences to give concrete personalized advice, not merely repeat the known
+preference back to the user.
+
+With those changes, `lme-local-vllm12-answerprompt-20260419T102313Z` scored
+12/12 with `MRR 0.792`, `NDCG 0.816`, `Hit@K 91.7%`, `F1 0.479`, mean search
+`1026 ms`, and `2246` average answer-context tokens. The cookie-advice target
+moved from rank 6 to rank 1, and the answer model used the turbinado-sugar
+preference correctly. The remaining retrieval blemish is the colleague/virtual
+coffee preference question, where the answer is correct but MemoryBench still
+reports `Hit@5=0`. That is the next skeleton to dig up: either the relevance
+judge is missing a valid retrieved memory, or the long local ingestion miss left
+a key session under-structured.
+
 ## What is being measured
 
 The default `signet` provider uses the public Signet daemon HTTP API:

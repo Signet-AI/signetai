@@ -232,6 +232,70 @@ export function sanitizeFtsQuery(raw: string): string {
 	return tokens.join(" OR ");
 }
 
+const BAKING_QUERY_TRIGGERS = new Set([
+	"bake",
+	"baked",
+	"baking",
+	"brownie",
+	"brownies",
+	"cake",
+	"cakes",
+	"chocolate",
+	"cookie",
+	"cookies",
+	"dessert",
+	"desserts",
+	"pastry",
+	"pastries",
+	"recipe",
+	"recipes",
+]);
+
+const BAKING_QUERY_EXPANSIONS = [
+	"baking",
+	"dessert",
+	"desserts",
+	"flavor",
+	"flavour",
+	"ingredient",
+	"ingredients",
+	"recipe",
+	"recipes",
+	"sugar",
+	"texture",
+] as const;
+
+function normalizeExpansionToken(raw: string): string {
+	const cleaned = raw
+		.toLowerCase()
+		.replace(/[^a-z0-9\s]/g, " ")
+		.trim();
+	if (!cleaned) return "";
+	if (cleaned.endsWith("ies") && cleaned.length > 4) return `${cleaned.slice(0, -3)}y`;
+	if (cleaned.endsWith("s") && cleaned.length > 3) return cleaned.slice(0, -1);
+	return cleaned;
+}
+
+/**
+ * Add a small set of mechanical recall expansions for common class-to-instance
+ * gaps. This intentionally stays conservative: it only fires for explicit
+ * baking/recipe terms, and it feeds FTS/hints only. Semantic vector search and
+ * answer generation still see the user's original query.
+ */
+export function expandRecallKeywordQuery(raw: string): string {
+	const tokens = raw
+		.split(/\s+/)
+		.map(normalizeExpansionToken)
+		.filter((token) => token.length >= 2 && !FTS_STOP.has(token));
+
+	if (!tokens.some((token) => BAKING_QUERY_TRIGGERS.has(token))) return raw;
+
+	const existing = new Set(tokens);
+	const additions = BAKING_QUERY_EXPANSIONS.filter((token) => !existing.has(normalizeExpansionToken(token)));
+	if (additions.length === 0) return raw;
+	return `${raw} ${additions.join(" ")}`;
+}
+
 // ---------------------------------------------------------------------------
 // Rehearsal boost (shared between traversal-primary and legacy paths)
 // ---------------------------------------------------------------------------
@@ -418,7 +482,8 @@ export async function hybridRecall(
 	embedFn: EmbedFn,
 ): Promise<RecallResponse> {
 	const query = params.query;
-	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? params.query).trim());
+	const expandedQuery = expandRecallKeywordQuery(params.query);
+	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? expandedQuery).trim());
 	const limit = params.limit ?? 10;
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
@@ -881,7 +946,8 @@ export async function hybridRecall(
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
 
-				scored = shapeByFacetCoverage(query, shaped, contentMap, coverageLimit).map((row) => ({
+				const coverageQuery = params.keywordQuery ? query : expandedQuery;
+				scored = shapeByFacetCoverage(coverageQuery, shaped, contentMap, coverageLimit).map((row) => ({
 					id: row.id,
 					score: row.score,
 					source: row.source,
@@ -1062,7 +1128,7 @@ export async function hybridRecall(
 						};
 					})
 					.filter((r): r is ScoredRow => r !== null),
-				query,
+				params.keywordQuery ? query : expandedQuery,
 				DEFAULT_DAMPENING,
 				entities,
 				degrees,

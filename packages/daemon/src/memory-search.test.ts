@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
-import { buildAgentScopeClause, hybridRecall } from "./memory-search";
+import { buildAgentScopeClause, expandRecallKeywordQuery, hybridRecall } from "./memory-search";
 
 describe("hybridRecall", () => {
 	let dir = "";
@@ -407,6 +407,68 @@ describe("hybridRecall", () => {
 		expect(result.results[0]?.source).toBe("hint");
 	});
 
+	it("expands baking advice queries to bridge ingredient preference memories", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'preference', 'default', ?, ?, 'test')`,
+			).run(
+				"mem-turbinado",
+				"The user experimented with turbinado sugar and found that it adds a richer flavor. " +
+					"They asked which ingredients pair well with it to enhance desserts.\n\n" +
+					"## Preferences\n- The user prefers turbinado sugar for its richer flavor.",
+				now,
+				now,
+			);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'preference', 'default', ?, ?, 'test')`,
+			).run(
+				"mem-running",
+				"The user was feeling motivated and asked for advice about getting back into a running routine.",
+				now,
+				now,
+			);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'preference', 'default', ?, ?, 'test')`,
+			).run(
+				"mem-cherry",
+				"The user asked for a cherry recipe and discussed brown sugar, flavor, texture, and ingredients.",
+				now,
+				now,
+			);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = false;
+		cfg.pipelineV2.traversal.enabled = false;
+		cfg.pipelineV2.reranker.enabled = false;
+
+		const result = await hybridRecall(
+			{
+				query: "I've been feeling like my chocolate chip cookies need something extra. Any advice?",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			cfg,
+			async () => null,
+		);
+
+		expect(expandRecallKeywordQuery("chocolate chip cookies need something extra")).toContain("sugar");
+		const ids = result.results.map((row) => row.id);
+		expect(ids).toContain("mem-turbinado");
+	});
+
 	it("dampens stale structured memories and annotates current replacements", async () => {
 		const oldDate = "2023-05-01T12:00:00.000Z";
 		const newDate = "2023-06-01T12:00:00.000Z";
@@ -489,7 +551,9 @@ describe("hybridRecall", () => {
 		const stale = result.results.find((row) => row.id === "mem-old-restaurants");
 		expect(stale?.content).toContain("[Signet currentness]");
 		expect(stale?.content).toContain("Superseded structured facts");
-		expect(stale?.content).toContain("Current replacement: MemoryBench User restaurants has now tried four Korean restaurants.");
+		expect(stale?.content).toContain(
+			"Current replacement: MemoryBench User restaurants has now tried four Korean restaurants.",
+		);
 	});
 
 	it("reapplies project filtering during hydration for traversal results", async () => {

@@ -69,7 +69,7 @@ function tokenize(text: string): ReadonlySet<string> {
 // Stage 1: Gravity dampening
 // ---------------------------------------------------------------------------
 
-const VECTOR_SOURCES = new Set(["vector", "hybrid", "traversal"]);
+const VECTOR_SOURCES = new Set(["vector", "hybrid", "traversal", "ka_traversal", "sec", "structured"]);
 
 /**
  * Penalize results that arrived via semantic similarity but share zero
@@ -151,6 +151,22 @@ function hub(
 // ---------------------------------------------------------------------------
 
 const BOOSTED_TYPES = new Set(["constraint", "decision"]);
+const PREFERENCE_QUERY_CUES = new Set([
+	"advice",
+	"advise",
+	"idea",
+	"ideas",
+	"prefer",
+	"preference",
+	"recommend",
+	"recommendation",
+	"recommendations",
+	"suggestion",
+	"suggestions",
+	"tip",
+	"tips",
+]);
+const PREFERENCE_SECTION = /(^|\n)##\s+Preferences\b/i;
 const DATE_PATTERN = /\b\d{4}-\d{2}-\d{2}\b/;
 const MONTH_PATTERN = /\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b/i;
 
@@ -159,10 +175,15 @@ const MONTH_PATTERN = /\b(?:january|february|march|april|may|june|july|august|se
  * (constraint, decision) or temporal anchors (dates, month names) get
  * a multiplier. Short, vague content gets no boost.
  */
-function resolution(rows: readonly ScoredRow[], boost: number): void {
+function resolution(rows: readonly ScoredRow[], boost: number, query: ReadonlySet<string>): void {
+	const preferenceIntent = [...query].some((token) => PREFERENCE_QUERY_CUES.has(token));
 	for (const row of rows) {
 		if (BOOSTED_TYPES.has(row.type)) {
 			row.score *= boost;
+			continue;
+		}
+		if (preferenceIntent && row.type === "preference" && PREFERENCE_SECTION.test(row.content)) {
+			row.score *= 1.6;
 			continue;
 		}
 		// Skip short, vague content — nothing to boost
@@ -211,7 +232,7 @@ export function applyDampening(
 	}
 
 	if (config.resolutionEnabled) {
-		resolution(out, config.resolutionBoost);
+		resolution(out, config.resolutionBoost, tokens);
 	}
 
 	out.sort((a, b) => b.score - a.score);

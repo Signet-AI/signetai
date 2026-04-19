@@ -85,6 +85,7 @@ ${search}${graphSection}
 5. If a memory includes a [Signet currentness] note, treat superseded structured facts as historical and prefer the listed current replacement or current structured fact.
 6. Graph Context (entity relationships) is structurally reliable
 7. Knowledge Graph Context provides aggregated cross-referencing — use it to fill gaps
+8. For preference or advice questions, use retrieved preferences as grounding and give a concrete personalized suggestion. Do not merely repeat the user's known preference back to them.
 
 Instructions:
 - Base your answer ONLY on the provided memories
