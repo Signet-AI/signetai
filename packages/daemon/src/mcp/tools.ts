@@ -713,6 +713,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.array(z.string())
 					.optional()
 					.describe("Prospective recall hints and alternate phrasings for retrieving this memory later"),
+				createdAt: z
+					.string()
+					.optional()
+					.describe("Source ISO timestamp for imported/older memories; used for currentness and supersession."),
 				transcript: z
 					.string()
 					.optional()
@@ -736,6 +740,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 								z.union([
 									z.object({
 										entityName: z.string(),
+										entityType: z.string().optional(),
 										aspect: z.string(),
 										attributes: z.array(
 											z.object({
@@ -759,12 +764,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					})
 					.optional()
 					.describe(
-						"Pre-extracted structured data (entities, aspects, hints). Skips pipeline extraction when provided.",
+						"Pre-extracted structured data: entities, entity aspects with attributes, and hints. Skips pipeline extraction when provided.",
 					),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ content, type, importance, tags, hints, transcript, structured, pinned }) => {
+		async ({ content, type, importance, tags, hints, transcript, structured, pinned, createdAt }) => {
 			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
 			let body = content;
 			if (tags) {
@@ -781,6 +786,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					transcript,
 					structured: normalizedStructured,
 					pinned,
+					createdAt,
 				},
 			});
 

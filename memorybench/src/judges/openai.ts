@@ -4,6 +4,7 @@ import type { Judge, JudgeConfig, JudgeInput, JudgeResult } from "../types/judge
 import type { ProviderPrompts } from "../types/prompts"
 import { buildJudgePrompt, parseJudgeResponse, getJudgePrompt } from "./base"
 import { logger } from "../utils/logger"
+import { createConfiguredOpenAI } from "../utils/config"
 import { getModelConfig, ModelConfig, DEFAULT_JUDGE_MODELS } from "../utils/models"
 
 export class OpenAIJudge implements Judge {
@@ -12,9 +13,7 @@ export class OpenAIJudge implements Judge {
   private client: ReturnType<typeof createOpenAI> | null = null
 
   async initialize(config: JudgeConfig): Promise<void> {
-    this.client = createOpenAI({
-      apiKey: config.apiKey,
-    })
+    this.client = createConfiguredOpenAI(config.apiKey)
     const modelAlias = config.model || DEFAULT_JUDGE_MODELS.openai
     this.modelConfig = getModelConfig(modelAlias)
     logger.info(

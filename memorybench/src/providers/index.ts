@@ -5,7 +5,7 @@ import { Mem0Provider } from "./mem0"
 import { ZepProvider } from "./zep"
 import { FilesystemProvider } from "./filesystem"
 import { RAGProvider } from "./rag"
-import { SignetProvider } from "./signet"
+import { SignetProvider, SignetSupermemoryParityProvider } from "./signet"
 
 const providers: Record<ProviderName, new () => Provider> = {
   supermemory: SupermemoryProvider,
@@ -14,6 +14,7 @@ const providers: Record<ProviderName, new () => Provider> = {
   filesystem: FilesystemProvider,
   rag: RAGProvider,
   signet: SignetProvider,
+  "signet-supermemory-parity": SignetSupermemoryParityProvider,
 }
 
 export function createProvider(name: ProviderName): Provider {
@@ -48,4 +49,5 @@ export {
   FilesystemProvider,
   RAGProvider,
   SignetProvider,
+  SignetSupermemoryParityProvider,
 }

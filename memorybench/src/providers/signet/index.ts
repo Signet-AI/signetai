@@ -9,12 +9,18 @@ import type {
   SearchOptions,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
+import { createConfiguredOpenAI } from "../../utils/config"
 import { logger } from "../../utils/logger"
-import { SIGNET_PROMPTS } from "./prompts"
+import { SIGNET_PROMPTS, SIGNET_SUPERMEMORY_PARITY_PROMPTS } from "./prompts"
 
 const DEFAULT_AGENT_ID = "memorybench"
 const DEFAULT_PROJECT = "memorybench"
 const DEFAULT_TIMEOUT_MS = 60_000
+const STRICT_SEARCH_LIMIT = 10
+const SUPERMEMORY_PARITY_SEARCH_LIMIT = 30
+
+export type SignetBenchmarkProfile = "structured" | "supermemory-parity"
+type StructuredPayload = Awaited<ReturnType<typeof extractStructuredMemories>>["structured"]
 
 interface SignetRecallResult {
   id?: string
@@ -37,6 +43,13 @@ interface SignetRememberResponse {
   error?: string
 }
 
+function parseSessionDate(session: UnifiedSession): string | undefined {
+  const raw = session.metadata?.date
+  if (typeof raw !== "string" || raw.trim().length === 0) return undefined
+  const date = new Date(raw)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
 function trimTrailingSlash(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value
 }
@@ -55,12 +68,63 @@ function formatTranscript(session: UnifiedSession): string {
   return date ? `[${date}]\n${raw}` : raw
 }
 
+export function formatSupermemoryParityContent(session: UnifiedSession): string {
+  const formattedDate = session.metadata?.formattedDate as string | undefined
+  const sessionStr = JSON.stringify(session.messages).replace(/</g, "&lt;").replace(/>/g, "&gt;")
+
+  return formattedDate
+    ? `Here is the date the following session took place: ${formattedDate}\n\nHere is the session as a stringified JSON:\n${sessionStr}`
+    : `Here is the session as a stringified JSON:\n${sessionStr}`
+}
+
+export function resolveSignetSearchLimit(
+  profile: SignetBenchmarkProfile,
+  requested?: number
+): number {
+  if (profile === "supermemory-parity") return SUPERMEMORY_PARITY_SEARCH_LIMIT
+  return requested && Number.isInteger(requested) && requested > 0 ? requested : STRICT_SEARCH_LIMIT
+}
+
 function hasStructuredData(result: Awaited<ReturnType<typeof extractStructuredMemories>>): boolean {
   return (
     result.structured.entities.length > 0 ||
     result.structured.hints.length > 0 ||
     (result.structured.aspects?.length ?? 0) > 0
   )
+}
+
+export function hasUsableMemoryContent(content: string): boolean {
+  return content.trim().length > 0
+}
+
+function canonicalEntityName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ")
+}
+
+function scopeBenchmarkParticipant(name: string, containerTag: string): string {
+  const canonical = canonicalEntityName(name)
+  if (canonical === "benchmark user") return `MemoryBench User ${containerTag}`
+  if (canonical === "benchmark assistant") return `MemoryBench Assistant ${containerTag}`
+  return name
+}
+
+export function scopeStructuredBenchmarkParticipants(
+  structured: StructuredPayload,
+  containerTag: string
+): StructuredPayload {
+  return {
+    entities: structured.entities.map((entity) => ({
+      ...entity,
+      source: scopeBenchmarkParticipant(entity.source, containerTag),
+      target: scopeBenchmarkParticipant(entity.target, containerTag),
+    })),
+    aspects: structured.aspects.map((aspect) => ({
+      ...aspect,
+      entityName: scopeBenchmarkParticipant(aspect.entityName, containerTag),
+      attributes: aspect.attributes.map((attribute) => ({ ...attribute })),
+    })),
+    hints: [...structured.hints],
+  }
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
@@ -90,6 +154,15 @@ export class SignetProvider implements Provider {
   private agentId = process.env.SIGNET_BENCH_AGENT_ID || DEFAULT_AGENT_ID
   private project = process.env.SIGNET_BENCH_PROJECT || DEFAULT_PROJECT
   private timeoutMs = readPositiveInt("SIGNET_BENCH_REQUEST_TIMEOUT_MS", DEFAULT_TIMEOUT_MS)
+  private profile: SignetBenchmarkProfile
+
+  constructor(profile: SignetBenchmarkProfile = "structured") {
+    this.profile = profile
+    if (profile === "supermemory-parity") {
+      this.name = "signet-supermemory-parity"
+      this.prompts = SIGNET_SUPERMEMORY_PARITY_PROMPTS
+    }
+  }
 
   async initialize(config: ProviderConfig): Promise<void> {
     const baseUrl = typeof config.baseUrl === "string" ? config.baseUrl.trim() : ""
@@ -98,12 +171,13 @@ export class SignetProvider implements Provider {
         "Signet provider requires SIGNET_BENCH_DAEMON_URL or SIGNET_BASE_URL. Use `bun run bench` to start an isolated daemon automatically."
       )
     }
-    if (!config.apiKey || config.apiKey === "none") {
+    if (this.profile === "structured" && (!config.apiKey || config.apiKey === "none")) {
       throw new Error("Signet provider requires OPENAI_API_KEY for structured extraction")
     }
 
     this.baseUrl = trimTrailingSlash(baseUrl)
-    this.openai = createOpenAI({ apiKey: config.apiKey })
+    this.openai =
+      config.apiKey && config.apiKey !== "none" ? createConfiguredOpenAI(config.apiKey) : null
 
     const health = await this.request<{ status?: string; agentsDir?: string; version?: string }>(
       "/health",
@@ -114,57 +188,55 @@ export class SignetProvider implements Provider {
     }
 
     logger.info(
-      `Initialized Signet provider (${this.baseUrl}, agent=${this.agentId}, workspace=${health.agentsDir || "unknown"}, version=${health.version || "unknown"})`
+      `Initialized Signet provider (${this.baseUrl}, profile=${this.profile}, agent=${this.agentId}, workspace=${health.agentsDir || "unknown"}, version=${health.version || "unknown"})`
     )
   }
 
   async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
-    if (!this.openai) throw new Error("Provider not initialized")
+    if (this.profile === "structured" && !this.openai) throw new Error("Provider not initialized")
 
     const ids: string[] = []
     const pending: string[] = []
 
     for (const session of sessions) {
+      if (this.profile === "supermemory-parity") {
+        const result = await this.rememberSession(session, options, {
+          content: formatSupermemoryParityContent(session),
+          tags: `memorybench,${options.containerTag},${session.sessionId},supermemory-parity,raw-session`,
+          transcript: formatTranscript(session),
+        })
+        this.collectMemoryIds(result, ids, pending)
+        continue
+      }
+
       let extracted: Awaited<ReturnType<typeof extractStructuredMemories>>
       try {
-        extracted = await extractStructuredMemories(this.openai, session)
+        extracted = await extractStructuredMemories(this.openai!, session)
       } catch (error) {
         logger.warn(`Structured extraction failed for session ${session.sessionId}: ${error}`)
         continue
       }
 
-      const sourceId = `${options.containerTag}:${session.sessionId}`
-      const transcript = formatTranscript(session)
-      const structured = hasStructuredData(extracted) ? extracted.structured : undefined
-
-      const result = await this.request<SignetRememberResponse>("/api/memory/remember", {
-        method: "POST",
-        body: JSON.stringify({
-          content: extracted.content,
-          who: "memorybench",
-          project: this.project,
-          importance: 0.6,
-          tags: `memorybench,${options.containerTag},${session.sessionId},structured`,
-          sourceType: "memorybench-session",
-          sourceId,
-          scope: options.containerTag,
-          agentId: this.agentId,
-          visibility: "global",
-          transcript,
-          hints: structured?.hints,
-          structured,
-        }),
-      })
-
-      if (result.error) {
-        throw new Error(`Signet remember failed for ${session.sessionId}: ${result.error}`)
+      if (!hasUsableMemoryContent(extracted.content)) {
+        logger.warn(`Structured extraction produced empty content for session ${session.sessionId}`)
+        continue
       }
 
+      const structured = hasStructuredData(extracted)
+        ? scopeStructuredBenchmarkParticipants(extracted.structured, options.containerTag)
+        : undefined
+      const result = await this.rememberSession(session, options, {
+        content: extracted.content,
+        tags: `memorybench,${options.containerTag},${session.sessionId},structured`,
+        transcript: formatTranscript(session),
+        hints: structured?.hints,
+        structured,
+      })
       this.collectMemoryIds(result, ids, pending)
     }
 
     logger.debug(
-      `Ingested ${sessions.length} session(s) as ${ids.length} structured Signet memories for ${options.containerTag}`
+      `Ingested ${sessions.length} session(s) as ${ids.length} ${this.profile} Signet memories for ${options.containerTag}`
     )
     return { documentIds: ids, taskIds: pending.length > 0 ? pending : undefined }
   }
@@ -220,7 +292,7 @@ export class SignetProvider implements Provider {
       method: "POST",
       body: JSON.stringify({
         query,
-        limit: Math.max(options.limit || 10, 10),
+        limit: resolveSignetSearchLimit(this.profile, options.limit),
         threshold: options.threshold || 0.3,
         scope: options.containerTag,
         agentId: this.agentId,
@@ -254,6 +326,48 @@ export class SignetProvider implements Provider {
     }
   }
 
+  private async rememberSession(
+    session: UnifiedSession,
+    options: IngestOptions,
+    payload: {
+      content: string
+      tags: string
+      transcript: string
+      hints?: string[]
+      structured?: Awaited<ReturnType<typeof extractStructuredMemories>>["structured"]
+    }
+  ): Promise<SignetRememberResponse> {
+    if (!hasUsableMemoryContent(payload.content)) {
+      throw new Error(`Signet remember skipped for ${session.sessionId}: content is empty`)
+    }
+
+    const result = await this.request<SignetRememberResponse>("/api/memory/remember", {
+      method: "POST",
+      body: JSON.stringify({
+        content: payload.content,
+        who: "memorybench",
+        project: this.project,
+        importance: 0.6,
+        tags: payload.tags,
+        sourceType: "memorybench-session",
+        sourceId: `${options.containerTag}:${session.sessionId}`,
+        createdAt: parseSessionDate(session),
+        scope: options.containerTag,
+        agentId: this.agentId,
+        visibility: "global",
+        transcript: payload.transcript,
+        hints: payload.hints,
+        structured: payload.structured,
+      }),
+    })
+
+    if (result.error) {
+      throw new Error(`Signet remember failed for ${session.sessionId}: ${result.error}`)
+    }
+
+    return result
+  }
+
   private async request<T>(path: string, init: RequestInit): Promise<T> {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
@@ -279,6 +393,12 @@ export class SignetProvider implements Provider {
     } finally {
       clearTimeout(timeout)
     }
+  }
+}
+
+export class SignetSupermemoryParityProvider extends SignetProvider {
+  constructor() {
+    super("supermemory-parity")
   }
 }
 

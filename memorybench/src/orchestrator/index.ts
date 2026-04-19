@@ -228,6 +228,23 @@ export class Orchestrator {
         logger.info(`In-progress questions: ${inProgressQuestions.join(", ")}`)
       }
 
+      let metadataChanged = false
+      if (phases.includes("answer") && checkpoint.answeringModel !== answeringModel) {
+        logger.info(
+          `Updating answering model for resumed run: ${checkpoint.answeringModel} -> ${answeringModel}`
+        )
+        checkpoint.answeringModel = answeringModel
+        metadataChanged = true
+      }
+      if (phases.includes("evaluate") && checkpoint.judge !== judgeModel) {
+        logger.info(`Updating judge model for resumed run: ${checkpoint.judge} -> ${judgeModel}`)
+        checkpoint.judge = judgeModel
+        metadataChanged = true
+      }
+      if (metadataChanged) {
+        this.checkpointManager.save(checkpoint)
+      }
+
       this.checkpointManager.updateStatus(checkpoint, "running")
     } else {
       logger.info(

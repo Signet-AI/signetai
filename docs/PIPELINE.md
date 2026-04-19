@@ -863,11 +863,30 @@ memory:
 Post-Fusion Dampening
 ---
 
-After hybrid recall combines traversal, FTS, and vector results into a
-fused score list, the dampening pipeline
+After hybrid recall combines traversal, FTS, vector results, and
+prospective hints into a candidate pool, structured evidence shaping
+(`packages/daemon/src/pipeline/structured-evidence.ts`) scores candidates
+across separate lexical, semantic, hint, and traversal channels. This is
+the recall-side SEC layer: traversal can contribute structure, but
+traversal-only memories are capped below directly anchored evidence;
+prospective hints stay strong enough to recover class-to-instance
+matches, such as "music streaming service" finding a memory that only
+says "Spotify." A light facet-coverage pass then prefers top candidates
+that cover different parts of multi-part queries instead of returning
+near-duplicates for one facet.
+
+After structured evidence shaping produces a fused score list, the
+dampening pipeline
 (`packages/daemon/src/pipeline/dampening.ts`) applies three corrections
 before the final sort. The goal is to break score bunching where relevant
 and irrelevant results land at similar fusion scores.
+
+Structured currentness then applies a final correction before hydration.
+Active attributes remain eligible as current evidence, while memories whose
+structured attributes have been superseded are downweighted and annotated
+with a `[Signet currentness]` note that points to the replacement
+attribute when available. This keeps stale facts visible for historical
+questions without letting them win ordinary "what is current?" recall.
 
 **Stage 1: Gravity dampening** penalizes results that arrived via a
 semantic path (vector, hybrid, or traversal) but share zero query-term

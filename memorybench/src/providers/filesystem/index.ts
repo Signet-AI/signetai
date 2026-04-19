@@ -10,6 +10,7 @@ import type {
   IndexingProgressCallback,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
+import { createConfiguredOpenAI } from "../../utils/config"
 import { logger } from "../../utils/logger"
 import { extractMemories } from "../../prompts/extraction"
 import { FILESYSTEM_PROMPTS } from "./prompts"
@@ -89,7 +90,7 @@ export class FilesystemProvider implements Provider {
     if (!config.apiKey || config.apiKey === "none") {
       throw new Error("Filesystem provider requires OPENAI_API_KEY for memory extraction")
     }
-    this.openai = createOpenAI({ apiKey: config.apiKey })
+    this.openai = createConfiguredOpenAI(config.apiKey)
     await mkdir(BASE_DIR, { recursive: true })
     logger.info("Initialized Filesystem memory provider (MEMORY.md-style with LLM extraction)")
   }

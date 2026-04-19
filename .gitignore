@@ -16,6 +16,7 @@
 *.tgz
 *.tsbuildinfo
 .DS_Store
+.bench/
 .bun-install/
 .bun-tmp/
 .claude/

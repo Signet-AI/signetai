@@ -103,6 +103,9 @@ Harness hook fires (session-start / user-prompt / session-end)
     → /api/memory/recall runs traversal-primary search:
       graph traversal produces the base candidate pool,
       flat FTS5/vector search fills remaining slots,
+      structured evidence shaping balances lexical, semantic,
+      prospective hint, and traversal evidence,
+      currentness shaping dampens superseded structured facts,
       predictor path can rerank if available
 ```
 
@@ -287,12 +290,15 @@ candidate pool blended with cosine similarity (70% cosine, 30%
 structural importance). Flat FTS5/vector search fills remaining
 slots — at least 40% of the result budget is reserved for flat
 candidates so hub entities cannot exclude keyword/vector matches
-entirely. After merging, the combined pool is score-sorted. When
-traversal is disabled or the graph has no matching entities, the
-system falls back to the legacy path: flat BM25 + vector search
-with optional graph boost (`getGraphBoostIds`). This improves the
-quality of the pool the rest of the system ranks; it is not, by itself,
-the whole Signet thesis.
+entirely. After merging, structured evidence shaping keeps lexical,
+semantic, prospective hint, and traversal evidence as separate channels.
+Traversal-only candidates are capped below directly anchored evidence,
+while exact prospective hints can rescue memories whose stored text uses
+a specific instance rather than the user's query class. When traversal
+is disabled or the graph has no matching entities, the system falls back
+to the legacy path: flat BM25 + vector search with optional graph boost
+(`getGraphBoostIds`). This improves the quality of the pool the rest of
+the system ranks; it is not, by itself, the whole Signet thesis.
 
 **Post-fusion dampening** (`dampening.ts`): three corrections run
 after fusion scoring but before the final sort/return. (1) *Gravity*
@@ -302,6 +308,16 @@ linked entities are all in the top-10% by degree (P90 threshold,
 0.7x). (3) *Resolution* boosts constraints, decisions, and
 date-anchored memories (1.2x). All three stages are independently
 toggleable via `DampeningConfig`.
+
+**Recall surface parity**: all recall entry points should route through the
+same daemon recall implementation whenever possible. Current daemon HTTP
+recall, search aliases, hook recall, prompt-submit injection, and MCP memory
+search all call `hybridRecall`, so they receive the same structured evidence
+shaping behavior. Any future recall surface, including CLI shortcuts, SDK
+helpers, desktop UI search, connector-specific recall, or daemon-rs parity work,
+must either call the daemon recall API or implement the same evidence-channel
+contract. Do not add a separate recall path that bypasses lexical, semantic,
+prospective hint, and traversal evidence shaping.
 
 **Graph boost fallback** (`graph-search.ts`): `getGraphBoostIds`
 is the legacy graph-augmented search path, used when traversal is

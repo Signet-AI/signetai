@@ -362,6 +362,7 @@ Body-level fields override prefix-parsed values.
   "pinned": false,
   "sourceType": "manual",
   "sourceId": "optional-external-id",
+  "createdAt": "2026-02-21T10:00:00.000Z",
   "agentId": "alice",
   "visibility": "global"
 }
@@ -373,6 +374,17 @@ Only `content` is required. Multi-agent fields:
 |--------------|-------------|
 | `agentId`    | Agent that owns this memory. Defaults to `"default"`. |
 | `visibility` | `"global"` (any permitted agent can read), `"private"` (owner only). Defaults to `"global"`. |
+
+`createdAt` is optional and must be a valid ISO timestamp. Use it when the
+memory is sourced from an older conversation or imported artifact so structured
+currentness and supersession can compare facts by source time instead of ingest
+time.
+
+Structured callers may also pass `structured.entities`, `structured.aspects`,
+and `structured.hints`. Aspect attributes are persisted directly under
+`entity_attributes`; newer conflicting attributes on the same entity/aspect can
+mark older attributes as `superseded` with `superseded_by` pointing at the
+replacement.
 
 **Response**
 
