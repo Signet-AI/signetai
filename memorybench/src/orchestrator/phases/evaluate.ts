@@ -68,7 +68,9 @@ export async function runEvaluatePhase(
             judge.getModel(),
             question.question,
             question.groundTruth,
-            searchResults
+            searchResults,
+            undefined,
+            question.relevantSessionIds
           ),
         ])
 

@@ -25,6 +25,7 @@ export interface UnifiedQuestion {
   questionType: string
   groundTruth: string
   haystackSessionIds: string[]
+  relevantSessionIds?: string[]
   metadata?: Record<string, unknown>
 }
 

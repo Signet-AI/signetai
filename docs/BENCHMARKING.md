@@ -399,12 +399,38 @@ preference back to the user.
 With those changes, `lme-local-vllm12-answerprompt-20260419T102313Z` scored
 12/12 with `MRR 0.792`, `NDCG 0.816`, `Hit@K 91.7%`, `F1 0.479`, mean search
 `1026 ms`, and `2246` average answer-context tokens. The cookie-advice target
-moved from rank 6 to rank 1, and the answer model used the turbinado-sugar
-preference correctly. The remaining retrieval blemish is the colleague/virtual
-coffee preference question, where the answer is correct but MemoryBench still
-reports `Hit@5=0`. That is the next skeleton to dig up: either the relevance
-judge is missing a valid retrieved memory, or the long local ingestion miss left
-a key session under-structured.
+moved from rank 6 to rank 1, but the answer/judge path was still too fragile:
+one judge pass accepted an answer that mostly repeated the turbinado-sugar
+preference instead of building on it.
+
+The next patch fixed two harness issues exposed by that run. First,
+LongMemEval already marks the answer-bearing session with
+`answer_session_ids`/`has_answer`, so MemoryBench now uses those labels for
+retrieval metrics when they are available instead of asking the local judge to
+guess relevance from retrieved text. This is not extra context for answering;
+it only makes retrieval scoring less noisy. That corrected the colleague /
+virtual-coffee case: the relevant memory was already at rank 2, but the local
+relevance judge had marked it as irrelevant. Second, the Signet answer prompt
+now says that advice questions should treat remembered preferences as the
+starting point and recommend a next step, pairing, variation, or technique that
+builds on them.
+
+The resulting run, `lme-local-vllm12-answer-refine-20260419T104059Z`, scored
+12/12 with `Hit@K 100%`, `MRR 0.833`, `NDCG 0.889`, `F1 0.548`, mean search
+`1026 ms`, and `2246` average answer-context tokens on the same warmed local
+workspace. The local-only comparison now looks like this:
+
+| Run                                               | Setup                                                            |    Accuracy |  Hit@K |   F1 |   MRR |  NDCG | Mean search | Avg context |
+| ------------------------------------------------- | ---------------------------------------------------------------- | ----------: | -----: | ---: | ----: | ----: | ----------: | ----------: |
+| `lme-local-vllm12-20260419T091740Z`               | Local vLLM E4B ingest, 26B Q5 answer/judge, pre-baking/advice fix | 11/12, 91.7% |  83.3% | .418 | .639 | .679 |      969 ms |     2328 tok |
+| `lme-local-vllm12-answerprompt-20260419T102313Z`  | Baking/advice recall shaping plus initial advice prompt          | 12/12, 100% |  91.7% | .479 | .792 | .816 |     1026 ms |     2246 tok |
+| `lme-local-vllm12-answer-refine-20260419T104059Z` | Exact LongMemEval retrieval labels plus refined advice prompt    | 12/12, 100% | 100.0% | .548 | .833 | .889 |     1026 ms |     2246 tok |
+
+There is still a useful caveat here: this is a warmed local development
+workspace, not a publishable score. It is exactly the right fixture for tuning
+recall and answer behavior without re-ingesting 575 sessions every time, but a
+public number should be regenerated from a fresh isolated workspace with the
+final production model choices.
 
 ## What is being measured
 

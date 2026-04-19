@@ -199,8 +199,10 @@ export class LongMemEvalBenchmark implements Benchmark {
         questionType: item.question_type,
         groundTruth: item.answer,
         haystackSessionIds: sessionIds,
+        relevantSessionIds: this.extractRelevantSessionIds(item),
         metadata: {
           questionDate: item.question_date,
+          answerSessionIds: item.answer_session_ids,
         },
       })
 
@@ -230,11 +232,27 @@ export class LongMemEvalBenchmark implements Benchmark {
         metadata: {
           date: parsedDate?.iso,
           formattedDate: parsedDate?.formatted,
+          originalSessionId: item.haystack_session_ids?.[i],
         },
       })
     }
 
     return sessions
+  }
+
+  private extractRelevantSessionIds(item: LongMemEvalItem): string[] {
+    const answerIds = new Set(item.answer_session_ids ?? [])
+    const ids: string[] = []
+
+    for (let i = 0; i < item.haystack_sessions.length; i++) {
+      const originalId = item.haystack_session_ids?.[i]
+      const sessionHasAnswer = item.haystack_sessions[i]?.some((m) => m.has_answer) === true
+      if ((originalId && answerIds.has(originalId)) || sessionHasAnswer) {
+        ids.push(`${item.question_id}-session-${i}`)
+      }
+    }
+
+    return [...new Set(ids)]
   }
 
   getQuestions(filter?: QuestionFilter): UnifiedQuestion[] {

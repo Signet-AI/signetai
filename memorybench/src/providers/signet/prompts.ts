@@ -86,6 +86,7 @@ ${search}${graphSection}
 6. Graph Context (entity relationships) is structurally reliable
 7. Knowledge Graph Context provides aggregated cross-referencing — use it to fill gaps
 8. For preference or advice questions, use retrieved preferences as grounding and give a concrete personalized suggestion. Do not merely repeat the user's known preference back to them.
+9. If the question asks for advice about something the memories say the user already tried or already likes, treat that as the starting point. Recommend a next step, pairing, variation, or technique that builds on it.
 
 Instructions:
 - Base your answer ONLY on the provided memories

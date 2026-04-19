@@ -7,6 +7,45 @@ interface RelevanceResult {
   relevant: 0 | 1
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function fieldStrings(value: unknown): string[] {
+  if (typeof value === "string") return [value]
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string")
+  return []
+}
+
+function collectSessionFields(result: unknown): string[] {
+  if (!isRecord(result)) return []
+
+  const metadata = isRecord(result.metadata) ? result.metadata : {}
+
+  return [
+    ...fieldStrings(result.tags),
+    ...fieldStrings(result.sourceId),
+    ...fieldStrings(result.source_id),
+    ...fieldStrings(result.sessionId),
+    ...fieldStrings(result.session_id),
+    ...fieldStrings(metadata.sourceId),
+    ...fieldStrings(metadata.source_id),
+    ...fieldStrings(metadata.sessionId),
+    ...fieldStrings(metadata.session_id),
+  ]
+}
+
+function resultMatchesRelevantSession(
+  result: unknown,
+  relevantSessionIds: readonly string[]
+): boolean {
+  const fields = collectSessionFields(result)
+  return relevantSessionIds.some((sessionId) => {
+    const normalized = sessionId.trim()
+    return normalized.length > 0 && fields.some((field) => field.includes(normalized))
+  })
+}
+
 async function evaluateAllChunks(
   model: LanguageModel,
   question: string,
@@ -90,9 +129,11 @@ export async function calculateRetrievalMetrics(
   question: string,
   groundTruth: string,
   searchResults: unknown[],
-  k: number = 10
+  k: number = 10,
+  relevantSessionIds: readonly string[] = []
 ): Promise<RetrievalMetrics> {
   const resultsToEval = searchResults.slice(0, k)
+  const totalRelevant = Math.max(1, relevantSessionIds.length)
 
   if (resultsToEval.length === 0) {
     return {
@@ -104,34 +145,48 @@ export async function calculateRetrievalMetrics(
       ndcg: 0,
       k: 0,
       relevantRetrieved: 0,
-      totalRelevant: 1,
+      totalRelevant,
     }
   }
 
-  const relevanceResults = await evaluateAllChunks(model, question, groundTruth, resultsToEval)
-
-  const relevanceScores = resultsToEval.map((_, i) => {
-    const id = `result_${i + 1}`
-    const result = relevanceResults.find((r) => r.id === id)
-    return result?.relevant === 1 ? 1 : 0
-  })
-
-  const relevantRetrieved = relevanceScores.filter((r) => r === 1).length
-  const totalRelevant = Math.max(1, relevantRetrieved)
+  let resolvedScores: number[]
+  if (relevantSessionIds.length > 0) {
+    resolvedScores = resultsToEval.map((result) =>
+      resultMatchesRelevantSession(result, relevantSessionIds) ? 1 : 0
+    )
+  } else {
+    const relevanceResults = await evaluateAllChunks(model, question, groundTruth, resultsToEval)
+    resolvedScores = resultsToEval.map((_, i) => {
+      const id = `result_${i + 1}`
+      const result = relevanceResults.find((item) => item.id === id)
+      return result?.relevant === 1 ? 1 : 0
+    })
+  }
+  const relevantRetrieved = resolvedScores.filter((r) => r === 1).length
 
   const hitAtK = relevantRetrieved > 0 ? 1 : 0
 
   const precisionAtK = resultsToEval.length > 0 ? relevantRetrieved / resultsToEval.length : 0
 
-  const recallAtK = relevantRetrieved > 0 ? 1 : 0
+  const retrievedRelevantIds = new Set(
+    relevantSessionIds.filter((sessionId) =>
+      resultsToEval.some((result) => resultMatchesRelevantSession(result, [sessionId]))
+    )
+  )
+  const recallAtK =
+    relevantSessionIds.length > 0
+      ? retrievedRelevantIds.size / relevantSessionIds.length
+      : relevantRetrieved > 0
+        ? 1
+        : 0
 
   const f1AtK =
     precisionAtK + recallAtK > 0 ? (2 * (precisionAtK * recallAtK)) / (precisionAtK + recallAtK) : 0
 
-  const firstRelevantIndex = relevanceScores.findIndex((r) => r === 1)
+  const firstRelevantIndex = resolvedScores.findIndex((r) => r === 1)
   const mrr = firstRelevantIndex >= 0 ? 1 / (firstRelevantIndex + 1) : 0
 
-  const ndcg = calculateNDCG(relevanceScores, totalRelevant)
+  const ndcg = calculateNDCG(resolvedScores, totalRelevant)
 
   return {
     hitAtK,
