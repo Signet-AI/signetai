@@ -179,6 +179,9 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.post("/api/knowledge/expand", async (c) => {
+		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
 		const scopedAgent = resolveScopedAgentId(c, undefined, "default");
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const body = await c.req.json().catch(() => ({}));
@@ -364,6 +367,9 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.post("/api/knowledge/expand/session", async (c) => {
+		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
 		const body = await c.req.json().catch(() => ({}));
 		const entityName = typeof body.entityName === "string" ? body.entityName.trim() : "";
 		const scopedAgent = resolveScopedAgentId(
@@ -483,6 +489,9 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.post("/api/graph/impact", async (c) => {
+		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
 		const body = await c.req.json().catch(() => ({}));
 		const entityId = typeof body.entityId === "string" ? body.entityId.trim() : "";
 		const direction = body.direction === "upstream" ? "upstream" : "downstream";

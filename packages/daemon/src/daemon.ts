@@ -1074,6 +1074,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	reloadAuthState(AGENTS_DIR);
 
 	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
+	const extractionFallbackProvider = memoryCfg.pipelineV2.extraction.fallbackProvider;
+	if (extractionFallbackProvider === undefined) {
+		throw new Error("Extraction fallback provider must be configured; memory-config should always resolve this");
+	}
 	const validExtractionProviders = new Set([
 		"none",
 		"llama-cpp",
@@ -1100,7 +1104,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		configured: providerHints.extraction,
 		resolved: memoryCfg.pipelineV2.extraction.provider,
 		effective: memoryCfg.pipelineV2.extraction.provider,
-		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider ?? "llama-cpp",
+		fallbackProvider: extractionFallbackProvider,
 		status: "active",
 		degraded: false,
 		fallbackApplied: false,
@@ -1129,7 +1133,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		});
 	}
 
-	const extractionFallbackProvider = memoryCfg.pipelineV2.extraction.fallbackProvider ?? "llama-cpp";
 	let effectiveExtractionProvider = memoryCfg.pipelineV2.extraction.provider;
 	let extractionStatus: "active" | "degraded" | "blocked" | "disabled" | "paused" = "active";
 	let extractionDegraded = false;
