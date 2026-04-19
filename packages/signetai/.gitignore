@@ -1,2 +1,4 @@
-# Build artifact: skills copied from repo root at build time
+# Build artifacts copied or generated at package build time.
+/bin/signet-predictor-*
+/dashboard/
 /skills/

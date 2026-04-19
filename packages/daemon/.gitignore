@@ -1,2 +1,3 @@
-# Build artifact: skills copied from repo root at build time
+# Build artifacts copied or generated at package build time.
+/dashboard/
 /skills/

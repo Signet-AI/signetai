@@ -30,11 +30,14 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-04-13
 - Bug fixes: prompt agents to check memory before acting; enable Signet pipeline through GitHub Copilot providers.
 
-### 2026-04-12
-- Bug fixes: emit valid Codex hooks.json schema; gate dependency synthesis on extraction progress; expose pinned param in memory_store and memory_modify.
-- Docs: add Ostico as contributor; align generated site metadata.
-
 ## Release Ledger
+
+## [0.102.2] - 2026-04-19
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.102.1..v0.102.2`.
+
+No notable changes were captured from conventional commit subjects for this release.
 
 ## [0.102.1] - 2026-04-18
 
