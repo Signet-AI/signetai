@@ -152,4 +152,50 @@ describe("registerKnowledgeCommands", () => {
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toContain("Temaki Den");
 	});
+
+	test("knowledge hygiene calls the report-only endpoint", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		let capturedPath = "";
+		const program = new Command();
+		registerKnowledgeCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, path) => {
+				capturedPath = path;
+				return {
+					ok: true,
+					data: {
+						suspiciousEntities: [{ name: "The", reason: "generic_word" }],
+						duplicateEntities: [],
+						attributeSummary: {
+							missingGroupKey: 0,
+							missingClaimKey: 0,
+							missingSourceMemory: 0,
+						},
+						safeMentionCandidates: [],
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"knowledge",
+			"hygiene",
+			"--limit",
+			"3",
+			"--memory-limit",
+			"4",
+			"--agent",
+			"default",
+		]);
+
+		expect(capturedPath).toBe("/api/knowledge/hygiene?limit=3&memory_limit=4&agent_id=default");
+		expect(lines.join("\n")).toContain("Knowledge Hygiene Report");
+		expect(lines.join("\n")).toContain("The");
+	});
 });

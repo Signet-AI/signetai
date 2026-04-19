@@ -148,6 +148,7 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"knowledge_list_groups",
 	"knowledge_list_claims",
 	"knowledge_list_attributes",
+	"knowledge_hygiene_report",
 	"entity_list",
 	"entity_get",
 	"entity_aspects",
@@ -1600,6 +1601,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		offset: z.number().optional().describe("Pagination offset, default 0"),
 		agent_id: z.string().optional().describe("Agent scope, default default"),
 	});
+	const hygieneReportInput = z.object({
+		limit: z.number().optional().describe("Max rows per report section, default 50"),
+		memory_limit: z.number().optional().describe("Recent memories to scan for safe mention candidates, default 200"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
 
 	const fetchNavigation = async (path: string, params: URLSearchParams, label: string) => {
 		const query = params.toString();
@@ -1676,6 +1682,13 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		if (offset !== undefined) params.set("offset", String(offset));
 		if (agent_id) params.set("agent_id", agent_id);
 		return fetchNavigation("/api/knowledge/navigation/attributes", params, "Entity attributes");
+	};
+	const hygieneReport = async ({ limit, memory_limit, agent_id }: z.infer<typeof hygieneReportInput>) => {
+		const params = new URLSearchParams();
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (memory_limit !== undefined) params.set("memory_limit", String(memory_limit));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/hygiene", params, "Knowledge hygiene report");
 	};
 
 	server.registerTool(
@@ -1769,6 +1782,20 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: true },
 		},
 		listAttributes,
+	);
+
+	server.registerTool(
+		"knowledge_hygiene_report",
+		{
+			title: "Knowledge Hygiene Report",
+			description:
+				"Run a report-only scan for likely graph cleanup work. " +
+				"Flags suspicious entities, duplicate canonical entities, missing group/claim/source fields, " +
+				"and safe known-entity mention candidates without mutating the graph.",
+			inputSchema: hygieneReportInput,
+			annotations: { readOnlyHint: true },
+		},
+		hygieneReport,
 	);
 
 	server.registerTool(

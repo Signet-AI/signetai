@@ -58,6 +58,11 @@ remember path may also add mention links to already-known entities for the same
 text. Fields: `memory_id`, `entity_id`, `mention_text`, `confidence`,
 `created_at`.
 
+Background extraction graph writes are separately gated by
+`memory.pipelineV2.graph.extractionWritesEnabled`, which defaults to `false`.
+Keeping `graph.enabled=true` allows traversal and recall boosting without
+letting the async extractor author graph structure.
+
 ### Entity Dependencies
 
 `entity_dependencies` — directed edges between entities. Unique on

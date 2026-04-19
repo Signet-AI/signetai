@@ -24,6 +24,7 @@ import {
 	resolveNamedEntity,
 	unpinEntity,
 } from "../knowledge-graph";
+import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import { getTraversalStatus, resolveFocalEntities, traverseKnowledgeGraph } from "../pipeline/graph-traversal";
 import { AGENTS_DIR, authConfig } from "./state";
@@ -204,6 +205,17 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				c.req.query("since") ?? undefined,
 				Number.isFinite(minComparisonsParam) ? Math.max(minComparisonsParam, 1) : 3,
 			),
+		);
+	});
+
+	app.get("/api/knowledge/hygiene", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		return c.json(
+			getKnowledgeHygieneReport(getDbAccessor(), {
+				agentId,
+				limit: parseNavigationLimit(c.req.query("limit"), 50, 500),
+				memoryLimit: parseNavigationLimit(c.req.query("memory_limit"), 200, 1000),
+			}),
 		);
 	});
 

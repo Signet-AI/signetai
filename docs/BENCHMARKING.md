@@ -361,10 +361,11 @@ The isolated daemon does not run background extraction or synthesis workers for
 benchmark ingestion. Those stages stay disabled so the benchmark is not racing
 async background work or depending on local daemon timing. Graph and traversal
 are enabled only so recall can use the structured data that was explicitly sent
-to `/api/memory/remember`. Prospective hint recall stays enabled because those
-hints are part of the structured remember payload, not a background extraction
-shortcut. Recall does not expand raw source transcripts into the answering
-prompt by default.
+to `/api/memory/remember`; `graph.extractionWritesEnabled` stays `false` so the
+async extractor cannot create benchmark graph structure. Prospective hint recall
+stays enabled because those hints are part of the structured remember payload,
+not a background extraction shortcut. Recall does not expand raw source
+transcripts into the answering prompt by default.
 
 The isolated daemon also disables structural backfill/classification. Benchmark
 graph state must come from the explicit structured remember payload, not from

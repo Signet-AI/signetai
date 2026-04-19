@@ -237,6 +237,7 @@ export interface PipelineWorkerConfig {
 
 export interface PipelineGraphConfig {
 	readonly enabled: boolean;
+	readonly extractionWritesEnabled?: boolean;
 	readonly boostWeight: number;
 	readonly boostTimeoutMs: number;
 }

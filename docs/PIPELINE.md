@@ -279,11 +279,16 @@ For details on the knowledge graph persistence stage, see
 Knowledge Graph
 ---
 
-When `graphEnabled` is true, extracted entity triples are persisted to a
-set of graph tables alongside the main fact writes. This happens in a
-**separate** transaction immediately after the main write transaction
-commits. Graph persistence failure is non-fatal — it logs a warning but
-never reverts the fact extraction results.
+When `graph.enabled` is true, graph reads, traversal, and recall boosting are
+available. Background extraction only persists extracted entity triples when
+`graph.extractionWritesEnabled` is also true. That second gate defaults to
+`false` so graph navigation can stay on without letting the async extractor
+author semantic graph structure.
+
+If extraction graph writes are explicitly enabled, they happen in a
+**separate** transaction immediately after the main write transaction commits.
+Graph persistence failure is non-fatal: it logs a warning but never reverts the
+fact extraction results.
 
 Entities are stored in the `entities` table with `name` (original casing),
 `canonical_name` (lowercase, whitespace-normalized), `entity_type`, and
@@ -1075,6 +1080,7 @@ worker:
 
 graph:
   enabled: true
+  extractionWritesEnabled: false # default; structured remember authors graph data
   boostWeight: 0.15              # fraction 0.0–1.0
   boostTimeoutMs: 500            # ms, range 50–5000
 
@@ -1179,6 +1185,7 @@ memory:
     enabled: true
     graph:
       enabled: true
+      extractionWritesEnabled: false
     extraction:
       minConfidence: 0.75
 ```
