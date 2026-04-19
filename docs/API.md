@@ -2801,6 +2801,20 @@ Resolve one entity by name.
 /api/knowledge/navigation/entity?name=Nicholai
 ```
 
+### GET /api/knowledge/navigation/tree
+
+Return a compact entity outline for agent browsing. The tree includes aspects,
+groups, claim slots, counts, and active previews so agents can decide where to
+drill next without loading the full constellation graph. Query parameters:
+`entity`, `depth`, `max_aspects`, `max_groups`, `max_claims`.
+
+Depth controls how far the outline expands: `1` returns aspects, `2` returns
+aspects and groups, and `3` returns aspects, groups, and claim slots.
+
+```text
+/api/knowledge/navigation/tree?entity=Nicholai&depth=3
+```
+
 ### GET /api/knowledge/navigation/aspects
 
 List aspects for an entity.

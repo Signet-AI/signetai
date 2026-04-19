@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	getEntityAspectsByName,
+	getEntityKnowledgeTree,
 	listEntityAttributesByPath,
 	listEntityClaims,
 	listEntityGroups,
@@ -153,5 +154,67 @@ describe("knowledge graph navigation", () => {
 			offset: 0,
 		});
 		expect(all?.items.map((item) => item.status)).toEqual(["active", "superseded"]);
+	});
+
+	test("returns a compact tree for agent-visible graph browsing", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity();
+		seedAttribute({
+			id: "attr-fav-new",
+			groupKey: "restaurants",
+			claimKey: "favorite_restaurant",
+			content: "Nicholai currently prefers Temaki Den.",
+		});
+		seedAttribute({
+			id: "attr-count",
+			groupKey: "restaurants",
+			claimKey: "korean_restaurants_tried_count",
+			content: "Nicholai has tried four Korean restaurants.",
+		});
+
+		const tree = getEntityKnowledgeTree(getDbAccessor(), {
+			agentId: "default",
+			entity: "Nicholai",
+			maxAspects: 20,
+			maxGroups: 20,
+			maxClaims: 50,
+			depth: 3,
+		});
+
+		expect(tree?.entity.name).toBe("Nicholai");
+		expect(tree?.limits.depth).toBe(3);
+		expect(tree?.items[0]?.aspect.canonicalName).toBe("food");
+		expect(tree?.items[0]?.groups[0]?.groupKey).toBe("restaurants");
+		expect(tree?.items[0]?.groups[0]?.claims.map((item) => item.claimKey)).toEqual([
+			"favorite_restaurant",
+			"korean_restaurants_tried_count",
+		]);
+		expect(tree?.items[0]?.groups[0]?.claims[0]?.preview).toBe("Nicholai currently prefers Temaki Den.");
+	});
+
+	test("tree depth can stop before claims", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity();
+		seedAttribute({
+			id: "attr-fav-new",
+			groupKey: "restaurants",
+			claimKey: "favorite_restaurant",
+			content: "Nicholai currently prefers Temaki Den.",
+		});
+
+		const tree = getEntityKnowledgeTree(getDbAccessor(), {
+			agentId: "default",
+			entity: "Nicholai",
+			maxAspects: 20,
+			maxGroups: 20,
+			maxClaims: 50,
+			depth: 2,
+		});
+
+		expect(tree?.items[0]?.groupCount).toBe(1);
+		expect(tree?.items[0]?.groups[0]?.claimCount).toBe(1);
+		expect(tree?.items[0]?.groups[0]?.claims).toEqual([]);
 	});
 });
