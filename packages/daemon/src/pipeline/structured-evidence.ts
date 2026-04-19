@@ -5,6 +5,7 @@ export interface EvidenceChannels {
 	readonly semantic: number;
 	readonly hint: number;
 	readonly traversal: number;
+	readonly structured: number;
 }
 
 export interface EvidenceCandidateInput {
@@ -14,6 +15,7 @@ export interface EvidenceCandidateInput {
 	readonly semantic?: number;
 	readonly hint?: number;
 	readonly traversal?: number;
+	readonly structured?: number;
 }
 
 export interface EvidenceCandidate {
@@ -39,6 +41,7 @@ export const DEFAULT_STRUCTURED_EVIDENCE_OPTIONS: StructuredEvidenceOptions = {
 		semantic: 0.3,
 		hint: 0.3,
 		traversal: 0.15,
+		structured: 0,
 	},
 };
 
@@ -63,16 +66,25 @@ function weightedScore(channels: EvidenceChannels, weights: EvidenceChannels): n
 		channels.lexical * weights.lexical +
 		channels.semantic * weights.semantic +
 		channels.hint * weights.hint +
-		channels.traversal * weights.traversal
+		channels.traversal * weights.traversal +
+		channels.structured * weights.structured
 	);
 }
 
 function hasTraversalAnchor(channels: EvidenceChannels, threshold: number): boolean {
-	return channels.lexical > 0 || channels.hint > 0 || channels.semantic >= threshold;
+	return (
+		channels.lexical > 0 || channels.hint > 0 || channels.semantic >= threshold || channels.structured >= threshold
+	);
 }
 
 function sourceFor(input: EvidenceCandidateInput, channels: EvidenceChannels): string {
-	if (channels.traversal > 0 && (channels.lexical > 0 || channels.semantic > 0 || channels.hint > 0)) return "sec";
+	if (
+		channels.traversal > 0 &&
+		(channels.lexical > 0 || channels.semantic > 0 || channels.hint > 0 || channels.structured > 0)
+	)
+		return "sec";
+	if (channels.structured > 0 && (channels.lexical > 0 || channels.semantic > 0 || channels.hint > 0)) return "sec";
+	if (channels.structured > 0 && channels.traversal === 0) return "structured";
 	if (channels.hint > 0 && channels.lexical === 0 && channels.semantic === 0) return "hint";
 	return input.source ?? "sec";
 }
@@ -96,12 +108,17 @@ export function shapeStructuredEvidence(
 			semantic: clamp01(input.semantic),
 			hint: clamp01(input.hint),
 			traversal: clamp01(input.traversal),
+			structured: clamp01(input.structured),
 		};
 
 		let score = weightedScore(evidence, cfg.weights);
+		if (evidence.structured >= 0.25) {
+			score += (evidence.structured - 0.25) * 0.8;
+		}
 		if (evidence.traversal > 0 && !hasTraversalAnchor(evidence, cfg.traversalAnchorThreshold)) {
 			score = Math.min(score, cfg.traversalUnanchoredCap);
 		}
+		score = Math.max(0, Math.min(1, score));
 		if (score < cfg.minScore) return [];
 
 		return [

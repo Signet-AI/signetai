@@ -318,6 +318,7 @@ as "music streaming service" matching a memory that says "Spotify."
 | `lme-openrouter-six-20260418T194618Z` | OpenRouter ingestion, pre-SEC recall                                                                     | 5/6, 83.3% |  100% | 0.625 | 0.734 |      761 ms |
 | `lme-sec-six-20260419T0339Z`          | OpenRouter ingestion, SEC recall, warmed dev workspace                                                   |  6/6, 100% |  100% | 0.917 | 0.930 |      848 ms |
 | `lme-dev-six-20260419T0818Z`          | Mercury-2 ingestion via OpenRouter, structured remember graph, Gemma 4 26B Q5 answer/judge via llama.cpp |  6/6, 100% |  100% | 0.889 | 0.873 |     1427 ms |
+| `lme-secpath-six-20260419T090700Z`    | Same warmed workspace, structured path evidence added as a SEC recall channel                           |  6/6, 100% |  100% | 0.833 | 0.857 |     1042 ms |
 
 The direct comparison is encouraging because the hit rate was already high, but
 the ranking was weak. SEC improved the order of the evidence, not just whether
@@ -333,19 +334,36 @@ missing `group_key`, `claim_key`, or source memory. It did surface 8 safe
 known-entity mention candidates, which is normal repair/normalization work, not
 background graph authorship.
 
-The latest run preserved 100% accuracy and 100% Hit@K, and it massively improved
-ranking over the earlier currentness-only run (`MRR 0.889` vs `0.458`,
-`NDCG 0.873` vs `0.482`). It is slightly behind the SEC-only six-question run
-on aggregate ranking (`MRR 0.889` vs `0.917`, `NDCG 0.873` vs `0.930`) because
-the single-session-preference question ranked the right evidence third
-(`MRR 0.33`) even though the answer was judged correct. That retrieval wrinkle
-should be triaged before treating the latest result as a larger-run baseline.
+The structured graph run preserved 100% accuracy and 100% Hit@K, and it
+massively improved ranking over the earlier currentness-only run (`MRR 0.889`
+vs `0.458`, `NDCG 0.873` vs `0.482`). It was slightly behind the SEC-only
+six-question run on aggregate ranking (`MRR 0.889` vs `0.917`, `NDCG 0.873` vs
+`0.930`) because the single-session-preference question ranked the right
+evidence third (`MRR 0.33`) even though the answer was judged correct. That was
+the retrieval wrinkle targeted by the follow-up patch below.
 
-The latency tradeoff is still visible. Mean search increased from 761 ms in the
-pre-SEC run to 848 ms with SEC and 1427 ms in the latest structured graph run.
-The latest run also fell back from native embeddings to Ollama during search, so
-future comparison runs should set `SIGNET_BENCH_EMBEDDING_PROVIDER=ollama`
-explicitly instead of measuring the fallback path.
+The follow-up patch added structured path evidence as a SEC recall channel.
+Recall now scores candidate memories against active structured graph rows using
+aspect, group key, claim key, attribute kind, and attribute content, while still
+requiring concrete query overlap before preference/advice boosts apply. This
+fixed the first regression target: in `lme-secpath-six-20260419T090700Z`, the
+single-session-preference question ranked the virtual coffee-break memory first
+instead of third (`MRR 1.00`, `NDCG 1.00`).
+
+The aggregate MRR moved from `0.889` to `0.833` in that rerun because the local
+Gemma relevance pass marked the first relevant hit later for the multi-session
+and single-session-user questions, even though the benchmark answer/judge score
+remained 6/6. The retrieval wrinkle we targeted is fixed, but the next larger
+run should watch whether this is judge noise or a real ranking tradeoff outside
+the preference/advice path. The important durable TODO is that every recall
+surface should eventually use the same structured-path SEC evidence, not just
+the MemoryBench-facing daemon recall path.
+
+The latency tradeoff is improving but still visible. Mean search increased from
+761 ms in the pre-SEC run to 848 ms with SEC, then 1427 ms in the first
+structured graph run. After the structured-path patch, the same warmed workspace
+searched in 1042 ms mean with `SIGNET_BENCH_EMBEDDING_PROVIDER=ollama` set
+explicitly, so the path is moving the right direction without dropping accuracy.
 
 The same tuning pass also raised ingest concurrency for local development. With
 OpenRouter Mercury extraction, question-level ingest concurrency `3` plus

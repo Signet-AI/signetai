@@ -25,6 +25,7 @@ import {
 	shapeByFacetCoverage,
 	shapeStructuredEvidence,
 } from "./pipeline/structured-evidence";
+import { scoreStructuredPathEvidence } from "./pipeline/structured-path-evidence";
 import { escapeLike } from "./sql-utils";
 
 // ---------------------------------------------------------------------------
@@ -331,7 +332,10 @@ function loadCurrentnessInfo(ids: readonly string[], agentId: string): Map<strin
 			}>,
 	);
 
-	const mutable = new Map<string, { active: string[]; superseded: Array<{ content: string; replacement: string | null }> }>();
+	const mutable = new Map<
+		string,
+		{ active: string[]; superseded: Array<{ content: string; replacement: string | null }> }
+	>();
 	for (const row of rows) {
 		const existing = mutable.get(row.memory_id) ?? { active: [], superseded: [] };
 		if (row.status === "active" && existing.active.length < 3) {
@@ -678,13 +682,16 @@ export async function hybridRecall(
 		// the guarantee is eligibility, not placement.
 		const traversalIds = new Set(traversalScored.map((s) => s.id));
 		const flatOnly = flatScored.filter((s) => !traversalIds.has(s.id));
-		const minFlat = Math.ceil(limit * 0.4);
-		const maxTraversal = limit - Math.min(minFlat, flatOnly.length);
+		const candidateBudget = Math.max(limit, Math.min(cfg.search.top_k, limit * 4));
+		const minFlat = Math.ceil(candidateBudget * 0.4);
+		const maxTraversal = candidateBudget - Math.min(minFlat, flatOnly.length);
 		scored = [
 			...traversalScored.slice(0, maxTraversal),
 			// When traversal underperforms its cap, flat absorbs the surplus
-			// slots — this is intentional, not a bug.
-			...flatOnly.slice(0, limit - Math.min(maxTraversal, traversalScored.length)),
+			// slots — this is intentional, not a bug. Keep the pre-SEC pool
+			// wider than the final limit so structured evidence can rescue
+			// lower raw-rank but better path-matched candidates.
+			...flatOnly.slice(0, candidateBudget - Math.min(maxTraversal, traversalScored.length)),
 		];
 		scored.sort((a, b) => b.score - a.score);
 	} else {
@@ -814,6 +821,8 @@ export async function hybridRecall(
 		}
 	}
 
+	const structuredEvidenceMap = new Map<string, number>();
+
 	// --- Structured Evidence Convolution (SEC-lite) ---
 	// Keep retrieval channels separate until after traversal/boosting. This
 	// prevents graph-only memories from outranking directly anchored evidence,
@@ -823,13 +832,34 @@ export async function hybridRecall(
 			const byId = new Map<string, { id: string; score: number; source: string }>();
 			for (const row of scored) mergeCandidate(byId, row);
 
-			const evidence: EvidenceCandidateInput[] = [...byId.values()].map((row) => ({
+			const candidates = [...byId.values()];
+			try {
+				const agentId = params.agentId ?? "default";
+				const structured = getDbAccessor().withReadDb((db) =>
+					scoreStructuredPathEvidence(
+						db,
+						candidates.map((row) => row.id),
+						query,
+						agentId,
+					),
+				);
+				for (const [id, score] of structured) {
+					structuredEvidenceMap.set(id, score);
+				}
+			} catch (e) {
+				logger.warn("memory", "Structured path evidence failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+
+			const evidence: EvidenceCandidateInput[] = candidates.map((row) => ({
 				id: row.id,
 				source: row.source,
 				lexical: bm25Map.get(row.id),
 				semantic: semanticEvidenceMap.get(row.id),
 				hint: hintMap.get(row.id),
 				traversal: traversalEvidenceMap.get(row.id),
+				structured: structuredEvidenceMap.get(row.id),
 			}));
 
 			const shaped = shapeStructuredEvidence(evidence, { minScore });

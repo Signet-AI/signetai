@@ -22,6 +22,16 @@ describe("structured evidence shaping", () => {
 		expect(shaped[0]?.source).toBe("hint");
 	});
 
+	it("lets structured path evidence preserve SEC ranking gains", () => {
+		const shaped = shapeStructuredEvidence([
+			{ id: "social-justice", source: "hybrid", lexical: 0.56, hint: 0.73, traversal: 0.9, structured: 0.28 },
+			{ id: "virtual-coffee", source: "hybrid", lexical: 0.72, traversal: 0.9, structured: 0.82 },
+		]);
+
+		expect(shaped[0]?.id).toBe("virtual-coffee");
+		expect(shaped[0]?.source).toBe("sec");
+	});
+
 	it("prefers candidates that add uncovered query facets", () => {
 		const candidates = shapeStructuredEvidence([
 			{ id: "commute", lexical: 0.7, semantic: 0.6 },
