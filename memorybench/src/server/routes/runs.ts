@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { CheckpointManager } from "../../orchestrator/checkpoint"
 import { orchestrator } from "../../orchestrator"

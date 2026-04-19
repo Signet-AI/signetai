@@ -85,7 +85,6 @@ export function buildSupermemoryAnswerPrompt(
   context: unknown[],
   questionDate?: string
 ): string {
-  const results = context as SupermemoryResult[]
   const retrievedContext = buildSupermemoryContext(context)
 
   // console.log(`\n=== DEBUG: Processing ${results.length} search results ===`)

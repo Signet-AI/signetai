@@ -25,7 +25,7 @@ export const wsManager = new WebSocketManager()
 export async function startServer(options: ServerOptions): Promise<void> {
   const { port, open = true } = options
 
-  const server = Bun.serve({
+  Bun.serve({
     port,
 
     async fetch(req, server) {

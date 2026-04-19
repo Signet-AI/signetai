@@ -50,7 +50,7 @@ export class WebSocketManager {
           ws.send(JSON.stringify({ type: "pong" }))
           break
       }
-    } catch (e) {
+    } catch (_e) {
       // Ignore invalid messages
     }
   }
@@ -62,7 +62,7 @@ export class WebSocketManager {
       if (client.subscribedRuns.has(runId)) {
         try {
           ws.send(payload)
-        } catch (e) {
+        } catch (_e) {
           // Client disconnected, will be cleaned up
         }
       }
@@ -75,7 +75,7 @@ export class WebSocketManager {
     for (const [ws] of this.clients) {
       try {
         ws.send(payload)
-      } catch (e) {
+      } catch (_e) {
         // Client disconnected
       }
     }

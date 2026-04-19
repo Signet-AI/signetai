@@ -2,7 +2,7 @@ import type { JudgeInput, JudgeResult } from "../types/judge"
 import type { ProviderPrompts } from "../types/prompts"
 import { getJudgePromptForType } from "../prompts/defaults"
 
-export function getJudgePrompt(questionType: string, providerPrompts?: ProviderPrompts): string {
+export function getJudgePrompt(questionType: string, _providerPrompts?: ProviderPrompts): string {
   return getJudgePromptForType(questionType)
 }
 

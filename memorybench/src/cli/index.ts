@@ -7,8 +7,6 @@ import { statusCommand } from "./commands/status"
 import { listQuestionsCommand } from "./commands/list-questions"
 import { showFailuresCommand } from "./commands/show-failures"
 import { serveCommand } from "./commands/serve"
-import { getAvailableProviders } from "../providers"
-import { getAvailableBenchmarks } from "../benchmarks"
 import { listModelsByProvider, MODEL_ALIASES, DEFAULT_ANSWERING_MODEL } from "../utils/models"
 
 function printHelp(): void {

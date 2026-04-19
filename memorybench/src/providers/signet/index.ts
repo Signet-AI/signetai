@@ -270,6 +270,13 @@ export class SignetProvider implements Provider {
     )
   }
 
+  protected async extractStructured(
+    session: UnifiedSession
+  ): Promise<Awaited<ReturnType<typeof extractStructuredMemories>>> {
+    if (!this.openai) throw new Error("Provider not initialized")
+    return extractStructuredMemories(this.openai, session)
+  }
+
   async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
     if (this.profile === "structured" && !this.openai) throw new Error("Provider not initialized")
 
@@ -289,15 +296,16 @@ export class SignetProvider implements Provider {
 
       let extracted: Awaited<ReturnType<typeof extractStructuredMemories>>
       try {
-        extracted = await extractStructuredMemories(this.openai!, session)
+        extracted = await this.extractStructured(session)
       } catch (error) {
-        logger.warn(`Structured extraction failed for session ${session.sessionId}: ${error}`)
-        continue
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(`Structured extraction failed for session ${session.sessionId}: ${message}`)
       }
 
       if (!hasUsableMemoryContent(extracted.content)) {
-        logger.warn(`Structured extraction produced empty content for session ${session.sessionId}`)
-        continue
+        throw new Error(
+          `Structured extraction produced empty content for session ${session.sessionId}`
+        )
       }
 
       const structured = hasStructuredData(extracted)

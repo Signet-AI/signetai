@@ -123,7 +123,7 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
           totalPages: Math.ceil(total / limit),
         },
       })
-    } catch (e) {
+    } catch (_e) {
       return json({ error: `Benchmark not found: ${benchmarkName}` }, 404)
     }
   }

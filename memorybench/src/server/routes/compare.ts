@@ -1,8 +1,6 @@
 import { existsSync, readdirSync } from "fs"
-import { join } from "path"
 import { CheckpointManager } from "../../orchestrator/checkpoint"
 import { batchManager } from "../../orchestrator/batch"
-import type { CompareManifest } from "../../orchestrator/batch"
 import { wsManager } from "../index"
 import { getRunState } from "../runState"
 import type { ProviderName } from "../../types/provider"
@@ -28,11 +26,6 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   })
-}
-
-function shouldStop(compareId: string): boolean {
-  const state = activeCompares.get(compareId)
-  return state?.status === "stopping"
 }
 
 function requestStop(compareId: string): boolean {

@@ -222,7 +222,6 @@ export class Orchestrator {
           if (limit) {
             const limitedQuestions = allQuestions.slice(0, limit).map((q) => q.questionId)
             targetQuestionIds = limitedQuestions
-            effectiveLimit = limit
             checkpoint.limit = limit
             checkpoint.targetQuestionIds = targetQuestionIds
             this.checkpointManager.save(checkpoint)

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync } from "fs"
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "fs"
 import { join } from "path"
 import type { Benchmark, BenchmarkConfig, QuestionFilter } from "../../types/benchmark"
 import type {
@@ -83,13 +83,13 @@ export class ConvoMemBenchmark implements Benchmark {
     const dataFile = join(fullPath, "convomem_data.json")
     if (!existsSync(dataFile)) {
       logger.info("Downloading ConvoMem dataset from HuggingFace...")
-      await this.downloadDataset(fullPath, dataFile)
+      await this.downloadDataset(dataFile)
     }
 
     this.loadQuestions(dataFile)
   }
 
-  private async downloadDataset(fullPath: string, dataFile: string): Promise<void> {
+  private async downloadDataset(dataFile: string): Promise<void> {
     const allItems: { category: string; item: ConvoMemEvidence }[] = []
 
     // Calculate total downloads for progress
@@ -101,40 +101,49 @@ export class ConvoMemBenchmark implements Benchmark {
 
     for (const [category, subfolders] of Object.entries(EVIDENCE_CATEGORIES)) {
       for (const subfolder of subfolders) {
-        const url = `${HF_BASE_URL}/${category}/${subfolder}/batched_000.json`
+        const label = `${category}/${subfolder}`
+        const url = `${HF_BASE_URL}/${label}/batched_000.json`
 
         try {
-          logger.progress(completed, totalDownloads, `Downloading ${category}/${subfolder}`)
+          logger.progress(completed, totalDownloads, `Downloading ${label}`)
 
           const response = await fetch(url, { redirect: "follow" })
 
           if (!response.ok) {
-            logger.warn(`Failed to fetch ${category}/${subfolder}: ${response.status}`)
-            completed++
-            continue
+            throw new Error(`HTTP ${response.status}`)
           }
 
           const data: PreMixedTestCase[] = await response.json()
+          let itemCount = 0
 
           // Extract evidence items from batched format
           for (const testCase of data) {
             if (testCase.evidenceItems) {
               for (const item of testCase.evidenceItems) {
                 allItems.push({ category, item })
+                itemCount++
               }
             }
           }
 
+          if (itemCount === 0) {
+            throw new Error("downloaded file contained no evidence items")
+          }
+
           completed++
-          logger.progress(completed, totalDownloads, `Downloaded ${category}/${subfolder}`)
+          logger.progress(completed, totalDownloads, `Downloaded ${label}`)
         } catch (e) {
-          logger.warn(`Error fetching ${category}/${subfolder}: ${e}`)
-          completed++
+          const message = e instanceof Error ? e.message : String(e)
+          throw new Error(`Failed to download required ConvoMem slice ${label}: ${message}`)
         }
       }
     }
 
-    // Save all items to a single file
+    if (allItems.length === 0) {
+      throw new Error("ConvoMem download produced no benchmark items")
+    }
+
+    // Save all items to a single file only after every required slice succeeds.
     writeFileSync(dataFile, JSON.stringify(allItems, null, 2))
     logger.success(`Downloaded ConvoMem dataset (${allItems.length} items)`)
   }

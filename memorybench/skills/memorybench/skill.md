@@ -32,7 +32,7 @@ Use this skill when you:
 ### The 7 Automated Phases
 
 **Phase 1: Setup**
-- Clones memorybench from https://github.com/supermemoryai/memorybench into your project (`./memorybench`)
+- Uses the in-repository `./memorybench` checkout when present, or clones a pinned upstream revision into your project when bootstrapping a new integration
 - Installs dependencies with bun
 - Verifies environment is ready
 
@@ -197,7 +197,7 @@ basename "$(pwd)" | grep -q "memorybench" && echo "ERROR" || echo "OK"
 
 If ERROR, inform user to run from their project root and exit.
 
-### Step 2: Clone MemoryBench
+### Step 2: Use a pinned MemoryBench checkout
 
 Check if memorybench already exists:
 
@@ -205,10 +205,15 @@ Check if memorybench already exists:
 [ -d "memorybench" ] && echo "EXISTS" || echo "NOT_FOUND"
 ```
 
-If NOT_FOUND, clone it using EXACTLY this command (do not modify the URL):
+If EXISTS, use the existing in-repository checkout. Do not replace it with a moving upstream clone.
+
+If NOT_FOUND, clone upstream only at the pinned revision below. Do not run benchmarks from an unpinned remote default branch.
 
 ```bash
 git clone https://github.com/supermemoryai/memorybench.git memorybench
+cd memorybench
+git checkout 852c38e4acef76deb58dc3dbe242cd5de7e4d331
+cd ..
 ```
 
 Then install dependencies:
