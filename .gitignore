@@ -1,94 +1,45 @@
-# Dependencies
-node_modules/
-.pnpm-store/
-.bun-tmp/
-.bun-install/
-.gitnexus/
-
-# Build outputs
-dist/
-*.tsbuildinfo
-.svelte-kit/
-packages/cli/dashboard/build/
-packages/daemon/dashboard/
-packages/signetai/dist/
-packages/signetai/dashboard/
-packages/signetai/bin/signet-predictor-*
-*.tgz
-*.png
-!web/public/blog/*.png
-!web/public/apple-touch-icon.png
-!web/public/Signet-Logo-White.png
-!web/public/Signet-Logo-Black.png
-!public/Signet-Logo-Black.png
-!public/Signet-Logo-White.png
-!public/discord-icon.png
-!packages/cli/dashboard/static/logo-dark.png
-!packages/cli/dashboard/static/logo-light.png
-.ruff_cache
-tmp/
-
-# TypeScript declaration files (generated in wrong locations)
-**/src/*.d.ts
-**/src/*.d.ts.map
-**/src/**/*.d.ts
-**/src/**/*.d.ts.map
-!packages/cli/dashboard/src/global.d.ts
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# IDE
-.idea/
-*.swp
-*.swo
-.vscode/
-.playwright-mcp/
-.claude/
-.specstory/
-.cursorindexingignore
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-
-# Lock files (use bun.lockb)
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
-
-# Test coverage
-coverage/
-
-# Local database for testing
+#
+# NOTE! Don't add files that are generated in specific
+# subdirectories here. Add them in the ".gitignore" file
+# in that subdirectory instead.
+#
+# NOTE! Please use 'git ls-files -i -c --exclude-per-directory=.gitignore'
+# command after changing this file, to see if there are
+# any tracked files which get ignored after the change.
+#
+# Normal rules (sorted alphabetically)
+#
 *.db
-
-# Local references
-references/
+*.log
+*.swo
+*.swp
+*.tgz
+*.tsbuildinfo
+.DS_Store
+.bun-install/
+.bun-tmp/
+.claude/
+.cursorindexingignore
+.env
+.env.*.local
+.env.local
+.gitnexus/
+.idea/
+.playwright-mcp/
+.pnpm-store/
+.ruff_cache/
+.specstory/
+.vscode/
+.worktrees/
+/marketing/
+/references/
+Thumbs.db
+coverage/
 dogfood-output/
 email*
-marketing/
-
-# Web (Cloudflare Worker)
-web/.wrangler/
-web/.dev.vars*
-
-# Rust build artifacts
-packages/predictor/target/
-packages/daemon-rs/target/
-
-# Worktrees
-.worktrees/
-
-
-
-# Desktop app generated resources
-packages/desktop/dist/
-packages/desktop/resources/
-!packages/desktop/icons/*.png
+node_modules/
+npm-debug.log*
+package-lock.json
+pnpm-lock.yaml
+tmp/
+yarn.lock

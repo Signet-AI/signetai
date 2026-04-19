@@ -1,0 +1,4 @@
+.artifacts/
+.svelte-kit/
+build/
+vite.log
