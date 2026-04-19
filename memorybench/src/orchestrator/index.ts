@@ -32,6 +32,14 @@ export interface OrchestratorOptions {
   phases?: ("ingest" | "indexing" | "search" | "answer" | "evaluate" | "report")[]
 }
 
+export function mergeResumeConcurrency(
+  existing: ConcurrencyConfig | undefined,
+  incoming: ConcurrencyConfig | undefined
+): ConcurrencyConfig | undefined {
+  if (!incoming || Object.keys(incoming).length === 0) return existing
+  return { ...(existing ?? {}), ...incoming }
+}
+
 function selectQuestionsBySampling(
   allQuestions: { questionId: string; questionType: string }[],
   sampling: SamplingConfig
@@ -250,6 +258,14 @@ export class Orchestrator {
       if (phases.includes("evaluate") && checkpoint.judge !== judgeModel) {
         logger.info(`Updating judge model for resumed run: ${checkpoint.judge} -> ${judgeModel}`)
         checkpoint.judge = judgeModel
+        metadataChanged = true
+      }
+      const mergedConcurrency = mergeResumeConcurrency(checkpoint.concurrency, concurrency)
+      if (JSON.stringify(mergedConcurrency) !== JSON.stringify(checkpoint.concurrency)) {
+        logger.info(
+          `Updating concurrency for resumed run: ${JSON.stringify(checkpoint.concurrency ?? {})} -> ${JSON.stringify(mergedConcurrency ?? {})}`
+        )
+        checkpoint.concurrency = mergedConcurrency
         metadataChanged = true
       }
       const byId = new Map(allQuestions.map((q) => [q.questionId, q]))

@@ -32,7 +32,11 @@ interface Report {
 	judge?: string;
 	answeringModel?: string;
 	timestamp?: string;
-	summary?: { totalQuestions?: number; correctCount?: number; accuracy?: number };
+	summary?: {
+		totalQuestions?: number;
+		correctCount?: number;
+		accuracy?: number;
+	};
 	latency?: { search?: { mean?: number } };
 	tokens?: { avgContextTokens?: number };
 	retrieval?: { hitAtK?: number; f1AtK?: number; mrr?: number; ndcg?: number };
@@ -287,6 +291,8 @@ function runCanary(args: string[]): void {
 	const judgeModel = argValue(args, "--judge-model") || answerModel;
 	const sessionConcurrency = argValue(args, "--session-concurrency") || "8";
 	const ingestConcurrency = argValue(args, "--ingest-concurrency") || "3";
+	const answerConcurrency = argValue(args, "--answer-concurrency") || "1";
+	const evaluateConcurrency = argValue(args, "--evaluate-concurrency") || "1";
 
 	const commonEnv = {
 		OPENAI_API_KEY: process.env.OPENAI_API_KEY || "dummy",
@@ -322,7 +328,19 @@ function runCanary(args: string[]): void {
 		"--concurrency-ingest",
 		ingestConcurrency,
 	];
-	const evaluate = ["bun", "run", "bench:evaluate", "--", "--no-build", "--workspace", workspace];
+	const evaluate = [
+		"bun",
+		"run",
+		"bench:evaluate",
+		"--",
+		"--no-build",
+		"--workspace",
+		workspace,
+		"--concurrency-answer",
+		answerConcurrency,
+		"--concurrency-evaluate",
+		evaluateConcurrency,
+	];
 
 	console.log(`Run id: ${runId}`);
 	console.log(`Workspace: ${workspace}`);

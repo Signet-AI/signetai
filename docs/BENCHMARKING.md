@@ -355,7 +355,9 @@ bun scripts/autoresearch-memorybench.ts run-canary
 `--execute` only when the local OpenAI-compatible model server is already
 running. The default local split is Gemma 4 E4B for ingestion through vLLM,
 Gemma 4 26B Q5 for answer/judge through llama.cpp, and Ollama
-`nomic-embed-text` for embeddings. It does not use OpenRouter.
+`nomic-embed-text` for embeddings. Answer and judge phases run with
+concurrency `1` by default because the local llama.cpp 26B Q5 server is usually
+started with one slot. It does not use OpenRouter.
 
 ```bash
 bun scripts/autoresearch-memorybench.ts run-canary --execute
@@ -371,6 +373,8 @@ bun scripts/autoresearch-memorybench.ts run-canary --skip-ingest --execute --run
 ```
 
 If they are on separate ports, pass `--ingest-base-url` and `--answer-base-url`.
+If the answer server has more than one safe slot, pass `--answer-concurrency`
+and `--evaluate-concurrency`; otherwise leave them at the default.
 
 If a change only affects recall, ranking, context packing, answer prompting, or
 judging, reuse the warmed canary workspace and skip ingestion:
@@ -536,12 +540,13 @@ reason the Ibotta question could retrieve the right 16 April 2023 memory and
 still fail to answer "3 weeks ago." The checkpoint now stores question dates on
 new runs and backfills them when resuming older checkpoints.
 
-| Fixed canary run                                         | Setup                                                       |     Accuracy |  Hit@K |   F1 |  MRR | NDCG | Mean search | Avg context |
-| -------------------------------------------------------- | ----------------------------------------------------------- | -----------: | -----: | ---: | ---: | ---: | ----------: | ----------: |
-| `lme-canary12-vibes-20260419T163939Z`                    | Fixed 12Q local ingest, pre-transcript/date fixes           |  8/12, 66.7% |  91.7% | .607 | .819 | .842 |     1790 ms |    1841 tok |
-| `lme-canary12-vibes-20260419T163939Z-transcript-lite`    | Bounded transcript fallback, before score cap               | 10/12, 83.3% | 100.0% | .434 | .579 | .670 |     1894 ms |    2450 tok |
-| `lme-canary12-vibes-20260419T163939Z-transcript-capped`  | Transcript fallback capped below real memory evidence       | 11/12, 91.7% | 100.0% | .434 | .903 | .947 |     1924 ms |    2792 tok |
-| `lme-canary12-vibes-20260419T163939Z-transcript-datefix` | Transcript cap plus checkpoint `question_date` preservation |  12/12, 100% | 100.0% | .434 | .903 | .947 |     1866 ms |    2792 tok |
+| Fixed canary run                                         | Setup                                                                     |     Accuracy |  Hit@K |   F1 |   MRR | NDCG | Mean search | Avg context |
+| -------------------------------------------------------- | ------------------------------------------------------------------------- | -----------: | -----: | ---: | ----: | ---: | ----------: | ----------: |
+| `lme-canary12-vibes-20260419T163939Z`                    | Fixed 12Q local ingest, pre-transcript/date fixes                         |  8/12, 66.7% |  91.7% | .607 |  .819 | .842 |     1790 ms |    1841 tok |
+| `lme-canary12-vibes-20260419T163939Z-transcript-lite`    | Bounded transcript fallback, before score cap                             | 10/12, 83.3% | 100.0% | .434 |  .579 | .670 |     1894 ms |    2450 tok |
+| `lme-canary12-vibes-20260419T163939Z-transcript-capped`  | Transcript fallback capped below real memory evidence                     | 11/12, 91.7% | 100.0% | .434 |  .903 | .947 |     1924 ms |    2792 tok |
+| `lme-canary12-vibes-20260419T163939Z-transcript-datefix` | Transcript cap plus checkpoint `question_date` preservation               |  12/12, 100% | 100.0% | .434 |  .903 | .947 |     1866 ms |    2792 tok |
+| `lme-canary12-fresh-9503efd5-20260419T175605Z`           | Fresh local E4B ingest, 26B Q5 answer/judge, SEC path rank + metric fixes |  12/12, 100% | 100.0% | .420 | 1.000 | .982 |     1329 ms |    2815 tok |
 
 The F1 drop in the fixed canary is expected from adding supplemental recall
 evidence. It means more non-answer evidence is visible, not that the answer
@@ -549,6 +554,22 @@ path got worse. The important ranking metrics recovered after transcript hits
 were capped: `MRR` returned from `0.579` to `0.903`, and `NDCG` from `0.670` to
 `0.947`, while accuracy reached 12/12 once the missing question-date metadata
 was repaired.
+
+The fresh local canary was regenerated from an isolated workspace using Gemma 4
+E4B via vLLM for ingestion and Gemma 4 26B Q5 via llama.cpp for answering and
+judging. It kept 12/12 accuracy, moved every answer-bearing session to rank 1,
+and lowered mean search latency by about half a second against the date-fix
+canary. The last ranking wrinkle was the colleague / virtual coffee-break
+question: moderate structured path evidence now has enough weight to beat
+generic "thinking/suggestions" lexical noise from unrelated recommendation
+sessions.
+
+That run also exposed and fixed a retrieval-metric bug. When LongMemEval
+provides `answer_session_ids`, duplicate chunks from the same answer-bearing
+session must not count as multiple ideal relevant documents. Without that cap,
+NDCG could exceed `1.0`, which is mathematically invalid. Retrieval scoring now
+counts each labeled relevant session once, so duplicate evidence is useful for
+answering but does not inflate NDCG.
 
 ## What is being measured
 

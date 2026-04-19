@@ -32,6 +32,16 @@ describe("structured evidence shaping", () => {
 		expect(shaped[0]?.source).toBe("sec");
 	});
 
+	it("lets moderate structured path matches beat generic lexical advice noise", () => {
+		const shaped = shapeStructuredEvidence([
+			{ id: "mountain-trip", source: "hybrid", lexical: 0.38, semantic: 0.9 },
+			{ id: "virtual-coffee", source: "hybrid", semantic: 0.82, structured: 0.39 },
+		]);
+
+		expect(shaped[0]?.id).toBe("virtual-coffee");
+		expect(shaped[0]?.source).toBe("sec");
+	});
+
 	it("prefers candidates that add uncovered query facets", () => {
 		const candidates = shapeStructuredEvidence([
 			{ id: "commute", lexical: 0.7, semantic: 0.6 },

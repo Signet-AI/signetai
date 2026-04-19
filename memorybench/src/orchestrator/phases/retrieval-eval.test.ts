@@ -52,4 +52,29 @@ describe("calculateRetrievalMetrics", () => {
     expect(metrics.mrr).toBe(1)
     expect(metrics.ndcg).toBe(1)
   })
+
+  test("does not let duplicate hits for one relevant session push NDCG above 1", async () => {
+    const metrics = await calculateRetrievalMetrics(
+      unusedModel,
+      "What should I do with colleagues?",
+      "Use previous remote-work context.",
+      [
+        {
+          tags: "memorybench,run,54026fce-session-26,structured",
+          content: "The user misses social interactions while working from home.",
+        },
+        {
+          source_id: "run:54026fce-session-26",
+          content: "A second chunk from the same virtual coffee break session.",
+        },
+      ],
+      5,
+      ["54026fce-session-26"]
+    )
+
+    expect(metrics.hitAtK).toBe(1)
+    expect(metrics.relevantRetrieved).toBe(1)
+    expect(metrics.ndcg).toBeLessThanOrEqual(1)
+    expect(metrics.ndcg).toBe(1)
+  })
 })

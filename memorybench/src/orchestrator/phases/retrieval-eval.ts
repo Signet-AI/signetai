@@ -39,11 +39,20 @@ function resultMatchesRelevantSession(
   result: unknown,
   relevantSessionIds: readonly string[]
 ): boolean {
+  return matchedRelevantSession(result, relevantSessionIds) !== null
+}
+
+function matchedRelevantSession(
+  result: unknown,
+  relevantSessionIds: readonly string[]
+): string | null {
   const fields = collectSessionFields(result)
-  return relevantSessionIds.some((sessionId) => {
-    const normalized = sessionId.trim()
-    return normalized.length > 0 && fields.some((field) => field.includes(normalized))
-  })
+  return (
+    relevantSessionIds.find((sessionId) => {
+      const normalized = sessionId.trim()
+      return normalized.length > 0 && fields.some((field) => field.includes(normalized))
+    }) ?? null
+  )
 }
 
 async function evaluateAllChunks(
@@ -151,9 +160,13 @@ export async function calculateRetrievalMetrics(
 
   let resolvedScores: number[]
   if (relevantSessionIds.length > 0) {
-    resolvedScores = resultsToEval.map((result) =>
-      resultMatchesRelevantSession(result, relevantSessionIds) ? 1 : 0
-    )
+    const seen = new Set<string>()
+    resolvedScores = resultsToEval.map((result) => {
+      const sessionId = matchedRelevantSession(result, relevantSessionIds)
+      if (!sessionId || seen.has(sessionId)) return 0
+      seen.add(sessionId)
+      return 1
+    })
   } else {
     const relevanceResults = await evaluateAllChunks(model, question, groundTruth, resultsToEval)
     resolvedScores = resultsToEval.map((_, i) => {

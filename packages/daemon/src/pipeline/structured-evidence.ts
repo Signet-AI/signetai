@@ -41,7 +41,7 @@ export const DEFAULT_STRUCTURED_EVIDENCE_OPTIONS: StructuredEvidenceOptions = {
 		semantic: 0.3,
 		hint: 0.3,
 		traversal: 0.15,
-		structured: 0,
+		structured: 0.15,
 	},
 };
 
