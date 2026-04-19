@@ -313,10 +313,11 @@ reranking and dampening. Traversal-only candidates are capped below directly
 anchored evidence, and hint matches can rescue class-to-instance questions such
 as "music streaming service" matching a memory that says "Spotify."
 
-| Run | Setup | Accuracy | Hit@K | MRR | NDCG | Mean search |
-|---|---|---:|---:|---:|---:|---:|
-| `lme-openrouter-six-20260418T194618Z` | OpenRouter ingestion, pre-SEC recall | 5/6, 83.3% | 100% | 0.625 | 0.734 | 761 ms |
-| `lme-sec-six-20260419T0339Z` | OpenRouter ingestion, SEC recall, warmed dev workspace | 6/6, 100% | 100% | 0.917 | 0.930 | 848 ms |
+| Run                                   | Setup                                                                                                    |   Accuracy | Hit@K |   MRR |  NDCG | Mean search |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------- | ---------: | ----: | ----: | ----: | ----------: |
+| `lme-openrouter-six-20260418T194618Z` | OpenRouter ingestion, pre-SEC recall                                                                     | 5/6, 83.3% |  100% | 0.625 | 0.734 |      761 ms |
+| `lme-sec-six-20260419T0339Z`          | OpenRouter ingestion, SEC recall, warmed dev workspace                                                   |  6/6, 100% |  100% | 0.917 | 0.930 |      848 ms |
+| `lme-dev-six-20260419T0818Z`          | Mercury-2 ingestion via OpenRouter, structured remember graph, Gemma 4 26B Q5 answer/judge via llama.cpp |  6/6, 100% |  100% | 0.889 | 0.873 |     1427 ms |
 
 The direct comparison is encouraging because the hit rate was already high, but
 the ranking was weak. SEC improved the order of the evidence, not just whether
@@ -324,9 +325,27 @@ the answer appeared somewhere in the pile. That matters more than the one extra
 correct answer: a higher MRR means the right memory is closer to the top, which
 reduces how much context the answer model has to search through.
 
-The tradeoff was modest search latency: mean search increased from 761 ms to
-848 ms on this sample. That is acceptable for development and benchmark work,
-but should be watched before large runs or latency-sensitive harness injection.
+The `lme-dev-six-20260419T0818Z` run is the first small pass after separating
+graph reads from background extraction graph writes and routing benchmark graph
+structure through structured remember. Its graph hygiene report was clean:
+0 suspicious entities, 0 duplicate canonical groups, and 0 active attributes
+missing `group_key`, `claim_key`, or source memory. It did surface 8 safe
+known-entity mention candidates, which is normal repair/normalization work, not
+background graph authorship.
+
+The latest run preserved 100% accuracy and 100% Hit@K, and it massively improved
+ranking over the earlier currentness-only run (`MRR 0.889` vs `0.458`,
+`NDCG 0.873` vs `0.482`). It is slightly behind the SEC-only six-question run
+on aggregate ranking (`MRR 0.889` vs `0.917`, `NDCG 0.873` vs `0.930`) because
+the single-session-preference question ranked the right evidence third
+(`MRR 0.33`) even though the answer was judged correct. That retrieval wrinkle
+should be triaged before treating the latest result as a larger-run baseline.
+
+The latency tradeoff is still visible. Mean search increased from 761 ms in the
+pre-SEC run to 848 ms with SEC and 1427 ms in the latest structured graph run.
+The latest run also fell back from native embeddings to Ollama during search, so
+future comparison runs should set `SIGNET_BENCH_EMBEDDING_PROVIDER=ollama`
+explicitly instead of measuring the fallback path.
 
 The same tuning pass also raised ingest concurrency for local development. With
 OpenRouter Mercury extraction, question-level ingest concurrency `3` plus
