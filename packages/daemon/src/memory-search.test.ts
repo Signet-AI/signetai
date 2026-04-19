@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
-import { buildAgentScopeClause, expandRecallKeywordQuery, hybridRecall } from "./memory-search";
+import { buildAgentScopeClause, expandRecallKeywordQuery, hybridRecall, transcriptExcerpt } from "./memory-search";
 
 describe("hybridRecall", () => {
 	let dir = "";
@@ -765,6 +765,34 @@ assistant: John Mulaney's Kid Gorgeous is an excellent example. Hasan Minhaj: Ho
 		const ids = result.results.map((row) => row.id);
 		expect(ids).not.toContain("mem-like-escape");
 		expect(ids).not.toContain("mem-like-other");
+	});
+});
+
+describe("transcriptExcerpt", () => {
+	it("chooses the densest query window instead of the first weak term match", () => {
+		const transcript = [
+			"assistant: Worsted weight yarn works for many amigurumi projects if you adjust hook size.",
+			"assistant: Here is a long filler answer about gauge, density, fabric, toys, and hooks.".repeat(8),
+			"user: I have a stash of 17 skeins of worsted weight yarn that I found recently.",
+		].join(" ");
+
+		const excerpt = transcriptExcerpt(transcript, "How many skeins of worsted weight yarn did I find in my stash?");
+
+		expect(excerpt).toContain("17 skeins");
+		expect(excerpt).toContain("stash");
+	});
+
+	it("uses meeting and temporal variants when choosing an excerpt", () => {
+		const transcript = [
+			"assistant: Questions to ask Mark and Sarah about the local history include festivals and museums.",
+			"assistant: Here is filler about travel, hometowns, and restaurant planning.".repeat(8),
+			"user: I met Mark and Sarah on a beach trip about a month ago.",
+		].join(" ");
+
+		const excerpt = transcriptExcerpt(transcript, "Who did I meet first, Mark and Sarah or Tom?");
+
+		expect(excerpt).toContain("met Mark and Sarah");
+		expect(excerpt).toContain("about a month ago");
 	});
 });
 

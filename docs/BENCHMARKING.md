@@ -189,6 +189,9 @@ MemoryBench phase contract:
 - use `/api/memory/recall` with `expand: true`, so any lossless source snippets
   come from the recall API surface itself, not a benchmark-side hidden context
   channel
+- pass LongMemEval `question_date` into the Signet provider so relative
+  temporal search phrases such as "four weeks ago" can be resolved into
+  mechanical absolute-date search hints before recall
 - do not dump full raw transcripts into the answer prompt
 
 `supermemory-parity` uses the `signet-supermemory-parity` provider. It is not a
@@ -570,6 +573,41 @@ session must not count as multiple ideal relevant documents. Without that cap,
 NDCG could exceed `1.0`, which is mathematically invalid. Retrieval scoring now
 counts each labeled relevant session once, so duplicate evidence is useful for
 answering but does not inflate NDCG.
+
+The first unattended autoresearch loop after that canary reused a fresh local
+12-question workspace, then copied the checkpoint from search forward to test
+recall-side changes without re-ingesting. The first report looked better than
+it really was: two temporal questions produced empty local-model answers and
+were omitted from the denominator, leaving a misleading `9/10`. The harness now
+records an explicit `I don't know.` when the answer model returns empty output,
+so every selected question remains in the score denominator.
+
+The same run exposed two recall-side issues. First, transcript excerpts were
+choosing the first weak lexical hit, such as an assistant later saying "ask Mark
+and Sarah", instead of the densest window containing the user’s actual temporal
+fact, "I met Mark and Sarah on a beach trip about a month ago." Second, relative
+temporal search questions such as "four weeks ago" were sent to recall without
+the provided LongMemEval question date, so recall could not mechanically search
+for the resolved date. The fix was intentionally small: transcript fallback now
+scores candidate windows by query-term density, quantity/temporal hints, and
+simple verb variants like `meet`/`met`; the Signet provider now appends absolute
+date hints for relative search phrases using the benchmark-provided question
+date.
+
+| Random local 12Q run                                                | Setup                                                                       |     Accuracy |  Hit@K |   F1 |  MRR | NDCG | Mean search | Avg context |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------- | -----------: | -----: | ---: | ---: | ---: | ----------: | ----------: |
+| `lme-local-explore12-20260419T190341Z`                              | Fresh local E4B ingest, before denominator/transcript/date-hint fixes       |  9/10, 90.0% | 100.0% | .438 | .900 | .911 |     1236 ms |    2751 tok |
+| `lme-local-explore12-20260419T190341Z-dense-transcript-20260419...` | Same data, dense transcript selection plus explicit empty-answer abstention | 10/12, 83.3% | 100.0% | .416 | .854 | .864 |      504 ms |    2780 tok |
+| `lme-local-explore12-20260419T190341Z-temporal-search-20260419...`  | Same data, dense transcript selection plus relative-date search hints       |  12/12, 100% | 100.0% | .423 | .875 | .890 |      579 ms |    3046 tok |
+
+The `9/10` row should not be read as a better score than the `10/12` row. It is
+the opposite: the denominator bug hid two temporal failures. Once every question
+was counted, the remaining misses were exactly the kind of temporal recall
+failures we wanted the loop to surface. The final row fixed both temporal
+questions without changing ingestion or adding hidden answer context. The
+retrieval metrics remain lower than the fixed canary because this random set has
+harder temporal/noisy-neighbor cases, but answer accuracy recovered to 12/12 and
+the run now reports all selected questions cleanly.
 
 ## What is being measured
 

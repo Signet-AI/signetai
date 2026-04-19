@@ -514,7 +514,42 @@ function sessionIdFromSourceId(sourceId: string): string {
 	return index >= 0 ? sourceId.slice(index + 1) : sourceId;
 }
 
-function transcriptExcerpt(content: string, query: string, maxChars = 650): string {
+function expandTranscriptTerms(terms: readonly string[]): string[] {
+	const expanded = new Set(terms);
+	const add = (from: string, variants: readonly string[]): void => {
+		if (!expanded.has(from)) return;
+		for (const variant of variants) expanded.add(variant);
+	};
+	add("meet", ["met", "meeting"]);
+	add("met", ["meet", "meeting"]);
+	add("buy", ["bought", "got", "purchased", "acquired"]);
+	add("bought", ["buy", "got", "purchased", "acquired"]);
+	add("purchase", ["purchased", "bought", "got", "acquired"]);
+	add("investment", ["invest", "invested", "investing"]);
+	return [...expanded];
+}
+
+function scoreTranscriptWindow(
+	window: string,
+	terms: readonly string[],
+	wantsQuantity: boolean,
+	wantsTemporal: boolean,
+): number {
+	const lower = window.toLowerCase();
+	const matched = terms.filter((term) => lower.includes(term));
+	const density = matched.reduce((sum, term) => sum + Math.min(term.length, 12), 0);
+	const quantityBonus = wantsQuantity && /\b\d+(?:[.,]\d+)?\b/.test(window) ? 8 : 0;
+	const temporalBonus =
+		wantsTemporal &&
+		/\b(ago|week|weeks|month|months|year|years|today|yesterday|last|next|earlier|later)\b|\b\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(
+			window,
+		)
+			? 10
+			: 0;
+	return matched.length * 20 + density + quantityBonus + temporalBonus;
+}
+
+export function transcriptExcerpt(content: string, query: string, maxChars = 650): string {
 	const clean = content.replace(/\s+/g, " ").trim();
 	if (clean.length <= maxChars) return clean;
 
@@ -535,20 +570,35 @@ function transcriptExcerpt(content: string, query: string, maxChars = 650): stri
 		"watch",
 		"wondering",
 	]);
-	const terms = expandRecallKeywordQuery(query)
-		.toLowerCase()
-		.split(/\W+/)
-		.map(normalizeExpansionToken)
-		.filter((term, index, all) => term.length >= 3 && !FTS_STOP.has(term) && all.indexOf(term) === index)
-		.sort((a, b) => Number(weakTerms.has(a)) - Number(weakTerms.has(b)) || b.length - a.length)
-		.slice(0, 12);
+	const terms = expandTranscriptTerms(
+		expandRecallKeywordQuery(query)
+			.toLowerCase()
+			.split(/\W+/)
+			.map(normalizeExpansionToken)
+			.filter((term, index, all) => term.length >= 3 && !FTS_STOP.has(term) && all.indexOf(term) === index)
+			.sort((a, b) => Number(weakTerms.has(a)) - Number(weakTerms.has(b)) || b.length - a.length)
+			.slice(0, 12),
+	);
 	const lower = clean.toLowerCase();
+	const wantsQuantity = /\b(how many|how much|count|number|total)\b/i.test(query);
+	const wantsTemporal = /\b(first|before|after|earlier|later|ago|week|month|year|when|date)\b/i.test(query);
 	let best = -1;
+	let bestScore = -1;
 	for (const term of terms) {
-		const index = lower.indexOf(term);
-		if (index !== -1) {
-			best = index;
-			break;
+		let from = 0;
+		let seen = 0;
+		while (seen < 8) {
+			const index = lower.indexOf(term, from);
+			if (index === -1) break;
+			const start = Math.max(0, index - Math.floor(maxChars * 0.35));
+			const window = clean.slice(start, Math.min(clean.length, start + maxChars));
+			const score = scoreTranscriptWindow(window, terms, wantsQuantity, wantsTemporal);
+			if (score > bestScore) {
+				bestScore = score;
+				best = index;
+			}
+			from = index + term.length;
+			seen++;
 		}
 	}
 

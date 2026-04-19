@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test"
 import {
+  boundStructuredContent,
   buildExtractionPrompt,
   buildStructuredPrompt,
   isAllowedStructuredEntityName,
@@ -37,6 +38,18 @@ describe("structured extraction prompts", () => {
     expect(prompt).toContain("Every attribute SHOULD include groupKey")
     expect(prompt).toContain("Every attribute MUST include claimKey")
     expect(prompt).toContain("korean_restaurants_tried_count")
+  })
+
+  it("bounds structured extraction content for local context windows", () => {
+    const content = `${"Speaker A likes coffee.\n".repeat(1200)}Speaker A found 17 skeins of yarn.\n`
+    const bounded = boundStructuredContent(content)
+    const prompt = buildStructuredPrompt(content)
+
+    expect(bounded.length).toBeLessThan(content.length)
+    expect(bounded).toContain("Truncated")
+    expect(bounded).toContain("middle characters")
+    expect(bounded).toContain("17 skeins")
+    expect(prompt).toContain(bounded)
   })
 })
 
@@ -183,7 +196,9 @@ describe("structured extraction sanitizer", () => {
     expect(sanitized.aspects[0]?.attributes[0]?.claimKey).toBe("speaker_a_likes_indie_rock")
     expect(sanitized.aspects[1]?.entityName).toBe("Spotify")
     expect(sanitized.aspects[1]?.attributes[0]?.groupKey).toBe("listening_habits")
-    expect(sanitized.aspects[1]?.attributes[0]?.claimKey).toBe("music_streaming_service_recent_usage")
+    expect(sanitized.aspects[1]?.attributes[0]?.claimKey).toBe(
+      "music_streaming_service_recent_usage"
+    )
     expect(sanitized.hints).toEqual([
       "What music streaming service has Speaker A been using lately?",
     ])

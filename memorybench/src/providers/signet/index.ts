@@ -18,6 +18,20 @@ const DEFAULT_PROJECT = "memorybench"
 const DEFAULT_TIMEOUT_MS = 60_000
 const STRICT_SEARCH_LIMIT = 10
 const SUPERMEMORY_PARITY_SEARCH_LIMIT = 30
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+] as const
 
 export type SignetBenchmarkProfile = "structured" | "supermemory-parity"
 type StructuredPayload = Awaited<ReturnType<typeof extractStructuredMemories>>["structured"]
@@ -57,6 +71,70 @@ function trimTrailingSlash(value: string): string {
 function readPositiveInt(name: string, fallback: number): number {
   const parsed = Number.parseInt(process.env[name] ?? "", 10)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function parseQuestionDate(value?: string): Date | undefined {
+  if (!value) return undefined
+  const match = value.match(/^(\d{4})\/(\d{2})\/(\d{2})/)
+  if (!match) return undefined
+
+  const year = Number.parseInt(match[1] ?? "", 10)
+  const month = Number.parseInt(match[2] ?? "", 10)
+  const day = Number.parseInt(match[3] ?? "", 10)
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day))
+    return undefined
+
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return Number.isNaN(date.getTime()) ? undefined : date
+}
+
+function formatTemporalHintDate(date: Date): string {
+  const day = date.getUTCDate()
+  const month = MONTH_NAMES[date.getUTCMonth()]
+  const year = date.getUTCFullYear()
+  return `${day} ${month} ${year}; ${month} ${day}, ${year}; ${year}-${String(
+    date.getUTCMonth() + 1
+  ).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+}
+
+export function buildSignetRecallQuery(query: string, questionDate?: string): string {
+  const anchor = parseQuestionDate(questionDate)
+  if (!anchor) return query
+
+  const hints: string[] = []
+  const weekMatch = query.match(
+    /\b(?:about\s+)?(?:a\s+)?(\d+|one|two|three|four|five|six)\s+weeks?\s+ago\b/i
+  )
+  const wordNumbers: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+  }
+  if (weekMatch) {
+    const raw = (weekMatch[1] ?? "").toLowerCase()
+    const weeks = wordNumbers[raw] ?? Number.parseInt(raw, 10)
+    if (Number.isFinite(weeks) && weeks > 0) {
+      const date = new Date(anchor)
+      date.setUTCDate(date.getUTCDate() - weeks * 7)
+      hints.push(`${weekMatch[0]} resolves near ${formatTemporalHintDate(date)}`)
+    }
+  }
+
+  const monthMatch = query.match(
+    /\b(?:about\s+)?(?:a|one|two|three|four|five|six)\s+months?\s+ago\b/i
+  )
+  if (monthMatch) {
+    const raw = monthMatch[0].match(/\b(a|one|two|three|four|five|six)\b/i)?.[1]?.toLowerCase()
+    const months = raw === "a" ? 1 : raw ? (wordNumbers[raw] ?? 1) : 1
+    const date = new Date(anchor)
+    date.setUTCMonth(date.getUTCMonth() - months)
+    hints.push(`${monthMatch[0]} resolves near ${formatTemporalHintDate(date)}`)
+  }
+
+  return hints.length > 0 ? `${query}\nTemporal search hints: ${hints.join("; ")}` : query
 }
 
 function formatTranscript(session: UnifiedSession): string {
@@ -288,10 +366,11 @@ export class SignetProvider implements Provider {
   }
 
   async search(query: string, options: SearchOptions): Promise<unknown[]> {
+    const recallQuery = buildSignetRecallQuery(query, options.questionDate)
     const response = await this.request<SignetRecallResponse>("/api/memory/recall", {
       method: "POST",
       body: JSON.stringify({
-        query,
+        query: recallQuery,
         limit: resolveSignetSearchLimit(this.profile, options.limit),
         threshold: options.threshold || 0.3,
         scope: options.containerTag,

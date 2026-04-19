@@ -67,6 +67,11 @@ function buildAnswerPrompt(
   return buildDefaultAnswerPrompt(question, context, questionDate)
 }
 
+export function normalizeGeneratedAnswer(text: string): string {
+  const trimmed = text.trim()
+  return trimmed.length > 0 ? trimmed : "I don't know."
+}
+
 export async function runAnswerPhase(
   benchmark: Benchmark,
   checkpoint: RunCheckpoint,
@@ -140,11 +145,17 @@ export async function runAnswerPhase(
         }
 
         const { text } = await generateText(params as Parameters<typeof generateText>[0])
+        const hypothesis = normalizeGeneratedAnswer(text)
+        if (hypothesis !== text.trim()) {
+          logger.warn(
+            `Answer model returned an empty response for ${question.questionId}; recording an explicit abstention so the question remains in the score denominator.`
+          )
+        }
 
         const durationMs = Date.now() - startTime
         checkpointManager.updatePhase(checkpoint, question.questionId, "answer", {
           status: "completed",
-          hypothesis: text.trim(),
+          hypothesis,
           promptTokens,
           basePromptTokens,
           contextTokens,

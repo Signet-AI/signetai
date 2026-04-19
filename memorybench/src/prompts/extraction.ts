@@ -15,6 +15,10 @@ const STRUCTURED_EXTRACTION_MAX_TOKENS = readPositiveInt(
   "MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS",
   1800
 )
+const STRUCTURED_EXTRACTION_CONTENT_CHARS = readPositiveInt(
+  "MEMORYBENCH_STRUCTURED_EXTRACTION_CONTENT_CHARS",
+  18000
+)
 
 function extractionModelSupportsTemperature(): boolean {
   const model = EXTRACTION_MODEL.toLowerCase()
@@ -151,6 +155,8 @@ const ASPECT_CATEGORIES =
  * from already-extracted markdown memory content.
  */
 export function buildStructuredPrompt(content: string): string {
+  const bounded = boundStructuredContent(content)
+
   return `You are a knowledge graph extraction system. Given the following extracted memories, produce a structured JSON object with entities, aspects, and hints.
 
 Structured remembering model:
@@ -159,7 +165,7 @@ Structured remembering model:
 - Attribute: a specific sourced claim attached to an entity aspect.
 
 <memories>
-${content}
+${bounded}
 </memories>
 
 Return a JSON object with this exact schema:
@@ -200,6 +206,18 @@ Rules:
 - Confidence: how certain the information is (0-1)
 - Importance: how significant the fact is for future recall (0-1)
 - Return ONLY valid JSON, no markdown fences, no explanation`
+}
+
+export function boundStructuredContent(content: string): string {
+  const trimmed = content.trim()
+  if (trimmed.length <= STRUCTURED_EXTRACTION_CONTENT_CHARS) return trimmed
+
+  const omitted = trimmed.length - STRUCTURED_EXTRACTION_CONTENT_CHARS
+  const headChars = Math.floor(STRUCTURED_EXTRACTION_CONTENT_CHARS * 0.6)
+  const tailChars = STRUCTURED_EXTRACTION_CONTENT_CHARS - headChars
+  const head = trimmed.slice(0, headChars).trimEnd()
+  const tail = trimmed.slice(trimmed.length - tailChars).trimStart()
+  return `${head}\n\n[Truncated ${omitted} middle characters to keep structured extraction inside the local model context window.]\n\n${tail}`
 }
 
 /** Structured extraction result */

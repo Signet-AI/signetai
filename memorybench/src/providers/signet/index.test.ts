@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test"
 import {
+  buildSignetRecallQuery,
   formatSupermemoryParityContent,
   hasUsableMemoryContent,
   resolveSignetSearchLimit,
@@ -31,6 +32,17 @@ describe("Signet benchmark profiles", () => {
     expect(resolveSignetSearchLimit("structured", 10)).toBe(10)
     expect(resolveSignetSearchLimit("structured", undefined)).toBe(10)
     expect(resolveSignetSearchLimit("supermemory-parity", 10)).toBe(30)
+  })
+
+  it("adds absolute temporal hints for relative LongMemEval search questions", () => {
+    const query = buildSignetRecallQuery(
+      "I mentioned an investment for a competition four weeks ago? What did I buy?",
+      "2023/04/01 (Sat) 08:30"
+    )
+
+    expect(query).toContain("Temporal search hints")
+    expect(query).toContain("4 March 2023")
+    expect(query).toContain("2023-03-04")
   })
 })
 

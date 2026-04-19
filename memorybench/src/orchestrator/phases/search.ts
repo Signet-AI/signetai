@@ -59,6 +59,7 @@ export async function runSearchPhase(
           containerTag,
           limit: 10,
           threshold: 0.3,
+          questionDate: checkpoint.questions[question.questionId]?.questionDate,
         })
 
         const durationMs = Date.now() - startTime
