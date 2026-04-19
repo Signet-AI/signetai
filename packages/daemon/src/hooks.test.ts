@@ -36,7 +36,6 @@ const {
 	writeMemoryMd: synthWriteMemoryMd,
 	applyTokenBudget,
 	buildSignetSystemPrompt,
-	handleSessionStart,
 	normalizeCodexTranscript,
 	normalizeJsonConversationTranscript,
 	normalizeSessionTranscript,
