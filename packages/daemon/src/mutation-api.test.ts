@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import type { Hono } from "hono";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { txIngestEnvelope } from "./transactions";
 
@@ -434,6 +434,15 @@ describe("mutation API routes", () => {
 	});
 
 	it("POST /api/memory/remember scopes inline entity linking and client hints to the requested agent", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at
+				) VALUES (?, ?, ?, 'person', ?, 0, ?, ?)`,
+			).run("ent-inline-nicholai", "Nicholai", "nicholai", "inline-agent", now, now);
+		});
+
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },

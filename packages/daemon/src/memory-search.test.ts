@@ -29,13 +29,15 @@ describe("hybridRecall", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	function testCfg(opts: {
-		graph?: boolean;
-		traversal?: boolean;
-		traversalPrimary?: boolean;
-		reranker?: boolean;
-		rerankerTopN?: number;
-	} = {}): ResolvedMemoryConfig {
+	function testCfg(
+		opts: {
+			graph?: boolean;
+			traversal?: boolean;
+			traversalPrimary?: boolean;
+			reranker?: boolean;
+			rerankerTopN?: number;
+		} = {},
+	): ResolvedMemoryConfig {
 		const raw = loadMemoryConfig(dir);
 		const trav = raw.pipelineV2.traversal;
 		return {
