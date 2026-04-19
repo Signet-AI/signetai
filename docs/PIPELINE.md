@@ -221,39 +221,36 @@ Inline Entity Linker
 
 Before any async pipeline job runs, the inline entity linker
 (`packages/daemon/src/inline-entity-linker.ts`) performs a fast,
-synchronous extraction pass at memory write time. This is the "fast
-path" that complements the "deep path" of LLM-based extraction.
+synchronous mention-linking pass at memory write time. This is a
+mechanical helper, not a semantic author.
 
-The linker runs without an LLM call. It scans the memory's content
-text using regex patterns to extract entities, aspects, and attributes.
-Extracted entities are inserted or matched against `canonical_name` in
-the `entities` table, and corresponding `memory_entity_mentions` and
-`entity_attributes` rows are written in the same transaction as the
-memory itself.
+The linker runs without an LLM call. It scans the memory's content text
+for candidate proper nouns and links only entities that already exist
+for the same `agent_id`. It writes `memory_entity_mentions` rows so a
+new memory can be discovered from known entity pages immediately, but it
+does not create entities, aspects, attributes, or dependencies.
 
-The key benefit is immediacy: entities are queryable via knowledge
-graph traversal the moment the memory is committed — there is no
-waiting for the async extraction worker to pick up the job. When the
-extraction pipeline processes the same memory later, it performs deeper
-analysis: supersession detection, dependency synthesis, and confidence
-calibration. The async pass may refine or extend the entities the
-inline linker created, but the fast path ensures baseline graph
-connectivity is never delayed by queue depth or LLM availability.
+Structured graph writes come from `POST /api/memory/remember` with a
+`structured` payload, explicit user/agent actions, or reviewed
+normalization passes. This keeps the default background path cheap,
+predictable, and hard to poison: incidental capitalization can attach a
+memory to an existing known entity, but it cannot invent graph structure.
 
-Because the linker runs inside the write transaction, it must be fast
-and deterministic. There are no network calls, no LLM inference, and
-no blocking I/O — only regex matching and SQLite writes.
+Because the linker runs inside the write transaction, it must stay fast
+and deterministic. There are no network calls, no LLM inference, and no
+blocking I/O, only candidate matching and SQLite writes against existing
+graph rows.
 
 
 Structural Classification
 ---
 
-After extraction writes facts to the database, the structural classification
-worker (`structural-classify.ts`) runs a second LLM pass to assign each
-extracted fact to its entity's aspect hierarchy. Jobs are enqueued as
-`structural_classify` entries in `memory_jobs` and processed by a separate
-polling worker that batches by `entity_id` — all facts for the same entity
-in one LLM call.
+When explicitly enabled, after extraction writes facts to the database, the
+structural classification worker (`structural-classify.ts`) runs a second LLM
+pass to assign each extracted fact to its entity's aspect hierarchy. Jobs are
+enqueued as `structural_classify` entries in `memory_jobs` and processed by a
+separate polling worker that batches by `entity_id`, all facts for the same
+entity in one LLM call.
 
 The prompt presents the entity name, type, existing aspects, and suggested
 aspect names (from `ASPECT_SUGGESTIONS` keyed by entity type). The LLM
@@ -270,8 +267,10 @@ If a valid canonical type is returned (`person`, `project`, `system`,
 updated in the same transaction.
 
 The worker configuration lives under `structural` in the pipeline config:
-`pollIntervalMs` (how often to check for pending jobs) and
-`classifyBatchSize` (max facts per entity per LLM call).
+`enabled` (default `false`), `pollIntervalMs` (how often to check for pending
+jobs), and `classifyBatchSize` (max facts per entity per LLM call). The default
+pipeline does not use a background LLM to author graph structure; structured
+remember is the normal semantic write path.
 
 For details on the knowledge graph persistence stage, see
 [KNOWLEDGE-GRAPH.md](./KNOWLEDGE-GRAPH.md).
@@ -994,11 +993,10 @@ nodes into `session_summaries`.
 Decision Auto-Protection
 ---
 
-The inline entity linker (`packages/daemon/src/inline-entity-linker.ts`)
-runs a 14-pattern regex battery on memory content at write time. When
-decision language is detected, extracted attributes are promoted from
-`kind='attribute'` to `kind='constraint'` with `importance=0.85`
-(default attributes use `importance=0.5`).
+The shared decision detector (`isDecisionContent`) runs a 14-pattern regex
+battery on memory content. Structured graph writes use this detector when a
+caller does not specify a stronger kind, so decision language can become a
+`kind='constraint'` without requiring a background LLM.
 
 The patterns cover common decision-indicating phrases:
 
@@ -1009,16 +1007,10 @@ The patterns cover common decision-indicating phrases:
 - "prefers X over/instead/rather", "adopted"
 - "architecture decision", "design decision"
 
-The detection function `isDecisionContent` returns true if any pattern
-matches. The linker then sets `kind='constraint'` on all attributes
-extracted from that memory's clauses, ensuring they receive the
-resolution boost during dampening (see Post-Fusion Dampening, Stage 3)
-and always surface in recall per INDEX.md invariant 5: constraints must
-be retrievable.
-
-This is a write-time classification — no LLM call is involved. The
-regex battery is fast and deterministic, consistent with the inline
-linker's contract of no network calls inside the write transaction.
+The detection function returns true if any pattern matches. This is a
+write-time classification, no LLM call is involved. The regex battery is fast
+and deterministic, consistent with the pipeline rule that default background
+work should be mechanical and predictable.
 
 
 Configuration Reference

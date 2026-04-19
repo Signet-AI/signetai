@@ -23,6 +23,7 @@ import {
 	releaseStaleLeases,
 	requeueDeadJobs,
 	resyncVectorIndex,
+	structuralBackfill,
 	triggerRetentionSweep,
 } from "./repair-actions";
 
@@ -298,6 +299,25 @@ describe("checkRepairGate", () => {
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
 		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(true);
+	});
+});
+
+describe("structuralBackfill", () => {
+	it("does not enqueue LLM structural jobs while structural workers are disabled", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const limiter = createRateLimiter();
+
+		try {
+			const result = structuralBackfill(accessor, TEST_CFG, CTX_OPERATOR, limiter);
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(0);
+			expect(result.message).toContain("structural backfill disabled");
+		} finally {
+			db.close();
+		}
 	});
 });
 

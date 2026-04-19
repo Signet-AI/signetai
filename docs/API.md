@@ -389,6 +389,13 @@ unrelated events under one aspect do not replace each other. Newer conflicting
 attributes on the same grouped claim can mark older attributes as `superseded`
 with `superseded_by` pointing at the replacement.
 
+When `structured` is omitted, the default remember path is deliberately
+conservative. It embeds and stores the memory, then links mentions to existing
+entities for the same `agentId` when they are mechanically recognizable. It does
+not create new entities, aspects, attributes, dependencies, or supersession
+claims from raw text. Use a structured payload when the caller intends to author
+or update the knowledge graph.
+
 **Response**
 
 ```json

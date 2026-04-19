@@ -1767,6 +1767,15 @@ export function structuralBackfill(
 	options?: { batchSize?: number; dryRun?: boolean },
 ): RepairResult {
 	const action = "structuralBackfill";
+	if (!cfg.structural.enabled) {
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: "structural backfill disabled; use structured remember or an explicit normalization pass",
+		};
+	}
+
 	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 20);
 	if (!gate.allowed) {
 		return { action, success: false, affected: 0, message: gate.reason ?? "denied" };
@@ -1832,6 +1841,7 @@ export function structuralBackfill(
 				entity_type: row.entity_type,
 				fact_content: row.content,
 				attribute_id: attrId,
+				agent_id: row.agent_id,
 			});
 			const jobId = crypto.randomUUID();
 			db.prepare(
