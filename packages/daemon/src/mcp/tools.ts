@@ -114,6 +114,7 @@ function normalizeStructuredMemoryPayload(value: unknown): unknown {
 					attributes: [
 						{
 							content: aspect.value,
+							...(typeof aspect.groupKey === "string" ? { groupKey: aspect.groupKey } : {}),
 							...(typeof aspect.claimKey === "string" ? { claimKey: aspect.claimKey } : {}),
 							...(typeof aspect.confidence === "number" ? { confidence: aspect.confidence } : {}),
 							...(typeof aspect.importance === "number" ? { importance: aspect.importance } : {}),
@@ -745,10 +746,16 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 										aspect: z.string(),
 										attributes: z.array(
 											z.object({
+												groupKey: z
+													.string()
+													.optional()
+													.describe("Navigable subgroup within the aspect, like a dresser inside a room."),
 												claimKey: z
 													.string()
 													.optional()
-													.describe("Stable identity for this claim within the entity/aspect, used for supersession."),
+													.describe(
+														"Stable identity for this claim within the entity/aspect/group, used for supersession.",
+													),
 												content: z.string(),
 												confidence: z.number().optional(),
 												importance: z.number().optional(),
@@ -759,6 +766,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 										entity: z.string(),
 										aspect: z.string(),
 										value: z.string(),
+										groupKey: z.string().optional(),
 										claimKey: z.string().optional(),
 										confidence: z.number().optional(),
 										importance: z.number().optional(),
@@ -1581,6 +1589,147 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Expand failed: ${result.error}`);
 			}
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"entity_list",
+		{
+			title: "List Entities",
+			description: "List knowledge graph entities with structural counts. Use this before drilling into aspects.",
+			inputSchema: z.object({
+				query: z.string().optional().describe("Optional entity name filter"),
+				type: z.string().optional().describe("Optional entity type filter"),
+				limit: z.number().optional().describe("Max entities to return, default 50"),
+				offset: z.number().optional().describe("Pagination offset, default 0"),
+				agent_id: z.string().optional().describe("Agent scope, default default"),
+			}),
+			annotations: { readOnlyHint: true },
+		},
+		async ({ query, type, limit, offset, agent_id }) => {
+			const params = new URLSearchParams();
+			if (query) params.set("q", query);
+			if (type) params.set("type", type);
+			if (limit !== undefined) params.set("limit", String(limit));
+			if (offset !== undefined) params.set("offset", String(offset));
+			if (agent_id) params.set("agent_id", agent_id);
+			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/entities?${params}`);
+			if (!result.ok) return errorResult(`Entity list failed: ${result.error}`);
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"entity_get",
+		{
+			title: "Get Entity",
+			description: "Resolve an entity by name and return its structural summary.",
+			inputSchema: z.object({
+				name: z.string().describe("Entity name, e.g. Nicholai or Signet"),
+				agent_id: z.string().optional().describe("Agent scope, default default"),
+			}),
+			annotations: { readOnlyHint: true },
+		},
+		async ({ name, agent_id }) => {
+			const params = new URLSearchParams({ name });
+			if (agent_id) params.set("agent_id", agent_id);
+			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/entity?${params}`);
+			if (!result.ok) return errorResult(`Entity get failed: ${result.error}`);
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"entity_aspects",
+		{
+			title: "List Entity Aspects",
+			description: "List rooms/aspects under an entity.",
+			inputSchema: z.object({
+				entity: z.string().describe("Entity name"),
+				agent_id: z.string().optional().describe("Agent scope, default default"),
+			}),
+			annotations: { readOnlyHint: true },
+		},
+		async ({ entity, agent_id }) => {
+			const params = new URLSearchParams({ entity });
+			if (agent_id) params.set("agent_id", agent_id);
+			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/aspects?${params}`);
+			if (!result.ok) return errorResult(`Entity aspects failed: ${result.error}`);
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"entity_groups",
+		{
+			title: "List Entity Groups",
+			description: "List dresser/group keys under an entity aspect.",
+			inputSchema: z.object({
+				entity: z.string().describe("Entity name"),
+				aspect: z.string().describe("Aspect name"),
+				agent_id: z.string().optional().describe("Agent scope, default default"),
+			}),
+			annotations: { readOnlyHint: true },
+		},
+		async ({ entity, aspect, agent_id }) => {
+			const params = new URLSearchParams({ entity, aspect });
+			if (agent_id) params.set("agent_id", agent_id);
+			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/groups?${params}`);
+			if (!result.ok) return errorResult(`Entity groups failed: ${result.error}`);
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"entity_claims",
+		{
+			title: "List Entity Claims",
+			description: "List drawer/claim slots under an entity aspect group.",
+			inputSchema: z.object({
+				entity: z.string().describe("Entity name"),
+				aspect: z.string().describe("Aspect name"),
+				group: z.string().describe("Group key"),
+				agent_id: z.string().optional().describe("Agent scope, default default"),
+			}),
+			annotations: { readOnlyHint: true },
+		},
+		async ({ entity, aspect, group, agent_id }) => {
+			const params = new URLSearchParams({ entity, aspect, group });
+			if (agent_id) params.set("agent_id", agent_id);
+			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/claims?${params}`);
+			if (!result.ok) return errorResult(`Entity claims failed: ${result.error}`);
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"entity_attributes",
+		{
+			title: "List Entity Attributes",
+			description: "List note/attribute observations under an entity aspect group claim path.",
+			inputSchema: z.object({
+				entity: z.string().describe("Entity name"),
+				aspect: z.string().describe("Aspect name"),
+				group: z.string().describe("Group key"),
+				claim: z.string().describe("Claim key"),
+				status: z.enum(["active", "superseded", "deleted", "all"]).optional().describe("Default active"),
+				kind: z.enum(["attribute", "constraint"]).optional(),
+				limit: z.number().optional().describe("Max attributes to return, default 50"),
+				offset: z.number().optional().describe("Pagination offset, default 0"),
+				agent_id: z.string().optional().describe("Agent scope, default default"),
+			}),
+			annotations: { readOnlyHint: true },
+		},
+		async ({ entity, aspect, group, claim, status, kind, limit, offset, agent_id }) => {
+			const params = new URLSearchParams({ entity, aspect, group, claim });
+			if (status) params.set("status", status);
+			if (kind) params.set("kind", kind);
+			if (limit !== undefined) params.set("limit", String(limit));
+			if (offset !== undefined) params.set("offset", String(offset));
+			if (agent_id) params.set("agent_id", agent_id);
+			const result = await daemonFetch<unknown>(baseUrl, `/api/knowledge/navigation/attributes?${params}`);
+			if (!result.ok) return errorResult(`Entity attributes failed: ${result.error}`);
 			return textResult(result.data);
 		},
 	);

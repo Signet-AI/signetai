@@ -382,11 +382,12 @@ time.
 
 Structured callers may also pass `structured.entities`, `structured.aspects`,
 and `structured.hints`. Aspect attributes are persisted directly under
-`entity_attributes`. Include `claimKey` on each structured attribute when the
-claim can be updated over time. Supersession only runs within the same
-entity/aspect/claimKey, so unrelated events under one aspect do not replace each
-other. Newer conflicting attributes on the same claim can mark older attributes
-as `superseded` with `superseded_by` pointing at the replacement.
+`entity_attributes`. Include `groupKey` to create a navigable subgroup inside an
+aspect, and include `claimKey` when the claim can be updated over time.
+Supersession only runs within the same entity/aspect/groupKey/claimKey, so
+unrelated events under one aspect do not replace each other. Newer conflicting
+attributes on the same grouped claim can mark older attributes as `superseded`
+with `superseded_by` pointing at the replacement.
 
 **Response**
 
@@ -2768,6 +2769,73 @@ Requires `admin` permission and uses the admin rate limit bucket.
 
 `changed` is `false` when the persisted pause flag already matches the
 requested state.
+
+
+Knowledge graph navigation
+--------------------------
+
+Signet exposes the structured memory graph as a navigable hierarchy for agents.
+Search discovers unknown paths; navigation inspects known paths without loading
+the full constellation graph.
+
+```text
+Entity -> Aspect -> Group -> ClaimKey -> Attributes
+```
+
+The house/filesystem analogy is intentional: entities are houses or top-level
+folders, aspects are rooms, groups are dressers, claim keys are drawers, and
+attributes are notes inside those drawers.
+
+All routes accept optional `agent_id` and default to `default`.
+
+### GET /api/knowledge/navigation/entities
+
+List entities with structural counts. Query parameters: `q`, `type`, `limit`,
+`offset`.
+
+### GET /api/knowledge/navigation/entity
+
+Resolve one entity by name.
+
+```text
+/api/knowledge/navigation/entity?name=Nicholai
+```
+
+### GET /api/knowledge/navigation/aspects
+
+List aspects for an entity.
+
+```text
+/api/knowledge/navigation/aspects?entity=Nicholai
+```
+
+### GET /api/knowledge/navigation/groups
+
+List groups under an entity aspect. Attributes without `group_key` appear under
+`general` for backward compatibility.
+
+```text
+/api/knowledge/navigation/groups?entity=Nicholai&aspect=food
+```
+
+### GET /api/knowledge/navigation/claims
+
+List claim slots under an entity/aspect/group path.
+
+```text
+/api/knowledge/navigation/claims?entity=Nicholai&aspect=food&group=restaurants
+```
+
+### GET /api/knowledge/navigation/attributes
+
+List attributes under an entity/aspect/group/claim path. Defaults to
+`status=active`; pass `status=all` to include superseded history. Query
+parameters: `entity`, `aspect`, `group`, `claim`, `status`, `kind`, `limit`,
+`offset`.
+
+```text
+/api/knowledge/navigation/attributes?entity=Nicholai&aspect=food&group=restaurants&claim=favorite_restaurant
+```
 
 
 Dreaming

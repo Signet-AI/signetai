@@ -304,6 +304,7 @@ export async function checkAndSupersedeForAttributes(
 				kind: row.kind as "attribute" | "constraint",
 				content: row.content as string,
 				normalizedContent: row.normalized_content as string,
+				groupKey: (row.group_key as string) ?? null,
 				claimKey: (row.claim_key as string) ?? null,
 				confidence: row.confidence as number,
 				importance: row.importance as number,

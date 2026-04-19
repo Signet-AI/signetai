@@ -159,6 +159,7 @@ describe("migration framework", () => {
 
 		const attributeColumns = db.query("PRAGMA table_info(entity_attributes)").all() as Array<{ name: string }>;
 		expect(attributeColumns.map((col) => col.name)).toContain("claim_key");
+		expect(attributeColumns.map((col) => col.name)).toContain("group_key");
 
 		// v20 tables (predictor reporting)
 		expect(tableNames).toContain("predictor_comparisons");
