@@ -70,6 +70,37 @@ interface AttributeRecord {
 	readonly updatedAt?: string;
 }
 
+interface SuspiciousEntityRecord {
+	readonly name?: string;
+	readonly reason?: string;
+	readonly mentions?: number;
+}
+
+interface DuplicateEntityRecord {
+	readonly canonicalName?: string;
+	readonly count?: number;
+	readonly names?: readonly string[];
+}
+
+interface AttributeHygieneRecord {
+	readonly missingGroupKey?: number;
+	readonly missingClaimKey?: number;
+	readonly missingSourceMemory?: number;
+}
+
+interface SafeMentionCandidateRecord {
+	readonly entityName?: string;
+	readonly memoryId?: string;
+	readonly snippet?: string;
+}
+
+interface HygieneResponse {
+	readonly suspiciousEntities?: readonly SuspiciousEntityRecord[];
+	readonly duplicateEntities?: readonly DuplicateEntityRecord[];
+	readonly attributeSummary?: AttributeHygieneRecord;
+	readonly safeMentionCandidates?: readonly SafeMentionCandidateRecord[];
+}
+
 interface ListResponse<T> {
 	readonly items?: readonly T[];
 }
@@ -196,6 +227,51 @@ function printAttributes(data: unknown): void {
 		const parts = [item.kind, item.status, item.updatedAt].filter((part): part is string => typeof part === "string");
 		if (typeof item.confidence === "number") parts.push(`confidence ${item.confidence.toFixed(2)}`);
 		if (parts.length > 0) console.log(chalk.dim(`    ${parts.join(" · ")}`));
+	}
+	console.log();
+}
+
+function printHygieneReport(data: unknown): void {
+	const report = data as HygieneResponse;
+	const suspicious = report.suspiciousEntities ?? [];
+	const duplicates = report.duplicateEntities ?? [];
+	const summary = report.attributeSummary ?? {};
+	const candidates = report.safeMentionCandidates ?? [];
+
+	console.log(chalk.bold("\n  Knowledge Hygiene Report\n"));
+	console.log(
+		chalk.dim(
+			`  attributes: ${summary.missingGroupKey ?? 0} missing groups · ${summary.missingClaimKey ?? 0} missing claims · ${
+				summary.missingSourceMemory ?? 0
+			} missing sources`,
+		),
+	);
+
+	if (suspicious.length > 0) {
+		console.log(chalk.bold("\n  Suspicious entities"));
+		for (const entity of suspicious.slice(0, 10)) {
+			console.log(`  ${chalk.cyan(entity.name ?? "unknown")} ${chalk.dim(entity.reason ?? "unknown")}`);
+		}
+	}
+
+	if (duplicates.length > 0) {
+		console.log(chalk.bold("\n  Duplicate canonical groups"));
+		for (const group of duplicates.slice(0, 10)) {
+			console.log(`  ${chalk.cyan(group.canonicalName ?? "unknown")} ${chalk.dim(`${group.count ?? 0} entities`)}`);
+			if (group.names && group.names.length > 0) console.log(chalk.dim(`    ${group.names.join(", ")}`));
+		}
+	}
+
+	if (candidates.length > 0) {
+		console.log(chalk.bold("\n  Safe mention candidates"));
+		for (const candidate of candidates.slice(0, 10)) {
+			console.log(`  ${chalk.cyan(candidate.entityName ?? "unknown")} ${chalk.dim(candidate.memoryId ?? "")}`);
+			if (candidate.snippet) console.log(chalk.dim(`    ${candidate.snippet}`));
+		}
+	}
+
+	if (suspicious.length === 0 && duplicates.length === 0 && candidates.length === 0) {
+		console.log(chalk.dim("\n  No obvious hygiene issues found"));
 	}
 	console.log();
 }
@@ -356,5 +432,22 @@ export function registerKnowledgeCommands(program: Command, deps: KnowledgeDeps)
 		const data = await apiGet(deps, "/api/knowledge/navigation/attributes", params);
 		if (options.json) console.log(JSON.stringify(data, null, 2));
 		else printAttributes(data);
+	});
+
+	addCommonOptions(
+		knowledge
+			.command("hygiene")
+			.description("Run a report-only graph hygiene scan")
+			.option("-l, --limit <n>", "Max rows per report section", Number.parseInt)
+			.option("--memory-limit <n>", "Recent memories to scan for safe mention candidates", Number.parseInt),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		if (options.memoryLimit !== undefined) params.set("memory_limit", String(options.memoryLimit));
+		appendAgent(params, options.agent);
+		const data = await apiGet(deps, "/api/knowledge/hygiene", params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printHygieneReport(data);
 	});
 }

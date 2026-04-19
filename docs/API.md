@@ -2869,7 +2869,20 @@ signet knowledge groups Nicholai food
 signet knowledge claims Nicholai food restaurants
 signet knowledge attributes Nicholai food restaurants favorite_restaurant
 signet knowledge attributes Nicholai food restaurants favorite_restaurant --status all
+signet knowledge hygiene
 ```
+
+### GET /api/knowledge/hygiene
+
+Return a report-only graph hygiene scan. Query parameters: `agent_id`, `limit`,
+and `memory_limit`.
+
+The response includes suspicious entities, duplicate canonical entity groups,
+attribute rows missing `group_key` or `claim_key`, attributes without source
+memories, and safe mention-link candidates where an existing entity name appears
+in a memory that is not yet linked. This endpoint does not mutate graph data.
+
+MCP exposes the same report as `knowledge_hygiene_report`.
 
 
 Dreaming

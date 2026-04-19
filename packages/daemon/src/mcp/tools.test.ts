@@ -104,6 +104,7 @@ describe("createMcpServer", () => {
 		expect(names).toContain("knowledge_list_groups");
 		expect(names).toContain("knowledge_list_claims");
 		expect(names).toContain("knowledge_list_attributes");
+		expect(names).toContain("knowledge_hygiene_report");
 		expect(names).toContain("entity_list");
 		expect(names).toContain("entity_get");
 		expect(names).toContain("entity_aspects");
@@ -127,7 +128,7 @@ describe("createMcpServer", () => {
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("session_bypass");
-		expect(names.length).toBe(38);
+		expect(names.length).toBe(39);
 	});
 
 	it("registers intuitive knowledge navigation aliases", async () => {
@@ -148,6 +149,21 @@ describe("createMcpServer", () => {
 		);
 		expect(result.isError).toBeUndefined();
 		expect(result.content[0]?.text).toContain("Nicholai");
+	});
+
+	it("registers a report-only knowledge hygiene tool", async () => {
+		const cap: { url?: string } = {};
+		mockFetch(200, { suspiciousEntities: [{ name: "The" }] }, cap);
+
+		const result = await callTool(server, "knowledge_hygiene_report", {
+			limit: 3,
+			memory_limit: 4,
+			agent_id: "default",
+		});
+
+		expect(cap.url).toBe("http://localhost:3850/api/knowledge/hygiene?limit=3&memory_limit=4&agent_id=default");
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("The");
 	});
 
 	describe("memory_search", () => {

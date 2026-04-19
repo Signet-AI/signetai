@@ -35,7 +35,8 @@ The default memory pipeline should help navigation mechanically without trying
 to author the graph. It may link new memories to known entities, but entities,
 aspects, groups, claim keys, attributes, and dependencies are semantic
 structure. They should come from structured remember payloads, explicit
-agent/user writes, or reviewed normalization passes.
+agent/user writes, or reviewed normalization passes. Graph reads may be enabled
+independently from background extraction graph writes.
 
 ## Schema contract
 
@@ -138,3 +139,5 @@ Every command supports `--json` and `--agent <name>`. Attribute reads accept
    browsing inspect the same daemon endpoints.
 7. Default background remember/linking never creates new graph claims from raw
    text; structured remember remains the semantic write path.
+8. Developers can inspect graph hygiene with a report-only scan before applying
+   any cleanup or normalization.

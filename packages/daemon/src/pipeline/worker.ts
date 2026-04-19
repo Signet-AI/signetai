@@ -825,6 +825,10 @@ interface StructuralPass1Stats {
 	dependencyEnqueued: number;
 }
 
+export function shouldPersistExtractionGraph(cfg: PipelineV2Config, entityCount: number): boolean {
+	return cfg.graph.enabled && cfg.graph.extractionWritesEnabled && entityCount > 0;
+}
+
 /**
  * Heuristic entity linking for written facts. For each fact, find
  * matching entity triples, resolve entity IDs, create stub
@@ -1387,7 +1391,7 @@ export function startWorker(
 			relationsUpdated: 0,
 			mentionsLinked: 0,
 		};
-		if (pipelineCfg.graph.enabled && extraction.entities.length > 0) {
+		if (shouldPersistExtractionGraph(pipelineCfg, extraction.entities.length)) {
 			try {
 				graphStats = accessor.withWriteTx((db) =>
 					txPersistEntities(db, {

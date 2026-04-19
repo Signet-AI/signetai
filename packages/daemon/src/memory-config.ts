@@ -93,6 +93,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	},
 	graph: {
 		enabled: true,
+		extractionWritesEnabled: false,
 		boostWeight: 0.15,
 		boostTimeoutMs: 500,
 	},
@@ -614,6 +615,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 
 		graph: {
 			enabled: resolveBool(graphRaw?.enabled, raw.graphEnabled, d.graph.enabled),
+			extractionWritesEnabled: resolveBool(
+				graphRaw?.extractionWritesEnabled,
+				raw.graphExtractionWritesEnabled,
+				d.graph.extractionWritesEnabled,
+			),
 			boostWeight: clampFraction(graphRaw?.boostWeight ?? raw.graphBoostWeight, d.graph.boostWeight),
 			boostTimeoutMs: clampPositive(
 				graphRaw?.boostTimeoutMs ?? raw.graphBoostTimeoutMs,
