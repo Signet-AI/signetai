@@ -2851,6 +2851,19 @@ parameters: `entity`, `aspect`, `group`, `claim`, `status`, `kind`, `limit`,
 /api/knowledge/navigation/attributes?entity=Nicholai&aspect=food&group=restaurants&claim=favorite_restaurant
 ```
 
+CLI equivalents:
+
+```bash
+signet knowledge tree Nicholai
+signet knowledge entities --query Nicholai
+signet knowledge entity Nicholai
+signet knowledge aspects Nicholai
+signet knowledge groups Nicholai food
+signet knowledge claims Nicholai food restaurants
+signet knowledge attributes Nicholai food restaurants favorite_restaurant
+signet knowledge attributes Nicholai food restaurants favorite_restaurant --status all
+```
+
 
 Dreaming
 --------

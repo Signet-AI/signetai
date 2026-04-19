@@ -100,6 +100,23 @@ names make the domain and traversal order obvious in tool lists. The `entity_*`
 tools remain compatibility aliases. Tools return compact JSON summaries and
 preserve `agent_id` scoping.
 
+## CLI contract
+
+The CLI exposes the same navigation path under `signet knowledge`:
+
+```text
+signet knowledge tree [entity]
+signet knowledge entities
+signet knowledge entity <name>
+signet knowledge aspects <entity>
+signet knowledge groups <entity> <aspect>
+signet knowledge claims <entity> <aspect> <group>
+signet knowledge attributes <entity> <aspect> <group> <claim>
+```
+
+Every command supports `--json` and `--agent <name>`. Attribute reads accept
+`--status all` for superseded history.
+
 ## Success criteria
 
 1. Agents can list entities, aspects, groups, claims, and attributes without
@@ -111,3 +128,5 @@ preserve `agent_id` scoping.
 4. Navigation tools are read-only and safe for regular agent exploration.
 5. Agents have an obvious first tool, `knowledge_tree`, for scanning graph
    structure before choosing a narrower list/read operation.
+6. Developers have the same affordance in the CLI, so human debugging and agent
+   browsing inspect the same daemon endpoints.

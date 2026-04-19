@@ -70,6 +70,7 @@ import { registerDreamCommands } from "./commands/dream.js";
 import { registerForgeCommands } from "./commands/forge.js";
 import { registerGitCommands } from "./commands/git.js";
 import { registerHookCommands } from "./commands/hook.js";
+import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMcpCommands } from "./commands/mcp.js";
 import { registerMemoryCommands } from "./commands/memory.js";
 import { registerPortableCommands } from "./commands/portable.js";
@@ -1412,6 +1413,11 @@ registerMcpCommands(program, {
 });
 
 registerMemoryCommands(program, {
+	ensureDaemonForSecrets,
+	secretApiCall,
+});
+
+registerKnowledgeCommands(program, {
 	ensureDaemonForSecrets,
 	secretApiCall,
 });
