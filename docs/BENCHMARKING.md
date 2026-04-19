@@ -600,6 +600,67 @@ date.
 | `lme-local-explore12-20260419T190341Z-dense-transcript-20260419...` | Same data, dense transcript selection plus explicit empty-answer abstention | 10/12, 83.3% | 100.0% | .416 | .854 | .864 |      504 ms |    2780 tok |
 | `lme-local-explore12-20260419T190341Z-temporal-search-20260419...`  | Same data, dense transcript selection plus relative-date search hints       |  12/12, 100% | 100.0% | .423 | .875 | .890 |      579 ms |    3046 tok |
 
+The later `lme-local-explore12-20260419T202440Z` workspace is another random
+12-question fixture, not a direct continuation of the `190341Z` fixture. It
+looked like a regression because the previous random slice had recovered to
+12/12, but the right comparison is within the same ingested data source. That
+fixture exposed a different skeleton: the structured graph contained the answer
+facts, but daemon recall was not surfacing those structured rows as first-class
+candidates.
+
+In the baseline run, both `single-session-user` questions missed retrieval
+entirely. Direct database inspection showed the structured attributes were
+there, for example a `music_preferences / listening_habits / recent_platform`
+claim saying the user had been listening to songs on Spotify lately, and a
+`personal_preferences / shampoo_preferences / preferred_shampoo_scent_and_source`
+claim saying the user liked lavender shampoo from Trader Joe's. The failure was
+not extraction. It was candidate shaping: traversal-primary recall could spend
+the flat candidate budget before structured candidates ever reached SEC ranking.
+That meant the thing we saved into the graph was visible to the database, but
+not reliably visible to recall.
+
+The first structured-candidate patch proved the diagnosis but did not fix the
+path. It searched active structured attributes generically, but those candidates
+were still reduced to a small additive boost behind unrelated vector neighbors.
+It also briefly included a too-specific `spotify` query expansion while
+debugging. That expansion did not improve the run, and it has been removed
+because provider-side bridges may connect generic vocabulary, e.g. `music` to
+`song` or `playlist`, but must not include answer-specific product names. The
+fairness rule is simple: if the LongMemEval data were swapped out, the same
+generic structure and query bridges should still make sense.
+
+The follow-up patch makes structured rows a real recall surface. Daemon recall
+now searches active `entity_attributes` through entity, aspect, group key, claim
+key, attribute kind, and content; merges those memory ids into the SEC candidate
+pool before flat candidate trimming; and lets strong structured path evidence
+stand on its own instead of being only a tiny bonus on top of embedding score.
+That recovered both `single-session-user` questions on the same warmed fixture
+without hardcoded answer terms. The remaining miss had the answer-bearing
+session in the retrieved set, so the next issue is answer/context handling, not
+missing graph recall.
+
+| Random local 12Q run, second fixture                               | Setup                                                                 |     Accuracy |  Hit@K |   F1 |  MRR | NDCG | Mean search | Avg context |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------- | -----------: | -----: | ---: | ---: | ---: | ----------: | ----------: |
+| `lme-local-explore12-20260419T202440Z`                             | Fresh local E4B ingest, before structured candidates were surfaced     |  9/12, 75.0% |  83.3% | .330 | .708 | .727 |      451 ms |    3219 tok |
+| `lme-local-explore12-20260419T202440Z-structured-candidates-...`    | Same data, initial attribute search, candidates still lost before SEC   | 10/12, 83.3% |  83.3% | .330 | .708 | .727 |      451 ms |    3182 tok |
+| `lme-local-explore12-20260419T202440Z-structured-fused-...`         | Same data, structured rows merged into SEC pool, 16k local answer ctx   | 11/12, 91.7% | 100.0% | .329 | .833 | .843 |      449 ms |    4449 tok |
+
+This is the regression story in plain terms: the graph work was helping only
+when the right memory also survived ordinary candidate selection. Once a random
+slice asked for facts whose strongest evidence lived in `aspect/group/claim`
+shape rather than obvious lexical text, recall dropped them. The fix is not to
+make extraction more clever or add benchmark-specific names. The fix is to make
+recall use the structure it was already being given. That raised Hit@K from
+83.3% to 100% on the same fixture while keeping mean search basically flat. The
+cost is context size: average answer context rose to 4449 tokens, so the next
+tuning pass should reduce duplicate/noisy context now that the right structured
+evidence is actually entering the pool. The remaining failed question was an
+advice-style recommendation prompt where the relevant healthcare-AI publication
+preference was retrieved at rank 2 (`MRR 0.50` for that question), but the answer
+model also used unrelated retrieved context about nanotechnology and robotics.
+That is now an answer/context shaping problem, not a missing structured recall
+problem.
+
 The `9/10` row should not be read as a better score than the `10/12` row. It is
 the opposite: the denominator bug hid two temporal failures. Once every question
 was counted, the remaining misses were exactly the kind of temporal recall
@@ -632,9 +693,14 @@ benchmark ingestion. Those stages stay disabled so the benchmark is not racing
 async background work or depending on local daemon timing. Graph and traversal
 are enabled only so recall can use the structured data that was explicitly sent
 to `/api/memory/remember`; `graph.extractionWritesEnabled` stays `false` so the
-async extractor cannot create benchmark graph structure. Prospective hint recall
-stays enabled because those hints are part of the structured remember payload,
-not a background extraction shortcut. Recall may
+async extractor cannot create benchmark graph structure. Recall treats active
+structured rows as a first-class candidate source by searching entity names,
+aspects, group keys, claim keys, attribute kinds, and attribute content before
+SEC reranking. This is deliberately generic: bridges may connect broad query
+classes like music, service, brand, or currentness to nearby vocabulary, but the
+daemon must not contain LongMemEval answer names or dataset-specific product
+terms. Prospective hint recall stays enabled because those hints are part of the
+structured remember payload, not a background extraction shortcut. Recall may
 attach a bounded transcript excerpt to a retrieved memory, or add a
 low-confidence transcript-only supplemental hit, when `expand: true` is
 requested. Those snippets are returned by the recall API and capped so they

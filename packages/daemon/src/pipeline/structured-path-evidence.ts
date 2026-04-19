@@ -19,20 +19,31 @@ const INTENT_ASPECTS = new Set([
 const QUERY_EXPANSIONS: Readonly<Record<string, readonly string[]>> = {
 	advice: ["guidance", "tips", "suggestion", "suggestions", "recommend", "recommendations", "ideas", "ways"],
 	advise: ["guidance", "tips", "suggestion", "suggestions", "recommend", "recommendations", "ideas", "ways"],
+	brand: ["brands", "company", "label", "maker", "retailer", "source", "store", "vendor"],
+	brands: ["brand", "company", "label", "maker", "retailer", "source", "store", "vendor"],
 	colleague: ["coworker", "coworkers", "team", "teammate", "teammates", "work", "workplace"],
 	colleagues: ["coworker", "coworkers", "team", "teammate", "teammates", "work", "workplace"],
 	connected: ["connection", "connect", "socialize", "socializing", "collaborate", "collaboration", "communication"],
 	connection: ["connected", "connect", "socialize", "socializing", "collaborate", "collaboration", "communication"],
+	current: ["currently", "latest", "lately", "now", "preferred", "recent", "recently"],
+	currently: ["current", "latest", "lately", "now", "preferred", "recent", "recently"],
 	idea: ["ideas", "suggestion", "suggestions", "tips", "guidance", "recommendation", "recommendations"],
 	ideas: ["idea", "suggestion", "suggestions", "tips", "guidance", "recommendation", "recommendations"],
+	music: ["audio", "band", "bands", "playlist", "playlists", "song", "songs"],
 	recommend: ["recommendation", "recommendations", "suggestion", "suggestions", "advice", "tips", "ideas"],
 	recommendation: ["recommend", "recommendations", "suggestion", "suggestions", "advice", "tips", "ideas"],
 	recommendations: ["recommend", "recommendation", "suggestion", "suggestions", "advice", "tips", "ideas"],
 	remote: ["virtual", "online", "work", "workday", "workplace"],
+	service: ["app", "application", "platform", "provider", "subscription"],
+	services: ["app", "application", "platform", "provider", "subscription"],
+	streaming: ["listening", "music", "platform"],
 	suggestion: ["suggestions", "advice", "tips", "ideas", "guidance", "recommendation", "recommendations", "ways"],
 	suggestions: ["suggestion", "advice", "tips", "ideas", "guidance", "recommendation", "recommendations", "ways"],
 	tip: ["tips", "advice", "suggestion", "suggestions", "guidance", "ideas"],
 	tips: ["tip", "advice", "suggestion", "suggestions", "guidance", "ideas"],
+	use: ["likes", "prefer", "preferred", "used", "using"],
+	used: ["likes", "prefer", "preferred", "use", "using"],
+	using: ["likes", "prefer", "preferred", "use", "used"],
 	way: ["ways", "idea", "ideas", "suggestion", "suggestions", "advice", "tips", "guidance"],
 	ways: ["way", "idea", "ideas", "suggestion", "suggestions", "advice", "tips", "guidance"],
 };
@@ -76,6 +87,14 @@ function expandToken(token: string): Set<string> {
 		if (next.length >= 2 && !FTS_STOP.has(next)) expanded.add(next);
 	}
 	return expanded;
+}
+
+function expandedQueryTokens(queryTokens: readonly string[]): string[] {
+	const expanded = new Set<string>();
+	for (const token of queryTokens) {
+		for (const item of expandToken(token)) expanded.add(item);
+	}
+	return [...expanded];
 }
 
 interface MemoryPathAggregate {
@@ -197,4 +216,83 @@ export function scoreStructuredPathEvidence(
 		if (score > 0) scores.set(id, score);
 	}
 	return scores;
+}
+
+function escapeLikeToken(token: string): string {
+	return token.replace(/[%_\\]/g, "\\$&");
+}
+
+export function findStructuredPathCandidates(
+	db: ReadDb,
+	query: string,
+	agentId: string,
+	options: {
+		readonly limit: number;
+		readonly minScore?: number;
+		readonly filterSql?: string;
+		readonly filterArgs?: readonly unknown[];
+	} = { limit: 20 },
+): Map<string, number> {
+	const queryTokens = [...new Set(tokenize(query))];
+	if (queryTokens.length === 0 || options.limit <= 0) return new Map();
+
+	const tokens = expandedQueryTokens(queryTokens)
+		.filter((token) => token.length >= 3)
+		.slice(0, 18);
+	if (tokens.length === 0) return new Map();
+
+	const haystack = `LOWER(
+		COALESCE(e.name, '') || ' ' ||
+		COALESCE(asp.canonical_name, '') || ' ' ||
+		COALESCE(ea.group_key, '') || ' ' ||
+		COALESCE(ea.claim_key, '') || ' ' ||
+		COALESCE(ea.kind, '') || ' ' ||
+		COALESCE(ea.content, '')
+	)`;
+	const like = tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
+	const filterSql = options.filterSql ?? "";
+	const rows = db
+		.prepare(
+			`SELECT
+				 ea.memory_id,
+				 e.name AS entity_name,
+				 asp.canonical_name AS aspect,
+				 ea.group_key,
+				 ea.claim_key,
+				 ea.content,
+				 ea.kind,
+				 ea.importance,
+				 ea.confidence
+			 FROM entity_attributes ea
+			 JOIN entity_aspects asp ON asp.id = ea.aspect_id
+			 JOIN entities e ON e.id = asp.entity_id
+			 JOIN memories m ON m.id = ea.memory_id
+			 WHERE ea.agent_id = ?
+			   AND asp.agent_id = ?
+			   AND e.agent_id = ?
+			   AND ea.status = 'active'
+			   AND ea.memory_id IS NOT NULL
+			   AND m.is_deleted = 0
+			   ${filterSql}
+			   AND (${like})
+			 LIMIT ?`,
+		)
+		.all(
+			agentId,
+			agentId,
+			agentId,
+			...(options.filterArgs ?? []),
+			...tokens.map((token) => `%${escapeLikeToken(token)}%`),
+			Math.max(options.limit * 8, options.limit),
+		) as StructuredPathRow[];
+
+	const ids = [...new Set(rows.map((row) => row.memory_id))];
+	const scores = scoreStructuredPathEvidence(db, ids, query, agentId);
+	const minScore = options.minScore ?? 0;
+	return new Map(
+		[...scores.entries()]
+			.filter(([, score]) => score >= minScore)
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, options.limit),
+	);
 }

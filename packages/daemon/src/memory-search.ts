@@ -25,7 +25,7 @@ import {
 	shapeByFacetCoverage,
 	shapeStructuredEvidence,
 } from "./pipeline/structured-evidence";
-import { scoreStructuredPathEvidence } from "./pipeline/structured-path-evidence";
+import { findStructuredPathCandidates, scoreStructuredPathEvidence } from "./pipeline/structured-path-evidence";
 import { escapeLike } from "./sql-utils";
 
 // ---------------------------------------------------------------------------
@@ -832,14 +832,40 @@ export async function hybridRecall(
 	}
 	const semanticEvidenceMap = new Map(vectorMap);
 
-	// --- Flat search: merge BM25 + vector scores ---
-	const allIds = new Set([...bm25Map.keys(), ...hintMap.keys(), ...vectorMap.keys()]);
+	// --- Structured path candidate search ---
+	// SEC can only reshape memories that make it into the candidate pool.
+	// Query the navigable entity/aspect/group/claim path directly so structured
+	// memories can be recalled even when their raw prose does not share enough
+	// surface text with the question.
+	const structuredCandidateMap = new Map<string, number>();
+	if (cfg.pipelineV2.graph.enabled) {
+		try {
+			const agentId = params.agentId ?? "default";
+			const candidates = getDbAccessor().withReadDb((db) =>
+				findStructuredPathCandidates(db, query, agentId, {
+					limit: cfg.search.top_k,
+					minScore,
+					filterSql: filter.sql,
+					filterArgs: filter.args,
+				}),
+			);
+			for (const [id, score] of candidates) structuredCandidateMap.set(id, score);
+		} catch (e) {
+			logger.warn("memory", "Structured path candidate search failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
+	// --- Flat search: merge BM25 + vector + structured path candidate scores ---
+	const allIds = new Set([...bm25Map.keys(), ...hintMap.keys(), ...vectorMap.keys(), ...structuredCandidateMap.keys()]);
 	const flatScored: Array<{ id: string; score: number; source: string }> = [];
 
 	for (const id of allIds) {
 		const bm25 = bm25Map.get(id) ?? 0;
 		const hint = hintMap.get(id) ?? 0;
 		const vec = vectorMap.get(id) ?? 0;
+		const structured = structuredCandidateMap.get(id) ?? 0;
 		let score: number;
 		let source: string;
 
@@ -849,13 +875,20 @@ export async function hybridRecall(
 		} else if (vec > 0) {
 			score = vec;
 			source = "vector";
-		} else {
+		} else if (bm25 > 0) {
 			score = bm25;
 			source = "keyword";
+		} else {
+			score = structured;
+			source = "structured";
 		}
 		if (hint > 0 && hint >= score) {
 			score = hint;
 			source = bm25 > 0 || vec > 0 ? "hybrid" : "hint";
+		}
+		if (structured > 0 && structured >= score) {
+			score = structured;
+			source = bm25 > 0 || vec > 0 || hint > 0 ? "sec" : "structured";
 		}
 
 		if (score >= minScore) flatScored.push({ id, score, source });
@@ -1111,7 +1144,16 @@ export async function hybridRecall(
 		}
 	}
 
-	const structuredEvidenceMap = new Map<string, number>();
+	if (structuredCandidateMap.size > 0) {
+		const byId = new Map<string, { id: string; score: number; source: string }>();
+		for (const row of scored) mergeCandidate(byId, row);
+		for (const [id, score] of [...structuredCandidateMap.entries()].sort((a, b) => b[1] - a[1])) {
+			mergeCandidate(byId, { id, score, source: "structured" });
+		}
+		scored = [...byId.values()].sort((a, b) => b.score - a.score);
+	}
+
+	const structuredEvidenceMap = new Map(structuredCandidateMap);
 
 	// --- Structured Evidence Convolution (SEC-lite) ---
 	// Keep retrieval channels separate until after traversal/boosting. This

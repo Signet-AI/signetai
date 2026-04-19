@@ -408,6 +408,163 @@ describe("hybridRecall", () => {
 		expect(result.results[0]?.source).toBe("hint");
 	});
 
+	it("uses structured path candidates when lexical recall misses a music platform", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-spotify-structured", "Speaker A has been listening to songs on Spotify lately.", now, now);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run(
+				"mem-netflix-distractor",
+				"Netflix is a video streaming service with documentary recommendations.",
+				now,
+				now,
+			);
+
+			db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at
+				) VALUES (?, ?, ?, 'person', 'default', 1, ?, ?)`,
+			).run("ent-music-user", "MemoryBench User music", "memorybench user music", now, now);
+
+			db.prepare(
+				`INSERT INTO entity_aspects (
+					id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
+				) VALUES (?, ?, 'default', 'music_preferences', 'music_preferences', 0.9, ?, ?)`,
+			).run("asp-music-user", "ent-music-user", now, now);
+
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, group_key, claim_key, content, normalized_content,
+					confidence, importance, status, created_at, updated_at
+				) VALUES (?, ?, 'default', ?, 'attribute', ?, ?, ?, ?, 1, 0.95, 'active', ?, ?)`,
+			).run(
+				"attr-music-user",
+				"asp-music-user",
+				"mem-spotify-structured",
+				"listening_habits",
+				"recent_platform",
+				"Speaker A has been listening to songs on Spotify lately.",
+				"speaker a has been listening to songs on spotify lately",
+				now,
+				now,
+			);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = true;
+		cfg.pipelineV2.traversal.enabled = false;
+		cfg.pipelineV2.reranker.enabled = false;
+
+		const result = await hybridRecall(
+			{
+				query: "What music streaming service has the user been using lately?",
+				keywordQuery: "What music streaming service has the user been using lately?",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			cfg,
+			async () => null,
+		);
+
+		const hit = result.results.find((row) => row.id === "mem-spotify-structured");
+		expect(hit).toBeDefined();
+		expect(["structured", "sec"]).toContain(hit?.source);
+	});
+
+	it("uses structured path candidates when lexical recall misses a shampoo brand", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run(
+				"mem-shampoo-structured",
+				"Speaker A likes the lavender scented shampoo picked up at Trader Joe's.",
+				now,
+				now,
+			);
+
+			const distractor = db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			);
+			for (let i = 0; i < 25; i++) {
+				distractor.run(
+					`mem-generic-brand-${i}`,
+					`A generic brand memo mentioned current shampoo use and product positioning ${i}.`,
+					now,
+					now,
+				);
+			}
+
+			db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at
+				) VALUES (?, ?, ?, 'person', 'default', 1, ?, ?)`,
+			).run("ent-shampoo-user", "MemoryBench User shampoo", "memorybench user shampoo", now, now);
+
+			db.prepare(
+				`INSERT INTO entity_aspects (
+					id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
+				) VALUES (?, ?, 'default', 'personal_preferences', 'personal_preferences', 0.9, ?, ?)`,
+			).run("asp-shampoo-user", "ent-shampoo-user", now, now);
+
+			db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, group_key, claim_key, content, normalized_content,
+					confidence, importance, status, created_at, updated_at
+				) VALUES (?, ?, 'default', ?, 'attribute', ?, ?, ?, ?, 1, 0.95, 'active', ?, ?)`,
+			).run(
+				"attr-shampoo-user",
+				"asp-shampoo-user",
+				"mem-shampoo-structured",
+				"shampoo_preferences",
+				"preferred_shampoo_scent_and_source",
+				"Likes the lavender scented shampoo picked up at Trader Joe's.",
+				"likes the lavender scented shampoo picked up at trader joe's",
+				now,
+				now,
+			);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = true;
+		cfg.pipelineV2.traversal.enabled = true;
+		cfg.pipelineV2.traversal.primary = true;
+		cfg.pipelineV2.reranker.enabled = false;
+
+		const result = await hybridRecall(
+			{
+				query: "What brand of shampoo does the user currently use?",
+				keywordQuery: "What brand of shampoo does the user currently use?",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			cfg,
+			async () => null,
+		);
+
+		const hit = result.results.find((row) => row.id === "mem-shampoo-structured");
+		expect(hit).toBeDefined();
+		expect(["structured", "sec"]).toContain(hit?.source);
+	});
+
 	it("expands baking advice queries to bridge ingredient preference memories", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {

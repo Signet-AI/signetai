@@ -32,6 +32,16 @@ describe("structured evidence shaping", () => {
 		expect(shaped[0]?.source).toBe("sec");
 	});
 
+	it("lets strong structured-only path evidence beat generic semantic neighbors", () => {
+		const shaped = shapeStructuredEvidence([
+			{ id: "generic-streaming", source: "vector", semantic: 0.82 },
+			{ id: "music-platform", source: "structured", structured: 0.53 },
+		]);
+
+		expect(shaped[0]?.id).toBe("music-platform");
+		expect(shaped[0]?.source).toBe("structured");
+	});
+
 	it("lets moderate structured path matches beat generic lexical advice noise", () => {
 		const shaped = shapeStructuredEvidence([
 			{ id: "mountain-trip", source: "hybrid", lexical: 0.38, semantic: 0.9 },

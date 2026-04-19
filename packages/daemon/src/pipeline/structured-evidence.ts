@@ -115,6 +115,13 @@ export function shapeStructuredEvidence(
 		if (evidence.structured >= 0.25) {
 			score += (evidence.structured - 0.25) * 0.8;
 		}
+		if (evidence.structured >= 0.2) {
+			// Structured path scores are already query-normalized evidence over
+			// entity/aspect/group/claim/content tokens. Let that channel introduce
+			// and rank candidates on its own instead of reducing it to a small
+			// additive boost behind generic vector similarity.
+			score = Math.max(score, evidence.structured);
+		}
 		if (evidence.traversal > 0 && !hasTraversalAnchor(evidence, cfg.traversalAnchorThreshold)) {
 			score = Math.min(score, cfg.traversalUnanchoredCap);
 		}
