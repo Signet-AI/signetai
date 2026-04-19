@@ -1,4 +1,3 @@
-import type { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -380,7 +379,7 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 		return diagnosticsCache.report;
 	}
 
-	const report = getDbAccessor().withReadDb((db: Database) =>
+	const report = getDbAccessor().withReadDb((db) =>
 		getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams(), buildOpenClawHealth()),
 	);
 	diagnosticsCache = {

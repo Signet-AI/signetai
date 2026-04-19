@@ -6,7 +6,7 @@
  * opened on demand (SQLite WAL mode allows concurrent readers).
  */
 
-import { Database, type Statement } from "bun:sqlite";
+import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -115,13 +115,13 @@ function toMigrationDb(db: Database): {
 		prepare(sql: string) {
 			const stmt = db.prepare(sql);
 			return {
-				run(...args: unknown[]): void {
+				run(...args: SQLQueryBindings[]): void {
 					stmt.run(...args);
 				},
-				get(...args: unknown[]): Record<string, unknown> | undefined {
+				get(...args: SQLQueryBindings[]): Record<string, unknown> | undefined {
 					return toRecordOrUndefined(stmt.get(...args));
 				},
-				all(...args: unknown[]): Record<string, unknown>[] {
+				all(...args: SQLQueryBindings[]): Record<string, unknown>[] {
 					const rows = stmt.all(...args);
 					return rows
 						.map((row) => toRecordOrUndefined(row))
@@ -132,16 +132,16 @@ function toMigrationDb(db: Database): {
 	};
 }
 
-function toFtsSchemaQueryDb(db: Database): {
+export function toFtsSchemaQueryDb(db: { prepare(sql: string): Statement }): {
 	prepare(sql: string): {
-		get(...args: unknown[]): Record<string, unknown> | undefined;
+		get(...args: SQLQueryBindings[]): Record<string, unknown> | undefined;
 	};
 } {
 	return {
 		prepare(sql: string) {
 			const stmt = db.prepare(sql);
 			return {
-				get(...args: unknown[]): Record<string, unknown> | undefined {
+				get(...args: SQLQueryBindings[]): Record<string, unknown> | undefined {
 					return toRecordOrUndefined(stmt.get(...args));
 				},
 			};

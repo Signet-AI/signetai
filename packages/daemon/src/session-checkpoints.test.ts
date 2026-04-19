@@ -49,7 +49,7 @@ function createTestDbAccessor(dbPath: string): DbAccessor {
 	const db = new Database(dbPath);
 	db.run("PRAGMA journal_mode = WAL");
 	db.run("PRAGMA busy_timeout = 5000");
-	runMigrations(db);
+	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 
 	return {
 		withWriteTx<T>(fn: (wdb: WriteDb) => T): T {

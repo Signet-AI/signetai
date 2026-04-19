@@ -24,7 +24,7 @@ function listLiveSessions(agentId: string): Array<{
 	expiresAt: string | null;
 	bypassed: boolean;
 }> {
-	const byKey = new Map(
+	const byKey = new Map<string, { key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }>(
 		getActiveSessions()
 			.filter((s) => s.agentId === agentId)
 			.map((session) => [session.key, session] as const),

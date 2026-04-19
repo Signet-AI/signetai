@@ -187,11 +187,12 @@ export function parseOptionalBoolean(value: unknown): boolean | undefined {
 	return undefined;
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 export function toRecord(value: unknown): Record<string, unknown> | null {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return null;
-	}
-	return value;
+	return isRecord(value) ? value : null;
 }
 
 export async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {

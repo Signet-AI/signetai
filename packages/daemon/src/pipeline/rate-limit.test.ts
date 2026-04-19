@@ -140,6 +140,7 @@ describe("withRateLimit", () => {
 	it("throws RateLimitExceededError with generateWithUsage too", async () => {
 		const provider = mockProviderWithUsage("claude-code:haiku");
 		const wrapped = withRateLimit(provider, { maxCallsPerHour: 10, burstSize: 2, waitTimeoutMs: 0 });
+		if (!wrapped.generateWithUsage) throw new Error("expected generateWithUsage");
 		await wrapped.generateWithUsage("a");
 		await wrapped.generateWithUsage("b");
 		await expect(wrapped.generateWithUsage("c")).rejects.toThrow(RateLimitExceededError);

@@ -12,7 +12,7 @@ describe("task scope helpers", () => {
 	beforeEach(() => {
 		path = join("/tmp", `signet-task-scope-${crypto.randomUUID()}.db`);
 		db = new Database(path);
-		runMigrations(db);
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		db.prepare(
 			`INSERT INTO scheduled_tasks
 			 (id, name, prompt, cron_expression, harness, enabled, next_run_at, created_at, updated_at)

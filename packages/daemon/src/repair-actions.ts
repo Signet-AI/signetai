@@ -14,6 +14,7 @@ import {
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import { toFtsSchemaQueryDb } from "./db-accessor";
 import {
 	countChanges,
 	syncVecDeleteByEmbeddingIds,
@@ -369,7 +370,7 @@ export function checkFtsConsistency(
 		} catch {
 			missing = true;
 		}
-		const ftsSql = missing ? null : readMemoriesFtsSql(db);
+		const ftsSql = missing ? null : readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 		return {
 			memCount: memRow.n,
 			ftsCount: ftsN,
@@ -2043,8 +2044,8 @@ export function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[])
 			{
 				actor: "api",
 				reason: "dead-memory hygiene",
-				actorType: "system",
-				requestId: null,
+				actorType: "daemon",
+				requestId: undefined,
 			},
 			total,
 			`soft-deleted ${total} dead memories`,

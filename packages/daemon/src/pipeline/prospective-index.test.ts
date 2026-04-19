@@ -12,6 +12,7 @@ import { runMigrations } from "../../../core/src/migrations";
 import type { LlmProvider } from "./provider";
 import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
 import type { PipelineHintsConfig } from "@signet/core";
+import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import { generateHints, enqueueHintsJob, startHintsWorker } from "./prospective-index";
 
 // ---------------------------------------------------------------------------
@@ -108,33 +109,22 @@ function getJob(
 /** Shared pipeline config with hints enabled. */
 function pipelineCfg(hints = HINTS_CFG) {
 	return {
-		enabled: true,
+		...DEFAULT_PIPELINE_V2,
 		shadowMode: false,
 		mutationsFrozen: false,
-		extraction: { provider: "ollama" as const, model: "test", timeout: 5000, minConfidence: 0.7 },
-		worker: { pollMs: 10, maxRetries: 3, leaseTimeoutMs: 300000 },
-		graph: { enabled: false, boostWeight: 0, boostTimeoutMs: 500 },
-		reranker: { enabled: false, model: "", useExtractionModel: false, topN: 20, timeoutMs: 2000 },
+		extraction: { ...DEFAULT_PIPELINE_V2.extraction, provider: "ollama" as const, model: "test", timeout: 5000, minConfidence: 0.7 },
+		worker: { ...DEFAULT_PIPELINE_V2.worker, pollMs: 10 },
+		graph: { ...DEFAULT_PIPELINE_V2.graph, enabled: false, boostWeight: 0 },
+		reranker: { ...DEFAULT_PIPELINE_V2.reranker, enabled: false },
 		autonomous: {
+			...DEFAULT_PIPELINE_V2.autonomous,
 			enabled: false,
 			frozen: false,
 			allowUpdateDelete: false,
 			maintenanceIntervalMs: 0,
 			maintenanceMode: "observe" as const,
 		},
-		repair: {
-			reembedCooldownMs: 0,
-			reembedHourlyBudget: 0,
-			requeueCooldownMs: 0,
-			requeueHourlyBudget: 0,
-			dedupCooldownMs: 0,
-			dedupHourlyBudget: 0,
-			dedupSemanticThreshold: 0.92,
-			dedupBatchSize: 100,
-		},
-		documents: { workerIntervalMs: 10000, chunkSize: 2000, chunkOverlap: 200, maxContentBytes: 10_000_000 },
-		guardrails: { maxContentChars: 500, chunkTargetChars: 300, recallTruncateChars: 500 },
-		structural: { enabled: false, classifyBatchSize: 8, dependencyBatchSize: 5, pollIntervalMs: 10000 },
+		structural: { ...DEFAULT_PIPELINE_V2.structural, enabled: false },
 		significance: { enabled: false, minTurns: 5, minEntityOverlap: 1, noveltyThreshold: 0.15 },
 		hints,
 	};

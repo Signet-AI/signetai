@@ -11,6 +11,9 @@ function makeAccessor(db: Database): DbAccessor {
 		withReadDb<T>(fn: (rdb: Database) => T): T {
 			return fn(db);
 		},
+		close() {
+			db.close();
+		},
 	};
 }
 

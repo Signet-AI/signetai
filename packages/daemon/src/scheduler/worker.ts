@@ -11,12 +11,16 @@ import type { TaskHarness } from "@signet/core";
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
-import type { WorkerHandle } from "../pipeline/worker";
 import { recordSkillInvocation } from "../skill-invocations";
 import { computeNextRun } from "./cron";
 import { resolveSkillPrompt } from "./skill-resolver";
 import { type SpawnResult, spawnTask } from "./spawn";
 import { emitTaskStream } from "./task-stream";
+
+export interface SchedulerHandle {
+	stop(): Promise<void>;
+	readonly running: boolean;
+}
 
 const POLL_INTERVAL_MS = 15_000;
 const MAX_CONCURRENT = 3;
@@ -124,7 +128,7 @@ const DEFAULT_EXECUTE_TASK_DEPS: ExecuteTaskDeps = {
 };
 
 /** Start the scheduler worker. Returns a handle to stop it. */
-export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
+export function startSchedulerWorker(db: DbAccessor): SchedulerHandle {
 	let running = true;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	const activeProcesses = new Set<Promise<void>>();
@@ -156,7 +160,7 @@ export function startSchedulerWorker(db: DbAccessor): WorkerHandle {
 				p.finally(() => activeProcesses.delete(p));
 			}
 		} catch (err) {
-			logger.error("scheduler", "Poll error", {
+			logger.error("scheduler", "Poll error", undefined, {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
@@ -208,7 +212,7 @@ export async function executeTask(
 	try {
 		nextRun = deps.computeNextRun(task.cron_expression);
 	} catch {
-		deps.logger.error("scheduler", `Invalid cron for task ${task.name}`, {
+		deps.logger.error("scheduler", `Invalid cron for task ${task.name}`, undefined, {
 			taskId: task.id,
 			cron: task.cron_expression,
 		});

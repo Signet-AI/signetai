@@ -42,8 +42,8 @@ describe("continuity-state", () => {
 
 	test("recordPrompt increments count and stores query", () => {
 		initContinuity("s2", "test", "/tmp/p");
-		recordPrompt("s2", "typescript config");
-		recordPrompt("s2", "database setup");
+		recordPrompt("s2", "typescript config", undefined);
+		recordPrompt("s2", "database setup", undefined);
 		const state = getState("s2");
 		expect(state?.promptCount).toBe(2);
 		expect(state?.pendingQueries).toEqual(["typescript config", "database setup"]);
@@ -52,7 +52,7 @@ describe("continuity-state", () => {
 	test("recordPrompt caps queries at 20", () => {
 		initContinuity("s3", "test", "/tmp/p");
 		for (let i = 0; i < 25; i++) {
-			recordPrompt("s3", `query-${i}`);
+			recordPrompt("s3", `query-${i}`, undefined);
 		}
 		const state = getState("s3");
 		expect(state?.pendingQueries.length).toBe(20);
@@ -73,17 +73,17 @@ describe("continuity-state", () => {
 	test("shouldCheckpoint returns true after promptInterval", () => {
 		initContinuity("s5", "test", "/tmp/p");
 		for (let i = 0; i < 4; i++) {
-			recordPrompt("s5", undefined);
+			recordPrompt("s5", undefined, undefined);
 		}
 		expect(shouldCheckpoint("s5", defaultConfig)).toBe(false);
-		recordPrompt("s5", undefined);
+		recordPrompt("s5", undefined, undefined);
 		expect(shouldCheckpoint("s5", defaultConfig)).toBe(true);
 	});
 
 	test("shouldCheckpoint returns false when disabled", () => {
 		initContinuity("s6", "test", "/tmp/p");
 		for (let i = 0; i < 10; i++) {
-			recordPrompt("s6", undefined);
+			recordPrompt("s6", undefined, undefined);
 		}
 		expect(shouldCheckpoint("s6", { ...defaultConfig, enabled: false })).toBe(false);
 	});
@@ -94,7 +94,7 @@ describe("continuity-state", () => {
 
 	test("consumeState returns snapshot and resets accumulators", () => {
 		initContinuity("s7", "test", "/tmp/p");
-		recordPrompt("s7", "q1");
+		recordPrompt("s7", "q1", undefined);
 		recordRemember("s7", "r1");
 
 		const snap = consumeState("s7");
@@ -117,8 +117,8 @@ describe("continuity-state", () => {
 
 	test("no-ops on undefined/empty session key", () => {
 		// None of these should throw
-		recordPrompt(undefined, "test");
-		recordPrompt("", "test");
+		recordPrompt(undefined, "test", undefined);
+		recordPrompt("", "test", undefined);
 		recordRemember(undefined, "test");
 		expect(shouldCheckpoint(undefined, defaultConfig)).toBe(false);
 		expect(consumeState(undefined)).toBeUndefined();

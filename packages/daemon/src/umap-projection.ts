@@ -537,11 +537,12 @@ export function computeProjectionForQuery(
 }
 
 export function getCachedProjection(db: ReadDb, nComponents: 2 | 3): CachedProjection | null {
-	const rawRow: Record<string, unknown> | null | undefined = db
+	const rawResult = db
 		.prepare("SELECT dimensions, embedding_count, payload, created_at FROM umap_cache WHERE dimensions = ? LIMIT 1")
 		.get(nComponents);
 
-	if (!rawRow) return null;
+	if (rawResult == null || typeof rawResult !== "object") return null;
+	const rawRow = rawResult as Record<string, unknown>;
 
 	const payload = rawRow.payload;
 	const embeddingCount = rawRow.embedding_count;

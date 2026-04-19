@@ -540,6 +540,7 @@ describe("install command args", () => {
 		const source = "Signet-AI/signetai";
 		const name = "web-search";
 		const args = ["add", source, "--global", "--yes"];
+		// @ts-ignore
 		if (source && source !== name && repoPattern.test(source)) {
 			args.push("--skill", name);
 		}
@@ -560,6 +561,7 @@ describe("install command args", () => {
 		const source = "clawhub@some-skill";
 		const name = "some-skill";
 		const args = ["add", source, "--global", "--yes"];
+		// @ts-ignore
 		if (source && source !== name && repoPattern.test(source)) {
 			args.push("--skill", name);
 		}

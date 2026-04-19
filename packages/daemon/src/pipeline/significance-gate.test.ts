@@ -16,27 +16,12 @@ function makeReadDb(db: Database): ReadDb {
 	return { prepare: (sql: string) => db.prepare(sql) };
 }
 
-/** Wrap bun:sqlite Database to satisfy MigrationDb. */
-function makeMigrationDb(db: Database): MigrationDb {
-	return {
-		exec: (sql: string) => db.exec(sql),
-		prepare: (sql: string) => {
-			const stmt = db.prepare(sql);
-			return {
-				run: (...args: unknown[]) => stmt.run(...args),
-				get: (...args: unknown[]) => stmt.get(...args) ?? undefined,
-				all: (...args: unknown[]) => stmt.all(...args),
-			};
-		},
-	};
-}
-
 describe("significance gate", () => {
 	let db: Database;
 
 	beforeEach(() => {
 		db = new Database(":memory:");
-		runMigrations(makeMigrationDb(db));
+		runMigrations(db as unknown as MigrationDb);
 	});
 
 	afterEach(() => {

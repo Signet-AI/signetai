@@ -163,7 +163,7 @@ export function listLiveSessions(agentId: string): Array<{
 	expiresAt: string | null;
 	bypassed: boolean;
 }> {
-	const byKey = new Map(
+	const byKey = new Map<string, { key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }>(
 		getActiveSessions()
 			.filter((s) => s.agentId === agentId)
 			.map((session) => [session.key, session] as const),
@@ -409,7 +409,7 @@ function registerRemember(app: Hono): void {
 			}
 
 			const auth = c.req.header("authorization");
-			const headers = auth
+			const headers: Record<string, string> = auth
 				? { "Content-Type": "application/json", Authorization: auth }
 				: { "Content-Type": "application/json" };
 			return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {

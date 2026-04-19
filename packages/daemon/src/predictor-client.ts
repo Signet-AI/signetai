@@ -555,7 +555,7 @@ export function createPredictorClient(
 				const result = await sendRequest("status", {}, 5000);
 				const parsed = parsePredictorStatus(result);
 				if (parsed !== null) {
-					logger.info("predictor", "Sidecar ready", parsed);
+					logger.info("predictor", "Sidecar ready", { ...parsed });
 				} else {
 					logger.warn(
 						"predictor",

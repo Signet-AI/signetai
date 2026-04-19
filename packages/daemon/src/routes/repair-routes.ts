@@ -36,7 +36,7 @@ function resolveRepairContext(c: Context): RepairContext {
 	return { reason, actor, actorType, requestId };
 }
 
-function repairHttpStatus(result: RepairResult): number {
+function repairHttpStatus(result: RepairResult): 200 | 429 | 500 {
 	if (result.success) return 200;
 	if (
 		/cooldown active|hourly budget exhausted|denied by policy gate|autonomous\.|agents cannot trigger repairs|already in progress/i.test(

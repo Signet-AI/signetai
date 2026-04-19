@@ -92,7 +92,7 @@ export function mountAppTrayRoutes(app: Hono): void {
 			const stubs = missing.map((server) => ({
 				id: server.id,
 				name: server.name,
-				icon: resolveServerIcon(server.source, server.catalogId),
+				icon: resolveServerIcon(server.source, server.catalogId) ?? undefined,
 				state: "tray" as const,
 				manifest: {
 					name: server.name,

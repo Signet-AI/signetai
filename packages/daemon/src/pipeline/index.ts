@@ -7,7 +7,7 @@ import type { DbAccessor } from "../db-accessor";
 import type { ProviderTracker } from "../diagnostics";
 import { getLlmProvider } from "../llm";
 import { logger } from "../logger";
-import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
+import type { EmbeddingConfig, MemorySearchConfig, PipelineV2Config } from "../memory-config";
 import type { TelemetryCollector } from "../telemetry";
 import type { DecisionConfig } from "./decision";
 import { type DependencySynthesisHandle, startDependencySynthesisWorker } from "./dependency-synthesis";
@@ -15,7 +15,7 @@ import { type DocumentWorkerHandle, startDocumentWorker } from "./document-worke
 import type { DreamingWorkerHandle } from "./dreaming-worker";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
-import { DEFAULT_RETENTION, type RetentionHandle, startRetentionWorker } from "./retention-worker";
+import { DEFAULT_RETENTION, type RetentionConfig, type RetentionHandle, startRetentionWorker } from "./retention-worker";
 import { type StructuralClassifyHandle, startStructuralClassifyWorker } from "./structural-classify";
 import { type StructuralDependencyHandle, startStructuralDependencyWorker } from "./structural-dependency";
 import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
@@ -115,7 +115,7 @@ export function startPipeline(
 	pipelineCfg: PipelineV2Config,
 	embeddingCfg: EmbeddingConfig,
 	fetchEmbedding: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
-	searchCfg: { alpha: number; top_k: number; min_score: number },
+	searchCfg: MemorySearchConfig,
 	agentId: string,
 	providerTracker?: ProviderTracker,
 	analytics?: AnalyticsCollector,

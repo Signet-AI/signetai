@@ -217,7 +217,7 @@ describe("updateSuccessRate", () => {
 
 describe("evaluateColdStartExit condition 3", () => {
 	it("blocks exit when successRate <= 0.4", () => {
-		const status = { trained: true, training_pairs: 100, model_version: 1, last_trained: null };
+		const status = { trained: true, training_pairs: 100, model_version: 1, last_trained: null, native_dimensions: 384, feature_dimensions: 12 };
 		const state = {
 			successRate: 0.3,
 			alpha: 0.7,
@@ -249,7 +249,7 @@ describe("evaluateColdStartExit condition 3", () => {
 			}
 		});
 
-		const status = { trained: true, training_pairs: 100, model_version: 1, last_trained: null };
+		const status = { trained: true, training_pairs: 100, model_version: 1, last_trained: null, native_dimensions: 384, feature_dimensions: 12 };
 		const state = {
 			successRate: 0.5,
 			alpha: 0.5,
@@ -262,7 +262,7 @@ describe("evaluateColdStartExit condition 3", () => {
 	});
 
 	it("always returns true if already exited", () => {
-		const status = { trained: true, training_pairs: 100, model_version: 1, last_trained: null };
+		const status = { trained: true, training_pairs: 100, model_version: 1, last_trained: null, native_dimensions: 384, feature_dimensions: 12 };
 		const state = {
 			successRate: 0.1,
 			alpha: 0.9,

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { loadMemoryConfig } from "./memory-config";
+import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { buildAgentScopeClause, hybridRecall } from "./memory-search";
 
 describe("hybridRecall", () => {
@@ -28,6 +28,37 @@ describe("hybridRecall", () => {
 		}
 		rmSync(dir, { recursive: true, force: true });
 	});
+
+	function testCfg(opts: {
+		graph?: boolean;
+		traversal?: boolean;
+		traversalPrimary?: boolean;
+		reranker?: boolean;
+		rerankerTopN?: number;
+	} = {}): ResolvedMemoryConfig {
+		const raw = loadMemoryConfig(dir);
+		const trav = raw.pipelineV2.traversal;
+		return {
+			...raw,
+			search: { ...raw.search, rehearsal_enabled: false, min_score: 0 },
+			pipelineV2: {
+				...raw.pipelineV2,
+				graph: { ...raw.pipelineV2.graph, enabled: opts.graph ?? false },
+				traversal: trav
+					? {
+							...trav,
+							enabled: opts.traversal ?? false,
+							primary: opts.traversalPrimary ?? trav.primary,
+						}
+					: undefined,
+				reranker: {
+					...raw.pipelineV2.reranker,
+					enabled: opts.reranker ?? false,
+					topN: opts.rerankerTopN ?? raw.pipelineV2.reranker.topN,
+				},
+			},
+		};
+	}
 
 	it("keeps expanded transcript sources scoped to the requesting agent", async () => {
 		const now = new Date().toISOString();
@@ -109,20 +140,9 @@ describe("hybridRecall", () => {
 			).run("mem-b", "deploy checklist", "sess-a", "default", now, now);
 		});
 
-		const base = loadMemoryConfig(dir);
-		base.search.rehearsal_enabled = false;
-		base.search.min_score = 0;
-		base.pipelineV2.graph.enabled = false;
-		base.pipelineV2.traversal.enabled = false;
-		base.pipelineV2.reranker.enabled = false;
+		const base = testCfg();
 
-		const withReranker = loadMemoryConfig(dir);
-		withReranker.search.rehearsal_enabled = false;
-		withReranker.search.min_score = 0;
-		withReranker.pipelineV2.graph.enabled = false;
-		withReranker.pipelineV2.traversal.enabled = false;
-		withReranker.pipelineV2.reranker.enabled = true;
-		withReranker.pipelineV2.reranker.topN = 10;
+		const withReranker = testCfg({ reranker: true, rerankerTopN: 10 });
 
 		const params = {
 			query: "deploy rollback checklist release",
@@ -177,12 +197,7 @@ describe("hybridRecall", () => {
 			stmt.run("attr-noise-2", "[[memory/2026-03-29-summary.md]]", "[[memory/2026-03-29-summary.md]]", 0.7, now, now);
 		});
 
-		const cfg = loadMemoryConfig(dir);
-		cfg.search.rehearsal_enabled = false;
-		cfg.search.min_score = 0;
-		cfg.pipelineV2.graph.enabled = true;
-		cfg.pipelineV2.traversal.enabled = true;
-		cfg.pipelineV2.reranker.enabled = false;
+		const cfg = testCfg({ graph: true, traversal: true });
 
 		const result = await hybridRecall(
 			{
@@ -261,12 +276,7 @@ describe("hybridRecall", () => {
 			).run("emb-null-vec", "hash-null-vec", "mem-null-vec", "Signet traversal memory", now);
 		});
 
-		const cfg = loadMemoryConfig(dir);
-		cfg.search.rehearsal_enabled = false;
-		cfg.search.min_score = 0;
-		cfg.pipelineV2.graph.enabled = true;
-		cfg.pipelineV2.traversal.enabled = true;
-		cfg.pipelineV2.reranker.enabled = false;
+		const cfg = testCfg({ graph: true, traversal: true });
 
 		const result = await hybridRecall(
 			{
@@ -334,13 +344,7 @@ describe("hybridRecall", () => {
 			);
 		});
 
-		const cfg = loadMemoryConfig(dir);
-		cfg.search.rehearsal_enabled = false;
-		cfg.search.min_score = 0;
-		cfg.pipelineV2.graph.enabled = true;
-		cfg.pipelineV2.traversal.enabled = true;
-		cfg.pipelineV2.traversal.primary = true;
-		cfg.pipelineV2.reranker.enabled = false;
+		const cfg = testCfg({ graph: true, traversal: true, traversalPrimary: true });
 
 		const result = await hybridRecall(
 			{
@@ -395,13 +399,7 @@ describe("hybridRecall", () => {
 			);
 		});
 
-		const cfg = loadMemoryConfig(dir);
-		cfg.search.rehearsal_enabled = false;
-		cfg.search.min_score = 0;
-		cfg.pipelineV2.graph.enabled = true;
-		cfg.pipelineV2.traversal.enabled = true;
-		cfg.pipelineV2.traversal.primary = true;
-		cfg.pipelineV2.reranker.enabled = false;
+		const cfg = testCfg({ graph: true, traversal: true, traversalPrimary: true });
 
 		const result = await hybridRecall(
 			{
@@ -434,12 +432,7 @@ describe("hybridRecall", () => {
 			).run("mem-like-other", "percent memory", "other", now, now);
 		});
 
-		const cfg = loadMemoryConfig(dir);
-		cfg.search.rehearsal_enabled = false;
-		cfg.search.min_score = 0;
-		cfg.pipelineV2.graph.enabled = false;
-		cfg.pipelineV2.traversal.enabled = false;
-		cfg.pipelineV2.reranker.enabled = false;
+		const cfg = testCfg();
 
 		const result = await hybridRecall(
 			{

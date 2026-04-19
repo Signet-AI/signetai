@@ -344,7 +344,7 @@ export async function runDependencySynthesisTick(deps: DependencySynthesisDeps):
 				const reason =
 					result.dep_type === "related_to" && !normalized
 						? `llm synthesized a loose association from ${entity.name} to ${result.target}`
-						: normalized || null;
+						: normalized || undefined;
 				upsertDependency(deps.accessor, {
 					sourceEntityId: entity.id,
 					targetEntityId: target.id,

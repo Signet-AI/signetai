@@ -258,7 +258,7 @@ async function processDependencyBatch(
 	for (let i = 0; i < payloads.length; i++) {
 		if (payloads[i] !== null) {
 			validIndices.push(i);
-			validPayloads.push(payloads[i]);
+			validPayloads.push(payloads[i] as DependencyPayload);
 		}
 	}
 	if (validPayloads.length === 0) return;
@@ -358,7 +358,7 @@ async function processDependencyBatch(
 					const reason =
 						result.dep_type === "related_to" && !normalized
 							? `llm marked a loose association from fact: ${payload.fact_content.slice(0, 180)}`
-							: normalized || null;
+							: normalized || undefined;
 					upsertDependency(deps.accessor, {
 						sourceEntityId: payload.entity_id,
 						targetEntityId: targetEntity.id,

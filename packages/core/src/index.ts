@@ -20,6 +20,7 @@ export {
 	ATTRIBUTE_STATUSES,
 	DEPENDENCY_TYPES,
 	TASK_STATUSES,
+	TASK_HARNESSES,
 	DEFAULT_PROVIDER_RATE_LIMIT,
 } from "./types";
 export type {
@@ -70,6 +71,7 @@ export type {
 	AttributeStatus,
 	DependencyType,
 	TaskStatus,
+	TaskHarness,
 	EntityAspect,
 	EntityAttribute,
 	EntityDependency,

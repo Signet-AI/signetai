@@ -63,6 +63,28 @@ export type LogCategory =
 	| "dreaming" // Dreaming worker (background knowledge synthesis)
 	| "http" // HTTP server lifecycle
 	| "resources" // FD / event-loop resource monitoring
+	| "connectors" // Connector management
+	| "documents" // Document ingestion
+	| "projection" // UMAP projection computation
+	| "scheduler" // Task scheduler
+	| "os" // Signet OS app tray and system operations
+	| "changelog" // Changelog, roadmap, and README serving
+	| "auth" // Authentication and authorization
+	| "reconciler" // Skill filesystem reconciler
+	| "llm" // LLM provider calls
+	| "native-embedding" // Native ONNX embedding operations
+	| "dependency-synthesis" // Pipeline dependency synthesis stage
+	| "document-worker" // Pipeline document ingestion worker
+	| "dreaming-worker" // Background dreaming worker
+	| "model-registry" // LLM model registry management
+	| "structural-classify" // Pipeline structural classification
+	| "structural-dependency" // Pipeline structural dependency analysis
+	| "supersession" // Memory supersession detection
+	| "training-pairs" // Training pair generation
+	| "telemetry" // Telemetry collection
+	| "temporal-fallback" // Temporal fallback retrieval
+	| "checkpoints" // Session checkpoint management
+	| "transcripts" // Lossless transcript storage
 	| "shadow"; // Shadow logs for sensitive data (not written to disk, only emitted for real-time streaming)
 
 export interface LogEntry {
@@ -390,7 +412,7 @@ class Logger extends EventEmitter {
 	}
 
 	// Timed operation logging
-	time(category: LogCategory, operation: string): () => void {
+	time(category: LogCategory, operation: string): (data?: Record<string, unknown>) => void {
 		const start = Date.now();
 		return (data?: Record<string, unknown>) => {
 			const duration = Date.now() - start;

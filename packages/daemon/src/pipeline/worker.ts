@@ -1578,10 +1578,10 @@ export function startWorker(
 					durationMs: runtime.now() - jobStart,
 				});
 				if (nonRetryable) {
-					logger.error("pipeline", `Dead-lettering job ${job.id} — rate limit exhausted (permanent)`, {
-						error: msg,
-						memoryId: job.memory_id,
-					});
+				logger.error("pipeline", `Dead-lettering job ${job.id} — rate limit exhausted (permanent)`, undefined, {
+					error: msg,
+					memoryId: job.memory_id,
+				});
 				}
 				accessor.withWriteTx((db) => {
 					if (nonRetryable) {

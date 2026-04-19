@@ -8,6 +8,8 @@ import { readMemoriesFtsSql } from "../../core/src/fts-schema";
 import { runMigrations } from "../../core/src/migrations";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import { toFtsSchemaQueryDb } from "./db-accessor";
+import { DEFAULT_PIPELINE_V2 } from "./memory-config";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import {
 	checkFtsConsistency,
@@ -83,74 +85,33 @@ function installLegacyPorterMemoriesFts(db: Database): void {
 }
 
 const TEST_CFG: PipelineV2Config = {
-	enabled: true,
+	...DEFAULT_PIPELINE_V2,
 	shadowMode: false,
 	mutationsFrozen: false,
 	semanticContradictionEnabled: false,
 	extraction: {
+		...DEFAULT_PIPELINE_V2.extraction,
 		provider: "ollama",
 		model: "test",
 		timeout: 45000,
 		minConfidence: 0.7,
 	},
-	worker: {
-		pollMs: 2000,
-		maxRetries: 3,
-		leaseTimeoutMs: 300000,
-	},
-	graph: {
-		enabled: true,
-		boostWeight: 0.15,
-		boostTimeoutMs: 500,
-	},
 	reranker: {
+		...DEFAULT_PIPELINE_V2.reranker,
 		enabled: false,
-		model: "",
-		useExtractionModel: false,
-		topN: 20,
-		timeoutMs: 2000,
 	},
 	autonomous: {
+		...DEFAULT_PIPELINE_V2.autonomous,
 		enabled: true,
 		frozen: false,
 		allowUpdateDelete: true,
 		maintenanceIntervalMs: 1800000,
 		maintenanceMode: "observe",
 	},
-	repair: {
-		reembedCooldownMs: 300000,
-		reembedHourlyBudget: 10,
-		requeueCooldownMs: 60000,
-		requeueHourlyBudget: 50,
-		dedupCooldownMs: 600000,
-		dedupHourlyBudget: 3,
-		dedupSemanticThreshold: 0.92,
-		dedupBatchSize: 100,
-	},
-	documents: {
-		workerIntervalMs: 10000,
-		chunkSize: 2000,
-		chunkOverlap: 200,
-		maxContentBytes: 10 * 1024 * 1024,
-	},
-	guardrails: {
-		maxContentChars: 500,
-		chunkTargetChars: 300,
-		recallTruncateChars: 500,
-	},
 	telemetryEnabled: false,
-	telemetry: {
-		posthogHost: "",
-		posthogApiKey: "",
-		flushIntervalMs: 60000,
-		flushBatchSize: 50,
-		retentionDays: 90,
-	},
 	structural: {
+		...DEFAULT_PIPELINE_V2.structural,
 		enabled: false,
-		classifyBatchSize: 8,
-		dependencyBatchSize: 5,
-		pollIntervalMs: 10000,
 	},
 };
 
@@ -517,7 +478,7 @@ describe("checkFtsConsistency", () => {
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
 		expect(result.message).toMatch(/tokenizer drift/i);
-		expect(readMemoriesFtsSql(db)).toContain("porter unicode61");
+		expect(readMemoriesFtsSql(toFtsSchemaQueryDb(db))).toContain("porter unicode61");
 	});
 
 	it("repairs legacy porter tokenizer drift when repair=true", () => {
@@ -530,7 +491,7 @@ describe("checkFtsConsistency", () => {
 		expect(result.affected).toBe(1);
 		expect(result.message).toMatch(/unicode61 tokenizer/i);
 
-		const sql = readMemoriesFtsSql(db);
+		const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 		expect(sql).toContain("tokenize='unicode61'");
 		expect(sql).not.toContain("porter unicode61");
 	});

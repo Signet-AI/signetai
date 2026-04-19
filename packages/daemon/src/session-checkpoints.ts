@@ -560,7 +560,7 @@ export function flushPendingCheckpoints(): void {
 		try {
 			writeCheckpoint(dbRef, entry.params, entry.maxPerSession);
 		} catch (err) {
-			logger.error("checkpoints", "Failed to flush checkpoint", {
+			logger.error("checkpoints", "Failed to flush checkpoint", undefined, {
 				sessionKey: entry.params.sessionKey,
 				error: err instanceof Error ? err.message : String(err),
 			});

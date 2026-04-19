@@ -24,9 +24,10 @@ function relativePathWithin(root: string, target: string): string | null {
 
 export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: string) => boolean {
 	const defaultPredictorCheckpoint = normalizePath(join(agentsDir, "memory", "predictor", "model.bin"));
-	const configuredPredictorCheckpoint = resolveForComparison(
-		resolvePredictorCheckpointPath(loadMemoryConfig(agentsDir).pipelineV2.predictor),
-	);
+	const predictorCfg = loadMemoryConfig(agentsDir).pipelineV2.predictor;
+	const configuredPredictorCheckpoint = predictorCfg
+		? resolveForComparison(resolvePredictorCheckpointPath(predictorCfg))
+		: defaultPredictorCheckpoint;
 	const agentRoot = resolveForComparison(join(agentsDir, "agents"));
 	const memoriesDb = resolveForComparison(join(agentsDir, "memory", "memories.db"));
 	const memoriesDbWal = resolveForComparison(join(agentsDir, "memory", "memories.db-wal"));

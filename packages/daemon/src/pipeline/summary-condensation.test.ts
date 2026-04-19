@@ -97,7 +97,9 @@ describe("summary condensation", () => {
 		);
 
 		const provider = {
+			name: "test",
 			generate: async () => "Arc summary",
+			available: async () => true,
 		};
 
 		await checkAndCondense(accessor, provider, "proj-a", "agent-a", {
@@ -131,7 +133,7 @@ describe("summary condensation", () => {
 				 WHERE parent_id = ?
 				 ORDER BY ordinal ASC`,
 			)
-			.all(arc?.id) as Array<{ child_id: string }>;
+			.all(arc?.id ?? "") as Array<{ child_id: string }>;
 		expect(links.map((row) => row.child_id)).toEqual(["sum-a", "cmp-a"]);
 		expect(links.map((row) => row.child_id)).not.toContain("sum-b");
 	});

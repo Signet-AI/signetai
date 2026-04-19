@@ -45,23 +45,25 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.post("/api/knowledge/entities/:id/pin", async (c) => {
-		return requirePermission("modify", authConfig)(c, async () => {
-			const agentId = c.req.query("agent_id") ?? "default";
-			pinEntity(getDbAccessor(), c.req.param("id"), agentId);
-			const entity = getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
-			if (!entity?.entity.pinnedAt) {
-				return c.json({ error: "Entity not found" }, 404);
-			}
-			return c.json({ pinned: true, pinnedAt: entity.entity.pinnedAt });
-		});
+		const denied = await requirePermission("modify", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
+		const agentId = c.req.query("agent_id") ?? "default";
+		pinEntity(getDbAccessor(), c.req.param("id"), agentId);
+		const entity = getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
+		if (!entity?.entity.pinnedAt) {
+			return c.json({ error: "Entity not found" }, 404);
+		}
+		return c.json({ pinned: true, pinnedAt: entity.entity.pinnedAt });
 	});
 
 	app.delete("/api/knowledge/entities/:id/pin", async (c) => {
-		return requirePermission("modify", authConfig)(c, async () => {
-			const agentId = c.req.query("agent_id") ?? "default";
-			unpinEntity(getDbAccessor(), c.req.param("id"), agentId);
-			return c.json({ pinned: false });
-		});
+		const denied = await requirePermission("modify", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
+		const agentId = c.req.query("agent_id") ?? "default";
+		unpinEntity(getDbAccessor(), c.req.param("id"), agentId);
+		return c.json({ pinned: false });
 	});
 
 	app.get("/api/knowledge/entities/pinned", (c) => {

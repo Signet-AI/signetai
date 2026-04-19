@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { handleUserPromptSubmit } from "./hooks";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
 
+type PromptDeps = NonNullable<Parameters<typeof handleUserPromptSubmit>[1]>;
+
 const originalSignetPath = process.env.SIGNET_PATH;
 const agentsDir = mkdtempSync(join(tmpdir(), "signet-hooks-prompt-submit-"));
 const memoryDir = join(agentsDir, "memory");
@@ -14,9 +16,9 @@ mkdirSync(memoryDir, { recursive: true });
 writeFileSync(memoryDbPath, "");
 process.env.SIGNET_PATH = agentsDir;
 
-const infoMock = mock(() => {});
-const warnMock = mock(() => {});
-const errorMock = mock(() => {});
+const infoMock = mock((_cat: string, _msg: string, _data?: Record<string, unknown>) => {});
+const warnMock = mock((..._args: unknown[]) => {});
+const errorMock = mock((..._args: unknown[]) => {});
 const emptyHybridResults: Array<{ id: string; score: number; content: string; created_at: string; pinned?: boolean }> =
 	[];
 const hybridRecallMock = mock(async () => ({ results: emptyHybridResults }));
@@ -42,7 +44,7 @@ function ensureMemoryDbExists(): void {
 	}
 }
 
-function makeDeps() {
+function makeDeps(): PromptDeps {
 	return {
 		logger: {
 			debug() {},
@@ -98,7 +100,7 @@ function makeDeps() {
 		},
 		recordAgentFeedback() {},
 		trackFtsHits() {},
-	};
+	} as unknown as PromptDeps;
 }
 
 describe("handleUserPromptSubmit observability", () => {

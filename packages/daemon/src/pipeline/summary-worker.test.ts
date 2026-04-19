@@ -541,7 +541,7 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 				...cfg.pipelineV2,
 				extraction: {
 					...cfg.pipelineV2.extraction,
-					provider: "command",
+					provider: "command" as const,
 					command: {
 						bin: "node",
 						args: [scriptPath, "$TRANSCRIPT", "$SESSION_KEY", "$PROJECT", "$AGENT_ID", marker],
@@ -553,10 +553,15 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 			{
 				id: "job-1",
 				session_key: "session-123",
+				session_id: null,
 				harness: "codex",
 				project: "/tmp/project",
 				agent_id: "agent-abc",
 				transcript: "hello command provider",
+				trigger: "test",
+				captured_at: null,
+				started_at: null,
+				ended_at: null,
 				attempts: 1,
 				max_attempts: 3,
 				created_at: new Date().toISOString(),
@@ -582,7 +587,7 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 				...cfg.pipelineV2,
 				extraction: {
 					...cfg.pipelineV2.extraction,
-					provider: "command",
+					provider: "command" as const,
 					command: {
 						bin: "node",
 						args: [scriptPath],
@@ -595,10 +600,15 @@ writeFileSync(markerPath, transcriptPath, "utf8");
 				{
 					id: "job-2",
 					session_key: "session-xyz",
+					session_id: null,
 					harness: "codex",
 					project: "/tmp/project",
 					agent_id: "default",
 					transcript: "test",
+					trigger: "test",
+					captured_at: null,
+					started_at: null,
+					ended_at: null,
 					attempts: 1,
 					max_attempts: 3,
 					created_at: new Date().toISOString(),
@@ -635,7 +645,7 @@ setInterval(() => {}, 1000);
 				extraction: {
 					...cfg.pipelineV2.extraction,
 					timeout: 5000,
-					provider: "command",
+					provider: "command" as const,
 					command: {
 						bin: "node",
 						args: [scriptPath, marker],
@@ -649,10 +659,15 @@ setInterval(() => {}, 1000);
 				{
 					id: "job-timeout",
 					session_key: "session-timeout",
+					session_id: null,
 					harness: "codex",
 					project: "/tmp/project",
 					agent_id: "default",
 					transcript: "test",
+					trigger: "test",
+					captured_at: null,
+					started_at: null,
+					ended_at: null,
 					attempts: 1,
 					max_attempts: 3,
 					created_at: new Date().toISOString(),
@@ -719,11 +734,11 @@ describe("resolveSummaryProvider", () => {
 		// Intercept fetch to verify num_ctx is included in the request
 		const original = globalThis.fetch;
 		let captured: unknown = null;
-		const mockFetch: typeof fetch = async (_url, init) => {
+		const mockFetch = (async (_url: URL | RequestInfo, init?: RequestInit) => {
 			if (typeof init?.body !== "string") throw new Error(`Expected string body, got: ${typeof init?.body}`);
 			captured = JSON.parse(init.body);
 			return new Response(JSON.stringify({ response: "{}", done: true }), { status: 200 });
-		};
+		}) as unknown as typeof fetch;
 		globalThis.fetch = mockFetch;
 
 		try {

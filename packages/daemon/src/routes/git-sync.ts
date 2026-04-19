@@ -570,44 +570,36 @@ export async function getGitStatus(): Promise<{
 	unpushedCommits?: number;
 	unpulledCommits?: number;
 }> {
-	const status: Record<string, unknown> = {
-		isRepo: isGitRepo(AGENTS_DIR),
-		hasCredentials: false,
-		autoSync: gitConfig.autoSync,
-	};
-
-	if (!status.isRepo) return status as ReturnType<typeof getGitStatus>;
+	const isRepo = isGitRepo(AGENTS_DIR);
+	if (!isRepo) return { isRepo, hasCredentials: false, autoSync: gitConfig.autoSync };
 
 	const creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
-	status.hasCredentials = creds.method !== "none" && creds.method !== "no-remote";
-	status.authMethod = creds.method;
+	const hasCredentials = creds.method !== "none" && creds.method !== "no-remote";
 
+	let branch: string | undefined;
 	const branchResult = await runGitCommand(["rev-parse", "--abbrev-ref", "HEAD"], AGENTS_DIR);
 	if (branchResult.code === 0) {
-		status.branch = branchResult.stdout.trim();
+		branch = branchResult.stdout.trim();
 	}
 
-	status.remote = gitConfig.remote;
-
-	if (lastGitSync) {
-		status.lastSync = lastGitSync.toISOString();
-	}
-
+	let uncommittedChanges: number | undefined;
 	const statusResult = await runGitCommand(["status", "--porcelain"], AGENTS_DIR);
 	if (statusResult.code === 0) {
-		status.uncommittedChanges = statusResult.stdout
+		uncommittedChanges = statusResult.stdout
 			.trim()
 			.split("\n")
 			.filter((l) => l.trim()).length;
 	}
 
-	if (status.hasCredentials) {
+	let unpushedCommits: number | undefined;
+	let unpulledCommits: number | undefined;
+	if (hasCredentials) {
 		const unpushedResult = await runGitCommand(
 			["rev-list", "--count", `${gitConfig.remote}/${gitConfig.branch}..HEAD`],
 			AGENTS_DIR,
 		);
 		if (unpushedResult.code === 0) {
-			status.unpushedCommits = Number.parseInt(unpushedResult.stdout.trim(), 10) || 0;
+			unpushedCommits = Number.parseInt(unpushedResult.stdout.trim(), 10) || 0;
 		}
 
 		const unpulledResult = await runGitCommand(
@@ -615,11 +607,22 @@ export async function getGitStatus(): Promise<{
 			AGENTS_DIR,
 		);
 		if (unpulledResult.code === 0) {
-			status.unpulledCommits = Number.parseInt(unpulledResult.stdout.trim(), 10) || 0;
+			unpulledCommits = Number.parseInt(unpulledResult.stdout.trim(), 10) || 0;
 		}
 	}
 
-	return status as ReturnType<typeof getGitStatus>;
+	return {
+		isRepo,
+		branch,
+		remote: gitConfig.remote,
+		hasCredentials,
+		authMethod: creds.method,
+		autoSync: gitConfig.autoSync,
+		lastSync: lastGitSync ? lastGitSync.toISOString() : undefined,
+		uncommittedChanges,
+		unpushedCommits,
+		unpulledCommits,
+	};
 }
 
 let commitPending = false;

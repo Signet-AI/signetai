@@ -31,7 +31,7 @@ function createTestDb(): { db: Database; accessor: DbAccessor } {
 	db.exec("PRAGMA busy_timeout = 5000");
 
 	// Run all migrations to get the schema
-	runMigrations(db);
+	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 
 	const accessor: DbAccessor = {
 		withWriteTx<T>(fn: (db: WriteDb) => T): T {

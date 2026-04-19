@@ -28,7 +28,7 @@ describe("recordSkillInvocation", () => {
 		path = join("/tmp", `signet-skill-invocations-${crypto.randomUUID()}.db`);
 		initDbAccessor(path);
 		db = new Database(path);
-		runMigrations(db);
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 	});
 
 	afterEach(() => {

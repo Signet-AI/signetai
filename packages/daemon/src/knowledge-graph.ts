@@ -1096,7 +1096,7 @@ export function getEntityHealth(
 	return accessor.withReadDb((db) => {
 		const args: Array<string | number> = [agentId];
 		const sinceClause = typeof since === "string" && since.length > 0 ? " AND created_at >= ?" : "";
-		if (sinceClause) {
+		if (sinceClause && since !== undefined) {
 			args.push(since);
 		}
 

@@ -1,13 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import type { Hono } from "hono";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { txIngestEnvelope } from "./transactions";
 
-let app: {
-	request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-};
+let app: Hono;
 let agentsDir = "";
 const dbFiles = ["memories.db", "memories.db-shm", "memories.db-wal"];
 let originalSignetPath: string | undefined;

@@ -26,7 +26,7 @@ import type { ReadDb } from "./db-accessor";
 function makeDb(): Database {
 	const db = new Database(":memory:");
 	db.exec("PRAGMA journal_mode = WAL");
-	runMigrations(db);
+	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 	return db;
 }
 

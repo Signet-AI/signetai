@@ -2020,7 +2020,7 @@ describe("handleSynthesisRequest", () => {
 		);
 		db.close();
 
-		const result = handleSynthesisRequest({ trigger: "manual" });
+		const result = await handleSynthesisRequest({ trigger: "manual" });
 
 		expect(result.harness).toBe("daemon");
 		expect(result.model).toBe("projection");
@@ -2057,7 +2057,7 @@ describe("handleSynthesisRequest", () => {
 		);
 		db.close();
 
-		const result = handleSynthesisRequest({ trigger: "manual" });
+		const result = await handleSynthesisRequest({ trigger: "manual" });
 
 		expect(result.prompt).toContain("## Thread Heads (Tier 2)");
 		expect(result.prompt).toContain("project:rpg");
@@ -2110,7 +2110,7 @@ describe("handleSynthesisRequest", () => {
 		);
 		db.close();
 
-		const result = handleSynthesisRequest({ trigger: "manual" });
+		const result = await handleSynthesisRequest({ trigger: "manual" });
 
 		expect(result.prompt).toContain("project:rpg#session:sess-rpg#harness:test");
 		expect(result.indexBlock).toContain("node-green");
@@ -2121,7 +2121,7 @@ describe("handleSynthesisRequest", () => {
 	test.serial("renders deterministic projection with required sections", async () => {
 		createMemoryDb([{ content: "Test session summary content", importance: 0.9 }]);
 
-		const result = handleSynthesisRequest({ trigger: "scheduled" });
+		const result = await handleSynthesisRequest({ trigger: "scheduled" });
 
 		expect(result.prompt).toContain("# Working Memory Summary");
 		expect(result.prompt).toContain("## Global Head (Tier 1)");
@@ -2131,7 +2131,7 @@ describe("handleSynthesisRequest", () => {
 	});
 
 	test.serial("returns zero fileCount when no synthesis sources exist", async () => {
-		const result = handleSynthesisRequest({ trigger: "manual" });
+		const result = await handleSynthesisRequest({ trigger: "manual" });
 		expect(result.fileCount).toBe(0);
 	});
 
@@ -2146,7 +2146,7 @@ describe("handleSynthesisRequest", () => {
 		]);
 		upsertAgent("agent-shared", "shared");
 
-		const result = handleSynthesisRequest({ trigger: "manual" }, { agentId: "agent-shared" });
+		const result = await handleSynthesisRequest({ trigger: "manual" }, { agentId: "agent-shared" });
 
 		expect(result.prompt).toContain("Shared synthesis memory");
 	});
@@ -2172,7 +2172,7 @@ describe("handleSynthesisRequest", () => {
 			});
 
 			reindexMemoryArtifacts("default");
-			const before = handleSynthesisRequest({ trigger: "manual" });
+			const before = await handleSynthesisRequest({ trigger: "manual" });
 			expect(before.prompt).toContain("## Session Ledger (Last 30 Days)");
 			expect(before.prompt).toContain("session=sess-pr390");
 			expect(before.prompt).toContain("[[memory/");
@@ -2187,7 +2187,7 @@ describe("handleSynthesisRequest", () => {
 				removeCanonicalSession("default", token, "privacy test");
 			}
 			reindexMemoryArtifacts("default");
-			const after = handleSynthesisRequest({ trigger: "manual" });
+			const after = await handleSynthesisRequest({ trigger: "manual" });
 			expect(after.prompt).not.toContain("session=sess-pr390");
 		},
 	);
