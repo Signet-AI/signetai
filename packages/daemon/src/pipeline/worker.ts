@@ -835,6 +835,7 @@ function runStructuralPass1(
 	accessor: DbAccessor,
 	writtenFacts: readonly WrittenFact[],
 	extractionTriples: readonly import("@signet/core").ExtractedEntity[],
+	agentId: string,
 ): StructuralPass1Stats {
 	const stats: StructuralPass1Stats = {
 		attributesCreated: 0,
@@ -860,8 +861,8 @@ function runStructuralPass1(
 			// Resolve source entity ID from the entities table
 			const canonical = matchedTriple.source.trim().toLowerCase().replace(/\s+/g, " ");
 			const entityRow = db
-				.prepare("SELECT id, entity_type, agent_id FROM entities WHERE canonical_name = ? LIMIT 1")
-				.get(canonical) as { id: string; entity_type: string; agent_id: string } | undefined;
+				.prepare("SELECT id, entity_type, agent_id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
+				.get(canonical, agentId) as { id: string; entity_type: string; agent_id: string } | undefined;
 			if (!entityRow) continue;
 
 			// Skip if this memory already has a structural attribute row (classified or stub)
@@ -899,8 +900,8 @@ function runStructuralPass1(
 				const targetCanonical = matchedTriple.target.trim().toLowerCase().replace(/\s+/g, " ");
 				if (targetCanonical !== canonical) {
 					const targetRow = db
-						.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1")
-						.get(targetCanonical) as { id: string } | undefined;
+						.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
+						.get(targetCanonical, agentId) as { id: string } | undefined;
 					if (targetRow) {
 						const depPayload = JSON.stringify({
 							memory_id: fact.memoryId,
@@ -908,6 +909,7 @@ function runStructuralPass1(
 							entity_name: matchedTriple.source,
 							fact_content: fact.content,
 							target_entity_name: matchedTriple.target,
+							agent_id: entityRow.agent_id,
 						});
 						enqueueStructuralJob(db, fact.memoryId, "structural_dependency", depPayload);
 						stats.dependencyEnqueued++;
@@ -1474,7 +1476,7 @@ export function startWorker(
 			extraction.entities.length > 0
 		) {
 			try {
-				structuralStats = runStructuralPass1(accessor, structuralFacts, extraction.entities);
+				structuralStats = runStructuralPass1(accessor, structuralFacts, extraction.entities, agentId);
 			} catch (e) {
 				logger.warn("pipeline", "Structural pass 1 failed (non-fatal)", {
 					jobId: job.id,

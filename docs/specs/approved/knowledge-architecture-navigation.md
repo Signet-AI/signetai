@@ -31,6 +31,12 @@ Signet should never treat a room like a drawer. Supersession and precise
 inspection happen at the claim slot, optionally scoped by group. Aspects remain
 broad organization, not replacement identity.
 
+The default memory pipeline should help navigation mechanically without trying
+to author the graph. It may link new memories to known entities, but entities,
+aspects, groups, claim keys, attributes, and dependencies are semantic
+structure. They should come from structured remember payloads, explicit
+agent/user writes, or reviewed normalization passes.
+
 ## Schema contract
 
 `entity_attributes` gains nullable `group_key TEXT`.
@@ -130,3 +136,5 @@ Every command supports `--json` and `--agent <name>`. Attribute reads accept
    structure before choosing a narrower list/read operation.
 6. Developers have the same affordance in the CLI, so human debugging and agent
    browsing inspect the same daemon endpoints.
+7. Default background remember/linking never creates new graph claims from raw
+   text; structured remember remains the semantic write path.

@@ -598,7 +598,7 @@ export function registerMemoryRoutes(app: Hono): void {
 					// Inline entity linking for chunk
 					try {
 						getDbAccessor().withWriteTx((db) => {
-							linkMemoryToEntities(db, chunkId, chunk, "default");
+							linkMemoryToEntities(db, chunkId, chunk, agentId);
 						});
 					} catch {
 						// Non-fatal — pipeline extraction handles deeper linking

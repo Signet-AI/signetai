@@ -820,6 +820,14 @@ describe("loadPipelineConfig", () => {
 		expect(result.structural.synthesisMaxStallMs).toBe(90_000);
 	});
 
+	it("keeps LLM-authored structural graph workers disabled by default", () => {
+		const result = loadPipelineConfig({});
+
+		expect(result.structural.enabled).toBe(false);
+		expect(result.structural.synthesisEnabled).toBe(false);
+		expect(result.structural.supersessionSemanticFallback).toBe(false);
+	});
+
 	it("preserves zero as the dependency synthesis stall disable value", () => {
 		const result = loadPipelineConfig({
 			memory: {

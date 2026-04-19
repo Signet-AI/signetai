@@ -7,14 +7,14 @@
  * write locks.
  */
 
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
 import { ENTITY_TYPES } from "@signet/core";
-import { stripFences, tryParseJson } from "./extraction";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { getAspectsForEntity } from "../knowledge-graph";
-import { ASPECT_SUGGESTIONS } from "./aspect-suggestions";
 import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
+import { ASPECT_SUGGESTIONS } from "./aspect-suggestions";
+import { stripFences, tryParseJson } from "./extraction";
+import type { LlmProvider } from "./provider";
 
 const VALID_ENTITY_TYPES = new Set<string>(ENTITY_TYPES);
 
@@ -278,9 +278,10 @@ async function processClassifyBatch(deps: StructuralClassifyDeps, jobs: readonly
 
 		// Upgrade entity_type if currently "extracted" and the LLM inferred a real type
 		if (inferredEntityType && entityType === "extracted") {
-			db.prepare(`UPDATE entities SET entity_type = ? WHERE id = ? AND entity_type = 'extracted'`).run(
+			db.prepare(`UPDATE entities SET entity_type = ? WHERE id = ? AND agent_id = ? AND entity_type = 'extracted'`).run(
 				inferredEntityType,
 				entityId,
+				agentId,
 			);
 		}
 
@@ -295,19 +296,19 @@ async function processClassifyBatch(deps: StructuralClassifyDeps, jobs: readonly
 			db.prepare(
 				`INSERT INTO entity_aspects
 				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
-				 VALUES (?, ?, 'default', ?, ?, 0.5, ?, ?)
+				 VALUES (?, ?, ?, ?, ?, 0.5, ?, ?)
 				 ON CONFLICT(entity_id, canonical_name) DO UPDATE SET
 				   name = excluded.name,
 				   updated_at = excluded.updated_at`,
-			).run(aspectId, entityId, result.aspect, canonical, now, now);
+			).run(aspectId, entityId, agentId, result.aspect, canonical, now, now);
 
 			// Read back the actual aspect id (may differ on conflict)
 			const aspectRow = db
 				.prepare(
 					`SELECT id FROM entity_aspects
-					 WHERE entity_id = ? AND canonical_name = ?`,
+					 WHERE entity_id = ? AND canonical_name = ? AND agent_id = ?`,
 				)
-				.get(entityId, canonical) as { id: string };
+				.get(entityId, canonical, agentId) as { id: string };
 
 			// Update the entity_attributes row
 			db.prepare(

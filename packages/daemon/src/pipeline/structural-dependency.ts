@@ -7,13 +7,13 @@
  */
 
 import { DEPENDENCY_TYPES, type DependencyType } from "@signet/core";
-import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
-import { stripFences, tryParseJson } from "./extraction";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { upsertAspect, upsertDependency } from "../knowledge-graph";
-import { invalidateTraversalCache } from "./graph-traversal";
 import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
+import { stripFences, tryParseJson } from "./extraction";
+import { invalidateTraversalCache } from "./graph-traversal";
+import type { LlmProvider } from "./provider";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -44,6 +44,7 @@ interface DependencyPayload {
 	readonly entity_name: string;
 	readonly fact_content: string;
 	readonly target_entity_name: string;
+	readonly agent_id?: string;
 }
 
 interface DependencyResult {
@@ -264,13 +265,17 @@ async function processDependencyBatch(
 	if (validPayloads.length === 0) return;
 
 	const entityName = validPayloads[0].entity_name;
+	const agentId =
+		typeof validPayloads[0].agent_id === "string" && validPayloads[0].agent_id.trim().length > 0
+			? validPayloads[0].agent_id
+			: "default";
 
 	// Load entity type for prompt context
 	const entityRow = deps.accessor.withReadDb(
 		(db) =>
-			db.prepare("SELECT entity_type FROM entities WHERE id = ? LIMIT 1").get(validPayloads[0].entity_id) as
-				| { entity_type: string }
-				| undefined,
+			db
+				.prepare("SELECT entity_type FROM entities WHERE id = ? AND agent_id = ? LIMIT 1")
+				.get(validPayloads[0].entity_id, agentId) as { entity_type: string } | undefined,
 	);
 	const entityType = entityRow?.entity_type ?? "unknown";
 
@@ -279,9 +284,9 @@ async function processDependencyBatch(
 		const rows = db
 			.prepare(
 				`SELECT name FROM entity_aspects
-				 WHERE entity_id = ? AND agent_id = 'default'`,
+				 WHERE entity_id = ? AND agent_id = ?`,
 			)
-			.all(validPayloads[0].entity_id) as readonly { name: string }[];
+			.all(validPayloads[0].entity_id, agentId) as readonly { name: string }[];
 		return rows.map((r) => r.name);
 	});
 
@@ -337,9 +342,9 @@ async function processDependencyBatch(
 			const targetCanonical = result.dep_target.trim().toLowerCase().replace(/\s+/g, " ");
 			const targetEntity = deps.accessor.withReadDb(
 				(db) =>
-					db.prepare("SELECT id FROM entities WHERE canonical_name = ? LIMIT 1").get(targetCanonical) as
-						| { id: string }
-						| undefined,
+					db
+						.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
+						.get(targetCanonical, agentId) as { id: string } | undefined,
 			);
 
 			if (targetEntity) {
@@ -351,7 +356,7 @@ async function processDependencyBatch(
 				try {
 					const aspect = upsertAspect(deps.accessor, {
 						entityId: payload.entity_id,
-						agentId: "default",
+						agentId,
 						name: result.aspect,
 					});
 					const normalized = result.reason?.trim() ?? "";
@@ -362,7 +367,7 @@ async function processDependencyBatch(
 					upsertDependency(deps.accessor, {
 						sourceEntityId: payload.entity_id,
 						targetEntityId: targetEntity.id,
-						agentId: "default",
+						agentId,
 						aspectId: aspect.id,
 						dependencyType: result.dep_type as DependencyType,
 						strength: 0.5,
