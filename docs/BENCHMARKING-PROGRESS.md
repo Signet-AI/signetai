@@ -152,13 +152,14 @@ reason the Ibotta question could retrieve the right 16 April 2023 memory and
 still fail to answer "3 weeks ago." The checkpoint now stores question dates on
 new runs and backfills them when resuming older checkpoints.
 
-| Fixed canary run                                         | Setup                                                                     |     Accuracy |  Hit@K |   F1 |   MRR | NDCG | Mean search | Avg context |
-| -------------------------------------------------------- | ------------------------------------------------------------------------- | -----------: | -----: | ---: | ----: | ---: | ----------: | ----------: |
-| `lme-canary12-vibes-20260419T163939Z`                    | Fixed 12Q local ingest, pre-transcript/date fixes                         |  8/12, 66.7% |  91.7% | .607 |  .819 | .842 |     1790 ms |    1841 tok |
-| `lme-canary12-vibes-20260419T163939Z-transcript-lite`    | Bounded transcript fallback, before score cap                             | 10/12, 83.3% | 100.0% | .434 |  .579 | .670 |     1894 ms |    2450 tok |
-| `lme-canary12-vibes-20260419T163939Z-transcript-capped`  | Transcript fallback capped below real memory evidence                     | 11/12, 91.7% | 100.0% | .434 |  .903 | .947 |     1924 ms |    2792 tok |
-| `lme-canary12-vibes-20260419T163939Z-transcript-datefix` | Transcript cap plus checkpoint `question_date` preservation               |  12/12, 100% | 100.0% | .434 |  .903 | .947 |     1866 ms |    2792 tok |
-| `lme-canary12-fresh-9503efd5-20260419T175605Z`           | Fresh local E4B ingest, 26B Q5 answer/judge, SEC path rank + metric fixes |  12/12, 100% | 100.0% | .420 | 1.000 | .982 |     1329 ms |    2815 tok |
+| Fixed canary run                                         | Setup                                                                      |     Accuracy |  Hit@K |   F1 |   MRR | NDCG | Mean search | Avg context |
+| -------------------------------------------------------- | -------------------------------------------------------------------------- | -----------: | -----: | ---: | ----: | ---: | ----------: | ----------: |
+| `lme-canary12-vibes-20260419T163939Z`                    | Fixed 12Q local ingest, pre-transcript/date fixes                          |  8/12, 66.7% |  91.7% | .607 |  .819 | .842 |     1790 ms |    1841 tok |
+| `lme-canary12-vibes-20260419T163939Z-transcript-lite`    | Bounded transcript fallback, before score cap                              | 10/12, 83.3% | 100.0% | .434 |  .579 | .670 |     1894 ms |    2450 tok |
+| `lme-canary12-vibes-20260419T163939Z-transcript-capped`  | Transcript fallback capped below real memory evidence                      | 11/12, 91.7% | 100.0% | .434 |  .903 | .947 |     1924 ms |    2792 tok |
+| `lme-canary12-vibes-20260419T163939Z-transcript-datefix` | Transcript cap plus checkpoint `question_date` preservation                |  12/12, 100% | 100.0% | .434 |  .903 | .947 |     1866 ms |    2792 tok |
+| `lme-canary12-fresh-9503efd5-20260419T175605Z`           | Fresh local E4B ingest, 26B Q5 answer/judge, SEC path rank + metric fixes  |  12/12, 100% | 100.0% | .420 | 1.000 | .982 |     1329 ms |    2815 tok |
+| `lme-canary12-summary-hydration-20260420T043330Z`        | Same warmed canary after transcript fallback hydrates same-session summary |  12/12, 100% | 100.0% | .371 |  .847 | .866 |     1162 ms |    4298 tok |
 
 The F1 drop in the fixed canary is expected from adding supplemental recall
 evidence. It means more non-answer evidence is visible, not that the answer
@@ -182,6 +183,15 @@ session must not count as multiple ideal relevant documents. Without that cap,
 NDCG could exceed `1.0`, which is mathematically invalid. Retrieval scoring now
 counts each labeled relevant session once, so duplicate evidence is useful for
 answering but does not inflate NDCG.
+
+The summary-hydration run reused the warmed canary workspace after a post-rebase
+safety run regressed to 11/12. The miss was not a ranking miss: both relevant
+sessions were retrieved, but the transcript fallback excerpt for the Wednesday
+yoga session started too late and omitted the exact schedule fact. The daemon
+now hydrates transcript-only fallback hits with the same-session structured
+memory summary when one exists. That let the answerer combine
+Tuesday/Thursday Zumba, Wednesday yoga, and Saturday weightlifting into the
+correct four-day answer without changing the underlying ingested data.
 
 The first unattended autoresearch loop after that canary reused a fresh local
 12-question workspace, then copied the checkpoint from search forward to test

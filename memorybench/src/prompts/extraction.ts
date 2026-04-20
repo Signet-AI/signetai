@@ -102,6 +102,8 @@ Specificity rules:
 - Treat recent named-service usage as memorable ("using Spotify lately", "watching on Netflix", "tracking in TripIt")
 - If a speaker says they have just downloaded, started using, have been using, listening, watching, reading, tracking, or syncing on a named service/app/platform, write a separate dated fact naming that service explicitly. Do not fold it into a generic preference.
 - For collections and inventories, preserve counts and later additions as separate dated facts so current totals can be computed from old count plus new additions.
+- For recurring schedules and routines, preserve every stated activity with its day, time, cadence, and start/update language. Do not collapse "yoga on Wednesdays, Zumba on Tuesdays and Thursdays, and weightlifting on Saturdays" into "attends fitness classes."
+- When a speaker starts, attends, changes, or plans a recurring class, lesson, appointment, workout, meeting, or habit, write a separate fact for each recurring slot so later answers can count or combine them.
 
 Temporal rules:
 - The conversation took place on ${date}
@@ -198,6 +200,8 @@ Rules:
 - For each entity, extract relevant aspects with specific factual attributes.
 - Attach generic user facts to Benchmark User instead of dropping them.
 - Preserve temporal and update language in attributes, including "currently", "recently", "previously", dates, counts, and before/after relationships.
+- For recurring schedules and routines, attach each recurring slot as an attribute on Benchmark User. Use specific aspects such as activities, fitness_routine, work_schedule, learning_routine, or medical_routine when supported by the memory. Use groupKey values like class_schedule, appointment_schedule, meeting_schedule, practice_schedule, or habit_schedule. Use stable claimKey values like yoga_class_day, zumba_class_time, weightlifting_class_time, therapy_appointment_day, or team_meeting_time.
+- Preserve day-of-week, time, cadence, start/update language, and currentness in those recurring schedule attributes. Separate slots should have separate claimKey values unless a newer fact updates the exact same slot.
 - Every attribute SHOULD include groupKey: a stable snake_case subgroup inside the aspect, like restaurants inside food or listening_habits inside music. Use "general" only when no clearer subgroup exists.
 - Every attribute MUST include claimKey: a stable snake_case identity for the specific claim slot within the entity/aspect/group.
 - Use the same claimKey only when a newer attribute updates or replaces the same underlying claim. Example: "tried three Korean restaurants" and "has now tried four Korean restaurants" share "korean_restaurants_tried_count".

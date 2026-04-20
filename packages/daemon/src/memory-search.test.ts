@@ -681,6 +681,66 @@ assistant: John Mulaney's Kid Gorgeous is an excellent example. Hasan Minhaj: Ho
 		expect(result.results[0]?.tags).toContain("answer_0250ae1c");
 	});
 
+	it("hydrates transcript fallback with the same-session structured memory summary", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, project, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, 'default', ?, ?, ?, 'test')`,
+			).run(
+				"mem-routine-summary",
+				"Speaker A mentioned starting yoga on Wednesdays.",
+				"bench-scope:session-28",
+				"memorybench",
+				now,
+				now,
+			);
+
+			db.prepare(
+				`INSERT INTO session_transcripts (
+					session_key, content, harness, project, agent_id, created_at, updated_at
+				) VALUES (?, ?, 'memorybench-session', ?, ?, ?, ?)`,
+			).run(
+				"bench-scope:session-28",
+				`user: We talked through exercise classes and calendar planning.
+assistant: Considering your weightlifting background, power yoga might be useful.`,
+				"memorybench",
+				"default",
+				now,
+				now,
+			);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = false;
+		cfg.pipelineV2.traversal.enabled = false;
+		cfg.pipelineV2.reranker.enabled = false;
+
+		const result = await hybridRecall(
+			{
+				query: "exercise classes calendar",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				project: "memorybench",
+				scope: "bench-scope",
+				expand: true,
+			},
+			cfg,
+			async () => null,
+		);
+
+		const hit = result.results.find((row) => row.id === "transcript:bench-scope:session-28");
+		expect(hit?.source).toBe("transcript");
+		expect(hit?.content).toStartWith("[Structured memory summary]");
+		expect(hit?.content).toContain("starting yoga on Wednesdays");
+		expect(hit?.content).toContain("[Transcript excerpt]");
+		expect(hit?.content).toContain("exercise classes and calendar planning");
+	});
+
 	it("dampens stale structured memories and annotates current replacements", async () => {
 		const oldDate = "2023-05-01T12:00:00.000Z";
 		const newDate = "2023-06-01T12:00:00.000Z";

@@ -29,6 +29,27 @@ describe("structured extraction prompts", () => {
     expect(prompt).toContain("using Spotify lately")
   })
 
+  it("tells markdown extraction to preserve recurring schedule slots", () => {
+    const session: UnifiedSession = {
+      sessionId: "routine-schedule",
+      messages: [
+        {
+          role: "user",
+          speaker: "Speaker A",
+          content:
+            "I started yoga on Wednesdays. I also have Zumba on Tuesdays and Thursdays and weightlifting on Saturdays.",
+        },
+      ],
+      metadata: { formattedDate: "2023/05/27 (Sat)" },
+    }
+
+    const prompt = buildExtractionPrompt(session)
+
+    expect(prompt).toContain("recurring schedules and routines")
+    expect(prompt).toContain("preserve every stated activity with its day")
+    expect(prompt).toContain("write a separate fact for each recurring slot")
+  })
+
   it("defines structured entities as durable referents with scoped user aspects", () => {
     const prompt = buildStructuredPrompt("Speaker A has been using Spotify lately.")
 
@@ -38,6 +59,9 @@ describe("structured extraction prompts", () => {
     expect(prompt).toContain("Every attribute SHOULD include groupKey")
     expect(prompt).toContain("Every attribute MUST include claimKey")
     expect(prompt).toContain("korean_restaurants_tried_count")
+    expect(prompt).toContain("For recurring schedules and routines")
+    expect(prompt).toContain("class_schedule")
+    expect(prompt).toContain("yoga_class_day")
   })
 
   it("bounds structured extraction content for local context windows", () => {

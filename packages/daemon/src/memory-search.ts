@@ -680,6 +680,64 @@ function buildTranscriptRecallHits(
 	}
 }
 
+function loadStructuredSummariesBySourceId(params: RecallParams, sourceIds: readonly string[]): Map<string, string> {
+	const unique = [...new Set(sourceIds.filter((sourceId) => sourceId.length > 0))];
+	if (unique.length === 0) return new Map();
+
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const placeholders = unique.map(() => "?").join(", ");
+			const parts = [
+				"SELECT source_id, content",
+				"FROM memories",
+				`WHERE source_id IN (${placeholders})`,
+				"AND agent_id = ?",
+				"AND COALESCE(is_deleted, 0) = 0",
+				"AND TRIM(content) != ''",
+			];
+			const args: unknown[] = [...unique, params.agentId ?? "default"];
+			if (params.project) {
+				parts.push("AND project = ?");
+				args.push(params.project);
+			}
+			parts.push("ORDER BY importance DESC, updated_at DESC, created_at DESC");
+
+			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
+				source_id: string | null;
+				content: string;
+			}>;
+
+			const summaries = new Map<string, string>();
+			for (const row of rows) {
+				if (!row.source_id || summaries.has(row.source_id)) continue;
+				summaries.set(row.source_id, row.content.trim());
+			}
+			return summaries;
+		});
+	} catch (e) {
+		logger.warn("memory", "Transcript summary hydration failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+		return new Map();
+	}
+}
+
+function buildTranscriptFallbackContent(
+	excerpt: string,
+	summary: string | undefined,
+	recallTruncate: number,
+): { content: string; contentLength: number; truncated: boolean } {
+	const content = summary
+		? `[Structured memory summary]\n${summary}\n\n[Transcript excerpt]\n${excerpt}`
+		: `[Transcript excerpt]\n${excerpt}`;
+	const truncated = content.length > recallTruncate;
+	return {
+		content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+		contentLength: content.length,
+		truncated,
+	};
+}
+
 function cosineSimilarity(query: Float32Array, memory: Float32Array): number {
 	const len = Math.min(query.length, memory.length);
 	let dot = 0;
@@ -1435,17 +1493,27 @@ export async function hybridRecall(
 	// hydration. 3x compensates for the expected discard rate.
 	const preHydrate = scoped ? limit * 3 : limit;
 	const topIds = scored.slice(0, preHydrate).map((s) => s.id);
+	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 
 	if (topIds.length === 0) {
 		const transcriptHits = buildTranscriptRecallHits(params, expandedQuery, new Set());
 		if (transcriptHits.length > 0) {
+			const transcriptSummaries = loadStructuredSummariesBySourceId(
+				params,
+				transcriptHits.map((hit) => hit.sessionKey),
+			);
 			const results = transcriptHits.slice(0, limit).map((hit): RecallResult => {
 				const sessionId = sessionIdFromSourceId(hit.sessionKey);
+				const assembled = buildTranscriptFallbackContent(
+					hit.excerpt,
+					transcriptSummaries.get(hit.sessionKey),
+					recallTruncate,
+				);
 				return {
 					id: `transcript:${hit.sessionKey}`,
-					content: `[Transcript excerpt]\n${hit.excerpt}`,
-					content_length: hit.excerpt.length,
-					truncated: false,
+					content: assembled.content,
+					content_length: assembled.contentLength,
+					truncated: assembled.truncated,
 					score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
 					source: "transcript",
 					source_id: hit.sessionKey,
@@ -1542,7 +1610,6 @@ export async function hybridRecall(
 	}
 
 	const rowMap = new Map(rows.map((r) => [r.id, r]));
-	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 	// No pre-decrement: always fetch `limit` memories. The summary card is
 	// injected after assembly and the array is capped to `limit` at that point.
 	const results: RecallResult[] = scored
@@ -1836,6 +1903,10 @@ export async function hybridRecall(
 				.filter((sourceId): sourceId is string => typeof sourceId === "string" && sourceId.length > 0),
 		);
 		const transcriptHits = buildTranscriptRecallHits(params, expandedQuery, sourceIds);
+		const transcriptSummaries = loadStructuredSummariesBySourceId(
+			params,
+			transcriptHits.map((hit) => hit.sessionKey),
+		);
 		const realScores = results.filter((row) => row.source !== "transcript").map((row) => row.score);
 		const maxTranscriptScore = realScores.length > 0 ? Math.max(0.01, Math.min(...realScores) - 0.01) : 0.5;
 		for (const hit of transcriptHits) {
@@ -1843,11 +1914,16 @@ export async function hybridRecall(
 			const id = `transcript:${hit.sessionKey}`;
 			if (existingIds.has(id)) continue;
 			existingIds.add(id);
+			const assembled = buildTranscriptFallbackContent(
+				hit.excerpt,
+				transcriptSummaries.get(hit.sessionKey),
+				recallTruncate,
+			);
 			results.push({
 				id,
-				content: `[Transcript excerpt]\n${hit.excerpt}`,
-				content_length: hit.excerpt.length,
-				truncated: false,
+				content: assembled.content,
+				content_length: assembled.contentLength,
+				truncated: assembled.truncated,
 				score: Math.round(Math.max(0.01, Math.min(maxTranscriptScore, hit.rank)) * 100) / 100,
 				source: "transcript",
 				source_id: hit.sessionKey,
