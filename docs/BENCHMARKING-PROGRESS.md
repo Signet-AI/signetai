@@ -193,6 +193,57 @@ memory summary when one exists. That let the answerer combine
 Tuesday/Thursday Zumba, Wednesday yoga, and Saturday weightlifting into the
 correct four-day answer without changing the underlying ingested data.
 
+## Merge story and surface parity plan
+
+The merge story for this PR is intentionally narrow: land the MemoryBench
+integration, isolated benchmark daemon workflow, structured remember path,
+currentness/supersession fixes, SEC recall shaping, transcript fallback, and
+benchmark documentation as one coherent benchmark foundation. Do not turn this
+branch into the PR where every harness learns every new memory behavior. The
+daemon is the source of truth for recall semantics; harnesses should be plumbing
+and presentation, not separate recall engines.
+
+The follow-up should be a smaller recall-surface parity PR. Its contract should
+be simple: `/api/memory/recall` is the canonical recall engine,
+`/api/hooks/user-prompt-submit` uses the same engine with a tighter auto-inject
+budget, `/api/memory/remember` is the canonical structured remember entrypoint,
+and knowledge graph navigation is exposed through explicit daemon/CLI/MCP tools
+instead of hidden benchmark-only behavior. The parity PR should include a small
+contract test proving CLI, MCP, SDK, hook recall, and harness recall all consume
+the daemon recall path rather than reimplementing structured evidence, SEC
+ranking, currentness annotations, or transcript fallback locally.
+
+For the CLI and MCP surfaces, the graph should be navigable in the same mental
+model agents and humans use when browsing a filesystem or rooms in a house:
+entity, aspect, group, claim, attribute. `knowledge_expand` can stay as the
+"whole card" view, but agents also need narrow list/get tools so they can scan
+large graphs without requesting a giant blob. The target shape is:
+
+```text
+entity.list()
+entity.get("Nicholai")
+entity.aspects("Nicholai")
+entity.groups("Nicholai", "food")
+entity.claims("Nicholai", "food", "restaurants")
+entity.attributes("Nicholai", "food", "restaurants", "favorite_restaurant")
+```
+
+For harnesses, the audit is mostly about preserving daemon output faithfully.
+OpenClaw, OpenCode, Pi/Oh-My-Pi, Hermes, the browser extension, and SDK clients
+should preserve enough metadata to debug recall: result source, source session,
+supplementary status, structured/SEC/transcript origin, currentness annotations,
+and expanded sources when requested. They should not decide their own ranking or
+graph traversal rules. Explicit recall and benchmarks can opt into
+`expand: true`; automatic prompt injection should stay tighter and use transcript
+evidence as bounded rescue when structured recall is empty or anchor terms are
+missing. That keeps prompts useful without turning every turn into transcript
+soup.
+
+After this PR merges, run one fresh clean benchmark from an isolated workspace
+with the final production model choices before publishing any score. Warmed
+workspace runs are for development ratcheting; fresh isolated runs are the only
+credible public numbers.
+
 The first unattended autoresearch loop after that canary reused a fresh local
 12-question workspace, then copied the checkpoint from search forward to test
 recall-side changes without re-ingesting. The first report looked better than
