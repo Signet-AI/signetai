@@ -147,6 +147,7 @@ export function searchTranscriptFallback(params: {
 	readonly sessionKey?: string;
 	readonly project?: string;
 	readonly limit: number;
+	readonly allowScanFallback?: boolean;
 }): TranscriptHit[] {
 	const limit = Math.max(1, Math.min(8, Math.trunc(params.limit)));
 	if (!tableExists("session_transcripts")) return [];
@@ -193,12 +194,20 @@ export function searchTranscriptFallback(params: {
 						.slice(0, limit);
 					if (hits.length > 0) return hits;
 				} catch (error) {
-					logger.warn("transcripts", "Transcript FTS query failed, falling back to LIKE", {
-						error: error instanceof Error ? error.message : String(error),
-					});
+					logger.warn(
+						"transcripts",
+						params.allowScanFallback === false
+							? "Transcript FTS query failed, skipping scan fallback"
+							: "Transcript FTS query failed, falling back to LIKE",
+						{
+							error: error instanceof Error ? error.message : String(error),
+						},
+					);
 				}
 			}
 		}
+
+		if (params.allowScanFallback === false) return [];
 
 		const words = params.query
 			.toLowerCase()

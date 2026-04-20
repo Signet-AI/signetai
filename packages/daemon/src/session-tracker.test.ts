@@ -3,7 +3,9 @@ import {
 	bypassSession,
 	claimSession,
 	getBypassedSessionKeys,
+	getEndedSession,
 	isSessionBypassed,
+	markSessionEnded,
 	renewSession,
 	resetSessions,
 	runStaleCleanup,
@@ -140,5 +142,27 @@ describe("renewSession bypass TTL refresh", () => {
 
 		expect(isSessionBypassed("renew-no-bp")).toBe(false);
 		expect(getBypassedSessionKeys().has("renew-no-bp")).toBe(false);
+	});
+});
+
+describe("ended session tombstones", () => {
+	it("records a short-lived marker after a session is ended", () => {
+		claimSession("ended-sess", "plugin");
+
+		markSessionEnded("ended-sess", "plugin");
+
+		const ended = getEndedSession("ended-sess");
+		expect(ended).toBeDefined();
+		expect(ended?.key).toBe("ended-sess");
+		expect(ended?.runtimePath).toBe("plugin");
+	});
+
+	it("clears an ended marker when the session is claimed again", () => {
+		markSessionEnded("reused-sess", "legacy");
+		expect(getEndedSession("reused-sess")).toBeDefined();
+
+		claimSession("reused-sess", "plugin");
+
+		expect(getEndedSession("reused-sess")).toBeUndefined();
 	});
 });

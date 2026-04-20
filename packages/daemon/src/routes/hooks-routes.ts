@@ -48,9 +48,11 @@ import {
 	type RuntimePath,
 	claimSession,
 	getActiveSessions,
+	getEndedSession,
 	getSessionPath,
 	hasSession,
 	isSessionBypassed,
+	markSessionEnded,
 	normalizeSessionKey,
 	releaseSession,
 	renewSession,
@@ -106,6 +108,68 @@ function checkSessionClaim(
 		return c.json({ error: `session claimed by ${owner} path` }, 409) as unknown as Response;
 	}
 	return null;
+}
+
+function claimAutomaticSessionOrSkip(
+	sessionKey: string | undefined,
+	runtimePath: RuntimePath | undefined,
+	agentId: string,
+	hook: string,
+	noop: Record<string, unknown>,
+): Record<string, unknown> | null {
+	if (!sessionKey || !runtimePath) return null;
+
+	const claim = claimSession(sessionKey, runtimePath, agentId);
+	if (claim.ok) return null;
+
+	logger.info("hooks", "Duplicate runtime hook skipped", {
+		hook,
+		sessionKey,
+		runtimePath,
+		claimedBy: claim.claimedBy,
+	});
+	return {
+		...noop,
+		skipped: true,
+		duplicateRuntimePath: true,
+		claimedBy: claim.claimedBy,
+	};
+}
+
+function skipConflictingSessionEnd(
+	sessionKey: string | undefined,
+	runtimePath: RuntimePath | undefined,
+): Record<string, unknown> | null {
+	if (!sessionKey) return null;
+	const ended = getEndedSession(sessionKey);
+	if (ended) {
+		logger.info("hooks", "Duplicate session-end skipped", {
+			sessionKey,
+			runtimePath,
+			endedBy: ended.runtimePath,
+		});
+		return {
+			memoriesSaved: 0,
+			skipped: true,
+			duplicateSessionEnd: true,
+			endedBy: ended.runtimePath ?? "unknown",
+		};
+	}
+	if (!runtimePath) return null;
+	const owner = getSessionPath(sessionKey);
+	if (!owner || owner === runtimePath) return null;
+
+	logger.info("hooks", "Duplicate runtime session-end skipped", {
+		sessionKey,
+		runtimePath,
+		claimedBy: owner,
+	});
+	return {
+		memoriesSaved: 0,
+		skipped: true,
+		duplicateRuntimePath: true,
+		claimedBy: owner,
+	};
 }
 
 // Guard against recursive hook calls from spawned agent contexts
@@ -234,9 +298,15 @@ function registerUserPromptSubmit(app: Hono): void {
 			const sessionKey = parseOptionalString(body.sessionKey);
 			const known = sessionKey ? hasSession(sessionKey) : false;
 
-			const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
-			if (conflict) return conflict;
 			const agentId = parseOptionalString(body.agentId) ?? "default";
+			const duplicate = claimAutomaticSessionOrSkip(sessionKey, runtimePath, agentId, "user-prompt-submit", {
+				inject: "",
+				memoryCount: 0,
+				sessionKnown: known,
+			});
+			if (duplicate) {
+				return c.json(duplicate);
+			}
 			if (sessionKey) {
 				const touched = touchAgentPresence(sessionKey);
 				if (!touched) {
@@ -293,21 +363,38 @@ function registerSessionEnd(app: Hono): void {
 			stampHarness(body.harness);
 
 			const sessionKey = body.sessionKey || body.sessionId;
+			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath);
+			if (conflict) return c.json(conflict);
+			const duplicate = claimAutomaticSessionOrSkip(
+				sessionKey,
+				runtimePath,
+				parseOptionalString(body.agentId) ?? "default",
+				"session-end",
+				{
+					memoriesSaved: 0,
+				},
+			);
+			if (duplicate) return c.json(duplicate);
 
 			if (sessionKey && isSessionBypassed(sessionKey)) {
-				releaseSession(sessionKey);
+				markSessionEnded(sessionKey, runtimePath);
 				removeAgentPresence(sessionKey);
 				return c.json({ memoriesSaved: 0, bypassed: true });
 			}
 
 			try {
 				const result = handleSessionEnd(body);
+				if (sessionKey) {
+					markSessionEnded(sessionKey, runtimePath);
+					removeAgentPresence(sessionKey);
+				}
 				return c.json(result);
-			} finally {
+			} catch (e) {
 				if (sessionKey) {
 					releaseSession(sessionKey);
 					removeAgentPresence(sessionKey);
 				}
+				throw e;
 			}
 		} catch (e) {
 			logger.error("hooks", "Session end hook failed", e as Error);
@@ -332,8 +419,16 @@ function registerCheckpointExtract(app: Hono): void {
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
 
-			const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
-			if (conflict) return conflict;
+			const duplicate = claimAutomaticSessionOrSkip(
+				body.sessionKey,
+				runtimePath,
+				parseOptionalString(body.agentId) ?? "default",
+				"session-checkpoint-extract",
+				{
+					skipped: true,
+				},
+			);
+			if (duplicate) return c.json(duplicate);
 
 			stampHarness(body.harness);
 
@@ -460,8 +555,18 @@ function registerPreCompaction(app: Hono): void {
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
 
-			const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
-			if (conflict) return conflict;
+			const duplicate = claimAutomaticSessionOrSkip(
+				body.sessionKey,
+				runtimePath,
+				resolveAgentId({ sessionKey: body.sessionKey }),
+				"pre-compaction",
+				{
+					guidelines: "",
+					instructions: "",
+					summaryPrompt: "",
+				},
+			);
+			if (duplicate) return c.json(duplicate);
 
 			if (checkBypass(body)) {
 				return c.json({ instructions: "", bypassed: true });
@@ -494,8 +599,16 @@ function registerCompactionComplete(app: Hono): void {
 			}
 
 			const runtimePath = resolveRuntimePath(c, body);
-			const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
-			if (conflict) return conflict;
+			const duplicate = claimAutomaticSessionOrSkip(
+				body.sessionKey,
+				runtimePath,
+				parseOptionalString(body.agentId) ?? "default",
+				"compaction-complete",
+				{
+					success: true,
+				},
+			);
+			if (duplicate) return c.json(duplicate);
 
 			if (checkBypass(body)) {
 				return c.json({ success: true, bypassed: true });
