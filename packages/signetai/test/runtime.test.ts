@@ -26,6 +26,26 @@ describe("signet bin runtime selection", () => {
 		).toBe(true);
 	});
 
+	it("matches Bun global paths case-insensitively on default case-insensitive platforms", () => {
+		expect(
+			isBunGlobalPackageDir("/Users/Jason/.bun/install/global/node_modules/signetai", {}, "/Users/jason", "darwin"),
+		).toBe(true);
+		expect(
+			isBunGlobalPackageDir(
+				"C:\\USERS\\JASON\\.bun\\install\\global\\node_modules\\signetai",
+				{},
+				"C:\\Users\\jason",
+				"win32",
+			),
+		).toBe(true);
+	});
+
+	it("keeps path matching case-sensitive on Linux", () => {
+		expect(
+			isBunGlobalPackageDir("/home/Jason/.bun/install/global/node_modules/signetai", {}, "/home/jason", "linux"),
+		).toBe(false);
+	});
+
 	it("does not treat npm global installs as Bun installs", () => {
 		expect(isBunGlobalPackageDir("/usr/local/lib/node_modules/signetai", {}, "/Users/jason")).toBe(false);
 	});

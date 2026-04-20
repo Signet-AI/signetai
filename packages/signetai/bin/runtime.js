@@ -1,15 +1,24 @@
 import { homedir } from "node:os";
-import { join, normalize, sep } from "node:path";
+import { join, normalize } from "node:path";
 
 function stripTrailingSeparator(path) {
-	const normalized = normalize(path);
-	return normalized.length > 1 && normalized.endsWith(sep) ? normalized.slice(0, -1) : normalized;
+	const normalized = normalize(path.replaceAll("\\", "/")).replaceAll("\\", "/");
+	return normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 }
 
-function containsPath(root, path) {
-	const normalizedRoot = stripTrailingSeparator(root);
-	const normalizedPath = stripTrailingSeparator(path);
-	return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}${sep}`);
+function caseInsensitivePathPlatform(platform) {
+	return platform === "darwin" || platform === "win32";
+}
+
+function comparablePath(path, platform) {
+	const normalized = stripTrailingSeparator(path);
+	return caseInsensitivePathPlatform(platform) ? normalized.toLowerCase() : normalized;
+}
+
+function containsPath(root, path, platform) {
+	const normalizedRoot = comparablePath(root, platform);
+	const normalizedPath = comparablePath(path, platform);
+	return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
 }
 
 export function bunGlobalPackageRoots(env = process.env, homeDir = homedir()) {
@@ -25,8 +34,8 @@ export function bunGlobalPackageRoots(env = process.env, homeDir = homedir()) {
 	return Array.from(new Set(roots.map(stripTrailingSeparator)));
 }
 
-export function isBunGlobalPackageDir(packageDir, env = process.env, homeDir = homedir()) {
-	return bunGlobalPackageRoots(env, homeDir).some((root) => containsPath(root, packageDir));
+export function isBunGlobalPackageDir(packageDir, env = process.env, homeDir = homedir(), platform = process.platform) {
+	return bunGlobalPackageRoots(env, homeDir).some((root) => containsPath(root, packageDir, platform));
 }
 
 export function shouldRunCliWithBun({
@@ -35,6 +44,7 @@ export function shouldRunCliWithBun({
 	bunAvailable,
 	env = process.env,
 	homeDir = homedir(),
+	platform = process.platform,
 }) {
-	return !isBunRuntime && bunAvailable && isBunGlobalPackageDir(packageDir, env, homeDir);
+	return !isBunRuntime && bunAvailable && isBunGlobalPackageDir(packageDir, env, homeDir, platform);
 }
