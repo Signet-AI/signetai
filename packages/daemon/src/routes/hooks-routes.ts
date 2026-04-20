@@ -140,8 +140,9 @@ function skipConflictingSessionEnd(
 	sessionKey: string | undefined,
 	runtimePath: RuntimePath | undefined,
 ): Record<string, unknown> | null {
-	if (!sessionKey) return null;
+	if (!sessionKey || !runtimePath) return null;
 	const ended = getEndedSession(sessionKey);
+	if (ended && !ended.runtimePath) return null;
 	if (ended) {
 		logger.info("hooks", "Duplicate session-end skipped", {
 			sessionKey,
@@ -155,7 +156,6 @@ function skipConflictingSessionEnd(
 			endedBy: ended.runtimePath ?? "unknown",
 		};
 	}
-	if (!runtimePath) return null;
 	const owner = getSessionPath(sessionKey);
 	if (!owner || owner === runtimePath) return null;
 

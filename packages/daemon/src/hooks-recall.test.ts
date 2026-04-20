@@ -296,6 +296,60 @@ describe("/api/hooks/recall", () => {
 		}
 	});
 
+	it("keeps unmarked session-end calls compatible after a marked runtime ended", async () => {
+		const sessionKey = "unmarked-session-end-after-owner";
+		try {
+			const first = await app.request("/api/hooks/user-prompt-submit", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-signet-runtime-path": "plugin",
+				},
+				body: JSON.stringify({
+					harness: "opencode",
+					userMessage: "deploy checklist",
+					sessionKey,
+				}),
+			});
+			expect(first.status).toBe(200);
+
+			const ownerEnd = await app.request("/api/hooks/session-end", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-signet-runtime-path": "plugin",
+				},
+				body: JSON.stringify({
+					harness: "opencode",
+					sessionKey,
+					transcript: "user: deploy checklist",
+				}),
+			});
+			expect(ownerEnd.status).toBe(200);
+			expect(getEndedSession?.(sessionKey)?.runtimePath).toBe("plugin");
+
+			const unmarkedEnd = await app.request("/api/hooks/session-end", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					harness: "unknown-client",
+					sessionKey,
+					transcript: "user: deploy checklist",
+				}),
+			});
+
+			expect(unmarkedEnd.status).toBe(200);
+			expect(await unmarkedEnd.json()).toMatchObject({
+				memoriesSaved: 0,
+			});
+			expect(getEndedSession?.(sessionKey)?.runtimePath).toBeUndefined();
+		} finally {
+			releaseSession?.(sessionKey);
+		}
+	});
+
 	it("skips duplicate session-end calls after the owning runtime already ended", async () => {
 		const sessionKey = "duplicate-session-end-after-owner";
 		try {
