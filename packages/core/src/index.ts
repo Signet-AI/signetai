@@ -114,8 +114,27 @@ export {
 	type VectorSearchOptions,
 	type HybridSearchOptions,
 } from "./search";
-export { applyRecallScoreThreshold, partitionRecallRows } from "./recall";
-export type { RecallPartitionableRow } from "./recall";
+export {
+	applyRecallScoreThreshold,
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	emptyHookRecallResponse,
+	formatRecallText,
+	normalizeStructuredMemoryPayload,
+	parseRecallMeta,
+	parseRecallPayload,
+	partitionRecallRows,
+	withHookRecallCompat,
+} from "./recall";
+export type {
+	RecallMeta,
+	RecallPartitionableRow,
+	RecallPayload,
+	RecallRequestOptions,
+	RecallRow,
+	RecallScoreFilterRow,
+	RememberRequestOptions,
+} from "./recall";
 export {
 	createMemoriesFts,
 	memoriesFtsNeedsTokenizerRepair,

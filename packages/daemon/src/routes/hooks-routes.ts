@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
+import { emptyHookRecallResponse, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
@@ -55,7 +56,15 @@ import {
 	renewSession,
 } from "../session-tracker.js";
 import { upsertThreadHead } from "../thread-heads";
-import { AGENTS_DIR, INTERNAL_SELF_HOST, MEMORY_DB, PORT, authConfig, authCrossAgentMessageLimiter, harnessLastSeen } from "./state";
+import {
+	AGENTS_DIR,
+	INTERNAL_SELF_HOST,
+	MEMORY_DB,
+	PORT,
+	authConfig,
+	authCrossAgentMessageLimiter,
+	harnessLastSeen,
+} from "./state";
 import {
 	parseOptionalBoolean,
 	parseOptionalInt,
@@ -111,51 +120,6 @@ function checkBypass(body?: { sessionKey?: string; sessionId?: string }): boolea
 	return isSessionBypassed(key);
 }
 
-function emptyHookRecallResponse(
-	query: string,
-	extras?: { readonly bypassed?: boolean; readonly internal?: boolean },
-): {
-	results: [];
-	memories: [];
-	count: 0;
-	query: string;
-	method: "hybrid";
-	meta: {
-		totalReturned: 0;
-		hasSupplementary: false;
-		noHits: true;
-	};
-	bypassed?: boolean;
-	internal?: boolean;
-} {
-	return {
-		results: [],
-		memories: [],
-		count: 0,
-		query,
-		method: "hybrid",
-		meta: {
-			totalReturned: 0,
-			hasSupplementary: false,
-			noHits: true,
-		},
-		...(extras?.bypassed ? { bypassed: true } : {}),
-		...(extras?.internal ? { internal: true } : {}),
-	};
-}
-
-function withHookRecallCompat<
-	T extends {
-		readonly results: ReadonlyArray<unknown>;
-	},
->(result: T): T & { memories: T["results"]; count: number } {
-	return {
-		...result,
-		memories: result.results,
-		count: result.results.length,
-	};
-}
-
 export function listLiveSessions(agentId: string): Array<{
 	key: string;
 	runtimePath: string;
@@ -163,7 +127,10 @@ export function listLiveSessions(agentId: string): Array<{
 	expiresAt: string | null;
 	bypassed: boolean;
 }> {
-	const byKey = new Map<string, { key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }>(
+	const byKey = new Map<
+		string,
+		{ key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }
+	>(
 		getActiveSessions()
 			.filter((s) => s.agentId === agentId)
 			.map((session) => [session.key, session] as const),

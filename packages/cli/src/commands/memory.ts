@@ -1,4 +1,10 @@
-import { applyRecallScoreThreshold, partitionRecallRows } from "@signet/core";
+import {
+	applyRecallScoreThreshold,
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	formatRecallText,
+	parseRecallPayload,
+} from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
@@ -18,87 +24,6 @@ interface MemoryDeps {
 	}>;
 }
 
-interface RecallMeta {
-	readonly totalReturned: number;
-	readonly hasSupplementary: boolean;
-	readonly noHits: boolean;
-}
-
-interface RecallRow {
-	readonly content: string;
-	readonly created_at?: string;
-	readonly score?: number;
-	readonly source?: string;
-	readonly who?: string;
-	readonly type?: string;
-	readonly tags?: string | null;
-	readonly pinned?: boolean;
-	readonly project?: string | null;
-	readonly supplementary?: boolean;
-}
-
-interface ParsedRecallResult {
-	readonly rows: RecallRow[];
-	readonly meta: RecallMeta;
-	readonly query?: string;
-	readonly method?: string;
-}
-
-function parseRecallMeta(raw: unknown, fallbackCount: number): RecallMeta {
-	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-		return {
-			totalReturned: fallbackCount,
-			hasSupplementary: false,
-			noHits: fallbackCount === 0,
-		};
-	}
-	const totalReturned =
-		"totalReturned" in raw && typeof raw.totalReturned === "number" ? raw.totalReturned : fallbackCount;
-	const hasSupplementary = "hasSupplementary" in raw && raw.hasSupplementary === true;
-	const noHits = "noHits" in raw ? raw.noHits === true : totalReturned === 0;
-	return { totalReturned, hasSupplementary, noHits };
-}
-
-function parseRecallResult(raw: unknown): ParsedRecallResult {
-	const result = typeof raw === "object" && raw !== null ? raw : {};
-	const rows = "results" in result && Array.isArray(result.results) ? (result.results as RecallRow[]) : [];
-	const meta = parseRecallMeta("meta" in result ? result.meta : undefined, rows.length);
-	const query = "query" in result && typeof result.query === "string" ? result.query : undefined;
-	const method = "method" in result && typeof result.method === "string" ? result.method : undefined;
-	return { rows, meta, query, method };
-}
-
-function formatRecallRows(rows: ReadonlyArray<RecallRow>): string[] {
-	const { primary, supporting } = partitionRecallRows(rows);
-	const sections: Array<{ heading?: string; rows: ReadonlyArray<RecallRow> }> = [];
-	if (primary.length > 0) sections.push({ rows: primary });
-	if (supporting.length > 0) sections.push({ heading: "  Supporting context:\n", rows: supporting });
-
-	const lines: string[] = [];
-	for (const section of sections) {
-		if (section.heading) lines.push(chalk.bold(section.heading));
-		for (const row of section.rows) {
-			const content = typeof row.content === "string" ? row.content : "";
-			const createdAt = typeof row.created_at === "string" ? row.created_at : "";
-			const scoreValue = typeof row.score === "number" ? row.score : 0;
-			const source = typeof row.source === "string" ? row.source : "unknown";
-			const who = typeof row.who === "string" && row.who.length > 0 ? row.who : "unknown";
-			const type = typeof row.type === "string" ? row.type : "memory";
-			const tags = typeof row.tags === "string" ? row.tags : "";
-			const pinned = row.pinned === true;
-			const date = createdAt.slice(0, 10) || "unknown";
-			const score = chalk.dim(`[${(scoreValue * 100).toFixed(0)}%]`);
-			const critical = pinned ? chalk.red("★") : "";
-			const tagLabel = tags ? chalk.dim(` [${tags}]`) : "";
-			const displayContent = content.length > 120 ? `${content.slice(0, 117)}...` : content;
-
-			lines.push(`  ${chalk.dim(date)} ${score} ${critical}${displayContent}${tagLabel}`);
-			lines.push(chalk.dim(`      ${type} · ${source} · by ${who}`));
-		}
-	}
-	return lines;
-}
-
 export function registerMemoryCommands(program: Command, deps: MemoryDeps): void {
 	program
 		.command("remember <content>")
@@ -113,15 +38,18 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
 			const spinner = ora("Saving memory...").start();
-			const { ok, data } = await deps.secretApiCall("POST", "/api/memory/remember", {
-				content,
-				who: options.who,
-				tags: options.tags,
-				importance: options.importance,
-				pinned: options.critical,
-				...(options.agent ? { agentId: options.agent } : {}),
-				...(options.private ? { visibility: "private" } : {}),
-			});
+			const { ok, data } = await deps.secretApiCall(
+				"POST",
+				"/api/memory/remember",
+				buildRememberRequestBody(content, {
+					who: options.who,
+					tags: options.tags,
+					importance: options.importance,
+					pinned: options.critical,
+					agentId: options.agent,
+					visibility: options.private ? "private" : undefined,
+				}),
+			);
 
 			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
 			if (!ok || typeof err === "string") {
@@ -169,21 +97,20 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			const { ok, data } = await deps.secretApiCall(
 				"POST",
 				"/api/memory/recall",
-				{
-					query,
+				buildRecallRequestBody(query, {
 					keywordQuery: options.keywordQuery,
 					limit: options.limit,
 					project: options.project,
 					type: options.type,
 					tags: options.tags,
 					who: options.who,
-					pinned: options.pinned === true ? true : undefined,
+					pinned: options.pinned,
 					importance_min: options.importanceMin,
 					since: options.since,
 					until: options.until,
-					expand: options.expand === true ? true : undefined,
-					...(options.agent ? { agentId: options.agent } : {}),
-				},
+					expand: options.expand,
+					agentId: options.agent,
+				}),
 				MEMORY_RECALL_TIMEOUT_MS,
 			);
 
@@ -197,7 +124,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			// Score thresholds trim ranked matches, but intentionally keep
 			// unscored supporting context in-band.
 			const filtered = applyRecallScoreThreshold(data, options.minScore);
-			const parsed = parseRecallResult(filtered);
+			const parsed = parseRecallPayload(filtered);
 
 			if (options.json) {
 				console.log(JSON.stringify(filtered, null, 2));
@@ -210,14 +137,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 				return;
 			}
 
-			const summarySuffix: string[] = [];
-			if (parsed.method) summarySuffix.push(parsed.method);
-			if (parsed.meta.hasSupplementary) summarySuffix.push("includes supporting context");
-			const summary = summarySuffix.length > 0 ? ` ${chalk.dim(`(${summarySuffix.join(" · ")})`)}` : "";
-			const noun = parsed.meta.totalReturned === 1 ? "memory" : "memories";
-			console.log(chalk.bold(`\n  Found ${parsed.meta.totalReturned} ${noun}:${summary}\n`));
-			for (const line of formatRecallRows(parsed.rows)) console.log(line);
-			console.log();
+			console.log(`\n${formatRecallText(filtered)}\n`);
 		});
 
 	const embedCmd = program.command("embed").description("Embedding management (audit, backfill)");

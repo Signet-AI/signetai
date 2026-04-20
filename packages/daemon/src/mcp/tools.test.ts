@@ -238,7 +238,7 @@ describe("createMcpServer", () => {
 			expect(result.content[0]?.text).toContain("Primary matches:");
 			expect(result.content[0]?.text).not.toContain("Supporting context:");
 			expect(result.content[0]?.text).not.toContain("supporting rationale");
-			expect(result.content[0]?.text).toContain("test (fact, hybrid, 2026-04-07)");
+			expect(result.content[0]?.text).toContain("id: 1; test (fact, hybrid, 2026-04-07)");
 		});
 
 		it("returns error on fetch failure", async () => {
@@ -354,7 +354,7 @@ describe("createMcpServer", () => {
 			expect(result.isError).toBeUndefined();
 		});
 
-		it("prepends tags when provided", async () => {
+		it("passes tags as structured request metadata", async () => {
 			const cap: { body?: string } = {};
 			mockFetch(200, { id: "abc-456" }, cap);
 
@@ -364,7 +364,8 @@ describe("createMcpServer", () => {
 			});
 
 			const body = JSON.parse(cap.body ?? "{}");
-			expect(body.content).toBe("[foo,bar]: tagged memory");
+			expect(body.content).toBe("tagged memory");
+			expect(body.tags).toBe("foo,bar");
 		});
 
 		it("passes pinned through to request body", async () => {
