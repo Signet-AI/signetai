@@ -67,6 +67,45 @@ function parseJsonObjectBody(body: BodyInit | null | undefined): Record<string, 
 	return parsed;
 }
 
+/**
+ * Wraps a fetch mock to silently handle parent session creation and
+ * fire-and-forget DELETE cleanup added by the extraction notification
+ * suppression feature.  Existing mock logic runs unchanged for child
+ * session creation, messages, and all other requests.
+ */
+function withParentSession(
+	handler: (url: string, init?: RequestInit) => Response | Promise<Response>,
+): (url: string, init?: RequestInit) => Response | Promise<Response> {
+	return async (url: string, init?: RequestInit) => {
+		// Route cleanup DELETEs to a silent 200
+		if (init?.method === "DELETE" && url.includes("/session/")) {
+			return new Response(null, { status: 200 });
+		}
+		// Route parent session creation to a fixed response
+		if (
+			init?.method === "POST" &&
+			url.includes("/session") &&
+			!url.includes("/message")
+		) {
+			const body =
+				typeof init.body === "string"
+					? (JSON.parse(init.body) as Record<string, unknown>)
+					: {};
+			if (body.title === "signet-system") {
+				return Response.json({
+					id: "ses_parent",
+					slug: "parent",
+					projectID: "p",
+					directory: "/tmp",
+					title: "signet-system",
+					version: "1",
+				});
+			}
+		}
+		return handler(url, init);
+	};
+}
+
 function getObjectField(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
 	const value = record[key];
 	return isRecord(value) ? value : undefined;
@@ -524,7 +563,7 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() extracts text from parts array", async () => {
 		let callCount = 0;
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			callCount++;
 			if (url.includes("/session") && !url.includes("/message")) {
 				// Session creation
@@ -539,7 +578,7 @@ describe("createOpenCodeProvider", () => {
 			}
 			// Message
 			return Response.json(openCodeResponse("  extracted fact  "));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test prompt");
@@ -547,9 +586,9 @@ describe("createOpenCodeProvider", () => {
 		expect(callCount).toBe(2); // session create + message
 	});
 
-	it("generate() reuses session on subsequent calls", async () => {
+	it("generate() creates a new child session per call after cleanup", async () => {
 		let sessionCreations = 0;
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				sessionCreations++;
 				return Response.json({
@@ -562,18 +601,86 @@ describe("createOpenCodeProvider", () => {
 				});
 			}
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		await provider.generate("prompt 1");
 		await provider.generate("prompt 2");
-		expect(sessionCreations).toBe(1);
+		expect(sessionCreations).toBe(2);
+	});
+
+	it("generate() passes parentID to child sessions and cleans up via DELETE", async () => {
+		const sessionBodies: Record<string, unknown>[] = [];
+		const deletedIds: string[] = [];
+		let childCount = 0;
+
+		mockFetch(async (url, init) => {
+			if (init?.method === "DELETE") {
+				const match = url.match(/\/session\/([^/]+)$/);
+				if (match) deletedIds.push(match[1]);
+				return new Response(null, { status: 200 });
+			}
+			if (url.includes("/session") && !url.includes("/message")) {
+				const body = parseJsonObjectBody(init?.body);
+				sessionBodies.push(body);
+				if (body.title === "signet-system") {
+					return Response.json({
+						id: "ses_parent_qa",
+						slug: "parent",
+						projectID: "p",
+						directory: "/tmp",
+						title: "signet-system",
+						version: "1",
+					});
+				}
+				childCount++;
+				return Response.json({
+					id: `ses_child_${childCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "signet-extraction",
+					version: "1",
+				});
+			}
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+		await provider.generate("first");
+		// Allow fire-and-forget DELETE to settle
+		await new Promise((r) => setTimeout(r, 100));
+
+		await provider.generate("second");
+		await new Promise((r) => setTimeout(r, 100));
+
+		// Parent session created once, without parentID
+		const parentBody = sessionBodies.find(
+			(b) => b.title === "signet-system",
+		);
+		expect(parentBody).toBeDefined();
+		expect(parentBody?.parentID).toBeUndefined();
+
+		// Child sessions include parentID pointing to parent
+		const childBodies = sessionBodies.filter(
+			(b) => b.title === "signet-extraction",
+		);
+		expect(childBodies).toHaveLength(2);
+		for (const b of childBodies) {
+			expect(b.parentID).toBe("ses_parent_qa");
+		}
+
+		// Both child sessions cleaned up
+		expect(deletedIds).toContain("ses_child_1");
+		expect(deletedIds).toContain("ses_child_2");
+		// Parent session NOT deleted
+		expect(deletedIds).not.toContain("ses_parent_qa");
 	});
 
 	it("generate() retries on 404 (expired session)", async () => {
 		let messageAttempts = 0;
 		let sessionCreations = 0;
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				sessionCreations++;
 				return Response.json({
@@ -590,7 +697,7 @@ describe("createOpenCodeProvider", () => {
 				return new Response("session not found", { status: 404 });
 			}
 			return Response.json(openCodeResponse("recovered"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -599,7 +706,7 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generateWithUsage() maps tokens and cost from response", async () => {
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_usage",
@@ -611,7 +718,7 @@ describe("createOpenCodeProvider", () => {
 				});
 			}
 			return Response.json(openCodeResponse("result", { input: 100, output: 25 }, 0.0042));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generateWithUsage!("test");
@@ -623,7 +730,7 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generate() throws on non-200 non-retryable status", async () => {
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_err",
@@ -635,14 +742,14 @@ describe("createOpenCodeProvider", () => {
 				});
 			}
 			return new Response("internal server error", { status: 500 });
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		await expect(provider.generate("test")).rejects.toThrow(/OpenCode HTTP 500/);
 	});
 
 	it("generate() throws a timeout error on slow responses", async () => {
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_slow",
@@ -659,7 +766,7 @@ describe("createOpenCodeProvider", () => {
 					signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
 				}
 			});
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -669,7 +776,7 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("available() returns true when /global/health responds 200", async () => {
-		mockFetch(() => Response.json({ healthy: true, version: "1.2.15" }));
+		mockFetch(withParentSession(() => Response.json({ healthy: true, version: "1.2.15" })));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.available();
@@ -677,9 +784,9 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("available() returns false when server is unreachable", async () => {
-		mockFetch(() => {
+		mockFetch(withParentSession(() => {
 			throw new Error("connection refused");
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.available();
@@ -688,7 +795,7 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() sends correct request body with parts format", async () => {
 		let capturedBody: Record<string, unknown> = {};
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_body",
@@ -701,7 +808,7 @@ describe("createOpenCodeProvider", () => {
 			}
 			capturedBody = JSON.parse(init?.body as string);
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -722,7 +829,7 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() sends signet-pipeline agent in request body", async () => {
 		let capturedBody: Record<string, unknown> = {};
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_agent",
@@ -735,7 +842,7 @@ describe("createOpenCodeProvider", () => {
 			}
 			capturedBody = JSON.parse(init?.body as string);
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -748,7 +855,7 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() omits agent when config.agent is empty", async () => {
 		let capturedBody: Record<string, unknown> = {};
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_no_agent",
@@ -761,7 +868,7 @@ describe("createOpenCodeProvider", () => {
 			}
 			capturedBody = JSON.parse(init?.body as string);
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -776,7 +883,7 @@ describe("createOpenCodeProvider", () => {
 	it("generate() retries without agent on agent-not-found 4xx and stays disabled", async () => {
 		let sessionCount = 0;
 		let lastBody: Record<string, unknown> = {};
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				sessionCount++;
 				return Response.json({
@@ -794,7 +901,7 @@ describe("createOpenCodeProvider", () => {
 			}
 			lastBody = parsed;
 			return Response.json(openCodeResponse("recovered"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -812,7 +919,7 @@ describe("createOpenCodeProvider", () => {
 	it("generate() falls back when agent-rejection 400 arrives after agent already disabled", async () => {
 		let sessionCount = 0;
 		let agentSeen = false;
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				sessionCount++;
 				return Response.json({
@@ -833,7 +940,7 @@ describe("createOpenCodeProvider", () => {
 				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
 			}
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -848,7 +955,7 @@ describe("createOpenCodeProvider", () => {
 		sessionCount = 0;
 		agentSeen = false;
 		let threw = false;
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_sibling",
@@ -860,7 +967,7 @@ describe("createOpenCodeProvider", () => {
 				});
 			}
 			return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
-		});
+		}));
 		try {
 			await provider.generate("extract sibling");
 		} catch {
@@ -871,7 +978,7 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() omits format field when enableStructuredOutput is false", async () => {
 		let capturedBody: Record<string, unknown> = {};
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_no_so",
@@ -884,7 +991,7 @@ describe("createOpenCodeProvider", () => {
 			}
 			capturedBody = JSON.parse(init?.body as string);
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -898,7 +1005,7 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generate() joins multiple text parts", async () => {
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_multi",
@@ -917,7 +1024,7 @@ describe("createOpenCodeProvider", () => {
 					{ type: "text", text: "second part", id: "p3", sessionID: "ses_multi", messageID: "msg_test" },
 				],
 			});
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -927,7 +1034,7 @@ describe("createOpenCodeProvider", () => {
 	it("generate() polls session messages when post response is empty", async () => {
 		let postCalls = 0;
 		let getCalls = 0;
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_poll",
@@ -960,7 +1067,7 @@ describe("createOpenCodeProvider", () => {
 					parts: [{ type: "text", text: "recovered" }],
 				},
 			]);
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -971,7 +1078,7 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() returns fallback JSON when no assistant text appears", async () => {
 		let getCalls = 0;
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_bad",
@@ -995,7 +1102,7 @@ describe("createOpenCodeProvider", () => {
 					parts: [{ type: "text", text: "still pending" }],
 				},
 			]);
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test", { timeoutMs: 200 });
@@ -1007,7 +1114,7 @@ describe("createOpenCodeProvider", () => {
 		const seenUrls: string[] = [];
 		let fallbackBody: Record<string, unknown> | null = null;
 		let postCount = 0;
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			seenUrls.push(url);
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
@@ -1046,7 +1153,7 @@ describe("createOpenCodeProvider", () => {
 				return Response.json({ response: '{"facts":[],"entities":[]}' });
 			}
 			return new Response("unexpected url", { status: 500 });
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1067,7 +1174,7 @@ describe("createOpenCodeProvider", () => {
 	it("generate() does NOT attempt Ollama fallback when enableOllamaFallback is omitted (safe default)", async () => {
 		const seenUrls: string[] = [];
 		let postCount = 0;
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			seenUrls.push(url);
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
@@ -1096,7 +1203,7 @@ describe("createOpenCodeProvider", () => {
 				return Response.json({ models: [] });
 			}
 			return new Response("unexpected url", { status: 500 });
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1111,7 +1218,7 @@ describe("createOpenCodeProvider", () => {
 	}, 35000);
 
 	it("generate() prefers info.structured over text parts", async () => {
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_structured",
@@ -1133,7 +1240,7 @@ describe("createOpenCodeProvider", () => {
 				},
 				parts: [{ type: "text", text: "ignore this text", id: "p1", sessionID: "ses_structured", messageID: "msg_s" }],
 			});
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -1142,7 +1249,7 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generate() returns info.structured as string when it is a string", async () => {
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_str",
@@ -1164,7 +1271,7 @@ describe("createOpenCodeProvider", () => {
 				},
 				parts: [],
 			});
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -1174,7 +1281,7 @@ describe("createOpenCodeProvider", () => {
 	it("generate() disables structured output on 422 and retries without format", async () => {
 		let attempts = 0;
 		const bodies: Record<string, unknown>[] = [];
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: `ses_compat_${attempts}`,
@@ -1192,7 +1299,7 @@ describe("createOpenCodeProvider", () => {
 				return new Response('{"issues":[{"path":["format"],"message":"Unrecognized key"}]}', { status: 422 });
 			}
 			return Response.json(openCodeResponse("fallback works"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const first = await provider.generate("test");
@@ -1208,7 +1315,7 @@ describe("createOpenCodeProvider", () => {
 	it("generate() disables structured output after consecutive malformed 200 responses", async () => {
 		let postCount = 0;
 		const postBodies: Record<string, unknown>[] = [];
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: `ses_200err_${postCount}`,
@@ -1234,7 +1341,7 @@ describe("createOpenCodeProvider", () => {
 			}
 			// GET polls: return empty array so poll times out quickly
 			return Response.json([]);
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1253,7 +1360,7 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() does not disable structured output on an unrelated 400", async () => {
 		let attempts = 0;
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: `ses_unrelated_${attempts}`,
@@ -1270,7 +1377,7 @@ describe("createOpenCodeProvider", () => {
 				return new Response('{"error":"Invalid request format: parts array is missing"}', { status: 400 });
 			}
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		// Should throw, not silently disable structured output and retry
@@ -1279,7 +1386,7 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generate() preserves error body on non-format 400", async () => {
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_400",
@@ -1291,7 +1398,7 @@ describe("createOpenCodeProvider", () => {
 				});
 			}
 			return new Response("bad request: missing required field", { status: 400 });
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		await expect(provider.generate("test")).rejects.toThrow(/bad request: missing required field/);
@@ -1302,7 +1409,7 @@ describe("createOpenCodeProvider", () => {
 		expect(provider.name).toBe("opencode:github-copilot/gpt-4o");
 	});
 	it("generate() refreshes bypass TTL on reused session", async () => {
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: "ses_bypass_refresh",
@@ -1314,7 +1421,7 @@ describe("createOpenCodeProvider", () => {
 				});
 			}
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		await provider.generate("prompt 1");
@@ -1338,7 +1445,7 @@ describe("createOpenCodeProvider", () => {
 		let peak = 0;
 		let inflight = 0;
 
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: `ses_conc_${Date.now()}`,
@@ -1355,7 +1462,7 @@ describe("createOpenCodeProvider", () => {
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			inflight--;
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		const N = 8;
 		const providers = Array.from({ length: N }, (_, i) =>
@@ -1372,7 +1479,7 @@ describe("createOpenCodeProvider", () => {
 	it("generate() throws deadline error when semaphore wait exceeds timeout", async () => {
 		const blockers: Array<() => void> = [];
 
-		mockFetch(async (url) => {
+		mockFetch(withParentSession(async (url) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: `ses_deadline_${Date.now()}`,
@@ -1385,7 +1492,7 @@ describe("createOpenCodeProvider", () => {
 			}
 			await new Promise<void>((resolve) => blockers.push(resolve));
 			return Response.json(openCodeResponse("ok"));
-		});
+		}));
 
 		// Fill all 4 semaphore slots with blocked requests
 		const fillers = Array.from({ length: 4 }, (_, i) =>
@@ -1702,7 +1809,7 @@ describe("createOpenCodeProvider — session creation vs semaphore ordering", ()
 		const sessionDelayMs = 300;
 		const messageDelayMs = 200;
 
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				await new Promise((r) => setTimeout(r, sessionDelayMs));
 				return Response.json({
@@ -1728,7 +1835,7 @@ describe("createOpenCodeProvider — session creation vs semaphore ordering", ()
 					});
 				}
 			});
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1754,7 +1861,7 @@ describe("createOpenCodeProvider — retry session creation respects deadline", 
 		// only ~200ms of the 600ms budget remains after the first round-trip.
 		let sessionCount = 0;
 
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				sessionCount++;
 				if (sessionCount > 1) {
@@ -1788,7 +1895,7 @@ describe("createOpenCodeProvider — retry session creation respects deadline", 
 				);
 			}
 			return new Response("not found", { status: 404 });
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1883,7 +1990,7 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 		const N = 4; // matches DEFAULT_MAX_LLM_CONCURRENCY
 		let postCount = 0;
 
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			// Session creation
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
@@ -1918,7 +2025,7 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 			}
 			// GET polls — empty array to trigger malformed path
 			return Response.json([]);
-		});
+		}));
 
 		const providers = Array.from({ length: N }, () =>
 			createOpenCodeProvider({
@@ -1954,7 +2061,7 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 		let ollamaFetchAbortedAt = 0;
 		let postCount = 0;
 
-		mockFetch(async (url, init) => {
+		mockFetch(withParentSession(async (url, init) => {
 			if (url.includes("/session") && !url.includes("/message")) {
 				return Response.json({
 					id: `ses_deadline_${postCount}`,
@@ -1999,7 +2106,7 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 				});
 			}
 			return Response.json([]);
-		});
+		}));
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",

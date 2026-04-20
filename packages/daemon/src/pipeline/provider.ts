@@ -2072,6 +2072,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	const modelID = slashIdx > 0 ? cfg.model.slice(slashIdx + 1) : cfg.model;
 
 	let sessionId: string | null = null;
+	let parentSessionId: string | null = null;
 	let ollamaFallbackProvider: LlmProvider | null = null;
 
 	function getOllamaFallbackProvider(): LlmProvider {
@@ -2166,10 +2167,18 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			remainingMs !== undefined
 				? Math.max(1, Math.min(remainingMs, 10_000))
 				: 10_000;
+
+		// Attach parentID so OpenCode treats extraction sessions as children.
+		// Child sessions are hidden from the root session list and, crucially,
+		// skipped by the desktop notification handler.
+		const parentId = await getOrCreateParentSession();
+		const payload: Record<string, unknown> = { title: "signet-extraction" };
+		if (parentId) payload.parentID = parentId;
+
 		const res = await fetch(`${cfg.baseUrl}/session`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ title: "signet-extraction" }),
+			body: JSON.stringify(payload),
 			signal: AbortSignal.timeout(timeoutMs),
 		});
 
@@ -2186,7 +2195,11 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		// Bypass hooks for our own pipeline sessions so the OpenCode plugin
 		// does not trigger memory recall back to the daemon (circular loop).
 		bypassSession(id, { allowUnknown: true });
-		logger.debug("pipeline", "OpenCode session created", { id, bypassed: true });
+		logger.debug("pipeline", "OpenCode extraction session created", {
+			id,
+			parentId,
+			bypassed: true,
+		});
 		return id;
 	}
 
@@ -2194,6 +2207,60 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		if (sessionId) return sessionId;
 		sessionId = await createSession(remainingMs);
 		return sessionId;
+	}
+
+	/** Create or return a cached parent session used as parentID for
+	 *  extraction sessions.  OpenCode's notification handler skips sessions
+	 *  that carry a parentID, suppressing unwanted desktop notifications
+	 *  for pipeline work.  Returns null on failure so extraction can
+	 *  proceed unparented (notifications will fire but extraction still
+	 *  works). */
+	async function getOrCreateParentSession(): Promise<string | null> {
+		if (parentSessionId) return parentSessionId;
+		try {
+			const res = await fetch(`${cfg.baseUrl}/session`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ title: "signet-system" }),
+				signal: AbortSignal.timeout(5_000),
+			});
+			if (!res.ok) {
+				logger.warn("pipeline", "OpenCode parent session creation failed", {
+					status: res.status,
+				});
+				return null;
+			}
+			const data = (await res.json()) as Record<string, unknown>;
+			const id = data.id;
+			if (typeof id !== "string") {
+				logger.warn("pipeline", "OpenCode parent session response missing 'id'");
+				return null;
+			}
+			parentSessionId = id;
+			bypassSession(id, { allowUnknown: true });
+			logger.debug("pipeline", "OpenCode parent session created", { id });
+			return id;
+		} catch (e) {
+			logger.warn("pipeline", "OpenCode parent session creation error", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+			return null;
+		}
+	}
+
+	/** Fire-and-forget deletion of an extraction session.  If the call
+	 *  fails the session remains as a hidden child (parentID set) and
+	 *  does not appear in OpenCode's root session list. */
+	async function deleteSession(sid: string): Promise<void> {
+		try {
+			await fetch(`${cfg.baseUrl}/session/${sid}`, {
+				method: "DELETE",
+				signal: AbortSignal.timeout(5_000),
+			});
+			logger.debug("pipeline", "OpenCode extraction session deleted", { id: sid });
+		} catch {
+			logger.debug("pipeline", "OpenCode extraction session cleanup skipped", { id: sid });
+		}
 	}
 
 	let structuredOutputSupported = cfg.enableStructuredOutput !== false;
@@ -2459,7 +2526,25 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			} finally {
 				clearTimeout(timer);
 			}
-		}, timeoutMs, "opencode");
+		}, timeoutMs, "opencode").catch((err: unknown) => {
+			// NOTE(changed-behavior): This warn-level error alerting is unique
+			// to the OpenCode provider.  Other providers (Ollama, Claude Code,
+			// Codex, OpenRouter, llama.cpp) only throw — errors surface in debug
+			// logs via the pipeline's outer handler.
+			// TODO: extend warn-level error alerting to all providers for
+			// consistent visibility (see plan: suppress-opencode-extraction-
+			// notifications.md § Future Work).
+			logger.warn("pipeline", "OpenCode extraction failed", {
+				error: err instanceof Error ? err.message : String(err),
+				sessionId,
+			});
+			throw err;
+		}).finally(() => {
+			const finalSid = sessionId;
+			sessionId = null;
+			if (finalSid) void deleteSession(finalSid);
+			if (sid !== finalSid) void deleteSession(sid);
+		});
 	}
 
 	return {
