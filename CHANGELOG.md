@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-20
+- Refactoring: align recall and remember surfaces.
+
 ### 2026-04-19
 - Bug fixes: resolve all typescript strict-mode errors in daemon package.
 
@@ -31,6 +34,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: unify LLM concurrency (#509); prevent bypass memory leak in OpenCode provider; reduce OpenCode session overhead for pipeline jobs; five correctness bugs found via sqmd structural review.
 
 ## Release Ledger
+
+## [0.102.5] - 2026-04-20
+
+Release summary: 1 refactor.
+Tag range: `v0.102.4..v0.102.5`.
+
+### Refactoring
+
+- **memory**: align recall and remember surfaces (#531)
 
 ## [0.102.4] - 2026-04-20
 

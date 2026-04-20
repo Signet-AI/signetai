@@ -1,6 +1,6 @@
 {
   "name": "@signet/tray",
-  "version": "0.102.4",
+  "version": "0.102.5",
   "private": true,
   "description": "Shared tray and menu bar state utilities for Signet desktop shells",
   "type": "module",
