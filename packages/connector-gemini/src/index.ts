@@ -92,8 +92,13 @@ export class GeminiConnector extends BaseConnector {
 			mkdirSync(geminiHome, { recursive: true });
 		}
 
-		this.registerMcpServer(geminiHome);
-		configsPatched.push(this.getConfigPath());
+		const warnings: string[] = [];
+		const mcpConflict = this.registerMcpServer(geminiHome);
+		if (mcpConflict) {
+			warnings.push(`Could not parse ${mcpConflict} — MCP server not registered. Fix the file and rerun install.`);
+		} else {
+			configsPatched.push(this.getConfigPath());
+		}
 
 		const geminiMdPath = this.generateGeminiMd(expandedBasePath);
 		if (geminiMdPath) {
@@ -111,6 +116,7 @@ export class GeminiConnector extends BaseConnector {
 			message: "Gemini CLI integration installed — MCP server + GEMINI.md + skills",
 			filesWritten,
 			configsPatched,
+			warnings: warnings.length > 0 ? warnings : undefined,
 		};
 	}
 
@@ -179,21 +185,40 @@ export class GeminiConnector extends BaseConnector {
 		}
 	}
 
-	private registerMcpServer(geminiHome: string): void {
+	private registerMcpServer(geminiHome: string): string | null {
 		const settingsPath = join(geminiHome, "settings.json");
-		const settings = readGeminiSettings(settingsPath) ?? {};
 
-		const existingMcp = isJsonObject(settings.mcpServers) ? (settings.mcpServers as JsonObject) : {};
-		settings.mcpServers = {
-			...existingMcp,
-			signet: {
-				command: "signet-mcp",
-				args: [],
+		if (existsSync(settingsPath)) {
+			const settings = readGeminiSettings(settingsPath);
+			if (!settings) {
+				return settingsPath;
+			}
+
+			const existingMcp = isJsonObject(settings.mcpServers) ? (settings.mcpServers as JsonObject) : {};
+			settings.mcpServers = {
+				...existingMcp,
+				signet: {
+					command: "signet-mcp",
+					args: [],
+				},
+			};
+
+			atomicWriteJson(settingsPath, settings);
+			return null;
+		}
+
+		const settings: JsonObject = {
+			mcpServers: {
+				signet: {
+					command: "signet-mcp",
+					args: [],
+				},
 			},
 		};
 
 		mkdirSync(geminiHome, { recursive: true });
 		atomicWriteJson(settingsPath, settings);
+		return null;
 	}
 
 	private removeMcpServer(geminiHome: string): void {
