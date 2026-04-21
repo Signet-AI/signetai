@@ -746,6 +746,67 @@ describe("createOpenCodeProvider", () => {
 		expect(childBodies[1].parentID).toBeUndefined();
 	});
 
+	it("stale-parent retry keeps child session creation within the caller deadline", async () => {
+		let childAttempts = 0;
+
+		mockFetch(async (url, init) => {
+			if (init?.method === "DELETE" && url.includes("/session/")) {
+				return new Response(null, { status: 200 });
+			}
+			if (
+				init?.method === "POST" &&
+				url.includes("/session") &&
+				!url.includes("/message")
+			) {
+				const body = parseJsonObjectBody(init?.body);
+				if (body.title === "signet-system") {
+					return Response.json({
+						id: "ses_parent_stale_budget",
+						slug: "parent",
+						projectID: "p",
+						directory: "/tmp",
+						title: "signet-system",
+						version: "1",
+					});
+				}
+
+				childAttempts++;
+				if (body.parentID) {
+					await new Promise((resolve) => setTimeout(resolve, 250));
+					return new Response("Bad Request: unknown parent session", {
+						status: 400,
+					});
+				}
+
+				await new Promise<void>((resolve, reject) => {
+					const timer = setTimeout(resolve, 300);
+					init?.signal?.addEventListener("abort", () => {
+						clearTimeout(timer);
+						reject(new DOMException("aborted", "AbortError"));
+					});
+				});
+				return Response.json({
+					id: "ses_child_unparented",
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "signet-extraction",
+					version: "1",
+				});
+			}
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+
+		const start = performance.now();
+		await expect(provider.generate("hello", { timeoutMs: 400 })).rejects.toThrow(/aborted|timeout/i);
+		const elapsed = performance.now() - start;
+
+		expect(elapsed).toBeLessThan(650);
+		expect(childAttempts).toBe(2);
+	});
+
 	it("generate() retries on 404 (expired session)", async () => {
 		let messageAttempts = 0;
 		let sessionCreations = 0;

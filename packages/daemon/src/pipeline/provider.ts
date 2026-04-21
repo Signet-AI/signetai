@@ -2165,17 +2165,15 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		// Attach parentID so OpenCode treats extraction sessions as children.
 		// Child sessions are hidden from the root session list and, crucially,
 		// skipped by the desktop notification handler.
-		const parentStart = performance.now();
+		const started = performance.now();
 		const parentId = await getOrCreateParentSession(remainingMs);
-		const parentMs = performance.now() - parentStart;
 
 		// Subtract time spent creating the parent session so the child
 		// creation timeout stays within the caller's overall budget.
-		const adjusted = remainingMs !== undefined ? remainingMs - parentMs : undefined;
-		const timeoutMs =
-			adjusted !== undefined
-				? Math.max(1, Math.min(adjusted, 10_000))
-				: 10_000;
+		const childTimeoutMs = (): number => {
+			if (remainingMs === undefined) return 10_000;
+			return Math.max(1, Math.min(remainingMs - (performance.now() - started), 10_000));
+		};
 
 		const payload: Record<string, unknown> = { title: "signet-extraction" };
 		if (parentId) payload.parentID = parentId;
@@ -2184,7 +2182,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(payload),
-			signal: AbortSignal.timeout(timeoutMs),
+			signal: AbortSignal.timeout(childTimeoutMs()),
 		});
 
 		if (!res.ok && parentId) {
@@ -2197,7 +2195,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ title: "signet-extraction" }),
-				signal: AbortSignal.timeout(timeoutMs),
+				signal: AbortSignal.timeout(childTimeoutMs()),
 			});
 		}
 
