@@ -249,6 +249,7 @@ export class GeminiConnector extends BaseConnector {
 		const extras = this.composeIdentityExtras(basePath);
 
 		const destPath = this.getGeminiMdPath();
+		mkdirSync(dirname(destPath), { recursive: true });
 		writeFileSync(destPath, header + userContent + extras);
 		return destPath;
 	}
