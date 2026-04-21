@@ -1,6 +1,6 @@
 {
   "name": "signet",
-  "version": "0.103.1",
+  "version": "0.103.2",
   "private": true,
   "description": "Local-first identity, memory, and secrets for AI agents",
   "repository": {
