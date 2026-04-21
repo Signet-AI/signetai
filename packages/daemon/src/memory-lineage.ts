@@ -470,7 +470,12 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 	return path;
 }
 
-function upsertArtifactRow(path: string, frontmatter: Record<string, unknown>, body: string): void {
+function upsertArtifactRow(
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	sourceMtimeMs = statSync(path).mtimeMs,
+): void {
 	const agentId = typeof frontmatter.agent_id === "string" ? frontmatter.agent_id : "default";
 	const sourcePath = path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/");
 	const sourceKind = typeof frontmatter.kind === "string" ? frontmatter.kind : "manifest";
@@ -489,15 +494,15 @@ function upsertArtifactRow(path: string, frontmatter: Record<string, unknown>, b
 	const sourceSha =
 		typeof frontmatter.content_sha256 === "string" ? frontmatter.content_sha256 : hashNormalizedBody(body);
 	const updatedAt = typeof frontmatter.updated_at === "string" ? frontmatter.updated_at : new Date().toISOString();
-
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO memory_artifacts (
 				agent_id, source_path, source_sha256, source_kind, session_id,
 				session_key, session_token, project, harness, captured_at,
 				started_at, ended_at, manifest_path, source_node_id,
-				memory_sentence, memory_sentence_quality, content, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				memory_sentence, memory_sentence_quality, content, updated_at,
+				source_mtime_ms
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(agent_id, source_path) DO UPDATE SET
 				source_sha256 = excluded.source_sha256,
 				source_kind = excluded.source_kind,
@@ -514,7 +519,8 @@ function upsertArtifactRow(path: string, frontmatter: Record<string, unknown>, b
 				memory_sentence = excluded.memory_sentence,
 				memory_sentence_quality = excluded.memory_sentence_quality,
 				content = excluded.content,
-				updated_at = excluded.updated_at`,
+				updated_at = excluded.updated_at,
+				source_mtime_ms = excluded.source_mtime_ms`,
 		).run(
 			agentId,
 			sourcePath,
@@ -534,8 +540,29 @@ function upsertArtifactRow(path: string, frontmatter: Record<string, unknown>, b
 			quality,
 			body,
 			updatedAt,
+			sourceMtimeMs,
 		);
 	});
+}
+
+function canSeedColdCacheFromDbRow(
+	currentMtimeMs: number,
+	row: { readonly source_mtime_ms?: unknown; readonly updated_at?: unknown },
+): boolean {
+	if (!Number.isFinite(currentMtimeMs)) return false;
+
+	const storedMtimeMs =
+		typeof row.source_mtime_ms === "number" && Number.isFinite(row.source_mtime_ms)
+			? row.source_mtime_ms
+			: typeof row.updated_at === "string"
+				? Date.parse(row.updated_at)
+				: Number.NaN;
+	if (!Number.isFinite(storedMtimeMs)) return false;
+
+	// Filesystem mtimes and serialized ISO timestamps can differ by a small
+	// amount across platforms and write paths. Treat sub-second deltas as the
+	// same indexed artifact state.
+	return Math.abs(currentMtimeMs - storedMtimeMs) <= 1_000;
 }
 
 function listCanonicalFiles(): string[] {
@@ -582,24 +609,37 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 	}
 
 	if (cache.size === 0) {
-		// Seed from DB paths too so files deleted while daemon was down get detected
+		// Seed from DB state too so files deleted while daemon was down get
+		// detected, while unchanged files can skip a full reread on restart.
 		const dbPaths = getDbAccessor().withReadDb((db) => {
 			const rows = scope
-				? (db.prepare("SELECT DISTINCT source_path FROM memory_artifacts WHERE agent_id = ?").all(scope) as Array<{
+				? (db
+						.prepare("SELECT source_path, source_mtime_ms, updated_at FROM memory_artifacts WHERE agent_id = ?")
+						.all(scope) as Array<{
 						source_path: string;
+						source_mtime_ms?: number | null;
+						updated_at?: string | null;
 					}>)
-				: (db.prepare("SELECT DISTINCT source_path FROM memory_artifacts").all() as Array<{
+				: (db.prepare("SELECT source_path, source_mtime_ms, updated_at FROM memory_artifacts").all() as Array<{
 						source_path: string;
+						source_mtime_ms?: number | null;
+						updated_at?: string | null;
 					}>);
 			return rows;
 		});
 		if (dbPaths.length > 0) {
 			const root = getAgentsDir();
 			for (const row of dbPaths) {
-				cache.set(join(root, row.source_path), 0);
+				const absPath = join(root, row.source_path);
+				if (!existsSync(absPath)) {
+					cache.set(absPath, 0);
+					continue;
+				}
+				const currentMtimeMs = statSync(absPath).mtimeMs;
+				cache.set(absPath, canSeedColdCacheFromDbRow(currentMtimeMs, row) ? currentMtimeMs : 0);
 			}
 			for (const path of files) {
-				cache.set(path, 0);
+				if (!cache.has(path)) cache.set(path, 0);
 			}
 		}
 	}
@@ -644,7 +684,7 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 			changedPaths.add(path);
 			continue;
 		}
-		upsertArtifactRow(path, parsed.frontmatter, body);
+		upsertArtifactRow(path, parsed.frontmatter, body, mtime);
 		cache.set(path, mtime);
 		changedPaths.add(path);
 	}
@@ -656,7 +696,10 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 		changedPaths.add(path);
 	}
 
-	lastChangedManifestsByAgent.set(cacheKey, new Set([...changedPaths].filter((path) => path.endsWith("--manifest.md"))));
+	lastChangedManifestsByAgent.set(
+		cacheKey,
+		new Set([...changedPaths].filter((path) => path.endsWith("--manifest.md"))),
+	);
 	artifactIndexCache.set(cacheKey, cache);
 
 	stopTimer({ fileCount: files.length });
@@ -1335,7 +1378,11 @@ function renderIndexSection(indexBlock: string, base: ReadonlyArray<string>): st
 	return "";
 }
 
-function syncManifestRefs(refs: ReadonlyArray<string>, changedManifests: ReadonlySet<string> | undefined, agentId: string): void {
+function syncManifestRefs(
+	refs: ReadonlyArray<string>,
+	changedManifests: ReadonlySet<string> | undefined,
+	agentId: string,
+): void {
 	const set = new Set(refs);
 	let files: string[];
 	if (changedManifests !== undefined) {
