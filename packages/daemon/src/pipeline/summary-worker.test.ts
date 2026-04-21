@@ -207,6 +207,31 @@ describe("insertSummaryFacts", () => {
 		expect((row?.content_hash ?? "").length).toBeGreaterThan(0);
 	});
 
+	it("treats content_hash collisions as deduplication instead of job failures", () => {
+		const saved = insertSummaryFacts(
+			accessor,
+			{
+				harness: "opencode",
+				project: null,
+				session_key: "sess-hash-collision",
+				session_id: "sess-hash-collision",
+				id: "job-hash-collision",
+				agent_id: "default",
+			},
+			[
+				{ content: "UI.", importance: 0.4, type: "fact" },
+				{ content: "UI!", importance: 0.4, type: "fact" },
+			],
+		);
+
+		expect(saved).toBe(1);
+
+		const row = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE source_id = 'sess-hash-collision'").get() as {
+			n: number;
+		};
+		expect(row.n).toBe(1);
+	});
+
 	it("skips summary facts for temp sessions", () => {
 		const saved = insertSummaryFacts(
 			accessor,

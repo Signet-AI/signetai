@@ -17,7 +17,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { normalizeAndHashContent } from "../content-normalization";
-import type { DbAccessor } from "../db-accessor";
+import type { DbAccessor, WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
 import { inferType, isDuplicate } from "../hooks";
 import { logger } from "../logger";
@@ -113,6 +113,25 @@ export function resolveFailedSummaryJobStatus(
 	maxAttempts: number,
 ): "dead" | "pending" {
 	return terminal || attempts >= maxAttempts ? "dead" : "pending";
+}
+
+function hasActiveContentHash(db: WriteDb, contentHash: string, agentId: string): boolean {
+	const row = db
+		.prepare(
+			`SELECT id FROM memories
+			 WHERE content_hash = ?
+			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND scope IS NULL
+			   AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(contentHash, agentId);
+	return typeof row === "object" && row !== null;
+}
+
+function isContentHashUniqueError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	return err.message.includes("idx_memories_content_hash_unique") || err.message.includes("memories.content_hash");
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,29 +1208,35 @@ export function insertSummaryFacts(
 			if (!item.content || typeof item.content !== "string") continue;
 
 			const importance = Math.min(item.importance ?? 0.3, 0.5);
+			const { contentHash } = normalizeAndHashContent(item.content);
 
+			if (hasActiveContentHash(db, contentHash, agentId)) continue;
 			if (isDuplicate(db as unknown as Database, item.content, agentId)) continue;
 
 			const id = crypto.randomUUID();
 			const type = item.type || inferType(item.content);
-			const { contentHash } = normalizeAndHashContent(item.content);
 
-			stmt.run(
-				id,
-				item.content,
-				contentHash,
-				type,
-				importance,
-				job.session_key || null,
-				"session_end",
-				job.harness,
-				item.tags || null,
-				job.project || null,
-				agentId,
-				now,
-				now,
-				SUMMARY_WORKER_UPDATED_BY,
-			);
+			try {
+				stmt.run(
+					id,
+					item.content,
+					contentHash,
+					type,
+					importance,
+					job.session_key || null,
+					"session_end",
+					job.harness,
+					item.tags || null,
+					job.project || null,
+					agentId,
+					now,
+					now,
+					SUMMARY_WORKER_UPDATED_BY,
+				);
+			} catch (err) {
+				if (isContentHashUniqueError(err)) continue;
+				throw err;
+			}
 			count++;
 		}
 		return count;
