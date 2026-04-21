@@ -2171,7 +2171,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		// Attach parentID so OpenCode treats extraction sessions as children.
 		// Child sessions are hidden from the root session list and, crucially,
 		// skipped by the desktop notification handler.
-		const parentId = await getOrCreateParentSession();
+		const parentId = await getOrCreateParentSession(remainingMs);
 		const payload: Record<string, unknown> = { title: "signet-extraction" };
 		if (parentId) payload.parentID = parentId;
 
@@ -2215,14 +2215,15 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	 *  for pipeline work.  Returns null on failure so extraction can
 	 *  proceed unparented (notifications will fire but extraction still
 	 *  works). */
-	async function getOrCreateParentSession(): Promise<string | null> {
+	async function getOrCreateParentSession(remainingMs?: number): Promise<string | null> {
 		if (parentSessionId) return parentSessionId;
 		try {
+			const timeout = Math.min(5_000, Math.max(1, remainingMs ?? 5_000));
 			const res = await fetch(`${cfg.baseUrl}/session`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ title: "signet-system" }),
-				signal: AbortSignal.timeout(5_000),
+				signal: AbortSignal.timeout(timeout),
 			});
 			if (!res.ok) {
 				logger.warn("pipeline", "OpenCode parent session creation failed", {
@@ -2299,6 +2300,12 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		// Refresh bypass TTL on reused sessions so bypass-only entries do not
 		// expire while the provider is still actively sending messages.
 		bypassSession(sid, { allowUnknown: true });
+
+		// Track the session this specific call is using.  Retry paths may
+		// replace it with a fresh session; the .finally() cleanup reads
+		// this local instead of the shared `sessionId` to avoid a race
+		// when multiple calls run concurrently inside the semaphore.
+		let activeSid = sid;
 
 		return withLlmConcurrency(async () => {
 			const remaining = deadline - performance.now();
@@ -2398,6 +2405,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				const retryWithNewSession = async (): Promise<OpenCodeMessageResponse | null> => {
 					sessionId = null;
 					const retrySid = await getOrCreateSession(deadline - performance.now());
+					activeSid = retrySid;
 					const retryRes = await postMessage(retrySid);
 					if (!retryRes.ok) {
 						const retryBody = await retryRes.text().catch(() => "");
@@ -2431,6 +2439,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						consumedBody = null;
 						const retrySid = await createSession(deadline - performance.now());
 						sessionId = retrySid;
+						activeSid = retrySid;
 						res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
@@ -2467,10 +2476,12 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						});
 						if (retryRes.ok) {
 							sessionId = retrySid;
+							activeSid = retrySid;
 							const retryParsed = await parsePostResponse(retryRes, retrySid);
 							if (retryParsed) return retryParsed;
 						}
 						sessionId = null;
+						activeSid = sid;
 						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "agent-not-found-retry-failed");
 						if (ollamaFallback) return ollamaFallback;
 						return buildOpenCodeFallbackResponse();
@@ -2500,6 +2511,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					sessionId = null;
 					const fallbackSid = await createSession(deadline - performance.now());
 					sessionId = fallbackSid;
+					activeSid = fallbackSid;
 					const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -2540,10 +2552,9 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			});
 			throw err;
 		}).finally(() => {
-			const finalSid = sessionId;
-			sessionId = null;
-			if (finalSid) void deleteSession(finalSid);
-			if (sid !== finalSid) void deleteSession(sid);
+			if (sessionId === activeSid || sessionId === sid) sessionId = null;
+			void deleteSession(activeSid);
+			if (sid !== activeSid) void deleteSession(sid);
 		});
 	}
 
