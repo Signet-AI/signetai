@@ -1,13 +1,34 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	readlinkSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
+import { dirname, join, resolve } from "node:path";
+import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+	atomicWriteJson,
+	resolveSignetWorkspacePath,
+} from "@signet/connector-base";
 import { expandHome, hasValidIdentity } from "@signet/core";
 
 type JsonObject = Record<string, unknown>;
 
 function isJsonObject(value: unknown): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isChildOf(candidate: string, parent: string): boolean {
+	const resolvedParent = `${resolve(parent)}/`;
+	return candidate.startsWith(resolvedParent);
 }
 
 function readGeminiSettings(settingsPath: string): JsonObject | null {
@@ -33,15 +54,19 @@ export class GeminiConnector extends BaseConnector {
 	}
 
 	private getGeminiMdPath(): string {
+		const geminiHome = this.getGeminiHome();
 		const settings = readGeminiSettings(this.getConfigPath());
 		const contextConfig = settings?.context;
 		if (isJsonObject(contextConfig)) {
 			const fileNames = contextConfig.fileName;
 			if (Array.isArray(fileNames) && typeof fileNames[0] === "string") {
-				return join(this.getGeminiHome(), fileNames[0]);
+				const candidate = resolve(geminiHome, fileNames[0]);
+				if (isChildOf(candidate, geminiHome)) {
+					return candidate;
+				}
 			}
 		}
-		return join(this.getGeminiHome(), "GEMINI.md");
+		return join(geminiHome, "GEMINI.md");
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
@@ -93,6 +118,7 @@ export class GeminiConnector extends BaseConnector {
 		const filesRemoved: string[] = [];
 		const configsPatched: string[] = [];
 		const geminiHome = this.getGeminiHome();
+		const signetWorkspace = resolveSignetWorkspacePath();
 
 		this.removeMcpServer(geminiHome);
 		configsPatched.push(this.getConfigPath());
@@ -106,10 +132,9 @@ export class GeminiConnector extends BaseConnector {
 			}
 		}
 
-		const skillsLink = join(geminiHome, "skills");
-		if (existsSync(skillsLink)) {
-			rmSync(skillsLink, { force: true, recursive: true });
-			filesRemoved.push(skillsLink);
+		const skillsDir = join(geminiHome, "skills");
+		if (existsSync(skillsDir)) {
+			this.removeSignetSkillSymlinks(skillsDir, signetWorkspace);
 		}
 
 		return { filesRemoved, configsPatched };
@@ -124,6 +149,34 @@ export class GeminiConnector extends BaseConnector {
 
 	static isHarnessInstalled(): boolean {
 		return existsSync(join(homedir(), ".gemini", "settings.json"));
+	}
+
+	private removeSignetSkillSymlinks(skillsDir: string, signetWorkspace: string): void {
+		const signetSkillsSource = resolve(signetWorkspace, "skills");
+		let entries: string[];
+		try {
+			entries = readdirSync(skillsDir);
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const entryPath = join(skillsDir, entry);
+			let stat: ReturnType<typeof lstatSync> | null = null;
+			try {
+				stat = lstatSync(entryPath);
+			} catch {
+				continue;
+			}
+			if (stat?.isSymbolicLink()) {
+				try {
+					const rawTarget = readlinkSync(entryPath);
+					const target = resolve(dirname(entryPath), rawTarget);
+					if (isChildOf(target, signetSkillsSource)) {
+						unlinkSync(entryPath);
+					}
+				} catch {}
+			}
+		}
 	}
 
 	private registerMcpServer(geminiHome: string): void {
