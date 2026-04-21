@@ -459,6 +459,16 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 	const content = `${serializeFrontmatter(frontmatter)}\n${body}\n`;
 
 	if (existsSync(path)) {
+		const existing = parseFrontmatterDocument(readFileSync(path, "utf8"));
+		const fm = existing.frontmatter;
+		const fieldsMatch =
+			fm.kind === frontmatter.kind &&
+			fm.agent_id === frontmatter.agent_id &&
+			fm.session_id === frontmatter.session_id &&
+			fm.hash_scope === frontmatter.hash_scope;
+		if (!fieldsMatch) {
+			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (identity mismatch)`);
+		}
 		return path;
 	}
 
