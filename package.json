@@ -1,6 +1,6 @@
 {
   "name": "signet",
-  "version": "0.99.3",
+  "version": "0.102.7",
   "private": true,
   "description": "Local-first identity, memory, and secrets for AI agents",
   "repository": {
@@ -10,6 +10,7 @@
   "author": "Signet AI",
   "license": "Apache-2.0",
   "workspaces": [
+    "memorybench",
     "packages/*",
     "packages/adapters/*",
     "packages/cli/dashboard",
@@ -29,7 +30,8 @@
     "build:signetai": "cd packages/signetai && bun run build",
     "build:publish": "bun run build:dashboard && bun run build:signetai",
     "build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
-    "build:desktop": "cd packages/tray && bun run build:desktop",
+    "build:desktop": "cd packages/desktop && bun run build:desktop",
+    "build:tray": "cd packages/tray && bun run build",
     "start": "cd packages/daemon && bun run start",
     "dev": "bun run --filter '*' dev",
     "test": "bun run --filter '*' test",
@@ -42,7 +44,10 @@
     "deploy:web": "cd web && bun run deploy",
     "changelog": "bun scripts/changelog.ts",
     "test:prompt:structural": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/structural-dependency.test.ts",
-    "test:prompt:synthesis": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/dependency-synthesis.test.ts"
+    "test:prompt:synthesis": "SIGNET_OLLAMA_TEST_MODEL=nemotron-3-nano:4b bun test packages/daemon/src/pipeline/dependency-synthesis.test.ts",
+    "bench": "bun scripts/bench-memory.ts",
+    "bench:ingest": "bun scripts/bench-memory.ts ingest",
+    "bench:evaluate": "bun scripts/bench-memory.ts --resume run --from-phase search"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",

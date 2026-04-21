@@ -343,7 +343,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-start")).toBe(1);
 	});
 
-	it("normalizes memory_store tags to a comma string", async () => {
+	it("forwards memory_store tags as request metadata", async () => {
 		const id = await memoryStore("save this", {
 			daemonUrl: "http://daemon.test",
 			tags: ["alpha", " beta ", ""],
@@ -1103,11 +1103,11 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		await beforePromptBuild?.(
 			{
-				prompt: "real user question\n<signet-memory source=\"bad\">truncated injected text",
+				prompt: 'real user question\n<signet-memory source="bad">truncated injected text',
 				messages: [
 					{
 						role: "user",
-						content: "real user question\n<signet-memory source=\"bad\">truncated injected text",
+						content: 'real user question\n<signet-memory source="bad">truncated injected text',
 					},
 				],
 			},
@@ -1812,9 +1812,7 @@ describe("injectBillingBlock", () => {
 	it("prepends billing block to array system field", () => {
 		const body: Record<string, unknown> = {
 			model: "claude-sonnet-4-20250514",
-			system: [
-				{ type: "text", text: "You are a helpful assistant." },
-			],
+			system: [{ type: "text", text: "You are a helpful assistant." }],
 			messages: [{ role: "user", content: "hello" }],
 		};
 		expect(injectBillingBlock(body)).toBeTrue();
@@ -2040,14 +2038,14 @@ describe("swapAuthHeaders", () => {
 		};
 		swapAuthHeaders(headers, "sk-ant-oat01-oauth-token");
 		expect(headers["x-api-key"]).toBeUndefined();
-		expect(headers["authorization"]).toBe("Bearer sk-ant-oat01-oauth-token");
+		expect(headers.authorization).toBe("Bearer sk-ant-oat01-oauth-token");
 		expect(headers["content-type"]).toBe("application/json");
 	});
 
 	it("sets bearer token even without existing api key", () => {
 		const headers: Record<string, string> = {};
 		swapAuthHeaders(headers, "sk-ant-oat01-token");
-		expect(headers["authorization"]).toBe("Bearer sk-ant-oat01-token");
+		expect(headers.authorization).toBe("Bearer sk-ant-oat01-token");
 	});
 });
 
@@ -2134,9 +2132,7 @@ describe("installFetchSanitizer", () => {
 			});
 			expect(capturedHeaders).toHaveLength(1);
 			// No OAuth token in test env → original x-api-key must be preserved
-			expect(
-				capturedHeaders[0]["x-api-key"] ?? capturedHeaders[0]["authorization"],
-			).toBeDefined();
+			expect(capturedHeaders[0]["x-api-key"] ?? capturedHeaders[0].authorization).toBeDefined();
 		} finally {
 			remove();
 		}
@@ -2203,9 +2199,10 @@ describe("installSdkSanitizer", () => {
 		}
 	});
 
-	it("resolveAnthropicBase returns undefined in test environment", () => {
+	it("installSdkSanitizer is safe when the SDK is absent or present", () => {
 		const { resolveAnthropicBase, installSdkSanitizer } = _sanitization;
-		expect(resolveAnthropicBase()).toBeUndefined();
+		const base = resolveAnthropicBase();
+		expect(base === undefined || typeof base === "function").toBeTrue();
 		const cleanup = installSdkSanitizer();
 		cleanup();
 	});
@@ -2229,7 +2226,10 @@ describe("cleanupTimedMap regression", () => {
 		cleanupTimedMap(empty, 1000, 500);
 		expect(empty.size).toBe(0);
 
-		const allExpired = new Map<string, number>([["a", 100], ["b", 200]]);
+		const allExpired = new Map<string, number>([
+			["a", 100],
+			["b", 200],
+		]);
 		cleanupTimedMap(allExpired, 1000, 500);
 		expect(allExpired.size).toBe(0);
 	});

@@ -70,6 +70,7 @@ import { registerDreamCommands } from "./commands/dream.js";
 import { registerForgeCommands } from "./commands/forge.js";
 import { registerGitCommands } from "./commands/git.js";
 import { registerHookCommands } from "./commands/hook.js";
+import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMcpCommands } from "./commands/mcp.js";
 import { registerMemoryCommands } from "./commands/memory.js";
 import { registerPortableCommands } from "./commands/portable.js";
@@ -737,7 +738,13 @@ function embeddingProvider(basePath: string): "native" | "llama-cpp" | "ollama" 
 			const direct = parsed.embedding;
 			if (isRecord(direct) && typeof direct.provider === "string") {
 				const provider = direct.provider;
-				if (provider === "native" || provider === "llama-cpp" || provider === "ollama" || provider === "openai" || provider === "none") {
+				if (
+					provider === "native" ||
+					provider === "llama-cpp" ||
+					provider === "ollama" ||
+					provider === "openai" ||
+					provider === "none"
+				) {
 					return provider;
 				}
 			}
@@ -746,7 +753,13 @@ function embeddingProvider(basePath: string): "native" | "llama-cpp" | "ollama" 
 				const nested = mem.embeddings;
 				if (isRecord(nested) && typeof nested.provider === "string") {
 					const provider = nested.provider;
-					if (provider === "native" || provider === "llama-cpp" || provider === "ollama" || provider === "openai" || provider === "none") {
+					if (
+						provider === "native" ||
+						provider === "llama-cpp" ||
+						provider === "ollama" ||
+						provider === "openai" ||
+						provider === "none"
+					) {
 						return provider;
 					}
 				}
@@ -754,7 +767,13 @@ function embeddingProvider(basePath: string): "native" | "llama-cpp" | "ollama" 
 			const legacy = parsed.embeddings;
 			if (isRecord(legacy) && typeof legacy.provider === "string") {
 				const provider = legacy.provider;
-				if (provider === "native" || provider === "llama-cpp" || provider === "ollama" || provider === "openai" || provider === "none") {
+				if (
+					provider === "native" ||
+					provider === "llama-cpp" ||
+					provider === "ollama" ||
+					provider === "openai" ||
+					provider === "none"
+				) {
 					return provider;
 				}
 			}
@@ -1250,6 +1269,19 @@ const healthDeps = {
 	signetLogo,
 };
 
+const runSyncTemplates = (basePath = AGENTS_DIR): Promise<void> =>
+	syncTemplates({
+		agentsDir: basePath,
+		configureHarnessHooks,
+		getSkillsSourceDir,
+		getTemplatesDir,
+		signetLogo,
+		syncBuiltinSkills,
+		syncNativeEmbeddingModel,
+		syncPredictorBinary,
+		syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
+	});
+
 const daemonDeps = {
 	agentsDir: AGENTS_DIR,
 	defaultPort: DEFAULT_PORT,
@@ -1262,6 +1294,7 @@ const daemonDeps = {
 	sleep,
 	startDaemon,
 	stopDaemon,
+	syncTemplates: runSyncTemplates,
 };
 
 registerAppCommands(program, {
@@ -1307,18 +1340,7 @@ registerAppCommands(program, {
 		}),
 	showDoctor: (options) => showDoctor(options, healthDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
-	syncTemplates: () =>
-		syncTemplates({
-			agentsDir: AGENTS_DIR,
-			configureHarnessHooks,
-			getSkillsSourceDir,
-			getTemplatesDir,
-			signetLogo,
-			syncBuiltinSkills,
-			syncNativeEmbeddingModel,
-			syncPredictorBinary,
-			syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
-		}),
+	syncTemplates: () => runSyncTemplates(),
 });
 
 registerDaemonCommands(program, {
@@ -1391,6 +1413,11 @@ registerMcpCommands(program, {
 });
 
 registerMemoryCommands(program, {
+	ensureDaemonForSecrets,
+	secretApiCall,
+});
+
+registerKnowledgeCommands(program, {
 	ensureDaemonForSecrets,
 	secretApiCall,
 });

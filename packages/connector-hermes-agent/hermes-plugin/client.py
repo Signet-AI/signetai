@@ -25,6 +25,7 @@ _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 3850
 _TIMEOUT_SECS = 5
 _LONG_TIMEOUT_SECS = 15
+_RECALL_TIMEOUT_SECS = 30
 
 
 def _sanitize(value: str) -> str:
@@ -40,6 +41,22 @@ def _resolve_base_url() -> str:
     host = _sanitize(os.environ.get("SIGNET_HOST", _DEFAULT_HOST))
     port = _sanitize(os.environ.get("SIGNET_PORT", str(_DEFAULT_PORT)))
     return f"http://{host}:{port}"
+
+
+def _read_json_response(resp) -> Dict[str, Any]:
+    """Read a daemon response, treating empty successful bodies as an empty object."""
+    body = resp.read()
+    if not body:
+        return {}
+    return json.loads(body.decode("utf-8"))
+
+
+def _safe_score(value: Any) -> float:
+    """Coerce daemon result scores without failing recall on malformed rows."""
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 class SignetClient:
@@ -86,7 +103,7 @@ class SignetClient:
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                return _read_json_response(resp)
         except urllib.error.HTTPError as e:
             body_text = ""
             try:
@@ -95,7 +112,7 @@ class SignetClient:
                 logger.debug("Signet POST %s: failed to read error body: %s", path, read_err)
             logger.debug("Signet POST %s returned %d: %s", path, e.code, body_text)
             return None
-        except (urllib.error.URLError, OSError, TimeoutError) as e:
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
             logger.debug("Signet POST %s failed: %s", path, e)
             return None
 
@@ -110,9 +127,43 @@ class SignetClient:
         req = urllib.request.Request(url, headers=self._headers(), method="GET")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError) as e:
+                return _read_json_response(resp)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
             logger.debug("Signet GET %s failed: %s", path, e)
+            return None
+
+    def _patch(
+        self,
+        path: str,
+        body: Dict[str, Any],
+        *,
+        timeout: float = _TIMEOUT_SECS,
+    ) -> Optional[Dict[str, Any]]:
+        """PATCH JSON to the daemon. Returns parsed response or None on failure."""
+        url = f"{self._base_url}{path}"
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=self._headers(), method="PATCH")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return _read_json_response(resp)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
+            logger.debug("Signet PATCH %s failed: %s", path, e)
+            return None
+
+    def _delete(
+        self,
+        path: str,
+        *,
+        timeout: float = _TIMEOUT_SECS,
+    ) -> Optional[Dict[str, Any]]:
+        """DELETE from the daemon. Returns parsed response or None on failure."""
+        url = f"{self._base_url}{path}"
+        req = urllib.request.Request(url, headers=self._headers(), method="DELETE")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return _read_json_response(resp)
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
+            logger.debug("Signet DELETE %s failed: %s", path, e)
             return None
 
     # -- Health ---------------------------------------------------------------
@@ -161,6 +212,7 @@ class SignetClient:
                 "agentId": self._agent_id,
                 "project": project,
             },
+            timeout=_RECALL_TIMEOUT_SECS,
         )
 
     def session_end(
@@ -257,33 +309,152 @@ class SignetClient:
         *,
         importance: float = 0.5,
         tags: Optional[List[str]] = None,
+        memory_type: str = "",
+        pinned: Optional[bool] = None,
+        project: str = "",
+        hints: Optional[List[str]] = None,
+        transcript: str = "",
+        structured: Optional[Dict[str, Any]] = None,
+        who: str = "hermes-agent",
     ) -> Optional[Dict[str, Any]]:
         """Store a memory via the daemon API."""
         body: Dict[str, Any] = {
             "content": content,
             "importance": importance,
-            "agentId": self._agent_id,
+            "who": who,
         }
+        if self._agent_id:
+            body["agentId"] = self._agent_id
+        if memory_type:
+            body["type"] = memory_type
         if tags:
             body["tags"] = tags
-        return self._post("/api/memory/remember", body)
+        if pinned is not None:
+            body["pinned"] = pinned
+        if project:
+            body["project"] = project
+        if hints:
+            body["hints"] = hints
+        if transcript:
+            body["transcript"] = transcript
+        if structured:
+            body["structured"] = structured
+        return self._post("/api/memory/remember", body, timeout=_LONG_TIMEOUT_SECS)
 
     def recall(
         self,
         query: str,
         *,
         limit: int = 10,
-        min_score: float = 0.0,
+        project: str = "",
+        memory_type: str = "",
+        tags: str = "",
+        who: str = "",
+        pinned: Optional[bool] = None,
+        importance_min: Optional[float] = None,
+        since: str = "",
+        until: str = "",
+        keyword_query: str = "",
+        expand: bool = False,
+        score_min: Optional[float] = None,
+        agent_scoped: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Search memories via hybrid recall."""
         body: Dict[str, Any] = {
             "query": query,
             "limit": limit,
-            "agentId": self._agent_id,
         }
-        if min_score > 0.0:
-            body["minScore"] = min_score
-        return self._post("/api/memory/recall", body)
+        if project:
+            body["project"] = project
+        if memory_type:
+            body["type"] = memory_type
+        if tags:
+            body["tags"] = tags
+        if who:
+            body["who"] = who
+        if pinned is not None:
+            body["pinned"] = pinned
+        if importance_min is not None:
+            body["importance_min"] = importance_min
+        if since:
+            body["since"] = since
+        if until:
+            body["until"] = until
+        if keyword_query:
+            body["keywordQuery"] = keyword_query
+        if expand:
+            body["expand"] = True
+        if agent_scoped and self._agent_id:
+            body["agentId"] = self._agent_id
+
+        result = self._post("/api/memory/recall", body, timeout=_RECALL_TIMEOUT_SECS)
+        if (
+            result
+            and score_min is not None
+            and isinstance(result.get("results"), list)
+        ):
+            kept = [
+                row for row in result["results"]
+                if not isinstance(row, dict) or _safe_score(row.get("score")) >= score_min
+            ]
+            result = dict(result)
+            result["results"] = kept
+            meta = result.get("meta")
+            if isinstance(meta, dict):
+                result["meta"] = {**meta, "totalReturned": len(kept), "noHits": len(kept) == 0}
+        return result
+
+    def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a single memory by ID."""
+        return self._get(f"/api/memory/{urllib.parse.quote(memory_id)}")
+
+    def list_memories(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        memory_type: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """List memories with optional filters."""
+        params = f"?limit={limit}&offset={offset}"
+        if memory_type:
+            params += f"&type={urllib.parse.quote(memory_type)}"
+        return self._get(f"/api/memories{params}")
+
+    def modify_memory(
+        self,
+        memory_id: str,
+        *,
+        content: str = "",
+        memory_type: str = "",
+        importance: Optional[float] = None,
+        tags: str = "",
+        pinned: Optional[bool] = None,
+        reason: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Edit an existing memory by ID."""
+        body: Dict[str, Any] = {"reason": reason}
+        if content:
+            body["content"] = content
+        if memory_type:
+            body["type"] = memory_type
+        if importance is not None:
+            body["importance"] = importance
+        if tags:
+            body["tags"] = tags
+        if pinned is not None:
+            body["pinned"] = pinned
+        return self._patch(f"/api/memory/{urllib.parse.quote(memory_id)}", body)
+
+    def forget_memory(
+        self,
+        memory_id: str,
+        *,
+        reason: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Soft-delete a memory by ID."""
+        params = urllib.parse.urlencode({"reason": reason})
+        return self._delete(f"/api/memory/{urllib.parse.quote(memory_id)}?{params}")
 
     def search(
         self,

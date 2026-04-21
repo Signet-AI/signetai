@@ -14,6 +14,7 @@ import {
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import { toFtsSchemaQueryDb } from "./db-accessor";
 import {
 	countChanges,
 	syncVecDeleteByEmbeddingIds,
@@ -369,7 +370,7 @@ export function checkFtsConsistency(
 		} catch {
 			missing = true;
 		}
-		const ftsSql = missing ? null : readMemoriesFtsSql(db);
+		const ftsSql = missing ? null : readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 		return {
 			memCount: memRow.n,
 			ftsCount: ftsN,
@@ -1766,6 +1767,15 @@ export function structuralBackfill(
 	options?: { batchSize?: number; dryRun?: boolean },
 ): RepairResult {
 	const action = "structuralBackfill";
+	if (!cfg.structural.enabled) {
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: "structural backfill disabled; use structured remember or an explicit normalization pass",
+		};
+	}
+
 	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 20);
 	if (!gate.allowed) {
 		return { action, success: false, affected: 0, message: gate.reason ?? "denied" };
@@ -1831,6 +1841,7 @@ export function structuralBackfill(
 				entity_type: row.entity_type,
 				fact_content: row.content,
 				attribute_id: attrId,
+				agent_id: row.agent_id,
 			});
 			const jobId = crypto.randomUUID();
 			db.prepare(
@@ -2043,8 +2054,8 @@ export function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[])
 			{
 				actor: "api",
 				reason: "dead-memory hygiene",
-				actorType: "system",
-				requestId: null,
+				actorType: "daemon",
+				requestId: undefined,
 			},
 			total,
 			`soft-deleted ${total} dead memories`,

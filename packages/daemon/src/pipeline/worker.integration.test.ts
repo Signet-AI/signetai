@@ -139,6 +139,7 @@ const HINTS_RESPONSE = [
 function testPipelineCfg(): PipelineV2Config {
 	return {
 		enabled: true,
+		paused: false,
 		shadowMode: false,
 		nativeShadowEnabled: false,
 		mutationsFrozen: false,
@@ -158,7 +159,7 @@ function testPipelineCfg(): PipelineV2Config {
 				level2MaxEntities: 5,
 			},
 		},
-		worker: { pollMs: 10, maxRetries: 3, leaseTimeoutMs: 300000 },
+		worker: { pollMs: 10, maxRetries: 3, leaseTimeoutMs: 300000, maxLoadPerCpu: 2, overloadBackoffMs: 5000 },
 		graph: { enabled: true, boostWeight: 0.15, boostTimeoutMs: 500 },
 		traversal: {
 			enabled: false,
@@ -202,6 +203,7 @@ function testPipelineCfg(): PipelineV2Config {
 			maxContentChars: 800,
 			chunkTargetChars: 600,
 			recallTruncateChars: 500,
+			contextBudgetChars: 4000,
 		},
 		continuity: {
 			enabled: false,
@@ -246,6 +248,7 @@ function testPipelineCfg(): PipelineV2Config {
 			synthesisIntervalMs: 60_000,
 			synthesisTopEntities: 20,
 			synthesisMaxFacts: 10,
+			synthesisMaxStallMs: 1_800_000,
 			supersessionEnabled: false,
 			supersessionSweepEnabled: false,
 			supersessionSemanticFallback: false,
@@ -441,7 +444,7 @@ describe("pipeline integration", () => {
 		db = new Database(":memory:");
 		db.exec("PRAGMA journal_mode = WAL");
 		db.exec("PRAGMA foreign_keys = ON");
-		runMigrations(db as unknown as WriteDb);
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		accessor = makeAccessor(db);
 	});
 

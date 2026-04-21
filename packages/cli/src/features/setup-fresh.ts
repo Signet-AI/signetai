@@ -9,6 +9,7 @@ import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { buildSetupPipeline } from "./setup-pipeline.js";
+import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import { formatWorkspaceSourceRepoSync, readErr, readRecord } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps } from "./setup-types.js";
@@ -128,6 +129,8 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 
 		writeFileSync(join(cfg.basePath, "agent.yaml"), formatYaml(config));
 
+		writeSetupCorePluginRegistry(cfg.basePath, { signetSecretsEnabled: cfg.signetSecretsEnabled });
+
 		const docFiles = [
 			{ name: "MEMORY.md", template: "MEMORY.md.template" },
 			{ name: "SOUL.md", template: "SOUL.md.template" },
@@ -234,6 +237,14 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		console.log(chalk.dim("    ├── MEMORY.md     working memory"));
 		console.log(chalk.dim("    ├── signetai/     Signet source checkout"));
 		console.log(chalk.dim("    └── memory/       database & vectors"));
+
+		console.log();
+		console.log(chalk.dim("  Core plugins:"));
+		console.log(
+			chalk.dim(
+				`    ${cfg.signetSecretsEnabled ? "✓" : "○"} Signet Secrets ${cfg.signetSecretsEnabled ? "enabled" : "installed but disabled"}`,
+			),
+		);
 
 		if (configuredHarnesses.length > 0) {
 			console.log();

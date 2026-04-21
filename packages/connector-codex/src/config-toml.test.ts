@@ -24,8 +24,22 @@ let tempHome: string;
 let codexDir: string;
 let configPath: string;
 let hooksPath: string;
+let previousSessionStartTimeout: string | undefined;
+let previousFetchTimeout: string | undefined;
+
+function restoreEnv(name: string, value: string | undefined): void {
+	if (value === undefined) {
+		Reflect.deleteProperty(process.env, name);
+		return;
+	}
+	process.env[name] = value;
+}
 
 beforeEach(() => {
+	previousSessionStartTimeout = process.env.SIGNET_SESSION_START_TIMEOUT;
+	previousFetchTimeout = process.env.SIGNET_FETCH_TIMEOUT;
+	Reflect.deleteProperty(process.env, "SIGNET_SESSION_START_TIMEOUT");
+	Reflect.deleteProperty(process.env, "SIGNET_FETCH_TIMEOUT");
 	tempHome = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	codexDir = join(tempHome, ".codex");
 	configPath = join(codexDir, "config.toml");
@@ -34,6 +48,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	restoreEnv("SIGNET_SESSION_START_TIMEOUT", previousSessionStartTimeout);
+	restoreEnv("SIGNET_FETCH_TIMEOUT", previousFetchTimeout);
 	rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -267,7 +283,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(typeof handler.command).toBe("string");
 		expect(handler.command as string).toContain("hook session-start");
 		expect(handler.command as string).toContain("-H codex");
-		expect(handler.timeout).toBe(10);
+		expect(handler.timeout).toBe(20);
 	});
 
 	test("sets correct timeouts per event", async () => {
@@ -276,7 +292,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
 
 		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
-		expect(startHandler.timeout).toBe(10);
+		expect(startHandler.timeout).toBe(20);
 
 		const promptHandler = (
 			(hooks.UserPromptSubmit[0] as Record<string, unknown>).hooks as Record<string, unknown>[]
@@ -285,6 +301,139 @@ describe("CodexConnector.install — hooks.json schema", () => {
 
 		const stopHandler = ((hooks.Stop[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
 		expect(stopHandler.timeout).toBe(30);
+	});
+
+	test("sets Codex session-start timeout to Signet timeout plus grace", async () => {
+		process.env.SIGNET_SESSION_START_TIMEOUT = "18000";
+
+		await connector().install(tempHome);
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
+		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
+
+		expect(startHandler.timeout).toBe(23);
+	});
+
+	test("refreshes existing Signet-owned hooks to current timeouts", async () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify({
+				_signet: true,
+				hooks: {
+					SessionStart: [
+						{ _signet: true, hooks: [{ type: "command", command: "signet hook session-start -H codex", timeout: 10 }] },
+					],
+					UserPromptSubmit: [
+						{
+							_signet: true,
+							hooks: [{ type: "command", command: "signet hook user-prompt-submit -H codex", timeout: 5 }],
+						},
+					],
+					Stop: [
+						{ _signet: true, hooks: [{ type: "command", command: "signet hook session-end -H codex", timeout: 30 }] },
+					],
+				},
+			}),
+		);
+
+		await connector().install(tempHome);
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
+		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
+
+		expect(startHandler.timeout).toBe(20);
+	});
+
+	test("preserves unrelated top-level keys when refreshing only Signet hooks", async () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify({
+				_signet: true,
+				version: 1,
+				metadata: { owner: "third-party" },
+				hooks: {
+					SessionStart: [
+						{ _signet: true, hooks: [{ type: "command", command: "signet hook session-start -H codex", timeout: 10 }] },
+					],
+				},
+			}),
+		);
+
+		await connector().install(tempHome);
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
+		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
+
+		expect(json.version).toBe(1);
+		expect(json.metadata).toEqual({ owner: "third-party" });
+		expect(startHandler.timeout).toBe(20);
+	});
+
+	test("refreshes node-shim Signet hook commands without duplicating entries", async () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify({
+				hooks: {
+					SessionStart: [
+						{
+							hooks: [
+								{
+									type: "command",
+									command: "/usr/bin/node /tmp/signet/bin/signet.js hook session-start -H codex",
+									timeout: 10,
+								},
+							],
+						},
+					],
+				},
+			}),
+		);
+
+		await connector().install(tempHome);
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
+		const startGroups = hooks.SessionStart;
+		const signetHandlers = startGroups.flatMap((group) =>
+			((group as Record<string, unknown>).hooks as Record<string, unknown>[]).filter((handler) =>
+				(handler.command as string).includes("hook session-start"),
+			),
+		);
+
+		expect(signetHandlers.length).toBe(1);
+		expect(signetHandlers[0]?.timeout).toBe(20);
+	});
+
+	test("preserves third-party commands that only mention hook subcommands", async () => {
+		writeFileSync(
+			hooksPath,
+			JSON.stringify({
+				hooks: {
+					SessionStart: [
+						{
+							hooks: [
+								{
+									type: "command",
+									command: "python ./scripts/custom-reviewer.py --note ' hook session-start '",
+									timeout: 7,
+								},
+							],
+						},
+					],
+				},
+			}),
+		);
+
+		await connector().install(tempHome);
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
+		const commands = hooks.SessionStart.flatMap((group) =>
+			((group as Record<string, unknown>).hooks as Record<string, unknown>[]).map(
+				(handler) => handler.command as string,
+			),
+		);
+
+		expect(commands).toContain("python ./scripts/custom-reviewer.py --note ' hook session-start '");
+		expect(commands.some((command) => command === "signet hook session-start -H codex")).toBe(true);
 	});
 
 	test("does not use array-form command (regression: issue #481)", async () => {

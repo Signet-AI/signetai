@@ -1,8 +1,8 @@
 /**
  * Standalone types for the Signet OpenCode plugin.
  *
- * No @signet/* dependencies — this package must be independently
- * distributable.
+ * Keep runtime behavior routed through shared @signet/core helpers where
+ * possible so OpenCode stays aligned with CLI, MCP, and harness surfaces.
  */
 
 export const DAEMON_URL_DEFAULT = "http://localhost:3850";
@@ -29,13 +29,4 @@ export interface MemoryRecord {
 	readonly who: string | null;
 	readonly created_at: string;
 	readonly updated_at: string;
-}
-
-export interface RecallResult {
-	readonly id: string;
-	readonly content: string;
-	readonly type: string;
-	readonly importance: number;
-	readonly score: number;
-	readonly created_at: string;
 }

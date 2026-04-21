@@ -53,6 +53,166 @@ interface UpsertEntityResult {
 	readonly inserted: boolean;
 }
 
+interface StoredAttribute {
+	readonly id: string;
+	readonly content: string;
+	readonly normalizedContent: string;
+	readonly groupKey: string | null;
+	readonly claimKey: string;
+	readonly memoryId: string | null;
+	readonly createdAt: string;
+}
+
+const UPDATE_MARKERS = [
+	"currently",
+	"now",
+	"recently",
+	"lately",
+	"updated",
+	"changed",
+	"switched",
+	"replaced",
+	"no longer",
+	"not anymore",
+	"instead",
+	"previously",
+	"formerly",
+];
+
+const NUMBER_WORDS = new Set([
+	"zero",
+	"one",
+	"two",
+	"three",
+	"four",
+	"five",
+	"six",
+	"seven",
+	"eight",
+	"nine",
+	"ten",
+	"eleven",
+	"twelve",
+]);
+
+function tokenize(content: string): string[] {
+	return content
+		.toLowerCase()
+		.replace(/[^a-z0-9\s-]/g, " ")
+		.split(/\s+/)
+		.filter((token) => token.length >= 2);
+}
+
+function normalizeClaimKey(value: string | undefined): string | null {
+	const normalized = (value ?? "")
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.replace(/_{2,}/g, "_");
+	if (normalized.length < 3) return null;
+	return normalized.slice(0, 120);
+}
+
+function normalizeGroupKey(value: string | undefined): string | null {
+	return normalizeClaimKey(value);
+}
+
+function hasUpdateMarker(content: string): boolean {
+	const normalized = content.toLowerCase();
+	return UPDATE_MARKERS.some((marker) => normalized.includes(marker));
+}
+
+function numericTokens(tokens: readonly string[]): Set<string> {
+	return new Set(tokens.filter((token) => /^\d+$/.test(token) || NUMBER_WORDS.has(token)));
+}
+
+function overlapCount(left: readonly string[], right: readonly string[]): number {
+	const rightSet = new Set(right);
+	return left.filter((token) => rightSet.has(token)).length;
+}
+
+function hasNumericConflict(left: readonly string[], right: readonly string[]): boolean {
+	const leftNumbers = numericTokens(left);
+	const rightNumbers = numericTokens(right);
+	if (leftNumbers.size === 0 || rightNumbers.size === 0) return false;
+	for (const token of leftNumbers) {
+		if (!rightNumbers.has(token)) return true;
+	}
+	for (const token of rightNumbers) {
+		if (!leftNumbers.has(token)) return true;
+	}
+	return false;
+}
+
+function isLikelySupersession(newContent: string, oldContent: string): boolean {
+	const newer = tokenize(newContent);
+	const older = tokenize(oldContent);
+	if (newer.length === 0 || older.length === 0) return false;
+	const overlap = overlapCount(newer, older);
+	if (overlap < 3) return false;
+	if (hasNumericConflict(newer, older)) return true;
+	return hasUpdateMarker(newContent) && overlap >= 4;
+}
+
+function markSupersededSiblings(
+	db: WriteDb,
+	attribute: StoredAttribute,
+	aspectId: string,
+	agentId: string,
+	now: string,
+): number {
+	const siblings = db
+		.prepare(
+			`SELECT id, content, normalized_content, group_key, claim_key, memory_id, created_at
+			 FROM entity_attributes
+			 WHERE aspect_id = ? AND agent_id = ?
+			   AND (group_key = ? OR (group_key IS NULL AND ? IS NULL))
+			   AND claim_key = ?
+			   AND id != ?
+			   AND kind = 'attribute'
+			   AND status = 'active'`,
+		)
+		.all(aspectId, agentId, attribute.groupKey, attribute.groupKey, attribute.claimKey, attribute.id) as Array<{
+		id: string;
+		content: string;
+		normalized_content: string;
+		group_key: string | null;
+		claim_key: string;
+		memory_id: string | null;
+		created_at: string;
+	}>;
+
+	let count = 0;
+	for (const row of siblings) {
+		const sibling: StoredAttribute = {
+			id: row.id,
+			content: row.content,
+			normalizedContent: row.normalized_content,
+			groupKey: row.group_key,
+			claimKey: row.claim_key,
+			memoryId: row.memory_id,
+			createdAt: row.created_at,
+		};
+		const left = new Date(attribute.createdAt).getTime();
+		const right = new Date(sibling.createdAt).getTime();
+		const attributeIsNewer = Number.isFinite(left) && Number.isFinite(right) ? left >= right : true;
+		const newer = attributeIsNewer ? attribute : sibling;
+		const older = attributeIsNewer ? sibling : attribute;
+		if (!isLikelySupersession(newer.normalizedContent, older.normalizedContent)) continue;
+
+		const result = db
+			.prepare(
+				`UPDATE entity_attributes
+				 SET status = 'superseded', superseded_by = ?, updated_at = ?
+				 WHERE id = ? AND agent_id = ? AND status = 'active'`,
+			)
+			.run(newer.id, now, older.id, agentId);
+		count += countChanges(result);
+	}
+	return count;
+}
+
 /**
  * Upsert an entity by canonical_name. Returns the entity row id
  * and whether it was a new insert.
@@ -247,8 +407,11 @@ export function txPersistEntities(db: WriteDb, input: PersistEntitiesInput): Per
 
 export interface StructuredAspect {
 	readonly entityName: string;
+	readonly entityType?: string;
 	readonly aspect: string;
 	readonly attributes: ReadonlyArray<{
+		readonly groupKey?: string;
+		readonly claimKey?: string;
 		readonly content: string;
 		readonly confidence?: number;
 		readonly importance?: number;
@@ -272,6 +435,7 @@ export interface PersistStructuredResult {
 	readonly mentionsLinked: number;
 	readonly aspectsCreated: number;
 	readonly attributesCreated: number;
+	readonly attributesSuperseded: number;
 }
 
 /**
@@ -290,8 +454,12 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 		agentId: input.agentId,
 	});
 
+	let entitiesInserted = base.entitiesInserted;
+	let entitiesUpdated = base.entitiesUpdated;
+	let mentionsLinked = base.mentionsLinked;
 	let aspectsCreated = 0;
 	let attributesCreated = 0;
+	let attributesSuperseded = 0;
 
 	// Decision detection: promote attributes to constraints when
 	// the source memory contains decision-indicating language.
@@ -305,7 +473,7 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 	// Step 2: Upsert aspects and attributes
 	for (const sa of input.aspects) {
 		const canonical = toCanonicalName(sa.entityName);
-		const row = db
+		let row = db
 			.prepare(
 				`SELECT id FROM entities
 				 WHERE canonical_name = ? AND agent_id = ?
@@ -313,7 +481,21 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 			)
 			.get(canonical, input.agentId) as { id: string } | undefined;
 
-		if (!row) continue;
+		if (!row) {
+			const inserted = upsertEntity(db, sa.entityName, sa.entityType ?? "unknown", input.agentId, input.now);
+			if (!inserted) continue;
+			if (inserted.inserted) entitiesInserted++;
+			else entitiesUpdated++;
+			row = { id: inserted.id };
+		}
+		const mention = db
+			.prepare(
+				`INSERT OR IGNORE INTO memory_entity_mentions
+				 (memory_id, entity_id, mention_text, confidence, created_at)
+				 VALUES (?, ?, ?, ?, ?)`,
+			)
+			.run(input.sourceMemoryId, row.id, sa.entityName, 0.7, input.now);
+		if (countChanges(mention) > 0) mentionsLinked++;
 		resolved.push(row.id);
 
 		// Upsert aspect
@@ -354,27 +536,49 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 
 			const confidence = attr.confidence ?? 0.7;
 			const importance = attr.importance ?? baseImportance;
+			const attributeId = crypto.randomUUID();
+			const groupKey = normalizeGroupKey(attr.groupKey);
+			const claimKey = normalizeClaimKey(attr.claimKey);
 			try {
 				db.prepare(
 					`INSERT INTO entity_attributes
 					 (id, aspect_id, agent_id, memory_id, kind, content,
-					  normalized_content, confidence, importance, status,
+					  normalized_content, group_key, claim_key, confidence, importance, status,
 					  created_at, updated_at)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
 				).run(
-					crypto.randomUUID(),
+					attributeId,
 					stored.id,
 					input.agentId,
 					input.sourceMemoryId,
 					kind,
 					attr.content,
 					normalized,
+					groupKey,
+					claimKey,
 					confidence,
 					importance,
 					input.now,
 					input.now,
 				);
 				attributesCreated++;
+				if (kind === "attribute" && claimKey !== null) {
+					attributesSuperseded += markSupersededSiblings(
+						db,
+						{
+							id: attributeId,
+							content: attr.content,
+							normalizedContent: normalized,
+							groupKey,
+							claimKey,
+							memoryId: input.sourceMemoryId,
+							createdAt: input.now,
+						},
+						stored.id,
+						input.agentId,
+						input.now,
+					);
+				}
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
 				if (!msg.includes("UNIQUE constraint")) throw e;
@@ -418,13 +622,14 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 	}
 
 	return {
-		entitiesInserted: base.entitiesInserted,
-		entitiesUpdated: base.entitiesUpdated,
+		entitiesInserted,
+		entitiesUpdated,
 		relationsInserted: base.relationsInserted,
 		relationsUpdated: base.relationsUpdated,
-		mentionsLinked: base.mentionsLinked,
+		mentionsLinked,
 		aspectsCreated,
 		attributesCreated,
+		attributesSuperseded,
 	};
 }
 

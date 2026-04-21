@@ -20,7 +20,7 @@ function loadIndex(): number {
 		const v = Number.parseFloat(stored);
 		// Guard: values above the max step are old index-based storage (e.g. "7" for
 		// index 7). Passing them to nearest-match would silently set max zoom (3.0×).
-		if (!isNaN(v) && v <= STEPS[STEPS.length - 1]) {
+		if (!Number.isNaN(v) && v <= STEPS[STEPS.length - 1]) {
 			// Exact match first
 			const exact = (STEPS as readonly number[]).indexOf(v);
 			if (exact !== -1) return exact;
@@ -33,19 +33,30 @@ function loadIndex(): number {
 
 let index = $state(loadIndex());
 
+function applyViewportScale(scale: number): void {
+	if (typeof window === "undefined" || typeof document === "undefined") return;
+	document.documentElement.style.setProperty("--scaled-viewport-width", `${window.innerWidth / scale}px`);
+	document.documentElement.style.setProperty("--scaled-viewport-height", `${window.innerHeight / scale}px`);
+}
+
 function applyScale(): void {
 	if (typeof document === "undefined") return;
 	const scale = STEPS[index];
-	// CSS zoom scales everything uniformly — text, spacing, SVGs —
-	// without the WebKit stroke-width rendering bugs that come from
-	// the browser's native zoom implementation.
+	// CSS zoom scales visual output but viewport units still resolve against
+	// the unscaled window. Keep an inverse viewport variable so full-height
+	// dashboard shells do not clip their bottom edge at >100% scale.
 	document.documentElement.style.zoom = String(scale);
 	document.documentElement.style.setProperty("--ui-scale", String(scale));
+	applyViewportScale(scale);
 }
 
 // Apply on load
 if (typeof document !== "undefined") {
 	applyScale();
+}
+
+if (typeof window !== "undefined") {
+	window.addEventListener("resize", () => applyViewportScale(STEPS[index]));
 }
 
 export const uiScale = {

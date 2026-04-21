@@ -7,6 +7,8 @@ import { startSynthesisWorker } from "./synthesis-worker";
 let agentsDir = "";
 let previousSignetPath: string | undefined;
 
+type WriteResult = { ok: true } | { ok: false; error: string; code?: "busy" | "invalid" };
+
 const mockHandleSynthesisRequest = mock(
 	(_req?: { readonly trigger?: string }, opts?: { readonly agentId?: string }) => ({
 		harness: "daemon",
@@ -16,7 +18,7 @@ const mockHandleSynthesisRequest = mock(
 		indexBlock: "",
 	}),
 );
-const mockWriteMemoryMd = mock((_content: string, _opts?: { agentId?: string; owner?: string }) => ({
+const mockWriteMemoryMd = mock((_content: string, _opts?: { agentId?: string; owner?: string }): WriteResult => ({
 	ok: true as const,
 }));
 const mockActiveSessionCount = mock(() => 0);
@@ -28,6 +30,8 @@ const baseCfg = {
 	maxTokens: 8000,
 	idleGapMinutes: 15,
 };
+
+type SynthesisDeps = Parameters<typeof startSynthesisWorker>[1];
 
 function makeDeps() {
 	return {
@@ -48,7 +52,7 @@ function makeDeps() {
 					}),
 				}),
 		}),
-	};
+	} as unknown as SynthesisDeps;
 }
 
 function createWorker() {

@@ -11,6 +11,7 @@ import { runMigrations } from "../../../core/src/migrations";
 import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { syncVecInsert, vectorToBlob } from "../db-helpers";
+import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import type { PipelineV2Config } from "../memory-config";
 import type { DecisionConfig } from "./decision";
 import { type LlmProvider, RateLimitExceededError } from "./provider";
@@ -244,67 +245,38 @@ function rateLimitedProvider(): LlmProvider {
  */
 
 const PIPELINE_CFG: PipelineV2Config = {
-	enabled: true,
+	...DEFAULT_PIPELINE_V2,
 	shadowMode: true,
 	mutationsFrozen: false,
 	extraction: {
+		...DEFAULT_PIPELINE_V2.extraction,
 		provider: "ollama",
 		model: "qwen3:4b",
 		timeout: 5000,
 		minConfidence: 0.7,
 	},
 	worker: {
+		...DEFAULT_PIPELINE_V2.worker,
 		pollMs: 10, // fast polling for tests
-		maxRetries: 3,
-		leaseTimeoutMs: 300000,
-		maxLoadPerCpu: 0.8,
-		overloadBackoffMs: 30000,
 	},
 	graph: {
+		...DEFAULT_PIPELINE_V2.graph,
 		enabled: false,
-		boostWeight: 0.15,
-		boostTimeoutMs: 500,
 	},
 	reranker: {
+		...DEFAULT_PIPELINE_V2.reranker,
 		enabled: false,
-		model: "",
-		useExtractionModel: false,
-		topN: 20,
-		timeoutMs: 2000,
 	},
 	autonomous: {
+		...DEFAULT_PIPELINE_V2.autonomous,
 		enabled: false,
 		frozen: false,
 		allowUpdateDelete: false,
-		maintenanceIntervalMs: 1800000,
 		maintenanceMode: "observe",
 	},
-	repair: {
-		reembedCooldownMs: 300000,
-		reembedHourlyBudget: 10,
-		requeueCooldownMs: 60000,
-		requeueHourlyBudget: 50,
-		dedupCooldownMs: 600000,
-		dedupHourlyBudget: 3,
-		dedupSemanticThreshold: 0.92,
-		dedupBatchSize: 100,
-	},
-	documents: {
-		workerIntervalMs: 10000,
-		chunkSize: 2000,
-		chunkOverlap: 200,
-		maxContentBytes: 10 * 1024 * 1024,
-	},
-	guardrails: {
-		maxContentChars: 500,
-		chunkTargetChars: 300,
-		recallTruncateChars: 500,
-	},
 	structural: {
+		...DEFAULT_PIPELINE_V2.structural,
 		enabled: false,
-		classifyBatchSize: 8,
-		dependencyBatchSize: 5,
-		pollIntervalMs: 10000,
 	},
 	significance: {
 		enabled: false,
@@ -326,7 +298,7 @@ const DECISION_CFG: DecisionConfig = {
 		dimensions: 3, // matches test mock vectors
 		base_url: "http://localhost:11434",
 	},
-	search: { alpha: 0.7, top_k: 20, min_score: 0.0 },
+	search: { alpha: 0.7, top_k: 20, min_score: 0.0, rehearsal_enabled: false, rehearsal_weight: 0, rehearsal_half_life_days: 7 },
 	async fetchEmbedding() {
 		return null;
 	},
@@ -1880,7 +1852,7 @@ describe("Backoff recovery", () => {
 
 		// mem-bf-1 may have hit the throwing call — should be dead or completed
 		const j0 = getJob(db, "mem-bf-1");
-		expect(["completed", "dead"]).toContain(j0?.status);
+		expect(["completed", "dead"]).toContain(j0?.status ?? "");
 		const j1 = getJob(db, "mem-bf-2");
 		const j2 = getJob(db, "mem-bf-3");
 		expect(j1?.status).toBe("completed");

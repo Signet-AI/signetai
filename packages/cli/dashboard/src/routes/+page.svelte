@@ -10,6 +10,7 @@ import TabContentLoader from "$lib/components/layout/TabContentLoader.svelte";
 import WindowTitlebar from "$lib/components/layout/WindowTitlebar.svelte";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 import { Toaster } from "$lib/components/ui/sonner/index.js";
+import { isDesktopShell } from "$lib/desktop-shell";
 import { focus } from "$lib/stores/focus.svelte";
 import {
 	clearAll,
@@ -39,12 +40,13 @@ import { hasUnsavedChanges } from "$lib/stores/unsaved-changes.svelte";
 import { onMount } from "svelte";
 
 const activeTab = $derived(nav.activeTab);
-let { data } = $props();
+const { data } = $props();
 const agentId = $derived.by(() => {
 	if (typeof window === "undefined") return "default";
 	return new URLSearchParams(window.location.search).get("agent_id") ?? "default";
 });
 let daemonStatus = $state<DaemonStatus | null>(null);
+// biome-ignore lint/style/useConst: Svelte state is rebound by UpgradeBanner.
 let bannerShowing = $state(false);
 let embeddingsPrefetchPromise: Promise<unknown[]> | null = null;
 let timelineGeneratedFor = $state("");
@@ -157,17 +159,17 @@ onMount(() => {
 	};
 	window.addEventListener("beforeunload", handleBeforeUnload);
 
-	// Ctrl+scroll wheel zoom — only in Tauri (web build preserves native browser zoom).
+	// Ctrl+scroll wheel zoom — only in the desktop shell (web build preserves native browser zoom).
 	// Modifier check is inlined so non-ctrl scrolls exit immediately, minimising the
 	// cost of the { passive: false } constraint on ordinary scrolling.
-	const isTauri = "__TAURI_INTERNALS__" in window;
+	const isDesktop = isDesktopShell();
 	const handleWheel = (e: WheelEvent) => {
 		if (!(e.ctrlKey || e.metaKey)) return;
 		e.preventDefault();
 		if (e.deltaY < 0) uiScale.zoomIn();
 		else if (e.deltaY > 0) uiScale.zoomOut();
 	};
-	if (isTauri) {
+	if (isDesktop) {
 		window.addEventListener("wheel", handleWheel, { passive: false });
 	}
 
@@ -175,7 +177,7 @@ onMount(() => {
 		cleanupNav();
 		cleanupTabGroups();
 		window.removeEventListener("beforeunload", handleBeforeUnload);
-		if (isTauri) {
+		if (isDesktop) {
 			window.removeEventListener("wheel", handleWheel);
 		}
 	};
@@ -217,15 +219,18 @@ $effect(() => {
 
 <svelte:window
 	onkeydown={(e) => {
-		const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-		if (isTauri && uiScale.handleZoomKey(e)) return;
+		const isDesktop = isDesktopShell();
+		if (isDesktop && uiScale.handleZoomKey(e)) return;
 		handleGlobalKey(e);
 	}}
 	onfocusin={handleFocusIn}
 	onclick={handlePageClick}
 />
 
-<div class="flex flex-col h-screen overflow-hidden" style="--titlebar-h: {titlebar.visible ? titlebar.height : 0}px;">
+<div
+	class="flex flex-col h-screen overflow-hidden"
+	style="--titlebar-h: {titlebar.visible ? titlebar.height : 0}px; width: var(--scaled-viewport-width, 100vw); height: var(--scaled-viewport-height, 100vh);"
+>
 <WindowTitlebar />
 
 <Sidebar.Provider class="!h-full flex-1 min-h-0">

@@ -20,6 +20,7 @@ export {
 	ATTRIBUTE_STATUSES,
 	DEPENDENCY_TYPES,
 	TASK_STATUSES,
+	TASK_HARNESSES,
 	DEFAULT_PROVIDER_RATE_LIMIT,
 } from "./types";
 export type {
@@ -70,6 +71,7 @@ export type {
 	AttributeStatus,
 	DependencyType,
 	TaskStatus,
+	TaskHarness,
 	EntityAspect,
 	EntityAttribute,
 	EntityDependency,
@@ -112,8 +114,27 @@ export {
 	type VectorSearchOptions,
 	type HybridSearchOptions,
 } from "./search";
-export { applyRecallScoreThreshold, partitionRecallRows } from "./recall";
-export type { RecallPartitionableRow } from "./recall";
+export {
+	applyRecallScoreThreshold,
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	emptyHookRecallResponse,
+	formatRecallText,
+	normalizeStructuredMemoryPayload,
+	parseRecallMeta,
+	parseRecallPayload,
+	partitionRecallRows,
+	withHookRecallCompat,
+} from "./recall";
+export type {
+	RecallMeta,
+	RecallPartitionableRow,
+	RecallPayload,
+	RecallRequestOptions,
+	RecallRow,
+	RecallScoreFilterRow,
+	RememberRequestOptions,
+} from "./recall";
 export {
 	createMemoriesFts,
 	memoriesFtsNeedsTokenizerRepair,
@@ -133,6 +154,13 @@ export type {
 	MigrationResult,
 } from "./migration";
 export * from "./constants";
+
+export {
+	SIGNET_PLUGIN_REGISTRY_DIR,
+	SIGNET_PLUGIN_REGISTRY_FILE,
+	SIGNET_PLUGIN_REGISTRY_VERSION,
+	SIGNET_SECRETS_PLUGIN_ID,
+} from "./plugins";
 export {
 	SIGNET_GIT_PROTECTED_PATHS,
 	mergeSignetGitignoreEntries,
@@ -192,6 +220,7 @@ export {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolveSignetForgeManagedPath,
 	resolveAgentBasePath,
+	resolveHermesRepoPath,
 	resolveHermesRepoPluginPath,
 	hermesAgentCandidateDirs,
 } from "./identity";

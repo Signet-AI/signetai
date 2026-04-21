@@ -6,6 +6,27 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-20
+- Bug fixes: dedupe automatic hooks by runtime path; run Bun global installs with Bun.
+- Refactoring: align recall and remember surfaces.
+
+### 2026-04-19
+- Bug fixes: resolve all typescript strict-mode errors in daemon package.
+
+### 2026-04-18
+- Features: add plugin registry panel.
+- Bug fixes: scope Signet memory to named agents; align desktop release build prerequisites.
+
+### 2026-04-17
+- Features: replace Tauri shell with Electron app; add plugin SDK core v1 secrets registry.
+- Bug fixes: pass AGENTS_DIR directly in runSyncTemplates instead of accepting a parameter; wire enableOllamaFallback config and add native embedding init cooldown; prevent session-start hook timeouts.
+- Performance: paginate entity IDs before counting to avoid full GROUP BY.
+- Docs: add recall confidence gate record; define plugin sdk core v1.
+
+### 2026-04-16
+- Bug fixes: resolve FD exhaustion and event loop blocking with thousands of memory artifacts.
+- Refactoring: prompt for sync after restart.
+
 ### 2026-04-15
 - Bug fixes: thread deadline into OpenCode session creation.
 
@@ -13,23 +34,168 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add llama.cpp as default fallback runtime provider.
 - Bug fixes: unify LLM concurrency (#509); prevent bypass memory leak in OpenCode provider; reduce OpenCode session overhead for pipeline jobs; five correctness bugs found via sqmd structural review.
 
-### 2026-04-13
-- Bug fixes: prompt agents to check memory before acting; enable Signet pipeline through GitHub Copilot providers.
-
-### 2026-04-12
-- Bug fixes: emit valid Codex hooks.json schema; gate dependency synthesis on extraction progress; expose pinned param in memory_store and memory_modify.
-- Docs: add Ostico as contributor; align generated site metadata.
-
-### 2026-04-11
-- Docs: refresh public Signet positioning.
-
-### 2026-04-10
-- Bug fixes: rebuild changelog with readable highlights.
-
-### 2026-04-09
-- Bug fixes: block leaked workspace deps in release; improve docs search and docs navigation.
-
 ## Release Ledger
+
+## [0.102.7] - 2026-04-20
+
+Release summary: 1 bug fix.
+Tag range: `v0.102.6..v0.102.7`.
+
+### Bug Fixes
+
+- **daemon**: dedupe automatic hooks by runtime path (#540)
+
+## [0.102.6] - 2026-04-20
+
+Release summary: 1 bug fix.
+Tag range: `v0.102.5..v0.102.6`.
+
+### Bug Fixes
+
+- **cli**: run Bun global installs with Bun (#539)
+
+## [0.102.5] - 2026-04-20
+
+Release summary: 1 refactor.
+Tag range: `v0.102.4..v0.102.5`.
+
+### Refactoring
+
+- **memory**: align recall and remember surfaces (#531)
+
+## [0.102.4] - 2026-04-20
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.102.3..v0.102.4`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.102.3] - 2026-04-19
+
+Release summary: 1 bug fix.
+Tag range: `v0.102.2..v0.102.3`.
+
+### Bug Fixes
+
+- **daemon**: resolve all typescript strict-mode errors in daemon package (#527)
+
+## [0.102.2] - 2026-04-19
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.102.1..v0.102.2`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.102.1] - 2026-04-18
+
+Release summary: 1 bug fix.
+Tag range: `v0.102.0..v0.102.1`.
+
+### Bug Fixes
+
+- **hermes**: scope Signet memory to named agents (#504)
+
+## [0.102.0] - 2026-04-18
+
+Release summary: 1 feature.
+Tag range: `v0.101.2..v0.102.0`.
+
+### Features
+
+- **dashboard**: add plugin registry panel (#524)
+
+## [0.101.2] - 2026-04-18
+
+Release summary: 1 bug fix.
+Tag range: `v0.101.1..v0.101.2`.
+
+### Bug Fixes
+
+- **ci**: align desktop release build prerequisites (#525)
+
+## [0.101.1] - 2026-04-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.101.0..v0.101.1`.
+
+### Bug Fixes
+
+- **cli**: pass AGENTS_DIR directly in runSyncTemplates instead of accepting a parameter (#523)
+
+## [0.101.0] - 2026-04-17
+
+Release summary: 1 feature.
+Tag range: `v0.100.1..v0.101.0`.
+
+### Features
+
+- **desktop**: replace Tauri shell with Electron app (#519)
+
+## [0.100.1] - 2026-04-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.100.0..v0.100.1`.
+
+### Bug Fixes
+
+- **daemon**: wire enableOllamaFallback config and add native embedding init cooldown (#520)
+
+## [0.100.0] - 2026-04-17
+
+Release summary: 1 feature.
+Tag range: `v0.99.8..v0.100.0`.
+
+### Features
+
+- **plugins**: add plugin SDK core v1 secrets registry (#518)
+
+## [0.99.8] - 2026-04-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.99.7..v0.99.8`.
+
+### Bug Fixes
+
+- **codex**: prevent session-start hook timeouts (#517)
+
+## [0.99.7] - 2026-04-17
+
+Release summary: 1 performance improvement and 2 docs updates.
+Tag range: `v0.99.6..v0.99.7`.
+
+### Performance
+
+- **knowledge-graph**: paginate entity IDs before counting to avoid full GROUP BY (#516)
+
+### Docs
+
+- **specs**: add recall confidence gate record
+- **specs**: define plugin sdk core v1
+
+## [0.99.6] - 2026-04-16
+
+Release summary: 1 refactor.
+Tag range: `v0.99.5..v0.99.6`.
+
+### Refactoring
+
+- **cli**: prompt for sync after restart (#514)
+
+## [0.99.5] - 2026-04-16
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.99.4..v0.99.5`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.99.4] - 2026-04-16
+
+Release summary: 1 bug fix.
+Tag range: `v0.99.3..v0.99.4`.
+
+### Bug Fixes
+
+- **daemon**: resolve FD exhaustion and event loop blocking with thousands of memory artifacts (#513)
 
 ## [0.99.3] - 2026-04-15
 

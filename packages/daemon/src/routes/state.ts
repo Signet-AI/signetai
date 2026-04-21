@@ -1,4 +1,3 @@
-import type { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -169,8 +168,7 @@ const _ALLOWED_ORIGINS = new Set([
 	"http://127.0.0.1:3850",
 	"http://localhost:5173",
 	"http://127.0.0.1:5173",
-	"tauri://localhost",
-	"http://tauri.localhost",
+	"app://signet",
 ]);
 export const ALLOWED_ORIGINS = _ALLOWED_ORIGINS;
 
@@ -380,7 +378,7 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 		return diagnosticsCache.report;
 	}
 
-	const report = getDbAccessor().withReadDb((db: Database) =>
+	const report = getDbAccessor().withReadDb((db) =>
 		getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams(), buildOpenClawHealth()),
 	);
 	diagnosticsCache = {

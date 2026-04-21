@@ -9,7 +9,10 @@
 			"**/build/**",
 			"web/.wrangler/**",
 			"packages/signetai/dashboard/**",
-			"web/.astro/**"
+			"web/.astro/**",
+			"memorybench/data/**",
+			"memorybench/dist/**",
+			"memorybench/node_modules/**"
 		]
 	},
 	"formatter": {
@@ -37,5 +40,44 @@
 		"formatter": {
 			"indentStyle": "tab"
 		}
-	}
+	},
+	"overrides": [
+		{
+			"include": ["memorybench/**"],
+			"formatter": {
+				"enabled": false
+			},
+			"organizeImports": {
+				"enabled": false
+			},
+			"linter": {
+				"enabled": true,
+				"rules": {
+					"recommended": false,
+					"correctness": {
+						"noUnusedImports": "error",
+						"noUnusedVariables": "error"
+					},
+					"style": {
+						"noNonNullAssertion": "off",
+						"useNodejsImportProtocol": "off",
+						"noInferrableTypes": "off",
+						"useImportType": "off",
+						"useNumberNamespace": "off",
+						"useTemplate": "off",
+						"noUselessElse": "off",
+						"noUnusedTemplateLiteral": "off"
+					},
+					"complexity": {
+						"noStaticOnlyClass": "off",
+						"noThisInStatic": "off",
+						"noForEach": "off"
+					},
+					"suspicious": {
+						"noExplicitAny": "off"
+					}
+				}
+			}
+		}
+	]
 }

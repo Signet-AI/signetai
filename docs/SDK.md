@@ -750,26 +750,22 @@ await signet.updateGitConfig({
 Secrets Management
 ---
 
-Store and retrieve secrets securely (integrates with 1Password).
+Store secrets securely, list names, and inject values into subprocesses.
+Ordinary SDK calls do not retrieve raw secret values. The `signet.secrets`
+core plugin owns these helpers and keeps compatibility with the local
+encrypted store plus 1Password import flow.
 
 **`listSecrets()`** — List all secret names (not values).
 
 ```typescript
-const secrets = await signet.listSecrets();
+const { secrets } = await signet.listSecrets();
 // secrets[n] — secret name (e.g., "OPENAI_API_KEY")
 ```
 
-**`getSecret(name)`** — Retrieve a secret value.
+**`storeSecret(name, value)`**: Store a secret.
 
 ```typescript
-const apiKey = await signet.getSecret("OPENAI_API_KEY");
-console.log(apiKey);  // "sk-proj-..."
-```
-
-**`setSecret(name, value)`** — Store a secret.
-
-```typescript
-await signet.setSecret("ANTHROPIC_API_KEY", "sk-ant-...");
+await signet.storeSecret("ANTHROPIC_API_KEY", "sk-ant-...");
 ```
 
 **`deleteSecret(name)`** — Delete a secret.
@@ -781,31 +777,26 @@ await signet.deleteSecret("OLD_API_KEY");
 **`execWithSecrets(opts)`** — Run command with secrets injected as env vars.
 
 ```typescript
-const result = await signet.execWithSecrets({
-  command: "curl https://api.openai.com/v1/models",
-  secrets: {
-    OPENAI_API_KEY: "OPENAI_API_KEY",  // Maps to stored secret
-  },
+const result = await signet.execWithSecrets("curl https://api.openai.com/v1/models", {
+  OPENAI_API_KEY: "OPENAI_API_KEY",  // Bare name maps to local://OPENAI_API_KEY
 });
 // result.stdout — command output
 // result.stderr — error output
-// result.exit_code — process exit code
+// result.code: process exit code
 ```
 
 ### 1Password Integration
 
-**`connect1Password(opts)`** — Connect to 1Password using service account.
+**`connectOnePassword(token)`**: Connect to 1Password using service account.
 
 ```typescript
-await signet.connect1Password({
-  token: "ops_...",  // 1Password service account token
-});
+await signet.connectOnePassword("ops_...");
 ```
 
-**`list1PasswordVaults()`** — List available 1Password vaults.
+**`listOnePasswordVaults()`**: List available 1Password vaults.
 
 ```typescript
-const vaults = await signet.list1PasswordVaults();
+const { vaults } = await signet.listOnePasswordVaults();
 // vaults[n].id — vault identifier
 // vaults[n].name — vault name
 ```
@@ -814,12 +805,58 @@ const vaults = await signet.list1PasswordVaults();
 
 ```typescript
 await signet.import1PasswordSecrets({
-  vault: "Private",
-  items: [
-    { item: "API Keys", field: "OpenAI", secret_name: "OPENAI_API_KEY" },
-    { item: "API Keys", field: "Anthropic", secret_name: "ANTHROPIC_API_KEY" },
-  ],
+  vaults: ["Private"],
+  prefix: "OP",
+  overwrite: false,
 });
+```
+
+
+Plugin Diagnostics
+---
+
+Inspect the Plugin SDK V1 registry and active prompt contributions.
+
+**`listPlugins()`**: List registered daemon plugins.
+
+```typescript
+const { plugins } = await signet.listPlugins();
+const secretsPlugin = plugins.find((plugin) => plugin.id === "signet.secrets");
+```
+
+**`getPlugin(id)`**: Get one plugin registry record.
+
+```typescript
+const plugin = await signet.getPlugin("signet.secrets");
+console.log(plugin.state);
+```
+
+**`getPluginDiagnostics(id)`**: Get manifest, surface, and validation
+diagnostics for one plugin.
+
+```typescript
+const diagnostics = await signet.getPluginDiagnostics("signet.secrets");
+console.log(diagnostics.plugin.activeSurfaces.sdkClients);
+console.log(diagnostics.plugin.promptContributionDiagnostics);
+```
+
+**`listPluginPromptContributions()`**: List active plugin prompt
+contributions.
+
+```typescript
+const { contributions } = await signet.listPluginPromptContributions();
+```
+
+**`listPluginAuditEvents(opts?)`**: List durable plugin audit events.
+Sensitive fields are redacted by the daemon.
+
+```typescript
+const audit = await signet.listPluginAuditEvents({
+  pluginId: "signet.secrets",
+  event: "plugin.capability_denied",
+  limit: 20,
+});
+console.log(audit.events[0]?.result);
 ```
 
 

@@ -57,10 +57,12 @@ import {
 } from "./state.js";
 import { STATUS_CACHE_TTL, cachedEmbeddingStatus, statusCacheTime } from "./utils.js";
 
-const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | undefined> => {
-	const perm = requirePermission("admin", authConfig);
-	const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
-	return perm(c, async () => rate(c, next));
+const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | void> => {
+	const permDenied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+	if (permDenied) return permDenied;
+	const rateDenied = await requireRateLimit("admin", authAdminLimiter, authConfig)(c, () => Promise.resolve());
+	if (rateDenied) return rateDenied;
+	await next();
 };
 
 async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
@@ -93,7 +95,7 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 		});
 	} catch (err) {
 		const { logger } = await import("../logger.js");
-		logger.error("pipeline", paused ? "Failed to pause pipeline" : "Failed to resume pipeline", err);
+		logger.error("pipeline", paused ? "Failed to pause pipeline" : "Failed to resume pipeline", err instanceof Error ? err : new Error(String(err)));
 		return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
 	} finally {
 		setPipelineTransition(false);
@@ -101,6 +103,16 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 }
 
 export function registerPipelineRoutes(app: Hono): void {
+	app.use("/api/diagnostics", async (c, next) => {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.use("/api/diagnostics/*", async (c, next) => {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.use("/api/predictor/*", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+
 	app.get("/api/status", (c) => {
 		const config = loadMemoryConfig(AGENTS_DIR);
 		const workerStatus = getPipelineWorkerStatus();
@@ -259,31 +271,28 @@ export function registerPipelineRoutes(app: Hono): void {
 		const prev = openClawHeartbeat?.data;
 		const { logger } = await import("../logger.js");
 		const newData: import("./state.js").OpenClawHeartbeatData = {
-			timestamp: new Date().toISOString(),
-			data: {
-				pluginVersion: b.pluginVersion.slice(0, 128),
-				hooksRegistered: Array.isArray(b.hooksRegistered)
-					? (b.hooksRegistered as unknown[])
-							.filter((x): x is string => typeof x === "string")
-							.map((s) => s.slice(0, 128))
-							.slice(0, 50)
-					: [],
-				lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall.slice(0, 512) : null,
-				lastError: typeof b.lastError === "string" ? b.lastError.slice(0, 512) : null,
-				latencyMs: typeof b.latencyMs === "number" && Number.isFinite(b.latencyMs) ? b.latencyMs : 0,
-				lastFailedDelta: Math.max(
+			pluginVersion: b.pluginVersion.slice(0, 128),
+			hooksRegistered: Array.isArray(b.hooksRegistered)
+				? (b.hooksRegistered as unknown[])
+						.filter((x): x is string => typeof x === "string")
+						.map((s) => s.slice(0, 128))
+						.slice(0, 50)
+				: [],
+			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall.slice(0, 512) : null,
+			lastError: typeof b.lastError === "string" ? b.lastError.slice(0, 512) : null,
+			latencyMs: typeof b.latencyMs === "number" && Number.isFinite(b.latencyMs) ? b.latencyMs : 0,
+			lastFailedDelta: Math.max(
+				0,
+				typeof b.hooksFailed === "number" ? b.hooksFailed : typeof b.errorCount === "number" ? b.errorCount : 0,
+			),
+			totalSucceeded:
+				(prev?.totalSucceeded ?? 0) + Math.max(0, typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
+			totalFailed:
+				(prev?.totalFailed ?? 0) +
+				Math.max(
 					0,
 					typeof b.hooksFailed === "number" ? b.hooksFailed : typeof b.errorCount === "number" ? b.errorCount : 0,
 				),
-				totalSucceeded:
-					(prev?.totalSucceeded ?? 0) + Math.max(0, typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
-				totalFailed:
-					(prev?.totalFailed ?? 0) +
-					Math.max(
-						0,
-						typeof b.hooksFailed === "number" ? b.hooksFailed : typeof b.errorCount === "number" ? b.errorCount : 0,
-					),
-			},
 		};
 		setOpenClawHeartbeat({
 			timestamp: new Date().toISOString(),

@@ -21,6 +21,7 @@ const targets: Array<{
 	{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" },
 	{ entrypoint: "./src/mcp-stdio.ts", outfile: "./dist/mcp-stdio.js" },
 	{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" },
+	{ entrypoint: "./src/synthesis-render-worker.ts", outfile: "./dist/synthesis-render-worker.js" },
 ];
 
 let ok = true;

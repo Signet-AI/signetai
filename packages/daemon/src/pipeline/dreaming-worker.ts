@@ -100,7 +100,7 @@ export function startDreamingWorker(
 			await p;
 		} catch (e) {
 			recordDreamingFailure(accessor, agentId);
-			logger.error("dreaming-worker", "Dreaming check failed", {
+			logger.error("dreaming-worker", "Dreaming check failed", undefined, {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		} finally {
@@ -162,10 +162,10 @@ export function startDreamingWorker(
 			activePassPromise = p;
 			p.catch((e) => {
 				recordDreamingFailure(accessor, agentId);
-				logger.error("dreaming-worker", "Async trigger failed", {
-					passId,
-					error: e instanceof Error ? e.message : String(e),
-				});
+			logger.error("dreaming-worker", "Async trigger failed", undefined, {
+				passId,
+				error: e instanceof Error ? e.message : String(e),
+			});
 			}).finally(() => {
 				active = false;
 				activePassPromise = null;

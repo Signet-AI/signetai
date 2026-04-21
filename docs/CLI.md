@@ -123,7 +123,7 @@ Options:
 | `--name <name>` | Agent name in non-interactive mode |
 | `--description <description>` | Agent description in non-interactive mode |
 | `--deployment-type <type>` | Deployment context (`local`, `vps`, `server`) used for interactive guidance and non-interactive inferred defaults |
-| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `oh-my-pi`, `pi`, `codex`, `forge`) |
+| `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `hermes-agent`, `oh-my-pi`, `pi`, `codex`, `forge`) |
 | `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) |
 | `--embedding-model <model>` | Non-interactive embedding model |
 | `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) |
@@ -133,6 +133,7 @@ Options:
 | `--configure-openclaw-workspace` | Patch discovered OpenClaw configs to `$SIGNET_WORKSPACE` |
 | `--open-dashboard` | Open dashboard after non-interactive setup |
 | `--skip-git` | Skip git initialization/commits in non-interactive mode |
+| `--disable-signet-secrets` | Leave the bundled Signet Secrets core plugin installed but disabled |
 | `--create-local-backup` | If OpenClaw points at this workspace and no origin exists, create a local snapshot automatically |
 | `--allow-unprotected-workspace` | Explicitly allow setup to finish without origin or snapshot in non-interactive mode |
 
@@ -147,6 +148,8 @@ Non-interactive behavior:
   `none` when needed
 - for existing-identity migration, previously configured extraction providers
   are preserved unless `--extraction-provider` is explicitly passed
+- the bundled Signet Secrets core plugin is enabled by default; pass
+  `--disable-signet-secrets` to opt out while leaving it installed
 - explicit provider flags override inferred defaults
 - git: enabled unless `--skip-git` is passed
 - when OpenClaw points at this workspace and no `origin` remote exists, setup
@@ -170,21 +173,29 @@ Wizard steps:
 1. **Agent Name** - What to call your agent
 2. **Harnesses** - Which AI platforms you use:
    - Claude Code (Anthropic CLI)
+   - Codex
    - OpenCode
    - OpenClaw
-   - Codex
+   - Oh My Pi
+   - Pi
+   - Hermes Agent
+   - Forge
 3. **OpenClaw Workspace** - Appears only when an existing OpenClaw config
    is detected; workspace is patched only if you opt in, and setup warns
    that uninstalling OpenClaw can delete this workspace unless backups exist
 4. **Description** - Short agent description
-5. **Deployment Context** - Where Signet is running (`local`, `vps`, `server`)
+5. **Core Plugins** - Signet Secrets explains encrypted local storage,
+   value-safe CLI/MCP/SDK access, command injection with output redaction, and
+   connections to Signet's local encrypted store and compatible 1Password
+   references, then asks whether to enable the bundled `signet.secrets` plugin
+6. **Deployment Context** - Where Signet is running (`local`, `vps`, `server`)
    to show environment-aware guidance before extraction provider selection
-6. **Embedding Provider**:
+7. **Embedding Provider**:
    - Built-in (recommended, no setup required)
    - Ollama (local)
    - OpenAI API
    - Skip embeddings
-7. **Embedding Model** - Based on provider:
+8. **Embedding Model** - Based on provider:
    - Built-in: `nomic-embed-text-v1.5`
    - Ollama: `nomic-embed-text`, `all-minilm`, `mxbai-embed-large`
    - OpenAI: text-embedding-3-small, text-embedding-3-large
@@ -192,15 +203,15 @@ Wizard steps:
      service health, and model presence; if checks fail, setup offers
      retry, switch to built-in embeddings, switch to OpenAI, or
      continue without embeddings
-8. **Search Balance** - Semantic vs keyword weighting
-9. **Advanced Settings** (optional):
+9. **Search Balance** - Semantic vs keyword weighting
+10. **Advanced Settings** (optional):
    - `top_k` - Search candidates per source
    - `min_score` - Minimum search score threshold
    - `session_budget` - Context character limit
    - `decay_rate` - Memory importance decay
-10. **Import** - Optionally import from another platform
-11. **Git** - Initialize version control
-12. **Launch Dashboard** - Open web UI
+11. **Import** - Optionally import from another platform
+12. **Git** - Initialize version control
+13. **Launch Dashboard** - Open web UI
 
 What gets created:
 
@@ -216,6 +227,7 @@ $SIGNET_WORKSPACE/
 ├── hooks/               # OpenClaw hooks (if selected)
 │   └── agent-memory/
 └── .daemon/
+    ├── plugins/         # Bundled core plugin registry
     └── logs/
 ```
 
@@ -846,7 +858,7 @@ Environment Variables
 | `SIGNET_LOG_FILE` | Explicit daemon log file path | unset |
 | `SIGNET_LOG_DIR` | Daemon log directory override | `$SIGNET_WORKSPACE/.daemon/logs` |
 | `SIGNET_SQLITE_PATH` | macOS explicit SQLite dylib override used by the daemon before opening the database | unset |
-| `SIGNET_SESSION_START_TIMEOUT` | Session-start hook timeout in ms for Signet-managed clients and generated Claude Code hook configs | `15000` |
+| `SIGNET_SESSION_START_TIMEOUT` | Session-start daemon wait budget in ms for Signet-managed clients. Generated Claude Code hook config writes this value directly. Generated Codex hook config rounds up to seconds and adds 5 seconds of harness grace | `15000` |
 | `SIGNET_FETCH_TIMEOUT` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset | `15000` |
 | `SIGNET_PROMPT_SUBMIT_TIMEOUT` | Prompt-submit daemon wait budget in ms; OpenCode uses this value directly, generated Claude Code hook config writes this value + 2000 ms grace | `5000` |
 | `SIGNET_BYPASS` | Skip all hook processing (exit immediately) | unset |

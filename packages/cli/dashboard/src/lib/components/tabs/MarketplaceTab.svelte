@@ -1,11 +1,12 @@
 <script lang="ts">
 import McpServersTab from "$lib/components/marketplace/McpServersTab.svelte";
+import PluginsPanel from "$lib/components/plugins/PluginsPanel.svelte";
 import SkillsTab from "$lib/components/tabs/SkillsTab.svelte";
+import { getSkillsProviderLabel, normalizeSkillsProviderFilter } from "$lib/components/tabs/marketplace-filters";
 import { Button } from "$lib/components/ui/button/index.js";
 import * as Collapsible from "$lib/components/ui/collapsible/index.js";
 import * as Select from "$lib/components/ui/select/index.js";
 import { returnToSidebar } from "$lib/stores/focus.svelte";
-import { getSkillsProviderLabel, normalizeSkillsProviderFilter } from "$lib/components/tabs/marketplace-filters";
 import {
 	fetchMarketplaceMcpCatalog,
 	fetchMarketplaceMcpInstalled,
@@ -24,12 +25,15 @@ import {
 	syncMarketplaceReviewsNow,
 } from "$lib/stores/marketplace-reviews.svelte";
 import { nav } from "$lib/stores/navigation.svelte";
+import { loadPlugins, pluginsStore } from "$lib/stores/plugins.svelte";
 import { fetchCatalog, fetchInstalled, getCategoryOptions, setQuery, sk } from "$lib/stores/skills.svelte";
 import { toast } from "$lib/stores/toast.svelte";
 import ChevronDown from "@lucide/svelte/icons/chevron-down";
 import { onMount } from "svelte";
 
-let section = $state<"skills" | "mcp">("skills");
+type MarketplaceSection = "skills" | "mcp" | "plugins";
+
+let section = $state<MarketplaceSection>("skills");
 let sortOpen = $state(true);
 let reviewSyncOpen = $state(false);
 let refreshingSkills = $state(false);
@@ -48,10 +52,20 @@ type SpotlightItem = {
 	readonly targetId: string;
 };
 
-const activeQuery = $derived(section === "skills" ? sk.query : mcpMarket.query);
-const activeSectionLabel = $derived(section === "skills" ? "Agent Skills" : "MCP Tool Servers");
-const sectionCatalogCount = $derived(section === "skills" ? sk.catalogTotal : mcpMarket.catalogTotal);
-const activeInstalledCount = $derived(section === "skills" ? sk.installed.length : mcpMarket.installed.length);
+const activeQuery = $derived(section === "skills" ? sk.query : section === "mcp" ? mcpMarket.query : "");
+const activeSectionLabel = $derived(
+	section === "skills" ? "Agent Skills" : section === "mcp" ? "MCP Tool Servers" : "Plugins",
+);
+const sectionCatalogCount = $derived(
+	section === "skills" ? sk.catalogTotal : section === "mcp" ? mcpMarket.catalogTotal : 0,
+);
+const activeInstalledCount = $derived(
+	section === "skills"
+		? sk.installed.length
+		: section === "mcp"
+			? mcpMarket.installed.length
+			: pluginsStore.plugins.length,
+);
 
 const skillsFirst = $derived(
 	sk.catalog[0]
@@ -73,22 +87,24 @@ const mcpFirst = $derived(
 		: null,
 );
 
-const firstReviewTarget = $derived(section === "skills" ? skillsFirst : mcpFirst);
+const firstReviewTarget = $derived(section === "skills" ? skillsFirst : section === "mcp" ? mcpFirst : null);
 
 const categoryOptions = $derived.by(() => {
 	if (section === "skills") {
 		return getCategoryOptions();
 	}
+	if (section === "plugins") return ["all"];
 	return getMarketplaceMcpCategoryOptions();
 });
 
 const activeCategory = $derived.by(() => {
 	if (section === "skills") return sk.categoryFilter;
+	if (section === "plugins") return "all";
 	return mcpMarket.category;
 });
 
 const activeCategoryLabel = $derived(activeCategory === "all" ? "All categories" : activeCategory);
-const activeView = $derived(section === "skills" ? sk.view : mcpMarket.view);
+const activeView = $derived(section === "skills" ? sk.view : section === "mcp" ? mcpMarket.view : "installed");
 const activeSortLabel = $derived.by(() => {
 	if (section === "skills") {
 		if (sk.sortBy === "installs") return "Downloads";
@@ -97,6 +113,7 @@ const activeSortLabel = $derived.by(() => {
 		if (sk.sortBy === "newest") return "Newest";
 		return "Popularity";
 	}
+	if (section === "plugins") return "State";
 	if (mcpMarket.sortBy === "official") return "Official";
 	if (mcpMarket.sortBy === "name") return "Name";
 	return "Popularity";
@@ -106,6 +123,7 @@ const activeSecondarySortLabel = $derived.by(() => {
 	if (section === "skills") {
 		return getSkillsProviderLabel(sk.providerFilter);
 	}
+	if (section === "plugins") return "Core and installed";
 	if (mcpMarket.source === "mcpservers.org") return "MCP Registry";
 	if (mcpMarket.source === "modelcontextprotocol/servers") return "MCP GitHub";
 	if (mcpMarket.source === "github") return "GitHub";
@@ -113,6 +131,14 @@ const activeSecondarySortLabel = $derived.by(() => {
 });
 
 function handleSectionChange(value: string): void {
+	navMode = "tabs";
+	focusedCardIndex = -1;
+	focusedFilterIndex = 0;
+	if (value === "plugins") {
+		section = "plugins";
+		void loadPlugins();
+		return;
+	}
 	section = value === "mcp" ? "mcp" : "skills";
 }
 
@@ -121,6 +147,7 @@ function updateActiveQuery(value: string): void {
 		setQuery(value);
 		return;
 	}
+	if (section === "plugins") return;
 	mcpMarket.query = value;
 }
 
@@ -130,6 +157,7 @@ function applyCategory(category: string): void {
 		sk.categoryFilter = safe;
 		return;
 	}
+	if (section === "plugins") return;
 	mcpMarket.category = safe;
 }
 
@@ -142,6 +170,7 @@ function applySort(value: string): void {
 		sk.sortBy = "popularity";
 		return;
 	}
+	if (section === "plugins") return;
 	if (value === "name" || value === "official") {
 		mcpMarket.sortBy = value;
 		return;
@@ -154,6 +183,7 @@ function applySecondarySort(value: string): void {
 		sk.providerFilter = normalizeSkillsProviderFilter(value);
 		return;
 	}
+	if (section === "plugins") return;
 	if (value === "mcpservers.org" || value === "modelcontextprotocol/servers" || value === "github") {
 		mcpMarket.source = value;
 		return;
@@ -168,6 +198,7 @@ function clearSectionFilters(): void {
 		sk.providerFilter = "all";
 		return;
 	}
+	if (section === "plugins") return;
 	mcpMarket.query = "";
 	mcpMarket.category = "all";
 	mcpMarket.source = "all";
@@ -178,6 +209,7 @@ function setActiveView(value: "browse" | "installed"): void {
 		sk.view = value;
 		return;
 	}
+	if (section === "plugins") return;
 	mcpMarket.view = value;
 }
 
@@ -241,7 +273,11 @@ let focusedFilterIndex = $state(0);
 // Get all focusable cards in current section
 function getCards(): HTMLElement[] {
 	return Array.from(
-		section === "skills" ? document.querySelectorAll(".card-wrap .card") : document.querySelectorAll(".catalog-card"),
+		section === "skills"
+			? document.querySelectorAll(".card-wrap .card")
+			: section === "mcp"
+				? document.querySelectorAll(".catalog-card")
+				: document.querySelectorAll(".plugin-card"),
 	) as HTMLElement[];
 }
 
@@ -331,7 +367,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 			focusedCardIndex = -1;
 			// Blur any focused card
 			const cards = getCards();
-			cards.forEach((c) => c.blur());
+			for (const card of cards) card.blur();
 			return;
 		}
 
@@ -342,7 +378,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 			focusedFilterIndex = 0;
 			// Blur any focused filter
 			const filters = getFilterElements();
-			filters.forEach((f) => f.blur());
+			for (const filter of filters) filter.blur();
 			// Focus the last card in the visible row
 			const { columns, cards } = getGridInfo();
 			if (cards.length > 0) {
@@ -385,13 +421,22 @@ function handleGlobalKey(e: KeyboardEvent) {
 				e.preventDefault();
 				handleSectionChange("skills");
 			}
+			if (section === "plugins") {
+				e.preventDefault();
+				handleSectionChange("mcp");
+			}
 			return;
 		}
 
-		// Arrow Right - switch to MCP Servers from Agent Skills
+		// Arrow Right - switch sections from Agent Skills -> MCP Servers -> Plugins
 		if (e.key === "ArrowRight" && section === "skills") {
 			e.preventDefault();
 			handleSectionChange("mcp");
+			return;
+		}
+		if (e.key === "ArrowRight" && section === "mcp") {
+			e.preventDefault();
+			handleSectionChange("plugins");
 			return;
 		}
 
@@ -453,6 +498,8 @@ function handleGlobalKey(e: KeyboardEvent) {
 					returnToSidebar();
 				} else if (section === "mcp") {
 					handleSectionChange("skills");
+				} else if (section === "plugins") {
+					handleSectionChange("mcp");
 				}
 				return;
 			}
@@ -462,7 +509,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 				// At start of row, return to tabs mode
 				navMode = "tabs";
 				focusedCardIndex = -1;
-				cards.forEach((c) => c.blur());
+				for (const card of cards) card.blur();
 				return;
 			}
 
@@ -489,15 +536,14 @@ function handleGlobalKey(e: KeyboardEvent) {
 			const isLastCard = focusedCardIndex === cards.length - 1;
 
 			if (isAtEndOfRow || isLastCard) {
+				const filters = getFilterElements();
+				if (filters.length === 0) return;
+
 				// Move to filters panel
 				navMode = "filters";
 				focusedFilterIndex = 0;
-				cards.forEach((c) => c.blur());
-
-				const filters = getFilterElements();
-				if (filters.length > 0) {
-					filters[0]?.focus();
-				}
+				for (const card of cards) card.blur();
+				filters[0]?.focus();
 				return;
 			}
 
@@ -545,7 +591,7 @@ function handleGlobalKey(e: KeyboardEvent) {
 			e.preventDefault();
 			navMode = "cards";
 			focusedFilterIndex = 0;
-			filters.forEach((f) => f.blur());
+			for (const filter of filters) filter.blur();
 
 			const { columns, cards } = getGridInfo();
 			if (cards.length > 0) {
@@ -596,6 +642,7 @@ onMount(() => {
 	void fetchMarketplaceMcpCatalog(5);
 	void refreshMarketplaceMcpTools();
 	void loadMarketplaceReviewConfig();
+	void loadPlugins();
 
 	// Focus tracking for cards - use event delegation on document
 	function handleCardFocus(e: FocusEvent): void {
@@ -652,8 +699,10 @@ $effect(() => {
 		<div class="tab-header-left">
 			<span class="tab-header-title">MARKETPLACE</span>
 			<span class="tab-header-count">{activeInstalledCount} INSTALLED</span>
-			<span class="tab-header-sep" aria-hidden="true"></span>
-			<span class="tab-header-count">{sectionCatalogCount.toLocaleString()} CATALOG</span>
+			{#if section !== "plugins"}
+				<span class="tab-header-sep" aria-hidden="true"></span>
+				<span class="tab-header-count">{sectionCatalogCount.toLocaleString()} CATALOG</span>
+			{/if}
 		</div>
 		<div class="tab-header-right">
 			<button
@@ -684,48 +733,71 @@ $effect(() => {
 			>
 				MCP SERVERS
 			</button>
+			<button
+				class="section-switch"
+				class:section-switch--active={section === "plugins"}
+				onclick={() => handleSectionChange("plugins")}
+				onkeydown={(e) => {
+					if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+						e.stopPropagation();
+						handleGlobalKey(e);
+						e.preventDefault();
+					}
+				}}
+			>
+				PLUGINS
+			</button>
 		</div>
 	</div>
 
-	<div class="store-grid">
+	<div class="store-grid" class:store-grid-full={section === "plugins"}>
 		<main class="store-main">
-			<div class="module-head">
-				<div class="module-search-wrap">
-					<div class="module-search-inner">
-						<input
-							type="text"
-							class="module-search"
-							placeholder={section === "skills" ? "Search skills..." : "Search MCP servers..."}
-							value={activeQuery}
-							oninput={(e) => updateActiveQuery(e.currentTarget.value)}
-						/>
-						<Button variant="outline" size="sm" class="search-clear" onclick={clearSectionFilters}>Clear</Button>
+			{#if section === "plugins"}
+				<div class="module-head plugins-head">
+					<div>
+						<div class="module-title">{activeSectionLabel}</div>
+						<div class="module-subtitle">Core and installed extensions that add Signet capabilities.</div>
 					</div>
 				</div>
-				<div class="module-view-tabs">
-					<Button
-						variant="outline"
-						size="sm"
-						class={`view-tab ${activeView === "browse" ? "view-tab-active" : ""}`}
-						onclick={() => setActiveView("browse")}
-					>
-						Browse
-					</Button>
-					<Button
-						variant="outline"
-						size="sm"
-						class={`view-tab ${activeView === "installed" ? "view-tab-active" : ""}`}
-						onclick={() => setActiveView("installed")}
-					>
-						Installed
-					</Button>
+			{:else}
+				<div class="module-head">
+					<div class="module-search-wrap">
+						<div class="module-search-inner">
+							<input
+								type="text"
+								class="module-search"
+								placeholder={section === "skills" ? "Search skills..." : "Search MCP servers..."}
+								value={activeQuery}
+								oninput={(e) => updateActiveQuery(e.currentTarget.value)}
+							/>
+							<Button variant="outline" size="sm" class="search-clear" onclick={clearSectionFilters}>Clear</Button>
+						</div>
+					</div>
+					<div class="module-view-tabs">
+						<Button
+							variant="outline"
+							size="sm"
+							class={`view-tab ${activeView === "browse" ? "view-tab-active" : ""}`}
+							onclick={() => setActiveView("browse")}
+						>
+							Browse
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							class={`view-tab ${activeView === "installed" ? "view-tab-active" : ""}`}
+							onclick={() => setActiveView("installed")}
+						>
+							Installed
+						</Button>
+					</div>
 				</div>
-			</div>
+			{/if}
 
 			<div class="module-body">
 				{#if section === "skills"}
 					<SkillsTab embedded={true} showViewTabs={false} onreviewrequest={handleReviewRequest} />
-				{:else}
+				{:else if section === "mcp"}
 					<McpServersTab
 						embedded={true}
 						showViewTabs={false}
@@ -733,10 +805,13 @@ $effect(() => {
 						onviewchange={(v) => setActiveView(v)}
 						onreviewrequest={handleReviewRequest}
 					/>
+				{:else}
+					<PluginsPanel />
 				{/if}
 			</div>
 		</main>
 
+		{#if section !== "plugins"}
 		<aside class="store-rail">
 			<Collapsible.Root bind:open={sortOpen} class="rail-panel">
 				<Collapsible.Trigger class="rail-trigger">
@@ -964,6 +1039,7 @@ $effect(() => {
 				</Collapsible.Content>
 			</Collapsible.Root>
 		</aside>
+		{/if}
 	</div>
 </div>
 
@@ -1042,6 +1118,11 @@ $effect(() => {
 		border-right: none;
 	}
 
+	.section-switch:not(:first-child):not(:last-child) {
+		border-radius: 0;
+		border-right: none;
+	}
+
 	.section-switch:last-child {
 		border-radius: 0 var(--radius) var(--radius) 0;
 	}
@@ -1105,6 +1186,10 @@ $effect(() => {
 		padding: var(--space-sm);
 	}
 
+	.store-grid-full {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
 	.store-main {
 		display: flex;
 		flex-direction: column;
@@ -1120,6 +1205,24 @@ $effect(() => {
 		gap: 8px;
 		padding: var(--space-sm) var(--space-sm) 0;
 		margin-bottom: var(--space-sm);
+	}
+
+	.plugins-head {
+		grid-template-columns: 1fr;
+	}
+
+	.module-title {
+		font-family: var(--font-display);
+		font-size: 14px;
+		font-weight: 700;
+		color: var(--sig-text-bright);
+	}
+
+	.module-subtitle {
+		margin-top: 2px;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
 	}
 
 	.module-search {

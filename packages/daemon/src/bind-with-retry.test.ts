@@ -36,7 +36,7 @@ describe("bindWithRetry", () => {
 
 		expect(bound).not.toBeNull();
 		expect(listened).toBe(true);
-		bound?.close();
+		if (bound) (bound as Server).close();
 	});
 
 	it("retries on EADDRINUSE and succeeds when port is released", async () => {
@@ -71,10 +71,9 @@ describe("bindWithRetry", () => {
 					scheduledDelays.push(ms);
 					// Release the port before the next attempt
 					if (blocker.listening) {
-						blocker.close(() => setTimeout(fn, 5));
-					} else {
-						setTimeout(fn, 5);
+						return blocker.close(() => setTimeout(fn, 5)) as unknown as ReturnType<typeof setTimeout>;
 					}
+					return setTimeout(fn, 5);
 				},
 			});
 		});
@@ -83,7 +82,7 @@ describe("bindWithRetry", () => {
 		expect(scheduledDelays.length).toBeGreaterThanOrEqual(1);
 		expect(scheduledDelays[0]).toBe(10);
 		expect(bound).not.toBeNull();
-		bound?.close();
+		if (bound) (bound as Server).close();
 	});
 
 	it("retries indefinitely on persistent EADDRINUSE without crashing", async () => {
@@ -118,9 +117,9 @@ describe("bindWithRetry", () => {
 					// Stop after 6 attempts to end the test
 					if (attempts >= 6) {
 						resolve();
-					} else {
-						setTimeout(fn, 1);
+						return setTimeout(() => {}, 0);
 					}
+					return setTimeout(fn, 1);
 				},
 			});
 		});
@@ -159,9 +158,9 @@ describe("bindWithRetry", () => {
 					scheduledDelays.push(ms);
 					if (attempts >= 5) {
 						resolve();
-					} else {
-						setTimeout(fn, 1);
+						return setTimeout(() => {}, 0);
 					}
+					return setTimeout(fn, 1);
 				},
 			});
 		});
@@ -205,7 +204,7 @@ describe("bindWithRetry", () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 
 		expect(fatalError).not.toBeNull();
-		expect((fatalError as NodeJS.ErrnoException).code).toBe("EACCES");
+		expect((fatalError as unknown as NodeJS.ErrnoException).code).toBe("EACCES");
 	});
 
 	it("stops retrying when signal is aborted", async () => {

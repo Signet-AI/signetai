@@ -5,6 +5,7 @@ import type { HTMLAttributes } from "svelte/elements";
 import { SIDEBAR_WIDTH_MOBILE } from "./constants.js";
 import { useSidebar } from "./context.svelte.js";
 
+// biome-ignore lint/style/useConst: ref is rebound by bind:this.
 let {
 	ref = $bindable(null),
 	side = "left",
@@ -81,7 +82,7 @@ const sidebar = useSidebar();
 			data-slot="sidebar-container"
 			class={cn(
 				"fixed inset-y-0 z-10 hidden w-(--sidebar-width) transition-[left,right,width] duration-200 ease-out md:flex",
-				"top-[var(--titlebar-h,0px)] h-[calc(100svh-var(--titlebar-h,0px))]",
+				"top-[var(--titlebar-h,0px)] h-[calc(var(--scaled-viewport-height,100svh)-var(--titlebar-h,0px))]",
 				side === "left"
 					? "start-0 group-data-[collapsible=offcanvas]:start-[calc(var(--sidebar-width)*-1)]"
 					: "end-0 group-data-[collapsible=offcanvas]:end-[calc(var(--sidebar-width)*-1)]",

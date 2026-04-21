@@ -51,9 +51,17 @@ extraction hit), `pinned`, `pinned_at`, `created_at`, `updated_at`.
 - `memory_id` (TEXT, nullable) — source memory row
 - `confidence` (REAL, default 0.0), `importance` (REAL, default 0.5)
 
-`memory_entity_mentions` — join table linking memories to entities extracted from
-them. Created by the extraction pipeline via `txPersistEntities`. Fields:
-`memory_id`, `entity_id`, `mention_text`, `confidence`, `created_at`.
+`memory_entity_mentions` — join table linking memories to entities mentioned by
+them. Structured writes create these links via `txPersistEntities`; the default
+remember path may also add mention links to already-known entities for the same
+`agent_id`. The default path does not create new entities or attributes from raw
+text. Fields: `memory_id`, `entity_id`, `mention_text`, `confidence`,
+`created_at`.
+
+Background extraction graph writes are separately gated by
+`memory.pipelineV2.graph.extractionWritesEnabled`, which defaults to `false`.
+Keeping `graph.enabled=true` allows traversal and recall boosting without
+letting the async extractor author graph structure.
 
 ### Entity Dependencies
 
@@ -231,14 +239,14 @@ sweeps attributes whose `memory_id` refers to a deleted memory and marks them
 ### Retroactive Supersession
 
 Beyond orphaned-memory cleanup, `supersession.ts` detects contradictions
-between active sibling attributes on the same aspect. Two paths trigger this:
-an inline pass after `structural_classify` populates `aspect_id` (catching
-contradictions at classification time), and a periodic sweep in the
-maintenance worker (catching pre-existing contradictions across sessions).
-Detection uses a four-signal heuristic (negation polarity, antonym pairs,
-value conflict, temporal markers) with an optional LLM fallback via
-`detectSemanticContradiction()`. Attributes with `kind='constraint'` are
-never auto-superseded. See the
+between active sibling attributes on the same aspect and claim slot. Structured
+remember supersedes within `entity + aspect + group_key + claim_key` at write
+time. If structural workers are explicitly enabled, an additional pass can run
+after `structural_classify` populates `aspect_id`, and the maintenance worker can
+catch pre-existing contradictions across sessions. Detection uses a four-signal
+heuristic (negation polarity, antonym pairs, value conflict, temporal markers);
+the semantic LLM fallback is disabled by default. Attributes with
+`kind='constraint'` are never auto-superseded. See the
 [retroactive supersession spec](./specs/planning/retroactive-supersession.md)
 for full design details.
 

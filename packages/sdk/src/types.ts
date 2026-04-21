@@ -698,6 +698,143 @@ export interface OnePasswordImportResult {
 	readonly errorCount: number;
 }
 
+export type PluginLifecycleState = "installed" | "blocked" | "active" | "degraded" | "disabled";
+export type PluginPromptTarget = "system" | "session-start" | "user-prompt-submit";
+export type PluginPromptMode = "append" | "context";
+
+export interface PluginHealth {
+	readonly status: "healthy" | "degraded" | "unhealthy";
+	readonly message?: string;
+	readonly checkedAt: string;
+}
+
+export interface PluginSurfaceBase {
+	readonly summary: string;
+	readonly requiredCapabilities: readonly string[];
+}
+
+export interface PluginRouteSummary extends PluginSurfaceBase {
+	readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+	readonly path: string;
+}
+
+export interface PluginCommandSummary extends PluginSurfaceBase {
+	readonly path: readonly string[];
+}
+
+export interface PluginToolSummary extends PluginSurfaceBase {
+	readonly name: string;
+	readonly title: string;
+}
+
+export interface PluginDashboardSummary extends PluginSurfaceBase {
+	readonly id: string;
+	readonly title: string;
+}
+
+export interface PluginSdkSummary extends PluginSurfaceBase {
+	readonly name: string;
+}
+
+export interface PluginConnectorSummary extends PluginSurfaceBase {
+	readonly id: string;
+	readonly title: string;
+}
+
+export interface PluginPromptSummary extends PluginSurfaceBase {
+	readonly id: string;
+	readonly target: PluginPromptTarget;
+	readonly mode: PluginPromptMode;
+	readonly priority: number;
+	readonly maxTokens: number;
+}
+
+export interface PluginSurfaceSummary {
+	readonly daemonRoutes: readonly PluginRouteSummary[];
+	readonly cliCommands: readonly PluginCommandSummary[];
+	readonly mcpTools: readonly PluginToolSummary[];
+	readonly dashboardPanels: readonly PluginDashboardSummary[];
+	readonly sdkClients: readonly PluginSdkSummary[];
+	readonly connectorCapabilities: readonly PluginConnectorSummary[];
+	readonly promptContributions: readonly PluginPromptSummary[];
+}
+
+export interface PluginRegistryRecord {
+	readonly id: string;
+	readonly name: string;
+	readonly version: string;
+	readonly publisher: string;
+	readonly source: "bundled" | "local" | "marketplace";
+	readonly trustTier: "core" | "verified" | "community" | "local-dev";
+	readonly enabled: boolean;
+	readonly state: PluginLifecycleState;
+	readonly stateReason?: string;
+	readonly declaredCapabilities: readonly string[];
+	readonly grantedCapabilities: readonly string[];
+	readonly pendingCapabilities: readonly string[];
+	readonly surfaces: PluginSurfaceSummary;
+	readonly health?: PluginHealth;
+	readonly installedAt: string;
+	readonly updatedAt: string;
+}
+
+export interface PluginPromptContribution {
+	readonly id: string;
+	readonly pluginId: string;
+	readonly target: PluginPromptTarget;
+	readonly mode: PluginPromptMode;
+	readonly priority: number;
+	readonly maxTokens: number;
+	readonly content: string;
+}
+
+export interface PluginPromptContributionDiagnostic {
+	readonly contribution: PluginPromptContribution;
+	readonly included: boolean;
+	readonly reason?: string;
+	readonly missingCapabilities: readonly string[];
+}
+
+export interface PluginListResponse {
+	readonly plugins: readonly PluginRegistryRecord[];
+}
+
+export interface PluginPromptContributionListResponse {
+	readonly contributions: readonly PluginPromptContribution[];
+	readonly activeCount: number;
+}
+
+export type PluginAuditResult = "ok" | "denied" | "degraded" | "error";
+export type PluginAuditSource = "plugin-host" | "secrets-provider" | "secrets-routes";
+
+export interface PluginAuditEvent {
+	readonly id: string;
+	readonly timestamp: string;
+	readonly event: string;
+	readonly pluginId: string;
+	readonly result: PluginAuditResult;
+	readonly source: PluginAuditSource;
+	readonly agentId?: string;
+	readonly data: Record<string, unknown>;
+}
+
+export interface PluginAuditListResponse {
+	readonly events: readonly PluginAuditEvent[];
+	readonly count: number;
+}
+
+export interface PluginDiagnosticsResponse {
+	readonly plugin: {
+		readonly record: PluginRegistryRecord;
+		readonly manifest: unknown;
+		readonly activeSurfaces: PluginSurfaceSummary;
+		readonly plannedSurfaces: PluginSurfaceSummary;
+		readonly promptContributions: readonly PluginPromptContribution[];
+		readonly promptContributionDiagnostics: readonly PluginPromptContributionDiagnostic[];
+		readonly validationErrors: readonly string[];
+	};
+}
+
 // Skill types
 
 export interface SkillMeta {

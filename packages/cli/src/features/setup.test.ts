@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SetupDetection } from "@signet/core";
+import { SIGNET_SECRETS_PLUGIN_ID, type SetupDetection } from "@signet/core";
 import type { SetupDeps } from "./setup-types.js";
 import { setupWizard } from "./setup.js";
 
@@ -185,6 +185,23 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(configureHarnessHooks).not.toHaveBeenCalled();
 	});
 
+	it("persists disabled signet secrets when existing non-interactive setup opts out", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-secrets-disabled-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => fakeDetection(basePath)),
+		});
+
+		await setupWizard({ nonInteractive: true, disableSignetSecrets: true }, deps);
+
+		const registry = JSON.parse(readFileSync(join(basePath, ".daemon", "plugins", "registry-v1.json"), "utf-8"));
+		expect(registry.plugins[SIGNET_SECRETS_PLUGIN_ID].enabled).toBe(false);
+	});
+
 	it("fails fast on unknown non-interactive harness values in the existing-install path", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-invalid-harness-"));
 		const basePath = join(root, "agents");
@@ -202,9 +219,7 @@ describe("setupWizard non-interactive harness hooks", () => {
 				detectExistingSetup: mock(() => fakeDetection(basePath)),
 			});
 
-			await expect(setupWizard({ nonInteractive: true, harness: ["pi,nope"] }, deps)).rejects.toThrow(
-				"process.exit:1",
-			);
+			await expect(setupWizard({ nonInteractive: true, harness: ["pi,nope"] }, deps)).rejects.toThrow("process.exit:1");
 			expect(errorSpy).toHaveBeenCalled();
 			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("Unknown --harness value(s): nope");
 		} finally {

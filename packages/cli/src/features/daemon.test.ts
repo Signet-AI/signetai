@@ -101,7 +101,7 @@ describe("daemon lifecycle recovery", () => {
 			},
 		});
 
-		await doRestart({ openclaw: false }, deps);
+		await doRestart({ sync: false }, deps);
 
 		expect(calls).toEqual(["stop", "start"]);
 	});
@@ -119,6 +119,83 @@ describe("daemon lifecycle recovery", () => {
 		await doStop({}, deps);
 
 		expect(stopped).toBe(true);
+	});
+
+	it("restart runs signet sync when the user accepts the sync prompt", async () => {
+		let synced = false;
+		const deps = makeDeps({
+			isInteractive: () => true,
+			confirmRestartSync: async () => true,
+			syncTemplates: async () => {
+				synced = true;
+			},
+		});
+
+		await doRestart({}, deps);
+
+		expect(synced).toBe(true);
+	});
+
+	it("restart sync uses the resolved restart path", async () => {
+		let syncedPath: string | null = null;
+		const deps = makeDeps({
+			extractPathOption: () => "/tmp/custom-agents",
+			isInteractive: () => true,
+			confirmRestartSync: async () => true,
+			normalizeAgentPath: (pathValue) => `${pathValue}-normalized`,
+			syncTemplates: async (basePath) => {
+				syncedPath = basePath;
+			},
+		});
+
+		await doRestart({ path: "/tmp/custom-agents" }, deps);
+
+		expect(syncedPath).toBe("/tmp/custom-agents-normalized");
+	});
+
+	it("restart skips signet sync when the user declines the sync prompt", async () => {
+		let synced = false;
+		const deps = makeDeps({
+			isInteractive: () => true,
+			confirmRestartSync: async () => false,
+			syncTemplates: async () => {
+				synced = true;
+			},
+		});
+
+		await doRestart({}, deps);
+
+		expect(synced).toBe(false);
+	});
+
+	it("restart honors --no-sync even in an interactive terminal", async () => {
+		let synced = false;
+		const deps = makeDeps({
+			isInteractive: () => true,
+			confirmRestartSync: async () => true,
+			syncTemplates: async () => {
+				synced = true;
+			},
+		});
+
+		await doRestart({ sync: false }, deps);
+
+		expect(synced).toBe(false);
+	});
+
+	it("restart treats deprecated --no-openclaw as --no-sync", async () => {
+		let synced = false;
+		const deps = makeDeps({
+			isInteractive: () => true,
+			confirmRestartSync: async () => true,
+			syncTemplates: async () => {
+				synced = true;
+			},
+		});
+
+		await doRestart({ openclaw: false }, deps);
+
+		expect(synced).toBe(false);
 	});
 });
 
@@ -162,7 +239,7 @@ describe("daemon exit codes on failure", () => {
 
 		const deps = makeDeps({ startDaemon: async () => false });
 
-		await expect(doRestart({ openclaw: false }, deps)).rejects.toThrow("EXIT_1");
+		await expect(doRestart({ sync: false }, deps)).rejects.toThrow("EXIT_1");
 		expect(exitSpy).toHaveBeenCalledWith(1);
 	});
 
@@ -176,7 +253,7 @@ describe("daemon exit codes on failure", () => {
 			stopDaemon: async () => false,
 		});
 
-		await expect(doRestart({ openclaw: false }, deps)).rejects.toThrow("EXIT_1");
+		await expect(doRestart({ sync: false }, deps)).rejects.toThrow("EXIT_1");
 		expect(exitSpy).toHaveBeenCalledWith(1);
 	});
 });

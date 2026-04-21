@@ -1522,6 +1522,7 @@ export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryCo
 				ollamaFallbackMaxContextTokens: ollamaMaxContextTokens,
 				defaultTimeoutMs: timeout,
 				enableStructuredOutput: cfg.pipelineV2.synthesis.structuredOutput,
+				enableOllamaFallback: rawFallback !== "none",
 			});
 		case "llama-cpp":
 			return createLlamaCppProvider({

@@ -29,7 +29,7 @@ describe("fetchEmbedding", () => {
 		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
 			capturedHeaders = init?.headers;
 			return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		const result = await fetchEmbedding("hello", {
 			provider: "openai",
@@ -49,13 +49,14 @@ describe("fetchEmbedding", () => {
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			capturedUrl = url.toString();
 			return Promise.resolve(Response.json({ embedding: [0.5, 0.6, 0.7] }));
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider("ollama");
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text",
 			dimensions: 3,
+			base_url: "",
 		});
 
 		expect(result).toEqual([0.5, 0.6, 0.7]);
@@ -69,13 +70,14 @@ describe("fetchEmbedding", () => {
 			capturedUrl = url.toString();
 			capturedBody = init?.body as string;
 			return Promise.resolve(Response.json({ data: [{ embedding: [0.8, 0.9, 1.0] }] }));
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider("llama-cpp");
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text",
 			dimensions: 3,
+			base_url: "",
 		});
 
 		expect(result).toEqual([0.8, 0.9, 1.0]);
@@ -87,13 +89,14 @@ describe("fetchEmbedding", () => {
 	it("returns null when llama.cpp fallback provider is set but server unreachable", async () => {
 		globalThis.fetch = mock(() => {
 			return Promise.resolve(new Response("not found", { status: 500 }));
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider("llama-cpp");
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text",
 			dimensions: 3,
+			base_url: "",
 		});
 
 		expect(result).toBeNull();
@@ -111,13 +114,14 @@ describe("fetchEmbedding", () => {
 				return Promise.resolve(Response.json({ data: [{ embedding: [0.1, 0.2] }] }));
 			}
 			return Promise.resolve(new Response("unreachable", { status: 503 }));
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
 			dimensions: 2,
+			base_url: "",
 		});
 
 		expect(result).toEqual([0.1, 0.2]);
@@ -136,13 +140,14 @@ describe("fetchEmbedding", () => {
 				return Promise.resolve(Response.json({ embedding: [0.5, 0.6] }));
 			}
 			return Promise.resolve(new Response("unreachable", { status: 503 }));
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
 			dimensions: 2,
+			base_url: "",
 		});
 
 		expect(result).toEqual([0.5, 0.6]);
@@ -154,6 +159,7 @@ describe("fetchEmbedding", () => {
 			provider: "none",
 			model: "",
 			dimensions: 0,
+			base_url: "",
 		});
 		expect(result).toBeNull();
 	});
@@ -166,13 +172,14 @@ describe("fetchEmbedding", () => {
 				return Promise.resolve(Response.json({ embedding: [0.9, 0.9] }));
 			}
 			return Promise.resolve(new Response("unreachable", { status: 503 }));
-		}) as typeof fetch;
+		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider("llama-cpp");
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text",
 			dimensions: 2,
+			base_url: "",
 		});
 
 		expect(result).toBeNull();

@@ -7,7 +7,11 @@ import { CronExpressionParser } from "cron-parser";
 /** Compute the next run time from a cron expression, relative to `from`. */
 export function computeNextRun(expr: string, from: Date = new Date()): string {
 	const cron = CronExpressionParser.parse(expr, { currentDate: from });
-	return cron.next().toISOString();
+	const next = cron.next().toISOString();
+	if (next === null) {
+		throw new Error(`No next run time for cron expression: ${expr}`);
+	}
+	return next;
 }
 
 /** Validate a cron expression. Returns true if valid. */

@@ -1,13 +1,14 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
+import { emptyHookRecallResponse, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
+import { requirePermission, requireRateLimit } from "../auth";
 import {
 	type AgentMessage,
 	type AgentMessageType,
 	createAgentMessage,
-	getAgentPresenceForSession,
 	isMessageVisibleToAgent,
 	listAgentMessages,
 	listAgentPresence,
@@ -38,24 +39,34 @@ import {
 	writeMemoryMd,
 } from "../hooks.js";
 import { logger } from "../logger";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { loadMemoryConfig } from "../memory-config";
 import { writeCompactionArtifact } from "../memory-lineage.js";
-import { type RecallParams, hybridRecall } from "../memory-search";
+import { hybridRecall } from "../memory-search";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
 import { isNoiseSession } from "../session-noise";
 import {
 	type RuntimePath,
 	claimSession,
 	getActiveSessions,
+	getEndedSession,
 	getSessionPath,
 	hasSession,
 	isSessionBypassed,
+	markSessionEnded,
 	normalizeSessionKey,
 	releaseSession,
 	renewSession,
 } from "../session-tracker.js";
 import { upsertThreadHead } from "../thread-heads";
-import { AGENTS_DIR, INTERNAL_SELF_HOST, MEMORY_DB, PORT, harnessLastSeen } from "./state";
+import {
+	AGENTS_DIR,
+	INTERNAL_SELF_HOST,
+	MEMORY_DB,
+	PORT,
+	authConfig,
+	authCrossAgentMessageLimiter,
+	harnessLastSeen,
+} from "./state";
 import {
 	parseOptionalBoolean,
 	parseOptionalInt,
@@ -99,6 +110,68 @@ function checkSessionClaim(
 	return null;
 }
 
+function claimAutomaticSessionOrSkip(
+	sessionKey: string | undefined,
+	runtimePath: RuntimePath | undefined,
+	agentId: string,
+	hook: string,
+	noop: Record<string, unknown>,
+): Record<string, unknown> | null {
+	if (!sessionKey || !runtimePath) return null;
+
+	const claim = claimSession(sessionKey, runtimePath, agentId);
+	if (claim.ok) return null;
+
+	logger.info("hooks", "Duplicate runtime hook skipped", {
+		hook,
+		sessionKey,
+		runtimePath,
+		claimedBy: claim.claimedBy,
+	});
+	return {
+		...noop,
+		skipped: true,
+		duplicateRuntimePath: true,
+		claimedBy: claim.claimedBy,
+	};
+}
+
+function skipConflictingSessionEnd(
+	sessionKey: string | undefined,
+	runtimePath: RuntimePath | undefined,
+): Record<string, unknown> | null {
+	if (!sessionKey || !runtimePath) return null;
+	const ended = getEndedSession(sessionKey);
+	if (ended && !ended.runtimePath) return null;
+	if (ended) {
+		logger.info("hooks", "Duplicate session-end skipped", {
+			sessionKey,
+			runtimePath,
+			endedBy: ended.runtimePath,
+		});
+		return {
+			memoriesSaved: 0,
+			skipped: true,
+			duplicateSessionEnd: true,
+			endedBy: ended.runtimePath ?? "unknown",
+		};
+	}
+	const owner = getSessionPath(sessionKey);
+	if (!owner || owner === runtimePath) return null;
+
+	logger.info("hooks", "Duplicate runtime session-end skipped", {
+		sessionKey,
+		runtimePath,
+		claimedBy: owner,
+	});
+	return {
+		memoriesSaved: 0,
+		skipped: true,
+		duplicateRuntimePath: true,
+		claimedBy: owner,
+	};
+}
+
 // Guard against recursive hook calls from spawned agent contexts
 function isInternalCall(c: Context): boolean {
 	return c.req.header("x-signet-no-hooks") === "1";
@@ -111,51 +184,6 @@ function checkBypass(body?: { sessionKey?: string; sessionId?: string }): boolea
 	return isSessionBypassed(key);
 }
 
-function emptyHookRecallResponse(
-	query: string,
-	extras?: { readonly bypassed?: boolean; readonly internal?: boolean },
-): {
-	results: [];
-	memories: [];
-	count: 0;
-	query: string;
-	method: "hybrid";
-	meta: {
-		totalReturned: 0;
-		hasSupplementary: false;
-		noHits: true;
-	};
-	bypassed?: boolean;
-	internal?: boolean;
-} {
-	return {
-		results: [],
-		memories: [],
-		count: 0,
-		query,
-		method: "hybrid",
-		meta: {
-			totalReturned: 0,
-			hasSupplementary: false,
-			noHits: true,
-		},
-		...(extras?.bypassed ? { bypassed: true } : {}),
-		...(extras?.internal ? { internal: true } : {}),
-	};
-}
-
-function withHookRecallCompat<
-	T extends {
-		readonly results: ReadonlyArray<unknown>;
-	},
->(result: T): T & { memories: T["results"]; count: number } {
-	return {
-		...result,
-		memories: result.results,
-		count: result.results.length,
-	};
-}
-
 export function listLiveSessions(agentId: string): Array<{
 	key: string;
 	runtimePath: string;
@@ -163,7 +191,10 @@ export function listLiveSessions(agentId: string): Array<{
 	expiresAt: string | null;
 	bypassed: boolean;
 }> {
-	const byKey = new Map(
+	const byKey = new Map<
+		string,
+		{ key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }
+	>(
 		getActiveSessions()
 			.filter((s) => s.agentId === agentId)
 			.map((session) => [session.key, session] as const),
@@ -267,9 +298,15 @@ function registerUserPromptSubmit(app: Hono): void {
 			const sessionKey = parseOptionalString(body.sessionKey);
 			const known = sessionKey ? hasSession(sessionKey) : false;
 
-			const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
-			if (conflict) return conflict;
 			const agentId = parseOptionalString(body.agentId) ?? "default";
+			const duplicate = claimAutomaticSessionOrSkip(sessionKey, runtimePath, agentId, "user-prompt-submit", {
+				inject: "",
+				memoryCount: 0,
+				sessionKnown: known,
+			});
+			if (duplicate) {
+				return c.json(duplicate);
+			}
 			if (sessionKey) {
 				const touched = touchAgentPresence(sessionKey);
 				if (!touched) {
@@ -326,21 +363,38 @@ function registerSessionEnd(app: Hono): void {
 			stampHarness(body.harness);
 
 			const sessionKey = body.sessionKey || body.sessionId;
+			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath);
+			if (conflict) return c.json(conflict);
+			const duplicate = claimAutomaticSessionOrSkip(
+				sessionKey,
+				runtimePath,
+				parseOptionalString(body.agentId) ?? "default",
+				"session-end",
+				{
+					memoriesSaved: 0,
+				},
+			);
+			if (duplicate) return c.json(duplicate);
 
 			if (sessionKey && isSessionBypassed(sessionKey)) {
-				releaseSession(sessionKey);
+				markSessionEnded(sessionKey, runtimePath);
 				removeAgentPresence(sessionKey);
 				return c.json({ memoriesSaved: 0, bypassed: true });
 			}
 
 			try {
-				const result = await handleSessionEnd(body);
+				const result = handleSessionEnd(body);
+				if (sessionKey) {
+					markSessionEnded(sessionKey, runtimePath);
+					removeAgentPresence(sessionKey);
+				}
 				return c.json(result);
-			} finally {
+			} catch (e) {
 				if (sessionKey) {
 					releaseSession(sessionKey);
 					removeAgentPresence(sessionKey);
 				}
+				throw e;
 			}
 		} catch (e) {
 			logger.error("hooks", "Session end hook failed", e as Error);
@@ -365,8 +419,16 @@ function registerCheckpointExtract(app: Hono): void {
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
 
-			const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
-			if (conflict) return conflict;
+			const duplicate = claimAutomaticSessionOrSkip(
+				body.sessionKey,
+				runtimePath,
+				parseOptionalString(body.agentId) ?? "default",
+				"session-checkpoint-extract",
+				{
+					skipped: true,
+				},
+			);
+			if (duplicate) return c.json(duplicate);
 
 			stampHarness(body.harness);
 
@@ -409,7 +471,7 @@ function registerRemember(app: Hono): void {
 			}
 
 			const auth = c.req.header("authorization");
-			const headers = auth
+			const headers: Record<string, string> = auth
 				? { "Content-Type": "application/json", Authorization: auth }
 				: { "Content-Type": "application/json" };
 			return fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
@@ -493,8 +555,18 @@ function registerPreCompaction(app: Hono): void {
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
 
-			const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
-			if (conflict) return conflict;
+			const duplicate = claimAutomaticSessionOrSkip(
+				body.sessionKey,
+				runtimePath,
+				resolveAgentId({ sessionKey: body.sessionKey }),
+				"pre-compaction",
+				{
+					guidelines: "",
+					instructions: "",
+					summaryPrompt: "",
+				},
+			);
+			if (duplicate) return c.json(duplicate);
 
 			if (checkBypass(body)) {
 				return c.json({ instructions: "", bypassed: true });
@@ -527,8 +599,16 @@ function registerCompactionComplete(app: Hono): void {
 			}
 
 			const runtimePath = resolveRuntimePath(c, body);
-			const conflict = checkSessionClaim(c, body.sessionKey, runtimePath);
-			if (conflict) return conflict;
+			const duplicate = claimAutomaticSessionOrSkip(
+				body.sessionKey,
+				runtimePath,
+				parseOptionalString(body.agentId) ?? "default",
+				"compaction-complete",
+				{
+					success: true,
+				},
+			);
+			if (duplicate) return c.json(duplicate);
 
 			if (checkBypass(body)) {
 				return c.json({ success: true, bypassed: true });
@@ -1127,7 +1207,7 @@ function registerSynthesis(app: Hono): void {
 			if (scopedAgent.error) {
 				return c.json({ error: scopedAgent.error }, 403);
 			}
-			const result = handleSynthesisRequest(body, { agentId: scopedAgent.agentId });
+			const result = await handleSynthesisRequest(body, { agentId: scopedAgent.agentId, writeToDisk: false });
 			return c.json(result);
 		} catch (e) {
 			logger.error("hooks", "Synthesis request failed", e as Error);
@@ -1223,6 +1303,26 @@ function registerSynthesis(app: Hono): void {
 }
 
 export function registerHooksRoutes(app: Hono): void {
+	app.use("/api/cross-agent", async (c, next) => {
+		if (c.req.method === "GET") {
+			return requirePermission("recall", authConfig)(c, next);
+		}
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/cross-agent/*", async (c, next) => {
+		if (c.req.method === "GET") {
+			return requirePermission("recall", authConfig)(c, next);
+		}
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/cross-agent/messages", async (c, next) => {
+		if (c.req.method !== "POST") {
+			await next();
+			return;
+		}
+		return requireRateLimit("cross-agent-message", authCrossAgentMessageLimiter, authConfig)(c, next);
+	});
+
 	registerSessionStart(app);
 	registerUserPromptSubmit(app);
 	registerSessionEnd(app);

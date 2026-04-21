@@ -10,6 +10,7 @@ import {
 	resolveSignetForgeManagedPath,
 } from "@signet/core";
 import type { Hono } from "hono";
+import { requirePermission } from "../auth";
 import { createFilesystemConnector } from "../connectors/filesystem.js";
 import {
 	getConnector,
@@ -21,7 +22,7 @@ import {
 } from "../connectors/registry.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
-import { AGENTS_DIR, SCRIPTS_DIR, harnessLastSeen } from "./state.js";
+import { AGENTS_DIR, SCRIPTS_DIR, authConfig, harnessLastSeen } from "./state.js";
 
 type ConnectorSyncStartOutcome =
 	| { status: "syncing" }
@@ -121,6 +122,16 @@ function findForgeBinaryPath(): string | null {
 }
 
 export function registerConnectorRoutes(app: Hono): void {
+	// Permission guards — skip GET (public reads)
+	app.use("/api/connectors", async (c, next) => {
+		if (c.req.method === "GET") return next();
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/connectors/*", async (c, next) => {
+		if (c.req.method === "GET") return next();
+		return requirePermission("admin", authConfig)(c, next);
+	});
+
 	app.get("/api/connectors", (c) => {
 		try {
 			const accessor = getDbAccessor();

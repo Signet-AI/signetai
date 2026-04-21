@@ -132,7 +132,16 @@ a build pipeline aspect, a data model aspect. `nicholai` has a technical
 preferences aspect, a decision-making aspect, a communication style aspect.
 Aspects don't store facts — they organize them.
 
-Attributes are the facts organized under aspects. "ooIDE uses WorkOS for
+Groups are optional subfolders inside aspects. If an aspect is a room, a group
+is a dresser: a navigable place to collect related claim slots without making
+the room itself too specific. For example, Nicholai's food aspect can have
+`restaurants` and `dietary_constraints` groups.
+
+Claim keys are drawers inside groups. They identify the specific updateable fact
+slot, such as `favorite_restaurant` or `korean_restaurants_tried_count`. This
+keeps Signet from treating an entire room like one replaceable fact.
+
+Attributes are the facts organized under claim keys. "ooIDE uses WorkOS for
 auth" is an attribute of the auth aspect of ooIDE. "Bun is the package
 manager" is an attribute of the build pipeline aspect. Attributes are atomic
 facts. They have a home.
@@ -147,16 +156,24 @@ That's the rule.
 ```
 entity: ooIDE
   ├── aspect: auth system
-  │     ├── attribute: uses WorkOS for authentication
-  │     ├── attribute: WorkOS dashboard at [url]
-  │     └── constraint: never store auth tokens in client code
+  │     └── group: provider
+  │           ├── claim: current_auth_provider
+  │           │     └── attribute: uses WorkOS for authentication
+  │           ├── claim: dashboard_location
+  │           │     └── attribute: WorkOS dashboard at [url]
+  │           └── constraint: never store auth tokens in client code
   ├── aspect: build pipeline
-  │     ├── attribute: bun is the package manager
-  │     ├── attribute: `bun run dev` starts frontend and backend
-  │     └── constraint: run typecheck before committing
+  │     └── group: tooling
+  │           ├── claim: package_manager
+  │           │     └── attribute: bun is the package manager
+  │           ├── claim: dev_command
+  │           │     └── attribute: `bun run dev` starts frontend and backend
+  │           └── constraint: run typecheck before committing
   └── aspect: team
-        ├── attribute: nicholai is the primary developer
-        └── dependency → nicholai [entity]
+        └── group: maintainers
+              ├── claim: primary_developer
+              │     └── attribute: nicholai is the primary developer
+              └── dependency → nicholai [entity]
 ```
 
 The dependency on `nicholai` is not a semantic link inferred from word

@@ -142,6 +142,11 @@ signet setup --non-interactive \
 defaults when provider flags are omitted. Explicit provider flags always
 override inferred defaults.
 
+Signet Secrets is a bundled core plugin and is enabled by default for existing
+workspaces. New interactive installs include a **Core plugins** step that
+explains what it does before asking whether to enable it. For automation, pass
+`--disable-signet-secrets` if you want the plugin installed but disabled.
+
 If OpenClaw is configured to use the same workspace path, setup now enforces
 backup posture before finishing. In automation, either configure a git
 `origin` remote ahead of time, or pass `--create-local-backup` (or
@@ -181,12 +186,26 @@ for each:
 - OpenClaw — adapter-openclaw hooks
 - Codex — wrapper install + session hooks
 
-**3. Deployment context**
+**3. Agent description**
+
+Add a short description of your agent. This is used in generated identity
+metadata and dashboard summaries.
+
+**4. Core plugins**
+
+Signet Secrets stores reusable credentials outside chat, memory, logs, and
+source files. It connects to Signet's encrypted local store and compatible
+1Password references, then exposes value-safe CLI, MCP, and SDK helpers plus
+command injection with output redaction. This is safer than pasting API keys
+into prompts because agents can list secret names and run commands with
+injected values without reading the raw secrets.
+
+**5. Deployment context**
 
 Choose where Signet is running (`local`, `vps`, `server`). Setup uses
 this to show guidance before extraction provider selection.
 
-**4. Embedding provider**
+**6. Embedding provider**
 
 Embeddings power semantic (meaning-based) memory search. Choose:
 
@@ -197,7 +216,7 @@ Embeddings power semantic (meaning-based) memory search. Choose:
 - **OpenAI** — uses the OpenAI embeddings API. Requires `OPENAI_API_KEY`.
 - **Skip** — memory still works via keyword search, just no semantic search.
 
-**5. Embedding model**
+**7. Embedding model**
 
 For Ollama, `nomic-embed-text` is a good default. Setup can pull it for
 you (with confirmation), or you can do it manually:
@@ -206,12 +225,12 @@ you (with confirmation), or you can do it manually:
 ollama pull nomic-embed-text
 ```
 
-**6. Search balance**
+**8. Search balance**
 
 The `alpha` setting controls how much weight goes to semantic vs. keyword
 search. 0.7 (70% semantic, 30% keyword) works well for most people.
 
-**7. Git & auto-commit**
+**9. Git & auto-commit**
 
 The wizard can initialize a git repo in `$SIGNET_WORKSPACE/` so every change to
 your agent files is automatically versioned.
@@ -244,6 +263,7 @@ $SIGNET_WORKSPACE/
 │   ├── remember/        # Built-in: /remember command
 │   └── recall/          # Built-in: /recall command
 └── .daemon/
+    ├── plugins/         # Bundled core plugin registry
     └── logs/            # Daemon logs
 ```
 

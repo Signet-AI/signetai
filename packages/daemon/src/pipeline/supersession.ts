@@ -10,16 +10,16 @@
  *  2. Periodic sweep — maintenance worker scans all entities for stale siblings
  */
 
-import type { DbAccessor } from "../db-accessor";
-import type { PipelineV2Config } from "../memory-config";
-import type { LlmProvider } from "./provider";
 import type { EntityAttribute } from "@signet/core";
-import { tokenize, hasNegation, overlapCount, hasAntonymConflict } from "./antonyms";
+import type { DbAccessor } from "../db-accessor";
 import { getAttributesForAspect } from "../knowledge-graph";
-import { detectSemanticContradiction } from "./contradiction";
-import { insertHistoryEvent } from "../transactions";
-import { archiveToCold } from "./retention-worker";
 import { logger } from "../logger";
+import type { PipelineV2Config } from "../memory-config";
+import { insertHistoryEvent } from "../transactions";
+import { hasAntonymConflict, hasNegation, overlapCount, tokenize } from "./antonyms";
+import { detectSemanticContradiction } from "./contradiction";
+import type { LlmProvider } from "./provider";
+import { archiveToCold } from "./retention-worker";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -292,7 +292,7 @@ export async function checkAndSupersedeForAttributes(
 	for (const id of attributeIds) {
 		// Fetch the freshly classified attribute
 		const attr = accessor.withReadDb((db) => {
-			const row = db.prepare(`SELECT * FROM entity_attributes WHERE id = ? AND agent_id = ?`).get(id, agentId) as
+			const row = db.prepare("SELECT * FROM entity_attributes WHERE id = ? AND agent_id = ?").get(id, agentId) as
 				| Record<string, unknown>
 				| undefined;
 			if (!row) return null;
@@ -304,6 +304,8 @@ export async function checkAndSupersedeForAttributes(
 				kind: row.kind as "attribute" | "constraint",
 				content: row.content as string,
 				normalizedContent: row.normalized_content as string,
+				groupKey: (row.group_key as string) ?? null,
+				claimKey: (row.claim_key as string) ?? null,
 				confidence: row.confidence as number,
 				importance: row.importance as number,
 				status: row.status as "active" | "superseded" | "deleted",

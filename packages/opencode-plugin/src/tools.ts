@@ -6,11 +6,59 @@
  */
 
 import { tool } from "@opencode-ai/plugin";
+import {
+	applyRecallScoreThreshold,
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	formatRecallText,
+} from "@signet/core";
 import type { DaemonClient } from "./daemon-client.js";
 import { HARNESS, READ_TIMEOUT, WRITE_TIMEOUT } from "./types.js";
-import type { MemoryRecord, RecallResult } from "./types.js";
+import type { MemoryRecord } from "./types.js";
 
 const DAEMON_OFFLINE_MSG = "Signet daemon not running. Start with: signet daemon start";
+
+async function searchMemory(
+	client: DaemonClient,
+	args: { readonly query: string; readonly limit?: number; readonly type?: string; readonly min_score?: number },
+): Promise<string> {
+	const result = await client.post<unknown>(
+		"/api/memory/recall",
+		buildRecallRequestBody(args.query, {
+			limit: args.limit ?? 10,
+			type: args.type,
+		}),
+		READ_TIMEOUT,
+	);
+
+	if (result === null) return DAEMON_OFFLINE_MSG;
+	return formatRecallText(applyRecallScoreThreshold(result, args.min_score));
+}
+
+async function storeMemory(
+	client: DaemonClient,
+	args: {
+		readonly content: string;
+		readonly type?: string;
+		readonly importance?: number;
+		readonly tags?: readonly string[];
+		readonly pinned?: boolean;
+	},
+): Promise<{ readonly offline: true } | { readonly offline: false; readonly id?: string; readonly memoryId?: string }> {
+	const result = await client.post<{ readonly id?: string; readonly memoryId?: string }>(
+		"/api/memory/remember",
+		buildRememberRequestBody(args.content, {
+			type: args.type,
+			importance: args.importance,
+			tags: args.tags,
+			pinned: args.pinned,
+			who: HARNESS,
+		}),
+		WRITE_TIMEOUT,
+	);
+
+	return result === null ? { offline: true } : { offline: false, ...result };
+}
 
 // ============================================================================
 // Tool factory
@@ -27,24 +75,9 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				min_score: tool.schema.number().optional().describe("Minimum relevance score threshold"),
 			},
 			async execute(args): Promise<string> {
-				const result = await client.post<{ results: RecallResult[] }>(
-					"/api/memory/recall",
-					{
-						query: args.query,
-						limit: args.limit ?? 10,
-						type: args.type,
-						min_score: args.min_score,
-					},
-					READ_TIMEOUT,
-				);
-
-				if (result === null) return DAEMON_OFFLINE_MSG;
-				if (!result.results.length) return "No memories found.";
-
-				return result.results.map((r) => `[${r.type}] (score: ${r.score.toFixed(2)}) ${r.content}`).join("\n");
+				return searchMemory(client, args);
 			},
 		}),
-
 		memory_store: tool({
 			description: "Save a new memory",
 			args: {
@@ -55,20 +88,8 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				pinned: tool.schema.boolean().optional().describe("Pin this memory — prevents decay"),
 			},
 			async execute(args): Promise<string> {
-				const result = await client.post<{ id?: string; memoryId?: string }>(
-					"/api/memory/remember",
-					{
-						content: args.content,
-						type: args.type,
-						importance: args.importance,
-						tags: args.tags,
-						pinned: args.pinned,
-						who: HARNESS,
-					},
-					WRITE_TIMEOUT,
-				);
-
-				if (result === null) return DAEMON_OFFLINE_MSG;
+				const result = await storeMemory(client, args);
+				if (result.offline) return DAEMON_OFFLINE_MSG;
 				const id = result.id ?? result.memoryId;
 				return id ? `Memory saved${args.pinned ? " (pinned)" : ""} (id: ${id})` : "Memory saved.";
 			},
@@ -176,20 +197,8 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				pinned: tool.schema.boolean().optional().describe("Pin this memory — prevents decay"),
 			},
 			async execute(args): Promise<string> {
-				const result = await client.post<{ id?: string; memoryId?: string }>(
-					"/api/memory/remember",
-					{
-						content: args.content,
-						type: args.type,
-						importance: args.importance,
-						tags: args.tags,
-						pinned: args.pinned,
-						who: HARNESS,
-					},
-					WRITE_TIMEOUT,
-				);
-
-				if (result === null) return DAEMON_OFFLINE_MSG;
+				const result = await storeMemory(client, args);
+				if (result.offline) return DAEMON_OFFLINE_MSG;
 				const id = result.id ?? result.memoryId;
 				return id ? `Saved${args.pinned ? " (pinned)" : ""}: ${args.content.slice(0, 50)}` : "Saved.";
 			},
@@ -202,16 +211,7 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				limit: tool.schema.number().optional().describe("Max results"),
 			},
 			async execute(args): Promise<string> {
-				const result = await client.post<{ results: RecallResult[] }>(
-					"/api/memory/recall",
-					{ query: args.query, limit: args.limit ?? 10 },
-					READ_TIMEOUT,
-				);
-
-				if (result === null) return DAEMON_OFFLINE_MSG;
-				if (!result.results.length) return "No memories found.";
-
-				return result.results.map((r) => `- ${r.content}`).join("\n");
+				return searchMemory(client, args);
 			},
 		}),
 	};

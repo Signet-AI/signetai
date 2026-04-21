@@ -15,7 +15,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
+import type { Worker } from "node:worker_threads";
+import { getAgentIdentityFiles, parseSimpleYaml } from "@signet/core";
 import { getAgentScope, resolveAgentId } from "./agent-id";
 import { extractAnchorTerms } from "./anchor-terms";
 import {
@@ -59,6 +60,8 @@ import {
 } from "./pipeline/graph-traversal";
 import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
+import { getDefaultPluginHost } from "./plugins/index";
+import type { PluginPromptTargetV1 } from "./plugins/types";
 import {
 	type CandidateInput,
 	type CandidateSource,
@@ -87,9 +90,24 @@ import { isNoiseSession } from "./session-noise";
 import { getExpiryWarning } from "./session-tracker";
 import { getSessionTranscriptContent, searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { isObject, isRenderError, isRenderResult } from "./synthesis-worker-protocol";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
 import { getUpdateSummary } from "./update-system";
+
+// ---------------------------------------------------------------------------
+// Synthesis render worker (node:worker_threads)
+// ---------------------------------------------------------------------------
+
+let synthesisWorker: Worker | null = null;
+
+export function setSynthesisWorker(worker: Worker | null): void {
+	synthesisWorker = worker;
+}
+
+export function getSynthesisWorker(): Worker | null {
+	return synthesisWorker;
+}
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -105,6 +123,54 @@ function getMemoryDbPath(): string {
 
 /** Tracks which sessions have already received a full session-start inject. */
 const sessionStartSeen = new Map<string, number>();
+
+const DEFAULT_SESSION_START_MAX_INJECT_TOKENS = 12_000;
+const PREDICTED_CONTEXT_TERM_LIMIT = 6;
+const PREDICTED_CONTEXT_STOPWORDS: ReadonlySet<string> = new Set([
+	"able",
+	"about",
+	"after",
+	"again",
+	"also",
+	"back",
+	"been",
+	"before",
+	"being",
+	"check",
+	"code",
+	"could",
+	"from",
+	"have",
+	"into",
+	"issue",
+	"just",
+	"like",
+	"more",
+	"need",
+	"only",
+	"path",
+	"should",
+	"that",
+	"their",
+	"them",
+	"then",
+	"there",
+	"these",
+	"they",
+	"this",
+	"time",
+	"user",
+	"want",
+	"were",
+	"what",
+	"when",
+	"where",
+	"which",
+	"with",
+	"work",
+	"would",
+	"your",
+]);
 
 /** Sliding window of recently-injected memory IDs per session (prompt-submit). */
 const PROMPT_DEDUP_WINDOW = 5;
@@ -434,12 +500,13 @@ function buildTranscriptFallbackResponse(
 		readonly excerpt: string;
 	}>,
 	warnings?: string[],
+	pluginContext = "",
 ): UserPromptSubmitResponse {
 	const rows = hits.map((hit) => ({
 		content: `- [transcript ${formatTranscriptSessionLabel(hit.sessionKey)}] ${hit.excerpt} (${formatMemoryDate(hit.updatedAt)})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = buildPromptRecallInject(metadataHeader, lines);
+	const inject = buildPromptRecallInject(metadataHeader, lines, pluginContext);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -460,12 +527,13 @@ function buildTemporalFallbackResponse(
 		readonly excerpt: string;
 	}>,
 	warnings?: string[],
+	pluginContext = "",
 ): UserPromptSubmitResponse {
 	const rows = hits.map((hit) => ({
 		content: `- [thread ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = buildPromptRecallInject(metadataHeader, lines);
+	const inject = buildPromptRecallInject(metadataHeader, lines, pluginContext);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -531,7 +599,30 @@ export function applyTokenBudget(inject: string, mainBudget: number): string {
 	return truncateToTokens(inject, mainBudget - TRUNCATED_MARKER_TOKENS) + TRUNCATED_MARKER;
 }
 
-function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<string>): string {
+function buildPluginPromptContributionSection(target: PluginPromptTargetV1, log: typeof logger): string {
+	try {
+		const contributions = getDefaultPluginHost().promptContributions({ target });
+		if (contributions.length === 0) return "";
+		const parts = ["## Plugin Context", ""];
+		for (const contribution of contributions) {
+			parts.push(
+				`<signet-plugin-context plugin="${contribution.pluginId}" id="${contribution.id}" target="${contribution.target}">`,
+			);
+			parts.push(contribution.content.trim());
+			parts.push("</signet-plugin-context>");
+			parts.push("");
+		}
+		return parts.join("\n").trimEnd();
+	} catch (err) {
+		log.warn("hooks", "Plugin prompt contribution lookup failed", {
+			target,
+			error: err instanceof Error ? err.message : String(err),
+		});
+		return "";
+	}
+}
+
+function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<string>, pluginContext = ""): string {
 	// Keep formatting behavior aligned with daemon-rs
 	// `build_prompt_recall_inject()` in `packages/daemon-rs/.../routes/hooks.rs`.
 	const parts = [
@@ -541,24 +632,34 @@ function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<st
 		"",
 		"Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with /recall or memory_search, then expand with lcm_expand or knowledge_expand when needed.",
 		"",
-		"## Relevant Memory",
-		"",
 	];
+	if (pluginContext.trim().length > 0) {
+		parts.push(pluginContext.trimEnd());
+		parts.push("");
+	}
+	parts.push("## Relevant Memory");
+	parts.push("");
 	parts.push(...lines);
 	parts.push("");
 	parts.push("If you learn something durable, save it with /remember or memory_store.");
 	return `${parts.join("\n").trimEnd()}\n`;
 }
 
-function buildNoStrongMemoryMatchInject(metadataHeader: string): string {
-	return `${metadataHeader.trimEnd()}
-
-## Memory Check
-
-No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions.
-
-If you learn something durable, save it with /remember or memory_store.
-`;
+function buildNoStrongMemoryMatchInject(metadataHeader: string, pluginContext = ""): string {
+	const parts = [
+		metadataHeader.trimEnd(),
+		"",
+		"## Memory Check",
+		"",
+		"No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions.",
+		"",
+	];
+	if (pluginContext.trim().length > 0) {
+		parts.push(pluginContext.trimEnd());
+		parts.push("");
+	}
+	parts.push("If you learn something durable, save it with /remember or memory_store.");
+	return `${parts.join("\n").trimEnd()}\n`;
 }
 
 /** Build a brief "since your last session" summary for temporal awareness */
@@ -648,9 +749,10 @@ export function isDuplicate(db: Database, content: string, agentId: string): boo
 	return false;
 }
 
-function readIdentityFile(fileName: string, charBudget: number): string | undefined {
-	const filePath = join(getAgentsDir(), fileName);
-	if (!existsSync(filePath)) return undefined;
+type IdentityFileMap = Record<string, string>;
+
+function readIdentityPath(filePath: string | undefined, charBudget: number): string | undefined {
+	if (!filePath || !existsSync(filePath)) return undefined;
 
 	try {
 		const content = readFileSync(filePath, "utf-8").trim();
@@ -662,22 +764,21 @@ function readIdentityFile(fileName: string, charBudget: number): string | undefi
 	}
 }
 
-function readMemoryMd(charBudget: number): string | undefined {
-	return readIdentityFile("MEMORY.md", charBudget);
+function readIdentityFile(fileName: string, charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
+	return readIdentityPath(identityFiles?.[fileName] ?? join(getAgentsDir(), fileName), charBudget);
 }
 
-function readAgentsMd(charBudget: number): string | undefined {
-	const agentsMd = join(getAgentsDir(), "AGENTS.md");
-	if (!existsSync(agentsMd)) return undefined;
+function readMemoryMd(charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
+	return readIdentityFile("MEMORY.md", charBudget, identityFiles);
+}
 
-	try {
-		const content = readFileSync(agentsMd, "utf-8").trim();
-		if (!content) return undefined;
-		if (content.length <= charBudget) return content;
-		return `${content.slice(0, charBudget)}\n[truncated]`;
-	} catch {
-		return undefined;
-	}
+function readAgentsMd(charBudget: number, identityFiles?: IdentityFileMap): string | undefined {
+	return readIdentityFile("AGENTS.md", charBudget, identityFiles);
+}
+
+function resolveIdentityFiles(agentId: string): IdentityFileMap {
+	if (!agentId || agentId === "default") return {};
+	return getAgentIdentityFiles(agentId, getAgentsDir());
 }
 
 export interface ScoredMemory {
@@ -866,26 +967,19 @@ function getPredictedContextMemories(
 	policyGroup: string | null = null,
 ): ScoredMemory[] {
 	if (!existsSync(getMemoryDbPath())) return [];
+	if (!project || project.trim().length === 0) return [];
 
 	try {
-		// Get recent session summaries for this project
+		// Get recent session summaries for this project only. Global predictive
+		// FTS is too broad for session-start latency on large memory stores.
 		const summaryRows = getDbAccessor().withReadDb((db) => {
-			if (project) {
-				return db
-					.prepare(
-						`SELECT transcript FROM summary_jobs
-						 WHERE project = ? AND status = 'completed' AND agent_id = ?
-						 ORDER BY created_at DESC LIMIT 5`,
-					)
-					.all(project, agentId) as Array<{ transcript: string }>;
-			}
 			return db
 				.prepare(
 					`SELECT transcript FROM summary_jobs
-					 WHERE status = 'completed' AND agent_id = ?
+					 WHERE project = ? AND status = 'completed' AND agent_id = ?
 					 ORDER BY created_at DESC LIMIT 5`,
 				)
-				.all(agentId) as Array<{ transcript: string }>;
+				.all(project, agentId) as Array<{ transcript: string }>;
 		});
 
 		if (summaryRows.length === 0) return [];
@@ -898,7 +992,7 @@ function getPredictedContextMemories(
 				.toLowerCase()
 				.replace(/[^a-z0-9\s]/g, " ")
 				.split(/\s+/)
-				.filter((w) => w.length >= 4);
+				.filter((w) => w.length >= 4 && !PREDICTED_CONTEXT_STOPWORDS.has(w));
 			const seen = new Set<string>();
 			for (const w of words) {
 				if (seen.has(w)) continue;
@@ -911,7 +1005,7 @@ function getPredictedContextMemories(
 		const recurring = [...termFreq.entries()]
 			.filter(([_, count]) => count >= 2)
 			.sort((a, b) => b[1] - a[1])
-			.slice(0, 10)
+			.slice(0, PREDICTED_CONTEXT_TERM_LIMIT)
 			.map(([term]) => term);
 
 		if (recurring.length === 0) return [];
@@ -930,11 +1024,12 @@ function getPredictedContextMemories(
 						 JOIN memories m ON memories_fts.rowid = m.rowid
 						 WHERE memories_fts MATCH ?
 						   AND m.is_deleted = 0
+						   AND m.project = ?
 						   ${scope.sql}
 						 ORDER BY bm25(memories_fts)
 						 LIMIT ?`,
 					)
-					.all(ftsQuery, ...scope.args, limit * 2) as Array<{
+					.all(ftsQuery, project, ...scope.args, limit * 2) as Array<{
 					id: string;
 					content: string;
 					type: string;
@@ -1049,6 +1144,7 @@ function getDefaultConfig(): HooksConfig {
 			includeIdentity: true,
 			includeRecentContext: true,
 			recencyBias: 0.7,
+			maxInjectTokens: DEFAULT_SESSION_START_MAX_INJECT_TOKENS,
 		},
 		userPromptSubmit: {
 			enabled: true,
@@ -1093,7 +1189,25 @@ function isAgentConfig(value: unknown): value is AgentConfig {
 // Identity Loading
 // ============================================================================
 
-function loadIdentity(): { name: string; description?: string } {
+function parseIdentityMarkdown(content: string): { name: string; description?: string } {
+	const nameMatch = content.match(/name:\s*(.+)/i);
+	const youAreMatch = content.match(/(?:^|\n)\s*(?:#+\s*)?you are\s+([^\n.]+)\.?/i);
+	const descMatch = content.match(/creature:\s*(.+)/i) || content.match(/role:\s*(.+)/i);
+
+	return {
+		name: (nameMatch?.[1] ?? youAreMatch?.[1] ?? "Agent").trim(),
+		description: descMatch?.[1]?.trim(),
+	};
+}
+
+function loadIdentity(identityFiles?: IdentityFileMap): { name: string; description?: string } {
+	const identityMd = identityFiles?.["IDENTITY.md"];
+	if (identityMd && existsSync(identityMd)) {
+		try {
+			return parseIdentityMarkdown(readFileSync(identityMd, "utf-8"));
+		} catch {}
+	}
+
 	const agentYaml = join(getAgentsDir(), "agent.yaml");
 	if (existsSync(agentYaml)) {
 		try {
@@ -1109,16 +1223,10 @@ function loadIdentity(): { name: string; description?: string } {
 		} catch {}
 	}
 
-	const identityMd = join(getAgentsDir(), "IDENTITY.md");
-	if (existsSync(identityMd)) {
+	const rootIdentityMd = join(getAgentsDir(), "IDENTITY.md");
+	if (existsSync(rootIdentityMd)) {
 		try {
-			const content = readFileSync(identityMd, "utf-8");
-			const nameMatch = content.match(/name:\s*(.+)/i);
-			const descMatch = content.match(/creature:\s*(.+)/i) || content.match(/role:\s*(.+)/i);
-			return {
-				name: nameMatch?.[1]?.trim() || "Agent",
-				description: descMatch?.[1]?.trim(),
-			};
+			return parseIdentityMarkdown(readFileSync(rootIdentityMd, "utf-8"));
 		} catch {}
 	}
 
@@ -1270,13 +1378,14 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		initContinuity(req.sessionKey, req.harness, req.project);
 	}
 
-	const identity = includeIdentity ? loadIdentity() : { name: "Agent" };
+	const identityFiles = resolveIdentityFiles(resolveAgentId(req));
+	const identity = includeIdentity ? loadIdentity(identityFiles) : { name: "Agent" };
 
 	// Read AGENTS.md first so harness instructions precede synthesized memory
-	const agentsMdContent = includeIdentity ? readAgentsMd(12000) : undefined;
+	const agentsMdContent = includeIdentity ? readAgentsMd(12000, identityFiles) : undefined;
 
 	// Read MEMORY.md with 10k char budget
-	const memoryMdContent = readMemoryMd(10000);
+	const memoryMdContent = readMemoryMd(10000, identityFiles);
 
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
@@ -1528,7 +1637,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		);
 	}
 	const rawTokenBudget =
-		config.maxInjectTokens ?? (config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
+		config.maxInjectTokens ??
+		(config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : DEFAULT_SESSION_START_MAX_INJECT_TOKENS);
 	if (rawTokenBudget <= 0) {
 		logger.warn("hooks", "maxInjectTokens must be positive — clamping to 1", {
 			configured: rawTokenBudget,
@@ -1663,6 +1773,10 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	let recoverySection = "";
 
 	injectParts.push(buildSignetSystemPrompt());
+	const systemPluginContext = buildPluginPromptContributionSection("system", logger);
+	if (systemPluginContext) {
+		injectParts.push(systemPluginContext);
+	}
 	injectParts.push("[memory active | /remember | /recall]");
 	if (predictorStatusLine) {
 		injectParts.push(predictorStatusLine);
@@ -1719,9 +1833,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	// Inject additional identity files
-	const soulContent = includeIdentity ? readIdentityFile("SOUL.md", 4000) : undefined;
-	const identityContent = includeIdentity ? readIdentityFile("IDENTITY.md", 2000) : undefined;
-	const userContent = includeIdentity ? readIdentityFile("USER.md", 6000) : undefined;
+	const soulContent = includeIdentity ? readIdentityFile("SOUL.md", 4000, identityFiles) : undefined;
+	const identityContent = includeIdentity ? readIdentityFile("IDENTITY.md", 2000, identityFiles) : undefined;
+	const userContent = includeIdentity ? readIdentityFile("USER.md", 6000, identityFiles) : undefined;
 
 	if (soulContent) {
 		injectParts.push("\n## Soul\n");
@@ -1798,6 +1912,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		injectParts.push(updateStatus);
 	}
 
+	const sessionPluginContext = buildPluginPromptContributionSection("session-start", logger);
+	if (sessionPluginContext) {
+		injectParts.push(sessionPluginContext);
+	}
+
 	// Surface available secrets so agents know what's available
 	try {
 		const secretNames = listSecrets();
@@ -1842,7 +1961,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		traversalConstraints,
 		traversalTimedOut,
 		injectTokens: countTokens(inject),
-		inject,
+		injectChars: inject.length,
 		durationMs: duration,
 	});
 
@@ -2494,6 +2613,7 @@ export async function handleUserPromptSubmit(
 	const metadataHeader = `# Current Date & Time\n${now} (${tz})\n`;
 	const expiryWarning = req.sessionKey ? deps.getExpiryWarning(req.sessionKey) : null;
 	const warnings = expiryWarning ? [expiryWarning] : undefined;
+	const pluginContext = buildPluginPromptContributionSection("user-prompt-submit", deps.logger);
 
 	if (submitCfg.enabled === false) {
 		return finalizeUserPromptSubmitSuccess(
@@ -2501,7 +2621,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
-				inject: buildNoStrongMemoryMatchInject(metadataHeader),
+				inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 				memoryCount: 0,
 				warnings,
 			},
@@ -2516,7 +2636,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
-				inject: buildNoStrongMemoryMatchInject(metadataHeader),
+				inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 				memoryCount: 0,
 				warnings,
 			},
@@ -2569,7 +2689,14 @@ export async function handleUserPromptSubmit(
 					req,
 					userMessage,
 					start,
-					buildTemporalFallbackResponse(metadataHeader, queryTerms, injectBudget, temporalHits, warnings),
+					buildTemporalFallbackResponse(
+						metadataHeader,
+						queryTerms,
+						injectBudget,
+						temporalHits,
+						warnings,
+						pluginContext,
+					),
 					deps.logger,
 				);
 			}
@@ -2579,13 +2706,21 @@ export async function handleUserPromptSubmit(
 				sessionKey: req.sessionKey,
 				project: req.project,
 				limit: 3,
+				allowScanFallback: false,
 			});
 			if (transcriptHits.length > 0) {
 				return finalizeUserPromptSubmitSuccess(
 					req,
 					userMessage,
 					start,
-					buildTranscriptFallbackResponse(metadataHeader, queryTerms, injectBudget, transcriptHits, warnings),
+					buildTranscriptFallbackResponse(
+						metadataHeader,
+						queryTerms,
+						injectBudget,
+						transcriptHits,
+						warnings,
+						pluginContext,
+					),
 					deps.logger,
 				);
 			}
@@ -2595,7 +2730,7 @@ export async function handleUserPromptSubmit(
 					userMessage,
 					start,
 					{
-						inject: buildNoStrongMemoryMatchInject(metadataHeader),
+						inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 						memoryCount: 0,
 						warnings,
 					},
@@ -2610,7 +2745,7 @@ export async function handleUserPromptSubmit(
 				userMessage,
 				start,
 				{
-					inject: buildNoStrongMemoryMatchInject(metadataHeader),
+					inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 					memoryCount: 0,
 					warnings,
 				},
@@ -2662,7 +2797,7 @@ export async function handleUserPromptSubmit(
 				userMessage,
 				start,
 				{
-					inject: buildNoStrongMemoryMatchInject(metadataHeader),
+					inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
 					memoryCount: 0,
 					warnings,
 				},
@@ -2677,7 +2812,7 @@ export async function handleUserPromptSubmit(
 				`[signet:note] ${omitted} additional ${omitted === 1 ? "match was" : "matches were"} omitted to keep this lightweight (raise memory.guardrails.contextBudgetChars to include more).`,
 			);
 		}
-		let inject = buildPromptRecallInject(metadataHeader, lines);
+		let inject = buildPromptRecallInject(metadataHeader, lines, pluginContext);
 
 		// Append agent feedback request if enabled and there are injected memories
 		const selectedIds = selected.map((s) => s.id);
@@ -2718,7 +2853,7 @@ export async function handleUserPromptSubmit(
 		);
 	} catch (e) {
 		deps.logger.error("hooks", "User prompt submit failed", e as Error);
-		return { inject: buildNoStrongMemoryMatchInject(metadataHeader), memoryCount: 0, warnings };
+		return { inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext), memoryCount: 0, warnings };
 	}
 }
 
@@ -3572,10 +3707,10 @@ export function writeMemoryMd(
 	return { ok: false, error: result.error, ...(result.code ? { code: result.code } : {}) };
 }
 
-export function handleSynthesisRequest(
+export async function handleSynthesisRequest(
 	req: SynthesisRequest,
-	opts?: { maxTokens?: number; sinceTimestamp?: number; agentId?: string },
-): SynthesisResponse {
+	opts?: { maxTokens?: number; sinceTimestamp?: number; agentId?: string; writeToDisk?: boolean },
+): Promise<SynthesisResponse> {
 	logger.info("hooks", "Synthesis request", { trigger: req.trigger });
 
 	const _sinceTimestamp = opts?.sinceTimestamp ?? 0;
@@ -3587,12 +3722,108 @@ export function handleSynthesisRequest(
 	if (hasDbAccessor()) {
 		purgeCanonicalNoiseSessionsOnce(agentId, NOISE_PURGE_REASON);
 	}
-	const rendered = renderMemoryProjection(agentId);
-	return {
-		harness: "daemon",
-		model: "projection",
-		prompt: rendered.content,
-		fileCount: rendered.fileCount,
-		indexBlock: rendered.indexBlock,
-	};
+
+	const worker = getSynthesisWorker();
+	if (worker === null) {
+		logger.warn("hooks", "Synthesis render worker not available, falling back to synchronous render");
+		const rendered = renderMemoryProjection(agentId);
+		if (opts?.writeToDisk === true) {
+			writeMemoryMd(rendered.content, { agentId });
+		}
+		return {
+			harness: "daemon",
+			model: "projection",
+			prompt: rendered.content,
+			fileCount: rendered.fileCount,
+			indexBlock: rendered.indexBlock,
+		};
+	}
+
+	const requestId = randomUUID();
+	const w: Worker = worker;
+	return new Promise<SynthesisResponse>((resolve, reject) => {
+		let settled = false;
+
+		function cleanup(): void {
+			clearTimeout(timer);
+			w.off("message", handler);
+			w.off("error", onError);
+			w.off("exit", onExit);
+		}
+
+		function fallbackToSync(message: string, error?: Error): void {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			setSynthesisWorker(null);
+			w.terminate().catch((err) => {
+				logger.debug("hooks", "Synthesis render worker terminate failed", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
+			logger.warn("hooks", "Synthesis render worker failed, falling back to synchronous render", error ?? { message });
+			try {
+				const rendered = renderMemoryProjection(agentId);
+				if (opts?.writeToDisk === true) {
+					writeMemoryMd(rendered.content, { agentId });
+				}
+				resolve({
+					harness: "daemon",
+					model: "projection",
+					prompt: rendered.content,
+					fileCount: rendered.fileCount,
+					indexBlock: rendered.indexBlock,
+				});
+			} catch (err) {
+				reject(err instanceof Error ? err : new Error(String(err)));
+			}
+		}
+
+		function onError(err: Error): void {
+			logger.error("hooks", "Synthesis render worker failed", err);
+			fallbackToSync("Synthesis render worker failed", err);
+		}
+
+		function onExit(code: number): void {
+			if (settled) return;
+			const err = new Error(`Synthesis render worker exited before responding (code=${code})`);
+			logger.error("hooks", err.message, err);
+			fallbackToSync(err.message, err);
+		}
+
+		const timer = setTimeout(() => {
+			const err = new Error("Synthesis render worker timed out");
+			logger.warn("hooks", err.message);
+			fallbackToSync(err.message, err);
+		}, 30_000);
+
+		function handler(msg: unknown): void {
+			if (!isObject(msg)) return;
+			if (msg.requestId !== requestId) return;
+			if (settled) return;
+			if (isRenderResult(msg)) {
+				settled = true;
+				cleanup();
+				if (opts?.writeToDisk === true) {
+					writeMemoryMd(msg.content, { agentId });
+				}
+				resolve({
+					harness: "daemon",
+					model: "projection",
+					prompt: msg.content,
+					fileCount: msg.fileCount,
+					indexBlock: msg.indexBlock,
+				});
+			} else if (isRenderError(msg)) {
+				const err = new Error(`Synthesis render worker error: ${msg.error}`);
+				logger.error("hooks", err.message, err);
+				fallbackToSync(err.message, err);
+			}
+		}
+
+		w.on("message", handler);
+		w.once("error", onError);
+		w.once("exit", onExit);
+		w.postMessage({ type: "render", agentId, requestId });
+	});
 }

@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
-import type { DbAccessor } from "../db-accessor";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { logger } from "../logger";
 import { executeTask } from "./worker";
 
 function isTaskRunRow(value: unknown): value is { status: string; error: string | null } {
@@ -14,7 +15,7 @@ describe("executeTask", () => {
 
 	beforeEach(() => {
 		db = new Database(":memory:");
-		runMigrations(db);
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 	});
 
 	afterEach(() => {
@@ -31,11 +32,11 @@ describe("executeTask", () => {
 		).run("task-1", "task-task-1", "test prompt", "*/15 * * * *", "codex", null, 1, null, now, now, now);
 
 		const accessor: DbAccessor = {
-			withReadDb<T>(fn: (rdb: unknown) => T): T {
-				return fn(db);
+			withReadDb<T>(fn: (rdb: ReadDb) => T): T {
+				return fn(db as unknown as ReadDb);
 			},
-			withWriteTx<T>(fn: (wdb: unknown) => T): T {
-				return fn(db);
+			withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
+				return fn(db as unknown as WriteDb);
 			},
 			close() {},
 		};
@@ -64,12 +65,7 @@ describe("executeTask", () => {
 					timedOut: false,
 				})),
 				emitTaskStream() {},
-				logger: {
-					debug() {},
-					info() {},
-					warn() {},
-					error() {},
-				},
+				logger: { debug() {}, info() {}, warn() {}, error() {} } as unknown as typeof logger,
 				resolveTaskModel: () => {
 					throw new Error("config read failed");
 				},
@@ -100,11 +96,11 @@ describe("executeTask", () => {
 		).run("task-2", "task-task-2", "test prompt", "*/15 * * * *", "codex", null, 1, null, now, now, now, "web-search");
 
 		const accessor: DbAccessor = {
-			withReadDb<T>(fn: (rdb: unknown) => T): T {
-				return fn(db);
+			withReadDb<T>(fn: (rdb: ReadDb) => T): T {
+				return fn(db as unknown as ReadDb);
 			},
-			withWriteTx<T>(fn: (wdb: unknown) => T): T {
-				return fn(db);
+			withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
+				return fn(db as unknown as WriteDb);
 			},
 			close() {},
 		};
@@ -133,12 +129,7 @@ describe("executeTask", () => {
 					timedOut: false,
 				})),
 				emitTaskStream() {},
-				logger: {
-					debug() {},
-					info() {},
-					warn() {},
-					error() {},
-				},
+				logger: { debug() {}, info() {}, warn() {}, error() {} } as unknown as typeof logger,
 				resolveTaskModel: () => "gpt-test",
 				recordSkillInvocation(input) {
 					used.push({

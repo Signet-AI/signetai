@@ -41,7 +41,7 @@ let db: Database;
 
 beforeEach(() => {
 	db = new Database(":memory:");
-	runMigrations(db);
+	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 });
 
 afterEach(() => {

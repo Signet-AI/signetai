@@ -29,13 +29,28 @@ interface SessionClaim {
 	expiresAt: number;
 }
 
+export interface EndedSessionInfo {
+	readonly key: string;
+	readonly runtimePath?: RuntimePath;
+	readonly endedAt: string;
+	readonly expiresAt: string;
+}
+
+interface EndedSession {
+	readonly runtimePath?: RuntimePath;
+	readonly endedAt: string;
+	expiresAt: number;
+}
+
 type ClaimResult = { readonly ok: true } | { readonly ok: false; readonly claimedBy: RuntimePath };
 
 const STALE_SESSION_MS = 4 * 60 * 60 * 1000; // 4 hours
+const ENDED_SESSION_TOMBSTONE_MS = 30 * 60 * 1000; // 30 minutes
 const CLEANUP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 const WARN_BEFORE_MS = 30 * 60 * 1000; // warn 30 min before expiry
 
 const sessions = new Map<string, SessionClaim>();
+const endedSessions = new Map<string, EndedSession>();
 /** Key → expiresAt timestamp. Entries without a matching session claim are
  *  evicted by `cleanupStaleSessions` once their TTL elapses. */
 const bypassedSessions = new Map<string, number>();
@@ -61,6 +76,7 @@ export function normalizeSessionKey(sessionKey: string): string {
 export function claimSession(sessionKey: string, runtimePath: RuntimePath, agentId = "default"): ClaimResult {
 	const key = normalizeSessionKey(sessionKey);
 	const existing = sessions.get(key);
+	endedSessions.delete(key);
 
 	if (existing) {
 		if (existing.runtimePath === runtimePath) {
@@ -112,6 +128,20 @@ export function releaseSession(sessionKey: string): void {
 	}
 }
 
+export function markSessionEnded(sessionKey: string, runtimePath?: RuntimePath): void {
+	const key = normalizeSessionKey(sessionKey);
+	releaseSession(key);
+	endedSessions.set(key, {
+		runtimePath,
+		endedAt: new Date().toISOString(),
+		expiresAt: Date.now() + ENDED_SESSION_TOMBSTONE_MS,
+	});
+	logger.info("session-tracker", "Session ended", {
+		sessionKey: key,
+		runtimePath,
+	});
+}
+
 /**
  * Return true if the session is currently claimed and not stale.
  * Used by hooks to detect daemon-restart mid-session.
@@ -143,6 +173,24 @@ export function getSessionPath(sessionKey: string): RuntimePath | undefined {
 	}
 
 	return claim.runtimePath;
+}
+
+export function getEndedSession(sessionKey: string): EndedSessionInfo | undefined {
+	const key = normalizeSessionKey(sessionKey);
+	const ended = endedSessions.get(key);
+	if (!ended) return undefined;
+
+	if (Date.now() > ended.expiresAt) {
+		endedSessions.delete(key);
+		return undefined;
+	}
+
+	return {
+		key,
+		runtimePath: ended.runtimePath,
+		endedAt: ended.endedAt,
+		expiresAt: new Date(ended.expiresAt).toISOString(),
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +338,13 @@ function cleanupStaleSessions(): void {
 		}
 	}
 
+	for (const [key, ended] of endedSessions) {
+		if (now > ended.expiresAt) {
+			endedSessions.delete(key);
+			cleaned++;
+		}
+	}
+
 	if (cleaned > 0) {
 		logger.info("session-tracker", "Cleaned stale sessions", {
 			cleaned,
@@ -345,6 +400,7 @@ export function activeSessionCount(): number {
 /** Reset all sessions (for testing). */
 export function resetSessions(): void {
 	sessions.clear();
+	endedSessions.clear();
 	bypassedSessions.clear();
 	warnedSessions.clear();
 }

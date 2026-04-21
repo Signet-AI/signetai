@@ -6,24 +6,36 @@ import { getDbAccessor } from "../db-accessor";
 import { walkImpact } from "../graph-impact";
 import {
 	getAttributesForAspectFiltered,
+	getEntityAspectsByName,
 	getEntityAspectsWithCounts,
 	getEntityDependenciesDetailed,
 	getEntityHealth,
+	getEntityKnowledgeTree,
+	getKnowledgeEntityByName,
 	getKnowledgeEntityDetail,
 	getKnowledgeGraphForConstellation,
 	getKnowledgeStats,
 	getPinnedEntities,
+	listEntityAttributesByPath,
+	listEntityClaims,
+	listEntityGroups,
 	listKnowledgeEntities,
 	pinEntity,
 	resolveNamedEntity,
 	unpinEntity,
 } from "../knowledge-graph";
+import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import { getTraversalStatus, resolveFocalEntities, traverseKnowledgeGraph } from "../pipeline/graph-traversal";
 import { AGENTS_DIR, authConfig } from "./state";
 import { resolveScopedAgentId, resolveScopedProject } from "./utils";
 
 export function registerKnowledgeRoutes(app: Hono): void {
+	const parseNavigationLimit = (value: string | undefined, fallback: number, max: number): number => {
+		const parsed = Number.parseInt(value ?? String(fallback), 10);
+		return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), max) : fallback;
+	};
+
 	app.get("/api/knowledge/entities", (c) => {
 		const agentId = c.req.query("agent_id") ?? "default";
 		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
@@ -44,24 +56,140 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		});
 	});
 
-	app.post("/api/knowledge/entities/:id/pin", async (c) => {
-		return requirePermission("modify", authConfig)(c, async () => {
-			const agentId = c.req.query("agent_id") ?? "default";
-			pinEntity(getDbAccessor(), c.req.param("id"), agentId);
-			const entity = getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
-			if (!entity?.entity.pinnedAt) {
-				return c.json({ error: "Entity not found" }, 404);
-			}
-			return c.json({ pinned: true, pinnedAt: entity.entity.pinnedAt });
+	app.get("/api/knowledge/navigation/entities", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
+		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
+		const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
+		const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
+
+		return c.json({
+			items: listKnowledgeEntities(getDbAccessor(), {
+				agentId,
+				type: c.req.query("type") ?? undefined,
+				query: c.req.query("q") ?? undefined,
+				limit,
+				offset,
+			}),
+			limit,
+			offset,
 		});
 	});
 
-	app.delete("/api/knowledge/entities/:id/pin", async (c) => {
-		return requirePermission("modify", authConfig)(c, async () => {
-			const agentId = c.req.query("agent_id") ?? "default";
-			unpinEntity(getDbAccessor(), c.req.param("id"), agentId);
-			return c.json({ pinned: false });
+	app.get("/api/knowledge/navigation/entity", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const name = c.req.query("name")?.trim();
+		if (!name) return c.json({ error: "name is required" }, 400);
+		const entity = getKnowledgeEntityByName(getDbAccessor(), { agentId, name });
+		if (!entity) return c.json({ error: "Entity not found" }, 404);
+		return c.json(entity);
+	});
+
+	app.get("/api/knowledge/navigation/tree", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		const result = getEntityKnowledgeTree(getDbAccessor(), {
+			agentId,
+			entity,
+			maxAspects: parseNavigationLimit(c.req.query("max_aspects"), 20, 100),
+			maxGroups: parseNavigationLimit(c.req.query("max_groups"), 20, 100),
+			maxClaims: parseNavigationLimit(c.req.query("max_claims"), 50, 200),
+			depth: parseNavigationLimit(c.req.query("depth"), 3, 3),
 		});
+		if (!result) return c.json({ error: "Entity not found" }, 404);
+		return c.json(result);
+	});
+
+	app.get("/api/knowledge/navigation/aspects", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		const result = getEntityAspectsByName(getDbAccessor(), { agentId, entity });
+		if (!result) return c.json({ error: "Entity not found" }, 404);
+		return c.json(result);
+	});
+
+	app.get("/api/knowledge/navigation/groups", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		const result = listEntityGroups(getDbAccessor(), { agentId, entity, aspect });
+		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
+		return c.json(result);
+	});
+
+	app.get("/api/knowledge/navigation/claims", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		const result = listEntityClaims(getDbAccessor(), { agentId, entity, aspect, group });
+		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
+		return c.json(result);
+	});
+
+	app.get("/api/knowledge/navigation/attributes", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		const claim = c.req.query("claim")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		if (!claim) return c.json({ error: "claim is required" }, 400);
+		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
+		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
+		const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
+		const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
+		const kindQuery = c.req.query("kind");
+		const statusQuery = c.req.query("status");
+		const kind = kindQuery === "attribute" || kindQuery === "constraint" ? kindQuery : undefined;
+		const status =
+			statusQuery === "active" || statusQuery === "superseded" || statusQuery === "deleted" || statusQuery === "all"
+				? statusQuery
+				: undefined;
+		const result = listEntityAttributesByPath(getDbAccessor(), {
+			agentId,
+			entity,
+			aspect,
+			group,
+			claim,
+			kind,
+			status,
+			limit,
+			offset,
+		});
+		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
+		return c.json({ ...result, limit, offset });
+	});
+
+	app.post("/api/knowledge/entities/:id/pin", async (c) => {
+		const denied = await requirePermission("modify", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
+		const agentId = c.req.query("agent_id") ?? "default";
+		pinEntity(getDbAccessor(), c.req.param("id"), agentId);
+		const entity = getKnowledgeEntityDetail(getDbAccessor(), c.req.param("id"), agentId);
+		if (!entity?.entity.pinnedAt) {
+			return c.json({ error: "Entity not found" }, 404);
+		}
+		return c.json({ pinned: true, pinnedAt: entity.entity.pinnedAt });
+	});
+
+	app.delete("/api/knowledge/entities/:id/pin", async (c) => {
+		const denied = await requirePermission("modify", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
+		const agentId = c.req.query("agent_id") ?? "default";
+		unpinEntity(getDbAccessor(), c.req.param("id"), agentId);
+		return c.json({ pinned: false });
 	});
 
 	app.get("/api/knowledge/entities/pinned", (c) => {
@@ -79,6 +207,17 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				c.req.query("since") ?? undefined,
 				Number.isFinite(minComparisonsParam) ? Math.max(minComparisonsParam, 1) : 3,
 			),
+		);
+	});
+
+	app.get("/api/knowledge/hygiene", (c) => {
+		const agentId = c.req.query("agent_id") ?? "default";
+		return c.json(
+			getKnowledgeHygieneReport(getDbAccessor(), {
+				agentId,
+				limit: parseNavigationLimit(c.req.query("limit"), 50, 500),
+				memoryLimit: parseNavigationLimit(c.req.query("memory_limit"), 200, 1000),
+			}),
 		);
 	});
 
@@ -177,6 +316,9 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.post("/api/knowledge/expand", async (c) => {
+		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
 		const scopedAgent = resolveScopedAgentId(c, undefined, "default");
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const body = await c.req.json().catch(() => ({}));
@@ -362,6 +504,9 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.post("/api/knowledge/expand/session", async (c) => {
+		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
 		const body = await c.req.json().catch(() => ({}));
 		const entityName = typeof body.entityName === "string" ? body.entityName.trim() : "";
 		const scopedAgent = resolveScopedAgentId(
@@ -481,6 +626,9 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.post("/api/graph/impact", async (c) => {
+		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
 		const body = await c.req.json().catch(() => ({}));
 		const entityId = typeof body.entityId === "string" ? body.entityId.trim() : "";
 		const direction = body.direction === "upstream" ? "upstream" : "downstream";

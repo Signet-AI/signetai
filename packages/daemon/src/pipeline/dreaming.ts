@@ -1319,7 +1319,7 @@ export async function runDreamingPass(
 		return { passId, applied, skipped, failed, summary: result.summary };
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
-		logger.error("dreaming", "Dreaming pass failed", { error: msg });
+		logger.error("dreaming", "Dreaming pass failed", undefined, { error: msg });
 		failDreamingPass(accessor, passId, msg);
 		throw e;
 	}

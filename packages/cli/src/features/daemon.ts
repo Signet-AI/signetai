@@ -1,9 +1,7 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
-import { OpenClawConnector } from "@signet/connector-openclaw";
-import { detectSchema, ensureUnifiedSchema, parseSimpleYaml, runMigrations } from "@signet/core";
+import { detectSchema, ensureUnifiedSchema, runMigrations } from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
@@ -53,6 +51,9 @@ interface Deps {
 	readonly sleep: (ms: number) => Promise<void>;
 	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly stopDaemon: (agentsDir?: string) => Promise<boolean>;
+	readonly confirmRestartSync?: () => Promise<boolean>;
+	readonly isInteractive?: () => boolean;
+	readonly syncTemplates?: (basePath: string) => Promise<void>;
 }
 
 export async function launchDashboard(options: PathOptions, deps: Deps): Promise<void> {
@@ -258,16 +259,22 @@ export async function doRestart(options: RestartOptions, deps: Deps): Promise<vo
 		process.exit(1);
 	}
 
-	if (options.openclaw === false || !isOpenClawDetected()) {
+	if (options.openclaw === false) {
+		console.log(chalk.yellow("  --no-openclaw is deprecated; use --no-sync instead."));
+	}
+
+	if (
+		options.sync === false ||
+		options.openclaw === false ||
+		!deps.syncTemplates ||
+		!(deps.isInteractive ?? isInteractiveTerminal)()
+	) {
 		return;
 	}
 
-	const restart = await confirm({
-		message: "Restart connected OpenClaw instance?",
-		default: false,
-	});
-	if (restart) {
-		await restartOpenClaw(basePath);
+	const sync = await (deps.confirmRestartSync ?? confirmRestartSync)();
+	if (sync) {
+		await deps.syncTemplates(basePath);
 	}
 }
 
@@ -633,68 +640,15 @@ function formatLogEntry(entry: LogEntry): string {
 	return line;
 }
 
-function isOpenClawDetected(): boolean {
-	return new OpenClawConnector().getDiscoveredConfigPaths().length > 0;
+function isInteractiveTerminal(): boolean {
+	return process.stdin.isTTY === true && process.stdout.isTTY === true;
 }
 
-async function restartOpenClaw(basePath: string): Promise<boolean> {
-	const yamlPath = join(basePath, "agent.yaml");
-	let cmd: string | null = null;
-
-	try {
-		const yaml = readFileSync(yamlPath, "utf-8");
-		const cfg = parseSimpleYaml(yaml);
-		cmd = readRestartCommand(cfg);
-	} catch {
-		// Ignore
-	}
-
-	if (!cmd) {
-		console.log();
-		console.log(chalk.yellow("  No OpenClaw restart command configured."));
-		console.log(chalk.dim(`  Add to ${yamlPath}:`));
-		console.log(chalk.dim("    services:"));
-		console.log(chalk.dim("      openclaw:"));
-		console.log(chalk.dim('        restart_command: "systemctl --user restart openclaw"'));
-		return false;
-	}
-
-	// Validate command against known safe restart patterns to prevent
-	// injection via tampered agent.yaml (git sync, social engineering).
-	const SAFE_PATTERNS = [
-		/^systemctl\s+--user\s+restart\s+[\w.-]+$/,
-		/^launchctl\s+kickstart\s+-k\s+[\w.-]+(\/[\w.-]+)*$/,
-		/^brew\s+services\s+restart\s+[\w.-]+$/,
-		/^supervisorctl\s+restart\s+[\w.-]+$/,
-	];
-	if (!SAFE_PATTERNS.some((p) => p.test(cmd))) {
-		console.log();
-		console.log(chalk.red("  Restart command rejected — does not match safe patterns."));
-		console.log(chalk.dim(`  Command: ${cmd}`));
-		console.log(chalk.dim("  Allowed: systemctl --user restart <name>, launchctl kickstart -k <path>"));
-		return false;
-	}
-
-	const spinner = ora("Restarting OpenClaw...").start();
-	try {
-		const shell = process.platform === "win32" ? "cmd" : "sh";
-		const args = process.platform === "win32" ? ["/c", cmd] : ["-c", cmd];
-		const result = spawnSync(shell, args, {
-			timeout: 15_000,
-			stdio: "pipe",
-			windowsHide: true,
-		});
-		if (result.status === 0) {
-			spinner.succeed("OpenClaw restarted");
-			return true;
-		}
-		const stderr = readSpawnErr(result.stderr);
-		spinner.fail(`OpenClaw restart failed${stderr ? `: ${stderr}` : ""}`);
-		return false;
-	} catch {
-		spinner.fail("OpenClaw restart timed out");
-		return false;
-	}
+async function confirmRestartSync(): Promise<boolean> {
+	return confirm({
+		message: "Run `signet sync` now?",
+		default: false,
+	});
 }
 
 function readLogPayload(value: unknown): LogPayload | null {
@@ -765,31 +719,6 @@ function readLevel(value: unknown): LogEntry["level"] | null {
 		default:
 			return null;
 	}
-}
-
-function readRestartCommand(value: unknown): string | null {
-	if (!isRecord(value)) {
-		return null;
-	}
-	const services = value.services;
-	if (!isRecord(services)) {
-		return null;
-	}
-	const openclaw = services.openclaw;
-	if (!isRecord(openclaw)) {
-		return null;
-	}
-	return readString(openclaw.restart_command);
-}
-
-function readSpawnErr(value: string | Buffer | null): string {
-	if (typeof value === "string") {
-		return value.trim();
-	}
-	if (value instanceof Buffer) {
-		return value.toString("utf-8").trim();
-	}
-	return "";
 }
 
 function readString(value: unknown): string | null {

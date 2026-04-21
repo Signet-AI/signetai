@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { resolveAgentId } from "../agent-id.js";
+import { requirePermission } from "../auth";
 import { listAgentPresence, touchAgentPresence } from "../cross-agent.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
@@ -13,6 +14,7 @@ import {
 	unbypassSession,
 } from "../session-tracker.js";
 import { expandTemporalNode } from "../temporal-expand.js";
+import { authConfig } from "./state.js";
 import { readOptionalJsonObject, resolveScopedAgentId, resolveScopedProject } from "./utils.js";
 
 function listLiveSessions(agentId: string): Array<{
@@ -22,7 +24,7 @@ function listLiveSessions(agentId: string): Array<{
 	expiresAt: string | null;
 	bypassed: boolean;
 }> {
-	const byKey = new Map(
+	const byKey = new Map<string, { key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }>(
 		getActiveSessions()
 			.filter((s) => s.agentId === agentId)
 			.map((session) => [session.key, session] as const),
@@ -65,6 +67,14 @@ export interface SessionRoutesDeps {
 
 export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void {
 	const { gitConfig: gc, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync } = deps;
+
+	// Permission guards
+	app.use("/api/sessions/summaries", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/git/*", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
 
 	app.get("/api/sessions", (c) => {
 		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");

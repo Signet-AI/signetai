@@ -351,7 +351,7 @@ ${VALID_RESPONSE}
 	});
 
 	it("accepts all valid memory types", async () => {
-		const validTypes = ["fact", "preference", "decision", "procedural", "semantic"];
+		const validTypes = ["fact", "preference", "decision", "procedural", "semantic"] as const;
 		const facts = validTypes.map((type) => ({
 			content: `A fact of type ${type} that contains enough descriptive detail about the system configuration to pass validation`,
 			type,

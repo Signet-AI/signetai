@@ -7,6 +7,7 @@
  */
 
 import type { Hono } from "hono";
+import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 import { resolveScopedAgent } from "../request-scope.js";
@@ -67,6 +68,13 @@ function computePercentile(sorted: readonly number[], p: number): number {
 // ---------------------------------------------------------------------------
 
 export function mountMcpAnalyticsRoutes(app: Hono): void {
+	app.use("/api/mcp/analytics", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+	app.use("/api/mcp/analytics/*", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+
 	// GET /api/mcp/analytics — aggregated stats across all servers
 	app.get("/api/mcp/analytics", (c) => {
 		const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));

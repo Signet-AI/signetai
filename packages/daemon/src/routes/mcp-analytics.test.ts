@@ -59,7 +59,7 @@ describe("mcp-analytics routes", () => {
 
 	beforeEach(() => {
 		db = new Database(":memory:");
-		runMigrations(db);
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		app = new Hono();
 
 		// Monkey-patch: make the module use our test DB

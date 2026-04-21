@@ -1,6 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolvePiAgentDir } from "@signet/core";
+import {
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	formatRecallText,
+	parseRecallPayload,
+	resolvePiAgentDir,
+} from "@signet/core";
+import type { RecallPayload } from "@signet/core";
 import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
 import { Type } from "@sinclair/typebox";
 import { createDaemonClient } from "./daemon-client.js";
@@ -118,18 +125,19 @@ export async function recallMemories(
 		agentId?: string;
 		scope?: "global" | "agent" | "session";
 	} = {},
-): Promise<Array<{ id: string; content: string; importance?: number; tags?: string[] }>> {
+): Promise<RecallPayload> {
 	const { limit = 10, agentId, scope } = options;
 
 	const response = await fetch(`${daemonUrl}/api/memory/recall`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			query,
-			limit,
-			agentId,
-			...(scope !== undefined && { scope }),
-		}),
+		body: JSON.stringify(
+			buildRecallRequestBody(query, {
+				limit,
+				agentId,
+				scope,
+			}),
+		),
 		signal: AbortSignal.timeout(READ_TIMEOUT),
 	});
 
@@ -138,23 +146,8 @@ export async function recallMemories(
 		throw new Error(`Recall failed: ${error}`);
 	}
 
-	const data = (await response.json()) as {
-		results?: Array<{ id: string; content: string; importance?: number; tags?: string | null }>;
-	};
-	return (data.results ?? []).map((r) => ({
-		id: r.id,
-		content: r.content,
-		importance: r.importance,
-		tags:
-			typeof r.tags === "string"
-				? r.tags
-						.split(",")
-						.map((t) => t.trim())
-						.filter(Boolean)
-				: undefined,
-	}));
+	return (await response.json()) as RecallPayload;
 }
-
 export async function rememberContent(
 	daemonUrl: string,
 	content: string,
@@ -169,14 +162,16 @@ export async function rememberContent(
 	const response = await fetch(`${daemonUrl}/api/hooks/remember`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			harness: HARNESS,
-			content,
-			pinned: critical,
-			tags,
-			agentId,
-			source: "pi-extension",
-		}),
+		body: JSON.stringify(
+			buildRememberRequestBody(content, {
+				harness: HARNESS,
+				pinned: critical,
+				tags,
+				agentId,
+				source: "pi-extension",
+				runtimePath: RUNTIME_PATH,
+			}),
+		),
 		signal: AbortSignal.timeout(WRITE_TIMEOUT),
 	});
 
@@ -185,7 +180,6 @@ export async function rememberContent(
 		throw new Error(`Remember failed: ${error}`);
 	}
 }
-
 export async function sendMemoryFeedback(
 	daemonUrl: string,
 	sessionKey: string,
@@ -373,25 +367,19 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			ctx.ui.notify(`Recalling: "${args}"...`, "info");
 
 			try {
-				const memories = await recallMemories(daemonUrl, args, { limit: 5, agentId });
+				const recall = await recallMemories(daemonUrl, args, { limit: 5, agentId });
+				const parsed = parseRecallPayload(recall);
 
-				if (memories.length === 0) {
+				if (parsed.rows.length === 0) {
 					ctx.ui.notify("No relevant memories found", "info");
 					return;
 				}
 
 				state.lastRecall = new Date().toISOString();
-				state.memoryCount = memories.length;
+				state.memoryCount = parsed.rows.length;
 				updateStatus(ctx);
 
-				const formatted = memories
-					.map((m, i) => {
-						const tags = m.tags?.length ? `[${m.tags.join(", ")}] ` : "";
-						return `${i + 1}. [${m.id}] ${tags}${m.content}`;
-					})
-					.join("\n");
-
-				ctx.ui.notify(`Found ${memories.length} memories:\n${formatted}`, "success");
+				ctx.ui.notify(formatRecallText(recall), "success");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(`Recall failed: ${message}`, "error");
@@ -490,9 +478,10 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			try {
 				const query = String(params.query || "");
 				const limit = typeof params.limit === "number" ? params.limit : 5;
-				const memories = await recallMemories(daemonUrl, query, { limit, agentId });
+				const recall = await recallMemories(daemonUrl, query, { limit, agentId });
+				const parsed = parseRecallPayload(recall);
 
-				if (memories.length === 0) {
+				if (parsed.rows.length === 0) {
 					return {
 						content: [{ type: "text", text: "No relevant memories found for this query." }],
 						details: { memoriesFound: 0 },
@@ -500,23 +489,12 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				}
 
 				state.lastRecall = new Date().toISOString();
-				state.memoryCount = memories.length;
+				state.memoryCount = parsed.rows.length;
 				updateStatus(ctx);
 
-				const formatted = memories.map((m, i) => {
-					const tags = m.tags?.length ? `[tags: ${m.tags.join(", ")}]` : "";
-					const importance = m.importance ? `[importance: ${m.importance.toFixed(2)}]` : "";
-					return `${i + 1}. [id: ${m.id}] ${m.content} ${tags} ${importance}`.trim();
-				});
-
 				return {
-					content: [
-						{
-							type: "text",
-							text: `Found ${memories.length} relevant memories:\n\n${formatted.join("\n")}`,
-						},
-					],
-					details: { memoriesFound: memories.length, memories },
+					content: [{ type: "text", text: formatRecallText(recall) }],
+					details: { memoriesFound: parsed.rows.length, memories: parsed.rows, meta: parsed.meta },
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);

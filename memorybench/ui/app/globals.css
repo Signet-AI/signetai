@@ -1,0 +1,205 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Font Faces */
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("https://fonts.gstatic.com/s/spacegrotesk/v22/V8mDoQDjQSkFtoMM3T6r8E7mPbF4Cw.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "DM Sans";
+  src: url("/fonts/DMSans.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "DM Mono";
+  src: url("/fonts/DMMono.woff2") format("woff2");
+  font-weight: 400 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Base Styles */
+:root {
+  --bg-primary: #0b0b0e;
+  --bg-surface: #222222;
+  --bg-surface-hover: #2a2a2a;
+  --bg-elevated: #333333;
+  --accent: #267bf1;
+  --accent-hover: #3d8cf5;
+  --accent-muted: #267bf133;
+  --text-primary: #ffffff;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border: #1e2530;
+  --border-hover: #2a3240;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: "DM Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover);
+}
+
+/* Selection */
+::selection {
+  background-color: var(--accent-muted);
+  color: var(--text-primary);
+}
+
+/* Focus Styles */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Component Utilities */
+@layer components {
+  .card {
+    @apply bg-bg-surface border border-border rounded p-4;
+  }
+
+  .card-hover {
+    @apply transition-colors hover:bg-bg-surface-hover hover:border-border-hover;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded font-medium transition-all;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary;
+  }
+
+  .btn-primary {
+    @apply bg-accent text-white hover:bg-accent-hover active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply bg-bg-surface border border-border text-text-primary hover:bg-bg-surface-hover hover:border-border-hover;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent text-text-secondary hover:bg-bg-surface hover:text-text-primary;
+  }
+
+  .input {
+    @apply w-full bg-bg-surface border border-border rounded px-3 py-2 text-text-primary;
+    @apply placeholder:text-text-muted;
+    @apply focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent;
+    @apply transition-colors;
+  }
+
+  .select {
+    @apply input appearance-none cursor-pointer;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+    background-position: right 0.5rem center;
+    background-repeat: no-repeat;
+    background-size: 1.5em 1.5em;
+    padding-right: 2.5rem;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-status-success/20 text-status-success;
+  }
+
+  .badge-error {
+    @apply bg-status-error/20 text-status-error;
+  }
+
+  .badge-warning {
+    @apply bg-status-warning/20 text-status-warning;
+  }
+
+  .badge-running {
+    @apply bg-accent/20 text-accent;
+  }
+
+  .badge-neutral {
+    @apply bg-bg-elevated text-text-secondary;
+  }
+
+  .table-header {
+    @apply text-xs font-medium text-text-muted uppercase tracking-wider font-display;
+  }
+
+  .table-cell {
+    @apply py-3 px-4 text-sm;
+  }
+
+  .logo-text {
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    letter-spacing: -0.03em;
+    font-weight: 500;
+  }
+}
+
+/* Animations */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-surface) 25%,
+    var(--bg-surface-hover) 50%,
+    var(--bg-surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Progress bar animation */
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.progress-indeterminate {
+  animation: progress-indeterminate 1.5s ease-in-out infinite;
+}

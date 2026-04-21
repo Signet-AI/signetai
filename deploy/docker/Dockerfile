@@ -7,6 +7,7 @@ COPY package.json bun.lock bunfig.toml tsconfig.json biome.json ./
 COPY AGENTS.md CLAUDE.md LICENSE README.md ./
 COPY scripts ./scripts
 COPY skills ./skills
+COPY memorybench ./memorybench
 COPY packages ./packages
 COPY public ./public
 COPY web ./web

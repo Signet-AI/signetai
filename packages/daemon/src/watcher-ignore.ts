@@ -1,7 +1,11 @@
-import { isAbsolute, join, normalize, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { resolveWorkspaceSourceRepoPath } from "@signet/core";
 import { loadMemoryConfig } from "./memory-config";
 import { resolvePredictorCheckpointPath } from "./predictor-client";
+
+// Canonical artifact filename patterns (keep in sync with daemon.ts)
+const ARTIFACT_FILENAME_RE = /--(?:summary|transcript|compaction|manifest)\.md$/;
+const MEMORY_BACKUP_FILENAME_RE = /^MEMORY\.(?:backup|bak|pre)-.+\.md$/;
 
 function normalizePath(path: string): string {
 	return normalize(path);
@@ -20,15 +24,17 @@ function relativePathWithin(root: string, target: string): string | null {
 
 export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: string) => boolean {
 	const defaultPredictorCheckpoint = normalizePath(join(agentsDir, "memory", "predictor", "model.bin"));
-	const configuredPredictorCheckpoint = resolveForComparison(
-		resolvePredictorCheckpointPath(loadMemoryConfig(agentsDir).pipelineV2.predictor),
-	);
+	const predictorCfg = loadMemoryConfig(agentsDir).pipelineV2.predictor;
+	const configuredPredictorCheckpoint = predictorCfg
+		? resolveForComparison(resolvePredictorCheckpointPath(predictorCfg))
+		: defaultPredictorCheckpoint;
 	const agentRoot = resolveForComparison(join(agentsDir, "agents"));
 	const memoriesDb = resolveForComparison(join(agentsDir, "memory", "memories.db"));
 	const memoriesDbWal = resolveForComparison(join(agentsDir, "memory", "memories.db-wal"));
 	const memoriesDbShm = resolveForComparison(join(agentsDir, "memory", "memories.db-shm"));
 	const memoriesDbJournal = resolveForComparison(join(agentsDir, "memory", "memories.db-journal"));
 	const sourceRepoRoot = resolveForComparison(resolveWorkspaceSourceRepoPath(agentsDir));
+	const memoryDir = resolveForComparison(join(agentsDir, "memory"));
 	const ignoredPaths = new Set([
 		defaultPredictorCheckpoint,
 		configuredPredictorCheckpoint,
@@ -42,6 +48,15 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 		const normalizedPath = resolveForComparison(path);
 		if (relativePathWithin(sourceRepoRoot, normalizedPath) !== null) {
 			return true;
+		}
+
+		// Ignore canonical artifact and backup files inside memory/
+		const relMemory = relativePathWithin(memoryDir, normalizedPath);
+		if (relMemory !== null && relMemory !== "") {
+			const fname = basename(normalizedPath);
+			if (ARTIFACT_FILENAME_RE.test(fname) || MEMORY_BACKUP_FILENAME_RE.test(fname)) {
+				return true;
+			}
 		}
 
 		const relativeToAgentsRoot = relativePathWithin(agentRoot, normalizedPath);

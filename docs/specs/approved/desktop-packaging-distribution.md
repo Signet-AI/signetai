@@ -17,7 +17,7 @@ scope_boundary: "Desktop packaging, runtime bundling preference, CI workflows, a
 
 ## Context
 
-Signet already has a Tauri desktop app, but distribution is still
+Signet now uses an Electron desktop app, but distribution is still
 incomplete as a release contract:
 
 - runtime startup depends too heavily on global installs
@@ -34,7 +34,7 @@ Arch.
    - Windows installer artifacts
    - Ubuntu `.deb` and `.AppImage`
    - Arch deliverables as `.AppImage` + AUR metadata
-2. Tray runtime startup must support bundled daemon binaries as a
+2. Electron desktop runtime startup must support a bundled Bun daemon
    fallback path when system runtimes are unavailable.
 3. Release workflows must resolve signing mode before publish:
    - official signing when certificate secrets are present
@@ -50,5 +50,5 @@ Arch.
 - Desktop packaging remains independent of npm release train mechanics.
 - Generated AUR metadata is emitted as CI artifacts and can be pushed by
   a separate credentialed job.
-- `packages/daemon-rs` remains the shadow daemon rewrite. Desktop sidecar
-  usage is intentionally fallback-only until parity cutover is approved.
+- `packages/daemon-rs` remains the shadow daemon rewrite. Desktop sidecar usage is intentionally bound to the current Bun daemon.
+  `daemon-rs` remains separate parity work until cutover is approved.

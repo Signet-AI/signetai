@@ -5,6 +5,8 @@ import chalk from "chalk";
 import ora from "ora";
 import { getEmbeddingDimensions, readErr } from "./setup-shared.js";
 
+const COMMAND_DETECTION_TIMEOUT_MS = 1000;
+
 export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"; model: string; dimensions: number }> {
 	console.log();
 	const model = await select({
@@ -88,7 +90,11 @@ export async function preflightOllamaEmbedding(model: string): Promise<{
 
 export function hasCommand(command: string): boolean {
 	try {
-		const result = spawnSync(command, ["--version"], { stdio: "ignore", windowsHide: true });
+		const result = spawnSync(command, ["--version"], {
+			stdio: "ignore",
+			timeout: COMMAND_DETECTION_TIMEOUT_MS,
+			windowsHide: true,
+		});
 		return result.status === 0;
 	} catch {
 		return false;

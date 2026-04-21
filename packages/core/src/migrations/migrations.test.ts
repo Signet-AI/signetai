@@ -157,6 +157,10 @@ describe("migration framework", () => {
 		expect(tableNames).toContain("entity_dependencies");
 		expect(tableNames).toContain("task_meta");
 
+		const attributeColumns = db.query("PRAGMA table_info(entity_attributes)").all() as Array<{ name: string }>;
+		expect(attributeColumns.map((col) => col.name)).toContain("claim_key");
+		expect(attributeColumns.map((col) => col.name)).toContain("group_key");
+
 		// v20 tables (predictor reporting)
 		expect(tableNames).toContain("predictor_comparisons");
 		expect(tableNames).toContain("predictor_training_log");

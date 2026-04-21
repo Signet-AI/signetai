@@ -5,14 +5,17 @@ Bridges Hermes Agent's memory provider interface to the Signet daemon
 predictive recall, cross-session memory, and the full Signet pipeline
 (extraction, knowledge graph, retention decay, synthesis).
 
-The 3 tools (signet_search, signet_store, signet_profile) are exposed
-through the MemoryProvider interface. The daemon handles all heavy lifting:
-embedding, reranking, knowledge graph traversal, and predictive scoring.
+Canonical Signet memory tools (memory_search, memory_store, memory_get,
+memory_list, memory_modify, memory_forget, plus recall/remember aliases) are
+exposed through the MemoryProvider interface. The daemon handles all heavy
+lifting: embedding, reranking, knowledge graph traversal, and predictive
+scoring.
 
 Config:
   - SIGNET_HOST / SIGNET_PORT env vars (default: localhost:3850)
   - SIGNET_DAEMON_URL env var for full URL override
   - SIGNET_AGENT_ID env var for agent scoping (default: "hermes-agent")
+  - SIGNET_AGENT_WORKSPACE env var for the active named-agent workspace
 """
 
 from __future__ import annotations
@@ -38,70 +41,224 @@ logger = logging.getLogger(__name__)
 # Tool schemas
 # ---------------------------------------------------------------------------
 
-SEARCH_SCHEMA = {
-    "name": "signet_search",
-    "description": (
-        "Search Signet's memory using hybrid recall (keyword + semantic + "
-        "knowledge graph). Returns relevant memories ranked by predicted "
-        "usefulness. Use when you need to find past context, decisions, "
-        "preferences, or project knowledge."
-    ),
+MEMORY_SEARCH_SCHEMA = {
+    "name": "memory_search",
+    "description": "Search Signet memories using hybrid vector + keyword search.",
     "parameters": {
         "type": "object",
         "properties": {
-            "query": {
-                "type": "string",
-                "description": "What to search for in memory.",
+            "query": {"type": "string", "description": "Search query text."},
+            "limit": {"type": "integer", "description": "Max results to return (default 10, max 50)."},
+            "project": {"type": "string", "description": "Optional project path filter."},
+            "expand": {"type": "boolean", "description": "Include lossless session transcripts as sources."},
+            "type": {"type": "string", "description": "Filter by memory type."},
+            "tags": {"type": "string", "description": "Filter by tags, comma-separated."},
+            "who": {"type": "string", "description": "Filter by author."},
+            "since": {"type": "string", "description": "Only include memories created after this date."},
+            "until": {"type": "string", "description": "Only include memories created before this date."},
+            "keyword_query": {"type": "string", "description": "Override the keyword/FTS query used for recall."},
+            "pinned": {"type": "boolean", "description": "Only return pinned memories."},
+            "importance_min": {"type": "number", "description": "Minimum memory importance threshold."},
+            "min_score": {
+                "type": "number",
+                "description": "Deprecated compatibility alias for importance_min; ignored when importance_min is set.",
             },
-            "limit": {
-                "type": "integer",
-                "description": "Max results to return (default: 10, max: 50).",
+            "score_min": {"type": "number", "description": "Minimum recall score threshold, applied client-side."},
+            "agent_scoped": {
+                "type": "boolean",
+                "description": "When true, scope recall to SIGNET_AGENT_ID instead of searching shared effective memory.",
             },
         },
         "required": ["query"],
     },
 }
 
-STORE_SCHEMA = {
-    "name": "signet_store",
-    "description": (
-        "Store a memory in Signet. The daemon handles embedding, entity "
-        "extraction, knowledge graph linking, and deduplication automatically. "
-        "Use for explicit facts, preferences, decisions, or corrections the "
-        "user wants remembered across sessions."
-    ),
+STRUCTURED_ENTITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "source": {"type": "string", "description": "Source entity name."},
+        "sourceType": {"type": "string", "description": "Optional source entity type."},
+        "relationship": {"type": "string", "description": "Relationship from source to target."},
+        "target": {"type": "string", "description": "Target entity name."},
+        "targetType": {"type": "string", "description": "Optional target entity type."},
+        "confidence": {"type": "number", "description": "Optional confidence score 0-1."},
+    },
+    "required": ["source", "relationship", "target"],
+}
+
+STRUCTURED_ATTRIBUTE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "content": {"type": "string", "description": "Attribute or constraint text."},
+        "confidence": {"type": "number", "description": "Optional confidence score 0-1."},
+        "importance": {"type": "number", "description": "Optional importance score 0-1."},
+    },
+    "required": ["content"],
+}
+
+STRUCTURED_ASPECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "entityName": {"type": "string", "description": "Entity the aspect belongs to."},
+        "aspect": {"type": "string", "description": "Aspect name, e.g. preference, workflow, constraint."},
+        "attributes": {
+            "type": "array",
+            "items": STRUCTURED_ATTRIBUTE_SCHEMA,
+            "description": "Facts, constraints, or attributes for this aspect.",
+        },
+    },
+    "required": ["entityName", "aspect", "attributes"],
+}
+
+MEMORY_STORE_SCHEMA = {
+    "name": "memory_store",
+    "description": "Save a new memory to Signet.",
     "parameters": {
         "type": "object",
         "properties": {
-            "content": {
-                "type": "string",
-                "description": "The memory content to store.",
+            "content": {"type": "string", "description": "Memory content to save."},
+            "type": {"type": "string", "description": "Memory type, e.g. fact, preference, decision."},
+            "importance": {"type": "number", "description": "Importance score 0-1."},
+            "tags": {"type": "string", "description": "Comma-separated tags for categorization."},
+            "pinned": {"type": "boolean", "description": "Pin this memory so it does not decay."},
+            "project": {"type": "string", "description": "Optional project path. Defaults to the active Hermes Signet workspace."},
+            "hints": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Prospective recall hints and alternate phrasings for retrieving this memory later.",
             },
-            "importance": {
-                "type": "number",
-                "description": "Importance score 0-1 (default: 0.5). Higher = more likely to surface.",
-            },
-            "tags": {
+            "transcript": {
                 "type": "string",
-                "description": "Comma-separated tags for categorization (optional).",
+                "description": "Raw source text or conversation transcript to preserve alongside this memory.",
+            },
+            "structured": {
+                "type": "object",
+                "description": "Pre-extracted structured data. When provided, Signet can persist graph links and hints directly.",
+                "properties": {
+                    "entities": {
+                        "type": "array",
+                        "items": STRUCTURED_ENTITY_SCHEMA,
+                        "description": "Entity relationships to link to this memory.",
+                    },
+                    "aspects": {
+                        "type": "array",
+                        "items": STRUCTURED_ASPECT_SCHEMA,
+                        "description": "Entity aspects and attributes to persist for graph recall.",
+                    },
+                    "hints": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Prospective recall hints and alternate phrasings.",
+                    },
+                },
             },
         },
         "required": ["content"],
     },
 }
 
-PROFILE_SCHEMA = {
-    "name": "signet_profile",
-    "description": (
-        "Retrieve the user's memory profile from Signet — recent memories, "
-        "key facts, and working context (MEMORY.md). Fast overview without "
-        "a specific search query. Use at conversation start or when you need "
-        "a broad snapshot of what Signet knows."
-    ),
-    "parameters": {"type": "object", "properties": {}, "required": []},
+MEMORY_GET_SCHEMA = {
+    "name": "memory_get",
+    "description": "Get a single memory by its ID.",
+    "parameters": {
+        "type": "object",
+        "properties": {"id": {"type": "string", "description": "Memory ID to retrieve."}},
+        "required": ["id"],
+    },
 }
 
-ALL_TOOL_SCHEMAS = [SEARCH_SCHEMA, STORE_SCHEMA, PROFILE_SCHEMA]
+MEMORY_LIST_SCHEMA = {
+    "name": "memory_list",
+    "description": "List memories with optional filters.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "description": "Max results to return, default 100."},
+            "offset": {"type": "integer", "description": "Pagination offset."},
+            "type": {"type": "string", "description": "Filter by memory type."},
+        },
+        "required": [],
+    },
+}
+
+MEMORY_MODIFY_SCHEMA = {
+    "name": "memory_modify",
+    "description": "Edit an existing memory by ID.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "description": "Memory ID to modify."},
+            "content": {"type": "string", "description": "New content."},
+            "type": {"type": "string", "description": "New memory type."},
+            "importance": {"type": "number", "description": "New importance score 0-1."},
+            "tags": {"type": "string", "description": "New tags, comma-separated."},
+            "pinned": {"type": "boolean", "description": "Pin or unpin this memory."},
+            "reason": {"type": "string", "description": "Why this edit is being made."},
+        },
+        "required": ["id", "reason"],
+    },
+}
+
+MEMORY_FORGET_SCHEMA = {
+    "name": "memory_forget",
+    "description": "Soft-delete a memory by ID.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "description": "Memory ID to forget."},
+            "reason": {"type": "string", "description": "Why this memory should be forgotten."},
+        },
+        "required": ["id", "reason"],
+    },
+}
+
+RECALL_ALIAS_SCHEMA = {
+    "name": "recall",
+    "description": "Alias for memory_search.",
+    "parameters": MEMORY_SEARCH_SCHEMA["parameters"],
+}
+
+REMEMBER_ALIAS_SCHEMA = {
+    "name": "remember",
+    "description": "Alias for memory_store.",
+    "parameters": MEMORY_STORE_SCHEMA["parameters"],
+}
+
+ALL_TOOL_SCHEMAS = [
+    MEMORY_SEARCH_SCHEMA,
+    MEMORY_STORE_SCHEMA,
+    MEMORY_GET_SCHEMA,
+    MEMORY_LIST_SCHEMA,
+    MEMORY_MODIFY_SCHEMA,
+    MEMORY_FORGET_SCHEMA,
+    RECALL_ALIAS_SCHEMA,
+    REMEMBER_ALIAS_SCHEMA,
+]
+
+def _sanitize_env(value: str) -> str:
+    return value.strip().replace("\r", "").replace("\n", "")
+
+
+def _resolve_agent_workspace(agent_id: str, kwargs: Dict[str, Any]) -> str:
+    """Resolve the project/workspace path sent to Signet hooks.
+
+    Named Signet agents can have their own workspace at
+    $SIGNET_PATH/agents/{agent_id}. Prefer that workspace so daemon
+    session-start can load the agent's scoped identity files.
+    """
+    explicit = _sanitize_env(os.environ.get("SIGNET_AGENT_WORKSPACE", ""))
+    if explicit:
+        return str(Path(explicit).expanduser())
+
+    signet_path = _sanitize_env(os.environ.get("SIGNET_PATH", ""))
+    agents_root = Path(signet_path).expanduser() if signet_path else Path.home() / ".agents"
+    if agent_id and agent_id not in ("default", "hermes-agent"):
+        candidate = agents_root / "agents" / agent_id
+        if candidate.exists():
+            return str(candidate)
+
+    fallback = kwargs.get("cwd", kwargs.get("project", os.getcwd()))
+    return str(Path(str(fallback)).expanduser())
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +366,7 @@ class SignetMemoryProvider(MemoryProvider):
             return
 
         self._session_key = session_id or "hermes-default"
-        self._project = kwargs.get("cwd", kwargs.get("project", os.getcwd()))
+        self._project = _resolve_agent_workspace(agent_id, kwargs)
 
         # Call session-start hook — get identity + memories + inject
         result = self._client.session_start(
@@ -254,8 +411,9 @@ class SignetMemoryProvider(MemoryProvider):
         return (
             "# Signet Memory\n"
             "Active. Memories are auto-recalled each turn via hybrid search. "
-            "Use signet_search to query memory, signet_store to save facts, "
-            "signet_profile for a broad overview."
+            "Use memory_search to query memory, memory_store to save facts, "
+            "and memory_get/memory_list/memory_modify/memory_forget for direct "
+            "memory management."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -566,55 +724,152 @@ class SignetMemoryProvider(MemoryProvider):
         if not self._client:
             return json.dumps({"error": "Signet daemon is not connected."})
 
-        try:
-            if tool_name == "signet_search":
-                query = args.get("query", "")
-                if not query:
-                    return json.dumps({"error": "Missing required parameter: query"})
-                limit = min(int(args.get("limit", 10)), 50)
-                result = self._client.recall(query, limit=limit)
-                if not result:
-                    return json.dumps({"result": "No relevant memories found."})
-                # Extract memories from recall response
-                memories = result.get("results", result.get("memories", []))
-                if not memories:
-                    return json.dumps({"result": "No relevant memories found."})
-                items = []
-                for m in memories:
-                    items.append({
-                        "content": m.get("content", ""),
-                        "type": m.get("type", ""),
-                        "importance": m.get("importance", 0),
-                        "created_at": m.get("created_at", ""),
-                    })
-                return json.dumps({"results": items, "count": len(items)})
+        def _as_int(value: Any, default: int, *, minimum: int = 0, maximum: int = 10_000) -> int:
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                parsed = default
+            return max(minimum, min(maximum, parsed))
 
-            elif tool_name == "signet_store":
-                content = args.get("content", "")
-                if not content:
-                    return json.dumps({"error": "Missing required parameter: content"})
-                importance = float(args.get("importance", 0.5))
-                importance = max(0.0, min(1.0, importance))
-                tags_str = args.get("tags", "")
-                tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else None
-                result = self._client.remember(content, importance=importance, tags=tags)
-                if result:
-                    return json.dumps({"result": "Memory stored.", "id": result.get("id", "")})
+        def _as_float(value: Any) -> Optional[float]:
+            if value is None or value == "":
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _tags(value: Any) -> Optional[List[str]]:
+            if value is None or value == "":
+                return None
+            if isinstance(value, list):
+                return [str(t).strip() for t in value if str(t).strip()]
+            if isinstance(value, str):
+                return [t.strip() for t in value.split(",") if t.strip()]
+            return [str(value).strip()] if str(value).strip() else None
+
+        def _string_list(value: Any) -> Optional[List[str]]:
+            if value is None or value == "":
+                return None
+            if isinstance(value, list):
+                items = [str(item).strip() for item in value if str(item).strip()]
+                return items or None
+            if isinstance(value, str):
+                stripped = value.strip()
+                return [stripped] if stripped else None
+            return None
+
+        def _search(search_args: Dict[str, Any]) -> str:
+            query = str(search_args.get("query", "")).strip()
+            if not query:
+                return json.dumps({"error": "Missing required parameter: query"})
+
+            importance_min = _as_float(search_args.get("importance_min"))
+            if importance_min is None:
+                importance_min = _as_float(search_args.get("min_score"))
+
+            result = self._client.recall(
+                query,
+                limit=_as_int(search_args.get("limit"), 10, minimum=1, maximum=50),
+                project=str(search_args.get("project", "") or ""),
+                memory_type=str(search_args.get("type", "") or ""),
+                tags=str(search_args.get("tags", "") or ""),
+                who=str(search_args.get("who", "") or ""),
+                pinned=search_args.get("pinned") if isinstance(search_args.get("pinned"), bool) else None,
+                importance_min=importance_min,
+                since=str(search_args.get("since", "") or ""),
+                until=str(search_args.get("until", "") or ""),
+                keyword_query=str(search_args.get("keyword_query", "") or ""),
+                expand=bool(search_args.get("expand", False)),
+                score_min=_as_float(search_args.get("score_min")),
+                agent_scoped=bool(search_args.get("agent_scoped", False)),
+            )
+            if not result:
+                return json.dumps({"error": "Search failed or Signet daemon returned no response.", "results": []})
+            return json.dumps(result)
+
+        def _store(store_args: Dict[str, Any]) -> str:
+            content = str(store_args.get("content", "")).strip()
+            if not content:
+                return json.dumps({"error": "Missing required parameter: content"})
+            importance = _as_float(store_args.get("importance"))
+            if importance is None:
+                importance = 0.5
+            importance = max(0.0, min(1.0, importance))
+            structured = store_args.get("structured")
+            if not isinstance(structured, dict):
+                structured = None
+            result = self._client.remember(
+                content,
+                importance=importance,
+                tags=_tags(store_args.get("tags")),
+                memory_type=str(store_args.get("type", "") or ""),
+                pinned=store_args.get("pinned") if isinstance(store_args.get("pinned"), bool) else None,
+                project=str(store_args.get("project", "") or self._project),
+                hints=_string_list(store_args.get("hints")),
+                transcript=str(store_args.get("transcript", "") or ""),
+                structured=structured,
+                who="hermes-agent",
+            )
+            if not result:
                 return json.dumps({"error": "Failed to store memory."})
+            return json.dumps({"result": "Memory saved.", "id": result.get("id", result.get("memoryId", ""))})
 
-            elif tool_name == "signet_profile":
-                # Fetch recent memories and working context
-                result = self._client.recall("user profile preferences context", limit=15)
-                if not result:
-                    return json.dumps({"result": "No memories stored yet."})
-                memories = result.get("results", result.get("memories", []))
-                if not memories:
-                    return json.dumps({"result": "No memories stored yet."})
-                lines = [m.get("content", "") for m in memories if m.get("content")]
-                return json.dumps({
-                    "result": "\n".join(f"- {l}" for l in lines),
-                    "count": len(lines),
-                })
+        try:
+            if tool_name in ("memory_search", "recall", "signet_search"):
+                return _search(args)
+
+            if tool_name in ("memory_store", "remember", "signet_store"):
+                return _store(args)
+
+            if tool_name == "signet_profile":
+                return _search({"query": "user profile preferences context", "limit": 15})
+
+            if tool_name == "memory_get":
+                memory_id = str(args.get("id", "")).strip()
+                if not memory_id:
+                    return json.dumps({"error": "Missing required parameter: id"})
+                result = self._client.get_memory(memory_id)
+                return json.dumps(result if result else {"error": "Memory not found."})
+
+            if tool_name == "memory_list":
+                result = self._client.list_memories(
+                    limit=_as_int(args.get("limit"), 100, minimum=1, maximum=500),
+                    offset=_as_int(args.get("offset"), 0, minimum=0, maximum=1_000_000),
+                    memory_type=str(args.get("type", "") or ""),
+                )
+                return json.dumps(result if result else {"memories": [], "result": "No memories found."})
+
+            if tool_name == "memory_modify":
+                memory_id = str(args.get("id", "")).strip()
+                reason = str(args.get("reason", "")).strip()
+                if not memory_id:
+                    return json.dumps({"error": "Missing required parameter: id"})
+                if not reason:
+                    return json.dumps({"error": "Missing required parameter: reason"})
+                result = self._client.modify_memory(
+                    memory_id,
+                    content=str(args.get("content", "") or ""),
+                    memory_type=str(args.get("type", "") or ""),
+                    importance=_as_float(args.get("importance")),
+                    tags=str(args.get("tags", "") or ""),
+                    pinned=args.get("pinned") if isinstance(args.get("pinned"), bool) else None,
+                    reason=reason,
+                )
+                return json.dumps(result if result else {"error": "Failed to modify memory."})
+
+            if tool_name == "memory_forget":
+                memory_id = str(args.get("id", "")).strip()
+                reason = str(args.get("reason", "")).strip()
+                if not memory_id:
+                    return json.dumps({"error": "Missing required parameter: id"})
+                if not reason:
+                    return json.dumps({"error": "Missing required parameter: reason"})
+                result = self._client.forget_memory(
+                    memory_id,
+                    reason=reason,
+                )
+                return json.dumps(result if result else {"error": "Failed to forget memory."})
 
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
 

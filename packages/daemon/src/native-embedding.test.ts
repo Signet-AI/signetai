@@ -80,20 +80,34 @@ describe("native-embedding", () => {
 		expect(status.initializing).toBe(false);
 	});
 
-	it("init failure resets promise for retry", async () => {
-		// Make pipeline throw on first call
+	it("init failure resets promise for retry after shutdown", async () => {
 		mockPipeline.mockImplementationOnce(async () => {
 			throw new Error("network timeout");
 		});
 
-		// First call should fail
 		const status1 = await checkNativeProvider();
 		expect(status1.available).toBe(false);
 		expect(status1.error).toContain("network timeout");
 
-		// Second call should retry (mockPipeline restored to default)
+		await shutdownNativeProvider();
+
 		const status2 = await checkNativeProvider();
 		expect(status2.available).toBe(true);
 		expect(mockPipeline).toHaveBeenCalledTimes(2);
+	});
+
+	it("init failure enforces cooldown before retry", async () => {
+		mockPipeline.mockImplementationOnce(async () => {
+			throw new Error("network timeout");
+		});
+
+		const status1 = await checkNativeProvider();
+		expect(status1.available).toBe(false);
+		expect(status1.error).toContain("network timeout");
+
+		const status2 = await checkNativeProvider();
+		expect(status2.available).toBe(false);
+		expect(status2.error).toContain("network timeout");
+		expect(mockPipeline).toHaveBeenCalledTimes(1);
 	});
 });

@@ -1,8 +1,41 @@
 .git
 .github
+
+# Dependencies/build outputs
 node_modules
 **/node_modules
 **/dist
+**/build
+**/.svelte-kit
+**/target
+
+# Local/dev artifacts that should never enter the Docker build context
+.bench
+.bun-tmp
+.claude
+.codex
+.gitnexus
+.playwright-mcp
+.ruff_cache
+.specstory
+.vscode
+dogfood-output
+marketing
+references
+
+# Heavy generated package artifacts
+packages/desktop/release
+packages/desktop/resources
+packages/cli/dashboard/dogfood-output
+
+# MemoryBench local datasets/secrets/results are not needed for image builds
+memorybench/data
+memorybench/.env
+memorybench/.env.*
+memorybench/results
+memorybench/runs
+
+# Misc
 **/.DS_Store
 **/*.log
 tmp

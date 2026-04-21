@@ -10,6 +10,7 @@ import { managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
+import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
 import {
 	hasCommand,
@@ -163,6 +164,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 				createLocalBackup: options.createLocalBackup === true,
 			});
+			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
+			writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled });
 
 			const requestedHarnesses = normalizeHarnessList(options.harness, deps);
 			if (requestedHarnesses.length > 0) {
@@ -279,6 +282,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				preferredHarnesses: normalizedExistingHarnesses,
 			});
 
+			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
+
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
 				openDashboard: options.openDashboard === true,
@@ -289,6 +294,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				embeddingModel: deps.normalizeStringValue(options.embeddingModel) || undefined,
 				extractionProvider: migrationExtractionProvider,
 				extractionModel: deps.normalizeStringValue(options.extractionModel) || undefined,
+				signetSecretsEnabled,
 			});
 			return;
 		}
@@ -359,6 +365,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				preferredHarnesses: normalizedExistingHarnesses,
 			});
 
+			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, false, options);
+
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				allowUnprotectedWorkspace: false,
 				createLocalBackup: false,
@@ -369,6 +377,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					deps.normalizeStringValue(existingPipeline.extractionModel) ||
 					deps.normalizeStringValue(existingExtraction.model) ||
 					undefined,
+				signetSecretsEnabled,
 			});
 			return;
 		}
@@ -409,6 +418,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		{ value: "openclaw", name: "OpenClaw", checked: existingHarnesses.includes("openclaw") },
 		{ value: "oh-my-pi", name: "Oh My Pi", checked: existingHarnesses.includes("oh-my-pi") },
 		{ value: "pi", name: "Pi", checked: existingHarnesses.includes("pi") },
+		{ value: "hermes-agent", name: "Hermes Agent", checked: existingHarnesses.includes("hermes-agent") },
 		{
 			value: "forge",
 			name: "Forge (native Signet harness)",
@@ -494,6 +504,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				message: "Short description of your agent:",
 				default: existingDesc,
 			});
+
+	const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, nonInteractive, options);
 
 	let networkMode: NetworkMode;
 	if (nonInteractive) {
@@ -885,7 +897,42 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		openDashboard: options.openDashboard === true,
 		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 		createLocalBackup: options.createLocalBackup === true,
+		signetSecretsEnabled,
 	};
 
 	await runFreshSetup(cfg, deps);
+}
+
+async function resolveSignetSecretsCorePluginSelection(
+	basePath: string,
+	nonInteractive: boolean,
+	options: SetupWizardOptions,
+): Promise<boolean> {
+	const current = readSetupCorePluginEnabled(basePath);
+	const defaultEnabled = current ?? true;
+	if (options.disableSignetSecrets === true) return false;
+	if (nonInteractive) return defaultEnabled;
+
+	console.log();
+	console.log(chalk.bold("  Core plugins"));
+	console.log(
+		chalk.dim(
+			"    Signet Secrets is a bundled core plugin for storing reusable credentials outside chat, memory, logs, and source files.",
+		),
+	);
+	console.log(
+		chalk.dim(
+			"    It connects to Signet's encrypted local store and 1Password references, with value-safe CLI/MCP/SDK helpers and command output redaction.",
+		),
+	);
+	console.log(
+		chalk.dim(
+			"    This is safer than pasting API keys into prompts because agents can list names and run commands with injected values without reading raw secrets.",
+		),
+	);
+	console.log();
+	return confirm({
+		message: "Install and enable the Signet Secrets core plugin?",
+		default: defaultEnabled,
+	});
 }

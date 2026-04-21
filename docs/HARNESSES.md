@@ -245,6 +245,12 @@ registers as an MCP server so Codex can call `signet_remember` and
 4. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
 5. The MCP server exposes `memory_store`, `memory_search`, and other memory tools that Codex can invoke directly during sessions.
 
+Codex `SessionStart` hook timeout defaults to 20 seconds: the Signet CLI
+waits up to `SIGNET_SESSION_START_TIMEOUT` (`15000` ms by default) for
+the daemon, and the generated Codex hook config adds 5 seconds of harness
+grace. Rerun `signet setup` or `signet connect codex` after upgrading to
+rewrite an existing `~/.codex/hooks.json`.
+
 Codex matches the session-start, prompt-submit, and session-end path, but
 it does **not** currently expose the same compaction lifecycle fidelity as
 Claude Code or OpenCode.
@@ -677,9 +683,13 @@ Hermes lifecycle.
 
 | Tool | Description |
 |------|-------------|
-| `signet_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
-| `signet_store` | Store a fact/preference/decision with auto entity extraction |
-| `signet_profile` | Broad overview of stored memories and working context |
+| `memory_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
+| `memory_store` | Store a fact/preference/decision with auto entity extraction |
+| `memory_get` | Retrieve a memory by ID |
+| `memory_list` | List memories with optional filters |
+| `memory_modify` | Edit an existing memory |
+| `memory_forget` | Soft-delete a memory |
+| `recall` / `remember` | Compatibility aliases for search/store |
 
 ### Supported hooks
 
@@ -732,7 +742,8 @@ All harnesses target the same model:
 
 - one agent
 - many sessions / branches
-- one shared `MEMORY.md` head
+- one shared root `MEMORY.md` head, with optional agent-local `MEMORY.md`
+  overrides for named agents
 - structured retrieval first
 - transcripts as fallback / deep history
 - compaction artifacts feeding the same temporal DAG

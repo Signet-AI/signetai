@@ -1,0 +1,32 @@
+# Fixed LongMemEval canary used by the local autoresearch ratchet.
+# Keep this set stable unless we intentionally reset the scoreboard.
+# Format: one question id per line. Blank lines and # comments are ignored.
+
+# single-session-preference, repeated failure target
+32260d93
+# single-session-preference, stable pass/control
+54026fce
+
+# temporal-reasoning, hard failure target
+# and stable pass/control
+gpt4_e072b769
+gpt4_18c2b244
+
+# knowledge-update, hard failure target
+# and stable pass/control
+69fee5aa
+26bdc477
+
+# multi-session, hard failure target
+# and stable pass/control
+a08a253f
+88432d0a_abs
+
+# single-session-assistant, hard failure target
+# and stable pass/control
+1de5cff2
+7a8d0b71
+
+# single-session-user controls
+4100d0a0
+c8c3f81d

@@ -20,6 +20,12 @@ import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker"
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
 import { FTS_STOP } from "./pipeline/stop-words";
+import {
+	type EvidenceCandidateInput,
+	shapeByFacetCoverage,
+	shapeStructuredEvidence,
+} from "./pipeline/structured-evidence";
+import { findStructuredPathCandidates, scoreStructuredPathEvidence } from "./pipeline/structured-path-evidence";
 import { escapeLike } from "./sql-utils";
 
 // ---------------------------------------------------------------------------
@@ -55,6 +61,8 @@ export interface RecallResult {
 	truncated: boolean;
 	score: number;
 	source: string;
+	source_id?: string;
+	session_id?: string;
 	type: string;
 	tags: string | null;
 	pinned: boolean;
@@ -226,6 +234,114 @@ export function sanitizeFtsQuery(raw: string): string {
 	return tokens.join(" OR ");
 }
 
+const BAKING_QUERY_TRIGGERS = new Set([
+	"bake",
+	"baked",
+	"baking",
+	"brownie",
+	"brownies",
+	"cake",
+	"cakes",
+	"chocolate",
+	"cookie",
+	"cookies",
+	"dessert",
+	"desserts",
+	"pastry",
+	"pastries",
+	"recipe",
+	"recipes",
+]);
+
+const BAKING_QUERY_EXPANSIONS = [
+	"baking",
+	"dessert",
+	"desserts",
+	"flavor",
+	"flavour",
+	"ingredient",
+	"ingredients",
+	"recipe",
+	"recipes",
+	"sugar",
+	"texture",
+] as const;
+
+const ENTERTAINMENT_QUERY_TRIGGERS = new Set([
+	"documentary",
+	"documentaries",
+	"film",
+	"films",
+	"movie",
+	"movies",
+	"netflix",
+	"show",
+	"shows",
+	"streaming",
+	"television",
+	"tv",
+	"watch",
+	"watching",
+]);
+
+const ENTERTAINMENT_QUERY_EXPANSIONS = [
+	"comedy",
+	"documentary",
+	"film",
+	"hulu",
+	"netflix",
+	"show",
+	"stand up",
+	"storytelling",
+	"streaming",
+	"television",
+	"tv",
+	"watchlist",
+] as const;
+
+function normalizeExpansionToken(raw: string): string {
+	const cleaned = raw
+		.toLowerCase()
+		.replace(/[^a-z0-9\s]/g, " ")
+		.trim();
+	if (!cleaned) return "";
+	if (cleaned.endsWith("ies") && cleaned.length > 4) return `${cleaned.slice(0, -3)}y`;
+	if (cleaned.endsWith("s") && cleaned.length > 3) return cleaned.slice(0, -1);
+	return cleaned;
+}
+
+/**
+ * Add a small set of mechanical recall expansions for common class-to-instance
+ * gaps. This intentionally stays conservative: it only fires for explicit
+ * baking/recipe terms, and it feeds FTS/hints only. Semantic vector search and
+ * answer generation still see the user's original query.
+ */
+export function expandRecallKeywordQuery(raw: string): string {
+	const tokens = raw
+		.split(/\s+/)
+		.map(normalizeExpansionToken)
+		.filter((token) => token.length >= 2 && !FTS_STOP.has(token));
+
+	const expansions: string[] = [];
+	const existing = new Set(tokens);
+	const addMissing = (items: readonly string[]): void => {
+		for (const item of items) {
+			const normalized = normalizeExpansionToken(item);
+			if (!existing.has(normalized) && !expansions.includes(item)) expansions.push(item);
+		}
+	};
+
+	if (tokens.some((token) => BAKING_QUERY_TRIGGERS.has(token))) {
+		addMissing(BAKING_QUERY_EXPANSIONS);
+	}
+	if (tokens.some((token) => ENTERTAINMENT_QUERY_TRIGGERS.has(token))) {
+		addMissing(ENTERTAINMENT_QUERY_EXPANSIONS);
+	}
+
+	if (expansions.length === 0) return raw;
+	return `${raw} ${expansions.join(" ")}`;
+}
+
 // ---------------------------------------------------------------------------
 // Rehearsal boost (shared between traversal-primary and legacy paths)
 // ---------------------------------------------------------------------------
@@ -274,6 +390,371 @@ function applyRehearsalBoost(
 	}
 }
 
+function mergeCandidate(
+	rows: Map<string, { id: string; score: number; source: string }>,
+	row: { id: string; score: number; source: string },
+): void {
+	const existing = rows.get(row.id);
+	if (!existing || row.score > existing.score) {
+		rows.set(row.id, row);
+	}
+}
+
+interface CurrentnessInfo {
+	readonly active: readonly string[];
+	readonly superseded: ReadonlyArray<{
+		readonly content: string;
+		readonly replacement: string | null;
+	}>;
+}
+
+function shortenCurrentnessContent(content: string): string {
+	const oneLine = content.replace(/\s+/g, " ").trim();
+	return oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
+}
+
+function loadCurrentnessInfo(ids: readonly string[], agentId: string): Map<string, CurrentnessInfo> {
+	if (ids.length === 0) return new Map();
+	const placeholders = ids.map(() => "?").join(", ");
+	const rows = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT
+						 ea.memory_id,
+						 ea.content,
+						 ea.status,
+						 replacement.content AS replacement_content
+					 FROM entity_attributes ea
+					 LEFT JOIN entity_attributes replacement
+					   ON replacement.id = ea.superseded_by
+					  AND replacement.agent_id = ea.agent_id
+					 WHERE ea.memory_id IN (${placeholders})
+					   AND ea.agent_id = ?
+					   AND ea.status IN ('active', 'superseded')
+					 ORDER BY ea.importance DESC, ea.created_at DESC`,
+				)
+				.all(...ids, agentId) as Array<{
+				memory_id: string;
+				content: string;
+				status: string;
+				replacement_content: string | null;
+			}>,
+	);
+
+	const mutable = new Map<
+		string,
+		{ active: string[]; superseded: Array<{ content: string; replacement: string | null }> }
+	>();
+	for (const row of rows) {
+		const existing = mutable.get(row.memory_id) ?? { active: [], superseded: [] };
+		if (row.status === "active" && existing.active.length < 3) {
+			existing.active.push(shortenCurrentnessContent(row.content));
+		}
+		if (row.status === "superseded" && existing.superseded.length < 3) {
+			existing.superseded.push({
+				content: shortenCurrentnessContent(row.content),
+				replacement: row.replacement_content ? shortenCurrentnessContent(row.replacement_content) : null,
+			});
+		}
+		mutable.set(row.memory_id, existing);
+	}
+	return new Map(mutable);
+}
+
+function applyCurrentnessBias(
+	scored: Array<{ id: string; score: number; source: string }>,
+	currentness: ReadonlyMap<string, CurrentnessInfo>,
+): void {
+	for (const row of scored) {
+		const info = currentness.get(row.id);
+		if (!info) continue;
+		if (info.active.length === 0 && info.superseded.length > 0) {
+			row.score *= 0.65;
+			continue;
+		}
+		if (info.superseded.length > 0) {
+			row.score *= 0.85;
+			continue;
+		}
+		if (info.active.length > 0) {
+			row.score *= 1.03;
+		}
+	}
+	scored.sort((a, b) => b.score - a.score);
+}
+
+function annotateCurrentness(content: string, info: CurrentnessInfo | undefined): string {
+	if (!info || info.superseded.length === 0) return content;
+	const lines = ["[Signet currentness]"];
+	if (info.active.length > 0) {
+		lines.push("Current structured facts:");
+		for (const item of info.active) lines.push(`- ${item}`);
+	}
+	if (info.superseded.length > 0) {
+		lines.push("Superseded structured facts, historical unless the question asks about the past:");
+		for (const item of info.superseded) {
+			lines.push(`- ${item.content}`);
+			if (item.replacement) lines.push(`  Current replacement: ${item.replacement}`);
+		}
+	}
+	return `${lines.join("\n")}\n\n${content}`;
+}
+
+interface TranscriptRecallHit {
+	readonly sessionKey: string;
+	readonly project: string | null;
+	readonly updatedAt: string;
+	readonly excerpt: string;
+	readonly rank: number;
+}
+
+function sessionIdFromSourceId(sourceId: string): string {
+	const index = sourceId.lastIndexOf(":");
+	return index >= 0 ? sourceId.slice(index + 1) : sourceId;
+}
+
+function expandTranscriptTerms(terms: readonly string[]): string[] {
+	const expanded = new Set(terms);
+	const add = (from: string, variants: readonly string[]): void => {
+		if (!expanded.has(from)) return;
+		for (const variant of variants) expanded.add(variant);
+	};
+	add("meet", ["met", "meeting"]);
+	add("met", ["meet", "meeting"]);
+	add("buy", ["bought", "got", "purchased", "acquired"]);
+	add("bought", ["buy", "got", "purchased", "acquired"]);
+	add("purchase", ["purchased", "bought", "got", "acquired"]);
+	add("investment", ["invest", "invested", "investing"]);
+	return [...expanded];
+}
+
+function scoreTranscriptWindow(
+	window: string,
+	terms: readonly string[],
+	wantsQuantity: boolean,
+	wantsTemporal: boolean,
+): number {
+	const lower = window.toLowerCase();
+	const matched = terms.filter((term) => lower.includes(term));
+	const density = matched.reduce((sum, term) => sum + Math.min(term.length, 12), 0);
+	const quantityBonus = wantsQuantity && /\b\d+(?:[.,]\d+)?\b/.test(window) ? 8 : 0;
+	const temporalBonus =
+		wantsTemporal &&
+		/\b(ago|week|weeks|month|months|year|years|today|yesterday|last|next|earlier|later)\b|\b\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(
+			window,
+		)
+			? 10
+			: 0;
+	return matched.length * 20 + density + quantityBonus + temporalBonus;
+}
+
+export function transcriptExcerpt(content: string, query: string, maxChars = 650): string {
+	const clean = content.replace(/\s+/g, " ").trim();
+	if (clean.length <= maxChars) return clean;
+
+	const weakTerms = new Set([
+		"brand",
+		"brands",
+		"conversation",
+		"end",
+		"going",
+		"high",
+		"previous",
+		"recommend",
+		"recommendation",
+		"recommendations",
+		"remind",
+		"show",
+		"tonight",
+		"watch",
+		"wondering",
+	]);
+	const terms = expandTranscriptTerms(
+		expandRecallKeywordQuery(query)
+			.toLowerCase()
+			.split(/\W+/)
+			.map(normalizeExpansionToken)
+			.filter((term, index, all) => term.length >= 3 && !FTS_STOP.has(term) && all.indexOf(term) === index)
+			.sort((a, b) => Number(weakTerms.has(a)) - Number(weakTerms.has(b)) || b.length - a.length)
+			.slice(0, 12),
+	);
+	const lower = clean.toLowerCase();
+	const wantsQuantity = /\b(how many|how much|count|number|total)\b/i.test(query);
+	const wantsTemporal = /\b(first|before|after|earlier|later|ago|week|month|year|when|date)\b/i.test(query);
+	let best = -1;
+	let bestScore = -1;
+	for (const term of terms) {
+		let from = 0;
+		let seen = 0;
+		while (seen < 8) {
+			const index = lower.indexOf(term, from);
+			if (index === -1) break;
+			const start = Math.max(0, index - Math.floor(maxChars * 0.35));
+			const window = clean.slice(start, Math.min(clean.length, start + maxChars));
+			const score = scoreTranscriptWindow(window, terms, wantsQuantity, wantsTemporal);
+			if (score > bestScore) {
+				bestScore = score;
+				best = index;
+			}
+			from = index + term.length;
+			seen++;
+		}
+	}
+
+	if (best === -1) return `${clean.slice(0, maxChars - 3).trim()}...`;
+	const start = Math.max(0, best - Math.floor(maxChars * 0.35));
+	const end = Math.min(clean.length, start + maxChars);
+	const prefix = start > 0 ? "..." : "";
+	const suffix = end < clean.length ? "..." : "";
+	return `${prefix}${clean.slice(start, end).trim()}${suffix}`;
+}
+
+function buildTranscriptRecallHits(
+	params: RecallParams,
+	query: string,
+	existingSourceIds: Set<string>,
+): TranscriptRecallHit[] {
+	if (!params.expand) return [];
+	const fts = sanitizeFtsQuery(query);
+	if (fts.length === 0) return [];
+
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const table = db
+				.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts_fts'`)
+				.get();
+			if (!table) return [];
+
+			const parts = [
+				"SELECT st.session_key, st.project, COALESCE(st.updated_at, st.created_at) AS updated_at,",
+				`st.content, snippet(session_transcripts_fts, 0, '', '', ' … ', 36) AS excerpt,`,
+				"bm25(session_transcripts_fts) AS rank",
+				"FROM session_transcripts_fts",
+				"JOIN session_transcripts st ON st.rowid = session_transcripts_fts.rowid",
+				"WHERE session_transcripts_fts MATCH ?",
+				"AND st.agent_id = ?",
+			];
+			const args: unknown[] = [fts, params.agentId ?? "default"];
+			if (params.project) {
+				parts.push("AND st.project = ?");
+				args.push(params.project);
+			}
+			if (params.scope !== undefined && params.scope !== null) {
+				parts.push(`AND st.session_key LIKE ? ESCAPE '\\'`);
+				args.push(`${escapeLike(params.scope)}:%`);
+			}
+			if (existingSourceIds.size > 0) {
+				const placeholders = [...existingSourceIds].map(() => "?").join(", ");
+				parts.push(`AND st.session_key NOT IN (${placeholders})`);
+				args.push(...existingSourceIds);
+			}
+			parts.push("ORDER BY rank ASC, updated_at DESC LIMIT ?");
+			args.push(Math.max(2, Math.min(3, params.limit ?? 10)));
+
+			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
+				session_key: string;
+				project: string | null;
+				updated_at: string;
+				content: string;
+				excerpt: string | null;
+				rank: number;
+			}>;
+
+			const maxRank = rows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
+			return rows
+				.map((row) => ({
+					sessionKey: row.session_key,
+					project: row.project,
+					updatedAt: row.updated_at,
+					excerpt: transcriptExcerpt(row.content || row.excerpt || "", query),
+					rank: maxRank > 0 ? Math.abs(row.rank) / maxRank : 0.2,
+				}))
+				.filter((row) => row.excerpt.length > 0);
+		});
+	} catch (e) {
+		logger.warn("memory", "Transcript recall fallback failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+		return [];
+	}
+}
+
+function loadStructuredSummariesBySourceId(params: RecallParams, sourceIds: readonly string[]): Map<string, string> {
+	const unique = [...new Set(sourceIds.filter((sourceId) => sourceId.length > 0))];
+	if (unique.length === 0) return new Map();
+
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const placeholders = unique.map(() => "?").join(", ");
+			const parts = [
+				"SELECT source_id, content",
+				"FROM memories",
+				`WHERE source_id IN (${placeholders})`,
+				"AND agent_id = ?",
+				"AND COALESCE(is_deleted, 0) = 0",
+				"AND TRIM(content) != ''",
+			];
+			const args: unknown[] = [...unique, params.agentId ?? "default"];
+			if (params.project) {
+				parts.push("AND project = ?");
+				args.push(params.project);
+			}
+			parts.push("ORDER BY importance DESC, updated_at DESC, created_at DESC");
+
+			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
+				source_id: string | null;
+				content: string;
+			}>;
+
+			const summaries = new Map<string, string>();
+			for (const row of rows) {
+				if (!row.source_id || summaries.has(row.source_id)) continue;
+				summaries.set(row.source_id, row.content.trim());
+			}
+			return summaries;
+		});
+	} catch (e) {
+		logger.warn("memory", "Transcript summary hydration failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+		return new Map();
+	}
+}
+
+function buildTranscriptFallbackContent(
+	excerpt: string,
+	summary: string | undefined,
+	recallTruncate: number,
+): { content: string; contentLength: number; truncated: boolean } {
+	const content = summary
+		? `[Structured memory summary]\n${summary}\n\n[Transcript excerpt]\n${excerpt}`
+		: `[Transcript excerpt]\n${excerpt}`;
+	const truncated = content.length > recallTruncate;
+	return {
+		content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+		contentLength: content.length,
+		truncated,
+	};
+}
+
+function cosineSimilarity(query: Float32Array, memory: Float32Array): number {
+	const len = Math.min(query.length, memory.length);
+	let dot = 0;
+	let queryNorm = 0;
+	let memoryNorm = 0;
+	for (let i = 0; i < len; i++) {
+		const q = query[i] ?? 0;
+		const m = memory[i] ?? 0;
+		dot += q * m;
+		queryNorm += q * q;
+		memoryNorm += m * m;
+	}
+	const denom = Math.sqrt(queryNorm) * Math.sqrt(memoryNorm);
+	if (denom <= 0) return 0;
+	return Math.max(0, Math.min(1, dot / denom));
+}
+
 // ---------------------------------------------------------------------------
 // Main search orchestration
 // ---------------------------------------------------------------------------
@@ -284,7 +765,8 @@ export async function hybridRecall(
 	embedFn: EmbedFn,
 ): Promise<RecallResponse> {
 	const query = params.query;
-	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? params.query).trim());
+	const expandedQuery = expandRecallKeywordQuery(params.query);
+	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? expandedQuery).trim());
 	const limit = params.limit ?? 10;
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
@@ -294,6 +776,8 @@ export async function hybridRecall(
 
 	// --- BM25 keyword search via FTS5 ---
 	const bm25Map = new Map<string, number>();
+	const hintMap = new Map<string, number>();
+	const traversalEvidenceMap = new Map<string, number>();
 	try {
 		getDbAccessor().withReadDb((db) => {
 			const ftsRows = (
@@ -360,13 +844,7 @@ export async function hybridRecall(
 				const normalizer = maxRaw > 0 ? maxRaw : 1;
 				for (const row of rows) {
 					const hint = Math.abs(row.raw_score) / normalizer;
-					const content = bm25Map.get(row.id) ?? 0;
-					// Blend content (70%) and hint (30%) when both exist.
-					// Hint-only memories score on their own merit (0-1) — capping
-					// at 0.3 placed them exactly at the min_score cliff, filtering
-					// out the memories hints were designed to rescue.
-					const blended = content > 0 ? content * 0.7 + hint * 0.3 : hint;
-					bm25Map.set(row.id, Math.max(content, blended));
+					hintMap.set(row.id, Math.max(hintMap.get(row.id) ?? 0, hint));
 				}
 			});
 		} catch (e) {
@@ -410,14 +888,42 @@ export async function hybridRecall(
 			});
 		}
 	}
+	const semanticEvidenceMap = new Map(vectorMap);
 
-	// --- Flat search: merge BM25 + vector scores ---
-	const allIds = new Set([...bm25Map.keys(), ...vectorMap.keys()]);
+	// --- Structured path candidate search ---
+	// SEC can only reshape memories that make it into the candidate pool.
+	// Query the navigable entity/aspect/group/claim path directly so structured
+	// memories can be recalled even when their raw prose does not share enough
+	// surface text with the question.
+	const structuredCandidateMap = new Map<string, number>();
+	if (cfg.pipelineV2.graph.enabled) {
+		try {
+			const agentId = params.agentId ?? "default";
+			const candidates = getDbAccessor().withReadDb((db) =>
+				findStructuredPathCandidates(db, query, agentId, {
+					limit: cfg.search.top_k,
+					minScore,
+					filterSql: filter.sql,
+					filterArgs: filter.args,
+				}),
+			);
+			for (const [id, score] of candidates) structuredCandidateMap.set(id, score);
+		} catch (e) {
+			logger.warn("memory", "Structured path candidate search failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
+	// --- Flat search: merge BM25 + vector + structured path candidate scores ---
+	const allIds = new Set([...bm25Map.keys(), ...hintMap.keys(), ...vectorMap.keys(), ...structuredCandidateMap.keys()]);
 	const flatScored: Array<{ id: string; score: number; source: string }> = [];
 
 	for (const id of allIds) {
 		const bm25 = bm25Map.get(id) ?? 0;
+		const hint = hintMap.get(id) ?? 0;
 		const vec = vectorMap.get(id) ?? 0;
+		const structured = structuredCandidateMap.get(id) ?? 0;
 		let score: number;
 		let source: string;
 
@@ -427,9 +933,20 @@ export async function hybridRecall(
 		} else if (vec > 0) {
 			score = vec;
 			source = "vector";
-		} else {
+		} else if (bm25 > 0) {
 			score = bm25;
 			source = "keyword";
+		} else {
+			score = structured;
+			source = "structured";
+		}
+		if (hint > 0 && hint >= score) {
+			score = hint;
+			source = bm25 > 0 || vec > 0 ? "hybrid" : "hint";
+		}
+		if (structured > 0 && structured >= score) {
+			score = structured;
+			source = bm25 > 0 || vec > 0 || hint > 0 ? "sec" : "structured";
 		}
 
 		if (score >= minScore) flatScored.push({ id, score, source });
@@ -500,11 +1017,9 @@ export async function hybridRecall(
 							for (const row of embRows) {
 								if (!row.vector) continue;
 								const mv = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
-								// Cosine similarity (vectors are normalized by embedding model)
-								let dot = 0;
-								const len = Math.min(qv.length, mv.length);
-								for (let i = 0; i < len; i++) dot += qv[i] * mv[i];
-								cosineMap.set(row.source_id, Math.max(0, dot));
+								const cosine = cosineSimilarity(qv, mv);
+								cosineMap.set(row.source_id, cosine);
+								semanticEvidenceMap.set(row.source_id, Math.max(semanticEvidenceMap.get(row.source_id) ?? 0, cosine));
 							}
 						}
 
@@ -512,6 +1027,7 @@ export async function hybridRecall(
 						for (const [memoryId, importance] of traversal.memoryScores) {
 							const cosine = cosineMap.get(memoryId) ?? 0;
 							const imp = Math.max(minScore, Math.min(1, importance));
+							traversalEvidenceMap.set(memoryId, Math.max(traversalEvidenceMap.get(memoryId) ?? 0, imp));
 							const score = cosine > 0 ? cosineWeight * cosine + (1 - cosineWeight) * imp : imp;
 							traversalScored.push({
 								id: memoryId,
@@ -547,21 +1063,20 @@ export async function hybridRecall(
 		// the guarantee is eligibility, not placement.
 		const traversalIds = new Set(traversalScored.map((s) => s.id));
 		const flatOnly = flatScored.filter((s) => !traversalIds.has(s.id));
-		const minFlat = Math.ceil(limit * 0.4);
-		const maxTraversal = limit - Math.min(minFlat, flatOnly.length);
+		const candidateBudget = Math.max(limit, Math.min(cfg.search.top_k, limit * 4));
+		const minFlat = Math.ceil(candidateBudget * 0.4);
+		const maxTraversal = candidateBudget - Math.min(minFlat, flatOnly.length);
 		scored = [
 			...traversalScored.slice(0, maxTraversal),
 			// When traversal underperforms its cap, flat absorbs the surplus
-			// slots — this is intentional, not a bug.
-			...flatOnly.slice(0, limit - Math.min(maxTraversal, traversalScored.length)),
+			// slots — this is intentional, not a bug. Keep the pre-SEC pool
+			// wider than the final limit so structured evidence can rescue
+			// lower raw-rank but better path-matched candidates.
+			...flatOnly.slice(0, candidateBudget - Math.min(maxTraversal, traversalScored.length)),
 		];
 		scored.sort((a, b) => b.score - a.score);
-
-		applyRehearsalBoost(scored, cfg.search);
 	} else {
 		scored = flatScored;
-
-		applyRehearsalBoost(scored, cfg.search);
 
 		// --- Graph boost: pull up memories linked via knowledge graph ---
 		if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.graph.boostWeight > 0) {
@@ -574,6 +1089,7 @@ export async function hybridRecall(
 					for (const s of scored) {
 						if (graphResult.graphLinkedIds.has(s.id)) {
 							s.score = (1 - gw) * s.score + gw;
+							traversalEvidenceMap.set(s.id, Math.max(traversalEvidenceMap.get(s.id) ?? 0, gw));
 						}
 					}
 					scored.sort((a, b) => b.score - a.score);
@@ -621,6 +1137,7 @@ export async function hybridRecall(
 							const existing = scoredById.get(memoryId);
 							if (existing) {
 								existing.score = (1 - tw) * existing.score + tw;
+								traversalEvidenceMap.set(memoryId, Math.max(traversalEvidenceMap.get(memoryId) ?? 0, tw));
 							} else {
 								missingIds.push(memoryId);
 							}
@@ -652,9 +1169,11 @@ export async function hybridRecall(
 							);
 
 							for (const row of baseRows) {
+								const traversalScore = Math.max(minScore, Math.min(1, row.traversal_score));
+								traversalEvidenceMap.set(row.id, Math.max(traversalEvidenceMap.get(row.id) ?? 0, traversalScore));
 								scored.push({
 									id: row.id,
-									score: Math.max(minScore, Math.min(1, row.traversal_score)),
+									score: traversalScore,
 									source: "ka_traversal",
 								});
 							}
@@ -682,6 +1201,91 @@ export async function hybridRecall(
 			}
 		}
 	}
+
+	if (structuredCandidateMap.size > 0) {
+		const byId = new Map<string, { id: string; score: number; source: string }>();
+		for (const row of scored) mergeCandidate(byId, row);
+		for (const [id, score] of [...structuredCandidateMap.entries()].sort((a, b) => b[1] - a[1])) {
+			mergeCandidate(byId, { id, score, source: "structured" });
+		}
+		scored = [...byId.values()].sort((a, b) => b.score - a.score);
+	}
+
+	const structuredEvidenceMap = new Map(structuredCandidateMap);
+
+	// --- Structured Evidence Convolution (SEC-lite) ---
+	// Keep retrieval channels separate until after traversal/boosting. This
+	// prevents graph-only memories from outranking directly anchored evidence,
+	// while still letting prospective hints rescue class-to-instance matches.
+	if (scored.length > 0) {
+		try {
+			const byId = new Map<string, { id: string; score: number; source: string }>();
+			for (const row of scored) mergeCandidate(byId, row);
+
+			const candidates = [...byId.values()];
+			try {
+				const agentId = params.agentId ?? "default";
+				const structured = getDbAccessor().withReadDb((db) =>
+					scoreStructuredPathEvidence(
+						db,
+						candidates.map((row) => row.id),
+						query,
+						agentId,
+					),
+				);
+				for (const [id, score] of structured) {
+					structuredEvidenceMap.set(id, score);
+				}
+			} catch (e) {
+				logger.warn("memory", "Structured path evidence failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+
+			const evidence: EvidenceCandidateInput[] = candidates.map((row) => ({
+				id: row.id,
+				source: row.source,
+				lexical: bm25Map.get(row.id),
+				semantic: semanticEvidenceMap.get(row.id),
+				hint: hintMap.get(row.id),
+				traversal: traversalEvidenceMap.get(row.id),
+				structured: structuredEvidenceMap.get(row.id),
+			}));
+
+			const shaped = shapeStructuredEvidence(evidence, { minScore });
+			if (shaped.length > 0) {
+				const coverageLimit = Math.max(limit, cfg.search.top_k);
+				const coverageIds = shaped.slice(0, coverageLimit).map((row) => row.id);
+				let contentMap = new Map<string, string>();
+				if (coverageIds.length > 0) {
+					const placeholders = coverageIds.map(() => "?").join(", ");
+					const contentRows = getDbAccessor().withReadDb(
+						(db) =>
+							db
+								.prepare(
+									`SELECT id, content FROM memories
+									 WHERE id IN (${placeholders})`,
+								)
+								.all(...coverageIds) as Array<{ id: string; content: string }>,
+					);
+					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
+				}
+
+				const coverageQuery = params.keywordQuery ? query : expandedQuery;
+				scored = shapeByFacetCoverage(coverageQuery, shaped, contentMap, coverageLimit).map((row) => ({
+					id: row.id,
+					score: row.score,
+					source: row.source,
+				}));
+			}
+		} catch (e) {
+			logger.warn("memory", "Structured evidence shaping failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
+	applyRehearsalBoost(scored, cfg.search);
 
 	// --- Optional reranker hook ---
 	let recallSummary: string | undefined;
@@ -849,7 +1453,7 @@ export async function hybridRecall(
 						};
 					})
 					.filter((r): r is ScoredRow => r !== null),
-				query,
+				params.keywordQuery ? query : expandedQuery,
 				DEFAULT_DAMPENING,
 				entities,
 				degrees,
@@ -869,13 +1473,72 @@ export async function hybridRecall(
 		}
 	}
 
+	let currentness = new Map<string, CurrentnessInfo>();
+	if (scored.length > 0) {
+		try {
+			currentness = loadCurrentnessInfo(
+				scored.map((row) => row.id),
+				params.agentId ?? "default",
+			);
+			applyCurrentnessBias(scored, currentness);
+		} catch (e) {
+			logger.warn("memory", "Currentness shaping failed (non-fatal)", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
 	// Over-fetch before hydration when scoped. Vector search can't
 	// pre-filter by scope, so out-of-scope IDs get dropped at
 	// hydration. 3x compensates for the expected discard rate.
 	const preHydrate = scoped ? limit * 3 : limit;
 	const topIds = scored.slice(0, preHydrate).map((s) => s.id);
+	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 
 	if (topIds.length === 0) {
+		const transcriptHits = buildTranscriptRecallHits(params, expandedQuery, new Set());
+		if (transcriptHits.length > 0) {
+			const transcriptSummaries = loadStructuredSummariesBySourceId(
+				params,
+				transcriptHits.map((hit) => hit.sessionKey),
+			);
+			const results = transcriptHits.slice(0, limit).map((hit): RecallResult => {
+				const sessionId = sessionIdFromSourceId(hit.sessionKey);
+				const assembled = buildTranscriptFallbackContent(
+					hit.excerpt,
+					transcriptSummaries.get(hit.sessionKey),
+					recallTruncate,
+				);
+				return {
+					id: `transcript:${hit.sessionKey}`,
+					content: assembled.content,
+					content_length: assembled.contentLength,
+					truncated: assembled.truncated,
+					score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
+					source: "transcript",
+					source_id: hit.sessionKey,
+					session_id: sessionId,
+					type: "transcript",
+					tags: params.scope ? `memorybench,${params.scope},${sessionId},transcript` : null,
+					pinned: false,
+					importance: 0.55,
+					who: "",
+					project: hit.project,
+					created_at: hit.updatedAt,
+					supplementary: true,
+				};
+			});
+			return {
+				results,
+				query,
+				method: "keyword",
+				meta: {
+					totalReturned: results.length,
+					hasSupplementary: true,
+					noHits: false,
+				},
+			};
+		}
 		return {
 			results: [],
 			query,
@@ -947,7 +1610,6 @@ export async function hybridRecall(
 	}
 
 	const rowMap = new Map(rows.map((r) => [r.id, r]));
-	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 	// No pre-decrement: always fetch `limit` memories. The summary card is
 	// injected after assembly and the array is capped to `limit` at that point.
 	const results: RecallResult[] = scored
@@ -955,14 +1617,16 @@ export async function hybridRecall(
 		.filter((s) => rowMap.has(s.id))
 		.map((s) => {
 			const r = rowMap.get(s.id)!;
-			const isTruncated = r.content.length > recallTruncate;
+			const content = annotateCurrentness(r.content, currentness.get(r.id));
+			const isTruncated = content.length > recallTruncate;
 			return {
 				id: r.id,
-				content: isTruncated ? `${r.content.slice(0, recallTruncate)} [truncated]` : r.content,
-				content_length: r.content.length,
+				content: isTruncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+				content_length: content.length,
 				truncated: isTruncated,
 				score: Math.round(s.score * 100) / 100,
 				source: s.source,
+				...(r.source_id ? { source_id: r.source_id, session_id: sessionIdFromSourceId(r.source_id) } : {}),
 				type: r.type,
 				tags: r.tags,
 				pinned: !!r.pinned,
@@ -1228,6 +1892,58 @@ export async function hybridRecall(
 		}
 	}
 
+	// --- Transcript recall fallback ---
+	// When the caller asks for expansion, raw transcripts are an allowed
+	// lossless backing source. Use them as a mechanical rescue channel for
+	// cases where the extracted memory compressed away the exact detail.
+	if (params.expand) {
+		const sourceIds = new Set(
+			results
+				.map((result) => rowMap.get(result.id)?.source_id ?? result.source_id)
+				.filter((sourceId): sourceId is string => typeof sourceId === "string" && sourceId.length > 0),
+		);
+		const transcriptHits = buildTranscriptRecallHits(params, expandedQuery, sourceIds);
+		const transcriptSummaries = loadStructuredSummariesBySourceId(
+			params,
+			transcriptHits.map((hit) => hit.sessionKey),
+		);
+		const realScores = results.filter((row) => row.source !== "transcript").map((row) => row.score);
+		const maxTranscriptScore = realScores.length > 0 ? Math.max(0.01, Math.min(...realScores) - 0.01) : 0.5;
+		for (const hit of transcriptHits) {
+			const sessionId = sessionIdFromSourceId(hit.sessionKey);
+			const id = `transcript:${hit.sessionKey}`;
+			if (existingIds.has(id)) continue;
+			existingIds.add(id);
+			const assembled = buildTranscriptFallbackContent(
+				hit.excerpt,
+				transcriptSummaries.get(hit.sessionKey),
+				recallTruncate,
+			);
+			results.push({
+				id,
+				content: assembled.content,
+				content_length: assembled.contentLength,
+				truncated: assembled.truncated,
+				score: Math.round(Math.max(0.01, Math.min(maxTranscriptScore, hit.rank)) * 100) / 100,
+				source: "transcript",
+				source_id: hit.sessionKey,
+				session_id: sessionId,
+				type: "transcript",
+				tags: params.scope ? `memorybench,${params.scope},${sessionId},transcript` : null,
+				pinned: false,
+				importance: 0.55,
+				who: "",
+				project: hit.project,
+				created_at: hit.updatedAt,
+				supplementary: true,
+			});
+		}
+		if (transcriptHits.length > 0) {
+			results.sort((a, b) => b.score - a.score);
+			if (results.length > limit) results.length = limit;
+		}
+	}
+
 	// --- Lossless expansion: fetch raw session transcripts ---
 	let sources: Record<string, string> | undefined;
 	if (params.expand) {
@@ -1254,6 +1970,21 @@ export async function hybridRecall(
 			}
 		} catch {
 			// Non-fatal — table may not exist pre-migration
+		}
+	}
+
+	if (params.expand && sources) {
+		for (const result of results.filter((row) => row.source !== "transcript").slice(0, Math.min(5, limit))) {
+			const sourceId = rowMap.get(result.id)?.source_id ?? result.source_id;
+			if (!sourceId) continue;
+			const transcript = sources[sourceId];
+			if (!transcript) continue;
+			const excerpt = transcriptExcerpt(transcript, expandedQuery);
+			if (!excerpt || result.content.includes(excerpt)) continue;
+			const content = `[Transcript excerpt]\n${excerpt}\n\n${result.content}`;
+			result.content = content.length > recallTruncate ? `${content.slice(0, recallTruncate)} [truncated]` : content;
+			result.content_length = content.length;
+			result.truncated = content.length > recallTruncate;
 		}
 	}
 

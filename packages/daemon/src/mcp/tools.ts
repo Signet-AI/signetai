@@ -7,7 +7,12 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { applyRecallScoreThreshold, partitionRecallRows } from "@signet/core";
+import {
+	applyRecallScoreThreshold,
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	formatRecallText,
+} from "@signet/core";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -93,6 +98,10 @@ interface MarketplaceProxyState {
 	contextKey: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 interface DaemonResponse<T> {
 	readonly ok: true;
 	readonly data: T;
@@ -106,32 +115,6 @@ interface DaemonError {
 
 type FetchResult<T> = DaemonResponse<T> | DaemonError;
 
-interface RecallToolRow {
-	readonly content: string;
-	readonly created_at?: string;
-	readonly score?: number;
-	readonly source?: string;
-	readonly type?: string;
-	readonly tags?: string | null;
-	readonly who?: string;
-	readonly pinned?: boolean;
-	readonly project?: string | null;
-	readonly supplementary?: boolean;
-}
-
-interface RecallToolMeta {
-	readonly totalReturned: number;
-	readonly hasSupplementary: boolean;
-	readonly noHits: boolean;
-}
-
-interface RecallToolPayload {
-	readonly query?: string;
-	readonly method?: string;
-	readonly results?: ReadonlyArray<RecallToolRow>;
-	readonly meta?: RecallToolMeta;
-}
-
 const BASE_TOOL_NAMES = new Set<string>([
 	"memory_search",
 	"memory_store",
@@ -141,6 +124,20 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"memory_forget",
 	"memory_feedback",
 	"knowledge_expand",
+	"knowledge_tree",
+	"knowledge_list_entities",
+	"knowledge_get_entity",
+	"knowledge_list_aspects",
+	"knowledge_list_groups",
+	"knowledge_list_claims",
+	"knowledge_list_attributes",
+	"knowledge_hygiene_report",
+	"entity_list",
+	"entity_get",
+	"entity_aspects",
+	"entity_groups",
+	"entity_claims",
+	"entity_attributes",
 	"knowledge_expand_session",
 	"lcm_expand",
 	"agent_peers",
@@ -220,58 +217,6 @@ function textResult(value: unknown): { content: Array<{ type: "text"; text: stri
 			},
 		],
 	};
-}
-
-function formatRecallToolResult(value: unknown): string {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return typeof value === "string" ? value : JSON.stringify(value, null, 2);
-	}
-
-	const payload = value as RecallToolPayload;
-	const rows = Array.isArray(payload.results) ? payload.results : [];
-	const meta =
-		payload.meta && typeof payload.meta === "object"
-			? payload.meta
-			: {
-					totalReturned: rows.length,
-					hasSupplementary: rows.some((row) => row.supplementary === true),
-					noHits: rows.length === 0,
-				};
-
-	if (meta.noHits || rows.length === 0) {
-		return "No matching memories found.";
-	}
-
-	const { primary, supporting } = partitionRecallRows(rows);
-	const noun = meta.totalReturned === 1 ? "memory" : "memories";
-	const parts = [`Found ${meta.totalReturned} ${noun}${payload.method ? ` (${payload.method})` : ""}.`];
-
-	if (primary.length > 0) {
-		parts.push("", "Primary matches:");
-		parts.push(
-			...primary.map((row) => {
-				const score = typeof row.score === "number" ? `[${(row.score * 100).toFixed(0)}%] ` : "";
-				const source = typeof row.source === "string" ? row.source : "unknown";
-				const type = typeof row.type === "string" ? row.type : "memory";
-				const createdAt = typeof row.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
-				return `- ${score}${row.content} (${type}, ${source}, ${createdAt})`;
-			}),
-		);
-	}
-
-	if (supporting.length > 0) {
-		parts.push("", "Supporting context:");
-		parts.push(
-			...supporting.map((row) => {
-				const source = typeof row.source === "string" ? row.source : "unknown";
-				const type = typeof row.type === "string" ? row.type : "memory";
-				const createdAt = typeof row.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
-				return `- ${row.content} (${type}, ${source}, ${createdAt})`;
-			}),
-		);
-	}
-
-	return parts.join("\n");
 }
 
 function errorResult(msg: string): {
@@ -638,9 +583,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
-				body: {
-					query,
-					keywordQuery: keyword_query,
+				body: buildRecallRequestBody(query, {
+					keyword_query,
 					limit: limit ?? 10,
 					project,
 					type,
@@ -650,8 +594,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance_min: importance_min ?? min_score,
 					since,
 					until,
-					expand: expand === true ? true : undefined,
-				},
+					expand,
+				}),
 			});
 
 			if (!result.ok) {
@@ -659,7 +603,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}
 			// Score thresholds trim ranked matches, but intentionally keep
 			// unscored supporting context in-band.
-			return textResult(formatRecallToolResult(applyRecallScoreThreshold(result.data, score_min)));
+			return textResult(formatRecallText(applyRecallScoreThreshold(result.data, score_min)));
 		},
 	);
 
@@ -677,6 +621,14 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				importance: z.number().optional().describe("Importance score 0-1"),
 				tags: z.string().optional().describe("Comma-separated tags for categorization"),
 				pinned: z.boolean().optional().describe("Pin this memory — prevents decay, bypasses 0.95^days aging"),
+				hints: z
+					.array(z.string())
+					.optional()
+					.describe("Prospective recall hints and alternate phrasings for retrieving this memory later"),
+				createdAt: z
+					.string()
+					.optional()
+					.describe("Source ISO timestamp for imported/older memories; used for currentness and supersession."),
 				transcript: z
 					.string()
 					.optional()
@@ -697,39 +649,63 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 							.optional(),
 						aspects: z
 							.array(
-								z.object({
-									entity: z.string(),
-									aspect: z.string(),
-									value: z.string(),
-									confidence: z.number().optional(),
-								}),
+								z.union([
+									z.object({
+										entityName: z.string(),
+										entityType: z.string().optional(),
+										aspect: z.string(),
+										attributes: z.array(
+											z.object({
+												groupKey: z
+													.string()
+													.optional()
+													.describe("Navigable subgroup within the aspect, like a dresser inside a room."),
+												claimKey: z
+													.string()
+													.optional()
+													.describe(
+														"Stable identity for this claim within the entity/aspect/group, used for supersession.",
+													),
+												content: z.string(),
+												confidence: z.number().optional(),
+												importance: z.number().optional(),
+											}),
+										),
+									}),
+									z.object({
+										entity: z.string(),
+										aspect: z.string(),
+										value: z.string(),
+										groupKey: z.string().optional(),
+										claimKey: z.string().optional(),
+										confidence: z.number().optional(),
+										importance: z.number().optional(),
+									}),
+								]),
 							)
 							.optional(),
 						hints: z.array(z.string()).optional(),
 					})
 					.optional()
 					.describe(
-						"Pre-extracted structured data (entities, aspects, hints). Skips pipeline extraction when provided.",
+						"Pre-extracted structured data: entities, entity aspects with attributes, and hints. Skips pipeline extraction when provided.",
 					),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ content, type, importance, tags, transcript, structured, pinned }) => {
-			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
-			let body = content;
-			if (tags) {
-				body = `[${tags}]: ${content}`;
-			}
-
+		async ({ content, type, importance, tags, hints, transcript, structured, pinned, createdAt }) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/remember", {
 				method: "POST",
-				body: {
-					content: body,
+				body: buildRememberRequestBody(content, {
+					type,
 					importance,
+					tags,
+					hints,
 					transcript,
 					structured,
 					pinned,
-				},
+					createdAt,
+				}),
 			});
 
 			if (!result.ok) {
@@ -1519,6 +1495,314 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}
 			return textResult(result.data);
 		},
+	);
+
+	const knowledgeTreeInput = z.object({
+		entity: z.string().optional().describe("Entity name, e.g. Nicholai or Signet. Omit to list entities first."),
+		depth: z.number().optional().describe("How deep to expand: 1=aspects, 2=groups, 3=claims. Default 3."),
+		max_aspects: z.number().optional().describe("Max aspects/rooms to return, default 20"),
+		max_groups: z.number().optional().describe("Max groups/dressers per aspect, default 20"),
+		max_claims: z.number().optional().describe("Max claims/drawers per group, default 50"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listEntitiesInput = z.object({
+		query: z.string().optional().describe("Optional entity name filter"),
+		type: z.string().optional().describe("Optional entity type filter"),
+		limit: z.number().optional().describe("Max entities to return, default 50"),
+		offset: z.number().optional().describe("Pagination offset, default 0"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const getEntityInput = z.object({
+		name: z.string().describe("Entity name, e.g. Nicholai or Signet"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listAspectsInput = z.object({
+		entity: z.string().describe("Entity name"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listGroupsInput = z.object({
+		entity: z.string().describe("Entity name"),
+		aspect: z.string().describe("Aspect/room name, e.g. food"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listClaimsInput = z.object({
+		entity: z.string().describe("Entity name"),
+		aspect: z.string().describe("Aspect/room name"),
+		group: z.string().describe("Group/dresser key, e.g. restaurants"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const listAttributesInput = z.object({
+		entity: z.string().describe("Entity name"),
+		aspect: z.string().describe("Aspect/room name"),
+		group: z.string().describe("Group/dresser key"),
+		claim: z.string().describe("Claim/drawer key, e.g. favorite_restaurant"),
+		status: z.enum(["active", "superseded", "deleted", "all"]).optional().describe("Default active"),
+		kind: z.enum(["attribute", "constraint"]).optional(),
+		limit: z.number().optional().describe("Max attributes to return, default 50"),
+		offset: z.number().optional().describe("Pagination offset, default 0"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+	const hygieneReportInput = z.object({
+		limit: z.number().optional().describe("Max rows per report section, default 50"),
+		memory_limit: z.number().optional().describe("Recent memories to scan for safe mention candidates, default 200"),
+		agent_id: z.string().optional().describe("Agent scope, default default"),
+	});
+
+	const fetchNavigation = async (path: string, params: URLSearchParams, label: string) => {
+		const query = params.toString();
+		const result = await daemonFetch<unknown>(baseUrl, query ? `${path}?${query}` : path);
+		if (!result.ok) return errorResult(`${label} failed: ${result.error}`);
+		return textResult(result.data);
+	};
+	const knowledgeTree = async ({
+		entity,
+		depth,
+		max_aspects,
+		max_groups,
+		max_claims,
+		agent_id,
+	}: z.infer<typeof knowledgeTreeInput>) => {
+		const params = new URLSearchParams();
+		if (!entity) {
+			if (max_aspects !== undefined) params.set("limit", String(max_aspects));
+			if (agent_id) params.set("agent_id", agent_id);
+			return fetchNavigation("/api/knowledge/navigation/entities", params, "Knowledge tree entity listing");
+		}
+		params.set("entity", entity);
+		if (depth !== undefined) params.set("depth", String(depth));
+		if (max_aspects !== undefined) params.set("max_aspects", String(max_aspects));
+		if (max_groups !== undefined) params.set("max_groups", String(max_groups));
+		if (max_claims !== undefined) params.set("max_claims", String(max_claims));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/tree", params, "Knowledge tree");
+	};
+	const listEntities = async ({ query, type, limit, offset, agent_id }: z.infer<typeof listEntitiesInput>) => {
+		const params = new URLSearchParams();
+		if (query) params.set("q", query);
+		if (type) params.set("type", type);
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (offset !== undefined) params.set("offset", String(offset));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/entities", params, "Entity list");
+	};
+	const getEntity = async ({ name, agent_id }: z.infer<typeof getEntityInput>) => {
+		const params = new URLSearchParams({ name });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/entity", params, "Entity get");
+	};
+	const listAspects = async ({ entity, agent_id }: z.infer<typeof listAspectsInput>) => {
+		const params = new URLSearchParams({ entity });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/aspects", params, "Entity aspects");
+	};
+	const listGroups = async ({ entity, aspect, agent_id }: z.infer<typeof listGroupsInput>) => {
+		const params = new URLSearchParams({ entity, aspect });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/groups", params, "Entity groups");
+	};
+	const listClaims = async ({ entity, aspect, group, agent_id }: z.infer<typeof listClaimsInput>) => {
+		const params = new URLSearchParams({ entity, aspect, group });
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/claims", params, "Entity claims");
+	};
+	const listAttributes = async ({
+		entity,
+		aspect,
+		group,
+		claim,
+		status,
+		kind,
+		limit,
+		offset,
+		agent_id,
+	}: z.infer<typeof listAttributesInput>) => {
+		const params = new URLSearchParams({ entity, aspect, group, claim });
+		if (status) params.set("status", status);
+		if (kind) params.set("kind", kind);
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (offset !== undefined) params.set("offset", String(offset));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/navigation/attributes", params, "Entity attributes");
+	};
+	const hygieneReport = async ({ limit, memory_limit, agent_id }: z.infer<typeof hygieneReportInput>) => {
+		const params = new URLSearchParams();
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (memory_limit !== undefined) params.set("memory_limit", String(memory_limit));
+		if (agent_id) params.set("agent_id", agent_id);
+		return fetchNavigation("/api/knowledge/hygiene", params, "Knowledge hygiene report");
+	};
+
+	server.registerTool(
+		"knowledge_tree",
+		{
+			title: "Knowledge Tree",
+			description:
+				"Show a compact outline of the knowledge graph. " +
+				"Use this when you know an entity and need tool-visible structure before choosing what to read. " +
+				"It returns aspects/rooms, groups/dressers, claim drawers, counts, and active previews. " +
+				"Omit entity to list top-level entities first.",
+			inputSchema: knowledgeTreeInput,
+			annotations: { readOnlyHint: true },
+		},
+		knowledgeTree,
+	);
+
+	server.registerTool(
+		"knowledge_list_entities",
+		{
+			title: "Knowledge: List Entities",
+			description:
+				"List top-level knowledge graph entities, like folders or houses. " +
+				"Use this first when you do not know the exact entity name.",
+			inputSchema: listEntitiesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listEntities,
+	);
+
+	server.registerTool(
+		"knowledge_get_entity",
+		{
+			title: "Knowledge: Get Entity",
+			description:
+				"Resolve one entity by name and return its structural summary. " +
+				"Use knowledge_tree after this to scan the entity's rooms, dressers, and drawers.",
+			inputSchema: getEntityInput,
+			annotations: { readOnlyHint: true },
+		},
+		getEntity,
+	);
+
+	server.registerTool(
+		"knowledge_list_aspects",
+		{
+			title: "Knowledge: List Aspects",
+			description:
+				"List aspects, which are broad rooms under an entity. " +
+				"Use this before knowledge_list_groups when you want step-by-step navigation.",
+			inputSchema: listAspectsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAspects,
+	);
+
+	server.registerTool(
+		"knowledge_list_groups",
+		{
+			title: "Knowledge: List Groups",
+			description:
+				"List groups, which are dresser-like subdivisions inside an aspect. " +
+				"Use this to find the right subgroup before opening claim drawers.",
+			inputSchema: listGroupsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listGroups,
+	);
+
+	server.registerTool(
+		"knowledge_list_claims",
+		{
+			title: "Knowledge: List Claims",
+			description:
+				"List claim keys, which are drawers containing current and historical observations. " +
+				"Use this before knowledge_list_attributes when you need the actual saved notes.",
+			inputSchema: listClaimsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listClaims,
+	);
+
+	server.registerTool(
+		"knowledge_list_attributes",
+		{
+			title: "Knowledge: List Attributes",
+			description:
+				"List the saved observations inside one entity/aspect/group/claim path. " +
+				"Defaults to active/current rows; pass status=all when you need superseded history.",
+			inputSchema: listAttributesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAttributes,
+	);
+
+	server.registerTool(
+		"knowledge_hygiene_report",
+		{
+			title: "Knowledge Hygiene Report",
+			description:
+				"Run a report-only scan for likely graph cleanup work. " +
+				"Flags suspicious entities, duplicate canonical entities, missing group/claim/source fields, " +
+				"and safe known-entity mention candidates without mutating the graph.",
+			inputSchema: hygieneReportInput,
+			annotations: { readOnlyHint: true },
+		},
+		hygieneReport,
+	);
+
+	server.registerTool(
+		"entity_list",
+		{
+			title: "List Entities",
+			description: "Compatibility alias for knowledge_list_entities.",
+			inputSchema: listEntitiesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listEntities,
+	);
+
+	server.registerTool(
+		"entity_get",
+		{
+			title: "Get Entity",
+			description: "Compatibility alias for knowledge_get_entity.",
+			inputSchema: getEntityInput,
+			annotations: { readOnlyHint: true },
+		},
+		getEntity,
+	);
+
+	server.registerTool(
+		"entity_aspects",
+		{
+			title: "List Entity Aspects",
+			description: "Compatibility alias for knowledge_list_aspects.",
+			inputSchema: listAspectsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAspects,
+	);
+
+	server.registerTool(
+		"entity_groups",
+		{
+			title: "List Entity Groups",
+			description: "Compatibility alias for knowledge_list_groups.",
+			inputSchema: listGroupsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listGroups,
+	);
+
+	server.registerTool(
+		"entity_claims",
+		{
+			title: "List Entity Claims",
+			description: "Compatibility alias for knowledge_list_claims.",
+			inputSchema: listClaimsInput,
+			annotations: { readOnlyHint: true },
+		},
+		listClaims,
+	);
+
+	server.registerTool(
+		"entity_attributes",
+		{
+			title: "List Entity Attributes",
+			description: "Compatibility alias for knowledge_list_attributes.",
+			inputSchema: listAttributesInput,
+			annotations: { readOnlyHint: true },
+		},
+		listAttributes,
 	);
 
 	// ------------------------------------------------------------------

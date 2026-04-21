@@ -742,6 +742,7 @@ describe("loadPipelineConfig", () => {
 					shadowMode: true,
 					allowUpdateDelete: true,
 					graphEnabled: true,
+					graphExtractionWritesEnabled: true,
 					autonomousEnabled: true,
 					mutationsFrozen: true,
 					autonomousFrozen: true,
@@ -753,6 +754,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.shadowMode).toBe(true);
 		expect(result.autonomous.allowUpdateDelete).toBe(true);
 		expect(result.graph.enabled).toBe(true);
+		expect(result.graph.extractionWritesEnabled).toBe(true);
 		expect(result.autonomous.enabled).toBe(true);
 		expect(result.mutationsFrozen).toBe(true);
 		expect(result.autonomous.frozen).toBe(true);
@@ -774,6 +776,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
 		expect(result.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
 		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
+		expect(result.graph.extractionWritesEnabled).toBe(DEFAULT_PIPELINE_V2.graph.extractionWritesEnabled);
 		expect(result.autonomous.enabled).toBe(DEFAULT_PIPELINE_V2.autonomous.enabled);
 		expect(result.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
 	});
@@ -818,6 +821,14 @@ describe("loadPipelineConfig", () => {
 		});
 
 		expect(result.structural.synthesisMaxStallMs).toBe(90_000);
+	});
+
+	it("keeps LLM-authored structural graph workers disabled by default", () => {
+		const result = loadPipelineConfig({});
+
+		expect(result.structural.enabled).toBe(false);
+		expect(result.structural.synthesisEnabled).toBe(false);
+		expect(result.structural.supersessionSemanticFallback).toBe(false);
 	});
 
 	it("preserves zero as the dependency synthesis stall disable value", () => {
@@ -1080,6 +1091,7 @@ describe("loadPipelineConfig", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
+					graphExtractionWritesEnabled: true,
 					graphBoostWeight: 0.25,
 					graphBoostTimeoutMs: 300,
 					rerankerEnabled: true,
@@ -1090,6 +1102,7 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
+		expect(result.graph.extractionWritesEnabled).toBe(true);
 		expect(result.graph.boostWeight).toBe(0.25);
 		expect(result.graph.boostTimeoutMs).toBe(300);
 		expect(result.reranker.enabled).toBe(true);
@@ -1105,6 +1118,7 @@ describe("loadPipelineConfig", () => {
 		});
 
 		expect(result.graph.boostWeight).toBe(DEFAULT_PIPELINE_V2.graph.boostWeight);
+		expect(result.graph.extractionWritesEnabled).toBe(DEFAULT_PIPELINE_V2.graph.extractionWritesEnabled);
 		expect(result.graph.boostTimeoutMs).toBe(DEFAULT_PIPELINE_V2.graph.boostTimeoutMs);
 		expect(result.reranker.enabled).toBe(DEFAULT_PIPELINE_V2.reranker.enabled);
 		expect(result.reranker.model).toBe(DEFAULT_PIPELINE_V2.reranker.model);
@@ -1274,7 +1288,7 @@ describe("loadPipelineConfig", () => {
 						timeout: 30000,
 						minConfidence: 0.8,
 					},
-					graph: { enabled: true, boostWeight: 0.3 },
+					graph: { enabled: true, extractionWritesEnabled: true, boostWeight: 0.3 },
 					reranker: { enabled: true, model: "my-reranker", useExtractionModel: true, topN: 10 },
 					autonomous: {
 						enabled: true,
@@ -1293,6 +1307,7 @@ describe("loadPipelineConfig", () => {
 		expect(result.extraction.timeout).toBe(30000);
 		expect(result.extraction.minConfidence).toBe(0.8);
 		expect(result.graph.enabled).toBe(true);
+		expect(result.graph.extractionWritesEnabled).toBe(true);
 		expect(result.graph.boostWeight).toBe(0.3);
 		expect(result.reranker.enabled).toBe(true);
 		expect(result.reranker.model).toBe("my-reranker");

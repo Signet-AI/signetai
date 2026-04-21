@@ -7,7 +7,9 @@ section: "Core Concepts"
 
 # Secrets Management
 
-Encrypted storage for API keys and sensitive values. Agents can *use* secrets without being able to read or expose them.
+Encrypted storage for API keys and sensitive values. Agents can *use*
+secrets without being able to read or expose them. The capability is owned by
+the bundled `signet.secrets` core plugin.
 
 ---
 
@@ -15,7 +17,41 @@ Encrypted storage for API keys and sensitive values. Agents can *use* secrets wi
 
 The core problem with AI agents and secrets: if an agent can read `OPENAI_API_KEY` from the environment, a prompt injection attack or a careless response could leak it.
 
-Signet's solution: secrets are encrypted at rest, and agents never receive decrypted values. When a secret is needed (for embeddings, tool calls, etc.), the [[daemon]] resolves it internally — either by using the value directly in API calls or by injecting it into a subprocess environment that the agent cannot inspect.
+Signet's solution: secrets are encrypted at rest, and agents never receive
+decrypted values. When a secret is needed (for embeddings, tool calls, etc.),
+the [[daemon]] resolves it internally, either by using the value directly in
+API calls or by injecting it into a subprocess environment that the agent
+cannot inspect.
+
+`signet.secrets` is the privileged core plugin for the capability. In V1 it
+registers plugin diagnostics, surface metadata, and a local provider that
+adopts the existing encrypted store in place. Secret operations emit
+structured daemon diagnostics such as `secret.listed`, `secret.stored`,
+`secret.deleted`, `secret.resolved_for_exec`, `secret.exec_started`, and
+`secret.exec_completed`; payloads include names or counts where current API
+policy already exposes them, but never raw values. Plugin lifecycle,
+capability-denial, and secret-provider events are also appended to
+`$SIGNET_WORKSPACE/.daemon/plugins/audit-v1.ndjson` with sensitive fields
+redacted before storage.
+
+Secrets API routes are guarded by the plugin registry. If `signet.secrets`
+is disabled, blocked, or missing the required grant for a route, the daemon
+returns a structured plugin-capability error. Stored secret files are left
+in place.
+
+### Setup defaults
+
+Existing installs default to Signet Secrets enabled, even if they do not yet
+have a plugin registry file. New interactive installs include a **Core
+plugins** step that explains what Signet Secrets stores, how it connects to
+Signet's encrypted local store and compatible 1Password references, which
+value-safe surfaces it enables, and why that is safer than putting credentials
+in prompts, shell history, logs, or source files.
+
+For non-interactive setup, Signet Secrets is enabled by default. Use
+`signet setup --disable-signet-secrets` to leave the bundled plugin installed
+but disabled. Disabling the plugin blocks secret API routes and tool surfaces
+without deleting existing encrypted secret files.
 
 ---
 
@@ -28,6 +64,15 @@ $SIGNET_WORKSPACE/
 ```
 
 The `secrets.enc` file is JSON, but every value is encrypted individually. It's readable by humans as a list of names and metadata, but the actual values are ciphertext.
+
+The local provider keeps this file format unchanged. Existing
+`$SIGNET_WORKSPACE/.secrets/secrets.enc` files remain valid without
+migration, re-encryption, relocation, or user action. Bare secret names are
+compatibility aliases for local references:
+
+```text
+OPENAI_API_KEY == local://OPENAI_API_KEY
+```
 
 ### Encryption
 
@@ -174,6 +219,15 @@ stored Signet secret name or a 1Password `op://...` reference. The daemon:
 
 If a secret value appears anywhere in stdout or stderr, it is replaced with `[REDACTED]`.
 
+Provider-qualified local refs are accepted wherever secret references are
+accepted:
+
+```json
+{
+  "OPENAI_API_KEY": "local://OPENAI_API_KEY"
+}
+```
+
 ---
 
 ## Security Model
@@ -189,6 +243,8 @@ If a secret value appears anywhere in stdout or stderr, it is replaced with `[RE
 - Inspect subprocess environments
 - Enumerate secret values through the API (only names)
 - Access the `GET /api/secrets/:name` route (there is none — only `POST`, `DELETE`, and `GET /api/secrets` for names)
+- Retrieve raw values through SDK, MCP, dashboard, connector, or plugin
+  diagnostics responses
 
 **What you should know:**
 - The master key is machine-bound, not passphrase-protected by default. If someone has shell access as your user, they can derive the key.
@@ -214,6 +270,9 @@ The full secrets API is documented in [API.md](./API.md#secrets-api). Summary:
 | `/api/secrets/1password/connect` | DELETE | Disconnect/remove stored token |
 | `/api/secrets/1password/vaults` | GET | List accessible 1Password vaults |
 | `/api/secrets/1password/import` | POST | Import vault secrets into Signet |
+| `/api/plugins` | GET | List plugin registry records, including `signet.secrets` |
+| `/api/plugins/audit` | GET | List redacted durable plugin audit events |
+| `/api/plugins/signet.secrets/diagnostics` | GET | Inspect Secrets plugin diagnostics and surface metadata |
 
 ---
 

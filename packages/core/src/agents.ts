@@ -17,11 +17,17 @@ export interface NormalizedAgentRosterEntry {
 	readonly policyGroup: string | null;
 }
 
-/** Identity files that inherit from agent subdir (fall back to root). */
-const AGENT_SPECIFIC = new Set(["SOUL.md", "IDENTITY.md"]);
-
-/** All recognized shared identity files. */
-const SHARED_FILES = ["AGENTS.md", "USER.md", "TOOLS.md", "HEARTBEAT.md", "MEMORY.md", "BOOTSTRAP.md"];
+/** Standard identity files that may be overridden by a named agent. */
+const IDENTITY_FILES = [
+	"AGENTS.md",
+	"SOUL.md",
+	"IDENTITY.md",
+	"USER.md",
+	"TOOLS.md",
+	"HEARTBEAT.md",
+	"MEMORY.md",
+	"BOOTSTRAP.md",
+];
 
 /**
  * Scans {agentsDir}/agents/* subdirectories and returns a minimal
@@ -56,24 +62,18 @@ export function scaffoldAgent(name: string, agentsDir: string): void {
  * exists on disk for the given agent.
  *
  * Inheritance rules:
- * - `SOUL.md` and `IDENTITY.md`: agent subdir first, fall back to root.
- * - All other files (`AGENTS.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`,
- *   `MEMORY.md`, `BOOTSTRAP.md`): always use root (shared by all agents).
+ * - Check `~/.agents/agents/{name}/{file}` first.
+ * - Fall back to root-level `~/.agents/{file}` when the agent has no override.
  */
 export function getAgentIdentityFiles(name: string, agentsDir: string): Record<string, string> {
 	const result: Record<string, string> = {};
 	const agentDir = join(agentsDir, "agents", name);
 
-	for (const file of AGENT_SPECIFIC) {
+	for (const file of IDENTITY_FILES) {
 		const specific = join(agentDir, file);
 		const fallback = join(agentsDir, file);
 		if (existsSync(specific)) result[file] = specific;
 		else if (existsSync(fallback)) result[file] = fallback;
-	}
-
-	for (const file of SHARED_FILES) {
-		const path = join(agentsDir, file);
-		if (existsSync(path)) result[file] = path;
 	}
 
 	return result;

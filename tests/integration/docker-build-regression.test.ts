@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = fileURLToPath(new URL("../../", import.meta.url));
 const dockerfile = readFileSync(join(rootDir, "deploy/docker/Dockerfile"), "utf8");
-const openclawPackageJson = JSON.parse(
-	readFileSync(join(rootDir, "packages/adapters/openclaw/package.json"), "utf8"),
-);
+const openclawPackageJson = JSON.parse(readFileSync(join(rootDir, "packages/adapters/openclaw/package.json"), "utf8"));
+const daemonPackageJson = JSON.parse(readFileSync(join(rootDir, "packages/daemon/package.json"), "utf8"));
+const desktopPackageJson = JSON.parse(readFileSync(join(rootDir, "packages/desktop/package.json"), "utf8"));
 const openclawBuild =
 	typeof openclawPackageJson === "object" &&
 	openclawPackageJson !== null &&
@@ -17,6 +17,33 @@ const openclawBuild =
 	"build" in openclawPackageJson.scripts &&
 	typeof openclawPackageJson.scripts.build === "string"
 		? openclawPackageJson.scripts.build
+		: undefined;
+const daemonCopySkills =
+	typeof daemonPackageJson === "object" &&
+	daemonPackageJson !== null &&
+	"scripts" in daemonPackageJson &&
+	typeof daemonPackageJson.scripts === "object" &&
+	daemonPackageJson.scripts !== null &&
+	"copy:skills" in daemonPackageJson.scripts &&
+	typeof daemonPackageJson.scripts["copy:skills"] === "string"
+		? daemonPackageJson.scripts["copy:skills"]
+		: undefined;
+const desktopBuild =
+	typeof desktopPackageJson === "object" &&
+	desktopPackageJson !== null &&
+	"scripts" in desktopPackageJson &&
+	typeof desktopPackageJson.scripts === "object" &&
+	desktopPackageJson.scripts !== null &&
+	"build:desktop" in desktopPackageJson.scripts &&
+	typeof desktopPackageJson.scripts["build:desktop"] === "string"
+		? desktopPackageJson.scripts["build:desktop"]
+		: undefined;
+const desktopHomepage =
+	typeof desktopPackageJson === "object" &&
+	desktopPackageJson !== null &&
+	"homepage" in desktopPackageJson &&
+	typeof desktopPackageJson.homepage === "string"
+		? desktopPackageJson.homepage
 		: undefined;
 const openclawEntry = readFileSync(join(rootDir, "packages/adapters/openclaw/src/index.ts"), "utf8");
 
@@ -52,5 +79,22 @@ describe("Docker build pipeline regression guard", () => {
 	it("keeps the OpenClaw adapter build Docker-safe when bundling @signet/core", () => {
 		expect(openclawEntry).toContain('from "@signet/core"');
 		expect(openclawBuild).toContain("--external better-sqlite3");
+	});
+
+	it("keeps desktop release builds aligned with workspace dependency order", () => {
+		expect(desktopBuild).toBeDefined();
+		if (!desktopBuild) return;
+		expect(desktopBuild).toStartWith("bun run build:core");
+		expect(desktopBuild).toContain("bun run build:daemon");
+		expect(desktopBuild.indexOf("bun run build:core")).toBeLessThan(desktopBuild.indexOf("bun run build:daemon"));
+	});
+
+	it("uses a cross-platform skills copy script for daemon builds", () => {
+		expect(daemonCopySkills).toBe("bun ../../scripts/copy-skills.ts");
+		expect(daemonCopySkills).not.toContain("cp -r");
+	});
+
+	it("keeps desktop Linux package metadata complete for deb generation", () => {
+		expect(desktopHomepage).toBe("https://signetai.sh");
 	});
 });

@@ -364,7 +364,7 @@ export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig 
 			result.trainingPairsPurged;
 
 		if (total > 0) {
-			logger.info("retention", "Sweep completed", result);
+			logger.info("retention", "Sweep completed", { ...result });
 		}
 		return result;
 	}

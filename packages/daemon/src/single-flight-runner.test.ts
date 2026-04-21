@@ -5,7 +5,7 @@ describe("createSingleFlightRunner", () => {
 	it("replays one follow-up pass when a rerun is requested during execution", async () => {
 		const phases: string[] = [];
 		let runs = 0;
-		let releaseFirstRun: (() => void) | null = null;
+		let releaseFirstRun: (() => void) | undefined;
 
 		const runner = createSingleFlightRunner(async () => {
 			runs += 1;
@@ -34,7 +34,7 @@ describe("createSingleFlightRunner", () => {
 
 	it("collapses repeated rerun requests into one extra pass", async () => {
 		let runs = 0;
-		let releaseFirstRun: (() => void) | null = null;
+		let releaseFirstRun: (() => void) | undefined;
 
 		const runner = createSingleFlightRunner(async () => {
 			runs += 1;
@@ -59,7 +59,7 @@ describe("createSingleFlightRunner", () => {
 	it("replays a queued rerun after a transient failure", async () => {
 		const phases: string[] = [];
 		let runs = 0;
-		let releaseFirstRun: (() => void) | null = null;
+		let releaseFirstRun: (() => void) | undefined;
 		const seenErrors: string[] = [];
 
 		const runner = createSingleFlightRunner(

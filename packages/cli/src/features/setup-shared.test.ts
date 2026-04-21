@@ -1,16 +1,30 @@
 import { describe, expect, it } from "bun:test";
 import {
 	DEPLOYMENT_TYPE_CHOICES,
+	SETUP_HARNESS_CHOICES,
 	defaultEmbeddingProviderForDeployment,
 	defaultExtractionProviderForDeployment,
 	detectExtractionProviderFromAvailable,
 	getDeploymentExtractionGuidance,
+	normalizeHarnessList,
 	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
 
 describe("setup deployment defaults", () => {
 	it("supports local, vps, and server deployment choices", () => {
 		expect(DEPLOYMENT_TYPE_CHOICES).toEqual(["local", "vps", "server"]);
+	});
+
+	it("supports Hermes Agent as a setup harness choice", () => {
+		expect(SETUP_HARNESS_CHOICES).toContain("hermes-agent");
+		expect(
+			normalizeHarnessList(["hermes-agent,claude-code"], {
+				normalizeChoice: (value, allowed) => {
+					const s = String(value);
+					return (allowed as readonly string[]).includes(s) ? (s as (typeof allowed)[number]) : null;
+				},
+			}),
+		).toEqual(["hermes-agent", "claude-code"]);
 	});
 
 	it("defaults embedding provider to native across deployment types", () => {

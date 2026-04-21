@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import type { LlmProvider } from "@signet/core";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
-import type { LlmProvider } from "@signet/core";
 import { getAgentScope } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
+import { logger } from "./logger";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
 import { isNoiseSession, isTempProject } from "./session-noise";
@@ -31,6 +32,15 @@ export const NOISE_PURGE_REASON = "automatic projection cleanup for temp/test se
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 let projTok: Tiktoken | null = null;
 const purgeSeen = new Set<string>();
+
+// Incremental index cache: outer key = agentId or "*" for global, inner key = absolute path, value = mtimeMs
+const artifactIndexCache = new Map<string, Map<string, number>>();
+
+// Changed manifest paths from last reindexMemoryArtifacts call — read by renderMemoryProjection, keyed by agentId
+const lastChangedManifestsByAgent = new Map<string, Set<string>>();
+
+// Tracks which manifest rel paths were referenced in the previous ledger render per agent
+const prevLedgerRefsByAgent = new Map<string, Set<string>>();
 
 function getProjectionTokenizer(): Tiktoken {
 	if (projTok) return projTok;
@@ -287,7 +297,10 @@ function tokenCount(text: string): number {
 }
 
 function joinParts(parts: ReadonlyArray<string>): string {
-	return parts.filter((part) => part.trim().length > 0).join("\n\n").trimEnd();
+	return parts
+		.filter((part) => part.trim().length > 0)
+		.join("\n\n")
+		.trimEnd();
 }
 
 function renderSection(section: ProjectionSection): string {
@@ -530,27 +543,62 @@ function listCanonicalFiles(): string[] {
 		.sort();
 }
 
+function deleteArtifactRowsForPath(path: string, agentId: string | null): void {
+	const sourcePath = relativePath(path);
+	getDbAccessor().withWriteTx((db) => {
+		if (agentId) {
+			db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(sourcePath, agentId);
+			return;
+		}
+		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(sourcePath);
+	});
+}
+
 export function reindexMemoryArtifacts(agentId?: string): void {
 	const scope = agentId?.trim() || null;
 	const files = listCanonicalFiles();
+	const stopTimer = logger.time("resources", "reindexMemoryArtifacts");
+	const cacheKey = scope ?? "*";
+	const cache = artifactIndexCache.get(cacheKey) ?? new Map<string, number>();
+	const changedPaths = new Set<string>();
+	lastChangedManifestsByAgent.delete(cacheKey);
 
 	try {
 		const ready = getDbAccessor().withReadDb((db) => {
 			const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifacts'`).get();
 			return row !== undefined;
 		});
-		if (!ready) return;
+		if (!ready) {
+			stopTimer({ fileCount: files.length });
+			return;
+		}
 	} catch {
+		stopTimer({ fileCount: files.length });
 		return;
 	}
 
-	getDbAccessor().withWriteTx((db) => {
-		if (scope) {
-			db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ?").run(scope);
-			return;
+	if (cache.size === 0) {
+		// Seed from DB paths too so files deleted while daemon was down get detected
+		const dbPaths = getDbAccessor().withReadDb((db) => {
+			const rows = scope
+				? (db.prepare("SELECT DISTINCT source_path FROM memory_artifacts WHERE agent_id = ?").all(scope) as Array<{
+						source_path: string;
+					}>)
+				: (db.prepare("SELECT DISTINCT source_path FROM memory_artifacts").all() as Array<{
+						source_path: string;
+					}>);
+			return rows;
+		});
+		if (dbPaths.length > 0) {
+			const root = getAgentsDir();
+			for (const row of dbPaths) {
+				cache.set(join(root, row.source_path), 0);
+			}
+			for (const path of files) {
+				cache.set(path, 0);
+			}
 		}
-		db.prepare("DELETE FROM memory_artifacts").run();
-	});
+	}
 
 	const tombstones = getDbAccessor().withReadDb((db) => {
 		const table = db
@@ -565,17 +613,49 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 		return new Set(rows.map((row) => row.session_token));
 	});
 
+	const fileSet = new Set(files);
 	for (const path of files) {
+		const mtime = statSync(path).mtimeMs;
+		if (cache.get(path) === mtime) continue;
+
 		const parsed = parseFrontmatterDocument(readFileSync(path, "utf8"));
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
-		if (scope && nextAgent !== scope) continue;
+		if (scope && nextAgent !== scope) {
+			deleteArtifactRowsForPath(path, scope);
+			cache.set(path, mtime);
+			continue;
+		}
 		const match = path.match(/--([a-z2-7]{16})--/);
 		const sessionToken = match?.[1];
-		if (sessionToken && tombstones.has(sessionToken)) continue;
+		if (sessionToken && tombstones.has(sessionToken)) {
+			deleteArtifactRowsForPath(path, scope);
+			cache.set(path, mtime);
+			changedPaths.add(path);
+			continue;
+		}
 		const body = normalizeMarkdownBody(parsed.body);
-		if (!isValidArtifact(path, parsed.frontmatter, body)) continue;
+		if (!isValidArtifact(path, parsed.frontmatter, body)) {
+			deleteArtifactRowsForPath(path, scope);
+			cache.set(path, mtime);
+			changedPaths.add(path);
+			continue;
+		}
 		upsertArtifactRow(path, parsed.frontmatter, body);
+		cache.set(path, mtime);
+		changedPaths.add(path);
 	}
+
+	for (const path of cache.keys()) {
+		if (fileSet.has(path)) continue;
+		deleteArtifactRowsForPath(path, scope);
+		cache.delete(path);
+		changedPaths.add(path);
+	}
+
+	lastChangedManifestsByAgent.set(cacheKey, new Set([...changedPaths].filter((path) => path.endsWith("--manifest.md"))));
+	artifactIndexCache.set(cacheKey, cache);
+
+	stopTimer({ fileCount: files.length });
 }
 
 function isValidArtifact(path: string, frontmatter: Record<string, unknown>, body: string): boolean {
@@ -1208,9 +1288,7 @@ function renderLedgerSection(
 	if (best > 0) {
 		const kept = sessions.slice(0, best);
 		const block = renderCount(best);
-		const refs = kept
-			.map((session) => session.manifestPath)
-			.filter((path): path is string => typeof path === "string");
+		const refs = kept.map((session) => session.manifestPath).filter((path): path is string => typeof path === "string");
 		return {
 			block,
 			refs,
@@ -1253,9 +1331,27 @@ function renderIndexSection(indexBlock: string, base: ReadonlyArray<string>): st
 	return "";
 }
 
-function syncManifestRefs(refs: ReadonlyArray<string>): void {
+function syncManifestRefs(refs: ReadonlyArray<string>, changedManifests: ReadonlySet<string> | undefined, agentId: string): void {
 	const set = new Set(refs);
-	const files = listCanonicalFiles().filter((path) => path.endsWith("--manifest.md"));
+	let files: string[];
+	if (changedManifests !== undefined) {
+		const absFiles = new Set(changedManifests);
+		const prev = prevLedgerRefsByAgent.get(agentId);
+		if (prev) {
+			const root = getAgentsDir();
+			for (const rel of prev) {
+				if (!set.has(rel)) {
+					absFiles.add(join(root, rel));
+				}
+			}
+		}
+		prevLedgerRefsByAgent.set(agentId, set);
+		if (absFiles.size === 0) return;
+		files = [...absFiles];
+	} else {
+		prevLedgerRefsByAgent.set(agentId, set);
+		files = listCanonicalFiles().filter((path) => path.endsWith("--manifest.md"));
+	}
 	for (const path of files) {
 		const state = loadManifest(path);
 		if (!state) continue;
@@ -1286,6 +1382,8 @@ export function renderMemoryProjection(agentId = "default"): {
 	indexBlock: string;
 } {
 	reindexMemoryArtifacts(agentId);
+	const changedManifests = lastChangedManifestsByAgent.get(agentId);
+	lastChangedManifestsByAgent.delete(agentId);
 	const memories = readTopMemories(agentId);
 	const threadHeads = readThreadHeads(agentId);
 	const nodes = readTemporalNodes(agentId);
@@ -1330,7 +1428,7 @@ export function renderMemoryProjection(agentId = "default"): {
 		}),
 	];
 	const ledgerBlock = renderLedgerSection(ledger, parts);
-	syncManifestRefs(ledgerBlock.refs);
+	syncManifestRefs(ledgerBlock.refs, changedManifests, agentId);
 	parts.push(ledgerBlock.block);
 	const trimmedIndex = renderIndexSection(indexBlock, parts);
 	if (trimmedIndex.length > 0) {
@@ -1418,12 +1516,12 @@ export function purgeCanonicalNoiseSessions(agentId: string, reason: string): nu
 				 ORDER BY session_token`,
 				)
 				.all(agentId) as Array<{
-					session_token: string;
-					session_id: string;
-					session_key: string | null;
-					project: string | null;
-					harness: string | null;
-				}>,
+				session_token: string;
+				session_id: string;
+				session_key: string | null;
+				project: string | null;
+				harness: string | null;
+			}>,
 	);
 	const groups = new Map<
 		string,
@@ -1465,5 +1563,7 @@ export function purgeCanonicalNoiseSessionsOnce(agentId: string, reason: string)
 
 export function resetProjectionPurgeState(): void {
 	purgeSeen.clear();
+	artifactIndexCache.clear();
+	lastChangedManifestsByAgent.clear();
+	prevLedgerRefsByAgent.clear();
 }
-

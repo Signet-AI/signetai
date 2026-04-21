@@ -20,6 +20,7 @@ export interface SetupWizardOptions {
 	configureOpenclawWorkspace?: boolean;
 	allowUnprotectedWorkspace?: boolean;
 	createLocalBackup?: boolean;
+	disableSignetSecrets?: boolean;
 }
 
 export interface SetupDeps {
@@ -83,4 +84,5 @@ export interface FreshSetupConfig {
 	readonly openDashboard: boolean;
 	readonly allowUnprotectedWorkspace: boolean;
 	readonly createLocalBackup: boolean;
+	readonly signetSecretsEnabled: boolean;
 }

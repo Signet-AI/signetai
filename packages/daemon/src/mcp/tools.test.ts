@@ -97,6 +97,20 @@ describe("createMcpServer", () => {
 		expect(names).toContain("memory_forget");
 		expect(names).toContain("memory_feedback");
 		expect(names).toContain("knowledge_expand");
+		expect(names).toContain("knowledge_tree");
+		expect(names).toContain("knowledge_list_entities");
+		expect(names).toContain("knowledge_get_entity");
+		expect(names).toContain("knowledge_list_aspects");
+		expect(names).toContain("knowledge_list_groups");
+		expect(names).toContain("knowledge_list_claims");
+		expect(names).toContain("knowledge_list_attributes");
+		expect(names).toContain("knowledge_hygiene_report");
+		expect(names).toContain("entity_list");
+		expect(names).toContain("entity_get");
+		expect(names).toContain("entity_aspects");
+		expect(names).toContain("entity_groups");
+		expect(names).toContain("entity_claims");
+		expect(names).toContain("entity_attributes");
 		expect(names).toContain("knowledge_expand_session");
 		expect(names).toContain("lcm_expand");
 		expect(names).toContain("agent_peers");
@@ -114,7 +128,42 @@ describe("createMcpServer", () => {
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("session_bypass");
-		expect(names.length).toBe(25);
+		expect(names.length).toBe(39);
+	});
+
+	it("registers intuitive knowledge navigation aliases", async () => {
+		const cap: { url?: string } = {};
+		mockFetch(200, { entity: { name: "Nicholai" }, items: [] }, cap);
+
+		const result = await callTool(server, "knowledge_tree", {
+			entity: "Nicholai",
+			depth: 2,
+			max_aspects: 4,
+			max_groups: 5,
+			max_claims: 6,
+			agent_id: "default",
+		});
+
+		expect(cap.url).toBe(
+			"http://localhost:3850/api/knowledge/navigation/tree?entity=Nicholai&depth=2&max_aspects=4&max_groups=5&max_claims=6&agent_id=default",
+		);
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("Nicholai");
+	});
+
+	it("registers a report-only knowledge hygiene tool", async () => {
+		const cap: { url?: string } = {};
+		mockFetch(200, { suspiciousEntities: [{ name: "The" }] }, cap);
+
+		const result = await callTool(server, "knowledge_hygiene_report", {
+			limit: 3,
+			memory_limit: 4,
+			agent_id: "default",
+		});
+
+		expect(cap.url).toBe("http://localhost:3850/api/knowledge/hygiene?limit=3&memory_limit=4&agent_id=default");
+		expect(result.isError).toBeUndefined();
+		expect(result.content[0]?.text).toContain("The");
 	});
 
 	describe("memory_search", () => {
@@ -189,7 +238,7 @@ describe("createMcpServer", () => {
 			expect(result.content[0]?.text).toContain("Primary matches:");
 			expect(result.content[0]?.text).not.toContain("Supporting context:");
 			expect(result.content[0]?.text).not.toContain("supporting rationale");
-			expect(result.content[0]?.text).toContain("test (fact, hybrid, 2026-04-07)");
+			expect(result.content[0]?.text).toContain("id: 1; test (fact, hybrid, 2026-04-07)");
 		});
 
 		it("returns error on fetch failure", async () => {
@@ -305,7 +354,7 @@ describe("createMcpServer", () => {
 			expect(result.isError).toBeUndefined();
 		});
 
-		it("prepends tags when provided", async () => {
+		it("passes tags as structured request metadata", async () => {
 			const cap: { body?: string } = {};
 			mockFetch(200, { id: "abc-456" }, cap);
 
@@ -315,7 +364,8 @@ describe("createMcpServer", () => {
 			});
 
 			const body = JSON.parse(cap.body ?? "{}");
-			expect(body.content).toBe("[foo,bar]: tagged memory");
+			expect(body.content).toBe("tagged memory");
+			expect(body.tags).toBe("foo,bar");
 		});
 
 		it("passes pinned through to request body", async () => {
@@ -329,6 +379,70 @@ describe("createMcpServer", () => {
 
 			const body = JSON.parse(cap.body ?? "{}");
 			expect(body.pinned).toBe(true);
+		});
+
+		it("passes hints, transcript, and structured graph payloads through to remember", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(200, { id: "structured-1", hints_written: 2, structured: true }, cap);
+
+			await callTool(server, "memory_store", {
+				content: "Nicholai prefers Signet memory tools.",
+				hints: ["durable memory preference", "which memory tools should be used"],
+				transcript: "user: please use Signet memory tools only",
+				structured: {
+					entities: [
+						{
+							source: "Nicholai",
+							relationship: "prefers",
+							target: "Signet memory tools",
+							confidence: 0.95,
+						},
+					],
+					aspects: [
+						{
+							entityName: "Nicholai",
+							aspect: "memory preference",
+							attributes: [{ content: "prefers Signet memory tools", confidence: 0.95 }],
+						},
+					],
+					hints: ["Nicholai durable facts"],
+				},
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.hints).toEqual(["durable memory preference", "which memory tools should be used"]);
+			expect(body.transcript).toBe("user: please use Signet memory tools only");
+			expect(body.structured.entities[0].target).toBe("Signet memory tools");
+			expect(body.structured.aspects[0].entityName).toBe("Nicholai");
+			expect(body.structured.aspects[0].attributes[0].content).toBe("prefers Signet memory tools");
+		});
+
+		it("normalizes legacy structured aspect tuples before forwarding to remember", async () => {
+			const cap: { body?: string } = {};
+			mockFetch(200, { id: "legacy-structured-1", structured: true }, cap);
+
+			await callTool(server, "memory_store", {
+				content: "Legacy structured tuple.",
+				structured: {
+					aspects: [
+						{
+							entity: "Nicholai",
+							aspect: "memory preference",
+							value: "prefers Signet memory tools",
+							confidence: 0.9,
+						},
+					],
+				},
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.structured.aspects).toEqual([
+				{
+					entityName: "Nicholai",
+					aspect: "memory preference",
+					attributes: [{ content: "prefers Signet memory tools", confidence: 0.9 }],
+				},
+			]);
 		});
 	});
 

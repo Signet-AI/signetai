@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../../core/src/migrations";
-import type { DbAccessor } from "../db-accessor";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import type { PipelineV2Config } from "../memory-config";
 import { createProviderTracker } from "../diagnostics";
 import { startMaintenanceWorker } from "./maintenance-worker";
@@ -12,16 +13,16 @@ import { startMaintenanceWorker } from "./maintenance-worker";
 
 function freshDb(): Database {
 	const db = new Database(":memory:");
-	runMigrations(db);
+	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 	return db;
 }
 
 function asAccessor(db: Database): DbAccessor {
 	return {
-		withWriteTx<T>(fn: (wdb: unknown) => T): T {
+		withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
 			db.exec("BEGIN IMMEDIATE");
 			try {
-				const result = fn(db);
+				const result = fn(db as unknown as WriteDb);
 				db.exec("COMMIT");
 				return result;
 			} catch (err) {
@@ -29,8 +30,8 @@ function asAccessor(db: Database): DbAccessor {
 				throw err;
 			}
 		},
-		withReadDb<T>(fn: (rdb: unknown) => T): T {
-			return fn(db);
+		withReadDb<T>(fn: (rdb: ReadDb) => T): T {
+			return fn(db as unknown as ReadDb);
 		},
 		close() {
 			db.close();
@@ -39,33 +40,22 @@ function asAccessor(db: Database): DbAccessor {
 }
 
 const BASE_CFG: PipelineV2Config = {
-	enabled: true,
+	...DEFAULT_PIPELINE_V2,
 	shadowMode: false,
 	mutationsFrozen: false,
 	extraction: {
+		...DEFAULT_PIPELINE_V2.extraction,
 		provider: "ollama",
 		model: "test",
 		timeout: 45000,
 		minConfidence: 0.7,
 	},
-	worker: {
-		pollMs: 2000,
-		maxRetries: 3,
-		leaseTimeoutMs: 300000,
-	},
-	graph: {
-		enabled: true,
-		boostWeight: 0.15,
-		boostTimeoutMs: 500,
-	},
 	reranker: {
+		...DEFAULT_PIPELINE_V2.reranker,
 		enabled: false,
-		model: "",
-		useExtractionModel: false,
-		topN: 20,
-		timeoutMs: 2000,
 	},
 	autonomous: {
+		...DEFAULT_PIPELINE_V2.autonomous,
 		enabled: true,
 		frozen: false,
 		allowUpdateDelete: true,
@@ -73,31 +63,13 @@ const BASE_CFG: PipelineV2Config = {
 		maintenanceMode: "execute",
 	},
 	repair: {
-		reembedCooldownMs: 300000,
-		reembedHourlyBudget: 10,
+		...DEFAULT_PIPELINE_V2.repair,
 		requeueCooldownMs: 0, // no cooldown for tests
 		requeueHourlyBudget: 1000,
-		dedupCooldownMs: 600000,
-		dedupHourlyBudget: 3,
-		dedupSemanticThreshold: 0.92,
-		dedupBatchSize: 100,
-	},
-	documents: {
-		workerIntervalMs: 10000,
-		chunkSize: 2000,
-		chunkOverlap: 200,
-		maxContentBytes: 10 * 1024 * 1024,
-	},
-	guardrails: {
-		maxContentChars: 500,
-		chunkTargetChars: 300,
-		recallTruncateChars: 500,
 	},
 	structural: {
+		...DEFAULT_PIPELINE_V2.structural,
 		enabled: false,
-		classifyBatchSize: 8,
-		dependencyBatchSize: 5,
-		pollIntervalMs: 10000,
 	},
 };
 

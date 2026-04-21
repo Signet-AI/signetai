@@ -22,8 +22,11 @@ export interface LlmGenerateResult {
 
 export interface LlmProvider {
 	readonly name: string;
-	generate(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }): Promise<string>;
-	generateWithUsage?(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number }): Promise<LlmGenerateResult>;
+	generate(prompt: string, opts?: { timeoutMs?: number; maxTokens?: number; temperature?: number }): Promise<string>;
+	generateWithUsage?(
+		prompt: string,
+		opts?: { timeoutMs?: number; maxTokens?: number; temperature?: number },
+	): Promise<LlmGenerateResult>;
 	available(): Promise<boolean>;
 }
 
@@ -237,6 +240,7 @@ export interface PipelineWorkerConfig {
 
 export interface PipelineGraphConfig {
 	readonly enabled: boolean;
+	readonly extractionWritesEnabled?: boolean;
 	readonly boostWeight: number;
 	readonly boostTimeoutMs: number;
 }
@@ -294,6 +298,7 @@ export interface PipelineGuardrailsConfig {
 	readonly maxContentChars: number;
 	readonly chunkTargetChars: number;
 	readonly recallTruncateChars: number;
+	readonly contextBudgetChars?: number;
 }
 
 export interface PipelineTelemetryConfig {
@@ -762,6 +767,8 @@ export interface EntityAttribute {
 	readonly kind: AttributeKind;
 	readonly content: string;
 	readonly normalizedContent: string;
+	readonly groupKey: string | null;
+	readonly claimKey: string | null;
 	readonly confidence: number;
 	readonly importance: number;
 	readonly status: AttributeStatus;

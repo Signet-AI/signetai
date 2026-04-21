@@ -76,6 +76,8 @@ function rowToAttribute(r: Record<string, unknown>): EntityAttribute {
 		kind: r.kind as AttributeKind,
 		content: r.content as string,
 		normalizedContent: r.normalized_content as string,
+		groupKey: (r.group_key as string) ?? null,
+		claimKey: (r.claim_key as string) ?? null,
 		confidence: r.confidence as number,
 		importance: r.importance as number,
 		status: r.status as AttributeStatus,
@@ -219,6 +221,8 @@ export function createAttribute(accessor: DbAccessor, params: CreateAttributePar
 			kind: params.kind,
 			content: params.content,
 			normalizedContent: normalized,
+			groupKey: null,
+			claimKey: null,
 			confidence: params.confidence ?? 0.0,
 			importance: params.importance ?? 0.5,
 			status: "active" as const,
@@ -652,6 +656,64 @@ export interface ResolvedNamedEntity {
 	readonly description: string | null;
 }
 
+export interface EntityGroupSummary {
+	readonly groupKey: string;
+	readonly attributeCount: number;
+	readonly constraintCount: number;
+	readonly claimCount: number;
+	readonly latestUpdatedAt: string | null;
+}
+
+export interface EntityClaimSummary {
+	readonly claimKey: string;
+	readonly groupKey: string | null;
+	readonly attributeCount: number;
+	readonly constraintCount: number;
+	readonly activeCount: number;
+	readonly supersededCount: number;
+	readonly latestUpdatedAt: string | null;
+	readonly preview: string | null;
+}
+
+export interface EntityTreeClaim {
+	readonly claimKey: string;
+	readonly attributeCount: number;
+	readonly constraintCount: number;
+	readonly activeCount: number;
+	readonly supersededCount: number;
+	readonly latestUpdatedAt: string | null;
+	readonly preview: string | null;
+}
+
+export interface EntityTreeGroup {
+	readonly groupKey: string;
+	readonly attributeCount: number;
+	readonly constraintCount: number;
+	readonly claimCount: number;
+	readonly latestUpdatedAt: string | null;
+	readonly claims: readonly EntityTreeClaim[];
+}
+
+export interface EntityTreeAspect {
+	readonly aspect: EntityAspect;
+	readonly attributeCount: number;
+	readonly constraintCount: number;
+	readonly groupCount: number;
+	readonly claimCount: number;
+	readonly groups: readonly EntityTreeGroup[];
+}
+
+export interface EntityKnowledgeTree {
+	readonly entity: Entity;
+	readonly items: readonly EntityTreeAspect[];
+	readonly limits: {
+		readonly maxAspects: number;
+		readonly maxGroups: number;
+		readonly maxClaims: number;
+		readonly depth: number;
+	};
+}
+
 export function resolveNamedEntity(
 	accessor: DbAccessor,
 	input: {
@@ -733,6 +795,458 @@ export function resolveNamedEntity(
 	});
 }
 
+function resolveAspectByName(
+	db: ReadDb,
+	params: {
+		readonly entityId: string;
+		readonly agentId: string;
+		readonly aspect: string;
+	},
+): EntityAspect | null {
+	const canonical = toCanonicalName(params.aspect);
+	if (canonical.length === 0) return null;
+	const row = db
+		.prepare(
+			`SELECT *
+			 FROM entity_aspects
+			 WHERE entity_id = ?
+			   AND agent_id = ?
+			   AND (canonical_name = ? OR LOWER(name) = ?)
+			 ORDER BY weight DESC, updated_at DESC
+			 LIMIT 1`,
+		)
+		.get(params.entityId, params.agentId, canonical, canonical) as Record<string, unknown> | undefined;
+	return row ? rowToAspect(row) : null;
+}
+
+function resolveEntityRecordByName(
+	db: ReadDb,
+	params: {
+		readonly agentId: string;
+		readonly name: string;
+	},
+): Entity | null {
+	const canonical = toCanonicalName(params.name);
+	if (canonical.length === 0) return null;
+	const escaped = canonical.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+	const starts = `${escaped}%`;
+	const contains = `%${escaped}%`;
+	const row = db
+		.prepare(
+			`SELECT *
+			 FROM entities
+			 WHERE agent_id = ?
+			   AND (
+					COALESCE(canonical_name, LOWER(name)) = ?
+					OR LOWER(name) = ?
+					OR COALESCE(canonical_name, LOWER(name)) LIKE ? ESCAPE '\\'
+					OR LOWER(name) LIKE ? ESCAPE '\\'
+					OR COALESCE(canonical_name, LOWER(name)) LIKE ? ESCAPE '\\'
+					OR LOWER(name) LIKE ? ESCAPE '\\'
+			   )
+			 ORDER BY
+			   CASE
+				 WHEN COALESCE(canonical_name, LOWER(name)) = ? THEN 0
+				 WHEN LOWER(name) = ? THEN 1
+				 WHEN COALESCE(canonical_name, LOWER(name)) LIKE ? ESCAPE '\\' THEN 2
+				 WHEN LOWER(name) LIKE ? ESCAPE '\\' THEN 3
+				 WHEN COALESCE(canonical_name, LOWER(name)) LIKE ? ESCAPE '\\' THEN 4
+				 WHEN LOWER(name) LIKE ? ESCAPE '\\' THEN 5
+				 ELSE 6
+			   END ASC,
+			   mentions DESC,
+			   updated_at DESC,
+			   name ASC
+			 LIMIT 1`,
+		)
+		.get(
+			params.agentId,
+			canonical,
+			canonical,
+			starts,
+			starts,
+			contains,
+			contains,
+			canonical,
+			canonical,
+			starts,
+			starts,
+			contains,
+			contains,
+		) as Record<string, unknown> | undefined;
+	return row ? rowToEntity(row) : null;
+}
+
+export function getKnowledgeEntityByName(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly name: string;
+	},
+): KnowledgeEntityDetail | null {
+	const resolved = resolveNamedEntity(accessor, params);
+	return resolved ? getKnowledgeEntityDetail(accessor, resolved.id, params.agentId) : null;
+}
+
+export function getEntityAspectsByName(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly entity: string;
+	},
+): { readonly entity: Entity; readonly items: readonly AspectWithCounts[] } | null {
+	return accessor.withReadDb((db) => {
+		const entity = resolveEntityRecordByName(db, {
+			agentId: params.agentId,
+			name: params.entity,
+		});
+		if (!entity) return null;
+		return {
+			entity,
+			items: getEntityAspectsWithCounts(accessor, entity.id, params.agentId),
+		};
+	});
+}
+
+export function getEntityKnowledgeTree(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly entity: string;
+		readonly maxAspects: number;
+		readonly maxGroups: number;
+		readonly maxClaims: number;
+		readonly depth: number;
+	},
+): EntityKnowledgeTree | null {
+	return accessor.withReadDb((db) => {
+		const entity = resolveEntityRecordByName(db, {
+			agentId: params.agentId,
+			name: params.entity,
+		});
+		if (!entity) return null;
+
+		const aspectRows = db
+			.prepare(
+				`SELECT
+				   asp.*,
+				   COUNT(DISTINCT CASE
+				     WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
+				   END) AS attribute_count,
+				   COUNT(DISTINCT CASE
+				     WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
+				   END) AS constraint_count,
+				   COUNT(DISTINCT CASE
+				     WHEN attr.status != 'deleted' THEN COALESCE(attr.group_key, 'general')
+				   END) AS group_count,
+				   COUNT(DISTINCT CASE
+				     WHEN attr.status != 'deleted' AND attr.claim_key IS NOT NULL
+				     THEN COALESCE(attr.group_key, 'general') || ':' || attr.claim_key
+				   END) AS claim_count
+				 FROM entity_aspects asp
+				 LEFT JOIN entity_attributes attr
+				   ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
+				 WHERE asp.entity_id = ? AND asp.agent_id = ?
+				 GROUP BY asp.id
+				 ORDER BY asp.weight DESC, asp.name ASC
+				 LIMIT ?`,
+			)
+			.all(entity.id, params.agentId, params.maxAspects) as Array<Record<string, unknown>>;
+
+		return {
+			entity,
+			limits: {
+				maxAspects: params.maxAspects,
+				maxGroups: params.maxGroups,
+				maxClaims: params.maxClaims,
+				depth: params.depth,
+			},
+			items: aspectRows.map((aspectRow) => {
+				const aspect = rowToAspect(aspectRow);
+				const groupRows =
+					params.depth >= 2
+						? (db
+								.prepare(
+									`SELECT
+									   COALESCE(ea.group_key, 'general') AS group_key,
+									   COUNT(DISTINCT CASE
+									     WHEN ea.kind = 'attribute' AND ea.status = 'active' THEN ea.id
+									   END) AS attribute_count,
+									   COUNT(DISTINCT CASE
+									     WHEN ea.kind = 'constraint' AND ea.status = 'active' THEN ea.id
+									   END) AS constraint_count,
+									   COUNT(DISTINCT CASE
+									     WHEN ea.claim_key IS NOT NULL THEN ea.claim_key
+									   END) AS claim_count,
+									   MAX(ea.updated_at) AS latest_updated_at
+									 FROM entity_attributes ea
+									 WHERE ea.aspect_id = ?
+									   AND ea.agent_id = ?
+									   AND ea.status != 'deleted'
+									 GROUP BY COALESCE(ea.group_key, 'general')
+									 ORDER BY attribute_count DESC, constraint_count DESC, claim_count DESC, group_key ASC
+									 LIMIT ?`,
+								)
+								.all(aspect.id, params.agentId, params.maxGroups) as Array<Record<string, unknown>>)
+						: [];
+
+				return {
+					aspect,
+					attributeCount: Number(aspectRow.attribute_count ?? 0),
+					constraintCount: Number(aspectRow.constraint_count ?? 0),
+					groupCount: Number(aspectRow.group_count ?? 0),
+					claimCount: Number(aspectRow.claim_count ?? 0),
+					groups: groupRows.map((groupRow) => {
+						const groupKey = groupRow.group_key as string;
+						const claimRows =
+							params.depth >= 3
+								? (db
+										.prepare(
+											`SELECT
+											   ea.claim_key,
+											   COUNT(DISTINCT CASE WHEN ea.kind = 'attribute' THEN ea.id END) AS attribute_count,
+											   COUNT(DISTINCT CASE WHEN ea.kind = 'constraint' THEN ea.id END) AS constraint_count,
+											   COUNT(DISTINCT CASE WHEN ea.status = 'active' THEN ea.id END) AS active_count,
+											   COUNT(DISTINCT CASE WHEN ea.status = 'superseded' THEN ea.id END) AS superseded_count,
+											   MAX(ea.updated_at) AS latest_updated_at,
+											   (
+											     SELECT inner_attr.content
+											     FROM entity_attributes inner_attr
+											     WHERE inner_attr.aspect_id = ea.aspect_id
+											       AND inner_attr.agent_id = ea.agent_id
+											       AND COALESCE(inner_attr.group_key, 'general') = COALESCE(ea.group_key, 'general')
+											       AND inner_attr.claim_key = ea.claim_key
+											       AND inner_attr.status = 'active'
+											     ORDER BY inner_attr.importance DESC, inner_attr.updated_at DESC
+											     LIMIT 1
+											   ) AS preview
+											 FROM entity_attributes ea
+											 WHERE ea.aspect_id = ?
+											   AND ea.agent_id = ?
+											   AND COALESCE(ea.group_key, 'general') = ?
+											   AND ea.claim_key IS NOT NULL
+											   AND ea.status != 'deleted'
+											 GROUP BY ea.claim_key, COALESCE(ea.group_key, 'general')
+											 ORDER BY active_count DESC, latest_updated_at DESC, ea.claim_key ASC
+											 LIMIT ?`,
+										)
+										.all(aspect.id, params.agentId, groupKey, params.maxClaims) as Array<Record<string, unknown>>)
+								: [];
+
+						return {
+							groupKey,
+							attributeCount: Number(groupRow.attribute_count ?? 0),
+							constraintCount: Number(groupRow.constraint_count ?? 0),
+							claimCount: Number(groupRow.claim_count ?? 0),
+							latestUpdatedAt: typeof groupRow.latest_updated_at === "string" ? groupRow.latest_updated_at : null,
+							claims: claimRows.map((claimRow) => ({
+								claimKey: claimRow.claim_key as string,
+								attributeCount: Number(claimRow.attribute_count ?? 0),
+								constraintCount: Number(claimRow.constraint_count ?? 0),
+								activeCount: Number(claimRow.active_count ?? 0),
+								supersededCount: Number(claimRow.superseded_count ?? 0),
+								latestUpdatedAt: typeof claimRow.latest_updated_at === "string" ? claimRow.latest_updated_at : null,
+								preview: typeof claimRow.preview === "string" ? claimRow.preview : null,
+							})),
+						};
+					}),
+				};
+			}),
+		};
+	});
+}
+
+export function listEntityGroups(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly entity: string;
+		readonly aspect: string;
+	},
+): { readonly entity: Entity; readonly aspect: EntityAspect; readonly items: readonly EntityGroupSummary[] } | null {
+	return accessor.withReadDb((db) => {
+		const entity = resolveEntityRecordByName(db, {
+			agentId: params.agentId,
+			name: params.entity,
+		});
+		if (!entity) return null;
+		const aspect = resolveAspectByName(db, {
+			entityId: entity.id,
+			agentId: params.agentId,
+			aspect: params.aspect,
+		});
+		if (!aspect) return null;
+		const rows = db
+			.prepare(
+				`SELECT
+				   COALESCE(ea.group_key, 'general') AS group_key,
+				   COUNT(DISTINCT CASE
+				     WHEN ea.kind = 'attribute' AND ea.status = 'active' THEN ea.id
+				   END) AS attribute_count,
+				   COUNT(DISTINCT CASE
+				     WHEN ea.kind = 'constraint' AND ea.status = 'active' THEN ea.id
+				   END) AS constraint_count,
+				   COUNT(DISTINCT CASE
+				     WHEN ea.claim_key IS NOT NULL THEN ea.claim_key
+				   END) AS claim_count,
+				   MAX(ea.updated_at) AS latest_updated_at
+				 FROM entity_attributes ea
+				 WHERE ea.aspect_id = ?
+				   AND ea.agent_id = ?
+				   AND ea.status != 'deleted'
+				 GROUP BY COALESCE(ea.group_key, 'general')
+				 ORDER BY attribute_count DESC, constraint_count DESC, group_key ASC`,
+			)
+			.all(aspect.id, params.agentId) as Array<Record<string, unknown>>;
+		return {
+			entity,
+			aspect,
+			items: rows.map((row) => ({
+				groupKey: row.group_key as string,
+				attributeCount: Number(row.attribute_count ?? 0),
+				constraintCount: Number(row.constraint_count ?? 0),
+				claimCount: Number(row.claim_count ?? 0),
+				latestUpdatedAt: typeof row.latest_updated_at === "string" ? row.latest_updated_at : null,
+			})),
+		};
+	});
+}
+
+export function listEntityClaims(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly entity: string;
+		readonly aspect: string;
+		readonly group: string;
+	},
+): { readonly entity: Entity; readonly aspect: EntityAspect; readonly items: readonly EntityClaimSummary[] } | null {
+	return accessor.withReadDb((db) => {
+		const entity = resolveEntityRecordByName(db, {
+			agentId: params.agentId,
+			name: params.entity,
+		});
+		if (!entity) return null;
+		const aspect = resolveAspectByName(db, {
+			entityId: entity.id,
+			agentId: params.agentId,
+			aspect: params.aspect,
+		});
+		if (!aspect) return null;
+		const group = toCanonicalName(params.group).replace(/\s+/g, "_");
+		const rows = db
+			.prepare(
+				`SELECT
+				   ea.claim_key,
+				   ea.group_key,
+				   COUNT(DISTINCT CASE WHEN ea.kind = 'attribute' THEN ea.id END) AS attribute_count,
+				   COUNT(DISTINCT CASE WHEN ea.kind = 'constraint' THEN ea.id END) AS constraint_count,
+				   COUNT(DISTINCT CASE WHEN ea.status = 'active' THEN ea.id END) AS active_count,
+				   COUNT(DISTINCT CASE WHEN ea.status = 'superseded' THEN ea.id END) AS superseded_count,
+				   MAX(ea.updated_at) AS latest_updated_at,
+				   (
+				     SELECT inner_attr.content
+				     FROM entity_attributes inner_attr
+				     WHERE inner_attr.aspect_id = ea.aspect_id
+				       AND inner_attr.agent_id = ea.agent_id
+				       AND COALESCE(inner_attr.group_key, 'general') = COALESCE(ea.group_key, 'general')
+				       AND inner_attr.claim_key = ea.claim_key
+				       AND inner_attr.status = 'active'
+				     ORDER BY inner_attr.importance DESC, inner_attr.updated_at DESC
+				     LIMIT 1
+				   ) AS preview
+				 FROM entity_attributes ea
+				 WHERE ea.aspect_id = ?
+				   AND ea.agent_id = ?
+				   AND COALESCE(ea.group_key, 'general') = ?
+				   AND ea.claim_key IS NOT NULL
+				   AND ea.status != 'deleted'
+				 GROUP BY ea.claim_key, COALESCE(ea.group_key, 'general')
+				 ORDER BY active_count DESC, latest_updated_at DESC, ea.claim_key ASC`,
+			)
+			.all(aspect.id, params.agentId, group.length > 0 ? group : "general") as Array<Record<string, unknown>>;
+		return {
+			entity,
+			aspect,
+			items: rows.map((row) => ({
+				claimKey: row.claim_key as string,
+				groupKey: typeof row.group_key === "string" ? row.group_key : null,
+				attributeCount: Number(row.attribute_count ?? 0),
+				constraintCount: Number(row.constraint_count ?? 0),
+				activeCount: Number(row.active_count ?? 0),
+				supersededCount: Number(row.superseded_count ?? 0),
+				latestUpdatedAt: typeof row.latest_updated_at === "string" ? row.latest_updated_at : null,
+				preview: typeof row.preview === "string" ? row.preview : null,
+			})),
+		};
+	});
+}
+
+export function listEntityAttributesByPath(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId: string;
+		readonly entity: string;
+		readonly aspect: string;
+		readonly group: string;
+		readonly claim: string;
+		readonly kind?: AttributeKind;
+		readonly status?: AttributeStatus | "all";
+		readonly limit: number;
+		readonly offset: number;
+	},
+): { readonly entity: Entity; readonly aspect: EntityAspect; readonly items: readonly EntityAttribute[] } | null {
+	return accessor.withReadDb((db) => {
+		const entity = resolveEntityRecordByName(db, {
+			agentId: params.agentId,
+			name: params.entity,
+		});
+		if (!entity) return null;
+		const aspect = resolveAspectByName(db, {
+			entityId: entity.id,
+			agentId: params.agentId,
+			aspect: params.aspect,
+		});
+		if (!aspect) return null;
+		const group = toCanonicalName(params.group).replace(/\s+/g, "_");
+		const claim = toCanonicalName(params.claim).replace(/\s+/g, "_");
+		if (claim.length === 0) return { entity, aspect, items: [] };
+
+		const conditions = [
+			"ea.aspect_id = ?",
+			"ea.agent_id = ?",
+			"COALESCE(ea.group_key, 'general') = ?",
+			"ea.claim_key = ?",
+		];
+		const args: Array<string | number> = [aspect.id, params.agentId, group.length > 0 ? group : "general", claim];
+		if (params.kind) {
+			conditions.push("ea.kind = ?");
+			args.push(params.kind);
+		}
+		if (params.status && params.status !== "all") {
+			conditions.push("ea.status = ?");
+			args.push(params.status);
+		} else if (!params.status) {
+			conditions.push("ea.status = 'active'");
+		}
+
+		const rows = db
+			.prepare(
+				`SELECT ea.*
+				 FROM entity_attributes ea
+				 WHERE ${conditions.join(" AND ")}
+				 ORDER BY ea.created_at DESC, ea.importance DESC
+				 LIMIT ? OFFSET ?`,
+			)
+			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
+		return {
+			entity,
+			aspect,
+			items: rows.map(rowToAttribute),
+		};
+	});
+}
+
 export function listKnowledgeEntities(
 	accessor: DbAccessor,
 	params: {
@@ -755,30 +1269,51 @@ export function listKnowledgeEntities(
 			args.push(`%${params.query.trim().toLowerCase()}%`);
 		}
 
+		// Paginate entity IDs first, then compute counts only for the page.
+		// This avoids materializing GROUP BY + ORDER BY across every entity in
+		// the agent scope before LIMIT can apply, which is prohibitive on graphs
+		// with tens of thousands of entities. See Signet-AI/signetai#515.
 		const rows = db
 			.prepare(
-				`SELECT
+				`WITH page AS (
+					SELECT e.id
+					FROM entities e
+					WHERE ${conditions.join(" AND ")}
+					ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC, e.updated_at DESC, e.name ASC
+					LIMIT ? OFFSET ?
+				)
+				SELECT
 					e.*,
-					COUNT(DISTINCT asp.id) AS aspect_count,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
-					END) AS attribute_count,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
-					END) AS constraint_count,
-					COUNT(DISTINCT dep.id) AS dependency_count
-				 FROM entities e
-				 LEFT JOIN entity_aspects asp
-				   ON asp.entity_id = e.id AND asp.agent_id = e.agent_id
-				 LEFT JOIN entity_attributes attr
-				   ON attr.aspect_id = asp.id AND attr.agent_id = e.agent_id
-				 LEFT JOIN entity_dependencies dep
-				   ON dep.agent_id = e.agent_id
-				  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
-				 WHERE ${conditions.join(" AND ")}
-				 GROUP BY e.id
-				 ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC, e.updated_at DESC, e.name ASC
-				 LIMIT ? OFFSET ?`,
+					(
+						SELECT COUNT(*) FROM entity_aspects asp
+						WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+					) AS aspect_count,
+					(
+						SELECT COUNT(*) FROM entity_attributes attr
+						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
+						  AND attr.agent_id = e.agent_id
+						  AND attr.kind = 'attribute'
+						  AND attr.status = 'active'
+					) AS attribute_count,
+					(
+						SELECT COUNT(*) FROM entity_attributes attr
+						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
+						  AND attr.agent_id = e.agent_id
+						  AND attr.kind = 'constraint'
+						  AND attr.status = 'active'
+					) AS constraint_count,
+					(
+						SELECT COUNT(*) FROM entity_dependencies dep
+						WHERE dep.agent_id = e.agent_id
+						  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
+					) AS dependency_count
+				 FROM page p
+				 JOIN entities e ON e.id = p.id
+				 ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC, e.updated_at DESC, e.name ASC`,
 			)
 			.all(...args, params.limit, params.offset) as Array<Record<string, unknown>>;
 
@@ -798,33 +1333,46 @@ export function getKnowledgeEntityDetail(
 	agentId: string,
 ): KnowledgeEntityDetail | null {
 	return accessor.withReadDb((db) => {
+		// Scalar subqueries per count avoid GROUP BY materialization across
+		// the (LEFT JOIN aspects x attributes x dependencies) cartesian, which
+		// produces the same pathological shape as listKnowledgeEntities even
+		// when filtered to a single entity id. See Signet-AI/signetai#515.
 		const row = db
 			.prepare(
 				`SELECT
 					e.*,
-					COUNT(DISTINCT asp.id) AS aspect_count,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'attribute' AND attr.status = 'active' THEN attr.id
-					END) AS attribute_count,
-					COUNT(DISTINCT CASE
-						WHEN attr.kind = 'constraint' AND attr.status = 'active' THEN attr.id
-					END) AS constraint_count,
-					COUNT(DISTINCT CASE
-						WHEN dep.source_entity_id = e.id THEN dep.id
-					END) AS outgoing_dependency_count,
-					COUNT(DISTINCT CASE
-						WHEN dep.target_entity_id = e.id THEN dep.id
-					END) AS incoming_dependency_count
+					(
+						SELECT COUNT(*) FROM entity_aspects asp
+						WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+					) AS aspect_count,
+					(
+						SELECT COUNT(*) FROM entity_attributes attr
+						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
+						  AND attr.agent_id = e.agent_id
+						  AND attr.kind = 'attribute'
+						  AND attr.status = 'active'
+					) AS attribute_count,
+					(
+						SELECT COUNT(*) FROM entity_attributes attr
+						JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						WHERE asp.entity_id = e.id
+						  AND asp.agent_id = e.agent_id
+						  AND attr.agent_id = e.agent_id
+						  AND attr.kind = 'constraint'
+						  AND attr.status = 'active'
+					) AS constraint_count,
+					(
+						SELECT COUNT(*) FROM entity_dependencies dep
+						WHERE dep.agent_id = e.agent_id AND dep.source_entity_id = e.id
+					) AS outgoing_dependency_count,
+					(
+						SELECT COUNT(*) FROM entity_dependencies dep
+						WHERE dep.agent_id = e.agent_id AND dep.target_entity_id = e.id
+					) AS incoming_dependency_count
 				 FROM entities e
-				 LEFT JOIN entity_aspects asp
-				   ON asp.entity_id = e.id AND asp.agent_id = e.agent_id
-				 LEFT JOIN entity_attributes attr
-				   ON attr.aspect_id = asp.id AND attr.agent_id = e.agent_id
-				 LEFT JOIN entity_dependencies dep
-				   ON dep.agent_id = e.agent_id
-				  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
-				 WHERE e.id = ? AND e.agent_id = ?
-				 GROUP BY e.id`,
+				 WHERE e.id = ? AND e.agent_id = ?`,
 			)
 			.get(entityId, agentId) as Record<string, unknown> | undefined;
 
@@ -971,18 +1519,16 @@ export function getEntityDependenciesDetailed(
 
 export function getKnowledgeStats(accessor: DbAccessor, agentId: string): KnowledgeStats {
 	return accessor.withReadDb((db) => {
+		// Drive the join from the (narrower) agent-scoped entities side rather
+		// than scanning every memory with a correlated EXISTS. Same result,
+		// dramatically smaller search space on large corpora.
+		// See Signet-AI/signetai#515.
 		const scopedMemoryRows = db
 			.prepare(
-				`SELECT COUNT(DISTINCT m.id) as n
-				 FROM memories m
-				 WHERE m.is_deleted = 0
-				   AND EXISTS (
-				     SELECT 1
-				     FROM memory_entity_mentions mem
-				     JOIN entities e ON e.id = mem.entity_id
-				     WHERE mem.memory_id = m.id
-				       AND e.agent_id = ?
-				   )`,
+				`SELECT COUNT(DISTINCT mem.memory_id) as n
+				 FROM memory_entity_mentions mem
+				 JOIN entities e ON e.id = mem.entity_id AND e.agent_id = ?
+				 JOIN memories m ON m.id = mem.memory_id AND m.is_deleted = 0`,
 			)
 			.get(agentId) as { n: number };
 		const entityCount = db.prepare("SELECT COUNT(*) as n FROM entities WHERE agent_id = ?").get(agentId) as {
@@ -1064,7 +1610,7 @@ export function getEntityHealth(
 	return accessor.withReadDb((db) => {
 		const args: Array<string | number> = [agentId];
 		const sinceClause = typeof since === "string" && since.length > 0 ? " AND created_at >= ?" : "";
-		if (sinceClause) {
+		if (sinceClause && since !== undefined) {
 			args.push(since);
 		}
 

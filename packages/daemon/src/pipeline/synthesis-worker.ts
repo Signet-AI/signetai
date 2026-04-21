@@ -182,10 +182,6 @@ function shouldRecordSuccess(result: SynthesisResult): boolean {
 	return result === "ok" || result === "empty";
 }
 
-async function runSynthesis(config: PipelineSynthesisConfig, agentId?: string): Promise<SynthesisResult> {
-	return runSynthesisWithDeps(DEFAULT_DEPS, config, agentId);
-}
-
 async function runSynthesisWithDeps(
 	deps: SynthesisDeps,
 	config: PipelineSynthesisConfig,
@@ -199,7 +195,7 @@ async function runSynthesisWithDeps(
 	});
 
 	try {
-		const synthesisData = deps.handleSynthesisRequest(
+		const synthesisData = await deps.handleSynthesisRequest(
 			{ trigger: "scheduled" },
 			{
 				maxTokens: config.maxTokens,

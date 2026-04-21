@@ -1,6 +1,6 @@
 {
   "name": "@signet/daemon",
-  "version": "0.99.3",
+  "version": "0.102.7",
   "license": "Apache-2.0",
   "description": "Background daemon for Signet - serves dashboard, API, and memory system",
   "type": "module",
@@ -22,7 +22,7 @@
     "skills"
   ],
   "scripts": {
-    "copy:skills": "cp -r ../../skills ./skills",
+    "copy:skills": "bun ../../scripts/copy-skills.ts",
     "prebuild": "bun run copy:skills",
     "build": "bun run prebuild && bun run build.ts && bun run build:dashboard",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
