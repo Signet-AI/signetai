@@ -2071,7 +2071,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	const providerID = slashIdx > 0 ? cfg.model.slice(0, slashIdx) : "anthropic";
 	const modelID = slashIdx > 0 ? cfg.model.slice(slashIdx + 1) : cfg.model;
 
-	let sessionId: string | null = null;
+	let parentSessionId: string | null = null;
 	let ollamaFallbackProvider: LlmProvider | null = null;
 
 	function getOllamaFallbackProvider(): LlmProvider {
@@ -2162,16 +2162,42 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	}
 
 	async function createSession(remainingMs?: number): Promise<string> {
-		const timeoutMs =
-			remainingMs !== undefined
-				? Math.max(1, Math.min(remainingMs, 10_000))
-				: 10_000;
-		const res = await fetch(`${cfg.baseUrl}/session`, {
+		// Attach parentID so OpenCode treats extraction sessions as children.
+		// Child sessions are hidden from the root session list and, crucially,
+		// skipped by the desktop notification handler.
+		const started = performance.now();
+		const parentId = await getOrCreateParentSession(remainingMs);
+
+		// Subtract time spent creating the parent session so the child
+		// creation timeout stays within the caller's overall budget.
+		const childTimeoutMs = (): number => {
+			if (remainingMs === undefined) return 10_000;
+			return Math.max(1, Math.min(remainingMs - (performance.now() - started), 10_000));
+		};
+
+		const payload: Record<string, unknown> = { title: "signet-extraction" };
+		if (parentId) payload.parentID = parentId;
+
+		let res = await fetch(`${cfg.baseUrl}/session`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ title: "signet-extraction" }),
-			signal: AbortSignal.timeout(timeoutMs),
+			body: JSON.stringify(payload),
+			signal: AbortSignal.timeout(childTimeoutMs()),
 		});
+
+		if (!res.ok && parentId) {
+			logger.warn("pipeline", "Child session creation failed with parentID, retrying unparented", {
+				status: res.status,
+				parentId,
+			});
+			parentSessionId = null;
+			res = await fetch(`${cfg.baseUrl}/session`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ title: "signet-extraction" }),
+				signal: AbortSignal.timeout(childTimeoutMs()),
+			});
+		}
 
 		if (!res.ok) {
 			const body = await res.text().catch(() => "");
@@ -2186,14 +2212,72 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		// Bypass hooks for our own pipeline sessions so the OpenCode plugin
 		// does not trigger memory recall back to the daemon (circular loop).
 		bypassSession(id, { allowUnknown: true });
-		logger.debug("pipeline", "OpenCode session created", { id, bypassed: true });
+		logger.debug("pipeline", "OpenCode extraction session created", {
+			id,
+			parentId,
+			bypassed: true,
+		});
 		return id;
 	}
 
-	async function getOrCreateSession(remainingMs?: number): Promise<string> {
-		if (sessionId) return sessionId;
-		sessionId = await createSession(remainingMs);
-		return sessionId;
+	/** Create or return a cached parent session used as parentID for
+	 *  extraction sessions.  OpenCode's notification handler skips sessions
+	 *  that carry a parentID, suppressing unwanted desktop notifications
+	 *  for pipeline work.  Returns null on failure so extraction can
+	 *  proceed unparented (notifications will fire but extraction still
+	 *  works). */
+	async function getOrCreateParentSession(remainingMs?: number): Promise<string | null> {
+		if (parentSessionId) return parentSessionId;
+		try {
+			const timeout = Math.min(5_000, Math.max(1, remainingMs ?? 5_000));
+			const res = await fetch(`${cfg.baseUrl}/session`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ title: "signet-system" }),
+				signal: AbortSignal.timeout(timeout),
+			});
+			if (!res.ok) {
+				logger.warn("pipeline", "OpenCode parent session creation failed", {
+					status: res.status,
+				});
+				return null;
+			}
+			const data = (await res.json()) as Record<string, unknown>;
+			const id = data.id;
+			if (typeof id !== "string") {
+				logger.warn("pipeline", "OpenCode parent session response missing 'id'");
+				return null;
+			}
+			parentSessionId = id;
+			bypassSession(id, { allowUnknown: true });
+			logger.debug("pipeline", "OpenCode parent session created", { id });
+			return id;
+		} catch (e) {
+			logger.warn("pipeline", "OpenCode parent session creation error", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+			return null;
+		}
+	}
+
+	/** Fire-and-forget deletion of an extraction session.  If the call
+	 *  fails the session remains as a hidden child (parentID set) and
+	 *  does not appear in OpenCode's root session list. */
+	async function deleteSession(sid: string | null): Promise<void> {
+		if (!sid) return;
+		try {
+			const res = await fetch(`${cfg.baseUrl}/session/${sid}`, {
+				method: "DELETE",
+				signal: AbortSignal.timeout(5_000),
+			});
+			if (res.ok) {
+				logger.debug("pipeline", "OpenCode extraction session deleted", { id: sid });
+			} else {
+				logger.debug("pipeline", "OpenCode extraction session cleanup skipped", { id: sid, status: res.status });
+			}
+		} catch {
+			logger.debug("pipeline", "OpenCode extraction session cleanup skipped", { id: sid });
+		}
 	}
 
 	let structuredOutputSupported = cfg.enableStructuredOutput !== false;
@@ -2228,19 +2312,24 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
 
-		const sid = await getOrCreateSession(deadline - performance.now());
-		// Refresh bypass TTL on reused sessions so bypass-only entries do not
-		// expire while the provider is still actively sending messages.
-		bypassSession(sid, { allowUnknown: true });
-
 		return withLlmConcurrency(async () => {
 			const remaining = deadline - performance.now();
 			if (remaining <= 0) {
 				throw new Error(`OpenCode timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
 			}
 
+			// Session creation is inside the semaphore so concurrent
+			// generate() calls cannot share and then race-delete a session.
+			const sid = await createSession(deadline - performance.now());
+			bypassSession(sid, { allowUnknown: true });
+
+			// Track every session created during this call so the finally
+			// block can clean up all of them — not just the first and last.
+			const allSids = new Set<string | null>([sid]);
+			let activeSid = sid;
+
 			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), remaining);
+			const timer = setTimeout(() => controller.abort(), deadline - performance.now());
 
 			try {
 				const postMessage = async (sid: string): Promise<Response> =>
@@ -2329,8 +2418,9 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				};
 
 				const retryWithNewSession = async (): Promise<OpenCodeMessageResponse | null> => {
-					sessionId = null;
-					const retrySid = await getOrCreateSession(deadline - performance.now());
+					const retrySid = await createSession(deadline - performance.now());
+					allSids.add(retrySid);
+					activeSid = retrySid;
 					const retryRes = await postMessage(retrySid);
 					if (!retryRes.ok) {
 						const retryBody = await retryRes.text().catch(() => "");
@@ -2363,7 +2453,8 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						}
 						consumedBody = null;
 						const retrySid = await createSession(deadline - performance.now());
-						sessionId = retrySid;
+						allSids.add(retrySid);
+						activeSid = retrySid;
 						res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
@@ -2379,7 +2470,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						const retryParsed = await retryWithNewSession();
 						if (retryParsed) return retryParsed;
 						logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
-							sessionId,
+							sessionId: activeSid,
 						});
 						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "post-response-malformed-after-http-retry");
 						if (ollamaFallback) return ollamaFallback;
@@ -2392,6 +2483,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 							agent: cfg.agent,
 						});
 						const retrySid = await createSession(deadline - performance.now());
+						allSids.add(retrySid);
 						const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
@@ -2399,11 +2491,11 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 							signal: controller.signal,
 						});
 						if (retryRes.ok) {
-							sessionId = retrySid;
+							activeSid = retrySid;
 							const retryParsed = await parsePostResponse(retryRes, retrySid);
 							if (retryParsed) return retryParsed;
 						}
-						sessionId = null;
+						activeSid = sid;
 						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "agent-not-found-retry-failed");
 						if (ollamaFallback) return ollamaFallback;
 						return buildOpenCodeFallbackResponse();
@@ -2419,7 +2511,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					throw new Error(`OpenCode HTTP ${res.status}: ${body.slice(0, 200)}`);
 				}
 
-				const parsed = await parsePostResponse(res, sid);
+				const parsed = await parsePostResponse(res, activeSid);
 				if (parsed) return parsed;
 
 				const retryParsed = await retryWithNewSession();
@@ -2427,12 +2519,12 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 
 				if (structuredOutputSupported) {
 					logger.info("pipeline", "Consecutive malformed 200 responses; disabling structured output", {
-						sessionId,
+						sessionId: activeSid,
 					});
 					structuredOutputSupported = false;
-					sessionId = null;
 					const fallbackSid = await createSession(deadline - performance.now());
-					sessionId = fallbackSid;
+					allSids.add(fallbackSid);
+					activeSid = fallbackSid;
 					const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
@@ -2446,18 +2538,30 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				}
 
 				logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
-					sessionId,
+					sessionId: activeSid,
 				});
 				const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "post-response-malformed-after-session-reset");
 				if (ollamaFallback) return ollamaFallback;
 				return buildOpenCodeFallbackResponse();
 			} catch (e) {
-				if (e instanceof DOMException && e.name === "AbortError") {
-					throw new Error(`OpenCode timeout after ${timeoutMs}ms`);
-				}
-				throw e;
+				const err = (e instanceof DOMException && e.name === "AbortError")
+					? new Error(`OpenCode timeout after ${timeoutMs}ms`)
+					: e;
+				// NOTE(changed-behavior): This warn-level error alerting is unique
+				// to the OpenCode provider.  Other providers (Ollama, Claude Code,
+				// Codex, OpenRouter, llama.cpp) only throw — errors surface in debug
+				// logs via the pipeline's outer handler.
+				// TODO: extend warn-level error alerting to all providers for
+				// consistent visibility (see plan: suppress-opencode-extraction-
+				// notifications.md § Future Work).
+				logger.warn("pipeline", "OpenCode extraction failed", {
+					error: err instanceof Error ? err.message : String(err),
+					sessionId: activeSid,
+				});
+				throw err;
 			} finally {
 				clearTimeout(timer);
+				for (const s of allSids) void deleteSession(s);
 			}
 		}, timeoutMs, "opencode");
 	}

@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-04-21
 - Features: add Gemini CLI harness connector.
-- Bug fixes: make writeImmutableArtifact idempotent for job retries.
+- Bug fixes: skip unchanged artifact reindex on cold start; make writeImmutableArtifact idempotent for job retries.
 
 ### 2026-04-20
 - Bug fixes: dedupe automatic hooks by runtime path; run Bun global installs with Bun.
@@ -35,6 +35,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: thread deadline into OpenCode session creation.
 
 ## Release Ledger
+
+## [0.103.1] - 2026-04-21
+
+Release summary: 1 bug fix.
+Tag range: `v0.103.0..v0.103.1`.
+
+### Bug Fixes
+
+- **daemon**: skip unchanged artifact reindex on cold start (#542)
 
 ## [0.103.0] - 2026-04-21
 

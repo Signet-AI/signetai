@@ -36,7 +36,7 @@
     },
     "packages/adapters/openclaw": {
       "name": "@signetai/signet-memory-openclaw",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@sinclair/typebox": "0.34.47",
       },
@@ -50,7 +50,7 @@
     },
     "packages/cli": {
       "name": "@signet/cli",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "bin": "./dist/cli.js",
       "dependencies": {
         "@inquirer/prompts": "^7.0.0",
@@ -121,7 +121,7 @@
     },
     "packages/connector-base": {
       "name": "@signet/connector-base",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -135,7 +135,7 @@
     },
     "packages/connector-claude-code": {
       "name": "@signet/connector-claude-code",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -147,7 +147,7 @@
     },
     "packages/connector-codex": {
       "name": "@signet/connector-codex",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -159,7 +159,7 @@
     },
     "packages/connector-forge": {
       "name": "@signet/connector-forge",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -171,7 +171,7 @@
     },
     "packages/connector-gemini": {
       "name": "@signet/connector-gemini",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -183,7 +183,7 @@
     },
     "packages/connector-hermes-agent": {
       "name": "@signet/connector-hermes-agent",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -195,7 +195,7 @@
     },
     "packages/connector-oh-my-pi": {
       "name": "@signet/connector-oh-my-pi",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -207,7 +207,7 @@
     },
     "packages/connector-openclaw": {
       "name": "@signet/connector-openclaw",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -220,7 +220,7 @@
     },
     "packages/connector-opencode": {
       "name": "@signet/connector-opencode",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -232,7 +232,7 @@
     },
     "packages/connector-pi": {
       "name": "@signet/connector-pi",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -244,7 +244,7 @@
     },
     "packages/core": {
       "name": "@signet/core",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "sqlite-vec": "^0.1.7-alpha.2",
         "yaml": "^2.6.0",
@@ -266,7 +266,7 @@
     },
     "packages/daemon": {
       "name": "@signet/daemon",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "bin": {
         "signet-daemon": "./dist/daemon.js",
         "signet-mcp": "./dist/mcp-stdio.js",
@@ -300,7 +300,7 @@
     },
     "packages/desktop": {
       "name": "@signet/desktop",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/tray": "workspace:*",
       },
@@ -313,7 +313,7 @@
     },
     "packages/extension": {
       "name": "@signet/extension",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "devDependencies": {
         "@types/chrome": "^0.0.287",
         "typescript": "^5.7.0",
@@ -321,14 +321,14 @@
     },
     "packages/native": {
       "name": "@signet/native",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "devDependencies": {
         "@napi-rs/cli": "^3.5.1",
       },
     },
     "packages/oh-my-pi-extension": {
       "name": "@signet/oh-my-pi-extension",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@oh-my-pi/pi-coding-agent": "^13.16.4",
         "@signet/core": "workspace:*",
@@ -342,7 +342,7 @@
     },
     "packages/opencode-plugin": {
       "name": "@signet/opencode-plugin",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -352,7 +352,7 @@
     },
     "packages/pi-extension": {
       "name": "@signet/pi-extension",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@mariozechner/pi-coding-agent": "^0.54.1",
         "@signet/core": "workspace:*",
@@ -367,14 +367,14 @@
     },
     "packages/pi-extension-base": {
       "name": "@signet/pi-extension-base",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
     },
     "packages/sdk": {
       "name": "@signet/sdk",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "devDependencies": {
         "@types/react": "^19.0.0",
         "react": "^19.0.0",
@@ -390,7 +390,7 @@
     },
     "packages/signetai": {
       "name": "signetai",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "bin": {
         "signet": "bin/signet.js",
         "signet-mcp": "dist/mcp-stdio.js",
@@ -421,7 +421,7 @@
     },
     "packages/tray": {
       "name": "@signet/tray",
-      "version": "0.103.0",
+      "version": "0.103.1",
       "devDependencies": {
         "typescript": "^5.7.0",
       },
