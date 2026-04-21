@@ -2209,12 +2209,6 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		return id;
 	}
 
-	async function getOrCreateSession(remainingMs?: number): Promise<string> {
-		if (sessionId) return sessionId;
-		sessionId = await createSession(remainingMs);
-		return sessionId;
-	}
-
 	/** Create or return a cached parent session used as parentID for
 	 *  extraction sessions.  OpenCode's notification handler skips sessions
 	 *  that carry a parentID, suppressing unwanted desktop notifications
@@ -2310,12 +2304,12 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 
 			// Session creation is inside the semaphore so concurrent
 			// generate() calls cannot share and then race-delete a session.
-			const sid = await getOrCreateSession(deadline - performance.now());
+			const sid = await createSession(deadline - performance.now());
 			bypassSession(sid, { allowUnknown: true });
 
 			// Track the session this specific call is using.  Retry paths may
-			// replace it with a fresh session; the finally cleanup reads this
-			// local instead of the shared `sessionId`.
+			// replace it with a fresh session; the finally cleanup uses this
+			// local to delete the correct session.
 			let activeSid = sid;
 
 			const controller = new AbortController();
@@ -2408,8 +2402,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				};
 
 				const retryWithNewSession = async (): Promise<OpenCodeMessageResponse | null> => {
-					sessionId = null;
-					const retrySid = await getOrCreateSession(deadline - performance.now());
+					const retrySid = await createSession(deadline - performance.now());
 					activeSid = retrySid;
 					const retryRes = await postMessage(retrySid);
 					if (!retryRes.ok) {
@@ -2443,7 +2436,6 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						}
 						consumedBody = null;
 						const retrySid = await createSession(deadline - performance.now());
-						sessionId = retrySid;
 						activeSid = retrySid;
 						res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 							method: "POST",
@@ -2460,7 +2452,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						const retryParsed = await retryWithNewSession();
 						if (retryParsed) return retryParsed;
 						logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
-							sessionId,
+							sessionId: activeSid,
 						});
 						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "post-response-malformed-after-http-retry");
 						if (ollamaFallback) return ollamaFallback;
@@ -2480,12 +2472,10 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 							signal: controller.signal,
 						});
 						if (retryRes.ok) {
-							sessionId = retrySid;
 							activeSid = retrySid;
 							const retryParsed = await parsePostResponse(retryRes, retrySid);
 							if (retryParsed) return retryParsed;
 						}
-						sessionId = null;
 						activeSid = sid;
 						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "agent-not-found-retry-failed");
 						if (ollamaFallback) return ollamaFallback;
@@ -2510,12 +2500,10 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 
 				if (structuredOutputSupported) {
 					logger.info("pipeline", "Consecutive malformed 200 responses; disabling structured output", {
-						sessionId,
+						sessionId: activeSid,
 					});
 					structuredOutputSupported = false;
-					sessionId = null;
 					const fallbackSid = await createSession(deadline - performance.now());
-					sessionId = fallbackSid;
 					activeSid = fallbackSid;
 					const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
 						method: "POST",
@@ -2530,7 +2518,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				}
 
 				logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
-					sessionId,
+					sessionId: activeSid,
 				});
 				const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "post-response-malformed-after-session-reset");
 				if (ollamaFallback) return ollamaFallback;
@@ -2548,12 +2536,11 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				// notifications.md § Future Work).
 				logger.warn("pipeline", "OpenCode extraction failed", {
 					error: err instanceof Error ? err.message : String(err),
-					sessionId,
+					sessionId: activeSid,
 				});
 				throw err;
 			} finally {
 				clearTimeout(timer);
-				if (sessionId === activeSid || sessionId === sid) sessionId = null;
 				void deleteSession(activeSid);
 				if (sid !== activeSid) void deleteSession(sid);
 			}

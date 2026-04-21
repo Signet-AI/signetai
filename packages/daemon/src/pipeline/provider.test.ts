@@ -1513,6 +1513,58 @@ describe("createOpenCodeProvider", () => {
 		for (const release of blockers) release();
 		await Promise.allSettled(fillerPromises);
 	});
+
+	it("concurrent generate() calls on the same provider get distinct sessions", async () => {
+		const sessionIds: string[] = [];
+		let sessionCounter = 0;
+
+		mockFetch(withParentSession(async (url, init) => {
+			if (
+				init?.method === "POST" &&
+				url.includes("/session") &&
+				!url.includes("/message")
+			) {
+				const id = `ses_race_${++sessionCounter}`;
+				return Response.json({
+					id,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			const match = url.match(/\/session\/([^/]+)\/message/);
+			if (match) sessionIds.push(match[1]);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			return Response.json(openCodeResponse("ok"));
+		}));
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			model: "race-test",
+		});
+
+		const callA = provider.generate("prompt-a");
+		const callBC = new Promise<void>((resolve) =>
+			setTimeout(resolve, 10),
+		).then(() =>
+			Promise.all([
+				provider.generate("prompt-b"),
+				provider.generate("prompt-c"),
+			]),
+		);
+
+		const [resultA, resultsBC] = await Promise.all([callA, callBC]);
+
+		expect(resultA).toBe("ok");
+		expect(resultsBC).toHaveLength(2);
+		for (const r of resultsBC) expect(r).toBe("ok");
+
+		expect(sessionIds).toHaveLength(3);
+		const unique = new Set(sessionIds);
+		expect(unique.size).toBe(3);
+	});
 });
 
 describe("createOpenRouterProvider", () => {
