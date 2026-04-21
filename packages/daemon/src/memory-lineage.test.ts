@@ -524,6 +524,46 @@ describe("memory-lineage", () => {
 			expect(after?.source_mtime_ms).toBeGreaterThan(target.source_mtime_ms ?? 0);
 		});
 
+		it("cold cache does not trust sub-second source_mtime_ms drift", async () => {
+			await addSummary({
+				sessionId: "mtime-subsecond-reprocess",
+				project: "/home/nicholai/signet/signetai",
+				minutesAgo: 1,
+			});
+			reindexMemoryArtifacts("default");
+
+			const target = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path, source_mtime_ms
+							 FROM memory_artifacts
+							 WHERE agent_id = ?
+							   AND source_kind = 'summary'
+							 ORDER BY source_path ASC
+							 LIMIT 1`,
+						)
+						.get("default") as { source_path: string; source_mtime_ms: number | null },
+			);
+			expect(target.source_mtime_ms).not.toBeNull();
+
+			const bumpedMs = (target.source_mtime_ms ?? 0) + 500;
+			const bumped = new Date(bumpedMs);
+			utimesSync(join(dir, target.source_path), bumped, bumped);
+
+			resetProjectionPurgeState();
+			reindexMemoryArtifacts("default");
+
+			const after = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT source_mtime_ms FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+						.get("default", target.source_path) as { source_mtime_ms: number | null } | null,
+			);
+			expect(after).not.toBeNull();
+			expect(after?.source_mtime_ms).not.toBe(target.source_mtime_ms);
+		});
+
 		it("cold cache still indexes new files when DB rows already exist", async () => {
 			await addSummary({
 				sessionId: "mtime-existing-db",

@@ -551,17 +551,16 @@ function canSeedColdCacheFromDbRow(
 ): boolean {
 	if (!Number.isFinite(currentMtimeMs)) return false;
 
-	const storedMtimeMs =
-		typeof row.source_mtime_ms === "number" && Number.isFinite(row.source_mtime_ms)
-			? row.source_mtime_ms
-			: typeof row.updated_at === "string"
-				? Date.parse(row.updated_at)
-				: Number.NaN;
+	if (typeof row.source_mtime_ms === "number" && Number.isFinite(row.source_mtime_ms)) {
+		return currentMtimeMs === row.source_mtime_ms;
+	}
+
+	const storedMtimeMs = typeof row.updated_at === "string" ? Date.parse(row.updated_at) : Number.NaN;
 	if (!Number.isFinite(storedMtimeMs)) return false;
 
 	// Filesystem mtimes and serialized ISO timestamps can differ by a small
-	// amount across platforms and write paths. Treat sub-second deltas as the
-	// same indexed artifact state.
+	// amount across platforms and write paths. Only allow tolerance for legacy
+	// upgraded rows that do not have source_mtime_ms populated yet.
 	return Math.abs(currentMtimeMs - storedMtimeMs) <= 1_000;
 }
 
