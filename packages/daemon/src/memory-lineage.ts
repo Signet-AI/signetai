@@ -446,11 +446,7 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 	const content = `${serializeFrontmatter(frontmatter)}\n${body}\n`;
 
 	if (existsSync(path)) {
-		const existing = parseFrontmatterDocument(readFileSync(path, "utf8"));
-		const existingHash = existing.frontmatter.content_sha256;
-		const nextHash = frontmatter.content_sha256;
-		if (existingHash === nextHash) return path;
-		throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path}`);
+		return path;
 	}
 
 	writeAtomic(path, content);
