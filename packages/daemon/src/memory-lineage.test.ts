@@ -170,6 +170,42 @@ describe("memory-lineage", () => {
 		expect(existsSync(join(dir, row.source_path))).toBe(false);
 	});
 
+	it("writeSummaryArtifact is idempotent when called twice for the same session", async () => {
+		const stamp = new Date().toISOString();
+		const base = {
+			agentId: "default",
+			sessionId: "idem-test",
+			sessionKey: "idem-test",
+			project: "/home/user/project",
+			harness: "codex",
+			capturedAt: stamp,
+			startedAt: stamp,
+			endedAt: stamp,
+		};
+
+		const first = await writeSummaryArtifact({
+			...base,
+			summary: "First summary content for the session.",
+		});
+		expect(first.summaryPath).toBeTruthy();
+
+		const second = await writeSummaryArtifact({
+			...base,
+			summary: "Completely different content from a retry.",
+		});
+		expect(second.summaryPath).toBe(first.summaryPath);
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT COUNT(*) AS count FROM memory_artifacts WHERE session_id = ? AND source_kind = 'summary'`,
+					)
+					.get("idem-test") as { count: number },
+		);
+		expect(rows.count).toBe(1);
+	});
+
 	it("keeps canonical sessions when any artifact row carries a real project", () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {

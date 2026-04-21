@@ -460,10 +460,16 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 
 	if (existsSync(path)) {
 		const existing = parseFrontmatterDocument(readFileSync(path, "utf8"));
-		const existingHash = existing.frontmatter.content_sha256;
-		const nextHash = frontmatter.content_sha256;
-		if (existingHash === nextHash) return path;
-		throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path}`);
+		const fm = existing.frontmatter;
+		const fieldsMatch =
+			fm.kind === frontmatter.kind &&
+			fm.agent_id === frontmatter.agent_id &&
+			fm.session_id === frontmatter.session_id &&
+			fm.hash_scope === frontmatter.hash_scope;
+		if (!fieldsMatch) {
+			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (identity mismatch)`);
+		}
+		return path;
 	}
 
 	writeAtomic(path, content);
