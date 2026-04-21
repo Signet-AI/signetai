@@ -2071,7 +2071,6 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	const providerID = slashIdx > 0 ? cfg.model.slice(0, slashIdx) : "anthropic";
 	const modelID = slashIdx > 0 ? cfg.model.slice(slashIdx + 1) : cfg.model;
 
-	let sessionId: string | null = null;
 	let parentSessionId: string | null = null;
 	let ollamaFallbackProvider: LlmProvider | null = null;
 
@@ -2252,13 +2251,18 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	/** Fire-and-forget deletion of an extraction session.  If the call
 	 *  fails the session remains as a hidden child (parentID set) and
 	 *  does not appear in OpenCode's root session list. */
-	async function deleteSession(sid: string): Promise<void> {
+	async function deleteSession(sid: string | null): Promise<void> {
+		if (!sid) return;
 		try {
-			await fetch(`${cfg.baseUrl}/session/${sid}`, {
+			const res = await fetch(`${cfg.baseUrl}/session/${sid}`, {
 				method: "DELETE",
 				signal: AbortSignal.timeout(5_000),
 			});
-			logger.debug("pipeline", "OpenCode extraction session deleted", { id: sid });
+			if (res.ok) {
+				logger.debug("pipeline", "OpenCode extraction session deleted", { id: sid });
+			} else {
+				logger.debug("pipeline", "OpenCode extraction session cleanup skipped", { id: sid, status: res.status });
+			}
 		} catch {
 			logger.debug("pipeline", "OpenCode extraction session cleanup skipped", { id: sid });
 		}
@@ -2307,9 +2311,9 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 			const sid = await createSession(deadline - performance.now());
 			bypassSession(sid, { allowUnknown: true });
 
-			// Track the session this specific call is using.  Retry paths may
-			// replace it with a fresh session; the finally cleanup uses this
-			// local to delete the correct session.
+			// Track every session created during this call so the finally
+			// block can clean up all of them — not just the first and last.
+			const allSids = new Set<string | null>([sid]);
 			let activeSid = sid;
 
 			const controller = new AbortController();
@@ -2403,6 +2407,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 
 				const retryWithNewSession = async (): Promise<OpenCodeMessageResponse | null> => {
 					const retrySid = await createSession(deadline - performance.now());
+					allSids.add(retrySid);
 					activeSid = retrySid;
 					const retryRes = await postMessage(retrySid);
 					if (!retryRes.ok) {
@@ -2436,6 +2441,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 						}
 						consumedBody = null;
 						const retrySid = await createSession(deadline - performance.now());
+						allSids.add(retrySid);
 						activeSid = retrySid;
 						res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 							method: "POST",
@@ -2465,6 +2471,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 							agent: cfg.agent,
 						});
 						const retrySid = await createSession(deadline - performance.now());
+						allSids.add(retrySid);
 						const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
@@ -2492,7 +2499,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					throw new Error(`OpenCode HTTP ${res.status}: ${body.slice(0, 200)}`);
 				}
 
-				const parsed = await parsePostResponse(res, sid);
+				const parsed = await parsePostResponse(res, activeSid);
 				if (parsed) return parsed;
 
 				const retryParsed = await retryWithNewSession();
@@ -2504,6 +2511,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 					});
 					structuredOutputSupported = false;
 					const fallbackSid = await createSession(deadline - performance.now());
+					allSids.add(fallbackSid);
 					activeSid = fallbackSid;
 					const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
 						method: "POST",
@@ -2541,8 +2549,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				throw err;
 			} finally {
 				clearTimeout(timer);
-				void deleteSession(activeSid);
-				if (sid !== activeSid) void deleteSession(sid);
+				for (const s of allSids) void deleteSession(s);
 			}
 		}, timeoutMs, "opencode");
 	}

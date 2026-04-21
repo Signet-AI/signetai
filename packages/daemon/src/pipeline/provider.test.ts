@@ -1565,6 +1565,174 @@ describe("createOpenCodeProvider", () => {
 		const unique = new Set(sessionIds);
 		expect(unique.size).toBe(3);
 	});
+
+	it("format-rejection retry polls the retry session, not the original", async () => {
+		// F9 regression: after a 422 format rejection, parsePostResponse
+		// was called with the original `sid` instead of the retry session.
+		// If the retry POST returns an unparseable body, pollForAssistantMessage
+		// would poll the wrong session and miss the assistant message.
+		let sessionCounter = 0;
+		const sessionIds: string[] = [];
+		const pollTargets: string[] = [];
+
+		mockFetch(withParentSession(async (url, init) => {
+			// Child session creation — track IDs
+			if (
+				init?.method === "POST" &&
+				url.includes("/session") &&
+				!url.includes("/message")
+			) {
+				const id = `ses_fmt_${++sessionCounter}`;
+				sessionIds.push(id);
+				return Response.json({
+					id,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+
+			// POST message
+			if (init?.method === "POST" && url.includes("/message")) {
+				const match = url.match(/\/session\/([^/]+)\/message/);
+				const sid = match?.[1] ?? "";
+				if (sid === "ses_fmt_1") {
+					// First session → 422 format rejection
+					return new Response(
+						'{"issues":[{"path":["format"],"message":"Unrecognized key"}]}',
+						{ status: 422 },
+					);
+				}
+				// Retry session → empty body (forces poll fallback)
+				return new Response("", {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+
+			// GET poll — record which session is being polled
+			if (init?.method === "GET" || (!init?.method && url.includes("/message"))) {
+				const match = url.match(/\/session\/([^/]+)\/message/);
+				if (match) pollTargets.push(match[1]);
+
+				// Only the retry session has the assistant message
+				if (match?.[1] === "ses_fmt_2") {
+					return Response.json([openCodeResponse("polled-from-retry")]);
+				}
+				// Original session returns empty — no message here
+				return Response.json([]);
+			}
+
+			return new Response(null, { status: 404 });
+		}));
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			model: "f9-test",
+			enableOllamaFallback: false,
+			defaultTimeoutMs: 5000,
+		});
+
+		const result = await provider.generate("test prompt");
+
+		// The poll MUST target the retry session (ses_fmt_2), not the original (ses_fmt_1)
+		expect(pollTargets.length).toBeGreaterThan(0);
+		expect(pollTargets.every((t) => t === "ses_fmt_2")).toBe(true);
+		expect(result).toBe("polled-from-retry");
+	});
+
+	it("all intermediate retry sessions are deleted in finally", async () => {
+		// F8 regression: when sendMessage creates multiple sessions through
+		// retries, only sid and activeSid were deleted.  Intermediate
+		// sessions (e.g. from retryWithNewSession superseded by fallbackSid)
+		// were leaked.
+		let sessionCounter = 0;
+		let postCount = 0;
+		const deletedSessions: string[] = [];
+
+		mockFetch(async (url, init) => {
+			// Parent session
+			if (
+				init?.method === "POST" &&
+				url.includes("/session") &&
+				!url.includes("/message")
+			) {
+				const body =
+					typeof init.body === "string"
+						? (JSON.parse(init.body) as Record<string, unknown>)
+						: {};
+				if (body.title === "signet-system") {
+					return Response.json({
+						id: "ses_parent",
+						slug: "parent",
+						projectID: "p",
+						directory: "/tmp",
+						title: "signet-system",
+						version: "1",
+					});
+				}
+				const id = `ses_leak_${++sessionCounter}`;
+				return Response.json({
+					id,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+
+			// Track DELETEs
+			if (init?.method === "DELETE" && url.includes("/session/")) {
+				const match = url.match(/\/session\/([^/]+)/);
+				if (match) deletedSessions.push(match[1]);
+				return new Response(null, { status: 200 });
+			}
+
+			// POST messages — trigger the malformed-200 double-retry path:
+			// 1st POST (ses_leak_1): malformed 200 (empty body)
+			// 2nd POST (ses_leak_2 via retryWithNewSession): also malformed
+			// 3rd POST (ses_leak_3 via fallbackSid): success
+			if (init?.method === "POST" && url.includes("/message")) {
+				postCount++;
+				if (postCount <= 2) {
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				return Response.json(openCodeResponse("recovered"));
+			}
+
+			// GET polls — return empty to trigger retry path
+			if (url.includes("/message") && (!init?.method || init.method === "GET")) {
+				return Response.json([]);
+			}
+
+			return new Response(null, { status: 404 });
+		});
+
+		const provider = createOpenCodeProvider({
+			baseUrl: "http://localhost:9999",
+			model: "f8-test",
+			enableOllamaFallback: false,
+			defaultTimeoutMs: 5000,
+		});
+
+		const result = await provider.generate("test prompt");
+		expect(result).toBe("recovered");
+
+		// Three child sessions were created: ses_leak_1, ses_leak_2, ses_leak_3
+		expect(sessionCounter).toBe(3);
+
+		// ALL three must be deleted — not just sid + activeSid
+		const uniqueDeleted = new Set(deletedSessions);
+		expect(uniqueDeleted).toContain("ses_leak_1");
+		expect(uniqueDeleted).toContain("ses_leak_2");
+		expect(uniqueDeleted).toContain("ses_leak_3");
+	});
 });
 
 describe("createOpenRouterProvider", () => {
