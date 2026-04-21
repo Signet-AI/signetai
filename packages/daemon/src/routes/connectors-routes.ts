@@ -380,6 +380,12 @@ export function registerConnectorRoutes(app: Hono): void {
 				path: verifiedForgePath ?? resolveSignetForgeManagedPath(),
 				exists: Boolean(verifiedForgePath),
 			},
+			{
+				name: "Gemini CLI",
+				id: "gemini",
+				path: join(homedir(), ".gemini", "settings.json"),
+				exists: existsSync(join(homedir(), ".gemini", "settings.json")),
+			},
 		];
 
 		const harnesses = configs.map((config) => ({

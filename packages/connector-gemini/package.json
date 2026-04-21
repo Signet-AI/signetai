@@ -1,7 +1,7 @@
 {
-  "name": "@signet/connector-hermes-agent",
+  "name": "@signet/connector-gemini",
   "version": "0.103.0",
-  "description": "Signet connector for Hermes Agent — installs Signet as a pluggable memory provider",
+  "description": "Signet connector for Gemini CLI",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,8 +12,7 @@
     }
   },
   "files": [
-    "dist",
-    "hermes-plugin"
+    "dist"
   ],
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
@@ -31,12 +30,10 @@
   },
   "keywords": [
     "signet",
-    "hermes",
-    "hermes-agent",
+    "gemini",
     "connector",
     "ai-memory",
-    "agent-identity",
-    "memory-provider"
+    "agent-identity"
   ],
   "license": "Apache-2.0"
 }

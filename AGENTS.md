@@ -183,6 +183,7 @@ bun test packages/daemon/src/pipeline/worker.test.ts
 | `@signet/connector-oh-my-pi` | Oh My Pi install-time integration | node |
 | `@signet/connector-pi` | Pi install-time integration | node |
 | `@signet/connector-hermes-agent` | Hermes Agent install-time integration + Python plugin | node |
+| `@signet/connector-gemini` | Gemini CLI install-time integration | node |
 | `@signet/opencode-plugin` | OpenCode runtime plugin | node |
 | `@signet/oh-my-pi-extension` | Oh My Pi extension/runtime bundle | browser |
 | `@signet/pi-extension-base` | Shared Pi/OMP extension utilities (raw TS) | node |

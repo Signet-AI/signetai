@@ -2,7 +2,16 @@ import { OpenClawConnector } from "@signet/connector-openclaw";
 import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core";
 import chalk from "chalk";
 
-export type HarnessChoice = "claude-code" | "opencode" | "openclaw" | "oh-my-pi" | "pi" | "codex" | "forge" | "hermes-agent";
+export type HarnessChoice =
+	| "claude-code"
+	| "opencode"
+	| "openclaw"
+	| "oh-my-pi"
+	| "pi"
+	| "codex"
+	| "forge"
+	| "hermes-agent"
+	| "gemini";
 export type EmbeddingProviderChoice = "native" | "llama-cpp" | "ollama" | "openai" | "none";
 export type ExtractionProviderChoice = "claude-code" | "llama-cpp" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
@@ -26,6 +35,7 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"codex",
 	"forge",
 	"hermes-agent",
+	"gemini",
 ];
 export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "llama-cpp", "ollama", "openai", "none"];
 export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
@@ -79,6 +89,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.pi) harnesses.push("Pi");
 	if (detection.harnesses.codex) harnesses.push("Codex");
 	if (detection.harnesses.hermesAgent) harnesses.push("Hermes Agent");
+	if (detection.harnesses.gemini) harnesses.push("Gemini");
 	if (detection.harnesses.forge) harnesses.push("Forge");
 	if (harnesses.length > 0) {
 		lines.push(`    ✓ Harnesses: ${harnesses.join(", ")}`);

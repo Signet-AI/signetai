@@ -263,6 +263,7 @@ async function configureHarnesses(yaml: string, deps: Deps, dir: string): Promis
 						: false,
 			},
 			{ value: "hermes-agent", name: "Hermes Agent" },
+			{ value: "gemini", name: "Gemini CLI" },
 			{ value: "cursor", name: "Cursor" },
 			{ value: "windsurf", name: "Windsurf" },
 		],

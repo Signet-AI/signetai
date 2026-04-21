@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-21
+- Features: add Gemini CLI harness connector.
+- Bug fixes: make writeImmutableArtifact idempotent for job retries.
+
 ### 2026-04-20
 - Bug fixes: dedupe automatic hooks by runtime path; run Bun global installs with Bun.
 - Refactoring: align recall and remember surfaces.
@@ -30,11 +34,20 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-04-15
 - Bug fixes: thread deadline into OpenCode session creation.
 
-### 2026-04-14
-- Features: add llama.cpp as default fallback runtime provider.
-- Bug fixes: unify LLM concurrency (#509); prevent bypass memory leak in OpenCode provider; reduce OpenCode session overhead for pipeline jobs; five correctness bugs found via sqmd structural review.
-
 ## Release Ledger
+
+## [0.103.0] - 2026-04-21
+
+Release summary: 1 feature and 1 bug fix.
+Tag range: `v0.102.7..v0.103.0`.
+
+### Features
+
+- **connector-gemini**: add Gemini CLI harness connector (#541)
+
+### Bug Fixes
+
+- **daemon**: make writeImmutableArtifact idempotent for job retries (#543)
 
 ## [0.102.7] - 2026-04-20
 
