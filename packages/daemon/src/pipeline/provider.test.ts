@@ -1787,7 +1787,7 @@ describe("createOpenCodeProvider", () => {
 			baseUrl: "http://localhost:9999",
 			model: "f8-test",
 			enableOllamaFallback: false,
-			defaultTimeoutMs: 5000,
+			defaultTimeoutMs: 500,
 		});
 
 		const result = await provider.generate("test prompt");
@@ -1801,7 +1801,7 @@ describe("createOpenCodeProvider", () => {
 		expect(uniqueDeleted).toContain("ses_leak_1");
 		expect(uniqueDeleted).toContain("ses_leak_2");
 		expect(uniqueDeleted).toContain("ses_leak_3");
-	});
+	}, 15000);
 });
 
 describe("createOpenRouterProvider", () => {
