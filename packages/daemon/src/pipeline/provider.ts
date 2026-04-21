@@ -2163,15 +2163,21 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 	}
 
 	async function createSession(remainingMs?: number): Promise<string> {
-		const timeoutMs =
-			remainingMs !== undefined
-				? Math.max(1, Math.min(remainingMs, 10_000))
-				: 10_000;
-
 		// Attach parentID so OpenCode treats extraction sessions as children.
 		// Child sessions are hidden from the root session list and, crucially,
 		// skipped by the desktop notification handler.
+		const parentStart = performance.now();
 		const parentId = await getOrCreateParentSession(remainingMs);
+		const parentMs = performance.now() - parentStart;
+
+		// Subtract time spent creating the parent session so the child
+		// creation timeout stays within the caller's overall budget.
+		const adjusted = remainingMs !== undefined ? remainingMs - parentMs : undefined;
+		const timeoutMs =
+			adjusted !== undefined
+				? Math.max(1, Math.min(adjusted, 10_000))
+				: 10_000;
+
 		const payload: Record<string, unknown> = { title: "signet-extraction" };
 		if (parentId) payload.parentID = parentId;
 
@@ -2296,25 +2302,24 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
 
-		const sid = await getOrCreateSession(deadline - performance.now());
-		// Refresh bypass TTL on reused sessions so bypass-only entries do not
-		// expire while the provider is still actively sending messages.
-		bypassSession(sid, { allowUnknown: true });
-
-		// Track the session this specific call is using.  Retry paths may
-		// replace it with a fresh session; the .finally() cleanup reads
-		// this local instead of the shared `sessionId` to avoid a race
-		// when multiple calls run concurrently inside the semaphore.
-		let activeSid = sid;
-
 		return withLlmConcurrency(async () => {
 			const remaining = deadline - performance.now();
 			if (remaining <= 0) {
 				throw new Error(`OpenCode timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
 			}
 
+			// Session creation is inside the semaphore so concurrent
+			// generate() calls cannot share and then race-delete a session.
+			const sid = await getOrCreateSession(deadline - performance.now());
+			bypassSession(sid, { allowUnknown: true });
+
+			// Track the session this specific call is using.  Retry paths may
+			// replace it with a fresh session; the finally cleanup reads this
+			// local instead of the shared `sessionId`.
+			let activeSid = sid;
+
 			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), remaining);
+			const timer = setTimeout(() => controller.abort(), deadline - performance.now());
 
 			try {
 				const postMessage = async (sid: string): Promise<Response> =>
@@ -2531,31 +2536,28 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 				if (ollamaFallback) return ollamaFallback;
 				return buildOpenCodeFallbackResponse();
 			} catch (e) {
-				if (e instanceof DOMException && e.name === "AbortError") {
-					throw new Error(`OpenCode timeout after ${timeoutMs}ms`);
-				}
-				throw e;
+				const err = (e instanceof DOMException && e.name === "AbortError")
+					? new Error(`OpenCode timeout after ${timeoutMs}ms`)
+					: e;
+				// NOTE(changed-behavior): This warn-level error alerting is unique
+				// to the OpenCode provider.  Other providers (Ollama, Claude Code,
+				// Codex, OpenRouter, llama.cpp) only throw — errors surface in debug
+				// logs via the pipeline's outer handler.
+				// TODO: extend warn-level error alerting to all providers for
+				// consistent visibility (see plan: suppress-opencode-extraction-
+				// notifications.md § Future Work).
+				logger.warn("pipeline", "OpenCode extraction failed", {
+					error: err instanceof Error ? err.message : String(err),
+					sessionId,
+				});
+				throw err;
 			} finally {
 				clearTimeout(timer);
+				if (sessionId === activeSid || sessionId === sid) sessionId = null;
+				void deleteSession(activeSid);
+				if (sid !== activeSid) void deleteSession(sid);
 			}
-		}, timeoutMs, "opencode").catch((err: unknown) => {
-			// NOTE(changed-behavior): This warn-level error alerting is unique
-			// to the OpenCode provider.  Other providers (Ollama, Claude Code,
-			// Codex, OpenRouter, llama.cpp) only throw — errors surface in debug
-			// logs via the pipeline's outer handler.
-			// TODO: extend warn-level error alerting to all providers for
-			// consistent visibility (see plan: suppress-opencode-extraction-
-			// notifications.md § Future Work).
-			logger.warn("pipeline", "OpenCode extraction failed", {
-				error: err instanceof Error ? err.message : String(err),
-				sessionId,
-			});
-			throw err;
-		}).finally(() => {
-			if (sessionId === activeSid || sessionId === sid) sessionId = null;
-			void deleteSession(activeSid);
-			if (sid !== activeSid) void deleteSession(sid);
-		});
+		}, timeoutMs, "opencode");
 	}
 
 	return {
