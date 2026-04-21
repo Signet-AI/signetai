@@ -677,6 +677,75 @@ describe("createOpenCodeProvider", () => {
 		expect(deletedIds).not.toContain("ses_parent_qa");
 	});
 
+	it("generate() retries without parentID when stale parent causes child creation failure", async () => {
+		const sessionBodies: Record<string, unknown>[] = [];
+		let parentCreations = 0;
+		let childAttempts = 0;
+
+		mockFetch(async (url, init) => {
+			if (init?.method === "DELETE" && url.includes("/session/")) {
+				return new Response(null, { status: 200 });
+			}
+			if (
+				init?.method === "POST" &&
+				url.includes("/session") &&
+				!url.includes("/message")
+			) {
+				const body = parseJsonObjectBody(init?.body);
+				sessionBodies.push(body);
+
+				if (body.title === "signet-system") {
+					parentCreations++;
+					return Response.json({
+						id: `ses_parent_${parentCreations}`,
+						slug: "parent",
+						projectID: "p",
+						directory: "/tmp",
+						title: "signet-system",
+						version: "1",
+					});
+				}
+
+				// Child session creation
+				childAttempts++;
+				if (body.parentID && childAttempts === 1) {
+					// First child attempt with stale parentID → 400
+					return new Response("Bad Request: unknown parent session", {
+						status: 400,
+					});
+				}
+				// Retry without parentID (or subsequent calls) → succeed
+				return Response.json({
+					id: `ses_child_${childAttempts}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "signet-extraction",
+					version: "1",
+				});
+			}
+			return Response.json(openCodeResponse("ok"));
+		});
+
+		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
+
+		// First call: parent is created and cached, child uses parentID.
+		// The mock fails the first child POST (stale parent), so
+		// createSession should clear the cache and retry without parentID.
+		const result = await provider.generate("hello");
+		expect(result).toBe("ok");
+
+		// The retry attempt must NOT carry parentID
+		const childBodies = sessionBodies.filter(
+			(b) => b.title === "signet-extraction",
+		);
+		expect(childBodies.length).toBeGreaterThanOrEqual(2);
+		// First attempt had parentID
+		expect(childBodies[0].parentID).toBeDefined();
+		// Retry had no parentID (graceful degradation)
+		expect(childBodies[1].parentID).toBeUndefined();
+	});
+
 	it("generate() retries on 404 (expired session)", async () => {
 		let messageAttempts = 0;
 		let sessionCreations = 0;

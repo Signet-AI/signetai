@@ -2180,12 +2180,26 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		const payload: Record<string, unknown> = { title: "signet-extraction" };
 		if (parentId) payload.parentID = parentId;
 
-		const res = await fetch(`${cfg.baseUrl}/session`, {
+		let res = await fetch(`${cfg.baseUrl}/session`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(payload),
 			signal: AbortSignal.timeout(timeoutMs),
 		});
+
+		if (!res.ok && parentId) {
+			logger.warn("pipeline", "Child session creation failed with parentID, retrying unparented", {
+				status: res.status,
+				parentId,
+			});
+			parentSessionId = null;
+			res = await fetch(`${cfg.baseUrl}/session`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ title: "signet-extraction" }),
+				signal: AbortSignal.timeout(timeoutMs),
+			});
+		}
 
 		if (!res.ok) {
 			const body = await res.text().catch(() => "");
