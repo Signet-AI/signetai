@@ -122,6 +122,7 @@ export async function runExistingSetupWizard(
 		if (detection.harnesses.opencode) detectedHarnesses.push("opencode");
 		if (detection.harnesses.codex) detectedHarnesses.push("codex");
 		if (detection.harnesses.hermesAgent) detectedHarnesses.push("hermes-agent");
+		if (detection.harnesses.gemini) detectedHarnesses.push("gemini");
 		const configuredHarnessList = readHarnesses(existingConfig.harnesses);
 		if (detection.harnesses.ohMyPi || configuredHarnessList.includes("oh-my-pi")) detectedHarnesses.push("oh-my-pi");
 		if (detection.harnesses.pi || configuredHarnessList.includes("pi")) detectedHarnesses.push("pi");

@@ -57,6 +57,7 @@
         "@signet/connector-claude-code": "workspace:*",
         "@signet/connector-codex": "workspace:*",
         "@signet/connector-forge": "workspace:*",
+        "@signet/connector-gemini": "workspace:*",
         "@signet/connector-hermes-agent": "workspace:*",
         "@signet/connector-oh-my-pi": "workspace:*",
         "@signet/connector-openclaw": "workspace:*",
@@ -158,6 +159,18 @@
     },
     "packages/connector-forge": {
       "name": "@signet/connector-forge",
+      "version": "0.102.7",
+      "dependencies": {
+        "@signet/connector-base": "workspace:*",
+        "@signet/core": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/connector-gemini": {
+      "name": "@signet/connector-gemini",
       "version": "0.102.7",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
@@ -1579,6 +1592,8 @@
     "@signet/connector-codex": ["@signet/connector-codex@workspace:packages/connector-codex"],
 
     "@signet/connector-forge": ["@signet/connector-forge@workspace:packages/connector-forge"],
+
+    "@signet/connector-gemini": ["@signet/connector-gemini@workspace:packages/connector-gemini"],
 
     "@signet/connector-hermes-agent": ["@signet/connector-hermes-agent@workspace:packages/connector-hermes-agent"],
 
@@ -4390,6 +4405,8 @@
 
     "@signet/connector-forge/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
 
+    "@signet/connector-gemini/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
+
     "@signet/connector-hermes-agent/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
 
     "@signet/connector-oh-my-pi/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
@@ -4947,6 +4964,8 @@
     "@signet/connector-codex/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-forge/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
+
+    "@signet/connector-gemini/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-hermes-agent/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 

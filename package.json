@@ -26,7 +26,7 @@
     "build:oh-my-pi-extension": "cd packages/oh-my-pi-extension && bun run build",
     "build:pi-extension": "cd packages/pi-extension && bun run build",
     "build:connector-pi": "cd packages/connector-pi && bun run build",
-    "build:deps": "bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-forge' --filter '@signet/connector-hermes-agent' --filter '@signet/connector-opencode' --filter '@signet/connector-openclaw' --filter '@signet/adapter-*' --filter '@signetai/*' --filter '@signet/daemon' --filter '@signet/sdk' build",
+    "build:deps": "bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-forge' --filter '@signet/connector-gemini' --filter '@signet/connector-hermes-agent' --filter '@signet/connector-opencode' --filter '@signet/connector-openclaw' --filter '@signet/adapter-*' --filter '@signetai/*' --filter '@signet/daemon' --filter '@signet/sdk' build",
     "build:signetai": "cd packages/signetai && bun run build",
     "build:publish": "bun run build:dashboard && bun run build:signetai",
     "build:dashboard": "cd packages/cli/dashboard && bun install && bun run build",
