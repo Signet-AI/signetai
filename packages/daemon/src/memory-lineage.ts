@@ -545,23 +545,14 @@ function upsertArtifactRow(
 	});
 }
 
-function canSeedColdCacheFromDbRow(
-	currentMtimeMs: number,
-	row: { readonly source_mtime_ms?: unknown; readonly updated_at?: unknown },
-): boolean {
+function canSeedColdCacheFromDbRow(currentMtimeMs: number, row: { readonly source_mtime_ms?: unknown }): boolean {
 	if (!Number.isFinite(currentMtimeMs)) return false;
 
 	if (typeof row.source_mtime_ms === "number" && Number.isFinite(row.source_mtime_ms)) {
 		return currentMtimeMs === row.source_mtime_ms;
 	}
 
-	const storedMtimeMs = typeof row.updated_at === "string" ? Date.parse(row.updated_at) : Number.NaN;
-	if (!Number.isFinite(storedMtimeMs)) return false;
-
-	// Filesystem mtimes and serialized ISO timestamps can differ by a small
-	// amount across platforms and write paths. Only allow tolerance for legacy
-	// upgraded rows that do not have source_mtime_ms populated yet.
-	return Math.abs(currentMtimeMs - storedMtimeMs) <= 1_000;
+	return false;
 }
 
 function listCanonicalFiles(): string[] {
@@ -613,16 +604,14 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 		const dbPaths = getDbAccessor().withReadDb((db) => {
 			const rows = scope
 				? (db
-						.prepare("SELECT source_path, source_mtime_ms, updated_at FROM memory_artifacts WHERE agent_id = ?")
+						.prepare("SELECT source_path, source_mtime_ms FROM memory_artifacts WHERE agent_id = ?")
 						.all(scope) as Array<{
 						source_path: string;
 						source_mtime_ms?: number | null;
-						updated_at?: string | null;
 					}>)
-				: (db.prepare("SELECT source_path, source_mtime_ms, updated_at FROM memory_artifacts").all() as Array<{
+				: (db.prepare("SELECT source_path, source_mtime_ms FROM memory_artifacts").all() as Array<{
 						source_path: string;
 						source_mtime_ms?: number | null;
-						updated_at?: string | null;
 					}>);
 			return rows;
 		});

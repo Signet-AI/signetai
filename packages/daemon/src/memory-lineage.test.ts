@@ -441,7 +441,7 @@ describe("memory-lineage", () => {
 			expect(rows.every((row) => row.updated_at === oldStamp)).toBe(true);
 		});
 
-		it("cold cache can fall back to updated_at when source_mtime_ms is missing", async () => {
+		it("cold cache refreshes upgraded rows missing source_mtime_ms", async () => {
 			await addSummary({
 				sessionId: "mtime-updated-at-fallback",
 				project: "/home/nicholai/signet/signetai",
@@ -457,11 +457,9 @@ describe("memory-lineage", () => {
 			);
 			expect(rows.length).toBeGreaterThan(0);
 
-			const seededByPath = new Map<string, string>();
 			getDbAccessor().withWriteTx((db) => {
 				for (const row of rows) {
 					const nextUpdatedAt = new Date(statSync(join(dir, row.source_path)).mtimeMs).toISOString();
-					seededByPath.set(row.source_path, nextUpdatedAt);
 					db.prepare(
 						"UPDATE memory_artifacts SET source_mtime_ms = NULL, updated_at = ? WHERE agent_id = ? AND source_path = ?",
 					).run(nextUpdatedAt, "default", row.source_path);
@@ -474,12 +472,14 @@ describe("memory-lineage", () => {
 			const after = getDbAccessor().withReadDb(
 				(db) =>
 					db
-						.prepare("SELECT source_path, updated_at FROM memory_artifacts WHERE agent_id = ? ORDER BY source_path ASC")
-						.all("default") as Array<{ source_path: string; updated_at: string }>,
+						.prepare(
+							"SELECT source_path, source_mtime_ms FROM memory_artifacts WHERE agent_id = ? ORDER BY source_path ASC",
+						)
+						.all("default") as Array<{ source_path: string; source_mtime_ms: number | null }>,
 			);
 
 			expect(after.length).toBe(rows.length);
-			expect(after.every((row) => row.updated_at === seededByPath.get(row.source_path))).toBe(true);
+			expect(after.every((row) => row.source_mtime_ms === statSync(join(dir, row.source_path)).mtimeMs)).toBe(true);
 		});
 
 		it("cold cache still refreshes persisted mtime for files changed while the daemon was down", async () => {
