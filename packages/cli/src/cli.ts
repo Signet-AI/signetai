@@ -336,6 +336,9 @@ async function configureHarnessHooks(
 			if (!result.success) {
 				console.warn(chalk.yellow(`  Warning: Gemini CLI integration setup failed: ${result.message}`));
 			}
+			for (const w of result.warnings ?? []) {
+				console.warn(chalk.yellow(`  ${w}`));
+			}
 			break;
 		}
 	}

@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
@@ -27,8 +27,8 @@ function isJsonObject(value: unknown): value is JsonObject {
 }
 
 function isChildOf(candidate: string, parent: string): boolean {
-	const resolvedParent = `${resolve(parent)}/`;
-	return candidate.startsWith(resolvedParent);
+	const prefix = resolve(parent) + sep;
+	return candidate.startsWith(prefix);
 }
 
 function readGeminiSettings(settingsPath: string): JsonObject | null {
@@ -126,8 +126,9 @@ export class GeminiConnector extends BaseConnector {
 		const geminiHome = this.getGeminiHome();
 		const signetWorkspace = resolveSignetWorkspacePath();
 
-		this.removeMcpServer(geminiHome);
-		configsPatched.push(this.getConfigPath());
+		if (this.removeMcpServer(geminiHome)) {
+			configsPatched.push(this.getConfigPath());
+		}
 
 		const geminiMdPath = this.getGeminiMdPath();
 		if (existsSync(geminiMdPath)) {
@@ -221,13 +222,14 @@ export class GeminiConnector extends BaseConnector {
 		return null;
 	}
 
-	private removeMcpServer(geminiHome: string): void {
+	private removeMcpServer(geminiHome: string): boolean {
 		const settingsPath = join(geminiHome, "settings.json");
 		const settings = readGeminiSettings(settingsPath);
-		if (!settings) return;
+		if (!settings) return false;
 
 		if (isJsonObject(settings.mcpServers)) {
 			const mcp = settings.mcpServers as JsonObject;
+			if (!("signet" in mcp)) return false;
 			const { signet: _, ...rest } = mcp;
 			if (Object.keys(rest).length === 0) {
 				const { mcpServers: __, ...withoutMcp } = settings;
@@ -236,7 +238,9 @@ export class GeminiConnector extends BaseConnector {
 				settings.mcpServers = rest;
 				atomicWriteJson(settingsPath, settings);
 			}
+			return true;
 		}
+		return false;
 	}
 
 	private generateGeminiMd(basePath: string): string | null {
