@@ -104,6 +104,7 @@ describe("buildSessionEndBody", () => {
 			sessionKey: "sess-1",
 			cwd: "/tmp/project",
 			reason: "shutdown",
+			runtimePath: "legacy",
 		});
 	});
 
@@ -125,6 +126,7 @@ describe("buildSessionEndBody", () => {
 			sessionKey: "sess-canonical-key",
 			transcript: "",
 			transcriptPath: "/tmp/session.txt",
+			runtimePath: "legacy",
 		});
 	});
 });
@@ -151,12 +153,13 @@ describe("buildUserPromptSubmitBody", () => {
 			sessionKey: "sess-2",
 			transcriptPath: "",
 			transcript: "user: hi",
+			runtimePath: "legacy",
 			lastAssistantMessage: "prior answer",
 		});
 	});
 
 	test("hook command uses daemon result transport for user-prompt-submit", async () => {
-		const seen: Array<{ path: string; body: string }> = [];
+		const seen: Array<{ path: string; body: string; runtimePath: string | null }> = [];
 		const lines: string[] = [];
 		console.log = (line?: unknown) => {
 			lines.push(String(line ?? ""));
@@ -169,6 +172,7 @@ describe("buildUserPromptSubmitBody", () => {
 				seen.push({
 					path,
 					body: typeof opts?.body === "string" ? opts.body : "",
+					runtimePath: new Headers(opts?.headers).get("x-signet-runtime-path"),
 				});
 				return {
 					ok: true,
@@ -185,6 +189,8 @@ describe("buildUserPromptSubmitBody", () => {
 		expect(seen).toHaveLength(1);
 		expect(seen[0]?.path).toBe("/api/hooks/user-prompt-submit");
 		expect(seen[0]?.body).toContain('"harness":"claude-code"');
+		expect(seen[0]?.body).toContain('"runtimePath":"legacy"');
+		expect(seen[0]?.runtimePath).toBe("legacy");
 		expect(lines).toContain("recalled context");
 	});
 });
@@ -208,6 +214,7 @@ describe("buildCompactionCompleteBody", () => {
 			agentId: "agent-7",
 			sessionKey: "sess-3",
 			project: "/tmp/explicit-project",
+			runtimePath: "legacy",
 		});
 	});
 
@@ -228,6 +235,7 @@ describe("buildCompactionCompleteBody", () => {
 			project: "/tmp/legacy-project",
 			sessionKey: "sess-legacy-id",
 			summary: "summary text",
+			runtimePath: "legacy",
 		});
 	});
 
@@ -235,6 +243,7 @@ describe("buildCompactionCompleteBody", () => {
 		expect(buildCompactionCompleteBody(null, "claude-code", "summary text")).toEqual({
 			harness: "claude-code",
 			summary: "summary text",
+			runtimePath: "legacy",
 		});
 	});
 });

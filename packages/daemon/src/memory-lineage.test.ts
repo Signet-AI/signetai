@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Tiktoken } from "js-tiktoken/lite";
@@ -70,7 +70,7 @@ describe("memory-lineage", () => {
 		closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 		if (prev === undefined) {
-			delete process.env.SIGNET_PATH;
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			return;
 		}
 		process.env.SIGNET_PATH = prev;
@@ -168,6 +168,42 @@ describe("memory-lineage", () => {
 
 		expect(purgeCanonicalNoiseSessions("default", "test cleanup")).toBe(1);
 		expect(existsSync(join(dir, row.source_path))).toBe(false);
+	});
+
+	it("writeSummaryArtifact is idempotent when called twice for the same session", async () => {
+		const stamp = new Date().toISOString();
+		const base = {
+			agentId: "default",
+			sessionId: "idem-test",
+			sessionKey: "idem-test",
+			project: "/home/user/project",
+			harness: "codex",
+			capturedAt: stamp,
+			startedAt: stamp,
+			endedAt: stamp,
+		};
+
+		const first = await writeSummaryArtifact({
+			...base,
+			summary: "First summary content for the session.",
+		});
+		expect(first.summaryPath).toBeTruthy();
+
+		const second = await writeSummaryArtifact({
+			...base,
+			summary: "Completely different content from a retry.",
+		});
+		expect(second.summaryPath).toBe(first.summaryPath);
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT COUNT(*) AS count FROM memory_artifacts WHERE session_id = ? AND source_kind = 'summary'`,
+					)
+					.get("idem-test") as { count: number },
+		);
+		expect(rows.count).toBe(1);
 	});
 
 	it("keeps canonical sessions when any artifact row carries a real project", () => {
@@ -382,7 +418,7 @@ describe("memory-lineage", () => {
 			expect(row).toBeNull();
 		});
 
-		it("cold cache + existing DB rows → mtime=0 triggers re-read", async () => {
+		it("cold cache re-reads artifacts when persisted mtime is missing and updated_at is stale", async () => {
 			const agentId = "cache-cold";
 			const oldStamp = "2000-01-01T00:00:00.000Z";
 			await writeSummaryArtifact({
@@ -394,13 +430,17 @@ describe("memory-lineage", () => {
 				capturedAt: new Date().toISOString(),
 				startedAt: null,
 				endedAt: null,
-				summary: "Cold cache should trigger incremental refresh when DB already has rows.",
+				summary: "Cold cache should trigger incremental refresh when DB already has stale rows.",
 			});
 
 			getDbAccessor().withWriteTx((db) => {
-				db.prepare("UPDATE memory_artifacts SET updated_at = ? WHERE agent_id = ?").run(oldStamp, agentId);
+				db.prepare("UPDATE memory_artifacts SET source_mtime_ms = NULL, updated_at = ? WHERE agent_id = ?").run(
+					oldStamp,
+					agentId,
+				);
 			});
 
+			resetProjectionPurgeState();
 			reindexMemoryArtifacts(agentId);
 
 			const rows = getDbAccessor().withReadDb(
@@ -412,6 +452,192 @@ describe("memory-lineage", () => {
 
 			expect(rows.length).toBeGreaterThan(0);
 			expect(rows.every((row) => row.updated_at !== oldStamp)).toBe(true);
+		});
+
+		it("cold cache trusts persisted source_mtime_ms for unchanged artifacts", async () => {
+			await addSummary({ sessionId: "mtime-seeded-skip", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+			reindexMemoryArtifacts("default");
+
+			const oldStamp = "2000-01-01T00:00:00.000Z";
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("UPDATE memory_artifacts SET updated_at = ? WHERE agent_id = ?").run(oldStamp, "default");
+			});
+
+			resetProjectionPurgeState();
+			reindexMemoryArtifacts("default");
+
+			const rows = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT updated_at FROM memory_artifacts WHERE agent_id = ?").all("default") as Array<{
+						updated_at: string;
+					}>,
+			);
+
+			expect(rows.length).toBeGreaterThan(0);
+			expect(rows.every((row) => row.updated_at === oldStamp)).toBe(true);
+		});
+
+		it("cold cache refreshes upgraded rows missing source_mtime_ms", async () => {
+			await addSummary({
+				sessionId: "mtime-updated-at-fallback",
+				project: "/home/nicholai/signet/signetai",
+				minutesAgo: 1,
+			});
+			reindexMemoryArtifacts("default");
+
+			const rows = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT source_path FROM memory_artifacts WHERE agent_id = ? ORDER BY source_path ASC")
+						.all("default") as Array<{ source_path: string }>,
+			);
+			expect(rows.length).toBeGreaterThan(0);
+
+			getDbAccessor().withWriteTx((db) => {
+				for (const row of rows) {
+					const nextUpdatedAt = new Date(statSync(join(dir, row.source_path)).mtimeMs).toISOString();
+					db.prepare(
+						"UPDATE memory_artifacts SET source_mtime_ms = NULL, updated_at = ? WHERE agent_id = ? AND source_path = ?",
+					).run(nextUpdatedAt, "default", row.source_path);
+				}
+			});
+
+			resetProjectionPurgeState();
+			reindexMemoryArtifacts("default");
+
+			const after = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT source_path, source_mtime_ms FROM memory_artifacts WHERE agent_id = ? ORDER BY source_path ASC",
+						)
+						.all("default") as Array<{ source_path: string; source_mtime_ms: number | null }>,
+			);
+
+			expect(after.length).toBe(rows.length);
+			expect(after.every((row) => row.source_mtime_ms === statSync(join(dir, row.source_path)).mtimeMs)).toBe(true);
+		});
+
+		it("cold cache still refreshes persisted mtime for files changed while the daemon was down", async () => {
+			await addSummary({
+				sessionId: "mtime-changed-reprocess",
+				project: "/home/nicholai/signet/signetai",
+				minutesAgo: 1,
+			});
+			reindexMemoryArtifacts("default");
+
+			const target = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path, source_mtime_ms
+							 FROM memory_artifacts
+							 WHERE agent_id = ?
+							   AND source_kind = 'summary'
+							 ORDER BY source_path ASC
+							 LIMIT 1`,
+						)
+						.get("default") as { source_path: string; source_mtime_ms: number | null },
+			);
+			expect(target.source_path).toBeDefined();
+			expect(target.source_mtime_ms).not.toBeNull();
+
+			const fullPath = join(dir, target.source_path);
+			await Bun.sleep(20);
+			const bumped = new Date(Date.now() + 2_000);
+			utimesSync(fullPath, bumped, bumped);
+
+			resetProjectionPurgeState();
+			reindexMemoryArtifacts("default");
+
+			const after = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT source_mtime_ms FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+						.get("default", target.source_path) as { source_mtime_ms: number | null } | null,
+			);
+			expect(after).not.toBeNull();
+			expect(after?.source_mtime_ms).toBeGreaterThan(target.source_mtime_ms ?? 0);
+		});
+
+		it("cold cache does not trust sub-second source_mtime_ms drift", async () => {
+			await addSummary({
+				sessionId: "mtime-subsecond-reprocess",
+				project: "/home/nicholai/signet/signetai",
+				minutesAgo: 1,
+			});
+			reindexMemoryArtifacts("default");
+
+			const target = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path, source_mtime_ms
+							 FROM memory_artifacts
+							 WHERE agent_id = ?
+							   AND source_kind = 'summary'
+							 ORDER BY source_path ASC
+							 LIMIT 1`,
+						)
+						.get("default") as { source_path: string; source_mtime_ms: number | null },
+			);
+			expect(target.source_mtime_ms).not.toBeNull();
+
+			const bumpedMs = (target.source_mtime_ms ?? 0) + 500;
+			const bumped = new Date(bumpedMs);
+			utimesSync(join(dir, target.source_path), bumped, bumped);
+
+			resetProjectionPurgeState();
+			reindexMemoryArtifacts("default");
+
+			const after = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT source_mtime_ms FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+						.get("default", target.source_path) as { source_mtime_ms: number | null } | null,
+			);
+			expect(after).not.toBeNull();
+			expect(after?.source_mtime_ms).not.toBe(target.source_mtime_ms);
+		});
+
+		it("cold cache still indexes new files when DB rows already exist", async () => {
+			await addSummary({
+				sessionId: "mtime-existing-db",
+				project: "/home/nicholai/signet/signetai",
+				minutesAgo: 2,
+			});
+			reindexMemoryArtifacts("default");
+
+			const baseline = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("default") as {
+						count: number;
+					},
+			);
+
+			await addSummary({
+				sessionId: "mtime-new-cold-cache",
+				project: "/home/nicholai/signet/signetai",
+				minutesAgo: 1,
+			});
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ? AND session_id = ?").run(
+					"default",
+					"mtime-new-cold-cache",
+				);
+			});
+
+			resetProjectionPurgeState();
+			reindexMemoryArtifacts("default");
+
+			const after = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("default") as {
+						count: number;
+					},
+			);
+
+			expect(after.count).toBe(baseline.count + 2);
 		});
 
 		it("renderMemoryProjection output is identical on cold vs warm call", async () => {

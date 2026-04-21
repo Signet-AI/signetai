@@ -66,6 +66,7 @@ import { up as memoriesFtsTokenizerRepair } from "./057-memories-fts-tokenizer-r
 import { up as knowledgeGraphIndices } from "./058-knowledge-graph-indices";
 import { up as entityAttributeClaimKey } from "./059-entity-attribute-claim-key";
 import { up as entityAttributeGroupKey } from "./060-entity-attribute-group-key";
+import { up as memoryArtifactSourceMtime } from "./061-memory-artifact-source-mtime";
 
 // -- Public interface consumed by Database.init() --
 
@@ -568,6 +569,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: entityAttributeGroupKey,
 		artifacts: {
 			columns: [{ table: "entity_attributes", column: "group_key" }],
+		},
+	},
+	{
+		version: 61,
+		name: "memory-artifact-source-mtime",
+		up: memoryArtifactSourceMtime,
+		artifacts: {
+			columns: [{ table: "memory_artifacts", column: "source_mtime_ms" }],
 		},
 	},
 ];

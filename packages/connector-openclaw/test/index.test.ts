@@ -57,11 +57,15 @@ describe("OpenClawConnector config patching", () => {
 			throw new Error("Expected installHookFiles() to write hooks/agent-memory/handler.js");
 		}
 		const handlerJs = readFileSync(handlerPath, "utf-8");
-		expect(handlerJs).toContain("function formatRecallMessage(data)");
+		expect(handlerJs).toContain("async function recallMessage(data)");
+		expect(handlerJs).toContain('if (typeof data?.message === "string") return data.message;');
+		expect(handlerJs).toContain('await import("@signet/core")');
 		expect(handlerJs).toContain('return "No matching memories found.";');
-		expect(handlerJs).toContain("Primary matches:");
-		expect(handlerJs).toContain("Supporting context:");
-		expect(handlerJs).toContain("event.messages.push(formatRecallMessage(data));");
+		expect(handlerJs).toContain("Keep a compact compatibility path");
+		expect(handlerJs).toContain("rows.slice(0, 8)");
+		expect(handlerJs).not.toContain("JSON.stringify(data, null, 2)");
+		expect(handlerJs).toContain("event.messages.push(await recallMessage(data));");
+		expect(handlerJs).not.toContain("Supporting context:");
 		expect(handlerJs).not.toContain('data.results.map(r => `- ${r.content}`).join("\\\\n")');
 	});
 

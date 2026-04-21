@@ -2706,6 +2706,7 @@ export async function handleUserPromptSubmit(
 				sessionKey: req.sessionKey,
 				project: req.project,
 				limit: 3,
+				allowScanFallback: false,
 			});
 			if (transcriptHits.length > 0) {
 				return finalizeUserPromptSubmitSuccess(

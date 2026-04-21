@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { parseRecallPayload } from "@signet/core";
 import SignetPiExtension, { loadConfig, parseRememberArgs, recallMemories, rememberContent } from "./src/index.js";
 
 // ============================================================================
@@ -220,12 +221,13 @@ describe("recallMemories", () => {
 		});
 		servers.push(server);
 
-		const results = await recallMemories(`http://127.0.0.1:${server.port}`, "bun");
+		const result = await recallMemories(`http://127.0.0.1:${server.port}`, "bun");
+		const rows = parseRecallPayload(result).rows;
 		expect(capturedMethod).toBe("POST");
 		expect(capturedPath).toBe("/api/memory/recall");
-		expect(results).toHaveLength(1);
-		expect(results[0]?.content).toBe("use bun");
-		expect(results[0]?.importance).toBe(0.9);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.content).toBe("use bun");
+		expect(rows[0]?.importance).toBe(0.9);
 	});
 
 	it("returns empty array when results field is absent", async () => {
@@ -237,11 +239,11 @@ describe("recallMemories", () => {
 		});
 		servers.push(server);
 
-		const results = await recallMemories(`http://127.0.0.1:${server.port}`, "nothing");
-		expect(results).toEqual([]);
+		const result = await recallMemories(`http://127.0.0.1:${server.port}`, "nothing");
+		expect(parseRecallPayload(result).rows).toEqual([]);
 	});
 
-	it("deserializes comma-separated string tags into an array", async () => {
+	it("preserves daemon recall rows without local reshaping", async () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch() {
@@ -265,8 +267,8 @@ describe("recallMemories", () => {
 		});
 		servers.push(server);
 
-		const [mem] = await recallMemories(`http://127.0.0.1:${server.port}`, "x");
-		expect(mem?.tags).toEqual(["a", "b", "c"]);
+		const result = await recallMemories(`http://127.0.0.1:${server.port}`, "x");
+		expect(parseRecallPayload(result).rows[0]?.tags).toBe("a,b,c");
 	});
 
 	it("does not send a scope field by default (preserves daemon unscoped-memory path)", async () => {
@@ -328,7 +330,7 @@ describe("rememberContent", () => {
 		});
 		expect(capturedBody.content).toBe("test memory");
 		expect(capturedBody.pinned).toBe(true);
-		expect(capturedBody.tags).toEqual(["tag1", "tag2"]);
+		expect(capturedBody.tags).toBe("tag1,tag2");
 	});
 
 	it("throws when the daemon returns an error status", async () => {
@@ -531,10 +533,7 @@ describe("SignetPiExtension", () => {
 		);
 
 		expect(result).toBeUndefined();
-		expect(requests.map((req) => req.path)).toEqual([
-			"/api/hooks/session-start",
-			"/api/hooks/pre-compaction",
-		]);
+		expect(requests.map((req) => req.path)).toEqual(["/api/hooks/session-start", "/api/hooks/pre-compaction"]);
 		expect(requests[1]?.body).toEqual({
 			harness: "pi",
 			sessionKey: "session-pi-compact-1",

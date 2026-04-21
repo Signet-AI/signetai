@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
 import { CodexConnector } from "@signet/connector-codex";
 import { ForgeConnector } from "@signet/connector-forge";
+import { GeminiConnector } from "@signet/connector-gemini";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
@@ -323,6 +324,17 @@ async function configureHarnessHooks(
 			const result = await connector.install(basePath);
 			if (!result.success) {
 				console.warn(chalk.yellow(`  Warning: Hermes Agent integration setup failed: ${result.message}`));
+			}
+			for (const w of result.warnings ?? []) {
+				console.warn(chalk.yellow(`  ${w}`));
+			}
+			break;
+		}
+		case "gemini": {
+			const connector = new GeminiConnector();
+			const result = await connector.install(basePath);
+			if (!result.success) {
+				console.warn(chalk.yellow(`  Warning: Gemini CLI integration setup failed: ${result.message}`));
 			}
 			for (const w of result.warnings ?? []) {
 				console.warn(chalk.yellow(`  ${w}`));

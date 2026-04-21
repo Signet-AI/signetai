@@ -13,6 +13,14 @@ interface HookDeps {
 }
 
 const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeout();
+const LEGACY_RUNTIME_PATH = "legacy" as const;
+
+function legacyHookHeaders(headers?: HeadersInit): Headers {
+	const merged = new Headers(headers);
+	if (!merged.has("Content-Type")) merged.set("Content-Type", "application/json");
+	merged.set("x-signet-runtime-path", LEGACY_RUNTIME_PATH);
+	return merged;
+}
 
 function readTimeoutEnv(name: string): string {
 	const value = process.env[name];
@@ -61,7 +69,10 @@ async function fetchHookData<T>(
 	path: string,
 	opts?: RequestInit & { timeout?: number },
 ): Promise<T | null> {
-	const res = await deps.fetchDaemonResult<T>(path, opts);
+	const res = await deps.fetchDaemonResult<T>(path, {
+		...opts,
+		headers: legacyHookHeaders(opts?.headers),
+	});
 	if (res.ok) return res.data;
 	process.stderr.write(formatHookFailure(name, res));
 	return null;
@@ -95,13 +106,14 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				error?: string;
 			}>("/api/hooks/session-start", {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: legacyHookHeaders(),
 				body: JSON.stringify({
 					harness: options.harness,
 					project: options.project || stdinProject,
 					agentId: options.agentId,
 					context: options.context,
 					sessionKey,
+					runtimePath: LEGACY_RUNTIME_PATH,
 				}),
 				timeout: SESSION_START_TIMEOUT_MS,
 			});
@@ -214,6 +226,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 						messageCount: options.messageCount,
 						sessionKey,
 						sessionContext,
+						runtimePath: LEGACY_RUNTIME_PATH,
 					}),
 				},
 			);
@@ -379,6 +392,7 @@ export function buildUserPromptSubmitBody(
 	transcriptPath: string;
 	transcript: string;
 	lastAssistantMessage?: string;
+	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
 	const body = input;
 	const userPrompt = pickString(body?.prompt, body?.user_prompt, body?.userPrompt);
@@ -392,6 +406,7 @@ export function buildUserPromptSubmitBody(
 		sessionKey: pickSessionKey(body),
 		transcriptPath: pickString(body?.transcript_path, body?.transcriptPath),
 		transcript: pickString(body?.transcript),
+		runtimePath: LEGACY_RUNTIME_PATH,
 		...(lastAssistantMessage ? { lastAssistantMessage } : {}),
 	};
 }
@@ -411,6 +426,7 @@ export function buildCompactionCompleteBody(
 	agentId?: string;
 	sessionKey?: string;
 	project?: string;
+	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
 	const body = input;
 	const agentId = pickString(overrides.agentId, body?.agent_id, body?.agentId);
@@ -422,6 +438,7 @@ export function buildCompactionCompleteBody(
 		...(agentId ? { agentId } : {}),
 		...(sessionKey ? { sessionKey } : {}),
 		...(project ? { project } : {}),
+		runtimePath: LEGACY_RUNTIME_PATH,
 	};
 }
 
@@ -436,6 +453,7 @@ export function buildSessionEndBody(
 	sessionKey: string;
 	cwd: string;
 	reason: string;
+	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
 	const body = input ?? {};
 	const sessionKey = pickSessionKey(body);
@@ -448,6 +466,7 @@ export function buildSessionEndBody(
 		sessionKey,
 		cwd: pickString(body.cwd),
 		reason: pickString(body.reason),
+		runtimePath: LEGACY_RUNTIME_PATH,
 	};
 }
 

@@ -4,16 +4,20 @@
  *
  * Routes to the appropriate runtime based on command:
  * - Most commands: Node.js (cli.js)
+ * - Bun global installs: Bun (cli.js) - avoids unbuilt better-sqlite3 bindings
  * - Daemon start: Bun (daemon.js) - required for bun:sqlite
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { existsSync } from "node:fs";
+import { shouldRunCliWithBun } from "./runtime.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const entryPath = realpathSync(fileURLToPath(import.meta.url));
+const __dirname = dirname(entryPath);
 const distDir = join(__dirname, "..", "dist");
+const packageDir = join(__dirname, "..");
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -36,8 +40,10 @@ function hasBun() {
 	}
 }
 
+const bunAvailable = hasBun();
+
 // Run with appropriate runtime
-if (isDaemonCommand && !hasBun()) {
+if (isDaemonCommand && !bunAvailable) {
 	console.error("Error: Bun is required to run the Signet daemon.");
 	console.error("Install Bun: curl -fsSL https://bun.sh/install | bash");
 	process.exit(1);
@@ -52,8 +58,35 @@ if (!existsSync(cliPath)) {
 	process.exit(1);
 }
 
-// Import and run CLI
-import(pathToFileURL(cliPath).href).catch((err) => {
-	console.error("Failed to start Signet:", err.message);
-	process.exit(1);
-});
+if (
+	shouldRunCliWithBun({
+		isBunRuntime: typeof globalThis.Bun !== "undefined",
+		packageDir,
+		bunAvailable,
+	})
+) {
+	const child = spawn("bun", [cliPath, ...args], {
+		stdio: "inherit",
+		env: process.env,
+		windowsHide: true,
+	});
+
+	child.on("error", (err) => {
+		console.error("Failed to start Signet with Bun:", err.message);
+		process.exit(1);
+	});
+
+	child.on("exit", (code, signal) => {
+		if (signal) {
+			process.kill(process.pid, signal);
+			return;
+		}
+		process.exit(code ?? 1);
+	});
+} else {
+	// Import and run CLI
+	import(pathToFileURL(cliPath).href).catch((err) => {
+		console.error("Failed to start Signet:", err.message);
+		process.exit(1);
+	});
+}

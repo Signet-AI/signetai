@@ -49,7 +49,9 @@ Tool Reference
 --------------
 
 All tools are defined in `packages/daemon/src/mcp/tools.ts`. Tool handlers
-call the daemon's HTTP API internally — they don't duplicate business logic.
+call the daemon's HTTP API internally and use the shared recall/remember
+surface helpers from `@signet/core` so MCP, CLI, and harness integrations do
+not drift into separate request shapes or result formatting.
 
 ### memory_search
 
@@ -108,8 +110,9 @@ context, and no-hit handling. The tool still reads from
 
 ### memory_store
 
-Save a new memory to the database. Tags are prepended in `[tag1,tag2]: `
-format before being sent to the daemon.
+Save a new memory to the database. Tags, structured graph payloads, hints,
+and transcripts are forwarded as request metadata instead of being folded into
+memory text. This keeps MCP aligned with CLI and harness remember behavior.
 
 **Parameters:**
 
@@ -119,6 +122,10 @@ format before being sent to the daemon.
 | `type` | string | no | Memory type (`fact`, `preference`, `decision`, etc.) |
 | `importance` | number | no | Importance score 0–1 |
 | `tags` | string | no | Comma-separated tags for categorization |
+| `pinned` | boolean | no | Pin this memory so it bypasses decay |
+| `hints` | string[] | no | Prospective recall hints and alternate phrasings |
+| `transcript` | string | no | Raw source text to preserve alongside the extracted memory |
+| `structured` | object | no | Pre-extracted entity/aspect/attribute graph data for structured remembering |
 
 **Returns:** The created memory object with its assigned ID.
 

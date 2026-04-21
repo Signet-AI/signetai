@@ -2003,7 +2003,8 @@ compatibility fields during the transition period:
     "totalReturned": 0,
     "hasSupplementary": false,
     "noHits": true
-  }
+  },
+  "message": "No matching memories found."
 }
 ```
 
@@ -2014,7 +2015,9 @@ Special no-op cases preserve the same shape and add a flag:
 
 `memories` and `count` are legacy compatibility aliases for older hook
 consumers and will mirror `results` and `results.length` during the
-transition period.
+transition period. `message` is the canonical formatted recall brief used by
+thin harness hooks so connectors do not reimplement ranking or presentation
+rules.
 
 ### POST /api/hooks/pre-compaction
 

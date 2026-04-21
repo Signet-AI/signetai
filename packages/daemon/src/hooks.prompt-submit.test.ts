@@ -226,6 +226,11 @@ describe("handleUserPromptSubmit observability", () => {
 		const payload = submitCalls[0]?.[2];
 		expect(payload?.engine).toBe("transcript-fallback");
 		expect(payload?.memoryCount).toBe(1);
+		expect(searchTranscriptFallbackMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				allowScanFallback: false,
+			}),
+		);
 		expect(result.inject).toContain("## Memory Check");
 		expect(result.inject).toContain("## Relevant Memory");
 		expect(result.inject).toContain("[transcript session-2]");

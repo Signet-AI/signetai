@@ -589,6 +589,15 @@ describe("migration framework", () => {
 		]);
 	});
 
+	test("migration 061 adds source_mtime_ms to memory_artifacts", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(memory_artifacts)").all() as Array<{ name: string }>;
+		const colNames = cols.map((col) => col.name);
+		expect(colNames).toContain("source_mtime_ms");
+	});
+
 	test("entities table has pinning columns after migration 022", () => {
 		db = createFreshDb();
 		runMigrations(db);

@@ -1144,50 +1144,34 @@ async function fetchDaemon(path, body) {
   return res.json();
 }
 
-function formatRecallMessage(data) {
+let sharedRecallFormatter;
+async function recallMessage(data) {
+  if (typeof data?.message === "string") return data.message;
   const rows = Array.isArray(data?.results) ? data.results : [];
-  const meta = typeof data?.meta === "object" && data?.meta !== null
-    ? data.meta
-    : {
-        totalReturned: rows.length,
-        hasSupplementary: rows.some((row) => row?.supplementary === true),
-        noHits: rows.length === 0,
-      };
-
-  if (meta.noHits || rows.length === 0) {
+  if (rows.length === 0) {
     return "No matching memories found.";
   }
 
-  const primary = rows.filter((row) => row?.supplementary !== true);
-  const supporting = rows.filter((row) => row?.supplementary === true);
-  const parts = [
-    \`Found \${meta.totalReturned} memories\${data?.method ? \` (\${data.method})\` : ""}.\`,
-    "",
-    "Primary matches:",
-    ...primary.map((row) => {
-      const score = typeof row?.score === "number" ? \`[\${Math.round(row.score * 100)}%] \` : "";
-      const source = typeof row?.source === "string" ? row.source : "unknown";
-      const type = typeof row?.type === "string" ? row.type : "memory";
-      const createdAt = typeof row?.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
-      return \`- \${score}\${row?.content || ""} (\${type}, \${source}, \${createdAt})\`;
-    }),
-  ];
-
-  if (supporting.length > 0) {
-    parts.push("", "Supporting context:");
-    parts.push(
-      ...supporting.map((row) => {
-        const source = typeof row?.source === "string" ? row.source : "unknown";
-        const type = typeof row?.type === "string" ? row.type : "memory";
-        const createdAt = typeof row?.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
-        return \`- \${row?.content || ""} (\${type}, \${source}, \${createdAt})\`;
-      })
-    );
+  try {
+    sharedRecallFormatter ??= (await import("@signet/core")).formatRecallText;
+    if (typeof sharedRecallFormatter === "function") {
+      return sharedRecallFormatter(data);
+    }
+  } catch {
+    // Older standalone hook installs may not have @signet/core resolvable.
+    // Keep a compact compatibility path instead of dumping raw JSON into
+    // the prompt.
   }
 
-  return parts.join("\\n");
+  const method = typeof data?.method === "string" ? data.method : "hybrid";
+  const lines = [\`Found \${rows.length} \${rows.length === 1 ? "memory" : "memories"} (\${method}).\`];
+  for (const row of rows.slice(0, 8)) {
+    const score = typeof row?.score === "number" ? \`[\${Math.round(row.score * 100)}%] \` : "";
+    const id = typeof row?.id === "string" && row.id ? \`id: \${row.id}; \` : "";
+    lines.push(\`- \${score}\${id}\${row?.content ?? ""}\`);
+  }
+  return lines.join("\\n");
 }
-
 const handler = async (event) => {
   // When the plugin runtime path is active, legacy hooks are disabled
   // to prevent duplicate capture/recall. Set SIGNET_RUNTIME_PATH=plugin
@@ -1213,7 +1197,7 @@ const handler = async (event) => {
         const data = await fetchDaemon("/api/hooks/recall", {
           harness: "openclaw", query: args.trim(),
         });
-        event.messages.push(formatRecallMessage(data));
+        event.messages.push(await recallMessage(data));
       } catch (e) { event.messages.push(\`Error: \${e.message}\`); }
       break;
     case "context":

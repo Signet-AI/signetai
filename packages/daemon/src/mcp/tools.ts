@@ -7,7 +7,12 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { applyRecallScoreThreshold, partitionRecallRows } from "@signet/core";
+import {
+	applyRecallScoreThreshold,
+	buildRecallRequestBody,
+	buildRememberRequestBody,
+	formatRecallText,
+} from "@signet/core";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -97,36 +102,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeStructuredMemoryPayload(value: unknown): unknown {
-	if (!isRecord(value)) return value;
-	const aspects = value.aspects;
-	if (!Array.isArray(aspects)) return value;
-
-	return {
-		...value,
-		aspects: aspects.map((aspect) => {
-			if (!isRecord(aspect)) return aspect;
-			if (typeof aspect.entityName === "string" && Array.isArray(aspect.attributes)) return aspect;
-			if (typeof aspect.entity === "string" && typeof aspect.aspect === "string" && typeof aspect.value === "string") {
-				return {
-					entityName: aspect.entity,
-					aspect: aspect.aspect,
-					attributes: [
-						{
-							content: aspect.value,
-							...(typeof aspect.groupKey === "string" ? { groupKey: aspect.groupKey } : {}),
-							...(typeof aspect.claimKey === "string" ? { claimKey: aspect.claimKey } : {}),
-							...(typeof aspect.confidence === "number" ? { confidence: aspect.confidence } : {}),
-							...(typeof aspect.importance === "number" ? { importance: aspect.importance } : {}),
-						},
-					],
-				};
-			}
-			return aspect;
-		}),
-	};
-}
-
 interface DaemonResponse<T> {
 	readonly ok: true;
 	readonly data: T;
@@ -139,32 +114,6 @@ interface DaemonError {
 }
 
 type FetchResult<T> = DaemonResponse<T> | DaemonError;
-
-interface RecallToolRow {
-	readonly content: string;
-	readonly created_at?: string;
-	readonly score?: number;
-	readonly source?: string;
-	readonly type?: string;
-	readonly tags?: string | null;
-	readonly who?: string;
-	readonly pinned?: boolean;
-	readonly project?: string | null;
-	readonly supplementary?: boolean;
-}
-
-interface RecallToolMeta {
-	readonly totalReturned: number;
-	readonly hasSupplementary: boolean;
-	readonly noHits: boolean;
-}
-
-interface RecallToolPayload {
-	readonly query?: string;
-	readonly method?: string;
-	readonly results?: ReadonlyArray<RecallToolRow>;
-	readonly meta?: RecallToolMeta;
-}
 
 const BASE_TOOL_NAMES = new Set<string>([
 	"memory_search",
@@ -268,58 +217,6 @@ function textResult(value: unknown): { content: Array<{ type: "text"; text: stri
 			},
 		],
 	};
-}
-
-function formatRecallToolResult(value: unknown): string {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return typeof value === "string" ? value : JSON.stringify(value, null, 2);
-	}
-
-	const payload = value as RecallToolPayload;
-	const rows = Array.isArray(payload.results) ? payload.results : [];
-	const meta =
-		payload.meta && typeof payload.meta === "object"
-			? payload.meta
-			: {
-					totalReturned: rows.length,
-					hasSupplementary: rows.some((row) => row.supplementary === true),
-					noHits: rows.length === 0,
-				};
-
-	if (meta.noHits || rows.length === 0) {
-		return "No matching memories found.";
-	}
-
-	const { primary, supporting } = partitionRecallRows(rows);
-	const noun = meta.totalReturned === 1 ? "memory" : "memories";
-	const parts = [`Found ${meta.totalReturned} ${noun}${payload.method ? ` (${payload.method})` : ""}.`];
-
-	if (primary.length > 0) {
-		parts.push("", "Primary matches:");
-		parts.push(
-			...primary.map((row) => {
-				const score = typeof row.score === "number" ? `[${(row.score * 100).toFixed(0)}%] ` : "";
-				const source = typeof row.source === "string" ? row.source : "unknown";
-				const type = typeof row.type === "string" ? row.type : "memory";
-				const createdAt = typeof row.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
-				return `- ${score}${row.content} (${type}, ${source}, ${createdAt})`;
-			}),
-		);
-	}
-
-	if (supporting.length > 0) {
-		parts.push("", "Supporting context:");
-		parts.push(
-			...supporting.map((row) => {
-				const source = typeof row.source === "string" ? row.source : "unknown";
-				const type = typeof row.type === "string" ? row.type : "memory";
-				const createdAt = typeof row.created_at === "string" ? row.created_at.slice(0, 10) : "unknown";
-				return `- ${row.content} (${type}, ${source}, ${createdAt})`;
-			}),
-		);
-	}
-
-	return parts.join("\n");
 }
 
 function errorResult(msg: string): {
@@ -686,9 +583,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
-				body: {
-					query,
-					keywordQuery: keyword_query,
+				body: buildRecallRequestBody(query, {
+					keyword_query,
 					limit: limit ?? 10,
 					project,
 					type,
@@ -698,8 +594,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance_min: importance_min ?? min_score,
 					since,
 					until,
-					expand: expand === true ? true : undefined,
-				},
+					expand,
+				}),
 			});
 
 			if (!result.ok) {
@@ -707,7 +603,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}
 			// Score thresholds trim ranked matches, but intentionally keep
 			// unscored supporting context in-band.
-			return textResult(formatRecallToolResult(applyRecallScoreThreshold(result.data, score_min)));
+			return textResult(formatRecallText(applyRecallScoreThreshold(result.data, score_min)));
 		},
 	);
 
@@ -798,24 +694,18 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ content, type, importance, tags, hints, transcript, structured, pinned, createdAt }) => {
-			// Prepend tags prefix if provided (daemon parses [tag1,tag2]: format)
-			let body = content;
-			if (tags) {
-				body = `[${tags}]: ${content}`;
-			}
-			const normalizedStructured = normalizeStructuredMemoryPayload(structured);
-
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/remember", {
 				method: "POST",
-				body: {
-					content: body,
+				body: buildRememberRequestBody(content, {
+					type,
 					importance,
+					tags,
 					hints,
 					transcript,
-					structured: normalizedStructured,
+					structured,
 					pinned,
 					createdAt,
-				},
+				}),
 			});
 
 			if (!result.ok) {

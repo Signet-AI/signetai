@@ -194,6 +194,7 @@ export interface SetupDetection {
 		pi: boolean;
 		forge: boolean;
 		hermesAgent: boolean;
+		gemini: boolean;
 	};
 }
 
@@ -480,6 +481,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			pi: isSignetManagedPiInstall() || existsSync(resolvePiAgentDir()),
 			forge: isForgeInstalled(basePath, home),
 			hermesAgent: resolveHermesRepoPath() !== null,
+			gemini: existsSync(join(home, ".gemini", "settings.json")),
 		},
 	};
 }
