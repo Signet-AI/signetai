@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SIGNET_GRAPHIQ_PLUGIN_ID, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
-import { installGraphiqPlugin } from "./graphiq.js";
+import { ensureGraphiqInstalled, installGraphiqPlugin } from "./graphiq.js";
 import { readSetupCorePluginEnabled } from "./setup-plugins.js";
 
 let tempRoot = "";
@@ -47,5 +47,35 @@ describe("GraphIQ plugin install", () => {
 		const state = readGraphiqState(basePath);
 		expect(state.enabled).toBe(false);
 		expect(state.activeProject).toBe(projectPath);
+	});
+
+	test("pins source fallback cargo installs to a fixed GraphIQ revision", async () => {
+		const basePath = makeRoot();
+		const binDir = join(basePath, "bin");
+		const capturePath = join(basePath, "cargo-args.txt");
+		mkdirSync(binDir, { recursive: true });
+		const cargoPath = join(binDir, "cargo");
+		writeFileSync(cargoPath, `#!/bin/sh\necho "$@" >> ${JSON.stringify(capturePath)}\n`);
+		chmodSync(cargoPath, 0o755);
+
+		const originalPath = process.env.PATH;
+		process.env.PATH = binDir;
+		try {
+			await expect(ensureGraphiqInstalled({ installIfMissing: true })).resolves.toBe(null);
+		} finally {
+			if (originalPath === undefined) {
+				Reflect.deleteProperty(process.env, "PATH");
+			} else {
+				process.env.PATH = originalPath;
+			}
+		}
+
+		const cargoArgs = readFileSync(capturePath, "utf-8");
+		expect(cargoArgs).toContain(
+			"install --git https://github.com/aaf2tbz/graphiq --rev 156f31daf366e9b68d75bdaa4069058666ecc518 graphiq-cli",
+		);
+		expect(cargoArgs).toContain(
+			"install --git https://github.com/aaf2tbz/graphiq --rev 156f31daf366e9b68d75bdaa4069058666ecc518 graphiq-mcp",
+		);
 	});
 });

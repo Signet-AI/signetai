@@ -31,6 +31,7 @@ export interface GraphiqUninstallOptions {
 }
 
 type GraphiqInstallSource = "homebrew" | "source" | "existing";
+const GRAPHIQ_SOURCE_REV = "156f31daf366e9b68d75bdaa4069058666ecc518";
 
 export function hasCommand(command: string): boolean {
 	const path = process.env.PATH ?? "";
@@ -90,13 +91,14 @@ export async function ensureGraphiqInstalled(options: {
 	}
 
 	const spinner = ora("Installing GraphIQ from source...").start();
-	const cli = await runCommand("cargo", ["install", "--git", "https://github.com/aaf2tbz/graphiq", "graphiq-cli"]);
+	const sourceArgs = ["install", "--git", "https://github.com/aaf2tbz/graphiq", "--rev", GRAPHIQ_SOURCE_REV];
+	const cli = await runCommand("cargo", [...sourceArgs, "graphiq-cli"]);
 	if (cli.code !== 0) {
 		spinner.fail("GraphIQ source install failed");
 		if (cli.stderr.trim()) console.error(chalk.dim(cli.stderr.trim()));
 		return null;
 	}
-	const mcp = await runCommand("cargo", ["install", "--git", "https://github.com/aaf2tbz/graphiq", "graphiq-mcp"]);
+	const mcp = await runCommand("cargo", [...sourceArgs, "graphiq-mcp"]);
 	if (mcp.code !== 0) {
 		spinner.warn("GraphIQ CLI installed, but graphiq-mcp source install failed");
 		if (mcp.stderr.trim()) console.error(chalk.dim(mcp.stderr.trim()));

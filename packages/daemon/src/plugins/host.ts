@@ -373,12 +373,12 @@ function resolveState(
 	if (validationErrors.length > 0) {
 		return { state: "blocked", stateReason: validationErrors.join("; ") };
 	}
+	if (!enabled) {
+		return { state: "disabled", stateReason: "disabled by host policy" };
+	}
 	const unsupported = unsupportedRuntimeReason(manifest);
 	if (unsupported) {
 		return { state: "blocked", stateReason: unsupported };
-	}
-	if (!enabled) {
-		return { state: "disabled", stateReason: "disabled by host policy" };
 	}
 	if (health?.status === "unhealthy") {
 		return { state: "degraded", stateReason: health.message ?? "plugin health check failed" };

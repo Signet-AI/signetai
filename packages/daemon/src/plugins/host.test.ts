@@ -58,6 +58,18 @@ describe("PluginHostV1", () => {
 		);
 	});
 
+	test("blocks verified graphiq runtime execution when explicitly enabled", () => {
+		const host = makeHost();
+		const record = host.discover(signetGraphiqManifest, {
+			enabled: true,
+			grantedCapabilities: signetGraphiqManifest.capabilities,
+		});
+		expect(record.state).toBe("blocked");
+		expect(record.stateReason).toContain("unsupported runtime in plugin API V1");
+		expect(record.grantedCapabilities).toEqual([]);
+		expect(record.surfaces.mcpTools).toEqual([]);
+	});
+
 	test("disabling signet.secrets removes active prompt contributions", () => {
 		const host = makeHost();
 		host.discover(signetSecretsManifest, { grantedCapabilities: signetSecretsManifest.capabilities });

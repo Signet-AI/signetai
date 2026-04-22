@@ -12,7 +12,7 @@ describe("plugin manifest validation", () => {
 
 	test("accepts the verified managed graphiq manifest", () => {
 		expect(validatePluginManifest(signetGraphiqManifest, { corePluginIds: [SIGNET_SECRETS_PLUGIN_ID] })).toEqual([]);
-		expect(runtimeSupportedInV1(signetGraphiqManifest)).toBe(true);
+		expect(runtimeSupportedInV1(signetGraphiqManifest)).toBe(false);
 	});
 
 	test("rejects invalid ids, versions, missing docs, and undeclared surface capabilities", () => {
