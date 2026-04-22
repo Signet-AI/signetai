@@ -8,6 +8,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+	SIGNET_GRAPHIQ_PLUGIN_ID,
 	applyRecallScoreThreshold,
 	buildRecallRequestBody,
 	buildRememberRequestBody,
@@ -15,6 +16,7 @@ import {
 } from "@signet/core";
 import { z } from "zod";
 import { getActiveGraphiqDbPath, runGraphiqCli } from "../graphiq.js";
+import { getDefaultPluginHost } from "../plugins/index.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,6 +35,19 @@ interface McpServerOptions {
 		readonly workspace?: string;
 		readonly channel?: string;
 	};
+	/** Plugin policy source used to gate plugin-owned MCP surfaces */
+	readonly pluginHost?: GraphiqPluginPolicyHost;
+}
+
+interface GraphiqPluginPolicyHost {
+	readonly get: (id: string) =>
+		| {
+				readonly state: string;
+				readonly surfaces: {
+					readonly mcpTools: ReadonlyArray<{ readonly name: string }>;
+				};
+		  }
+		| undefined;
 }
 
 interface MarketplaceRoutedTool {
@@ -174,6 +189,14 @@ const GRAPHIQ_CONSTANTS_TOP_DEFAULT = 20;
 const GRAPHIQ_CONSTANTS_TOP_MAX = 100;
 const GRAPHIQ_BLAST_DEPTH_DEFAULT = 3;
 const GRAPHIQ_BLAST_DEPTH_MAX = 10;
+const GRAPHIQ_MCP_TOOL_NAMES = new Set([
+	"code_search",
+	"code_context",
+	"code_blast",
+	"code_status",
+	"code_doctor",
+	"code_constants",
+]);
 
 // ---------------------------------------------------------------------------
 // Internal HTTP helper
@@ -266,6 +289,13 @@ async function graphIqToolResult(
 		const message = error instanceof Error ? error.message : String(error);
 		return errorResult(`${label}: ${message}`);
 	}
+}
+
+function allowedGraphiqMcpTools(pluginHost: GraphiqPluginPolicyHost): ReadonlySet<string> {
+	const plugin = pluginHost.get(SIGNET_GRAPHIQ_PLUGIN_ID);
+	const active = plugin?.state === "active" || plugin?.state === "degraded";
+	if (!active) return new Set();
+	return new Set(plugin.surfaces.mcpTools.map((tool) => tool.name).filter((name) => GRAPHIQ_MCP_TOOL_NAMES.has(name)));
 }
 
 function sanitizeToolSegment(value: string): string {
@@ -554,6 +584,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	const enableMarketplaceProxyTools = opts?.enableMarketplaceProxyTools ?? true;
 	const context = normalizeContext(opts?.context);
 	const contextKey = buildContextKey(context);
+	const pluginHost = opts?.pluginHost ?? getDefaultPluginHost();
 
 	const server = new McpServer({
 		name: "signet",
@@ -1911,116 +1942,129 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 	);
 
-	if (getActiveGraphiqDbPath()) {
-		server.registerTool(
-			"code_search",
-			{
-				title: "Search Code",
-				description: "Search the active GraphIQ-indexed project for symbols and implementation context.",
-				inputSchema: z.object({
-					query: z.string().describe("Code search query"),
-					top: z
-						.number()
-						.int()
-						.min(1)
-						.max(GRAPHIQ_SEARCH_TOP_MAX)
-						.optional()
-						.describe(`Max results to return (default ${GRAPHIQ_SEARCH_TOP_DEFAULT}, max ${GRAPHIQ_SEARCH_TOP_MAX})`),
-					file: z.string().optional().describe("Optional file path filter"),
-					debug: z.boolean().optional().describe("Include GraphIQ score/debug details"),
-				}),
-			},
-			async ({ query, top, file, debug }) => {
-				const boundedTop = boundedInteger(top, GRAPHIQ_SEARCH_TOP_DEFAULT, GRAPHIQ_SEARCH_TOP_MAX);
-				const args = ["search", query, "--top", String(boundedTop)];
-				if (file) args.push("--file", file);
-				if (debug) args.push("--debug");
-				return graphIqToolResult(args, "Code search failed");
-			},
-		);
+	const graphIqToolNames = getActiveGraphiqDbPath() ? allowedGraphiqMcpTools(pluginHost) : new Set<string>();
+	if (graphIqToolNames.size > 0) {
+		if (graphIqToolNames.has("code_search")) {
+			server.registerTool(
+				"code_search",
+				{
+					title: "Search Code",
+					description: "Search the active GraphIQ-indexed project for symbols and implementation context.",
+					inputSchema: z.object({
+						query: z.string().describe("Code search query"),
+						top: z
+							.number()
+							.int()
+							.min(1)
+							.max(GRAPHIQ_SEARCH_TOP_MAX)
+							.optional()
+							.describe(`Max results to return (default ${GRAPHIQ_SEARCH_TOP_DEFAULT}, max ${GRAPHIQ_SEARCH_TOP_MAX})`),
+						file: z.string().optional().describe("Optional file path filter"),
+						debug: z.boolean().optional().describe("Include GraphIQ score/debug details"),
+					}),
+				},
+				async ({ query, top, file, debug }) => {
+					const boundedTop = boundedInteger(top, GRAPHIQ_SEARCH_TOP_DEFAULT, GRAPHIQ_SEARCH_TOP_MAX);
+					const args = ["search", query, "--top", String(boundedTop)];
+					if (file) args.push("--file", file);
+					if (debug) args.push("--debug");
+					return graphIqToolResult(args, "Code search failed");
+				},
+			);
+		}
 
-		server.registerTool(
-			"code_context",
-			{
-				title: "Code Context",
-				description: "Read full source and structural neighborhood for a symbol in the active GraphIQ project.",
-				inputSchema: z.object({
-					symbol: z.string().describe("Symbol name to inspect"),
-				}),
-			},
-			async ({ symbol }) => graphIqToolResult(["context", symbol], "Code context failed"),
-		);
+		if (graphIqToolNames.has("code_context")) {
+			server.registerTool(
+				"code_context",
+				{
+					title: "Code Context",
+					description: "Read full source and structural neighborhood for a symbol in the active GraphIQ project.",
+					inputSchema: z.object({
+						symbol: z.string().describe("Symbol name to inspect"),
+					}),
+				},
+				async ({ symbol }) => graphIqToolResult(["context", symbol], "Code context failed"),
+			);
+		}
 
-		server.registerTool(
-			"code_blast",
-			{
-				title: "Code Blast Radius",
-				description: "Analyze impact radius for a symbol in the active GraphIQ project.",
-				inputSchema: z.object({
-					symbol: z.string().describe("Symbol name to analyze"),
-					depth: z
-						.number()
-						.int()
-						.min(1)
-						.max(GRAPHIQ_BLAST_DEPTH_MAX)
-						.optional()
-						.describe(`Traversal depth (default ${GRAPHIQ_BLAST_DEPTH_DEFAULT}, max ${GRAPHIQ_BLAST_DEPTH_MAX})`),
-					direction: z.enum(["forward", "backward", "both"]).optional().describe("Traversal direction"),
-				}),
-			},
-			async ({ symbol, depth, direction }) => {
-				const boundedDepth = boundedInteger(depth, GRAPHIQ_BLAST_DEPTH_DEFAULT, GRAPHIQ_BLAST_DEPTH_MAX);
-				const args = ["blast", symbol, "--depth", String(boundedDepth), "--direction", direction ?? "both"];
-				return graphIqToolResult(args, "Code blast failed");
-			},
-		);
+		if (graphIqToolNames.has("code_blast")) {
+			server.registerTool(
+				"code_blast",
+				{
+					title: "Code Blast Radius",
+					description: "Analyze impact radius for a symbol in the active GraphIQ project.",
+					inputSchema: z.object({
+						symbol: z.string().describe("Symbol name to analyze"),
+						depth: z
+							.number()
+							.int()
+							.min(1)
+							.max(GRAPHIQ_BLAST_DEPTH_MAX)
+							.optional()
+							.describe(`Traversal depth (default ${GRAPHIQ_BLAST_DEPTH_DEFAULT}, max ${GRAPHIQ_BLAST_DEPTH_MAX})`),
+						direction: z.enum(["forward", "backward", "both"]).optional().describe("Traversal direction"),
+					}),
+				},
+				async ({ symbol, depth, direction }) => {
+					const boundedDepth = boundedInteger(depth, GRAPHIQ_BLAST_DEPTH_DEFAULT, GRAPHIQ_BLAST_DEPTH_MAX);
+					const args = ["blast", symbol, "--depth", String(boundedDepth), "--direction", direction ?? "both"];
+					return graphIqToolResult(args, "Code blast failed");
+				},
+			);
+		}
 
-		server.registerTool(
-			"code_status",
-			{
-				title: "Code Index Status",
-				description: "Show GraphIQ status for the active indexed project.",
-				inputSchema: z.object({}),
-			},
-			async () => graphIqToolResult(["status"], "Code status failed"),
-		);
+		if (graphIqToolNames.has("code_status")) {
+			server.registerTool(
+				"code_status",
+				{
+					title: "Code Index Status",
+					description: "Show GraphIQ status for the active indexed project.",
+					inputSchema: z.object({}),
+				},
+				async () => graphIqToolResult(["status"], "Code status failed"),
+			);
+		}
 
-		server.registerTool(
-			"code_doctor",
-			{
-				title: "Code Index Doctor",
-				description: "Diagnose GraphIQ artifact health for the active indexed project.",
-				inputSchema: z.object({}),
-			},
-			async () => graphIqToolResult(["doctor"], "Code doctor failed"),
-		);
+		if (graphIqToolNames.has("code_doctor")) {
+			server.registerTool(
+				"code_doctor",
+				{
+					title: "Code Index Doctor",
+					description: "Diagnose GraphIQ artifact health for the active indexed project.",
+					inputSchema: z.object({}),
+				},
+				async () => graphIqToolResult(["doctor"], "Code doctor failed"),
+			);
+		}
 
-		server.registerTool(
-			"code_constants",
-			{
-				title: "Code Constants",
-				description: "Find shared numeric/string constants in the active GraphIQ project.",
-				inputSchema: z.object({
-					query: z.string().optional().describe("Optional constant/name filter"),
-					top: z
-						.number()
-						.int()
-						.min(1)
-						.max(GRAPHIQ_CONSTANTS_TOP_MAX)
-						.optional()
-						.describe(
-							`Max results to return (default ${GRAPHIQ_CONSTANTS_TOP_DEFAULT}, max ${GRAPHIQ_CONSTANTS_TOP_MAX})`,
-						),
-				}),
-			},
-			async ({ query, top }) => {
-				const args = ["constants"];
-				if (query) args.push(query);
-				const boundedTop = boundedInteger(top, GRAPHIQ_CONSTANTS_TOP_DEFAULT, GRAPHIQ_CONSTANTS_TOP_MAX);
-				args.push("--top", String(boundedTop));
-				return graphIqToolResult(args, "Code constants failed");
-			},
-		);
+		if (graphIqToolNames.has("code_constants")) {
+			server.registerTool(
+				"code_constants",
+				{
+					title: "Code Constants",
+					description: "Find shared numeric/string constants in the active GraphIQ project.",
+					inputSchema: z.object({
+						query: z.string().optional().describe("Optional constant/name filter"),
+						top: z
+							.number()
+							.int()
+							.min(1)
+							.max(GRAPHIQ_CONSTANTS_TOP_MAX)
+							.optional()
+							.describe(
+								`Max results to return (default ${GRAPHIQ_CONSTANTS_TOP_DEFAULT}, max ${GRAPHIQ_CONSTANTS_TOP_MAX})`,
+							),
+					}),
+				},
+				async ({ query, top }) => {
+					const args = ["constants"];
+					if (query) args.push(query);
+					const boundedTop = boundedInteger(top, GRAPHIQ_CONSTANTS_TOP_DEFAULT, GRAPHIQ_CONSTANTS_TOP_MAX);
+					args.push("--top", String(boundedTop));
+					return graphIqToolResult(args, "Code constants failed");
+				},
+			);
+		}
 	}
 
 	if (enableMarketplaceProxyTools) {

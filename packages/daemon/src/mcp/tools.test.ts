@@ -11,7 +11,8 @@ import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { updateGraphiqActiveProject } from "@signet/core";
+import { SIGNET_GRAPHIQ_PLUGIN_ID, updateGraphiqActiveProject } from "@signet/core";
+import { resetDefaultPluginHostForTests } from "../plugins/index.js";
 import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
 
 // ---------------------------------------------------------------------------
@@ -31,6 +32,37 @@ interface RegisteredTool {
 		>;
 	};
 	enabled: boolean;
+}
+
+const GRAPHIQ_TOOL_NAMES = [
+	"code_search",
+	"code_context",
+	"code_blast",
+	"code_status",
+	"code_doctor",
+	"code_constants",
+] as const;
+
+function graphiqPolicyHost(
+	state: "active" | "degraded" | "blocked" | "disabled" = "active",
+	toolNames: readonly string[] = GRAPHIQ_TOOL_NAMES,
+): {
+	get: (id: string) =>
+		| {
+				state: string;
+				surfaces: { mcpTools: Array<{ name: string }> };
+		  }
+		| undefined;
+} {
+	return {
+		get: (id: string) =>
+			id === SIGNET_GRAPHIQ_PLUGIN_ID
+				? {
+						state,
+						surfaces: { mcpTools: toolNames.map((name) => ({ name })) },
+					}
+				: undefined,
+	};
 }
 
 function getRegisteredTools(server: McpServer): Record<string, RegisteredTool> {
@@ -102,6 +134,7 @@ describe("createMcpServer", () => {
 	beforeEach(async () => {
 		tempAgentsDir = mkdtempSync(join(tmpdir(), "signet-mcp-tools-"));
 		process.env.SIGNET_PATH = tempAgentsDir;
+		resetDefaultPluginHostForTests();
 		server = await createMcpServer({
 			daemonUrl: "http://localhost:3850",
 			version: "0.0.1-test",
@@ -123,6 +156,7 @@ describe("createMcpServer", () => {
 		}
 		if (tempAgentsDir) rmSync(tempAgentsDir, { recursive: true, force: true });
 		tempAgentsDir = "";
+		resetDefaultPluginHostForTests();
 	});
 
 	it("creates server with correct info", () => {
@@ -188,6 +222,7 @@ describe("createMcpServer", () => {
 			daemonUrl: "http://localhost:3850",
 			version: "0.0.1-test",
 			enableMarketplaceProxyTools: false,
+			pluginHost: graphiqPolicyHost(),
 		});
 		const names = getToolNames(graphServer);
 		expect(names).toContain("code_search");
@@ -196,6 +231,28 @@ describe("createMcpServer", () => {
 		expect(names).toContain("code_status");
 		expect(names).toContain("code_doctor");
 		expect(names).toContain("code_constants");
+	});
+
+	it("does not register GraphIQ code tools when plugin host blocks GraphIQ", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+			pluginHost: graphiqPolicyHost("blocked"),
+		});
+		const names = getToolNames(graphServer);
+		for (const name of GRAPHIQ_TOOL_NAMES) {
+			expect(names).not.toContain(name);
+		}
 	});
 
 	it("bounds GraphIQ code tool numeric inputs before subprocess calls", async () => {
@@ -220,6 +277,7 @@ describe("createMcpServer", () => {
 			daemonUrl: "http://localhost:3850",
 			version: "0.0.1-test",
 			enableMarketplaceProxyTools: false,
+			pluginHost: graphiqPolicyHost(),
 		});
 
 		expect(getToolPropertySchema(graphServer, "code_search", "top")).toMatchObject({ minValue: 1, maxValue: 100 });
