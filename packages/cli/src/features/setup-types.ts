@@ -21,6 +21,8 @@ export interface SetupWizardOptions {
 	allowUnprotectedWorkspace?: boolean;
 	createLocalBackup?: boolean;
 	disableSignetSecrets?: boolean;
+	withGraphiq?: boolean;
+	disableGraphiq?: boolean;
 }
 
 export interface SetupDeps {
@@ -85,4 +87,5 @@ export interface FreshSetupConfig {
 	readonly allowUnprotectedWorkspace: boolean;
 	readonly createLocalBackup: boolean;
 	readonly signetSecretsEnabled: boolean;
+	readonly graphiqEnabled: boolean;
 }

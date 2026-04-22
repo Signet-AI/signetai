@@ -7,6 +7,7 @@ import chalk from "chalk";
 import open from "open";
 import ora from "ora";
 import { managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
+import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
 import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
@@ -165,7 +166,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				createLocalBackup: options.createLocalBackup === true,
 			});
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
-			writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled });
+			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
+			writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
+			if (graphiqEnabled) {
+				await installGraphiqPlugin({ agentsDir: basePath });
+			}
 
 			const requestedHarnesses = normalizeHarnessList(options.harness, deps);
 			if (requestedHarnesses.length > 0) {
@@ -283,6 +288,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			});
 
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
+			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				nonInteractive: true,
@@ -295,6 +301,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				extractionProvider: migrationExtractionProvider,
 				extractionModel: deps.normalizeStringValue(options.extractionModel) || undefined,
 				signetSecretsEnabled,
+				graphiqEnabled,
 			});
 			return;
 		}
@@ -366,6 +373,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			});
 
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, false, options);
+			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, false, options);
 
 			await runExistingSetupWizard(basePath, existing, existingConfig, deps, {
 				allowUnprotectedWorkspace: false,
@@ -378,6 +386,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					deps.normalizeStringValue(existingExtraction.model) ||
 					undefined,
 				signetSecretsEnabled,
+				graphiqEnabled,
 			});
 			return;
 		}
@@ -507,6 +516,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			});
 
 	const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, nonInteractive, options);
+	const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, nonInteractive, options);
 
 	let networkMode: NetworkMode;
 	if (nonInteractive) {
@@ -899,9 +909,40 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 		createLocalBackup: options.createLocalBackup === true,
 		signetSecretsEnabled,
+		graphiqEnabled,
 	};
 
 	await runFreshSetup(cfg, deps);
+}
+
+async function resolveGraphiqPluginSelection(
+	basePath: string,
+	nonInteractive: boolean,
+	options: SetupWizardOptions,
+): Promise<boolean> {
+	const current = readSetupCorePluginEnabled(basePath, "signet.graphiq");
+	const defaultEnabled = current ?? false;
+	if (options.withGraphiq === true) return true;
+	if (options.disableGraphiq === true) return false;
+	if (nonInteractive) return defaultEnabled;
+
+	console.log();
+	console.log(chalk.bold("  Optional code retrieval"));
+	console.log(
+		chalk.dim(
+			"    GraphIQ is a managed plugin for fast local codebase indexing, symbol search, structural context, constants, and blast-radius analysis.",
+		),
+	);
+	console.log(
+		chalk.dim(
+			"    It stores each project index outside Signet memory at <project>/.graphiq/ and Signet only remembers the active indexed project.",
+		),
+	);
+	console.log();
+	return confirm({
+		message: "Install GraphIQ for better code retrieval/context?",
+		default: defaultEnabled,
+	});
 }
 
 async function resolveSignetSecretsCorePluginSelection(

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+	SIGNET_GRAPHIQ_PLUGIN_ID,
 	SIGNET_PLUGIN_REGISTRY_DIR,
 	SIGNET_PLUGIN_REGISTRY_FILE,
 	SIGNET_PLUGIN_REGISTRY_VERSION,
@@ -9,6 +10,7 @@ import {
 
 export interface CorePluginSetupConfig {
 	readonly signetSecretsEnabled: boolean;
+	readonly graphiqEnabled?: boolean;
 }
 
 interface PersistedPluginStateV1 {
@@ -50,17 +52,27 @@ export function writeSetupCorePluginRegistry(
 	const timestamp = now.toISOString();
 	const store = readPluginRegistry(basePath);
 	const previous = store.plugins[SIGNET_SECRETS_PLUGIN_ID];
+	const previousGraphiq = store.plugins[SIGNET_GRAPHIQ_PLUGIN_ID];
+	const plugins: Record<string, PersistedPluginStateV1> = {
+		...store.plugins,
+		[SIGNET_SECRETS_PLUGIN_ID]: {
+			...previous,
+			enabled: config.signetSecretsEnabled,
+			installedAt: previous?.installedAt ?? timestamp,
+			updatedAt: timestamp,
+		},
+	};
+	if (typeof config.graphiqEnabled === "boolean") {
+		plugins[SIGNET_GRAPHIQ_PLUGIN_ID] = {
+			...previousGraphiq,
+			enabled: config.graphiqEnabled,
+			installedAt: previousGraphiq?.installedAt ?? timestamp,
+			updatedAt: timestamp,
+		};
+	}
 	const next: PluginRegistryStoreV1 = {
 		version: SIGNET_PLUGIN_REGISTRY_VERSION,
-		plugins: {
-			...store.plugins,
-			[SIGNET_SECRETS_PLUGIN_ID]: {
-				...previous,
-				enabled: config.signetSecretsEnabled,
-				installedAt: previous?.installedAt ?? timestamp,
-				updatedAt: timestamp,
-			},
-		},
+		plugins,
 	};
 
 	mkdirSync(join(basePath, SIGNET_PLUGIN_REGISTRY_DIR), { recursive: true });

@@ -54,12 +54,14 @@ Commands Overview
 | `signet daemon logs` | View daemon logs |
 | `signet remember` | Save a memory |
 | `signet recall` | Search memories |
+| `signet index` | Index a project with GraphIQ and make it active code context |
 | `signet export` | Export a portable bundle |
 | `signet import` | Import a portable bundle |
 | `signet migrate-schema` | Migrate database to unified schema |
 | `signet migrate-vectors` | Migrate BLOB vectors to sqlite-vec format |
 | `signet sync` | Sync hooks, extensions, built-in templates, and skills |
 | `signet secret` | Manage encrypted secrets |
+| `signet graphiq` | Manage the optional GraphIQ code retrieval plugin |
 | `signet skill` | Manage agent skills from registry |
 | `signet git` | Git sync management for $SIGNET_WORKSPACE |
 | `signet hook` | Lifecycle hook commands |
@@ -134,6 +136,8 @@ Options:
 | `--open-dashboard` | Open dashboard after non-interactive setup |
 | `--skip-git` | Skip git initialization/commits in non-interactive mode |
 | `--disable-signet-secrets` | Leave the bundled Signet Secrets core plugin installed but disabled |
+| `--with-graphiq` | Install and enable the optional verified GraphIQ code retrieval plugin |
+| `--disable-graphiq` | Leave the optional GraphIQ plugin disabled |
 | `--create-local-backup` | If OpenClaw points at this workspace and no origin exists, create a local snapshot automatically |
 | `--allow-unprotected-workspace` | Explicitly allow setup to finish without origin or snapshot in non-interactive mode |
 
@@ -150,6 +154,8 @@ Non-interactive behavior:
   are preserved unless `--extraction-provider` is explicitly passed
 - the bundled Signet Secrets core plugin is enabled by default; pass
   `--disable-signet-secrets` to opt out while leaving it installed
+- GraphIQ is optional and disabled by default; pass `--with-graphiq` to install
+  it through Homebrew, with source install as fallback
 - explicit provider flags override inferred defaults
 - git: enabled unless `--skip-git` is passed
 - when OpenClaw points at this workspace and no `origin` remote exists, setup
@@ -188,14 +194,17 @@ Wizard steps:
    value-safe CLI/MCP/SDK access, command injection with output redaction, and
    connections to Signet's local encrypted store and compatible 1Password
    references, then asks whether to enable the bundled `signet.secrets` plugin
-6. **Deployment Context** - Where Signet is running (`local`, `vps`, `server`)
+6. **Optional Code Retrieval** - GraphIQ explains fast local codebase indexing,
+   structural context, constants, and blast-radius tools, then asks whether to
+   install the verified managed `signet.graphiq` plugin
+7. **Deployment Context** - Where Signet is running (`local`, `vps`, `server`)
    to show environment-aware guidance before extraction provider selection
-7. **Embedding Provider**:
+8. **Embedding Provider**:
    - Built-in (recommended, no setup required)
    - Ollama (local)
    - OpenAI API
    - Skip embeddings
-8. **Embedding Model** - Based on provider:
+9. **Embedding Model** - Based on provider:
    - Built-in: `nomic-embed-text-v1.5`
    - Ollama: `nomic-embed-text`, `all-minilm`, `mxbai-embed-large`
    - OpenAI: text-embedding-3-small, text-embedding-3-large
@@ -203,15 +212,15 @@ Wizard steps:
      service health, and model presence; if checks fail, setup offers
      retry, switch to built-in embeddings, switch to OpenAI, or
      continue without embeddings
-9. **Search Balance** - Semantic vs keyword weighting
-10. **Advanced Settings** (optional):
+10. **Search Balance** - Semantic vs keyword weighting
+11. **Advanced Settings** (optional):
    - `top_k` - Search candidates per source
    - `min_score` - Minimum search score threshold
    - `session_budget` - Context character limit
    - `decay_rate` - Memory importance decay
-11. **Import** - Optionally import from another platform
-12. **Git** - Initialize version control
-13. **Launch Dashboard** - Open web UI
+12. **Import** - Optionally import from another platform
+13. **Git** - Initialize version control
+14. **Launch Dashboard** - Open web UI
 
 What gets created:
 
@@ -260,6 +269,43 @@ Sections:
 6. **View current config** - Display agent.yaml contents
 
 Changes are saved to `agent.yaml` immediately.
+
+---
+
+`signet index <path>`
+---
+
+Thin wrapper around `graphiq index <path>`. The command installs GraphIQ if it
+is missing, indexes the project into `<path>/.graphiq/`, enables the managed
+`signet.graphiq` plugin, and records that path as Signet's active code project.
+
+```bash
+signet index ~/signet/signetai
+signet index . --no-install
+```
+
+The GraphIQ index stays outside Signet memory and the main Signet database.
+Signet only stores plugin state and the active project pointer under
+`$SIGNET_WORKSPACE/.daemon/graphiq/state.json`.
+
+---
+
+`signet graphiq`
+---
+
+Manage the optional verified GraphIQ code retrieval plugin.
+
+| Command | Description |
+|---------|-------------|
+| `signet graphiq install` | Install GraphIQ with Homebrew, falling back to source, and enable the plugin |
+| `signet graphiq status` | Show GraphIQ status for the active indexed project |
+| `signet graphiq doctor` | Diagnose the active GraphIQ index |
+| `signet graphiq upgrade-index` | Rebuild stale artifacts for the active project |
+| `signet graphiq uninstall` | Disable Signet's GraphIQ integration and keep project indexes |
+| `signet graphiq uninstall --purge-indexes` | Disable integration and delete known `.graphiq/` directories |
+
+GraphIQ is maintained as a managed plugin by `aaf2tbz`, but remains optional
+and is not installed during setup unless the user opts in.
 
 ---
 

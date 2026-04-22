@@ -21,6 +21,8 @@ interface SetupOptions {
 	allowUnprotectedWorkspace?: boolean;
 	createLocalBackup?: boolean;
 	disableSignetSecrets?: boolean;
+	withGraphiq?: boolean;
+	disableGraphiq?: boolean;
 }
 
 interface PathOptions {
@@ -91,6 +93,8 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 			"--disable-signet-secrets",
 			"Leave the bundled Signet Secrets core plugin installed but disabled during setup",
 		)
+		.option("--with-graphiq", "Install and enable the optional GraphIQ code retrieval plugin")
+		.option("--disable-graphiq", "Leave the optional GraphIQ plugin disabled during setup")
 		.action(deps.setupWizard);
 
 	const dashboard = program

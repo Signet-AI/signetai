@@ -5,9 +5,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { updateGraphiqActiveProject } from "@signet/core";
 import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
 
 // ---------------------------------------------------------------------------
@@ -69,8 +73,12 @@ function mockFetch(status: number, body: unknown, capture?: { url?: string; meth
 describe("createMcpServer", () => {
 	let server: McpServer;
 	const originalFetch = globalThis.fetch;
+	const originalSignetPath = process.env.SIGNET_PATH;
+	let tempAgentsDir = "";
 
 	beforeEach(async () => {
+		tempAgentsDir = mkdtempSync(join(tmpdir(), "signet-mcp-tools-"));
+		process.env.SIGNET_PATH = tempAgentsDir;
 		server = await createMcpServer({
 			daemonUrl: "http://localhost:3850",
 			version: "0.0.1-test",
@@ -80,6 +88,13 @@ describe("createMcpServer", () => {
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
+		if (originalSignetPath === undefined) {
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
+		} else {
+			process.env.SIGNET_PATH = originalSignetPath;
+		}
+		if (tempAgentsDir) rmSync(tempAgentsDir, { recursive: true, force: true });
+		tempAgentsDir = "";
 	});
 
 	it("creates server with correct info", () => {
@@ -129,6 +144,30 @@ describe("createMcpServer", () => {
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("session_bypass");
 		expect(names.length).toBe(39);
+	});
+
+	it("registers generic code tools when GraphIQ has an active project", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+		const names = getToolNames(graphServer);
+		expect(names).toContain("code_search");
+		expect(names).toContain("code_context");
+		expect(names).toContain("code_blast");
+		expect(names).toContain("code_status");
+		expect(names).toContain("code_doctor");
+		expect(names).toContain("code_constants");
 	});
 
 	it("registers intuitive knowledge navigation aliases", async () => {

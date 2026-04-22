@@ -89,7 +89,7 @@ export function runtimeSupportedInV1(manifest: PluginManifestV1): boolean {
 	return (
 		manifest.runtime.language === "typescript" &&
 		manifest.runtime.kind === "bundled-module" &&
-		manifest.trustTier === "core"
+		(manifest.trustTier === "core" || manifest.trustTier === "verified")
 	);
 }
 

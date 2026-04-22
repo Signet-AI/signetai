@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { countTokens } from "../pipeline/tokenizer.js";
+import { SIGNET_GRAPHIQ_PLUGIN_ID, signetGraphiqManifest } from "./bundled/graphiq.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
 import { PluginHostV1 } from "./host.js";
 import type { PluginManifestV1 } from "./types.js";
@@ -40,6 +41,21 @@ describe("PluginHostV1", () => {
 		expect(plugins[0]?.state).toBe("active");
 		expect(plugins[0]?.grantedCapabilities).toContain("secrets:exec");
 		expect(plugins[0]?.surfaces.mcpTools.map((tool) => tool.name)).toContain("secret_exec");
+	});
+
+	test("discovers verified graphiq metadata disabled by default", () => {
+		const host = makeHost();
+		const record = host.discover(signetGraphiqManifest, {
+			enabled: false,
+			grantedCapabilities: signetGraphiqManifest.capabilities,
+		});
+		expect(record.id).toBe(SIGNET_GRAPHIQ_PLUGIN_ID);
+		expect(record.trustTier).toBe("verified");
+		expect(record.state).toBe("disabled");
+		expect(record.surfaces.mcpTools).toEqual([]);
+		expect(host.diagnostics(SIGNET_GRAPHIQ_PLUGIN_ID)?.plannedSurfaces.mcpTools.map((tool) => tool.name)).toContain(
+			"code_search",
+		);
 	});
 
 	test("disabling signet.secrets removes active prompt contributions", () => {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { SIGNET_SECRETS_PLUGIN_ID } from "@signet/core";
+import { SIGNET_GRAPHIQ_PLUGIN_ID, SIGNET_SECRETS_PLUGIN_ID } from "@signet/core";
 import {
 	getSetupPluginRegistryPath,
 	readSetupCorePluginEnabled,
@@ -34,6 +34,23 @@ describe("setup core plugin registry", () => {
 		const registry = JSON.parse(readFileSync(getSetupPluginRegistryPath(basePath), "utf-8"));
 		expect(registry.plugins[SIGNET_SECRETS_PLUGIN_ID]).toEqual({
 			enabled: false,
+			installedAt: "2026-04-17T12:00:00.000Z",
+			updatedAt: "2026-04-17T12:00:00.000Z",
+		});
+	});
+
+	test("writes optional graphiq plugin state when setup opts in", () => {
+		const basePath = makeRoot();
+		writeSetupCorePluginRegistry(
+			basePath,
+			{ signetSecretsEnabled: true, graphiqEnabled: true },
+			new Date("2026-04-17T12:00:00.000Z"),
+		);
+
+		expect(readSetupCorePluginEnabled(basePath, SIGNET_GRAPHIQ_PLUGIN_ID)).toBe(true);
+		const registry = JSON.parse(readFileSync(getSetupPluginRegistryPath(basePath), "utf-8"));
+		expect(registry.plugins[SIGNET_GRAPHIQ_PLUGIN_ID]).toEqual({
+			enabled: true,
 			installedAt: "2026-04-17T12:00:00.000Z",
 			updatedAt: "2026-04-17T12:00:00.000Z",
 		});

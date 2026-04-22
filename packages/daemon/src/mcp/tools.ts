@@ -14,6 +14,7 @@ import {
 	formatRecallText,
 } from "@signet/core";
 import { z } from "zod";
+import { getActiveGraphiqDbPath, runGraphiqCli } from "../graphiq.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,6 +156,12 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"mcp_server_policy_get",
 	"mcp_server_policy_set",
 	"session_bypass",
+	"code_search",
+	"code_context",
+	"code_blast",
+	"code_status",
+	"code_doctor",
+	"code_constants",
 ]);
 
 const marketplaceProxyState = new WeakMap<McpServer, MarketplaceProxyState>();
@@ -227,6 +234,24 @@ function errorResult(msg: string): {
 		content: [{ type: "text" as const, text: msg }],
 		isError: true as const,
 	};
+}
+
+async function graphIqToolResult(
+	args: readonly string[],
+	label: string,
+): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: true }> {
+	try {
+		const result = await runGraphiqCli(args);
+		const stderr = result.stderr.trim();
+		const output = result.stdout.trim();
+		const parts = [`Active project: ${result.activeProject}`];
+		if (output) parts.push(output);
+		if (stderr) parts.push(`stderr:\n${stderr}`);
+		return textResult(parts.join("\n\n"));
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return errorResult(`${label}: ${message}`);
+	}
 }
 
 function sanitizeToolSegment(value: string): string {
@@ -1871,6 +1896,95 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
+
+	if (getActiveGraphiqDbPath()) {
+		server.registerTool(
+			"code_search",
+			{
+				title: "Search Code",
+				description: "Search the active GraphIQ-indexed project for symbols and implementation context.",
+				inputSchema: z.object({
+					query: z.string().describe("Code search query"),
+					top: z.number().optional().describe("Max results to return (default 10)"),
+					file: z.string().optional().describe("Optional file path filter"),
+					debug: z.boolean().optional().describe("Include GraphIQ score/debug details"),
+				}),
+			},
+			async ({ query, top, file, debug }) => {
+				const args = ["search", query, "--top", String(top ?? 10)];
+				if (file) args.push("--file", file);
+				if (debug) args.push("--debug");
+				return graphIqToolResult(args, "Code search failed");
+			},
+		);
+
+		server.registerTool(
+			"code_context",
+			{
+				title: "Code Context",
+				description: "Read full source and structural neighborhood for a symbol in the active GraphIQ project.",
+				inputSchema: z.object({
+					symbol: z.string().describe("Symbol name to inspect"),
+				}),
+			},
+			async ({ symbol }) => graphIqToolResult(["context", symbol], "Code context failed"),
+		);
+
+		server.registerTool(
+			"code_blast",
+			{
+				title: "Code Blast Radius",
+				description: "Analyze impact radius for a symbol in the active GraphIQ project.",
+				inputSchema: z.object({
+					symbol: z.string().describe("Symbol name to analyze"),
+					depth: z.number().optional().describe("Traversal depth (default 3)"),
+					direction: z.enum(["forward", "backward", "both"]).optional().describe("Traversal direction"),
+				}),
+			},
+			async ({ symbol, depth, direction }) => {
+				const args = ["blast", symbol, "--depth", String(depth ?? 3), "--direction", direction ?? "both"];
+				return graphIqToolResult(args, "Code blast failed");
+			},
+		);
+
+		server.registerTool(
+			"code_status",
+			{
+				title: "Code Index Status",
+				description: "Show GraphIQ status for the active indexed project.",
+				inputSchema: z.object({}),
+			},
+			async () => graphIqToolResult(["status"], "Code status failed"),
+		);
+
+		server.registerTool(
+			"code_doctor",
+			{
+				title: "Code Index Doctor",
+				description: "Diagnose GraphIQ artifact health for the active indexed project.",
+				inputSchema: z.object({}),
+			},
+			async () => graphIqToolResult(["doctor"], "Code doctor failed"),
+		);
+
+		server.registerTool(
+			"code_constants",
+			{
+				title: "Code Constants",
+				description: "Find shared numeric/string constants in the active GraphIQ project.",
+				inputSchema: z.object({
+					query: z.string().optional().describe("Optional constant/name filter"),
+					top: z.number().optional().describe("Max results to return (default 20)"),
+				}),
+			},
+			async ({ query, top }) => {
+				const args = ["constants"];
+				if (query) args.push(query);
+				args.push("--top", String(top ?? 20));
+				return graphIqToolResult(args, "Code constants failed");
+			},
+		);
+	}
 
 	if (enableMarketplaceProxyTools) {
 		await refreshMarketplaceProxyTools(server, { notify: false });

@@ -156,11 +156,28 @@ export type {
 export * from "./constants";
 
 export {
+	SIGNET_GRAPHIQ_PLUGIN_ID,
 	SIGNET_PLUGIN_REGISTRY_DIR,
 	SIGNET_PLUGIN_REGISTRY_FILE,
 	SIGNET_PLUGIN_REGISTRY_VERSION,
 	SIGNET_SECRETS_PLUGIN_ID,
 } from "./plugins";
+export {
+	SIGNET_GRAPHIQ_STATE_FILE,
+	disableGraphiqState,
+	emptyGraphiqState,
+	enableGraphiqState,
+	getGraphiqProjectDbPath,
+	getGraphiqStatePath,
+	readGraphiqState,
+	updateGraphiqActiveProject,
+	writeGraphiqState,
+} from "./graphiq";
+export type {
+	GraphiqIndexedProject,
+	GraphiqPluginState,
+	UpdateGraphiqActiveProjectInput,
+} from "./graphiq";
 export {
 	SIGNET_GIT_PROTECTED_PATHS,
 	mergeSignetGitignoreEntries,

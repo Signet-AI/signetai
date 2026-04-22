@@ -822,6 +822,7 @@ Inspect the Plugin SDK V1 registry and active prompt contributions.
 ```typescript
 const { plugins } = await signet.listPlugins();
 const secretsPlugin = plugins.find((plugin) => plugin.id === "signet.secrets");
+const graphiqPlugin = plugins.find((plugin) => plugin.id === "signet.graphiq");
 ```
 
 **`getPlugin(id)`**: Get one plugin registry record.
@@ -839,6 +840,11 @@ const diagnostics = await signet.getPluginDiagnostics("signet.secrets");
 console.log(diagnostics.plugin.activeSurfaces.sdkClients);
 console.log(diagnostics.plugin.promptContributionDiagnostics);
 ```
+
+The optional GraphIQ plugin is registered as `signet.graphiq`. It is disabled
+by default, can be enabled during setup, and contributes CLI/MCP/prompt
+surfaces for generic code retrieval after `signet index <path>` activates a
+project.
 
 **`listPluginPromptContributions()`**: List active plugin prompt
 contributions.

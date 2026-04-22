@@ -425,6 +425,38 @@ Secret values in output are replaced with `[REDACTED]`.
 
 **Daemon endpoint:** `POST /api/secrets/exec` (30s timeout)
 
+### Optional GraphIQ Code Tools
+
+When the optional `signet.graphiq` plugin has an active indexed project, the
+MCP server also exposes generic code retrieval tools. Run `signet index <path>`
+to index a project and make it active. Re-running the command for another path
+moves the active GraphIQ context to that project.
+
+GraphIQ stores its index at `<project>/.graphiq/`. Signet stores only plugin
+state and the active project pointer, so GraphIQ code indexes remain outside
+the main Signet memory architecture.
+
+| Tool | Purpose |
+|------|---------|
+| `code_search` | Search the active indexed project for symbols and implementation context |
+| `code_context` | Read source and structural neighborhood for a symbol |
+| `code_blast` | Analyze forward/backward impact radius for a symbol |
+| `code_status` | Show GraphIQ status for the active project |
+| `code_doctor` | Diagnose GraphIQ artifact health |
+| `code_constants` | Find shared numeric and string constants |
+
+`code_search` parameters:
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | yes | Code search query |
+| `top` | number | no | Max results to return (default 10) |
+| `file` | string | no | Optional file path filter |
+| `debug` | boolean | no | Include GraphIQ score/debug details |
+
+`code_context` and `code_blast` both take a `symbol` string. `code_blast` also
+accepts optional `depth` and `direction` (`forward`, `backward`, or `both`).
+
 
 Discovery Protocol
 ------------------

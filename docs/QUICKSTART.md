@@ -147,6 +147,11 @@ workspaces. New interactive installs include a **Core plugins** step that
 explains what it does before asking whether to enable it. For automation, pass
 `--disable-signet-secrets` if you want the plugin installed but disabled.
 
+GraphIQ is an optional verified managed plugin for fast local code retrieval.
+It is not installed by default. Interactive setup asks whether to install it;
+automation can pass `--with-graphiq` to install through Homebrew with source
+fallback, or `--disable-graphiq` to keep it disabled.
+
 If OpenClaw is configured to use the same workspace path, setup now enforces
 backup posture before finishing. In automation, either configure a git
 `origin` remote ahead of time, or pass `--create-local-backup` (or
@@ -200,12 +205,28 @@ command injection with output redaction. This is safer than pasting API keys
 into prompts because agents can list secret names and run commands with
 injected values without reading the raw secrets.
 
-**5. Deployment context**
+**5. Optional code retrieval**
+
+GraphIQ can index active projects into each project's local `.graphiq/`
+directory and expose generic code retrieval tools through Signet. Use it when
+you want fast symbol search, structural context, constants, and blast-radius
+analysis alongside Signet memory retrieval.
+
+After setup, index a project with:
+
+```bash
+signet index ~/signet/signetai
+```
+
+That path becomes the active code project for GraphIQ-backed MCP tools until
+another `signet index <path>` command changes it.
+
+**6. Deployment context**
 
 Choose where Signet is running (`local`, `vps`, `server`). Setup uses
 this to show guidance before extraction provider selection.
 
-**6. Embedding provider**
+**7. Embedding provider**
 
 Embeddings power semantic (meaning-based) memory search. Choose:
 
@@ -216,7 +237,7 @@ Embeddings power semantic (meaning-based) memory search. Choose:
 - **OpenAI** — uses the OpenAI embeddings API. Requires `OPENAI_API_KEY`.
 - **Skip** — memory still works via keyword search, just no semantic search.
 
-**7. Embedding model**
+**8. Embedding model**
 
 For Ollama, `nomic-embed-text` is a good default. Setup can pull it for
 you (with confirmation), or you can do it manually:
@@ -225,7 +246,7 @@ you (with confirmation), or you can do it manually:
 ollama pull nomic-embed-text
 ```
 
-**8. Search balance**
+**9. Search balance**
 
 The `alpha` setting controls how much weight goes to semantic vs. keyword
 search. 0.7 (70% semantic, 30% keyword) works well for most people.

@@ -70,6 +70,7 @@ import { registerDaemonCommands } from "./commands/daemon.js";
 import { registerDreamCommands } from "./commands/dream.js";
 import { registerForgeCommands } from "./commands/forge.js";
 import { registerGitCommands } from "./commands/git.js";
+import { registerGraphiqCommands } from "./commands/graphiq.js";
 import { registerHookCommands } from "./commands/hook.js";
 import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMcpCommands } from "./commands/mcp.js";
@@ -1394,6 +1395,10 @@ registerForgeCommands(program, {
 			getTemplatesDir,
 			isDaemonRunning,
 		}),
+});
+
+registerGraphiqCommands(program, {
+	agentsDir: AGENTS_DIR,
 });
 
 // ============================================================================

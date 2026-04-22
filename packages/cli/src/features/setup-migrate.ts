@@ -22,6 +22,7 @@ import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
+import { installGraphiqPlugin } from "./graphiq.js";
 import { buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
@@ -53,10 +54,13 @@ export async function runExistingSetupWizard(
 		extractionProvider?: ExtractionProviderChoice;
 		extractionModel?: string;
 		signetSecretsEnabled?: boolean;
+		graphiqEnabled?: boolean;
 	},
 ): Promise<void> {
 	const spinner = ora("Setting up Signet for existing identity...").start();
 	const signetSecretsEnabled = options?.signetSecretsEnabled ?? true;
+	const graphiqEnabled = options?.graphiqEnabled ?? false;
+	let graphiqInstalled = false;
 
 	try {
 		const templatesDir = deps.getTemplatesDir();
@@ -214,7 +218,12 @@ export async function runExistingSetupWizard(
 			writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
 		}
 
-		writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled });
+		writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
+		if (graphiqEnabled) {
+			spinner.stop();
+			graphiqInstalled = await installGraphiqPlugin({ agentsDir: basePath });
+			spinner.start("Continuing Signet setup...");
+		}
 
 		const agentsPath = join(basePath, "AGENTS.md");
 		if (!existsSync(agentsPath)) {
@@ -346,6 +355,9 @@ export async function runExistingSetupWizard(
 			chalk.dim(
 				`    ${signetSecretsEnabled ? "✓" : "○"} Signet Secrets ${signetSecretsEnabled ? "enabled" : "installed but disabled"}`,
 			),
+		);
+		console.log(
+			chalk.dim(`    ${graphiqInstalled ? "✓" : "○"} GraphIQ ${graphiqInstalled ? "enabled" : "not installed"}`),
 		);
 		console.log();
 
