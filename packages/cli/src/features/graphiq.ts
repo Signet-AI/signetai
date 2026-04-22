@@ -214,7 +214,17 @@ async function runGraphiqForActiveProject(
 		return;
 	}
 	const dbPath = state.indexedProjects.find((entry) => entry.path === state.activeProject)?.dbPath;
-	const args = dbPath ? [command, "--db", dbPath] : [command];
+	if (!dbPath) {
+		console.error(chalk.red(`GraphIQ index metadata is missing for active project: ${state.activeProject}`));
+		console.error(chalk.dim("Run `signet index <path>` again to restore the active project record."));
+		return;
+	}
+	if (!existsSync(dbPath)) {
+		console.error(chalk.red(`GraphIQ database not found for active project: ${dbPath}`));
+		console.error(chalk.dim("Run `signet index <path>` again to rebuild the project index."));
+		return;
+	}
+	const args = [command, "--db", dbPath];
 	const result = await runCommand("graphiq", args);
 	if (result.stdout.trim()) console.log(result.stdout.trim());
 	if (result.stderr.trim()) console.error(result.stderr.trim());

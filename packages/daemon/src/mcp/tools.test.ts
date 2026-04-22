@@ -232,7 +232,10 @@ describe("createMcpServer", () => {
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("session_bypass");
-		expect(names.length).toBe(39);
+		for (const name of GRAPHIQ_TOOL_NAMES) {
+			expect(names).toContain(name);
+		}
+		expect(names.length).toBe(45);
 	});
 
 	it("registers generic code tools when GraphIQ has an active project", async () => {
@@ -260,7 +263,7 @@ describe("createMcpServer", () => {
 		expect(names).toContain("code_constants");
 	});
 
-	it("does not register GraphIQ code tools when plugin host blocks GraphIQ", async () => {
+	it("gates GraphIQ code tools when plugin host blocks GraphIQ", async () => {
 		const projectDir = join(tempAgentsDir, "project");
 		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
 		mkdirSync(dirname(dbPath), { recursive: true });
@@ -279,8 +282,41 @@ describe("createMcpServer", () => {
 		});
 		const names = getToolNames(graphServer);
 		for (const name of GRAPHIQ_TOOL_NAMES) {
-			expect(names).not.toContain(name);
+			expect(names).toContain(name);
 		}
+		const result = await callTool(graphServer, "code_status", {});
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("GraphIQ plugin is blocked");
+	});
+
+	it("uses fresh GraphIQ plugin policy when a project is indexed after server construction", async () => {
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+		enableGraphiqPluginInRegistry(tempAgentsDir);
+
+		const capturePath = join(tempAgentsDir, "graphiq-args.txt");
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, `#!/bin/sh\necho "$@" > ${JSON.stringify(capturePath)}\n`);
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+		const result = await callTool(graphServer, "code_status", {});
+		expect(result.isError).toBeUndefined();
+		expect(readFileSync(capturePath, "utf-8")).toContain(`status --db ${dbPath}`);
 	});
 
 	it("bounds GraphIQ code tool numeric inputs before subprocess calls", async () => {

@@ -47,6 +47,7 @@ export interface PluginHostOptionsV1 {
 	readonly auditPath?: string | null;
 	readonly now?: () => Date;
 	readonly corePluginIds?: readonly string[];
+	readonly persistRegistry?: boolean;
 }
 
 export interface DiscoverPluginOptionsV1 {
@@ -61,6 +62,7 @@ export class PluginHostV1 {
 	private readonly auditPath: string | null | undefined;
 	private readonly now: () => Date;
 	private readonly corePluginIds: readonly string[];
+	private readonly persistRegistry: boolean;
 	private readonly plugins = new Map<string, RegisteredPluginV1>();
 	private storeWritable = true;
 	private storeLoadError: string | null = null;
@@ -71,6 +73,7 @@ export class PluginHostV1 {
 		this.auditPath = opts.auditPath;
 		this.now = opts.now ?? (() => new Date());
 		this.corePluginIds = opts.corePluginIds ?? [];
+		this.persistRegistry = opts.persistRegistry ?? true;
 		this.store = this.loadStore();
 	}
 
@@ -343,6 +346,7 @@ export class PluginHostV1 {
 	}
 
 	private saveStore(): void {
+		if (!this.persistRegistry) return;
 		if (!this.storagePath) return;
 		if (!this.storeWritable) {
 			logger.warn("plugins", "plugin registry write skipped because existing registry could not be loaded safely", {
