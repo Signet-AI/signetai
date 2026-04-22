@@ -381,11 +381,13 @@ describe("createMcpServer", () => {
 		});
 
 		const search = await callTool(graphServer, "code_search", { query: "--help" });
+		const searchFile = await callTool(graphServer, "code_search", { query: "GraphIQ", file: "--db" });
 		const context = await callTool(graphServer, "code_context", { symbol: "-v" });
 		const blast = await callTool(graphServer, "code_blast", { symbol: "--db", depth: 2 });
 		const constants = await callTool(graphServer, "code_constants", { query: "--debug" });
 
 		expect(search.isError).toBe(true);
+		expect(searchFile.isError).toBe(true);
 		expect(context.isError).toBe(true);
 		expect(blast.isError).toBe(true);
 		expect(constants.isError).toBe(true);

@@ -2005,7 +2005,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!safeQuery.ok) return errorResult(safeQuery.error);
 			const boundedTop = boundedInteger(top, GRAPHIQ_SEARCH_TOP_DEFAULT, GRAPHIQ_SEARCH_TOP_MAX);
 			const args = ["search", safeQuery.value, "--top", String(boundedTop)];
-			if (file) args.push("--file", file);
+			if (file) {
+				const safeFile = graphIqPositionalArg(file, "file filter");
+				if (!safeFile.ok) return errorResult(safeFile.error);
+				args.push("--file", safeFile.value);
+			}
 			if (debug) args.push("--debug");
 			return graphIqToolResult(args, "Code search failed", "code_search", pluginHostProvider);
 		},

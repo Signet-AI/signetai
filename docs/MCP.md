@@ -427,10 +427,11 @@ Secret values in output are replaced with `[REDACTED]`.
 
 ### Optional GraphIQ Code Tools
 
-When the optional `signet.graphiq` plugin has an active indexed project, the
-MCP server also exposes generic code retrieval tools. Run `signet index <path>`
-to index a project and make it active. Re-running the command for another path
-moves the active GraphIQ context to that project.
+The MCP server registers generic GraphIQ code retrieval tools as stable tool
+names. Each call is runtime-gated by the optional `signet.graphiq` plugin state
+and the active indexed project. Run `signet index <path>` to index a project
+and make it active. Re-running the command for another path moves the active
+GraphIQ context to that project.
 
 GraphIQ stores its index at `<project>/.graphiq/`. Signet stores only plugin
 state and the active project pointer, so GraphIQ code indexes remain outside
