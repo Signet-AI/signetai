@@ -168,6 +168,12 @@ const marketplaceProxyState = new WeakMap<McpServer, MarketplaceProxyState>();
 const hotToolIdsByContext = new Map<string, Set<string>>();
 const hotToolTouchedAt = new Map<string, number>();
 const HOT_CONTEXT_TTL_MS = 30 * 60 * 1000;
+const GRAPHIQ_SEARCH_TOP_DEFAULT = 10;
+const GRAPHIQ_SEARCH_TOP_MAX = 100;
+const GRAPHIQ_CONSTANTS_TOP_DEFAULT = 20;
+const GRAPHIQ_CONSTANTS_TOP_MAX = 100;
+const GRAPHIQ_BLAST_DEPTH_DEFAULT = 3;
+const GRAPHIQ_BLAST_DEPTH_MAX = 10;
 
 // ---------------------------------------------------------------------------
 // Internal HTTP helper
@@ -224,6 +230,14 @@ function textResult(value: unknown): { content: Array<{ type: "text"; text: stri
 			},
 		],
 	};
+}
+
+function boundedInteger(value: number | undefined, fallback: number, max: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	const rounded = Math.trunc(value);
+	if (rounded < 1) return 1;
+	if (rounded > max) return max;
+	return rounded;
 }
 
 function errorResult(msg: string): {
@@ -1905,13 +1919,20 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				description: "Search the active GraphIQ-indexed project for symbols and implementation context.",
 				inputSchema: z.object({
 					query: z.string().describe("Code search query"),
-					top: z.number().optional().describe("Max results to return (default 10)"),
+					top: z
+						.number()
+						.int()
+						.min(1)
+						.max(GRAPHIQ_SEARCH_TOP_MAX)
+						.optional()
+						.describe(`Max results to return (default ${GRAPHIQ_SEARCH_TOP_DEFAULT}, max ${GRAPHIQ_SEARCH_TOP_MAX})`),
 					file: z.string().optional().describe("Optional file path filter"),
 					debug: z.boolean().optional().describe("Include GraphIQ score/debug details"),
 				}),
 			},
 			async ({ query, top, file, debug }) => {
-				const args = ["search", query, "--top", String(top ?? 10)];
+				const boundedTop = boundedInteger(top, GRAPHIQ_SEARCH_TOP_DEFAULT, GRAPHIQ_SEARCH_TOP_MAX);
+				const args = ["search", query, "--top", String(boundedTop)];
 				if (file) args.push("--file", file);
 				if (debug) args.push("--debug");
 				return graphIqToolResult(args, "Code search failed");
@@ -1937,12 +1958,19 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				description: "Analyze impact radius for a symbol in the active GraphIQ project.",
 				inputSchema: z.object({
 					symbol: z.string().describe("Symbol name to analyze"),
-					depth: z.number().optional().describe("Traversal depth (default 3)"),
+					depth: z
+						.number()
+						.int()
+						.min(1)
+						.max(GRAPHIQ_BLAST_DEPTH_MAX)
+						.optional()
+						.describe(`Traversal depth (default ${GRAPHIQ_BLAST_DEPTH_DEFAULT}, max ${GRAPHIQ_BLAST_DEPTH_MAX})`),
 					direction: z.enum(["forward", "backward", "both"]).optional().describe("Traversal direction"),
 				}),
 			},
 			async ({ symbol, depth, direction }) => {
-				const args = ["blast", symbol, "--depth", String(depth ?? 3), "--direction", direction ?? "both"];
+				const boundedDepth = boundedInteger(depth, GRAPHIQ_BLAST_DEPTH_DEFAULT, GRAPHIQ_BLAST_DEPTH_MAX);
+				const args = ["blast", symbol, "--depth", String(boundedDepth), "--direction", direction ?? "both"];
 				return graphIqToolResult(args, "Code blast failed");
 			},
 		);
@@ -1974,13 +2002,22 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				description: "Find shared numeric/string constants in the active GraphIQ project.",
 				inputSchema: z.object({
 					query: z.string().optional().describe("Optional constant/name filter"),
-					top: z.number().optional().describe("Max results to return (default 20)"),
+					top: z
+						.number()
+						.int()
+						.min(1)
+						.max(GRAPHIQ_CONSTANTS_TOP_MAX)
+						.optional()
+						.describe(
+							`Max results to return (default ${GRAPHIQ_CONSTANTS_TOP_DEFAULT}, max ${GRAPHIQ_CONSTANTS_TOP_MAX})`,
+						),
 				}),
 			},
 			async ({ query, top }) => {
 				const args = ["constants"];
 				if (query) args.push(query);
-				args.push("--top", String(top ?? 20));
+				const boundedTop = boundedInteger(top, GRAPHIQ_CONSTANTS_TOP_DEFAULT, GRAPHIQ_CONSTANTS_TOP_MAX);
+				args.push("--top", String(boundedTop));
 				return graphIqToolResult(args, "Code constants failed");
 			},
 		);

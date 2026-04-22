@@ -1,6 +1,6 @@
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { constants, accessSync, existsSync, rmSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
 	disableGraphiqState,
@@ -33,8 +33,32 @@ export interface GraphiqUninstallOptions {
 type GraphiqInstallSource = "homebrew" | "source" | "existing";
 
 export function hasCommand(command: string): boolean {
-	const result = runCommandSync(process.platform === "win32" ? "where" : "which", [command]);
-	return result.code === 0;
+	const path = process.env.PATH ?? "";
+	const candidates = path
+		.split(delimiter)
+		.filter((entry) => entry.length > 0)
+		.map((entry) => join(entry, command));
+	if (process.platform === "win32") {
+		const extensions = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";");
+		for (const candidate of candidates) {
+			for (const extension of extensions) {
+				if (isExecutable(`${candidate}${extension.toLowerCase()}`) || isExecutable(`${candidate}${extension}`)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+	return candidates.some(isExecutable);
+}
+
+function isExecutable(path: string): boolean {
+	try {
+		accessSync(path, constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export async function ensureGraphiqInstalled(options: {
@@ -86,6 +110,7 @@ export async function installGraphiqPlugin(deps: GraphiqDeps): Promise<boolean> 
 	const source = await ensureGraphiqInstalled({ installIfMissing: true });
 	if (!source) {
 		writeGraphiqPluginRegistryEnabled(deps.agentsDir, false);
+		disableGraphiqState(deps.agentsDir);
 		return false;
 	}
 	writeGraphiqPluginRegistryEnabled(deps.agentsDir, true);
@@ -203,15 +228,6 @@ function parseIndexStats(output: string): { files?: number; symbols?: number; ed
 		files: Number.parseInt(match[1] ?? "", 10),
 		symbols: Number.parseInt(match[2] ?? "", 10),
 		edges: Number.parseInt(match[3] ?? "", 10),
-	};
-}
-
-function runCommandSync(command: string, args: readonly string[]): CommandResult {
-	const result = spawnSync(command, [...args], { encoding: "utf-8", stdio: "pipe", windowsHide: true });
-	return {
-		code: typeof result.status === "number" ? result.status : 1,
-		stdout: result.stdout?.toString() ?? "",
-		stderr: result.stderr?.toString() ?? "",
 	};
 }
 

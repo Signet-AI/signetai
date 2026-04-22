@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -20,6 +20,16 @@ import { createMcpServer, refreshMarketplaceProxyTools } from "./tools.js";
 
 interface RegisteredTool {
 	handler: (args: Record<string, unknown>) => Promise<unknown>;
+	inputSchema: {
+		shape?: Record<
+			string,
+			{
+				def?: {
+					innerType?: { minValue?: number; maxValue?: number };
+				};
+			}
+		>;
+	};
 	enabled: boolean;
 }
 
@@ -52,6 +62,18 @@ function getToolNames(server: McpServer): string[] {
 	return Object.keys(getRegisteredTools(server));
 }
 
+function getToolPropertySchema(
+	server: McpServer,
+	toolName: string,
+	propertyName: string,
+): { minValue?: number; maxValue?: number } {
+	const schema = getRegisteredTools(server)[toolName]?.inputSchema.shape?.[propertyName]?.def?.innerType;
+	if (!schema) {
+		throw new Error(`Schema property ${toolName}.${propertyName} not found`);
+	}
+	return schema;
+}
+
 function mockFetch(status: number, body: unknown, capture?: { url?: string; method?: string; body?: string }): void {
 	globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
 		if (capture) {
@@ -74,6 +96,7 @@ describe("createMcpServer", () => {
 	let server: McpServer;
 	const originalFetch = globalThis.fetch;
 	const originalSignetPath = process.env.SIGNET_PATH;
+	const originalPath = process.env.PATH;
 	let tempAgentsDir = "";
 
 	beforeEach(async () => {
@@ -92,6 +115,11 @@ describe("createMcpServer", () => {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
 			process.env.SIGNET_PATH = originalSignetPath;
+		}
+		if (originalPath === undefined) {
+			Reflect.deleteProperty(process.env, "PATH");
+		} else {
+			process.env.PATH = originalPath;
 		}
 		if (tempAgentsDir) rmSync(tempAgentsDir, { recursive: true, force: true });
 		tempAgentsDir = "";
@@ -168,6 +196,41 @@ describe("createMcpServer", () => {
 		expect(names).toContain("code_status");
 		expect(names).toContain("code_doctor");
 		expect(names).toContain("code_constants");
+	});
+
+	it("bounds GraphIQ code tool numeric inputs before subprocess calls", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+
+		const capturePath = join(tempAgentsDir, "graphiq-args.txt");
+		const binDir = join(tempAgentsDir, "bin");
+		const graphiqPath = join(binDir, "graphiq");
+		mkdirSync(binDir, { recursive: true });
+		writeFileSync(graphiqPath, `#!/bin/sh\necho "$@" > ${JSON.stringify(capturePath)}\n`);
+		chmodSync(graphiqPath, 0o755);
+		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+
+		expect(getToolPropertySchema(graphServer, "code_search", "top")).toMatchObject({ minValue: 1, maxValue: 100 });
+		expect(getToolPropertySchema(graphServer, "code_blast", "depth")).toMatchObject({ minValue: 1, maxValue: 10 });
+		expect(getToolPropertySchema(graphServer, "code_constants", "top")).toMatchObject({ minValue: 1, maxValue: 100 });
+
+		await callTool(graphServer, "code_search", { query: "GraphIQ", top: 10_000 });
+		expect(readFileSync(capturePath, "utf-8")).toContain("search GraphIQ --top 100 --db");
+
+		await callTool(graphServer, "code_blast", { symbol: "installGraphiqPlugin", depth: -25 });
+		expect(readFileSync(capturePath, "utf-8")).toContain("blast installGraphiqPlugin --depth 1 --direction both --db");
 	});
 
 	it("registers intuitive knowledge navigation aliases", async () => {
