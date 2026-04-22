@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
+	getGraphiqProjectDbPath,
 	readGraphiqState,
 	updateGraphiqActiveProject,
 	writeGraphiqState,
 } from "@signet/core";
-import { ensureGraphiqInstalled, installGraphiqPlugin, runGraphiqDoctor } from "./graphiq.js";
+import { ensureGraphiqInstalled, installGraphiqPlugin, runGraphiqDoctor, uninstallGraphiqPlugin } from "./graphiq.js";
 import { readSetupCorePluginEnabled } from "./setup-plugins.js";
 
 let tempRoot = "";
@@ -124,5 +125,44 @@ describe("GraphIQ plugin install", () => {
 
 		expect(existsSync(capturePath)).toBe(false);
 		expect(errors.join("\n")).toContain("GraphIQ index metadata is missing");
+	});
+
+	test("purge indexes only removes GraphIQ dirs that match indexed project metadata", async () => {
+		const basePath = makeRoot();
+		const validProjectPath = join(basePath, "valid-project");
+		const tamperedProjectPath = join(basePath, "tampered-project");
+		const outsidePath = join(basePath, "outside");
+		const validDbPath = getGraphiqProjectDbPath(validProjectPath);
+		const outsideDbPath = join(outsidePath, ".graphiq", "graphiq.db");
+
+		mkdirSync(dirname(validDbPath), { recursive: true });
+		mkdirSync(dirname(outsideDbPath), { recursive: true });
+		writeFileSync(validDbPath, "");
+		writeFileSync(outsideDbPath, "");
+		writeGraphiqState(basePath, {
+			pluginId: SIGNET_GRAPHIQ_PLUGIN_ID,
+			enabled: true,
+			managedBy: "signet",
+			activeProject: validProjectPath,
+			indexedProjects: [
+				{
+					path: validProjectPath,
+					dbPath: validDbPath,
+					lastIndexedAt: "2026-04-21T00:00:00.000Z",
+				},
+				{
+					path: tamperedProjectPath,
+					dbPath: outsideDbPath,
+					lastIndexedAt: "2026-04-21T00:00:00.000Z",
+				},
+			],
+			updatedAt: "2026-04-21T00:00:00.000Z",
+		});
+
+		await uninstallGraphiqPlugin({ purgeIndexes: true }, { agentsDir: basePath });
+
+		expect(existsSync(dirname(validDbPath))).toBe(false);
+		expect(existsSync(dirname(outsideDbPath))).toBe(true);
+		expect(readGraphiqState(basePath).enabled).toBe(false);
 	});
 });

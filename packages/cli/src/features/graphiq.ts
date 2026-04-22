@@ -5,6 +5,7 @@ import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
 	disableGraphiqState,
 	enableGraphiqState,
+	getGraphiqProjectDbPath,
 	readGraphiqState,
 	updateGraphiqActiveProject,
 } from "@signet/core";
@@ -182,17 +183,31 @@ export async function uninstallGraphiqPlugin(options: GraphiqUninstallOptions, d
 	writeGraphiqPluginRegistryEnabled(deps.agentsDir, false);
 	const state = disableGraphiqState(deps.agentsDir);
 	if (options.purgeIndexes === true) {
+		let skipped = 0;
 		for (const project of state.indexedProjects) {
-			const dir = dirname(project.dbPath);
-			if (dir.endsWith(".graphiq") && existsSync(dir)) {
+			const dir = validatedGraphiqIndexDir(project);
+			if (!dir) {
+				skipped += 1;
+				continue;
+			}
+			if (existsSync(dir)) {
 				rmSync(dir, { recursive: true, force: true });
 			}
 		}
 		console.log(chalk.yellow("GraphIQ plugin disabled and known .graphiq indexes removed."));
+		if (skipped > 0) {
+			console.log(chalk.dim(`  Skipped ${skipped} index record(s) with invalid GraphIQ path metadata.`));
+		}
 		return;
 	}
 	console.log(chalk.green("GraphIQ plugin disabled."));
 	console.log(chalk.dim("  Existing project .graphiq indexes were left in place."));
+}
+
+function validatedGraphiqIndexDir(project: { readonly path: string; readonly dbPath: string }): string | null {
+	const expectedDbPath = resolve(getGraphiqProjectDbPath(project.path));
+	if (resolve(project.dbPath) !== expectedDbPath) return null;
+	return dirname(expectedDbPath);
 }
 
 function writeGraphiqPluginRegistryEnabled(agentsDir: string, enabled: boolean): void {
