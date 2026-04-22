@@ -23,8 +23,14 @@ import {
 function makeCheckout(): string {
 	const root = mkdtempSync(join(tmpdir(), "signet-desktop-test-"));
 	mkdirSync(join(root, "packages", "desktop", "icons"), { recursive: true });
-	writeFileSync(join(root, "package.json"), JSON.stringify({ name: "signet" }));
-	writeFileSync(join(root, "packages", "desktop", "package.json"), JSON.stringify({ name: "@signet/desktop" }));
+	writeFileSync(
+		join(root, "package.json"),
+		JSON.stringify({ name: "signet", workspaces: ["packages/*", "packages/cli/dashboard"] }),
+	);
+	writeFileSync(
+		join(root, "packages", "desktop", "package.json"),
+		JSON.stringify({ name: "@signet/desktop", main: "dist/main.js", build: { appId: "ai.signet.app" } }),
+	);
 	writeFileSync(join(root, "packages", "desktop", "icons", "icon.png"), "icon");
 	return root;
 }
@@ -43,6 +49,24 @@ describe("desktop source checkout resolution", () => {
 	test("rejects explicit non-checkout paths", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-desktop-missing-"));
 		try {
+			expect(() => resolveDesktopSourceCheckout(root, { env: {} })).toThrow("Not a Signet source checkout");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+	test("rejects lookalike checkouts before running source commands", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-desktop-lookalike-"));
+		try {
+			mkdirSync(join(root, "packages", "desktop"), { recursive: true });
+			writeFileSync(
+				join(root, "package.json"),
+				JSON.stringify({ name: "signet", workspaces: ["packages/*", "packages/cli/dashboard"] }),
+			);
+			writeFileSync(
+				join(root, "packages", "desktop", "package.json"),
+				JSON.stringify({ name: "@signet/desktop", main: "dist/main.js", build: { appId: "wrong.app" } }),
+			);
+
 			expect(() => resolveDesktopSourceCheckout(root, { env: {} })).toThrow("Not a Signet source checkout");
 		} finally {
 			rmSync(root, { recursive: true, force: true });

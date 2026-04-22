@@ -5,6 +5,7 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	readFileSync,
 	readdirSync,
 	readlinkSync,
 	rmSync,
@@ -169,7 +170,51 @@ function ancestorCandidates(path: string): string[] {
 }
 
 function isDesktopSourceCheckout(path: string): boolean {
-	return existsSync(join(path, "package.json")) && existsSync(join(path, "packages", "desktop", "package.json"));
+	const rootPkgPath = join(path, "package.json");
+	const desktopPkgPath = join(path, "packages", "desktop", "package.json");
+	if (!existsSync(rootPkgPath) || !existsSync(desktopPkgPath)) {
+		return false;
+	}
+
+	const rootPkg = readJson(rootPkgPath);
+	const desktopPkg = readJson(desktopPkgPath);
+	if (jsonString(rootPkg, "name") !== "signet" || jsonString(desktopPkg, "name") !== "@signet/desktop") {
+		return false;
+	}
+
+	const workspaces = jsonStringArray(rootPkg, "workspaces");
+	return (
+		workspaces.includes("packages/*") &&
+		workspaces.includes("packages/cli/dashboard") &&
+		jsonString(desktopPkg, "main") === "dist/main.js" &&
+		jsonString(jsonObject(desktopPkg, "build"), "appId") === "ai.signet.app"
+	);
+}
+
+function readJson(path: string): unknown {
+	try {
+		return JSON.parse(readFileSync(path, "utf8"));
+	} catch {
+		return null;
+	}
+}
+
+function jsonObject(value: unknown, key: string): unknown {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const child = Reflect.get(value, key);
+	return child && typeof child === "object" && !Array.isArray(child) ? child : null;
+}
+
+function jsonString(value: unknown, key: string): string | null {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const child = Reflect.get(value, key);
+	return typeof child === "string" ? child : null;
+}
+
+function jsonStringArray(value: unknown, key: string): string[] {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+	const child = Reflect.get(value, key);
+	return Array.isArray(child) && child.every((item) => typeof item === "string") ? child : [];
 }
 
 function desktopReleaseDir(repo: string): string {
