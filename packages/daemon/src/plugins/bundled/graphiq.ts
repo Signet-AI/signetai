@@ -97,8 +97,7 @@ export const signetGraphiqManifest: PluginManifestV1 = {
 	description: "Optional verified managed plugin for fast local structural code retrieval through GraphIQ.",
 	runtime: {
 		language: "typescript",
-		kind: "bundled-module",
-		entry: "@signet/daemon/plugins/bundled/graphiq",
+		kind: "host-managed",
 	},
 	compatibility: {
 		signet: ">=0.103.0 <1.0.0",

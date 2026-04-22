@@ -131,7 +131,7 @@ Runtime in V1:
 ```ts
 interface PluginRuntimeV1 {
   readonly language: "typescript" | "rust";
-  readonly kind: "bundled-module" | "sidecar" | "wasi";
+  readonly kind: "bundled-module" | "sidecar" | "wasi" | "host-managed";
   readonly entry?: string;
   readonly protocol?: string;
 }
@@ -145,6 +145,8 @@ kind=bundled-module
 trustTier=core
 ```
 
+V1 can also activate `host-managed` verified/core plugin metadata when the
+implementation is native Signet code and no external plugin runtime is executed.
 Rust, sidecar, and WASI manifest fields are accepted for forward-compatible
 metadata and status reporting, but those plugins enter `blocked` with an
 unsupported-runtime reason until later specs implement execution.

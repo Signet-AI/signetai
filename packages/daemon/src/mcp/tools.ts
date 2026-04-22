@@ -263,6 +263,19 @@ function boundedInteger(value: number | undefined, fallback: number, max: number
 	return rounded;
 }
 
+function graphIqPositionalArg(
+	value: string,
+	label: string,
+): { ok: true; value: string } | { ok: false; error: string } {
+	if (value.trim().length === 0) {
+		return { ok: false, error: `GraphIQ ${label} is required.` };
+	}
+	if (value.trimStart().startsWith("-")) {
+		return { ok: false, error: `GraphIQ ${label} cannot start with '-' because it would be parsed as a CLI option.` };
+	}
+	return { ok: true, value };
+}
+
 function errorResult(msg: string): {
 	content: Array<{ type: "text"; text: string }>;
 	isError: true;
@@ -1964,8 +1977,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					}),
 				},
 				async ({ query, top, file, debug }) => {
+					const safeQuery = graphIqPositionalArg(query, "query");
+					if (!safeQuery.ok) return errorResult(safeQuery.error);
 					const boundedTop = boundedInteger(top, GRAPHIQ_SEARCH_TOP_DEFAULT, GRAPHIQ_SEARCH_TOP_MAX);
-					const args = ["search", query, "--top", String(boundedTop)];
+					const args = ["search", safeQuery.value, "--top", String(boundedTop)];
 					if (file) args.push("--file", file);
 					if (debug) args.push("--debug");
 					return graphIqToolResult(args, "Code search failed");
@@ -1983,7 +1998,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 						symbol: z.string().describe("Symbol name to inspect"),
 					}),
 				},
-				async ({ symbol }) => graphIqToolResult(["context", symbol], "Code context failed"),
+				async ({ symbol }) => {
+					const safeSymbol = graphIqPositionalArg(symbol, "symbol");
+					if (!safeSymbol.ok) return errorResult(safeSymbol.error);
+					return graphIqToolResult(["context", safeSymbol.value], "Code context failed");
+				},
 			);
 		}
 
@@ -2006,8 +2025,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					}),
 				},
 				async ({ symbol, depth, direction }) => {
+					const safeSymbol = graphIqPositionalArg(symbol, "symbol");
+					if (!safeSymbol.ok) return errorResult(safeSymbol.error);
 					const boundedDepth = boundedInteger(depth, GRAPHIQ_BLAST_DEPTH_DEFAULT, GRAPHIQ_BLAST_DEPTH_MAX);
-					const args = ["blast", symbol, "--depth", String(boundedDepth), "--direction", direction ?? "both"];
+					const args = ["blast", safeSymbol.value, "--depth", String(boundedDepth), "--direction", direction ?? "both"];
 					return graphIqToolResult(args, "Code blast failed");
 				},
 			);
@@ -2058,7 +2079,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				},
 				async ({ query, top }) => {
 					const args = ["constants"];
-					if (query) args.push(query);
+					if (query) {
+						const safeQuery = graphIqPositionalArg(query, "query");
+						if (!safeQuery.ok) return errorResult(safeQuery.error);
+						args.push(safeQuery.value);
+					}
 					const boundedTop = boundedInteger(top, GRAPHIQ_CONSTANTS_TOP_DEFAULT, GRAPHIQ_CONSTANTS_TOP_MAX);
 					args.push("--top", String(boundedTop));
 					return graphIqToolResult(args, "Code constants failed");

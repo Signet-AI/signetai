@@ -1,5 +1,5 @@
 export type PluginRuntimeLanguageV1 = "typescript" | "rust";
-export type PluginRuntimeKindV1 = "bundled-module" | "sidecar" | "wasi";
+export type PluginRuntimeKindV1 = "bundled-module" | "sidecar" | "wasi" | "host-managed";
 export type PluginTrustTierV1 = "core" | "verified" | "community" | "local-dev";
 export type PluginSourceV1 = "bundled" | "local" | "marketplace";
 export type PluginLifecycleStateV1 = "installed" | "blocked" | "active" | "degraded" | "disabled";

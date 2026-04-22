@@ -58,11 +58,30 @@ describe("PluginHostV1", () => {
 		);
 	});
 
-	test("blocks verified graphiq runtime execution when explicitly enabled", () => {
+	test("activates verified host-managed graphiq when explicitly enabled", () => {
 		const host = makeHost();
 		const record = host.discover(signetGraphiqManifest, {
 			enabled: true,
 			grantedCapabilities: signetGraphiqManifest.capabilities,
+		});
+		expect(record.state).toBe("active");
+		expect(record.grantedCapabilities).toContain("mcp:tool");
+		expect(record.surfaces.mcpTools.map((tool) => tool.name)).toContain("code_search");
+	});
+
+	test("blocks verified bundled TypeScript runtime execution", () => {
+		const host = makeHost();
+		const manifest: PluginManifestV1 = {
+			...signetGraphiqManifest,
+			runtime: {
+				language: "typescript",
+				kind: "bundled-module",
+				entry: "@example/plugin",
+			},
+		};
+		const record = host.discover(manifest, {
+			enabled: true,
+			grantedCapabilities: manifest.capabilities,
 		});
 		expect(record.state).toBe("blocked");
 		expect(record.stateReason).toContain("unsupported runtime in plugin API V1");

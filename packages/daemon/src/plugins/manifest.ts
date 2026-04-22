@@ -23,7 +23,11 @@ export function validatePluginManifest(
 	if (!manifest.compatibility.signet.trim()) errors.push("compatibility.signet is required");
 	if (!manifest.compatibility.pluginApi.trim()) errors.push("compatibility.pluginApi is required");
 
-	if (manifest.runtime.kind !== "bundled-module" && !manifest.runtime.protocol?.trim()) {
+	if (
+		manifest.runtime.kind !== "bundled-module" &&
+		manifest.runtime.kind !== "host-managed" &&
+		!manifest.runtime.protocol?.trim()
+	) {
 		errors.push("runtime.protocol is required for sidecar or wasi plugins");
 	}
 
@@ -86,6 +90,9 @@ export function validatePluginManifest(
 }
 
 export function runtimeSupportedInV1(manifest: PluginManifestV1): boolean {
+	if (manifest.runtime.kind === "host-managed") {
+		return manifest.trustTier === "core" || manifest.trustTier === "verified";
+	}
 	return (
 		manifest.runtime.language === "typescript" &&
 		manifest.runtime.kind === "bundled-module" &&
