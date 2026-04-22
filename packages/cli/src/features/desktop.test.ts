@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	readlinkSync,
 	rmSync,
+	symlinkSync,
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
@@ -72,18 +74,24 @@ describe("desktop source build", () => {
 });
 
 describe("linux desktop install", () => {
-	test("installs the newest AppImage as a user launcher", () => {
+	test("installs the newest matching AppImage as a user launcher", () => {
 		const root = makeCheckout();
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
 		try {
 			const release = join(root, "packages", "desktop", "release");
 			mkdirSync(join(release, "nested"), { recursive: true });
-			const oldArtifact = join(release, "Signet-old.AppImage");
-			const newArtifact = join(release, "nested", "Signet-new.AppImage");
+			const oldArtifact = join(release, "Signet-0.1.0-linux-x86_64.AppImage");
+			const newArtifact = join(release, "Signet-0.2.0-linux-x86_64.AppImage");
+			const wrongArchArtifact = join(release, "Signet-0.3.0-linux-arm64.AppImage");
+			const nestedArtifact = join(release, "nested", "Signet-0.4.0-linux-x86_64.AppImage");
 			writeFileSync(oldArtifact, "old");
 			writeFileSync(newArtifact, "new");
+			writeFileSync(wrongArchArtifact, "wrong-arch");
+			writeFileSync(nestedArtifact, "nested");
 			utimesSync(oldArtifact, new Date(1_000), new Date(1_000));
 			utimesSync(newArtifact, new Date(2_000), new Date(2_000));
+			utimesSync(wrongArchArtifact, new Date(3_000), new Date(3_000));
+			utimesSync(nestedArtifact, new Date(4_000), new Date(4_000));
 
 			const result = installLinuxDesktopApp(root, home);
 
@@ -98,13 +106,59 @@ describe("linux desktop install", () => {
 		}
 	});
 
+	test("does not overwrite an existing non-symlink launcher", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "packages", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			writeFileSync(join(release, "Signet-0.1.0-linux-x86_64.AppImage"), "app");
+			const binDir = join(home, ".local", "bin");
+			mkdirSync(binDir, { recursive: true });
+			const existing = join(binDir, "signet-desktop");
+			writeFileSync(existing, "custom launcher");
+
+			expect(() => installLinuxDesktopApp(root, home)).toThrow("Refusing to replace existing non-symlink launcher");
+			expect(readFileSync(existing, "utf8")).toBe("custom launcher");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("replaces an existing Signet-owned launcher symlink", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "packages", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			writeFileSync(join(release, "Signet-0.1.0-linux-x86_64.AppImage"), "app");
+			const appDir = join(home, ".local", "share", "signet", "desktop");
+			const binDir = join(home, ".local", "bin");
+			mkdirSync(appDir, { recursive: true });
+			mkdirSync(binDir, { recursive: true });
+			const oldTarget = join(appDir, "Old-Signet.AppImage");
+			writeFileSync(oldTarget, "old app");
+			const binary = join(binDir, "signet-desktop");
+			symlinkSync(oldTarget, binary);
+
+			const result = installLinuxDesktopApp(root, home);
+
+			expect(lstatSync(result.binary).isSymbolicLink()).toBe(true);
+			expect(readlinkSync(result.binary)).toBe(result.appImage);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test("skip-build install does not run build commands", () => {
 		const root = makeCheckout();
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
 		try {
 			const release = join(root, "packages", "desktop", "release");
 			mkdirSync(release, { recursive: true });
-			writeFileSync(join(release, "Signet.AppImage"), "app");
+			writeFileSync(join(release, "Signet-0.1.0-linux-x86_64.AppImage"), "app");
 
 			const result = installDesktopFromSource(
 				{ repo: root, skipBuild: true },

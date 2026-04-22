@@ -6,6 +6,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	readdirSync,
+	readlinkSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -124,9 +125,11 @@ export function installDesktopFromSource(
 
 export function installLinuxDesktopApp(repo: string, home: string): DesktopLinuxInstallResult {
 	const releaseDir = desktopReleaseDir(repo);
-	const source = findNewestFile(releaseDir, (path) => path.endsWith(".AppImage"));
+	const source = findLinuxAppImage(releaseDir, process.arch);
 	if (!source) {
-		throw new Error(`No AppImage found in ${releaseDir}. Run signet desktop build first.`);
+		throw new Error(
+			`No matching Linux ${process.arch} AppImage found in ${releaseDir}. Run signet desktop build first.`,
+		);
 	}
 
 	const appDir = join(home, ".local", "share", "signet", "desktop");
@@ -190,38 +193,55 @@ function runChecked(
 	}
 }
 
-function findNewestFile(root: string, accept: (path: string) => boolean): string | null {
-	if (!existsSync(root)) return null;
+function findLinuxAppImage(releaseDir: string, arch: string): string | null {
+	if (!existsSync(releaseDir)) return null;
 	let best: { path: string; mtime: number } | null = null;
-	const stack = [root];
-	while (stack.length > 0) {
-		const dir = stack.pop();
-		if (!dir) continue;
-		for (const entry of readdirSync(dir, { withFileTypes: true })) {
-			const path = join(dir, entry.name);
-			if (entry.isDirectory()) {
-				stack.push(path);
-				continue;
-			}
-			if (!entry.isFile() || !accept(path)) continue;
-			const mtime = statSync(path).mtimeMs;
-			if (!best || mtime > best.mtime) {
-				best = { path, mtime };
-			}
+	const allowedArchNames = linuxArtifactArchNames(arch);
+	for (const entry of readdirSync(releaseDir, { withFileTypes: true })) {
+		if (!entry.isFile()) continue;
+		const match = /^Signet-.+-linux-([^.]+)\.AppImage$/.exec(entry.name);
+		if (!match || !allowedArchNames.has(match[1])) continue;
+		const path = join(releaseDir, entry.name);
+		const mtime = statSync(path).mtimeMs;
+		if (!best || mtime > best.mtime) {
+			best = { path, mtime };
 		}
 	}
 	return best?.path ?? null;
 }
 
+function linuxArtifactArchNames(arch: string): ReadonlySet<string> {
+	switch (arch) {
+		case "x64":
+			return new Set(["x64", "x86_64", "amd64"]);
+		case "arm64":
+			return new Set(["arm64", "aarch64"]);
+		default:
+			return new Set([arch]);
+	}
+}
+
 function replaceSymlink(path: string, target: string): void {
 	try {
 		const stat = lstatSync(path);
-		if (stat.isDirectory()) {
-			throw new Error(`Cannot replace directory with launcher symlink: ${path}`);
+		if (!stat.isSymbolicLink()) {
+			throw new Error(
+				`Refusing to replace existing non-symlink launcher at ${path}. Remove it first if it is not needed.`,
+			);
 		}
+
+		const current = resolve(dirname(path), readlinkSync(path));
+		const ownedDir = dirname(target);
+		if (current !== target && !current.startsWith(`${ownedDir}/`)) {
+			throw new Error(
+				`Refusing to replace launcher symlink at ${path} because it does not point at Signet's desktop install directory.`,
+			);
+		}
+
 		rmSync(path, { force: true });
 	} catch (err) {
-		if (err instanceof Error && "code" in err && err.code !== "ENOENT") {
+		const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+		if (code !== "ENOENT") {
 			throw err;
 		}
 	}
