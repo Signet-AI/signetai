@@ -7,6 +7,7 @@ import {
 	type ImportResult,
 	type SetupDetection,
 	type SkillsResult,
+	disableGraphiqState,
 	ensureUnifiedSchema,
 	findSignetForgeBinary,
 	formatYaml,
@@ -223,6 +224,8 @@ export async function runExistingSetupWizard(
 			spinner.stop();
 			graphiqInstalled = await installGraphiqPlugin({ agentsDir: basePath });
 			spinner.start("Continuing Signet setup...");
+		} else {
+			disableGraphiqState(basePath);
 		}
 
 		const agentsPath = join(basePath, "AGENTS.md");

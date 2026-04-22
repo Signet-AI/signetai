@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { NETWORK_MODES, type NetworkMode, parseSimpleYaml, readNetworkMode } from "@signet/core";
+import { NETWORK_MODES, type NetworkMode, disableGraphiqState, parseSimpleYaml, readNetworkMode } from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
@@ -170,6 +170,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled, graphiqEnabled });
 			if (graphiqEnabled) {
 				await installGraphiqPlugin({ agentsDir: basePath });
+			} else {
+				disableGraphiqState(basePath);
 			}
 
 			const requestedHarnesses = normalizeHarnessList(options.harness, deps);

@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SIGNET_SECRETS_PLUGIN_ID, type SetupDetection } from "@signet/core";
+import {
+	SIGNET_SECRETS_PLUGIN_ID,
+	type SetupDetection,
+	readGraphiqState,
+	updateGraphiqActiveProject,
+} from "@signet/core";
+import { runExistingSetupWizard } from "./setup-migrate.js";
 import type { SetupDeps } from "./setup-types.js";
 import { setupWizard } from "./setup.js";
 
@@ -200,6 +206,65 @@ describe("setupWizard non-interactive harness hooks", () => {
 
 		const registry = JSON.parse(readFileSync(join(basePath, ".daemon", "plugins", "registry-v1.json"), "utf-8"));
 		expect(registry.plugins[SIGNET_SECRETS_PLUGIN_ID].enabled).toBe(false);
+	});
+
+	it("disables persisted GraphIQ state when existing non-interactive setup opts out", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-graphiq-disabled-"));
+		const basePath = join(root, "agents");
+		const projectPath = join(root, "project");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(projectPath, { recursive: true });
+		updateGraphiqActiveProject(basePath, {
+			projectPath,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+			installSource: "existing",
+		});
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => fakeDetection(basePath)),
+		});
+
+		await setupWizard({ nonInteractive: true, disableGraphiq: true }, deps);
+
+		const state = readGraphiqState(basePath);
+		expect(state.enabled).toBe(false);
+		expect(state.activeProject).toBe(projectPath);
+	});
+
+	it("disables persisted GraphIQ state when migrated identity setup opts out", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-graphiq-disabled-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		const projectPath = join(root, "project");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(templatesPath, { recursive: true });
+		mkdirSync(projectPath, { recursive: true });
+		updateGraphiqActiveProject(basePath, {
+			projectPath,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+			installSource: "existing",
+		});
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+			isGitRepo: mock(() => true),
+		});
+
+		await runExistingSetupWizard(basePath, fakeDetection(basePath), {}, deps, {
+			nonInteractive: true,
+			skipGit: true,
+			allowUnprotectedWorkspace: true,
+			signetSecretsEnabled: true,
+			graphiqEnabled: false,
+		});
+
+		const state = readGraphiqState(basePath);
+		expect(state.enabled).toBe(false);
+		expect(state.activeProject).toBe(projectPath);
 	});
 
 	it("fails fast on unknown non-interactive harness values in the existing-install path", async () => {

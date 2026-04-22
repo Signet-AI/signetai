@@ -1,7 +1,13 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { ensureUnifiedSchema, formatYaml, resolvePrimaryPackageManager, runMigrations } from "@signet/core";
+import {
+	disableGraphiqState,
+	ensureUnifiedSchema,
+	formatYaml,
+	resolvePrimaryPackageManager,
+	runMigrations,
+} from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
@@ -139,6 +145,8 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			spinner.stop();
 			graphiqInstalled = await installGraphiqPlugin({ agentsDir: cfg.basePath });
 			spinner.start("Continuing Signet setup...");
+		} else {
+			disableGraphiqState(cfg.basePath);
 		}
 
 		const docFiles = [

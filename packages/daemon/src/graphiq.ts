@@ -49,11 +49,35 @@ function runCommand(
 ): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
 	return new Promise((resolveResult) => {
 		const proc = spawn(command, [...args], { stdio: "pipe", windowsHide: true });
+		const hardKillGraceMs = Math.min(1_000, Math.max(100, Math.floor(timeoutMs / 4)));
+		let settled = false;
 		let stdout = "";
 		let stderr = "";
+		let hardKillTimer: ReturnType<typeof setTimeout> | undefined;
+		let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+
+		const clearTimers = () => {
+			clearTimeout(timer);
+			if (hardKillTimer) clearTimeout(hardKillTimer);
+			if (fallbackTimer) clearTimeout(fallbackTimer);
+		};
+		const resolveOnce = (result: { readonly code: number; readonly stdout: string; readonly stderr: string }) => {
+			if (settled) return;
+			settled = true;
+			clearTimers();
+			resolveResult(result);
+		};
 		const timer = setTimeout(() => {
 			proc.kill("SIGTERM");
 			stderr += `Timed out after ${timeoutMs}ms`;
+			hardKillTimer = setTimeout(() => {
+				if (settled) return;
+				stderr += `; force killed after ${hardKillGraceMs}ms`;
+				proc.kill("SIGKILL");
+				fallbackTimer = setTimeout(() => {
+					resolveOnce({ code: 1, stdout, stderr });
+				}, hardKillGraceMs);
+			}, hardKillGraceMs);
 		}, timeoutMs);
 		proc.stdout.on("data", (chunk) => {
 			stdout += chunk.toString();
@@ -62,12 +86,10 @@ function runCommand(
 			stderr += chunk.toString();
 		});
 		proc.on("error", (err) => {
-			clearTimeout(timer);
-			resolveResult({ code: 1, stdout, stderr: `${stderr}${err.message}` });
+			resolveOnce({ code: 1, stdout, stderr: `${stderr}${err.message}` });
 		});
 		proc.on("close", (code) => {
-			clearTimeout(timer);
-			resolveResult({ code: code ?? 1, stdout, stderr });
+			resolveOnce({ code: code ?? 1, stdout, stderr });
 		});
 	});
 }
