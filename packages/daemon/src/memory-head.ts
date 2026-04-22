@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { loadMemoryConfig } from "./memory-config";
@@ -37,6 +37,20 @@ function projectMemoryMd(content: string): { readonly body: string; readonly fil
 	const budget = MEMORY_HEAD_MAX_TOKENS - countTokens(prefix);
 	const body = truncateToTokens(content, budget);
 	return { body, file: `${prefix}${body}` };
+}
+
+function normalizeAgentId(agentId?: string): string {
+	const next = agentId?.trim();
+	return next && next.length > 0 ? next : "default";
+}
+
+function isSafeAgentId(agentId: string): boolean {
+	return agentId === "default" || /^[a-z0-9][a-z0-9-]*$/.test(agentId);
+}
+
+function resolveMemoryHeadPath(agentsDir: string, agentId: string): string {
+	if (agentId === "default") return join(agentsDir, "MEMORY.md");
+	return join(agentsDir, "agents", agentId, "MEMORY.md");
 }
 
 function acquireHeadLease(agentId: string, owner: string, ttlMs: number): LeaseResult {
@@ -139,13 +153,15 @@ function releaseHeadLease(agentId: string, token: string): void {
 	}
 }
 
-function writeProjection(file: string): void {
+function writeProjection(file: string, agentId: string): void {
 	const agentsDir = getAgentsDir();
-	const path = join(agentsDir, "MEMORY.md");
+	const path = resolveMemoryHeadPath(agentsDir, agentId);
+	const dir = dirname(path);
+	mkdirSync(dir, { recursive: true });
 	if (existsSync(path)) {
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-		const backup = join(agentsDir, "memory", `MEMORY.backup-${stamp}.md`);
-		mkdirSync(join(agentsDir, "memory"), { recursive: true });
+		const backup = join(dir, "memory", `MEMORY.backup-${stamp}.md`);
+		mkdirSync(dirname(backup), { recursive: true });
 		writeFileSync(backup, readFileSync(path, "utf-8"));
 	}
 	writeFileSync(path, file);
@@ -172,7 +188,10 @@ export function writeMemoryHead(
 	}
 
 	const projected = projectMemoryMd(trimmed);
-	const agentId = opts?.agentId ?? "default";
+	const agentId = normalizeAgentId(opts?.agentId);
+	if (!isSafeAgentId(agentId)) {
+		return { ok: false, error: `Invalid agentId for MEMORY.md path: ${agentId}`, code: "invalid" };
+	}
 	const owner = opts?.owner ?? `memory-head:${process.pid}:${randomUUID().slice(0, 8)}`;
 	const ttlMs = loadMemoryConfig(getAgentsDir()).pipelineV2.worker.leaseTimeoutMs;
 	const lease = acquireHeadLease(agentId, owner, ttlMs);
@@ -183,7 +202,7 @@ export function writeMemoryHead(
 
 	if (!lease.ok) {
 		try {
-			writeProjection(projected.file);
+			writeProjection(projected.file, agentId);
 			return { ok: true, revision: 0 };
 		} catch (error) {
 			return {
@@ -201,7 +220,7 @@ export function writeMemoryHead(
 	}
 
 	try {
-		writeProjection(projected.file);
+		writeProjection(projected.file, agentId);
 		return { ok: true, revision: next };
 	} catch (error) {
 		return {

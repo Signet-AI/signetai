@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Tiktoken } from "js-tiktoken/lite";
@@ -14,6 +14,10 @@ let prevSignetPath: string | undefined;
 
 function readMemoryHead(): string {
 	return readFileSync(join(agentsDir, "MEMORY.md"), "utf-8");
+}
+
+function readAgentMemoryHead(agentId: string): string {
+	return readFileSync(join(agentsDir, "agents", agentId, "MEMORY.md"), "utf-8");
 }
 
 describe("writeMemoryHead", () => {
@@ -81,6 +85,37 @@ describe("writeMemoryHead", () => {
 			return result.n;
 		});
 		expect(otherCount).toBe(0);
+	});
+
+	it("writes named-agent projections to the agent-local MEMORY.md", () => {
+		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
+
+		const result = writeMemoryHead("# MEMORY\n\n## Active\n- local to agent-a\n", {
+			agentId: "agent-a",
+			owner: "memory-head-test",
+		});
+		expect(result.ok).toBe(true);
+
+		const file = readAgentMemoryHead("agent-a");
+		expect(file.startsWith("<!-- generated ")).toBe(true);
+		expect(file).toContain("local to agent-a");
+		expect(existsSync(join(agentsDir, "MEMORY.md"))).toBe(false);
+	});
+
+	it("rejects unsafe agent ids before writing a projection", () => {
+		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
+
+		const result = writeMemoryHead("# MEMORY\n\n## Active\n- should not write\n", {
+			agentId: "../agent-a",
+			owner: "memory-head-test",
+		});
+		expect(result).toEqual({
+			ok: false,
+			error: "Invalid agentId for MEMORY.md path: ../agent-a",
+			code: "invalid",
+		});
+		expect(existsSync(join(agentsDir, "MEMORY.md"))).toBe(false);
+		expect(existsSync(join(agentsDir, "agents"))).toBe(false);
 	});
 
 	it("truncates the tail of oversized MEMORY.md content to 5000 tokens", () => {
