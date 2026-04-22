@@ -1,4 +1,3 @@
-import { SIGNET_GRAPHIQ_PLUGIN_ID } from "@signet/core";
 import { getLocalSecretProviderHealth } from "../secrets.js";
 import { signetGraphiqManifest } from "./bundled/graphiq.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
