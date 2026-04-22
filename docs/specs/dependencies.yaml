@@ -1136,6 +1136,7 @@ specs:
       - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
       - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
       - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
+      - "The supported source-build path is exposed through `signet desktop build` and `signet desktop install`"
     decision: null
 
 

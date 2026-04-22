@@ -67,6 +67,7 @@ import { registerBrowseCommand } from "./browse.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerAppCommands } from "./commands/app.js";
 import { registerDaemonCommands } from "./commands/daemon.js";
+import { registerDesktopCommands } from "./commands/desktop.js";
 import { registerDreamCommands } from "./commands/dream.js";
 import { registerForgeCommands } from "./commands/forge.js";
 import { registerGitCommands } from "./commands/git.js";
@@ -93,6 +94,7 @@ import {
 	migrateSchema,
 	showLogs,
 } from "./features/daemon.js";
+import { buildDesktopFromSource, installDesktopFromSource } from "./features/desktop.js";
 import { doctorForge, installForge, showForgeStatus, updateForge } from "./features/forge.js";
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
 import { importFromGitHub } from "./features/import.js";
@@ -1354,6 +1356,11 @@ registerAppCommands(program, {
 	showDoctor: (options) => showDoctor(options, healthDeps),
 	showStatus: (options) => showStatus(options, healthDeps),
 	syncTemplates: () => runSyncTemplates(),
+});
+
+registerDesktopCommands(program, {
+	buildDesktopFromSource,
+	installDesktopFromSource,
 });
 
 registerDaemonCommands(program, {

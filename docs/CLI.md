@@ -48,6 +48,7 @@ Commands Overview
 | `signet doctor` | Run local health checks |
 | `signet dashboard` | Open web UI in browser |
 | `signet daemon` | Grouped daemon subcommands |
+| `signet desktop` | Build and install the Electron desktop app from source |
 | `signet daemon start` | Start the daemon |
 | `signet daemon stop` | Stop the daemon |
 | `signet daemon restart` | Restart the daemon |
@@ -97,6 +98,29 @@ Use explicit commands for interactive flows:
 - `signet setup` — initialize or migrate a workspace
 - `signet configure` — edit agent settings interactively
 - `signet doctor` — troubleshoot local issues
+
+---
+
+`signet desktop`
+---
+
+Builds the official Electron desktop app from an existing Signet source
+checkout. The command never clones over local work; run it from the repo root,
+set `SIGNET_SOURCE_DIR`, or pass `--repo <path>`.
+
+```bash
+signet desktop build
+signet desktop install
+signet desktop install --repo ~/signet/signetai
+signet desktop install --skip-build
+```
+
+`signet desktop install` runs `bun install`, then `bun run build:desktop`, then
+installs the newest built artifact. Linux/Arch currently installs a user-level
+AppImage launcher at `~/.local/bin/signet-desktop` and a desktop entry under
+`~/.local/share/applications/signet.desktop`. macOS and Windows builds are
+produced by the desktop package, with native installer automation still guarded
+until those platform installers are wired.
 
 ---
 
