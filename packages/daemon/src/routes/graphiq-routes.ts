@@ -1,4 +1,4 @@
-import { constants, accessSync, existsSync } from "node:fs";
+import { constants, accessSync, existsSync, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { disableGraphiqState, enableGraphiqState, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
 import type { Hono } from "hono";
@@ -84,6 +84,20 @@ export function registerGraphiqRoutes(app: Hono): void {
 		const resolved = resolve(projectPath);
 		if (!existsSync(resolved)) {
 			return c.json({ success: false, error: `Project path does not exist: ${resolved}` }, 400);
+		}
+		let projectStat;
+		try {
+			projectStat = statSync(resolved);
+		} catch {
+			return c.json({ success: false, error: `Project path is not accessible: ${resolved}` }, 400);
+		}
+		if (!projectStat.isDirectory()) {
+			return c.json({ success: false, error: `Project path must be a directory: ${resolved}` }, 400);
+		}
+		try {
+			accessSync(resolved, constants.R_OK | constants.X_OK);
+		} catch {
+			return c.json({ success: false, error: `Project path must be readable: ${resolved}` }, 400);
 		}
 
 		if (!isGraphiqInstalled()) {

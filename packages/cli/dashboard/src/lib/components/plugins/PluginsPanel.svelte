@@ -208,6 +208,9 @@ async function refreshSelected(): Promise<void> {
 async function choosePlugin(id: string): Promise<void> {
 	activityPage = 0;
 	openDrawer = null;
+	graphiqStatus = null;
+	graphiqError = "";
+	graphiqAction = "";
 	await selectPlugin(id);
 }
 
