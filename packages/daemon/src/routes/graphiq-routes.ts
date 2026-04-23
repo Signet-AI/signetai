@@ -9,12 +9,10 @@ import { getDefaultPluginHost } from "../plugins/index.js";
 import { authConfig } from "./state.js";
 
 export function registerGraphiqRoutes(app: Hono): void {
-	app.use("/api/graphiq", async (c, next) => {
+	const adminGuard = async (c: import("hono").Context, next: import("hono").Next) => {
 		return requirePermission("admin", authConfig)(c, next);
-	});
-	app.use("/api/graphiq/*", async (c, next) => {
-		return requirePermission("admin", authConfig)(c, next);
-	});
+	};
+	app.use("/api/graphiq/*", adminGuard);
 
 	app.get("/api/graphiq/status", (c) => {
 		const agentsDir = getAgentsDir();
