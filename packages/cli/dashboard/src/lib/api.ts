@@ -1606,14 +1606,12 @@ export interface GraphiqActionResult {
 
 export async function getGraphiqStatus(): Promise<GraphiqStatus> {
 	const response = await fetch(`${API_BASE}/api/graphiq/status`);
-	if (!response.ok) throw new Error("Failed to fetch GraphIQ status");
-	return response.json();
+	const body = await response.json();
+	if (!response.ok) throw new Error(body.error ?? "Failed to fetch GraphIQ status");
+	return body;
 }
 
-async function parseGraphiqActionResponse(
-	response: Response,
-	fallbackError: string,
-): Promise<GraphiqActionResult> {
+async function parseGraphiqActionResponse(response: Response, fallbackError: string): Promise<GraphiqActionResult> {
 	let payload: GraphiqActionResult | null = null;
 	try {
 		payload = (await response.json()) as GraphiqActionResult;

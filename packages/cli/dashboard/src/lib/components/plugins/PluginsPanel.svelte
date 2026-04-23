@@ -202,7 +202,11 @@ async function refreshSelected(): Promise<void> {
 		await loadPlugins();
 		return;
 	}
-	await Promise.all([loadPluginDiagnostics(plugin.id), loadPluginAuditEvents(plugin.id)]);
+	await Promise.all([
+		loadPluginDiagnostics(plugin.id),
+		loadPluginAuditEvents(plugin.id),
+		isGraphiqSelected ? loadGraphiqStatus() : Promise.resolve(),
+	]);
 }
 
 async function choosePlugin(id: string): Promise<void> {

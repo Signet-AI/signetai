@@ -8,6 +8,8 @@
  * The daemon must be running — tool handlers call the daemon's HTTP API.
  */
 
+import { existsSync, readdirSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createMcpServer, refreshMarketplaceProxyTools } from "./mcp/tools.js";
 
@@ -15,12 +17,29 @@ const DAEMON_URL =
 	process.env.SIGNET_DAEMON_URL ??
 	`http://${process.env.SIGNET_HOST ?? "127.0.0.1"}:${process.env.SIGNET_PORT ?? "3850"}`;
 
+function isLocalDaemonUrl(url: string): boolean {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return false;
+	}
+	return parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "[::1]";
+}
+
+function isValidAgentsDir(dir: string): boolean {
+	return isAbsolute(dir) && existsSync(dir) && readdirSync(dir, { withFileTypes: true }).some((e) => e.isDirectory());
+}
+
 async function resolveAgentsDir(daemonUrl: string): Promise<string | undefined> {
+	if (!isLocalDaemonUrl(daemonUrl)) return undefined;
 	try {
 		const res = await fetch(`${daemonUrl}/health`, { signal: AbortSignal.timeout(3000) });
 		if (!res.ok) return undefined;
 		const data = (await res.json()) as Record<string, unknown>;
-		if (typeof data.agentsDir === "string") return data.agentsDir;
+		if (typeof data.agentsDir !== "string") return undefined;
+		if (!isValidAgentsDir(data.agentsDir)) return undefined;
+		return data.agentsDir;
 	} catch {
 		// daemon unreachable — fall through to SIGNET_PATH
 	}
