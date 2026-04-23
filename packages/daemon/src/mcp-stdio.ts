@@ -47,8 +47,10 @@ async function resolveAgentsDir(daemonUrl: string): Promise<string | undefined> 
 }
 
 const resolvedAgentsDir = await resolveAgentsDir(DAEMON_URL);
-if (resolvedAgentsDir && !process.env.SIGNET_PATH) {
+if (resolvedAgentsDir) {
 	process.env.SIGNET_PATH = resolvedAgentsDir;
+} else if (process.env.SIGNET_PATH && !isValidAgentsDir(process.env.SIGNET_PATH)) {
+	process.env.SIGNET_PATH = undefined;
 }
 
 const server = await createMcpServer({

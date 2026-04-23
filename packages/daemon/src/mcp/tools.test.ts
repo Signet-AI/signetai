@@ -50,6 +50,15 @@ const GRAPHIQ_TOOL_NAMES = [
 	"signet_code_constants",
 ] as const;
 
+const GRAPHIQ_COMPAT_ALIASES = [
+	"code_search",
+	"code_context",
+	"code_blast",
+	"code_status",
+	"code_doctor",
+	"code_constants",
+] as const;
+
 function graphiqPolicyHost(
 	state: "active" | "degraded" | "blocked" | "disabled" = "active",
 	toolNames: readonly string[] = GRAPHIQ_TOOL_NAMES,
@@ -235,7 +244,10 @@ describe("createMcpServer", () => {
 		for (const name of GRAPHIQ_TOOL_NAMES) {
 			expect(names).toContain(name);
 		}
-		expect(names.length).toBe(45);
+		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
+			expect(names).toContain(alias);
+		}
+		expect(names.length).toBe(51);
 	});
 
 	it("registers generic code tools when GraphIQ has an active project", async () => {
