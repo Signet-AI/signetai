@@ -27,7 +27,7 @@ export function registerGraphiqRoutes(app: Hono): void {
 
 		return c.json({
 			installed,
-			pluginEnabled: state.enabled,
+			pluginEnabled: plugin?.enabled ?? false,
 			pluginState: plugin?.state ?? "not-registered",
 			activeProject: active?.activeProject ?? null,
 			indexedProjects: state.indexedProjects.map((p) => ({
