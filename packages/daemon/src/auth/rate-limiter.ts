@@ -68,6 +68,9 @@ export const DEFAULT_RATE_LIMITS: Readonly<Record<string, RateLimitConfig>> = {
 	batchForget: { windowMs: 60_000, max: 5 },
 	forceDelete: { windowMs: 60_000, max: 3 },
 	admin: { windowMs: 60_000, max: 10 },
+	inferenceExplain: { windowMs: 60_000, max: 120 },
+	inferenceExecute: { windowMs: 60_000, max: 20 },
+	inferenceGateway: { windowMs: 60_000, max: 30 },
 	// LLM-enabled recall (useExtractionModel: true) — separate bucket so
 	// operators can tune the cost-sensitive path independently of plain recall.
 	recallLlm: { windowMs: 60_000, max: 60 },

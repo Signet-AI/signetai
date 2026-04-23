@@ -139,18 +139,21 @@ enforced in `team` and `hybrid` modes — `local` mode has no limits.
 
 Default limits (per actor per minute):
 
-| Operation   | Limit |
-|-------------|-------|
-| forget      |    30 |
-| modify      |    60 |
-| batchForget |     5 |
-| forceDelete |     3 |
-| admin       |    10 |
+| Operation        | Limit |
+|------------------|-------|
+| forget           |    30 |
+| modify           |    60 |
+| batchForget      |     5 |
+| forceDelete      |     3 |
+| admin            |    10 |
+| inferenceExplain |   120 |
+| inferenceExecute |    20 |
+| inferenceGateway |    30 |
+| recallLlm        |    60 |
 
 The actor is identified by the token's `sub` claim when present. For
-unauthenticated requests (hybrid mode, localhost), the `x-signet-actor`
-header is used as a fallback. If neither is available, the actor defaults
-to `"anonymous"`.
+unauthenticated requests (hybrid mode, localhost), requests share the
+`"anonymous"` bucket.
 
 When a limit is exceeded, the daemon returns `429 Too Many Requests` with
 a `Retry-After` header indicating how many seconds until the window resets.
@@ -187,6 +190,15 @@ auth:
     admin:
       windowMs: 60000
       max: 10
+    inferenceExplain:
+      windowMs: 60000
+      max: 120
+    inferenceExecute:
+      windowMs: 60000
+      max: 20
+    inferenceGateway:
+      windowMs: 60000
+      max: 30
 ```
 
 The secret path is always `$SIGNET_WORKSPACE/.daemon/auth-secret` and is not
@@ -199,10 +211,6 @@ HTTP Headers
 
 `Authorization: Bearer <token>` — Required in `team` mode. Optional in
 `hybrid` mode for localhost requests (validated if present, not required).
-
-`x-signet-actor` — Actor identifier used by the rate limiter when no
-token is present. Useful for attributing requests from unauthenticated
-local tools in hybrid mode.
 
 `x-signet-actor-type: operator|agent` — Actor type hint used by certain
 policy decisions (e.g. repair action gating). Optional.

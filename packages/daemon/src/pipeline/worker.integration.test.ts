@@ -46,6 +46,16 @@ function makeAccessor(db: Database): DbAccessor {
 	};
 }
 
+function padExtractionInput(content: string): string {
+	if (content.trim().length >= 80) return content;
+	return `${content} This integration-test input includes durable context so extraction runs fully.`;
+}
+
+function longFact(content: string): string {
+	if (content.trim().length >= 80) return content;
+	return `${content}. This durable memory should remain useful across future coding sessions and related work.`;
+}
+
 function insertMemory(db: Database, id: string, content: string): void {
 	const now = new Date().toISOString();
 	db.prepare(
@@ -53,7 +63,7 @@ function insertMemory(db: Database, id: string, content: string): void {
 		 (id, type, content, confidence, importance, created_at, updated_at,
 		  updated_by, vector_clock, is_deleted, extraction_status)
 		 VALUES (?, 'fact', ?, 1.0, 0.5, ?, ?, 'test', '{}', 0, 'none')`,
-	).run(id, content, now, now);
+	).run(id, padExtractionInput(content), now, now);
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +102,7 @@ const EXTRACTION_RESPONSE = JSON.stringify({
 			confidence: 0.9,
 		},
 		{
-			content: "Nicholai prefers living in walkable neighborhoods with good coffee shops nearby",
+			content: longFact("Nicholai prefers living in walkable neighborhoods with good coffee shops nearby"),
 			type: "preference",
 			confidence: 0.85,
 		},
@@ -661,7 +671,7 @@ describe("pipeline integration", () => {
 
 		const provider = scriptedProvider([
 			JSON.stringify({
-				facts: [{ content: "It might rain tomorrow but who really knows for sure", type: "fact", confidence: 0.4 }],
+				facts: [{ content: longFact("It might rain tomorrow but who really knows for sure"), type: "fact", confidence: 0.4 }],
 				entities: [],
 			}),
 			JSON.stringify({ action: "add", confidence: 0.4, reason: "Low confidence speculation" }),
@@ -715,7 +725,7 @@ describe("pipeline integration", () => {
 			JSON.stringify({
 				facts: [
 					{
-						content: "Bob likes pizza as his favorite food and eats it every Friday",
+						content: longFact("Bob likes pizza as his favorite food and eats it every Friday"),
 						type: "preference",
 						confidence: 0.9,
 					},
@@ -756,7 +766,7 @@ describe("pipeline integration", () => {
 
 		const provider = scriptedProvider([
 			JSON.stringify({
-				facts: [{ content: "Carol lives in Denver, Colorado as her primary residence", type: "fact", confidence: 0.9 }],
+				facts: [{ content: longFact("Carol lives in Denver, Colorado as her primary residence"), type: "fact", confidence: 0.9 }],
 				entities: [],
 			}),
 			DECISION_ADD_RESPONSE,
@@ -785,7 +795,7 @@ describe("pipeline integration", () => {
 		const sourceId = crypto.randomUUID();
 		insertMemory(db, sourceId, "Dave is a professional plumber who works in residential construction projects");
 
-		const factContent = "Dave is a professional plumber working in residential construction";
+		const factContent = longFact("Dave is a professional plumber working in residential construction");
 
 		// Pre-insert a memory with the same content (including content_hash) so it deduplicates
 		const existingId = crypto.randomUUID();

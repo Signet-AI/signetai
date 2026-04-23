@@ -40,6 +40,7 @@ export type LogCategory =
 	| "secrets" // Secrets management
 	| "hooks" // Hook handlers
 	| "pipeline" // Extraction/decision pipeline
+	| "inference" // Inference router and provider execution
 	| "embedding-tracker" // Incremental embedding refresh tracker
 	| "summary-worker" // Session summary worker
 	| "synthesis" // MEMORY.md synthesis worker
@@ -60,6 +61,7 @@ export type LogCategory =
 	| "mcp-analytics" // MCP invocation analytics
 	| "config" // Configuration loading and resolution
 	| "config-migration" // Legacy config migration on startup
+	| "provider-safety" // Provider transition audit and rollback guardrails
 	| "dreaming" // Dreaming worker (background knowledge synthesis)
 	| "http" // HTTP server lifecycle
 	| "resources" // FD / event-loop resource monitoring

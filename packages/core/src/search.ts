@@ -71,6 +71,16 @@ interface DatabaseWrapper {
 	getMemories(type?: string): Memory[];
 }
 
+export function buildFtsMatchQuery(query: string): string | null {
+	const terms = query
+		.toLowerCase()
+		.split(/[^\p{L}\p{N}_]+/u)
+		.map((term) => term.trim())
+		.filter((term) => term.length > 0);
+	if (terms.length === 0) return null;
+	return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" ");
+}
+
 /**
  * Convert a Blob/Buffer to Float32Array for vector operations.
  * Uses zero-copy typed array view — no FFI needed here.
@@ -170,6 +180,8 @@ export function vectorSearch(
 export function keywordSearch(db: SQLiteDatabase, query: string, limit?: number): Array<{ id: string; score: number }> {
 	const effectiveLimit = limit ?? 20;
 	const results: Array<{ id: string; score: number }> = [];
+	const matchQuery = buildFtsMatchQuery(query);
+	if (matchQuery === null) return results;
 
 	try {
 		// FTS5 bm25() returns negative values (lower = better match)
@@ -183,7 +195,7 @@ export function keywordSearch(db: SQLiteDatabase, query: string, limit?: number)
       ORDER BY raw_score
       LIMIT ?
     `)
-			.all(query, effectiveLimit) as Array<{ id: string; raw_score: number }>;
+			.all(matchQuery, effectiveLimit) as Array<{ id: string; raw_score: number }>;
 
 		for (const row of rows) {
 			// Normalize BM25 score: convert negative to 0-1

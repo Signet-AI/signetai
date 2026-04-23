@@ -1583,6 +1583,75 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<Pl
 }
 
 // ============================================================================
+// GraphIQ Plugin Management
+// ============================================================================
+
+export interface GraphiqStatus {
+	installed: boolean;
+	pluginEnabled: boolean;
+	pluginState: string;
+	activeProject: string | null;
+	indexedProjects: readonly { path: string; lastIndexedAt: string; files?: number; symbols?: number; edges?: number }[];
+	installSource: string | null;
+}
+
+export interface GraphiqActionResult {
+	success: boolean;
+	message?: string;
+	error?: string;
+	source?: string;
+	project?: string;
+	stats?: { files?: number; symbols?: number; edges?: number };
+}
+
+export async function getGraphiqStatus(): Promise<GraphiqStatus> {
+	const response = await fetch(`${API_BASE}/api/graphiq/status`);
+	const body = await response.json();
+	if (!response.ok) throw new Error(body.error ?? "Failed to fetch GraphIQ status");
+	return body;
+}
+
+async function parseGraphiqActionResponse(response: Response, fallbackError: string): Promise<GraphiqActionResult> {
+	let payload: GraphiqActionResult | null = null;
+	try {
+		payload = (await response.json()) as GraphiqActionResult;
+	} catch {
+		// fall through to synthesized error payload below
+	}
+	if (response.ok) {
+		return payload ?? { success: true };
+	}
+	return {
+		success: false,
+		error: payload?.error ?? payload?.message ?? fallbackError,
+	};
+}
+
+export async function installGraphiq(): Promise<GraphiqActionResult> {
+	const response = await fetch(`${API_BASE}/api/graphiq/install`, { method: "POST" });
+	return parseGraphiqActionResponse(response, "Failed to install GraphIQ");
+}
+
+export async function updateGraphiq(): Promise<GraphiqActionResult> {
+	const response = await fetch(`${API_BASE}/api/graphiq/update`, { method: "POST" });
+	return parseGraphiqActionResponse(response, "Failed to update GraphIQ");
+}
+
+export async function uninstallGraphiq(): Promise<GraphiqActionResult> {
+	const response = await fetch(`${API_BASE}/api/graphiq/uninstall`, { method: "POST" });
+	return parseGraphiqActionResponse(response, "Failed to uninstall GraphIQ");
+}
+
+export async function indexProjectWithGraphiq(path: string): Promise<GraphiqActionResult> {
+	const response = await fetch(`${API_BASE}/api/graphiq/index`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ path }),
+	});
+	return parseGraphiqActionResponse(response, "Failed to index project with GraphIQ");
+}
+
+// ============================================================================
 // Marketplace MCP API
 // ============================================================================
 

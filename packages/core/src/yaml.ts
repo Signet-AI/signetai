@@ -20,6 +20,23 @@ export function parseSimpleYaml(text: string): Record<string, unknown> {
 }
 
 /**
+ * Parse a full YAML document with the bundled YAML parser.
+ *
+ * Use this for richer config surfaces that need arrays, deeper nesting,
+ * or round-trippable values that exceed parseSimpleYaml's limits.
+ */
+export function parseYamlDocument(text: string): unknown {
+	return YAML.parse(text);
+}
+
+/**
+ * Stringify a full YAML document with the bundled YAML serializer.
+ */
+export function stringifyYamlDocument(value: unknown): string {
+	return YAML.stringify(value);
+}
+
+/**
  * Format a JavaScript object as YAML.
  *
  * `_indent` is retained for internal call-site compatibility, but the

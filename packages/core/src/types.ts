@@ -219,6 +219,7 @@ export interface PipelineExtractionConfig {
 		| "openrouter"
 		| "command";
 	readonly fallbackProvider?: "llama-cpp" | "ollama" | "none";
+	readonly allowRemoteProviders?: boolean;
 	readonly model: string;
 	readonly strength: "low" | "medium" | "high";
 	readonly endpoint?: string;
@@ -334,6 +335,7 @@ export interface PipelineV2Config {
 	readonly semanticContradictionEnabled: boolean;
 	readonly semanticContradictionTimeoutMs: number;
 	readonly telemetryEnabled: boolean;
+	readonly allowRemoteProviders?: boolean;
 
 	// Grouped sub-objects
 	readonly extraction: PipelineExtractionConfig;

@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { createEvent, eventBus } from "./event-bus";
 import { logger } from "./logger";
 import { loadProbeResult } from "./mcp-probe";
-import { getWidgetProvider } from "./widget-llm";
+import { getWidgetProvider } from "./llm";
 
 // ---------------------------------------------------------------------------
 // Paths

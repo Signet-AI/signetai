@@ -173,6 +173,12 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"mcp_server_policy_get",
 	"mcp_server_policy_set",
 	"session_bypass",
+	"signet_code_search",
+	"signet_code_context",
+	"signet_code_blast",
+	"signet_code_status",
+	"signet_code_doctor",
+	"signet_code_constants",
 	"code_search",
 	"code_context",
 	"code_blast",
@@ -192,12 +198,21 @@ const GRAPHIQ_CONSTANTS_TOP_MAX = 100;
 const GRAPHIQ_BLAST_DEPTH_DEFAULT = 3;
 const GRAPHIQ_BLAST_DEPTH_MAX = 10;
 const GRAPHIQ_MCP_TOOL_NAMES = new Set([
-	"code_search",
-	"code_context",
-	"code_blast",
-	"code_status",
-	"code_doctor",
-	"code_constants",
+	"signet_code_search",
+	"signet_code_context",
+	"signet_code_blast",
+	"signet_code_status",
+	"signet_code_doctor",
+	"signet_code_constants",
+]);
+
+const GRAPHIQ_COMPAT_ALIASES: ReadonlyMap<string, string> = new Map([
+	["code_search", "signet_code_search"],
+	["code_context", "signet_code_context"],
+	["code_blast", "signet_code_blast"],
+	["code_status", "signet_code_status"],
+	["code_doctor", "signet_code_doctor"],
+	["code_constants", "signet_code_constants"],
 ]);
 
 // ---------------------------------------------------------------------------
@@ -314,14 +329,15 @@ function graphIqToolAccess(
 	toolName: string,
 	pluginHost: GraphiqPluginPolicyHost,
 ): { ok: true } | { ok: false; error: string } {
+	const resolved = GRAPHIQ_COMPAT_ALIASES.get(toolName) ?? toolName;
 	const plugin = pluginHost.get(SIGNET_GRAPHIQ_PLUGIN_ID);
 	const pluginActive = plugin?.state === "active" || plugin?.state === "degraded";
 	if (!pluginActive) {
 		const state = plugin?.state ?? "not registered";
 		return { ok: false, error: `GraphIQ plugin is ${state}. Run \`signet index <path>\` after enabling GraphIQ.` };
 	}
-	if (!allowedGraphiqMcpTools(pluginHost).has(toolName)) {
-		return { ok: false, error: `GraphIQ plugin has not granted MCP tool access for ${toolName}.` };
+	if (!allowedGraphiqMcpTools(pluginHost).has(resolved)) {
+		return { ok: false, error: `GraphIQ plugin has not granted MCP tool access for ${resolved}.` };
 	}
 	if (!getActiveGraphiqDbPath()) {
 		return { ok: false, error: "GraphIQ has no active indexed project. Run `signet index <path>` first." };
@@ -610,6 +626,118 @@ export async function refreshMarketplaceProxyTools(
 	}
 
 	return { changed: true, count: routed.data.tools.length };
+}
+
+// ---------------------------------------------------------------------------
+// GraphIQ backward-compat aliases
+// ---------------------------------------------------------------------------
+
+function registerGraphiqCompatAliases(server: McpServer, pluginHostProvider: GraphiqPluginPolicyHost): void {
+	const compatDefs: ReadonlyArray<{
+		alias: string;
+		canonical: string;
+		schema: z.SomeZodObject | z.ZodObject<z.ZodRecord<z.ZodString>>;
+		buildArgs: (args: Record<string, unknown>) => string[];
+		label: string;
+	}> = [
+		{
+			alias: "code_search",
+			canonical: "signet_code_search",
+			schema: z.object({
+				query: z.string(),
+				top: z.number().int().min(1).max(GRAPHIQ_SEARCH_TOP_MAX).optional(),
+				file: z.string().optional(),
+				debug: z.boolean().optional(),
+			}),
+			buildArgs: (a) => {
+				const bounded = boundedInteger(a.top as number | undefined, GRAPHIQ_SEARCH_TOP_DEFAULT, GRAPHIQ_SEARCH_TOP_MAX);
+				const parts = ["search", a.query as string, "--top", String(bounded)];
+				if (a.file) parts.push("--file", a.file as string);
+				if (a.debug) parts.push("--debug");
+				return parts;
+			},
+			label: "Code search failed",
+		},
+		{
+			alias: "code_context",
+			canonical: "signet_code_context",
+			schema: z.object({ symbol: z.string() }),
+			buildArgs: (a) => ["context", a.symbol as string],
+			label: "Code context failed",
+		},
+		{
+			alias: "code_blast",
+			canonical: "signet_code_blast",
+			schema: z.object({
+				symbol: z.string(),
+				depth: z.number().int().min(1).max(GRAPHIQ_BLAST_DEPTH_MAX).optional(),
+				direction: z.enum(["forward", "backward", "both"]).optional(),
+			}),
+			buildArgs: (a) => {
+				const bounded = boundedInteger(
+					a.depth as number | undefined,
+					GRAPHIQ_BLAST_DEPTH_DEFAULT,
+					GRAPHIQ_BLAST_DEPTH_MAX,
+				);
+				return [
+					"blast",
+					a.symbol as string,
+					"--depth",
+					String(bounded),
+					"--direction",
+					(a.direction as string) ?? "both",
+				];
+			},
+			label: "Code blast failed",
+		},
+		{
+			alias: "code_status",
+			canonical: "signet_code_status",
+			schema: z.object({}),
+			buildArgs: () => ["status"],
+			label: "Code status failed",
+		},
+		{
+			alias: "code_doctor",
+			canonical: "signet_code_doctor",
+			schema: z.object({}),
+			buildArgs: () => ["doctor"],
+			label: "Code doctor failed",
+		},
+		{
+			alias: "code_constants",
+			canonical: "signet_code_constants",
+			schema: z.object({
+				query: z.string().optional(),
+				top: z.number().int().min(1).max(GRAPHIQ_CONSTANTS_TOP_MAX).optional(),
+			}),
+			buildArgs: (a) => {
+				const parts = ["constants"];
+				if (a.query) parts.push(a.query as string);
+				const bounded = boundedInteger(
+					a.top as number | undefined,
+					GRAPHIQ_CONSTANTS_TOP_DEFAULT,
+					GRAPHIQ_CONSTANTS_TOP_MAX,
+				);
+				parts.push("--top", String(bounded));
+				return parts;
+			},
+			label: "Code constants failed",
+		},
+	];
+
+	for (const def of compatDefs) {
+		server.registerTool(
+			def.alias,
+			{
+				title: `[deprecated: use ${def.canonical}]`,
+				description: `Backward-compat alias for \`${def.canonical}\`. Will be removed in a future release.`,
+				inputSchema: def.schema,
+			},
+			(args) =>
+				graphIqToolResult(def.buildArgs(args as Record<string, unknown>), def.label, def.canonical, pluginHostProvider),
+		);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1983,7 +2111,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	);
 
 	server.registerTool(
-		"code_search",
+		"signet_code_search",
 		{
 			title: "Search Code",
 			description: "Search the active GraphIQ-indexed project for symbols and implementation context.",
@@ -2011,12 +2139,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				args.push("--file", safeFile.value);
 			}
 			if (debug) args.push("--debug");
-			return graphIqToolResult(args, "Code search failed", "code_search", pluginHostProvider);
+			return graphIqToolResult(args, "Code search failed", "signet_code_search", pluginHostProvider);
 		},
 	);
 
 	server.registerTool(
-		"code_context",
+		"signet_code_context",
 		{
 			title: "Code Context",
 			description: "Read full source and structural neighborhood for a symbol in the active GraphIQ project.",
@@ -2030,14 +2158,14 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return graphIqToolResult(
 				["context", safeSymbol.value],
 				"Code context failed",
-				"code_context",
+				"signet_code_context",
 				pluginHostProvider,
 			);
 		},
 	);
 
 	server.registerTool(
-		"code_blast",
+		"signet_code_blast",
 		{
 			title: "Code Blast Radius",
 			description: "Analyze impact radius for a symbol in the active GraphIQ project.",
@@ -2058,32 +2186,32 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!safeSymbol.ok) return errorResult(safeSymbol.error);
 			const boundedDepth = boundedInteger(depth, GRAPHIQ_BLAST_DEPTH_DEFAULT, GRAPHIQ_BLAST_DEPTH_MAX);
 			const args = ["blast", safeSymbol.value, "--depth", String(boundedDepth), "--direction", direction ?? "both"];
-			return graphIqToolResult(args, "Code blast failed", "code_blast", pluginHostProvider);
+			return graphIqToolResult(args, "Code blast failed", "signet_code_blast", pluginHostProvider);
 		},
 	);
 
 	server.registerTool(
-		"code_status",
+		"signet_code_status",
 		{
 			title: "Code Index Status",
 			description: "Show GraphIQ status for the active indexed project.",
 			inputSchema: z.object({}),
 		},
-		async () => graphIqToolResult(["status"], "Code status failed", "code_status", pluginHostProvider),
+		async () => graphIqToolResult(["status"], "Code status failed", "signet_code_status", pluginHostProvider),
 	);
 
 	server.registerTool(
-		"code_doctor",
+		"signet_code_doctor",
 		{
 			title: "Code Index Doctor",
 			description: "Diagnose GraphIQ artifact health for the active indexed project.",
 			inputSchema: z.object({}),
 		},
-		async () => graphIqToolResult(["doctor"], "Code doctor failed", "code_doctor", pluginHostProvider),
+		async () => graphIqToolResult(["doctor"], "Code doctor failed", "signet_code_doctor", pluginHostProvider),
 	);
 
 	server.registerTool(
-		"code_constants",
+		"signet_code_constants",
 		{
 			title: "Code Constants",
 			description: "Find shared numeric/string constants in the active GraphIQ project.",
@@ -2109,9 +2237,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}
 			const boundedTop = boundedInteger(top, GRAPHIQ_CONSTANTS_TOP_DEFAULT, GRAPHIQ_CONSTANTS_TOP_MAX);
 			args.push("--top", String(boundedTop));
-			return graphIqToolResult(args, "Code constants failed", "code_constants", pluginHostProvider);
+			return graphIqToolResult(args, "Code constants failed", "signet_code_constants", pluginHostProvider);
 		},
 	);
+
+	registerGraphiqCompatAliases(server, pluginHostProvider);
 
 	if (enableMarketplaceProxyTools) {
 		await refreshMarketplaceProxyTools(server, { notify: false });

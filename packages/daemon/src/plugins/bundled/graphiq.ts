@@ -37,37 +37,37 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 	],
 	mcpTools: [
 		{
-			name: "code_search",
+			name: "signet_code_search",
 			title: "Search Code",
 			summary: "Search the active GraphIQ-indexed project",
 			requiredCapabilities: ["mcp:tool", "code:search"],
 		},
 		{
-			name: "code_context",
+			name: "signet_code_context",
 			title: "Code Context",
 			summary: "Read source and structural neighborhood for a symbol",
 			requiredCapabilities: ["mcp:tool", "code:context"],
 		},
 		{
-			name: "code_blast",
+			name: "signet_code_blast",
 			title: "Code Blast Radius",
 			summary: "Analyze forward/backward impact for a symbol",
 			requiredCapabilities: ["mcp:tool", "code:blast"],
 		},
 		{
-			name: "code_status",
+			name: "signet_code_status",
 			title: "Code Index Status",
 			summary: "Show GraphIQ status for the active project",
 			requiredCapabilities: ["mcp:tool", "code:status"],
 		},
 		{
-			name: "code_doctor",
+			name: "signet_code_doctor",
 			title: "Code Index Doctor",
 			summary: "Diagnose active GraphIQ index health",
 			requiredCapabilities: ["mcp:tool", "code:doctor"],
 		},
 		{
-			name: "code_constants",
+			name: "signet_code_constants",
 			title: "Code Constants",
 			summary: "Find shared numeric and string constants in code",
 			requiredCapabilities: ["mcp:tool", "code:search"],
@@ -75,7 +75,47 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 	],
 	dashboardPanels: [],
 	sdkClients: [],
-	connectorCapabilities: [],
+	connectorCapabilities: [
+		{
+			id: "claude-code",
+			title: "Claude Code",
+			summary: "MCP tools via signet-mcp stdio",
+			requiredCapabilities: ["mcp:tool"],
+		},
+		{
+			id: "opencode",
+			title: "OpenCode",
+			summary: "MCP tools via signet-mcp stdio",
+			requiredCapabilities: ["mcp:tool"],
+		},
+		{ id: "codex", title: "Codex CLI", summary: "MCP tools via signet-mcp stdio", requiredCapabilities: ["mcp:tool"] },
+		{
+			id: "gemini",
+			title: "Gemini CLI",
+			summary: "MCP tools via signet-mcp stdio",
+			requiredCapabilities: ["mcp:tool"],
+		},
+		{
+			id: "openclaw",
+			title: "OpenClaw",
+			summary: "MCP tools via signet-mcp stdio",
+			requiredCapabilities: ["mcp:tool"],
+		},
+		{ id: "forge", title: "Forge", summary: "MCP tools via signet-mcp stdio", requiredCapabilities: ["mcp:tool"] },
+		{
+			id: "hermes-agent",
+			title: "Hermes Agent",
+			summary: "MCP tools via signet-mcp stdio",
+			requiredCapabilities: ["mcp:tool"],
+		},
+		{
+			id: "oh-my-pi",
+			title: "Oh My Pi",
+			summary: "MCP tools via signet-mcp stdio",
+			requiredCapabilities: ["mcp:tool"],
+		},
+		{ id: "pi", title: "Pi", summary: "MCP tools via signet-mcp stdio", requiredCapabilities: ["mcp:tool"] },
+	],
 	promptContributions: [
 		{
 			id: "signet.graphiq.code-retrieval-guidance",

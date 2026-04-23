@@ -207,6 +207,25 @@ specs:
       - "Signet operates as a standalone runtime channel independent of harness-specific connectors"
     decision: null
 
+  - id: model-provider-router
+    status: approved
+    path: docs/specs/approved/model-provider-router.md
+    hard_depends_on:
+      - signet-runtime
+    soft_depends_on:
+      - connector-hermes-agent
+      - signet-native-harness
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-INFERENCE-CONTROL-PLANE.md
+      - docs/research/technical/RESEARCH-COMPETITIVE-SYSTEMS.md
+    success_criteria:
+      - "Signet exposes a shared inference layer that can select among session-backed, API-backed, and local model targets from agent.yaml policy"
+      - "The daemon exposes both a Signet-native inference API and an OpenAI-compatible gateway surface backed by the same router"
+      - "Daemon-managed workloads such as extraction and synthesis can route through the same policy engine instead of a separate provider selector"
+      - "Operators can inspect routing decisions, health, and fallback state from the CLI and daemon status surfaces"
+    decision: null
+
   - id: pipeline-pause-control
     status: complete
     path: docs/specs/complete/pipeline-pause-control.md
@@ -1273,4 +1292,19 @@ specs:
       - "Token spend per dreaming pass is bounded and configurable"
       - "Dreaming passes run as full sessions with transcript capture and self-improvement loop (Phase 2)"
       - "Pipeline V2 extraction is gated off when dreaming is enabled (Phase 2)"
+    decision: null
+  - id: native-harness-memory-bridge
+    status: approved
+    path: docs/specs/approved/native-harness-memory-bridge.md
+    hard_depends_on:
+      - memory-md-rolling-window-lineage
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-NATIVE-HARNESS-MEMORY-BRIDGE.md
+    success_criteria:
+      - "Memories written by a native-memory harness are recallable through Signet from other harnesses without becoming Signet-authored memory rows"
+      - "Codex native memory artifacts are indexed with harness/source provenance"
+      - "Codex MCP registration avoids exposing duplicate Signet memory tools by default"
     decision: null

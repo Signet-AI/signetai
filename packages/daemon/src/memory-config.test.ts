@@ -614,6 +614,24 @@ describe("loadPipelineConfig", () => {
 		expect(result.synthesis.model).toBe("qwen3:4b");
 	});
 
+	it("falls back from command extraction when remote providers are locked", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					allowRemoteProviders: false,
+					extraction: {
+						provider: "command",
+						fallbackProvider: "ollama",
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.provider).toBe("ollama");
+		expect(result.extraction.command).toBeUndefined();
+		expect(result.synthesis.provider).toBe("ollama");
+	});
+
 	it("parses legacy extraction.command string into argv", () => {
 		const result = loadPipelineConfig({
 			memory: {

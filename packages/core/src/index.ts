@@ -6,9 +6,6 @@
 export { Signet } from "./signet";
 export { Database, findSqliteVecExtension, loadSqliteVec } from "./database";
 export {
-	Agent,
-	AgentManifest,
-	AgentConfig,
 	MEMORY_TYPES,
 	EXTRACTION_STATUSES,
 	JOB_STATUSES,
@@ -24,6 +21,9 @@ export {
 	DEFAULT_PROVIDER_RATE_LIMIT,
 } from "./types";
 export type {
+	Agent,
+	AgentManifest,
+	AgentConfig,
 	LlmProvider,
 	LlmUsage,
 	LlmGenerateResult,
@@ -88,10 +88,12 @@ export {
 	OPENCODE_PIPELINE_AGENT,
 	OPENCODE_PIPELINE_SYSTEM_PROMPT,
 	PIPELINE_PROVIDER_CHOICES,
+	SYNTHESIS_PROVIDER_CHOICES,
 	defaultPipelineModel,
 	isPipelineProvider,
+	isSynthesisProvider,
 } from "./pipeline-providers";
-export type { PipelineProviderChoice } from "./pipeline-providers";
+export type { PipelineProviderChoice, SynthesisProviderChoice } from "./pipeline-providers";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory } from "./memory";
@@ -109,6 +111,7 @@ export {
 	keywordSearch,
 	hybridSearch,
 	cosineSimilarity,
+	buildFtsMatchQuery,
 	type SearchOptions,
 	type SearchResult,
 	type VectorSearchOptions,
@@ -141,7 +144,8 @@ export {
 	readMemoriesFtsSql,
 	recreateMemoriesFts,
 } from "./fts-schema";
-export { migrate, MigrationSource } from "./migrate";
+export { migrate } from "./migrate";
+export type { MigrationSource } from "./migrate";
 export {
 	detectSchema,
 	ensureUnifiedSchema,
@@ -319,7 +323,53 @@ export {
 } from "./markdown";
 
 // YAML utilities
-export { parseSimpleYaml, formatYaml } from "./yaml";
+export { parseSimpleYaml, formatYaml, parseYamlDocument, stringifyYamlDocument } from "./yaml";
+export {
+	ROUTING_ACCOUNT_KINDS,
+	ROUTING_TARGET_KINDS,
+	ROUTING_EXECUTOR_KINDS,
+	ROUTING_POLICY_MODES,
+	ROUTING_PRIVACY_TIERS,
+	ROUTING_REASONING_DEPTHS,
+	ROUTING_COST_TIERS,
+	ROUTING_OPERATION_KINDS,
+	makeRoutingTargetRef,
+	parseRoutingTargetRef,
+	compileLegacyRoutingConfig,
+	parseRoutingConfig,
+	allTargetRefs,
+	resolveRoutingDecision,
+} from "./routing";
+export type {
+	RoutingAccountKind,
+	RoutingTargetKind,
+	RoutingExecutorKind,
+	RoutingPolicyMode,
+	RoutingPrivacyTier,
+	RoutingReasoningDepth,
+	RoutingCostTier,
+	RoutingOperationKind,
+	RoutingTargetRef,
+	RoutingPolicyId,
+	RoutingAgentId,
+	RouterError,
+	RouterResult,
+	RoutingAccountConfig,
+	RoutingModelConfig,
+	RoutingTargetConfig,
+	RoutingPolicyConfig,
+	RoutingTaskClassConfig,
+	AgentRoutingConfig,
+	RoutingWorkloadBinding,
+	RoutingConfig,
+	RoutingRuntimeState,
+	RoutingRuntimeSnapshot,
+	RouteRequest,
+	RouteClassification,
+	RouteCandidateTrace,
+	RouteTrace,
+	RouteDecision,
+} from "./routing";
 export {
 	PIPELINE_CONFIG_FILES,
 	findPipelineConfigFile,

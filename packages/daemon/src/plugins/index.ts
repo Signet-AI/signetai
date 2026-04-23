@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { getGraphiqStatePath } from "@signet/core";
+import { getAgentsDir } from "../graphiq.js";
 import { getLocalSecretProviderHealth } from "../secrets.js";
 import { signetGraphiqManifest } from "./bundled/graphiq.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
@@ -5,6 +8,25 @@ import { PluginHostV1 } from "./host.js";
 import type { PluginHostOptionsV1 } from "./host.js";
 
 let defaultHost: PluginHostV1 | null = null;
+
+function resolveGraphiqEnabled(): boolean {
+	const statePath = getGraphiqStatePath(getAgentsDir());
+	if (existsSync(statePath)) {
+		try {
+			const parsed: unknown = JSON.parse(readFileSync(statePath, "utf-8"));
+			if (
+				typeof parsed === "object" &&
+				parsed !== null &&
+				typeof (parsed as Record<string, unknown>).enabled === "boolean"
+			) {
+				return (parsed as Record<string, unknown>).enabled as boolean;
+			}
+		} catch {
+			// corrupted state file — fall through to default
+		}
+	}
+	return false;
+}
 
 export function createDefaultPluginHost(opts: PluginHostOptionsV1 = {}): PluginHostV1 {
 	const host = new PluginHostV1({
@@ -19,7 +41,7 @@ export function createDefaultPluginHost(opts: PluginHostOptionsV1 = {}): PluginH
 	});
 	host.discover(signetGraphiqManifest, {
 		source: "bundled",
-		enabled: false,
+		enabled: resolveGraphiqEnabled(),
 		grantedCapabilities: signetGraphiqManifest.capabilities,
 	});
 	return host;

@@ -14,9 +14,11 @@
  *   GET  /api/os/agent-events   — SSE stream of agent commands for the dashboard
  */
 
+import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
+import { getInferenceRouterOrNull } from "../inference-router.js";
+import { getInteractiveLlmProviderOrNull } from "../llm.js";
 import { logger } from "../logger.js";
-import { getSecret } from "../secrets.js";
 
 // ============================================================================
 // Agent Session State (in-memory)
@@ -26,6 +28,9 @@ interface AgentSessionState {
 	id: string;
 	serverId: string;
 	task: string;
+	agentId?: string;
+	taskClass?: string;
+	privacy?: RoutingPrivacyTier;
 	status: "running" | "done" | "error";
 	step: number;
 	maxSteps: number;
@@ -61,16 +66,6 @@ function createSessionId(): string {
 // ============================================================================
 // LLM Integration
 // ============================================================================
-
-let cachedApiKey: string | null = null;
-
-async function getApiKey(): Promise<string> {
-	if (!cachedApiKey) {
-		cachedApiKey = process.env.OPENAI_API_KEY || (await getSecret("OPENAI_API_KEY").catch(() => ""));
-	}
-	if (!cachedApiKey) throw new Error("OPENAI_API_KEY not found");
-	return cachedApiKey;
-}
 
 const AGENT_SYSTEM_PROMPT = `You are a GUI automation agent operating inside a web widget. You can see the page as simplified HTML with indexed interactive elements like [0]<button>Click me</button>.
 
@@ -112,32 +107,56 @@ interface AgentAction {
 	summary?: string;
 }
 
-async function callAgentLlm(messages: Array<{ role: string; content: string }>): Promise<AgentAction> {
-	const apiKey = await getApiKey();
+function buildAgentPrompt(messages: Array<{ role: "system" | "user" | "assistant"; content: string }>): string {
+	const transcript = messages
+		.filter((message) => message.role !== "system")
+		.map((message) => `${message.role.toUpperCase()}:\n${message.content}`)
+		.join("\n\n");
+	return `${AGENT_SYSTEM_PROMPT}\n\nConversation:\n${transcript}\n\nRespond with exactly one JSON action.`;
+}
 
-	const res = await fetch("https://api.openai.com/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${apiKey}`,
-		},
-		body: JSON.stringify({
-			model: "gpt-4o",
-			max_tokens: 512,
-			temperature: 0.1,
-			messages,
-		}),
-	});
-
-	if (!res.ok) {
-		const errText = await res.text();
-		throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 200)}`);
+async function callAgentLlm(
+	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+	route?: {
+		readonly agentId?: string;
+		readonly taskClass?: string;
+		readonly privacy?: RoutingPrivacyTier;
+	},
+): Promise<AgentAction> {
+	let raw: string;
+	const router = getInferenceRouterOrNull();
+	if (router && (await router.hasWorkload("interactive"))) {
+		const routed = await router.execute(
+			{
+				agentId: route?.agentId,
+				operation: "os_agent",
+				taskClass: route?.taskClass,
+				privacy: route?.privacy,
+				promptPreview: messages[messages.length - 1]?.content,
+			},
+			buildAgentPrompt(messages),
+			{ maxTokens: 512 },
+		);
+		if (routed.ok) {
+			raw = routed.value.text;
+		} else {
+			logger.warn("os-agent", "Inference router failed, falling back to legacy interactive provider", {
+				error: routed.error.message,
+			});
+			raw = "";
+		}
+	} else {
+		raw = "";
 	}
-
-	const data = (await res.json()) as {
-		choices: Array<{ message: { content: string } }>;
-	};
-	const raw = data.choices?.[0]?.message?.content ?? "";
+	if (!raw) {
+		const provider = getInteractiveLlmProviderOrNull();
+		if (!provider) {
+			throw new Error("Interactive inference provider is not configured");
+		}
+		raw = await provider.generate(buildAgentPrompt(messages), {
+			maxTokens: 512,
+		});
+	}
 
 	// Parse the action JSON
 	let cleaned = raw.trim();
@@ -223,7 +242,11 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 
 			let action: AgentAction;
 			try {
-				action = await callAgentLlm(session.messages);
+				action = await callAgentLlm(session.messages, {
+					agentId: session.agentId,
+					taskClass: session.taskClass,
+					privacy: session.privacy,
+				});
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
 				logger.warn("os-agent", `LLM error at step ${step}: ${msg}`);
@@ -413,7 +436,7 @@ export function mountOsAgentRoutes(app: Hono): void {
 	 * Returns: { sessionId: string } — connect to /api/os/agent-events?session=<id> for updates
 	 */
 	app.post("/api/os/agent-execute", async (c) => {
-		let body: { serverId?: string; task?: string };
+		let body: { serverId?: string; task?: string; agentId?: string; taskClass?: string; privacy?: RoutingPrivacyTier };
 		try {
 			body = await c.req.json();
 		} catch {
@@ -441,6 +464,9 @@ export function mountOsAgentRoutes(app: Hono): void {
 			id: sessionId,
 			serverId,
 			task,
+			agentId: body.agentId?.trim() || undefined,
+			taskClass: body.taskClass?.trim() || undefined,
+			privacy: body.privacy,
 			status: "running",
 			step: 0,
 			maxSteps: 20,
@@ -542,9 +568,9 @@ export function mountOsAgentRoutes(app: Hono): void {
 				} else {
 					// Listen to ALL sessions (broadcast mode)
 					// Register on all current sessions
-					Array.from(activeSessions.values()).forEach((session) => {
+					for (const session of activeSessions.values()) {
 						session.sseListeners.push(onEvent);
-					});
+					}
 				}
 
 				// Heartbeat
@@ -560,10 +586,10 @@ export function mountOsAgentRoutes(app: Hono): void {
 				c.req.raw.signal.addEventListener("abort", () => {
 					clearInterval(heartbeat);
 					// Remove listener from all sessions
-					Array.from(activeSessions.values()).forEach((session) => {
+					for (const session of activeSessions.values()) {
 						const idx = session.sseListeners.indexOf(onEvent);
 						if (idx >= 0) session.sseListeners.splice(idx, 1);
-					});
+					}
 				});
 			},
 		});

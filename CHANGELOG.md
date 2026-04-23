@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-04-23
+- Features: add GraphIQ plugin management UI and daemon API; index native harness memories; unify LLM provider plumbing.
+
 ### 2026-04-22
 - Features: add desktop source install command; add GraphIQ plugin integration.
 - Bug fixes: expose preload bridge reliably; proxy dashboard API to daemon; stage desktop AppImage replacement; bind install to configured workspace; write named-agent memory heads locally.
@@ -31,11 +34,34 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Performance: paginate entity IDs before counting to avoid full GROUP BY.
 - Docs: add recall confidence gate record; define plugin sdk core v1.
 
-### 2026-04-16
-- Bug fixes: resolve FD exhaustion and event loop blocking with thousands of memory artifacts.
-- Refactoring: prompt for sync after restart.
-
 ## Release Ledger
+
+## [0.108.0] - 2026-04-23
+
+Release summary: 1 feature.
+Tag range: `v0.107.0..v0.108.0`.
+
+### Features
+
+- **dashboard**: add GraphIQ plugin management UI and daemon API (#553)
+
+## [0.107.0] - 2026-04-23
+
+Release summary: 1 feature.
+Tag range: `v0.106.0..v0.107.0`.
+
+### Features
+
+- **memory**: index native harness memories (#554)
+
+## [0.106.0] - 2026-04-23
+
+Release summary: 1 feature.
+Tag range: `v0.105.6..v0.106.0`.
+
+### Features
+
+- **router**: unify LLM provider plumbing (#462)
 
 ## [0.105.6] - 2026-04-22
 

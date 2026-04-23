@@ -16,6 +16,7 @@ import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
 	type LlmGenerateResult,
 	type LlmProvider,
+	type LlmUsage,
 	OPENCODE_PIPELINE_AGENT,
 	OPENCODE_PIPELINE_SYSTEM_PROMPT,
 	type PipelineExtractionConfig,
@@ -125,14 +126,14 @@ export class LlmConcurrencySemaphore {
 const llmSemaphore = new LlmConcurrencySemaphore(
 	process.env.SIGNET_MAX_LLM_CONCURRENCY !== undefined
 		? (() => {
-			const parsed = Number(process.env.SIGNET_MAX_LLM_CONCURRENCY);
-			if (!Number.isSafeInteger(parsed) || parsed < 1) {
-				logger.warn("pipeline", "SIGNET_MAX_LLM_CONCURRENCY is not a valid positive integer, using default", {
-					value: process.env.SIGNET_MAX_LLM_CONCURRENCY,
-				});
-				return DEFAULT_MAX_LLM_CONCURRENCY;
-			}
-			return parsed;
+				const parsed = Number(process.env.SIGNET_MAX_LLM_CONCURRENCY);
+				if (!Number.isSafeInteger(parsed) || parsed < 1) {
+					logger.warn("pipeline", "SIGNET_MAX_LLM_CONCURRENCY is not a valid positive integer, using default", {
+						value: process.env.SIGNET_MAX_LLM_CONCURRENCY,
+					});
+					return DEFAULT_MAX_LLM_CONCURRENCY;
+				}
+				return parsed;
 			})()
 		: DEFAULT_MAX_LLM_CONCURRENCY,
 );
@@ -307,11 +308,7 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
  * Run an async function guarded by the global LLM concurrency semaphore.
  * Ensures no more than N concurrent LLM calls across all providers and workers.
  */
-async function withLlmConcurrency<T>(
-	fn: () => Promise<T>,
-	timeoutMs?: number,
-	label?: string,
-): Promise<T> {
+async function withLlmConcurrency<T>(fn: () => Promise<T>, timeoutMs?: number, label?: string): Promise<T> {
 	try {
 		if (timeoutMs !== undefined) {
 			await llmSemaphore.acquireWithTimeout(timeoutMs);
@@ -353,9 +350,7 @@ function parseApiErrorDetail(rawBody: string, includeType = false): string {
 	try {
 		const parsed = JSON.parse(rawBody) as ApiErrorBody;
 		if (parsed.error?.message) {
-			return includeType
-				? `${parsed.error.type ?? "error"}: ${parsed.error.message}`
-				: parsed.error.message;
+			return includeType ? `${parsed.error.type ?? "error"}: ${parsed.error.message}` : parsed.error.message;
 		}
 	} catch {
 		// Use raw body
@@ -412,9 +407,7 @@ interface HttpAttemptContext {
 	setLastError(e: Error): void;
 }
 
-type HttpAttemptResult<T> =
-	| { readonly retry: true }
-	| { readonly retry: false; readonly value: T };
+type HttpAttemptResult<T> = { readonly retry: true } | { readonly retry: false; readonly value: T };
 
 async function httpProviderCall<T>(
 	config: HttpRetryConfig,
@@ -429,12 +422,8 @@ async function httpProviderCall<T>(
 		if (attempt > 0) {
 			const remainingBudget = deadline - performance.now();
 			if (remainingBudget <= 0) {
-				const reason = state.lastError
-					? `last error: ${state.lastError.message}`
-					: "no successful attempt";
-				throw new Error(
-					`${label} timeout after ${timeoutMs}ms (deadline exceeded before retry backoff; ${reason})`,
-				);
+				const reason = state.lastError ? `last error: ${state.lastError.message}` : "no successful attempt";
+				throw new Error(`${label} timeout after ${timeoutMs}ms (deadline exceeded before retry backoff; ${reason})`);
 			}
 			const backoffMs = Math.min(1000 * 2 ** (attempt - 1), 8000, remainingBudget);
 			await new Promise((r) => setTimeout(r, backoffMs));
@@ -446,24 +435,16 @@ async function httpProviderCall<T>(
 		}
 
 		if (deadline - performance.now() <= 0) {
-			const reason = state.lastError
-				? `last error: ${state.lastError.message}`
-				: "no successful attempt";
-			throw new Error(
-				`${label} timeout after ${timeoutMs}ms (deadline exceeded before attempt ${attempt}; ${reason})`,
-			);
+			const reason = state.lastError ? `last error: ${state.lastError.message}` : "no successful attempt";
+			throw new Error(`${label} timeout after ${timeoutMs}ms (deadline exceeded before attempt ${attempt}; ${reason})`);
 		}
 
 		const result = await withLlmConcurrency(
 			async () => {
 				const remainingMs = deadline - performance.now();
 				if (remainingMs <= 0) {
-					const reason = state.lastError
-						? `last error: ${state.lastError.message}`
-						: "no successful attempt";
-					throw new Error(
-						`${label} timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore; ${reason})`,
-					);
+					const reason = state.lastError ? `last error: ${state.lastError.message}` : "no successful attempt";
+					throw new Error(`${label} timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore; ${reason})`);
 				}
 				const controller = new AbortController();
 				const timer = setTimeout(() => controller.abort(), remainingMs);
@@ -698,10 +679,7 @@ export async function awaitSubprocessWithDeadline<T>(
 		graceTimer = setTimeout(() => proc.kill("SIGKILL"), SUBPROCESS_KILL_GRACE_MS);
 		await proc.exited.catch(() => {});
 		clearTimeout(graceTimer);
-		throw new SemaphoreTimeoutError(
-			originalTimeoutMs,
-			`${label} timeout after ${originalTimeoutMs}ms`,
-		);
+		throw new SemaphoreTimeoutError(originalTimeoutMs, `${label} timeout after ${originalTimeoutMs}ms`);
 	}
 }
 
@@ -748,6 +726,196 @@ function createSterileCodexEnv(baseEnv: Record<string, string | undefined>): {
 
 export type { LlmProvider, LlmGenerateResult } from "@signet/core";
 
+export type LlmProviderCallOptions = {
+	readonly timeoutMs?: number;
+	readonly maxTokens?: number;
+	readonly temperature?: number;
+	readonly abortSignal?: AbortSignal;
+};
+
+export type LlmProviderStreamEvent =
+	| { readonly type: "text-delta"; readonly text: string }
+	| { readonly type: "done"; readonly text: string; readonly usage: LlmUsage | null };
+
+export interface LlmProviderStreamResult {
+	readonly stream: ReadableStream<LlmProviderStreamEvent>;
+	cancel(reason?: string): void;
+}
+
+export interface StreamCapableLlmProvider extends LlmProvider {
+	streamWithUsage?(prompt: string, opts?: LlmProviderCallOptions): Promise<LlmProviderStreamResult>;
+}
+
+interface AbortBundle {
+	readonly signal: AbortSignal;
+	readonly timedOut: () => boolean;
+	abort(reason?: string): void;
+	cleanup(): void;
+}
+
+function createAbortBundle(timeoutMs: number, abortSignal?: AbortSignal): AbortBundle {
+	const controller = new AbortController();
+	let timedOut = false;
+	let timeout: ReturnType<typeof setTimeout> | null = null;
+	const onAbort = (): void => {
+		controller.abort();
+	};
+
+	if (timeoutMs > 0) {
+		timeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, timeoutMs);
+	}
+
+	if (abortSignal) {
+		if (abortSignal.aborted) {
+			controller.abort();
+		} else {
+			abortSignal.addEventListener("abort", onAbort, { once: true });
+		}
+	}
+
+	return {
+		signal: controller.signal,
+		timedOut: () => timedOut,
+		abort(_reason?: string) {
+			controller.abort();
+		},
+		cleanup() {
+			if (timeout) clearTimeout(timeout);
+			if (abortSignal) abortSignal.removeEventListener("abort", onAbort);
+		},
+	};
+}
+
+function extractOpenAiLikeText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.flatMap((part) =>
+			typeof part === "object" &&
+			part !== null &&
+			"type" in part &&
+			part.type === "text" &&
+			"text" in part &&
+			typeof part.text === "string"
+				? [part.text]
+				: [],
+		)
+		.join("");
+}
+
+function createOpenAiLikeStreamResult(res: Response, cancel: () => void): LlmProviderStreamResult {
+	if (!res.body) {
+		throw new Error("streaming response body was missing");
+	}
+
+	let finished = false;
+	let fullText = "";
+	let usage: LlmUsage | null = null;
+
+	const stream = new ReadableStream<LlmProviderStreamEvent>({
+		async start(controller) {
+			const reader = res.body?.getReader();
+			if (!reader) {
+				controller.error(new Error("streaming response body was missing"));
+				return;
+			}
+
+			const decoder = new TextDecoder();
+			let buffer = "";
+
+			try {
+				while (true) {
+					const next = await reader.read();
+					if (next.done) break;
+					buffer += decoder.decode(next.value, { stream: true });
+
+					while (true) {
+						const boundary = buffer.indexOf("\n\n");
+						if (boundary < 0) break;
+						const block = buffer.slice(0, boundary);
+						buffer = buffer.slice(boundary + 2);
+
+						const dataLines = block
+							.split(/\r?\n/)
+							.flatMap((line) => (line.startsWith("data:") ? [line.slice("data:".length).trimStart()] : []));
+						if (dataLines.length === 0) continue;
+
+						const payload = dataLines.join("\n");
+						if (payload === "[DONE]") {
+							finished = true;
+							controller.enqueue({ type: "done", text: fullText, usage });
+							controller.close();
+							return;
+						}
+
+						let parsed: unknown;
+						try {
+							parsed = JSON.parse(payload);
+						} catch {
+							continue;
+						}
+
+						if (typeof parsed !== "object" || parsed === null) continue;
+						const record = parsed as Record<string, unknown>;
+						const choices = Array.isArray(record.choices) ? record.choices : [];
+						const first = choices[0];
+						if (typeof first === "object" && first !== null && "delta" in first) {
+							const delta = first.delta;
+							if (typeof delta === "object" && delta !== null && "content" in delta) {
+								const text = extractOpenAiLikeText(delta.content);
+								if (text.length > 0) {
+									fullText += text;
+									controller.enqueue({ type: "text-delta", text });
+								}
+							}
+						}
+
+						if ("usage" in record && typeof record.usage === "object" && record.usage !== null) {
+							const rawUsage = record.usage as Record<string, unknown>;
+							usage = {
+								inputTokens: typeof rawUsage.prompt_tokens === "number" ? rawUsage.prompt_tokens : null,
+								outputTokens: typeof rawUsage.completion_tokens === "number" ? rawUsage.completion_tokens : null,
+								cacheReadTokens:
+									typeof rawUsage.cached_tokens === "number"
+										? rawUsage.cached_tokens
+										: typeof rawUsage.cache_read_tokens === "number"
+											? rawUsage.cache_read_tokens
+											: null,
+								cacheCreationTokens:
+									typeof rawUsage.cache_creation_tokens === "number" ? rawUsage.cache_creation_tokens : null,
+								totalCost: typeof rawUsage.cost === "number" ? rawUsage.cost : null,
+								totalDurationMs: null,
+							};
+						}
+					}
+				}
+
+				if (!finished) {
+					controller.error(new Error("upstream stream ended unexpectedly"));
+				}
+			} catch (error) {
+				controller.error(error);
+			} finally {
+				reader.releaseLock();
+			}
+		},
+		cancel() {
+			cancel();
+		},
+	});
+
+	return {
+		stream,
+		cancel(reason?: string) {
+			logger.debug("pipeline", "Cancelling streaming provider call", { reason: reason ?? "unspecified" });
+			cancel();
+		},
+	};
+}
+
 // ---------------------------------------------------------------------------
 // Helper: call generateWithUsage if available, fall back to generate
 // ---------------------------------------------------------------------------
@@ -755,13 +923,239 @@ export type { LlmProvider, LlmGenerateResult } from "@signet/core";
 export async function generateWithTracking(
 	provider: LlmProvider,
 	prompt: string,
-	opts?: { timeoutMs?: number; maxTokens?: number },
+	opts?: LlmProviderCallOptions,
 ): Promise<LlmGenerateResult> {
 	if (provider.generateWithUsage) {
 		return provider.generateWithUsage(prompt, opts);
 	}
 	const text = await provider.generate(prompt, opts);
 	return { text, usage: null };
+}
+
+// ---------------------------------------------------------------------------
+// Generic command-line provider
+// ---------------------------------------------------------------------------
+
+export interface CommandLineProviderConfig {
+	readonly name: string;
+	readonly bin: string;
+	readonly args?: readonly string[];
+	readonly cwd?: string;
+	readonly env?: Readonly<Record<string, string>>;
+	readonly defaultTimeoutMs: number;
+}
+
+function replacePromptTokens(value: string, prompt: string): string {
+	return value.split("$PROMPT").join(prompt).split("{{prompt}}").join(prompt);
+}
+
+export function createCommandLineProvider(config: CommandLineProviderConfig): LlmProvider {
+	const args = config.args ?? [];
+	return {
+		name: config.name,
+		async generate(prompt, opts): Promise<string> {
+			const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
+			return new Promise<string>((resolve, reject) => {
+				let stdout = "";
+				let stderr = "";
+				let settled = false;
+				const child = nodeSpawn(
+					config.bin,
+					args.map((arg) => replacePromptTokens(arg, prompt)),
+					{
+						cwd: config.cwd,
+						env: {
+							...process.env,
+							...Object.fromEntries(
+								Object.entries(config.env ?? {}).map(([key, value]) => [key, replacePromptTokens(value, prompt)]),
+							),
+							SIGNET_PROMPT: prompt,
+						},
+						stdio: ["pipe", "pipe", "pipe"],
+						windowsHide: true,
+					},
+				);
+				const timer = setTimeout(() => {
+					if (settled) return;
+					settled = true;
+					child.kill("SIGTERM");
+					reject(new Error(`${config.name} timeout after ${timeoutMs}ms`));
+				}, timeoutMs);
+				child.stdout?.setEncoding("utf8");
+				child.stderr?.setEncoding("utf8");
+				child.stdout?.on("data", (chunk) => {
+					stdout += String(chunk);
+				});
+				child.stderr?.on("data", (chunk) => {
+					stderr += String(chunk);
+				});
+				child.on("error", (error) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					reject(error);
+				});
+				child.on("close", (code) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					if (code !== 0) {
+						reject(new Error(`${config.name} exited ${code}: ${stderr.slice(0, 300)}`));
+						return;
+					}
+					const text = stdout.trim();
+					if (!text) {
+						reject(new Error(`${config.name} returned empty response`));
+						return;
+					}
+					resolve(text);
+				});
+				child.stdin?.end(prompt);
+			});
+		},
+		async available(): Promise<boolean> {
+			return config.bin.includes("/") || Bun.which(config.bin) !== null;
+		},
+	};
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible via HTTP API
+// ---------------------------------------------------------------------------
+
+export interface OpenAiCompatibleProviderConfig {
+	readonly name: string;
+	readonly model: string;
+	readonly baseUrl: string;
+	readonly apiKey?: string;
+	readonly defaultTimeoutMs: number;
+}
+
+export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderConfig): StreamCapableLlmProvider {
+	const baseUrl = trimTrailingSlash(config.baseUrl);
+	const headers = (): Record<string, string> => ({
+		"Content-Type": "application/json",
+		...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+	});
+
+	async function call(prompt: string, opts?: LlmProviderCallOptions): Promise<LlmGenerateResult> {
+		const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
+		const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
+		try {
+			const res = await fetch(`${baseUrl}/chat/completions`, {
+				method: "POST",
+				headers: headers(),
+				body: JSON.stringify({
+					model: config.model,
+					messages: [{ role: "user", content: prompt }],
+					max_tokens: opts?.maxTokens ?? 4096,
+				}),
+				signal: abort.signal,
+			});
+			if (!res.ok) {
+				const detail = (await res.text().catch(() => "")).slice(0, 300);
+				throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
+			}
+			const body = (await res.json()) as {
+				choices?: Array<{ message?: { content?: string | Array<{ text?: string; type?: string }> } }>;
+				usage?: {
+					prompt_tokens?: number;
+					completion_tokens?: number;
+					total_tokens?: number;
+					cached_tokens?: number;
+				};
+			};
+			const text = extractOpenAiLikeText(body.choices?.[0]?.message?.content);
+			if (!text.trim()) {
+				throw new Error(`${config.name} returned empty response`);
+			}
+			return {
+				text,
+				usage: body.usage
+					? {
+							inputTokens: body.usage.prompt_tokens ?? null,
+							outputTokens: body.usage.completion_tokens ?? null,
+							cacheReadTokens: body.usage.cached_tokens ?? null,
+							cacheCreationTokens: null,
+							totalCost: null,
+							totalDurationMs: null,
+						}
+					: null,
+			};
+		} catch (error) {
+			if (abort.timedOut()) {
+				throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
+			}
+			throw error;
+		} finally {
+			abort.cleanup();
+		}
+	}
+
+	return {
+		name: config.name,
+		async generate(prompt, opts): Promise<string> {
+			const result = await call(prompt, opts);
+			return result.text;
+		},
+		async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
+			return call(prompt, opts);
+		},
+		async streamWithUsage(prompt, opts): Promise<LlmProviderStreamResult> {
+			const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
+			const abort = createAbortBundle(timeoutMs, opts?.abortSignal);
+			try {
+				const res = await fetch(`${baseUrl}/chat/completions`, {
+					method: "POST",
+					headers: headers(),
+					body: JSON.stringify({
+						model: config.model,
+						messages: [{ role: "user", content: prompt }],
+						max_tokens: opts?.maxTokens ?? 4096,
+						stream: true,
+						stream_options: { include_usage: true },
+					}),
+					signal: abort.signal,
+				});
+				if (!res.ok) {
+					const detail = (await res.text().catch(() => "")).slice(0, 300);
+					throw new Error(`${config.name} HTTP ${res.status}: ${detail}`);
+				}
+				const result = createOpenAiLikeStreamResult(res, () => {
+					abort.abort("stream cancelled");
+					abort.cleanup();
+				});
+				return {
+					stream: result.stream,
+					cancel(reason?: string) {
+						logger.debug("pipeline", "Cancelling openai-compatible stream", {
+							provider: config.name,
+							reason: reason ?? "unspecified",
+						});
+						abort.abort(reason);
+						abort.cleanup();
+					},
+				};
+			} catch (error) {
+				abort.cleanup();
+				if (abort.timedOut()) {
+					throw new Error(`${config.name} timeout after ${timeoutMs}ms`);
+				}
+				throw error;
+			}
+		},
+		async available(): Promise<boolean> {
+			try {
+				const res = await fetch(`${baseUrl}/models`, {
+					headers: config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {},
+					signal: AbortSignal.timeout(5_000),
+				});
+				return res.ok;
+			} catch {
+				return false;
+			}
+		},
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -875,33 +1269,37 @@ export function createOllamaProvider(config?: Partial<OllamaProviderConfig>): Ll
 	): Promise<OllamaGenerateResponse> {
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 
-		return withLlmConcurrency(async () => {
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), timeoutMs);
+		return withLlmConcurrency(
+			async () => {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-			try {
-				const options: Record<string, number> = {};
-				if (opts?.maxTokens) options.num_predict = opts.maxTokens;
-				if (cfg.maxContextTokens !== undefined) {
-					options.num_ctx = cfg.maxContextTokens;
+				try {
+					const options: Record<string, number> = {};
+					if (opts?.maxTokens) options.num_predict = opts.maxTokens;
+					if (cfg.maxContextTokens !== undefined) {
+						options.num_ctx = cfg.maxContextTokens;
+					}
+					return await callOllamaRaw({
+						baseUrl: cfg.baseUrl,
+						model: cfg.model,
+						prompt,
+						timeoutMs,
+						signal: controller.signal,
+						options,
+					});
+				} catch (e) {
+					if (e instanceof DOMException && e.name === "AbortError") {
+						throw new Error(`Ollama timeout after ${timeoutMs}ms`);
+					}
+					throw e;
+				} finally {
+					clearTimeout(timer);
 				}
-				return await callOllamaRaw({
-					baseUrl: cfg.baseUrl,
-					model: cfg.model,
-					prompt,
-					timeoutMs,
-					signal: controller.signal,
-					options,
-				});
-			} catch (e) {
-				if (e instanceof DOMException && e.name === "AbortError") {
-					throw new Error(`Ollama timeout after ${timeoutMs}ms`);
-				}
-				throw e;
-			} finally {
-				clearTimeout(timer);
-			}
-		}, timeoutMs, "ollama");
+			},
+			timeoutMs,
+			"ollama",
+		);
 	}
 
 	return {
@@ -989,9 +1387,8 @@ export function createLlamaCppProvider(config?: Partial<LlamaCppProviderConfig>)
 		defaultTimeoutMs: config?.defaultTimeoutMs ?? DEFAULT_LLAMACPP_CONFIG.defaultTimeoutMs,
 		maxContextTokens: normalizePositiveInt(config?.maxContextTokens),
 	};
-	const model = typeof config?.model === "string" && config.model.trim().length > 0
-		? config.model.trim()
-		: "qwen3.5:4b";
+	const model =
+		typeof config?.model === "string" && config.model.trim().length > 0 ? config.model.trim() : "qwen3.5:4b";
 
 	async function callLlamaCpp(
 		prompt: string,
@@ -1011,42 +1408,46 @@ export function createLlamaCppProvider(config?: Partial<LlamaCppProviderConfig>)
 		}
 		const body = JSON.stringify(bodyObj);
 
-		return withLlmConcurrency(async () => {
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), timeoutMs);
+		return withLlmConcurrency(
+			async () => {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-			try {
-				const options: Record<string, number> = {};
-				if (cfg.maxContextTokens !== undefined) options.num_ctx = cfg.maxContextTokens;
+				try {
+					const options: Record<string, number> = {};
+					if (cfg.maxContextTokens !== undefined) options.num_ctx = cfg.maxContextTokens;
 
-				const res = await fetch(url, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body,
-					signal: controller.signal,
-				});
+					const res = await fetch(url, {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body,
+						signal: controller.signal,
+					});
 
-				if (!res.ok) {
-					const detail = await res.text().catch(() => "");
-					throw new Error(`llama.cpp HTTP ${res.status}: ${detail.slice(0, 300)}`);
+					if (!res.ok) {
+						const detail = await res.text().catch(() => "");
+						throw new Error(`llama.cpp HTTP ${res.status}: ${detail.slice(0, 300)}`);
+					}
+
+					const data = (await res.json()) as LlamaCppResponse;
+					const first = Array.isArray(data.choices) ? data.choices[0] : undefined;
+					const text = extractContentText(first?.message?.content);
+					if (text.length === 0) {
+						throw new Error("llama.cpp returned empty response");
+					}
+					return { text, usage: data.usage ?? null };
+				} catch (e) {
+					if (e instanceof DOMException && e.name === "AbortError") {
+						throw new Error(`llama.cpp timeout after ${timeoutMs}ms`);
+					}
+					throw e;
+				} finally {
+					clearTimeout(timer);
 				}
-
-				const data = (await res.json()) as LlamaCppResponse;
-				const first = Array.isArray(data.choices) ? data.choices[0] : undefined;
-				const text = extractContentText(first?.message?.content);
-				if (text.length === 0) {
-					throw new Error("llama.cpp returned empty response");
-				}
-				return { text, usage: data.usage ?? null };
-			} catch (e) {
-				if (e instanceof DOMException && e.name === "AbortError") {
-					throw new Error(`llama.cpp timeout after ${timeoutMs}ms`);
-				}
-				throw e;
-			} finally {
-				clearTimeout(timer);
-			}
-		}, timeoutMs, "llama-cpp");
+			},
+			timeoutMs,
+			"llama-cpp",
+		);
 	}
 
 	return {
@@ -1124,54 +1525,58 @@ export function createClaudeCodeProvider(config?: Partial<ClaudeCodeProviderConf
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
 
-		return withLlmConcurrency(async () => {
-			const remainingMs = deadline - performance.now();
-			if (remainingMs <= 0) {
-				throw new Error(`claude-code timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
-			}
-
-			const args = ["-p", prompt, "--model", cfg.model, "--no-session-persistence", "--output-format", outputFormat];
-
-			// Strip ALL Claude Code env vars to prevent nested-session
-			// detection when the daemon is launched from a CC session.
-			// Also inject SIGNET_NO_HOOKS to prevent recursive hook loops.
-			const cleanEnv: Record<string, string> = {};
-			for (const [k, v] of Object.entries(process.env)) {
-				if (v === undefined) continue;
-				if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_") || k === "SIGNET_NO_HOOKS") continue;
-				cleanEnv[k] = v;
-			}
-
-			logger.debug("pipeline", "Spawning claude-code subprocess", {
-				model: cfg.model,
-				outputFormat,
-				promptLen: prompt.length,
-				timeoutMs,
-			});
-
-			const proc = spawnHidden(["claude", ...args], {
-				env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
-			});
-
-			return awaitSubprocessWithDeadline(proc, remainingMs, "claude-code", timeoutMs, async (p) => {
-				const [stdout, stderr, exitCode] = await Promise.all([
-					new Response(p.stdout).text().catch(() => ""),
-					new Response(p.stderr).text().catch(() => ""),
-					p.exited.catch(() => -1),
-				]);
-
-				if (exitCode !== 0) {
-					throw new Error(`claude-code exit ${exitCode}: ${stderr.slice(0, 300)}`);
+		return withLlmConcurrency(
+			async () => {
+				const remainingMs = deadline - performance.now();
+				if (remainingMs <= 0) {
+					throw new Error(`claude-code timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
 				}
 
-				const result = stdout.trim();
-				if (result.length === 0) {
-					throw new Error("claude-code returned empty output");
+				const args = ["-p", prompt, "--model", cfg.model, "--no-session-persistence", "--output-format", outputFormat];
+
+				// Strip ALL Claude Code env vars to prevent nested-session
+				// detection when the daemon is launched from a CC session.
+				// Also inject SIGNET_NO_HOOKS to prevent recursive hook loops.
+				const cleanEnv: Record<string, string> = {};
+				for (const [k, v] of Object.entries(process.env)) {
+					if (v === undefined) continue;
+					if (k === "CLAUDECODE" || k.startsWith("CLAUDE_CODE_") || k === "SIGNET_NO_HOOKS") continue;
+					cleanEnv[k] = v;
 				}
 
-				return result;
-			});
-		}, timeoutMs, "claude-code");
+				logger.debug("pipeline", "Spawning claude-code subprocess", {
+					model: cfg.model,
+					outputFormat,
+					promptLen: prompt.length,
+					timeoutMs,
+				});
+
+				const proc = spawnHidden(["claude", ...args], {
+					env: { ...cleanEnv, NO_COLOR: "1", SIGNET_NO_HOOKS: "1" },
+				});
+
+				return awaitSubprocessWithDeadline(proc, remainingMs, "claude-code", timeoutMs, async (p) => {
+					const [stdout, stderr, exitCode] = await Promise.all([
+						new Response(p.stdout).text().catch(() => ""),
+						new Response(p.stderr).text().catch(() => ""),
+						p.exited.catch(() => -1),
+					]);
+
+					if (exitCode !== 0) {
+						throw new Error(`claude-code exit ${exitCode}: ${stderr.slice(0, 300)}`);
+					}
+
+					const result = stdout.trim();
+					if (result.length === 0) {
+						throw new Error("claude-code returned empty output");
+					}
+
+					return result;
+				});
+			},
+			timeoutMs,
+			"claude-code",
+		);
 	}
 
 	return {
@@ -1272,7 +1677,6 @@ interface AnthropicContentBlock {
 	readonly text?: string;
 }
 
-
 interface AnthropicResponse {
 	readonly id?: string;
 	readonly content?: readonly AnthropicContentBlock[];
@@ -1322,9 +1726,7 @@ export function createAnthropicProvider(config?: Partial<AnthropicProviderConfig
 					const detail = parseApiErrorDetail(rawBody, true);
 
 					if (res.status === 401) {
-						throw new NonRetryableError(
-							`Anthropic auth failed (401): ${detail}. Check your ANTHROPIC_API_KEY.`,
-						);
+						throw new NonRetryableError(`Anthropic auth failed (401): ${detail}. Check your ANTHROPIC_API_KEY.`);
 					}
 
 					if (isRetryableStatus(res.status) && attempt < maxRetries) {
@@ -1440,7 +1842,6 @@ interface OpenRouterUsage {
 		readonly cached_tokens?: number;
 	};
 }
-
 
 interface OpenRouterResponse {
 	readonly choices?: readonly OpenRouterChoice[];
@@ -1668,59 +2069,63 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
 
-		return withLlmConcurrency(async () => {
-			const remainingMs = deadline - performance.now();
-			if (remainingMs <= 0) {
-				throw new Error(`codex timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
-			}
-			const args = [
-				"exec",
-				"--skip-git-repo-check",
-				"--json",
-				"--ephemeral",
-				"--sandbox",
-				"read-only",
-				"-c",
-				"mcp_servers.signet.enabled=false",
-				"-C",
-				cfg.workingDirectory,
-				"--model",
-				cfg.model,
-				prompt,
-			];
-
-			const { SIGNET_NO_HOOKS: _, SIGNET_CODEX_BYPASS_WRAPPER: __, ...cleanEnv } = process.env;
-			const sterile = createSterileCodexEnv(cleanEnv);
-			let proc: SpawnResult;
-			try {
-				proc = spawnHidden(["codex", ...args], {
-					env: {
-						...sterile.env,
-						NO_COLOR: "1",
-						SIGNET_NO_HOOKS: "1",
-						SIGNET_CODEX_BYPASS_WRAPPER: "1",
-					},
-				});
-			} catch (e) {
-				sterile.cleanup();
-				throw e;
-			}
-			proc.exited.finally(() => sterile.cleanup());
-
-			return awaitSubprocessWithDeadline(proc, remainingMs, "codex", timeoutMs, async (p) => {
-				const [stdout, stderr, exitCode] = await Promise.all([
-					new Response(p.stdout).text().catch(() => ""),
-					new Response(p.stderr).text().catch(() => ""),
-					p.exited.catch(() => -1),
-				]);
-
-				if (exitCode !== 0) {
-					const detail = stderr.trim() || stdout.trim();
-					throw new Error(`codex exit ${exitCode}: ${detail.slice(0, 500)}`);
+		return withLlmConcurrency(
+			async () => {
+				const remainingMs = deadline - performance.now();
+				if (remainingMs <= 0) {
+					throw new Error(`codex timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
 				}
-				return parseCodexJsonl(stdout);
-			});
-		}, timeoutMs, "codex");
+				const args = [
+					"exec",
+					"--skip-git-repo-check",
+					"--json",
+					"--ephemeral",
+					"--sandbox",
+					"read-only",
+					"-c",
+					"mcp_servers.signet.enabled=false",
+					"-C",
+					cfg.workingDirectory,
+					"--model",
+					cfg.model,
+					prompt,
+				];
+
+				const { SIGNET_NO_HOOKS: _, SIGNET_CODEX_BYPASS_WRAPPER: __, ...cleanEnv } = process.env;
+				const sterile = createSterileCodexEnv(cleanEnv);
+				let proc: SpawnResult;
+				try {
+					proc = spawnHidden(["codex", ...args], {
+						env: {
+							...sterile.env,
+							NO_COLOR: "1",
+							SIGNET_NO_HOOKS: "1",
+							SIGNET_CODEX_BYPASS_WRAPPER: "1",
+						},
+					});
+				} catch (e) {
+					sterile.cleanup();
+					throw e;
+				}
+				proc.exited.finally(() => sterile.cleanup());
+
+				return awaitSubprocessWithDeadline(proc, remainingMs, "codex", timeoutMs, async (p) => {
+					const [stdout, stderr, exitCode] = await Promise.all([
+						new Response(p.stdout).text().catch(() => ""),
+						new Response(p.stderr).text().catch(() => ""),
+						p.exited.catch(() => -1),
+					]);
+
+					if (exitCode !== 0) {
+						const detail = stderr.trim() || stdout.trim();
+						throw new Error(`codex exit ${exitCode}: ${detail.slice(0, 500)}`);
+					}
+					return parseCodexJsonl(stdout);
+				});
+			},
+			timeoutMs,
+			"codex",
+		);
 	}
 
 	return {
@@ -2312,258 +2717,283 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		const timeoutMs = opts?.timeoutMs ?? cfg.defaultTimeoutMs;
 		const deadline = performance.now() + timeoutMs;
 
-		return withLlmConcurrency(async () => {
-			const remaining = deadline - performance.now();
-			if (remaining <= 0) {
-				throw new Error(`OpenCode timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
-			}
-
-			// Session creation is inside the semaphore so concurrent
-			// generate() calls cannot share and then race-delete a session.
-			const sid = await createSession(deadline - performance.now());
-			bypassSession(sid, { allowUnknown: true });
-
-			// Track every session created during this call so the finally
-			// block can clean up all of them — not just the first and last.
-			const allSids = new Set<string | null>([sid]);
-			let activeSid = sid;
-
-			const controller = new AbortController();
-			const timer = setTimeout(() => controller.abort(), deadline - performance.now());
-
-			try {
-				const postMessage = async (sid: string): Promise<Response> =>
-					fetch(`${cfg.baseUrl}/session/${sid}/message`, {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: buildMessageBody(prompt, true),
-						signal: controller.signal,
-					});
-
-				const listMessages = async (sid: string): Promise<Response> =>
-					fetch(`${cfg.baseUrl}/session/${sid}/message`, {
-						method: "GET",
-						signal: controller.signal,
-					});
-
-				const parseResponsePayload = async (res: Response): Promise<unknown> => {
-					const text = await res.text().catch(() => "");
-					if (text.trim().length === 0) return null;
-					try {
-						return JSON.parse(text);
-					} catch {
-						return null;
-					}
-				};
-
-				const parseMessagePayload = (
-					payload: unknown,
-					forSessionId: string,
-					source: "post" | "poll",
-				): OpenCodeMessageResponse | null => {
-					const single = parseOpenCodeMessageResponse(payload);
-					if (single && hasUsableOpenCodeText(single)) {
-						return single;
-					}
-
-					const list = parseOpenCodeMessageList(payload);
-					if (list.length > 0) {
-						const selected = selectLatestAssistantMessage(list);
-						if (selected) return selected;
-						if (source === "post") {
-							logger.warn("pipeline", "OpenCode payload had no assistant text yet", {
-								sessionId: forSessionId,
-							});
-						}
-						return null;
-					}
-
-					if (single && source === "post") {
-						logger.warn("pipeline", "OpenCode response contained no usable text parts", {
-							sessionId: forSessionId,
-						});
-					} else if (source === "post") {
-						logger.warn("pipeline", "OpenCode response missing expected fields", {
-							sessionId: forSessionId,
-						});
-					}
-
-					return null;
-				};
-
-				// Use remaining time after semaphore acquisition for poll deadline
-				const pollForAssistantMessage = async (forSessionId: string): Promise<OpenCodeMessageResponse | null> => {
-					const pollRemaining = deadline - performance.now();
-					const pollDeadline = performance.now() + Math.max(1000, Math.min(pollRemaining, 20000));
-					while (performance.now() < pollDeadline) {
-						const res = await listMessages(forSessionId);
-						if (res.ok) {
-							const payload = await parseResponsePayload(res);
-							const parsed = parseMessagePayload(payload, forSessionId, "poll");
-							if (parsed) return parsed;
-						}
-						await new Promise((resolve) => setTimeout(resolve, 250));
-					}
-					return null;
-				};
-
-				const parsePostResponse = async (
-					res: Response,
-					forSessionId: string,
-				): Promise<OpenCodeMessageResponse | null> => {
-					const payload = await parseResponsePayload(res);
-					const parsed = parseMessagePayload(payload, forSessionId, "post");
-					if (parsed) return parsed;
-					return pollForAssistantMessage(forSessionId);
-				};
-
-				const retryWithNewSession = async (): Promise<OpenCodeMessageResponse | null> => {
-					const retrySid = await createSession(deadline - performance.now());
-					allSids.add(retrySid);
-					activeSid = retrySid;
-					const retryRes = await postMessage(retrySid);
-					if (!retryRes.ok) {
-						const retryBody = await retryRes.text().catch(() => "");
-						throw new Error(`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`);
-					}
-					return parsePostResponse(retryRes, retrySid);
-				};
-
-				let res = await postMessage(sid);
-				let consumedBody: string | null = null;
-
-				if (!res.ok && res.status === 422) {
-					consumedBody = await res.text().catch(() => "");
-					const isFormatRejection = (() => {
-						try {
-							const parsed: unknown = JSON.parse(consumedBody);
-							if (!isRecord(parsed)) return false;
-							const issues = Array.isArray(parsed.issues) ? parsed.issues : [];
-							return issues.some((i): boolean => isRecord(i) && Array.isArray(i.path) && i.path[0] === "format");
-						} catch {
-							return false;
-						}
-					})();
-					if (isFormatRejection) {
-						if (structuredOutputSupported) {
-							logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
-								status: res.status,
-							});
-							structuredOutputSupported = false;
-						}
-						consumedBody = null;
-						const retrySid = await createSession(deadline - performance.now());
-						allSids.add(retrySid);
-						activeSid = retrySid;
-						res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: buildMessageBody(prompt, false),
-							signal: controller.signal,
-						});
-					}
+		return withLlmConcurrency(
+			async () => {
+				const remaining = deadline - performance.now();
+				if (remaining <= 0) {
+					throw new Error(`OpenCode timeout after ${timeoutMs}ms (deadline exceeded waiting for semaphore)`);
 				}
 
-				if (!res.ok) {
-					const body = consumedBody ?? (await res.text().catch(() => ""));
-					if (res.status === 404 || res.status === 410) {
-						const retryParsed = await retryWithNewSession();
-						if (retryParsed) return retryParsed;
-						logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
-							sessionId: activeSid,
-						});
-						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "post-response-malformed-after-http-retry");
-						if (ollamaFallback) return ollamaFallback;
-						return buildOpenCodeFallbackResponse();
-					}
-					if (agentSupported && isAgentRejection(body, cfg.agent)) {
-						agentSupported = false;
-						logger.warn("pipeline", "OpenCode rejected pipeline agent; retrying without agent", {
-							status: res.status,
-							agent: cfg.agent,
-						});
-						const retrySid = await createSession(deadline - performance.now());
-						allSids.add(retrySid);
-						const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+				// Session creation is inside the semaphore so concurrent
+				// generate() calls cannot share and then race-delete a session.
+				const sid = await createSession(deadline - performance.now());
+				bypassSession(sid, { allowUnknown: true });
+
+				// Track every session created during this call so the finally
+				// block can clean up all of them — not just the first and last.
+				const allSids = new Set<string | null>([sid]);
+				let activeSid = sid;
+
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), deadline - performance.now());
+
+				try {
+					const postMessage = async (sid: string): Promise<Response> =>
+						fetch(`${cfg.baseUrl}/session/${sid}/message`, {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
 							body: buildMessageBody(prompt, true),
 							signal: controller.signal,
 						});
-						if (retryRes.ok) {
-							activeSid = retrySid;
-							const retryParsed = await parsePostResponse(retryRes, retrySid);
-							if (retryParsed) return retryParsed;
-						}
-						activeSid = sid;
-						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "agent-not-found-retry-failed");
-						if (ollamaFallback) return ollamaFallback;
-						return buildOpenCodeFallbackResponse();
-					}
-					if (!agentSupported && isAgentRejection(body, cfg.agent)) {
-						logger.warn("pipeline", "OpenCode agent rejection on already-disabled agent; falling back", {
-							status: res.status,
+
+					const listMessages = async (sid: string): Promise<Response> =>
+						fetch(`${cfg.baseUrl}/session/${sid}/message`, {
+							method: "GET",
+							signal: controller.signal,
 						});
-						const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "concurrent-agent-rejection");
-						if (ollamaFallback) return ollamaFallback;
-						return buildOpenCodeFallbackResponse();
+
+					const parseResponsePayload = async (res: Response): Promise<unknown> => {
+						const text = await res.text().catch(() => "");
+						if (text.trim().length === 0) return null;
+						try {
+							return JSON.parse(text);
+						} catch {
+							return null;
+						}
+					};
+
+					const parseMessagePayload = (
+						payload: unknown,
+						forSessionId: string,
+						source: "post" | "poll",
+					): OpenCodeMessageResponse | null => {
+						const single = parseOpenCodeMessageResponse(payload);
+						if (single && hasUsableOpenCodeText(single)) {
+							return single;
+						}
+
+						const list = parseOpenCodeMessageList(payload);
+						if (list.length > 0) {
+							const selected = selectLatestAssistantMessage(list);
+							if (selected) return selected;
+							if (source === "post") {
+								logger.warn("pipeline", "OpenCode payload had no assistant text yet", {
+									sessionId: forSessionId,
+								});
+							}
+							return null;
+						}
+
+						if (single && source === "post") {
+							logger.warn("pipeline", "OpenCode response contained no usable text parts", {
+								sessionId: forSessionId,
+							});
+						} else if (source === "post") {
+							logger.warn("pipeline", "OpenCode response missing expected fields", {
+								sessionId: forSessionId,
+							});
+						}
+
+						return null;
+					};
+
+					// Use remaining time after semaphore acquisition for poll deadline
+					const pollForAssistantMessage = async (forSessionId: string): Promise<OpenCodeMessageResponse | null> => {
+						const pollRemaining = deadline - performance.now();
+						const pollDeadline = performance.now() + Math.max(1000, Math.min(pollRemaining, 20000));
+						while (performance.now() < pollDeadline) {
+							const res = await listMessages(forSessionId);
+							if (res.ok) {
+								const payload = await parseResponsePayload(res);
+								const parsed = parseMessagePayload(payload, forSessionId, "poll");
+								if (parsed) return parsed;
+							}
+							await new Promise((resolve) => setTimeout(resolve, 250));
+						}
+						return null;
+					};
+
+					const parsePostResponse = async (
+						res: Response,
+						forSessionId: string,
+					): Promise<OpenCodeMessageResponse | null> => {
+						const payload = await parseResponsePayload(res);
+						const parsed = parseMessagePayload(payload, forSessionId, "post");
+						if (parsed) return parsed;
+						return pollForAssistantMessage(forSessionId);
+					};
+
+					const retryWithNewSession = async (): Promise<OpenCodeMessageResponse | null> => {
+						const retrySid = await createSession(deadline - performance.now());
+						allSids.add(retrySid);
+						activeSid = retrySid;
+						const retryRes = await postMessage(retrySid);
+						if (!retryRes.ok) {
+							const retryBody = await retryRes.text().catch(() => "");
+							throw new Error(`OpenCode HTTP ${retryRes.status}: ${retryBody.slice(0, 200)}`);
+						}
+						return parsePostResponse(retryRes, retrySid);
+					};
+
+					let res = await postMessage(sid);
+					let consumedBody: string | null = null;
+
+					if (!res.ok && res.status === 422) {
+						consumedBody = await res.text().catch(() => "");
+						const isFormatRejection = (() => {
+							try {
+								const parsed: unknown = JSON.parse(consumedBody);
+								if (!isRecord(parsed)) return false;
+								const issues = Array.isArray(parsed.issues) ? parsed.issues : [];
+								return issues.some((i): boolean => isRecord(i) && Array.isArray(i.path) && i.path[0] === "format");
+							} catch {
+								return false;
+							}
+						})();
+						if (isFormatRejection) {
+							if (structuredOutputSupported) {
+								logger.info("pipeline", "OpenCode does not support structured output format, disabling", {
+									status: res.status,
+								});
+								structuredOutputSupported = false;
+							}
+							consumedBody = null;
+							const retrySid = await createSession(deadline - performance.now());
+							allSids.add(retrySid);
+							activeSid = retrySid;
+							res = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: buildMessageBody(prompt, false),
+								signal: controller.signal,
+							});
+						}
 					}
-					throw new Error(`OpenCode HTTP ${res.status}: ${body.slice(0, 200)}`);
-				}
 
-				const parsed = await parsePostResponse(res, activeSid);
-				if (parsed) return parsed;
+					if (!res.ok) {
+						const body = consumedBody ?? (await res.text().catch(() => ""));
+						if (res.status === 404 || res.status === 410) {
+							const retryParsed = await retryWithNewSession();
+							if (retryParsed) return retryParsed;
+							logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
+								sessionId: activeSid,
+							});
+							const ollamaFallback = await tryOllamaFallback(
+								prompt,
+								deadline - performance.now(),
+								opts,
+								"post-response-malformed-after-http-retry",
+							);
+							if (ollamaFallback) return ollamaFallback;
+							return buildOpenCodeFallbackResponse();
+						}
+						if (agentSupported && isAgentRejection(body, cfg.agent)) {
+							agentSupported = false;
+							logger.warn("pipeline", "OpenCode rejected pipeline agent; retrying without agent", {
+								status: res.status,
+								agent: cfg.agent,
+							});
+							const retrySid = await createSession(deadline - performance.now());
+							allSids.add(retrySid);
+							const retryRes = await fetch(`${cfg.baseUrl}/session/${retrySid}/message`, {
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: buildMessageBody(prompt, true),
+								signal: controller.signal,
+							});
+							if (retryRes.ok) {
+								activeSid = retrySid;
+								const retryParsed = await parsePostResponse(retryRes, retrySid);
+								if (retryParsed) return retryParsed;
+							}
+							activeSid = sid;
+							const ollamaFallback = await tryOllamaFallback(
+								prompt,
+								deadline - performance.now(),
+								opts,
+								"agent-not-found-retry-failed",
+							);
+							if (ollamaFallback) return ollamaFallback;
+							return buildOpenCodeFallbackResponse();
+						}
+						if (!agentSupported && isAgentRejection(body, cfg.agent)) {
+							logger.warn("pipeline", "OpenCode agent rejection on already-disabled agent; falling back", {
+								status: res.status,
+							});
+							const ollamaFallback = await tryOllamaFallback(
+								prompt,
+								deadline - performance.now(),
+								opts,
+								"concurrent-agent-rejection",
+							);
+							if (ollamaFallback) return ollamaFallback;
+							return buildOpenCodeFallbackResponse();
+						}
+						throw new Error(`OpenCode HTTP ${res.status}: ${body.slice(0, 200)}`);
+					}
 
-				const retryParsed = await retryWithNewSession();
-				if (retryParsed) return retryParsed;
+					const parsed = await parsePostResponse(res, activeSid);
+					if (parsed) return parsed;
 
-				if (structuredOutputSupported) {
-					logger.info("pipeline", "Consecutive malformed 200 responses; disabling structured output", {
+					const retryParsed = await retryWithNewSession();
+					if (retryParsed) return retryParsed;
+
+					if (structuredOutputSupported) {
+						logger.info("pipeline", "Consecutive malformed 200 responses; disabling structured output", {
+							sessionId: activeSid,
+						});
+						structuredOutputSupported = false;
+						const fallbackSid = await createSession(deadline - performance.now());
+						allSids.add(fallbackSid);
+						activeSid = fallbackSid;
+						const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: buildMessageBody(prompt, false),
+							signal: controller.signal,
+						});
+						if (fallbackRes.ok) {
+							const fallbackParsed = await parsePostResponse(fallbackRes, fallbackSid);
+							if (fallbackParsed) return fallbackParsed;
+						}
+					}
+
+					logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
 						sessionId: activeSid,
 					});
-					structuredOutputSupported = false;
-					const fallbackSid = await createSession(deadline - performance.now());
-					allSids.add(fallbackSid);
-					activeSid = fallbackSid;
-					const fallbackRes = await fetch(`${cfg.baseUrl}/session/${fallbackSid}/message`, {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: buildMessageBody(prompt, false),
-						signal: controller.signal,
+					const ollamaFallback = await tryOllamaFallback(
+						prompt,
+						deadline - performance.now(),
+						opts,
+						"post-response-malformed-after-session-reset",
+					);
+					if (ollamaFallback) return ollamaFallback;
+					return buildOpenCodeFallbackResponse();
+				} catch (e) {
+					const err =
+						e instanceof DOMException && e.name === "AbortError"
+							? new Error(`OpenCode timeout after ${timeoutMs}ms`)
+							: e;
+					// NOTE(changed-behavior): This warn-level error alerting is unique
+					// to the OpenCode provider.  Other providers (Ollama, Claude Code,
+					// Codex, OpenRouter, llama.cpp) only throw — errors surface in debug
+					// logs via the pipeline's outer handler.
+					// TODO: extend warn-level error alerting to all providers for
+					// consistent visibility (see plan: suppress-opencode-extraction-
+					// notifications.md § Future Work).
+					logger.warn("pipeline", "OpenCode extraction failed", {
+						error: err instanceof Error ? err.message : String(err),
+						sessionId: activeSid,
 					});
-					if (fallbackRes.ok) {
-						const fallbackParsed = await parsePostResponse(fallbackRes, fallbackSid);
-						if (fallbackParsed) return fallbackParsed;
-					}
+					throw err;
+				} finally {
+					clearTimeout(timer);
+					for (const s of allSids) void deleteSession(s);
 				}
-
-				logger.warn("pipeline", "OpenCode response remained malformed after retry; using fallback", {
-					sessionId: activeSid,
-				});
-				const ollamaFallback = await tryOllamaFallback(prompt, deadline - performance.now(), opts, "post-response-malformed-after-session-reset");
-				if (ollamaFallback) return ollamaFallback;
-				return buildOpenCodeFallbackResponse();
-			} catch (e) {
-				const err = (e instanceof DOMException && e.name === "AbortError")
-					? new Error(`OpenCode timeout after ${timeoutMs}ms`)
-					: e;
-				// NOTE(changed-behavior): This warn-level error alerting is unique
-				// to the OpenCode provider.  Other providers (Ollama, Claude Code,
-				// Codex, OpenRouter, llama.cpp) only throw — errors surface in debug
-				// logs via the pipeline's outer handler.
-				// TODO: extend warn-level error alerting to all providers for
-				// consistent visibility (see plan: suppress-opencode-extraction-
-				// notifications.md § Future Work).
-				logger.warn("pipeline", "OpenCode extraction failed", {
-					error: err instanceof Error ? err.message : String(err),
-					sessionId: activeSid,
-				});
-				throw err;
-			} finally {
-				clearTimeout(timer);
-				for (const s of allSids) void deleteSession(s);
-			}
-		}, timeoutMs, "opencode");
+			},
+			timeoutMs,
+			"opencode",
+		);
 	}
 
 	return {

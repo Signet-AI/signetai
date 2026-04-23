@@ -1,25 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OpenClawPluginApi } from "./openclaw-types";
 
-// Mock readStaticIdentity so staticFallback() always returns a
-// truthy result regardless of whether ~/.agents exists on the host.
-mock.module("@signet/core", () => ({
-	readStaticIdentity: (_dir?: string, status?: string) => status ?? "mocked-static-identity",
-	resolveSessionStartTimeoutMs: (raw?: string) => {
-		if (!raw) return 15000;
-		const ms = Number.parseInt(raw, 10);
-		if (!Number.isFinite(ms) || ms < 1000) return 15000;
-		if (ms > 120000) return 120000;
-		return ms;
-	},
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS:
-		"[signet: daemon session-start timed out — running with static identity]",
-}));
-
-// Import after mock so the module picks up the stub.
+// Import directly; tests seed a real temporary SIGNET_PATH instead of
+// mocking @signet/core globally, which otherwise leaks into later suites.
 const signet = await import("./index");
 const signetPlugin = signet.default;
 const { memoryStore, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
@@ -30,6 +16,7 @@ type ToolRegistration = { name: string; label?: string; description?: string };
 const originalFetch = globalThis.fetch;
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
+const originalSignetPath = process.env.SIGNET_PATH;
 
 let intervalCallbacks: Array<() => void | Promise<void>> = [];
 let nextIntervalId = 1;
@@ -156,6 +143,8 @@ beforeEach(() => {
 	checkpointResponse = null;
 	warnMessages = [];
 	testDir = mkdtempSync(join(tmpdir(), "signet-openclaw-test-"));
+	process.env.SIGNET_PATH = testDir;
+	writeFileSync(join(testDir, "AGENTS.md"), "Temporary test instructions for static identity fallback coverage.");
 
 	const mockFetch = Object.assign(
 		async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -268,6 +257,11 @@ afterEach(async () => {
 	globalThis.fetch = originalFetch;
 	globalThis.setInterval = originalSetInterval;
 	globalThis.clearInterval = originalClearInterval;
+	if (originalSignetPath === undefined) {
+		delete process.env.SIGNET_PATH;
+	} else {
+		process.env.SIGNET_PATH = originalSignetPath;
+	}
 	rmSync(testDir, { recursive: true, force: true });
 	for (const service of registeredServices) {
 		await service.stop();

@@ -77,6 +77,7 @@ import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMcpCommands } from "./commands/mcp.js";
 import { registerMemoryCommands } from "./commands/memory.js";
 import { registerPortableCommands } from "./commands/portable.js";
+import { registerRouteCommands } from "./commands/route.js";
 import { registerSecretCommands } from "./commands/secret.js";
 import { registerSessionCommands } from "./commands/session.js";
 import { registerSkillCommands } from "./commands/skill.js";
@@ -1449,6 +1450,12 @@ registerKnowledgeCommands(program, {
 registerAgentCommands(program, {
 	AGENTS_DIR,
 	fetchFromDaemon,
+});
+
+registerRouteCommands(program, {
+	AGENTS_DIR,
+	fetchFromDaemon,
+	secretApiCall,
 });
 
 registerPortableCommands(program, {

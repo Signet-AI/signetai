@@ -6,54 +6,61 @@
  * agent responses with tool call results.
  */
 
+import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
+import { getInferenceRouterOrNull } from "../inference-router.js";
+import { getInteractiveLlmProviderOrNull } from "../llm.js";
 import { logger } from "../logger.js";
-import { getSynthesisProvider } from "../synthesis-llm.js";
-import { getWidgetProvider } from "../widget-llm.js";
-import { getSecret } from "../secrets.js";
-
-/** Cached API key */
-let cachedApiKey: string | null = null;
-
-/**
- * Call OpenAI API (GPT-4o) for chat routing.
- * Falls back through: OPENAI_API_KEY env → signet secrets.
- */
-async function callLlm(systemPrompt: string, userMessage: string, maxTokens = 2048): Promise<string> {
-	if (!cachedApiKey) {
-		cachedApiKey = process.env.OPENAI_API_KEY || (await getSecret("OPENAI_API_KEY").catch(() => ""));
-	}
-	const apiKey = cachedApiKey;
-	if (!apiKey) throw new Error("OPENAI_API_KEY not found in env or secrets");
-
-	const res = await fetch("https://api.openai.com/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${apiKey}`,
-		},
-		body: JSON.stringify({
-			model: "gpt-4o",
-			max_tokens: maxTokens,
-			messages: [
-				{ role: "system", content: systemPrompt },
-				{ role: "user", content: userMessage },
-			],
-		}),
-	});
-
-	if (!res.ok) {
-		const errText = await res.text();
-		throw new Error(`OpenAI API ${res.status}: ${errText.slice(0, 200)}`);
-	}
-
-	const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-	return data.choices?.[0]?.message?.content ?? "";
-}
 import { loadProbeResult } from "../mcp-probe.js";
+
+function buildPrompt(systemPrompt: string, userMessage: string): string {
+	return `${systemPrompt}\n\nUser message:\n${userMessage}`;
+}
+
+async function callLlm(
+	systemPrompt: string,
+	userMessage: string,
+	maxTokens = 2048,
+	route?: {
+		readonly agentId?: string;
+		readonly taskClass?: string;
+		readonly privacy?: RoutingPrivacyTier;
+	},
+): Promise<string> {
+	const router = getInferenceRouterOrNull();
+	if (router && (await router.hasWorkload("interactive"))) {
+		const routed = await router.execute(
+			{
+				agentId: route?.agentId,
+				operation: "tool_planning",
+				taskClass: route?.taskClass,
+				privacy: route?.privacy,
+				promptPreview: userMessage,
+				requireTools: true,
+			},
+			buildPrompt(systemPrompt, userMessage),
+			{ maxTokens },
+		);
+		if (routed.ok) {
+			return routed.value.text;
+		}
+		logger.warn("os-chat", "Inference router failed, falling back to legacy interactive provider", {
+			error: routed.error.message,
+		});
+	}
+
+	const provider = getInteractiveLlmProviderOrNull();
+	if (!provider) {
+		throw new Error("Interactive inference provider is not configured");
+	}
+	return provider.generate(buildPrompt(systemPrompt, userMessage), { maxTokens });
+}
 
 interface ChatRequest {
 	message: string;
+	agentId?: string;
+	taskClass?: string;
+	privacy?: RoutingPrivacyTier;
 }
 
 interface ToolCallResult {
@@ -229,22 +236,26 @@ export function mountOsChatRoutes(app: Hono): void {
 				});
 			}
 
-			// Build prompt and call Anthropic API directly
+			// Build prompt and call the shared interactive LLM provider
 			const systemPrompt = buildSystemPrompt(tools);
 
-			logger.info("os-chat", `Processing chat message`, {
+			logger.info("os-chat", "Processing chat message", {
 				message: body.message.slice(0, 100),
 				availableTools: tools.length,
 			});
 
-			const rawResponse = await callLlm(systemPrompt, body.message);
+			const rawResponse = await callLlm(systemPrompt, body.message, 2048, {
+				agentId: body.agentId,
+				taskClass: body.taskClass,
+				privacy: body.privacy,
+			});
 
 			const parsed = parseLlmResponse(rawResponse);
 
 			// If LLM decided this needs the visual agent, return immediately
 			// (no tool execution — the dashboard will handle it via agent executor)
 			if (parsed.useAgent && parsed.agentServerId) {
-				logger.info("os-chat", `Routing to visual agent`, {
+				logger.info("os-chat", "Routing to visual agent", {
 					serverId: parsed.agentServerId,
 					task: body.message.slice(0, 100),
 				});
@@ -261,10 +272,6 @@ export function mountOsChatRoutes(app: Hono): void {
 			const toolCallResults: ToolCallResult[] = [];
 
 			if (parsed.toolCalls.length > 0) {
-				// Dynamic import to avoid circular deps
-				const marketplaceModule = await import("./marketplace.js");
-				const { readInstalledServersPublic } = await import("./marketplace-helpers.js");
-
 				for (const call of parsed.toolCalls.slice(0, 5)) {
 					// Max 5 tool calls
 					try {

@@ -13,6 +13,7 @@ import {
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth";
 import { logger } from "./logger";
+import { isRemotePipelineProvider, providerFallbackForLock } from "./provider-safety";
 
 export interface EmbeddingConfig {
 	provider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
@@ -69,9 +70,11 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	mutationsFrozen: false,
 	semanticContradictionEnabled: true,
 	semanticContradictionTimeoutMs: 120000,
+	allowRemoteProviders: true,
 	extraction: {
 		provider: "llama-cpp",
 		fallbackProvider: "llama-cpp",
+		allowRemoteProviders: true,
 		model: "qwen3.5:4b",
 		strength: "low",
 		endpoint: undefined,
@@ -490,8 +493,26 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 		extractionRaw?.fallbackProvider ?? raw.extractionFallbackProvider,
 		d.extraction.fallbackProvider ?? "llama-cpp",
 	);
+	const topLevelRemote = typeof raw.allowRemoteProviders === "boolean" ? raw.allowRemoteProviders : undefined;
+	const extractionRemote =
+		typeof extractionRaw?.allowRemoteProviders === "boolean" ? extractionRaw.allowRemoteProviders : undefined;
+	const allowRemoteProviders = topLevelRemote ?? extractionRemote ?? d.allowRemoteProviders ?? true;
+	if (topLevelRemote !== undefined && extractionRemote !== undefined && topLevelRemote !== extractionRemote) {
+		logger.warn(
+			"config",
+			"pipelineV2.allowRemoteProviders and extraction.allowRemoteProviders conflict; top-level takes precedence",
+			{ topLevel: topLevelRemote, extraction: extractionRemote },
+		);
+	}
+	const effectiveProvider =
+		!allowRemoteProviders && isRemotePipelineProvider(resolvedProvider)
+			? providerFallbackForLock(resolvedProvider, resolvedFallbackProvider)
+			: resolvedProvider;
+	const effectiveModel =
+		effectiveProvider === resolvedProvider ? resolvedModel : defaultPipelineModel(effectiveProvider);
+	const effectiveEndpoint = effectiveProvider === resolvedProvider ? resolvedEndpoint : undefined;
 	const resolvedCommandConfig = parseCommandConfig(extractionRaw?.command ?? raw.extractionCommand);
-	if (resolvedProvider === "command" && !resolvedCommandConfig) {
+	if (effectiveProvider === "command" && !resolvedCommandConfig) {
 		throw new PipelineConfigValidationError(
 			"memory.pipelineV2.extraction.command is required when extraction.provider='command'.",
 		);
@@ -502,30 +523,41 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 		);
 	}
 
-	const rawSynthProvider = synthesisRaw?.provider;
-	const synthesisProviderWon = isSynthesisProvider(rawSynthProvider);
-	const resolvedSynthesisProvider: SynthesisProviderKind = isSynthesisProvider(rawSynthProvider)
-		? rawSynthProvider
-		: resolvedProvider === "command"
-			? d.synthesis.provider
-			: resolvedProvider;
-	const resolvedSynthesisModel =
-		typeof synthesisRaw?.model === "string" && synthesisRaw.model.trim().length > 0
+	const synthesisRawProvider = synthesisRaw?.provider;
+	const synthesisProviderWon = isSynthesisProvider(synthesisRawProvider);
+	const resolveSynthesisProvider = (): SynthesisProviderKind => {
+		if (isSynthesisProvider(synthesisRawProvider)) return synthesisRawProvider;
+		return effectiveProvider === "command" ? d.synthesis.provider : effectiveProvider;
+	};
+	const requestedSynthesisProvider: SynthesisProviderKind = resolveSynthesisProvider();
+	const resolveLockedSynthesisProvider = (): SynthesisProviderKind => {
+		if (!allowRemoteProviders && isRemotePipelineProvider(requestedSynthesisProvider)) {
+			const fallback = providerFallbackForLock(requestedSynthesisProvider, resolvedFallbackProvider);
+			return isSynthesisProvider(fallback) ? fallback : "none";
+		}
+		return requestedSynthesisProvider;
+	};
+	const resolvedSynthesisProvider: SynthesisProviderKind = resolveLockedSynthesisProvider();
+	const synthesisProviderChangedForLock = resolvedSynthesisProvider !== requestedSynthesisProvider;
+	const resolvedSynthesisModel = synthesisProviderChangedForLock
+		? defaultPipelineModel(resolvedSynthesisProvider)
+		: typeof synthesisRaw?.model === "string" && synthesisRaw.model.trim().length > 0
 			? synthesisRaw.model
 			: synthesisProviderWon
 				? defaultPipelineModel(resolvedSynthesisProvider)
-				: resolvedProvider === "command"
+				: effectiveProvider === "command"
 					? d.synthesis.model
-					: resolvedModel;
-	const resolvedSynthesisEndpoint =
-		parseOptionalUrl(synthesisRaw?.endpoint) ??
-		parseOptionalUrl(synthesisRaw?.base_url) ??
-		(synthesisProviderWon || resolvedProvider === "command" ? undefined : resolvedEndpoint);
+					: effectiveModel;
+	const resolvedSynthesisEndpoint = synthesisProviderChangedForLock
+		? undefined
+		: (parseOptionalUrl(synthesisRaw?.endpoint) ??
+			parseOptionalUrl(synthesisRaw?.base_url) ??
+			(synthesisProviderWon || effectiveProvider === "command" ? undefined : effectiveEndpoint));
 	const resolvedSynthesisTimeout = clampPositive(
 		synthesisRaw?.timeout,
 		5000,
 		300000,
-		synthesisProviderWon || resolvedProvider === "command" ? d.synthesis.timeout : resolvedTimeout,
+		synthesisProviderWon || effectiveProvider === "command" ? d.synthesis.timeout : resolvedTimeout,
 	);
 	const resolvedSynthesisEnabled =
 		resolvedSynthesisProvider === "none" ? false : resolveBool(synthesisRaw?.enabled, undefined, d.synthesis.enabled);
@@ -551,23 +583,25 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			300000,
 			d.semanticContradictionTimeoutMs,
 		),
+		allowRemoteProviders,
 
 		extraction: {
-			provider: resolvedProvider,
+			provider: effectiveProvider,
 			fallbackProvider: resolvedFallbackProvider,
-			model: resolvedModel,
+			allowRemoteProviders,
+			model: effectiveModel,
 			strength: (() => {
 				// Flat keys win when set (dashboard writes these); nested is fallback
 				const candidate = raw.extractionStrength ?? extractionRaw?.strength;
 				return isExtractionStrength(candidate) ? candidate : d.extraction.strength;
 			})(),
-			endpoint: resolvedEndpoint,
+			endpoint: effectiveEndpoint,
 			timeout: resolvedTimeout,
 			minConfidence: clampFraction(
 				extractionRaw?.minConfidence ?? raw.minFactConfidenceForWrite,
 				d.extraction.minConfidence,
 			),
-			command: resolvedCommandConfig,
+			command: effectiveProvider === "command" ? resolvedCommandConfig : undefined,
 			escalation: {
 				maxNewEntitiesPerChunk: clampPositive(
 					escalationRaw?.maxNewEntitiesPerChunk,
@@ -618,7 +652,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			extractionWritesEnabled: resolveBool(
 				graphRaw?.extractionWritesEnabled,
 				raw.graphExtractionWritesEnabled,
-				d.graph.extractionWritesEnabled,
+				d.graph.extractionWritesEnabled ?? false,
 			),
 			boostWeight: clampFraction(graphRaw?.boostWeight ?? raw.graphBoostWeight, d.graph.boostWeight),
 			boostTimeoutMs: clampPositive(

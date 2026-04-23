@@ -7,7 +7,7 @@
 import type { DreamingConfig } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import { logger } from "../logger";
-import { getSynthesisProvider } from "../synthesis-llm";
+import { getSynthesisProvider } from "../llm";
 import {
 	type DreamingMode,
 	createDreamingPass,

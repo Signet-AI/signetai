@@ -7,7 +7,7 @@
  * never mutating memory content.
  */
 
-import { DECISION_ACTIONS, type DecisionAction, type ExtractedFact } from "@signet/core";
+import { DECISION_ACTIONS, buildFtsMatchQuery, type DecisionAction, type ExtractedFact } from "@signet/core";
 import { type DbAccessor, isVectorRuntimeUsable } from "../db-accessor";
 import { logger } from "../logger";
 import type { EmbeddingConfig, MemorySearchConfig } from "../memory-config";
@@ -69,6 +69,8 @@ function findCandidatesBm25(
 	scope: DecisionScope,
 ): Map<string, number> {
 	const bm25Map = new Map<string, number>();
+	const matchQuery = buildFtsMatchQuery(query);
+	if (matchQuery === null) return bm25Map;
 	try {
 		accessor.withReadDb((db) => {
 			const sql = `
@@ -85,8 +87,8 @@ function findCandidatesBm25(
 			const stmt = db.prepare(sql) as unknown as AllQuery<Array<{ id: string; raw_score: number }>>;
 			const rows =
 				scope.scope !== null
-					? stmt.all(query, scope.agentId, scope.visibility, scope.scope, limit)
-					: stmt.all(query, scope.agentId, scope.visibility, limit);
+					? stmt.all(matchQuery, scope.agentId, scope.visibility, scope.scope, limit)
+					: stmt.all(matchQuery, scope.agentId, scope.visibility, limit);
 
 			for (const row of rows) {
 				bm25Map.set(row.id, 1 / (1 + Math.abs(row.raw_score)));
@@ -106,9 +108,7 @@ async function findCandidatesVector(
 	scope: DecisionScope,
 ): Promise<Map<string, number>> {
 	const vectorMap = new Map<string, number>();
-	if (!isVectorRuntimeUsable()) {
-		return vectorMap;
-	}
+	if (!isVectorRuntimeUsable()) return vectorMap;
 	const vectorLimit =
 		scope.scope !== null || scope.visibility !== "global" ? limit * VECTOR_OVERFETCH_MULTIPLIER : limit;
 	try {

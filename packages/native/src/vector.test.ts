@@ -1,8 +1,40 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 // Load the native addon directly (can't resolve @signet/native from within itself)
-const native: typeof import("@signet/native") = require(join(__dirname, ".."));
+const nativePackagePath = join(__dirname, "..");
+const nativeTriples = {
+	"linux-x64-gnu": "signet-native.linux-x64-gnu.node",
+	"linux-x64-musl": "signet-native.linux-x64-musl.node",
+	"linux-arm64-gnu": "signet-native.linux-arm64-gnu.node",
+	"linux-arm64-musl": "signet-native.linux-arm64-musl.node",
+	"darwin-x64": "signet-native.darwin-x64.node",
+	"darwin-arm64": "signet-native.darwin-arm64.node",
+	"win32-x64": "signet-native.win32-x64-msvc.node",
+	"win32-arm64": "signet-native.win32-arm64-msvc.node",
+} as const;
+
+function resolveNativeBindingPath(): string | null {
+	const { arch, platform } = process;
+	if (platform === "linux") {
+		const libc =
+			existsSync("/etc/alpine-release") ||
+			existsSync("/lib/ld-musl-x86_64.so.1") ||
+			existsSync("/lib/ld-musl-aarch64.so.1")
+				? "musl"
+				: "gnu";
+		return join(nativePackagePath, nativeTriples[`${platform}-${arch}-${libc}` as keyof typeof nativeTriples] ?? "");
+	}
+	return join(nativePackagePath, nativeTriples[`${platform}-${arch}` as keyof typeof nativeTriples] ?? "");
+}
+
+const nativeBindingPath = resolveNativeBindingPath();
+const native =
+	nativeBindingPath && existsSync(nativeBindingPath)
+		? (require(nativePackagePath) as typeof import("@signet/native"))
+		: null;
+const describeNative = native ? describe : describe.skip;
 
 // TS reference implementations for parity checks
 function tsCosineSimilarity(a: Float32Array, b: Float32Array): number {
@@ -116,7 +148,7 @@ function tsVectorToBlob(vec: readonly number[]): Buffer {
 // cosineSimilarity
 // ---------------------------------------------------------------------------
 
-describe("cosineSimilarity", () => {
+describeNative("cosineSimilarity", () => {
 	test("identical vectors return 1", () => {
 		const v = new Float32Array([1, 2, 3]);
 		expect(native.cosineSimilarity(v, v)).toBeCloseTo(1.0, 10);
@@ -172,7 +204,7 @@ describe("cosineSimilarity", () => {
 // squaredDistance
 // ---------------------------------------------------------------------------
 
-describe("squaredDistance", () => {
+describeNative("squaredDistance", () => {
 	test("identical points return 0", () => {
 		const v = new Float64Array([1, 2, 3]);
 		expect(native.squaredDistance(v, v)).toBe(0);
@@ -213,7 +245,7 @@ describe("squaredDistance", () => {
 // vectorToBlob / blobToVector round-trip
 // ---------------------------------------------------------------------------
 
-describe("vectorToBlob + blobToVector", () => {
+describeNative("vectorToBlob + blobToVector", () => {
 	test("round-trip preserves values (f32 precision)", () => {
 		const vec = [1.5, 2.5, 3.5, -4.0, 0.0];
 		const blob = native.vectorToBlob(vec);
@@ -260,7 +292,7 @@ describe("vectorToBlob + blobToVector", () => {
 // batchCosineSimilarity
 // ---------------------------------------------------------------------------
 
-describe("batchCosineSimilarity", () => {
+describeNative("batchCosineSimilarity", () => {
 	test("single row matches individual cosineSimilarity", () => {
 		const query = new Float32Array([1, 2, 3]);
 		const row = new Float32Array([4, 5, 6]);
@@ -338,7 +370,7 @@ describe("batchCosineSimilarity", () => {
 // buildKnnEdges
 // ---------------------------------------------------------------------------
 
-describe("buildKnnEdges", () => {
+describeNative("buildKnnEdges", () => {
 	test("small dataset matches TS exact implementation", () => {
 		// Generate 20 random 2D points
 		const coords: number[][] = [];
@@ -432,7 +464,7 @@ describe("buildKnnEdges", () => {
 // normaliseAxes
 // ---------------------------------------------------------------------------
 
-describe("normaliseAxes", () => {
+describeNative("normaliseAxes", () => {
 	test("output range is [-scale/2, scale/2]", () => {
 		const xs = [10, 20, 30, 40, 50];
 		const ys = [5, 15, 25, 35, 45];
@@ -485,7 +517,7 @@ describe("normaliseAxes", () => {
 // mergeHybridScores
 // ---------------------------------------------------------------------------
 
-describe("mergeHybridScores", () => {
+describeNative("mergeHybridScores", () => {
 	test("parity with TS merge logic", () => {
 		const vectorIds = ["a", "b", "c"];
 		const vectorScores = [0.9, 0.7, 0.5];

@@ -14,6 +14,7 @@ import {
 	resetProjectionPurgeState,
 	writeSummaryArtifact,
 } from "./memory-lineage";
+import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 
 const tok = new Tiktoken(cl100k_base);
 
@@ -198,9 +199,7 @@ describe("memory-lineage", () => {
 		const rows = getDbAccessor().withReadDb(
 			(db) =>
 				db
-					.prepare(
-						`SELECT COUNT(*) AS count FROM memory_artifacts WHERE session_id = ? AND source_kind = 'summary'`,
-					)
+					.prepare(`SELECT COUNT(*) AS count FROM memory_artifacts WHERE session_id = ? AND source_kind = 'summary'`)
 					.get("idem-test") as { count: number },
 		);
 		expect(rows.count).toBe(1);
@@ -323,6 +322,49 @@ describe("memory-lineage", () => {
 			);
 
 			expect(after).toEqual(before);
+		});
+
+		it("does not trust editable source_path frontmatter during canonical reindex", async () => {
+			await addSummary({ sessionId: "spoof-source", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
+			const row = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path
+							 FROM memory_artifacts
+							 WHERE agent_id = ? AND session_id = ? AND source_kind = 'summary'`,
+						)
+						.get("default", "spoof-source") as { source_path: string },
+			);
+			const artifactPath = join(dir, row.source_path);
+			writeFileSync(
+				artifactPath,
+				readFileSync(artifactPath, "utf8").replace(
+					"\n---\n",
+					`\nsource_path: memory/spoofed-summary.md\nsource_node_id: ${NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID}\n---\n`,
+				),
+			);
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ?").run("default");
+			});
+
+			reindexMemoryArtifacts("default");
+
+			const rows = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT source_path, source_node_id
+							 FROM memory_artifacts
+							 WHERE agent_id = ?
+							 ORDER BY source_path ASC`,
+						)
+						.all("default") as Array<{ source_path: string; source_node_id: string | null }>,
+			);
+			expect(rows.some((candidate) => candidate.source_path === "memory/spoofed-summary.md")).toBe(false);
+			expect(
+				rows.some((candidate) => candidate.source_path === row.source_path && candidate.source_node_id === null),
+			).toBe(true);
 		});
 
 		it("new file added → picked up on next call", async () => {

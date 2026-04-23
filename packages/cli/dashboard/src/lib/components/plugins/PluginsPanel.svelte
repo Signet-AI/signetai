@@ -10,6 +10,14 @@ import type {
 	PluginSdkSummary,
 	PluginToolSummary,
 } from "$lib/api";
+import {
+	type GraphiqStatus,
+	installGraphiq as apiInstallGraphiq,
+	uninstallGraphiq as apiUninstallGraphiq,
+	updateGraphiq as apiUpdateGraphiq,
+	getGraphiqStatus,
+	indexProjectWithGraphiq,
+} from "$lib/api";
 import { Button } from "$lib/components/ui/button/index.js";
 import { clampPage } from "$lib/stores/plugin-pagination";
 import {
@@ -28,6 +36,8 @@ import ChevronDown from "@lucide/svelte/icons/chevron-down";
 import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 import { onMount } from "svelte";
 
+const SIGNET_GRAPHIQ_PLUGIN_ID = "signet.graphiq";
+
 const ACTIVITY_PAGE_SIZE = 5;
 
 type Drawer = "permissions" | "activity" | "advanced";
@@ -35,7 +45,14 @@ type Drawer = "permissions" | "activity" | "advanced";
 let activityPage = $state(0);
 let openDrawer = $state<Drawer | null>(null);
 
+let graphiqStatus = $state<GraphiqStatus | null>(null);
+let graphiqLoading = $state(false);
+let graphiqAction = $state("");
+let graphiqError = $state("");
+let indexProjectPath = $state("");
+
 const selected = $derived(getSelectedPlugin());
+const isGraphiqSelected = $derived(selected?.id === SIGNET_GRAPHIQ_PLUGIN_ID);
 const selectedDiagnostics = $derived(
 	pluginsStore.diagnosticsPluginId === selected?.id && pluginsStore.diagnostics?.record.id === selected?.id
 		? pluginsStore.diagnostics
@@ -51,6 +68,12 @@ $effect(() => {
 	const page = clampPage(activityPage, selectedAuditEvents.length, ACTIVITY_PAGE_SIZE);
 	if (page !== activityPage) {
 		activityPage = page;
+	}
+});
+
+$effect(() => {
+	if (isGraphiqSelected && !graphiqStatus && !graphiqLoading && !graphiqError) {
+		void loadGraphiqStatus();
 	}
 });
 
@@ -176,12 +199,20 @@ async function refreshSelected(): Promise<void> {
 		await loadPlugins();
 		return;
 	}
-	await Promise.all([loadPluginDiagnostics(plugin.id), loadPluginAuditEvents(plugin.id)]);
+	const tasks: Promise<unknown>[] = [loadPluginDiagnostics(plugin.id), loadPluginAuditEvents(plugin.id)];
+	if (isGraphiqSelected) {
+		graphiqError = "";
+		tasks.push(loadGraphiqStatus());
+	}
+	await Promise.all(tasks);
 }
 
 async function choosePlugin(id: string): Promise<void> {
 	activityPage = 0;
 	openDrawer = null;
+	graphiqStatus = null;
+	graphiqError = "";
+	graphiqAction = "";
 	await selectPlugin(id);
 }
 
@@ -198,6 +229,97 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 		if (!ok) return;
 	}
 	await togglePlugin(plugin.id, next);
+	if (plugin.id === SIGNET_GRAPHIQ_PLUGIN_ID) {
+		graphiqStatus = null;
+		graphiqError = "";
+		await loadGraphiqStatus();
+	}
+}
+
+async function loadGraphiqStatus(): Promise<void> {
+	graphiqLoading = true;
+	graphiqError = "";
+	try {
+		graphiqStatus = await getGraphiqStatus();
+	} catch {
+		graphiqStatus = null;
+		graphiqError = "Failed to load GraphIQ status";
+	}
+	graphiqLoading = false;
+}
+
+async function handleGraphiqIndex(): Promise<void> {
+	const path = indexProjectPath.trim();
+	if (!path) {
+		graphiqError = "Enter a project path to index.";
+		return;
+	}
+	graphiqAction = "Indexing...";
+	graphiqError = "";
+	try {
+		const result = await indexProjectWithGraphiq(path);
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Indexing failed";
+			return;
+		}
+		await loadGraphiqStatus();
+		indexProjectPath = "";
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Indexing failed";
+	}
+}
+
+async function handleGraphiqInstall(): Promise<void> {
+	graphiqAction = "Installing...";
+	graphiqError = "";
+	try {
+		const result = await apiInstallGraphiq();
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Install failed";
+			return;
+		}
+		await Promise.all([loadGraphiqStatus(), loadPlugins().then(loadSelectedPluginDetails)]);
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Install failed";
+	}
+}
+
+async function handleGraphiqUninstall(): Promise<void> {
+	graphiqAction = "Uninstalling...";
+	graphiqError = "";
+	try {
+		const result = await apiUninstallGraphiq();
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Uninstall failed";
+			return;
+		}
+		await Promise.all([loadGraphiqStatus(), loadPlugins().then(loadSelectedPluginDetails)]);
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Uninstall failed";
+	}
+}
+
+async function handleGraphiqUpdate(): Promise<void> {
+	graphiqAction = "Updating...";
+	graphiqError = "";
+	try {
+		const result = await apiUpdateGraphiq();
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Update failed";
+			return;
+		}
+		await Promise.all([loadGraphiqStatus(), loadPlugins().then(loadSelectedPluginDetails)]);
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Update failed";
+	}
 }
 </script>
 
@@ -259,6 +381,22 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 						<RefreshCw class="size-3" />
 						Refresh
 					</Button>
+					{#if isGraphiqSelected && graphiqStatus?.installed}
+						<Button variant="outline" size="sm" disabled={graphiqAction !== ""} onclick={handleGraphiqUpdate}>
+							{graphiqAction === "Updating..." ? "Updating..." : "Update"}
+						</Button>
+					{/if}
+					{#if isGraphiqSelected}
+						{#if graphiqStatus && !graphiqStatus.installed}
+							<Button variant="outline" size="sm" disabled={graphiqAction !== ""} onclick={handleGraphiqInstall}>
+								Install
+							</Button>
+						{:else if graphiqStatus?.installed}
+							<Button variant="outline" size="sm" disabled={graphiqAction !== ""} onclick={handleGraphiqUninstall}>
+								Uninstall
+							</Button>
+						{/if}
+					{/if}
 					<Button
 						variant="outline"
 						size="sm"
@@ -276,6 +414,75 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 				<div><span>Updates</span><strong>{updateText(selected)}</strong></div>
 				<div><span>Last used</span><strong>{lastAuditEvent ? formatDate(lastAuditEvent.timestamp) : "No activity yet"}</strong></div>
 			</div>
+
+			{#if isGraphiqSelected}
+				<section class="graphiq-manager">
+					<div class="section-title">GraphIQ Management</div>
+
+					{#if graphiqLoading}
+						<div class="gm-loading">Loading...</div>
+					{:else if !graphiqStatus}
+						<div class="gm-loading">Could not load GraphIQ status.</div>
+					{/if}
+
+					{#if graphiqError}
+						<div class="gm-error">{graphiqError}</div>
+					{/if}
+
+					{#if graphiqStatus}
+						<div class="gm-status-row">
+							<span>Installed</span>
+							<strong>{graphiqStatus.installed ? `Yes (${graphiqStatus.installSource ?? "binary"})` : "No"}</strong>
+						</div>
+						<div class="gm-status-row">
+							<span>Enabled</span>
+							<strong>{graphiqStatus.pluginEnabled ? "Yes" : "No"}</strong>
+						</div>
+						<div class="gm-status-row">
+							<span>Active project</span>
+							<strong>{graphiqStatus.activeProject ?? "None"}</strong>
+						</div>
+						<div class="gm-status-row">
+							<span>Indexed projects</span>
+							<strong>{graphiqStatus.indexedProjects.length}</strong>
+						</div>
+
+						{#if graphiqAction}
+							<div class="gm-action-status">{graphiqAction}</div>
+						{/if}
+
+						<div class="gm-index">
+							<div class="section-title">Index a project</div>
+							<form class="gm-index-form" onsubmit={(e) => { e.preventDefault(); handleGraphiqIndex(); }}>
+								<input
+									type="text"
+									placeholder="/path/to/project"
+									bind:value={indexProjectPath}
+								/>
+								<Button variant="outline" size="sm" type="submit" disabled={graphiqAction !== ""}>
+									Index
+								</Button>
+							</form>
+						</div>
+
+						{#if graphiqStatus.indexedProjects.length > 0}
+							<div class="gm-projects">
+								<div class="section-title">Indexed projects</div>
+								{#each graphiqStatus.indexedProjects as project}
+									<div class="gm-project-row">
+										<span class="gm-project-path">{project.path}</span>
+										<span class="gm-project-stats">
+											{project.files ? `${project.files} files` : ""}
+											{project.symbols ? `${project.symbols} symbols` : ""}
+											{project.edges ? `${project.edges} edges` : ""}
+										</span>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					{/if}
+				</section>
+			{/if}
 
 			<section class="commands-card">
 				<div class="section-title">Commands this plugin adds</div>
@@ -381,6 +588,35 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 							<span>Runtime: {selectedDiagnostics?.manifest.runtime.kind ?? "unknown"}</span>
 							<span>Source: {selected.source}</span>
 						</div>
+						{#if isGraphiqSelected && graphiqStatus}
+							<div class="advanced-meta">
+								<span>Install source: {graphiqStatus.installSource ?? "unknown"}</span>
+								<span>Binary: {graphiqStatus.installed ? "found on PATH" : "not found"}</span>
+								<span>Plugin state: {graphiqStatus.pluginState}</span>
+								<span>Active project: {graphiqStatus.activeProject ?? "none"}</span>
+							</div>
+							{#if graphiqStatus.indexedProjects.length > 0}
+								<div class="surface-section">
+									<div class="section-title">Project indexes</div>
+									<div class="rows">
+										{#each graphiqStatus.indexedProjects as project (project.path)}
+											<div class="activity-row">
+												<div>
+													<div class="row-title">{project.path}</div>
+													<div class="row-sub">
+														{project.files ? `${project.files} files` : ""}
+														{project.symbols ? `${project.symbols} symbols` : ""}
+														{project.edges ? `${project.edges} edges` : ""}
+														— indexed {formatDate(project.lastIndexedAt)}
+													</div>
+												</div>
+												<span class="soft-pill">{project.path === graphiqStatus.activeProject ? "active" : ""}</span>
+											</div>
+										{/each}
+									</div>
+								</div>
+							{/if}
+						{/if}
 						<div class="advanced-grid">
 							{@render SurfaceSection("Daemon Routes", selected.surfaces.daemonRoutes, routeLabel)}
 							{@render SurfaceSection("Dashboard Panels", selected.surfaces.dashboardPanels, dashboardLabel)}
@@ -853,6 +1089,114 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 
 	.compact {
 		padding: var(--space-xs);
+	}
+
+	.graphiq-manager {
+		padding: var(--space-sm);
+		background: var(--sig-surface);
+		border: 1px solid var(--sig-border);
+		border-radius: var(--radius);
+		margin-bottom: var(--space-sm);
+	}
+
+	.gm-status-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 4px 0;
+		border-top: 1px solid var(--sig-border);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+	}
+
+	.gm-status-row:first-of-type {
+		border-top: none;
+	}
+
+	.gm-status-row strong {
+		color: var(--sig-text-bright);
+	}
+
+	.gm-action-status {
+		margin-top: var(--space-xs);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-highlight);
+	}
+
+	.gm-error {
+		padding: var(--space-xs);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-danger);
+	}
+
+	.gm-loading {
+		padding: var(--space-xs);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+	}
+
+	.gm-index {
+		margin-top: var(--space-sm);
+	}
+
+	.gm-index-form {
+		display: flex;
+		gap: var(--space-xs);
+		margin-top: var(--space-xs);
+	}
+
+	.gm-index-form input {
+		flex: 1;
+		min-width: 0;
+		padding: 5px 8px;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		background: var(--sig-bg);
+		border: 1px solid var(--sig-border);
+		border-radius: var(--radius);
+		color: var(--sig-text-bright);
+		outline: none;
+		transition: border-color var(--dur) var(--ease);
+	}
+
+	.gm-index-form input:focus {
+		border-color: var(--sig-highlight);
+	}
+
+	.gm-index-form input::placeholder {
+		color: var(--sig-text-muted);
+	}
+
+	.gm-projects {
+		margin-top: var(--space-sm);
+	}
+
+	.gm-project-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 3px 0;
+		border-top: 1px solid var(--sig-border);
+	}
+
+	.gm-project-row:first-of-type {
+		border-top: none;
+	}
+
+	.gm-project-path {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-bright);
+	}
+
+	.gm-project-stats {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		color: var(--sig-text-muted);
 	}
 
 	@media (max-width: 1120px) {

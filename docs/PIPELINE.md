@@ -1021,10 +1021,17 @@ work should be mechanical and predictable.
 Configuration Reference
 ---
 
-All pipeline config lives under `memory.pipelineV2` in `agent.yaml` (see
+Most pipeline config lives under `memory.pipelineV2` in `agent.yaml` (see
 [[configuration]]). The config uses a nested structure with grouped
 sub-objects. Legacy flat keys are also supported for backward
 compatibility (nested keys take precedence).
+
+Provider selection for extraction and session synthesis can also be bound to
+the shared inference control plane through the top-level `inference.workloads`
+config. If those workload bindings are present, the pipeline resolves its
+inference target through the router. Legacy extraction and synthesis provider
+fields are only used to build an implicit compatibility profile when no explicit
+`inference:` block is configured.
 
 ### Top-level flags
 
@@ -1055,13 +1062,12 @@ extraction:
   timeout: 90000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
   structuredOutput: true         # send JSON schema in format field; set false for providers that reject it (e.g. GitHub Copilot)
-  command:                       # required when provider: command
+  command:                       # required when legacy extraction.provider: command
     bin: node
     args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY", "--agent", "$AGENT_ID"]
     # tokens: $TRANSCRIPT (temp file path), $SESSION_KEY, $PROJECT, $AGENT_ID, $SIGNET_PATH
-    # keep bin/cwd fixed (or trusted $SIGNET_PATH/$AGENT_ID only); use args/env for session/project tokens
-    # command stdout/stderr are ignored; command must write memories to Signet state directly
-    # after command success, synthesis hooks can run when configured, but markdown/fact writes are skipped in command mode
+    # command stdout/stderr are ignored; command writes memories to Signet state directly
+    # top-level inference.targets.*.executor: command is the separate stdout-based inference-provider path
 
 synthesis:
   enabled: true
@@ -1069,7 +1075,7 @@ synthesis:
   model: qwen3.5:4b
   timeout: 120000                # ms, range 5000–300000
   # when omitted entirely, synthesis falls back to extraction provider/model
-  # except extraction.provider=command, which falls back to synthesis defaults
+  # explicit top-level inference.workloads bindings override legacy provider selection
 
 worker:
   pollMs: 2000                   # ms, range 100–60000

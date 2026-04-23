@@ -12,6 +12,7 @@ import { getDbAccessor } from "./db-accessor";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
+import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { constructContextBlocks } from "./pipeline/context-construction";
 import { DEFAULT_DAMPENING, type ScoredRow, applyDampening } from "./pipeline/dampening";
 import { getGraphBoostIds, tokenizeGraphQuery } from "./pipeline/graph-search";
@@ -509,6 +510,32 @@ interface TranscriptRecallHit {
 	readonly rank: number;
 }
 
+interface NativeArtifactRecallHit {
+	readonly rowid: number;
+	readonly sourcePath: string;
+	readonly sourceKind: string;
+	readonly harness: string | null;
+	readonly project: string | null;
+	readonly updatedAt: string;
+	readonly content: string;
+	readonly rank: number;
+}
+
+function nativeIdSegment(value: string | null | undefined): string {
+	return (
+		value
+			?.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9_.-]+/g, "-")
+			.replace(/^-+|-+$/g, "") || "unknown"
+	);
+}
+
+function nativeArtifactPublicId(hit: NativeArtifactRecallHit): string {
+	const digest = createHash("sha256").update(hit.sourcePath).digest("hex").slice(0, 16);
+	return `native:${nativeIdSegment(hit.harness)}:${nativeIdSegment(hit.sourceKind)}:${digest}`;
+}
+
 function sessionIdFromSourceId(sourceId: string): string {
 	const index = sourceId.lastIndexOf(":");
 	return index >= 0 ? sourceId.slice(index + 1) : sourceId;
@@ -674,6 +701,74 @@ function buildTranscriptRecallHits(
 		});
 	} catch (e) {
 		logger.warn("memory", "Transcript recall fallback failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+		return [];
+	}
+}
+
+function buildNativeArtifactRecallHits(
+	params: RecallParams,
+	query: string,
+	existingSourceIds: ReadonlySet<string>,
+): NativeArtifactRecallHit[] {
+	const fts = sanitizeFtsQuery(query);
+	if (fts.length === 0) return [];
+
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const table = db
+				.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memory_artifacts_fts'`)
+				.get();
+			if (!table) return [];
+
+			const parts = [
+				"SELECT ma.rowid, ma.source_path, ma.source_kind, ma.harness, ma.project,",
+				"COALESCE(ma.updated_at, ma.captured_at) AS updated_at, ma.content,",
+				"bm25(memory_artifacts_fts) AS rank",
+				"FROM memory_artifacts_fts",
+				"JOIN memory_artifacts ma ON ma.rowid = memory_artifacts_fts.rowid",
+				"WHERE memory_artifacts_fts MATCH ?",
+				"AND ma.agent_id = ?",
+				"AND ma.source_kind LIKE 'native_%'",
+				"AND ma.source_node_id = ?",
+				"AND ma.harness IS NOT NULL",
+			];
+			const args: unknown[] = [fts, params.agentId ?? "default", NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID];
+			if (params.project) {
+				parts.push("AND (ma.project = ? OR ma.project IS NULL)");
+				args.push(params.project);
+			}
+			parts.push("ORDER BY rank ASC, updated_at DESC LIMIT ?");
+			args.push(Math.max(2, Math.min(50, params.limit ?? 10) + existingSourceIds.size));
+
+			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
+				rowid: number;
+				source_path: string;
+				source_kind: string;
+				harness: string | null;
+				project: string | null;
+				updated_at: string;
+				content: string;
+				rank: number;
+			}>;
+
+			const maxRank = rows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
+			return rows
+				.map((row) => ({
+					rowid: row.rowid,
+					sourcePath: row.source_path,
+					sourceKind: row.source_kind,
+					harness: row.harness,
+					project: row.project,
+					updatedAt: row.updated_at,
+					content: transcriptExcerpt(row.content, query, 900),
+					rank: maxRank > 0 ? Math.abs(row.rank) / maxRank : 0.2,
+				}))
+				.filter((row) => row.content.length > 0 && !existingSourceIds.has(nativeArtifactPublicId(row)));
+		});
+	} catch (e) {
+		logger.warn("memory", "Native artifact recall failed (non-fatal)", {
 			error: e instanceof Error ? e.message : String(e),
 		});
 		return [];
@@ -1496,6 +1591,42 @@ export async function hybridRecall(
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 
 	if (topIds.length === 0) {
+		const nativeHits = buildNativeArtifactRecallHits(params, expandedQuery, new Set());
+		if (nativeHits.length > 0) {
+			const results = nativeHits.slice(0, limit).map((hit): RecallResult => {
+				const content = `[Native ${hit.harness ?? "harness"} memory]\n${hit.content}`;
+				const truncated = content.length > recallTruncate;
+				const sourceId = nativeArtifactPublicId(hit);
+				return {
+					id: `native-artifact:${hit.rowid}`,
+					content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+					content_length: content.length,
+					truncated,
+					score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
+					source: "native_memory",
+					source_id: sourceId,
+					session_id: sourceId,
+					type: hit.sourceKind,
+					tags: [hit.harness, "native-memory", hit.sourceKind].filter(Boolean).join(","),
+					pinned: false,
+					importance: 0.55,
+					who: hit.harness ?? "",
+					project: hit.project,
+					created_at: hit.updatedAt,
+					supplementary: true,
+				};
+			});
+			return {
+				results,
+				query,
+				method: "keyword",
+				meta: {
+					totalReturned: results.length,
+					hasSupplementary: true,
+					noHits: false,
+				},
+			};
+		}
 		const transcriptHits = buildTranscriptRecallHits(params, expandedQuery, new Set());
 		if (transcriptHits.length > 0) {
 			const transcriptSummaries = loadStructuredSummariesBySourceId(
@@ -1636,6 +1767,35 @@ export async function hybridRecall(
 				created_at: r.created_at,
 			};
 		});
+
+	if (results.length < limit) {
+		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
+		const nativeHits = buildNativeArtifactRecallHits(params, expandedQuery, existingSourceIds);
+		for (const hit of nativeHits) {
+			if (results.length >= limit) break;
+			const content = `[Native ${hit.harness ?? "harness"} memory]\n${hit.content}`;
+			const truncated = content.length > recallTruncate;
+			const sourceId = nativeArtifactPublicId(hit);
+			results.push({
+				id: `native-artifact:${hit.rowid}`,
+				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+				content_length: content.length,
+				truncated,
+				score: Math.round(Math.max(0.01, Math.min(1, hit.rank * 0.85)) * 100) / 100,
+				source: "native_memory",
+				source_id: sourceId,
+				session_id: sourceId,
+				type: hit.sourceKind,
+				tags: [hit.harness, "native-memory", hit.sourceKind].filter(Boolean).join(","),
+				pinned: false,
+				importance: 0.55,
+				who: hit.harness ?? "",
+				project: hit.project,
+				created_at: hit.updatedAt,
+				supplementary: true,
+			});
+		}
+	}
 
 	// Generate LLM summary from the final recalled set (not pre-filter candidates).
 	// Skip when limit < 2: can't fit a summary card without evicting the only

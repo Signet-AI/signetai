@@ -20,25 +20,15 @@ import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
 import { inferType, isDuplicate } from "../hooks";
+import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { IMMUTABLE_ARTIFACT_ERROR_PREFIX, writeSummaryArtifact } from "../memory-lineage";
-import { getSecret } from "../secrets";
 import { isNoiseSession } from "../session-noise";
 import { upsertSessionTranscript } from "../session-transcripts";
 import { upsertThreadHead } from "../thread-heads";
 import { addDreamingTokens } from "./dreaming";
-import {
-	RateLimitExceededError,
-	createAnthropicProvider,
-	createClaudeCodeProvider,
-	createCodexProvider,
-	createLlamaCppProvider,
-	createOllamaProvider,
-	createOpenCodeProvider,
-	createOpenRouterProvider,
-	resolveDefaultOllamaFallbackMaxContextTokens,
-} from "./provider";
+import { RateLimitExceededError } from "./provider";
 import { type SignificanceConfig, assessSignificance } from "./significance-gate";
 import { countTokens } from "./tokenizer";
 
@@ -590,232 +580,177 @@ async function processJob(
 			);
 		}
 	}
-	if (!commandMode && !provider) {
-		throw new Error("summary worker requires an LLM provider when extraction.provider is not 'command'");
-	}
 
-	if (provider) {
-		const today = resolveSummaryHeadingDate(job);
-		const genOpts = {
-			timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-			maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
-		};
-
-		const result =
-			job.transcript.length > CHUNK_TARGET_CHARS
-				? await processChunked(provider, job.transcript, today, genOpts)
-				: await processSingle(provider, job.transcript, today, genOpts);
-
-		if (!result) {
-			throw new Error("Failed to parse LLM summary response");
-		}
-
-		if (!commandMode) {
-			if (job.trigger === "session_end") {
-				if (
-					!isNoiseSession({
-						project: job.project,
-						sessionKey: job.session_key,
-						sessionId: job.session_id ?? job.id,
-						harness: job.harness,
-					})
-				) {
-					const summaryWrite = await writeSummaryArtifact({
-						agentId: job.agent_id,
-						sessionId: job.session_id ?? job.session_key ?? job.id,
-						sessionKey: job.session_key,
-						project: job.project,
-						harness: job.harness,
-						capturedAt: job.captured_at ?? job.created_at,
-						startedAt: job.started_at,
-						endedAt: job.ended_at,
-						summary: result.summary,
-						provider,
-					});
-
-					logger.info("summary-worker", "Wrote session summary artifact", {
-						path: summaryWrite.summaryPath,
-						sessionKey: job.session_key,
-						project: job.project,
-						summaryChars: result.summary.length,
-					});
-				}
-			}
-
-			const saved = insertSummaryFacts(accessor, job, result.facts);
-
-			logger.info("summary-worker", "Inserted session facts", {
-				total: result.facts.length,
-				saved,
-				deduplicated: result.facts.length - saved,
-				factsPreview: result.facts.slice(0, 10).map((fact) => fact.content),
-			});
-		} else {
-			logger.info("summary-worker", "Command extraction mode: skipping summary markdown + fact insertion", {
-				sessionKey: job.session_key,
-				project: job.project,
-			});
-		}
-
-		// Write to session_summaries DAG (depth 0 = session level)
-		try {
-			writeSummaryToDAG(accessor, job, result, job.agent_id);
-		} catch (e) {
-			logger.warn("summary-worker", "Failed to write session summary to DAG (non-fatal)", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		}
-
-		// Track session tokens for dreaming trigger (use transcript length
-		// as a proxy for the session's actual token consumption, not the
-		// compressed summary output).
-		// NOTE: The dreaming worker currently only starts for the default
-		// agent. Tokens for non-default agents accumulate but no pass fires
-		// for them until Phase 2 adds multi-agent dreaming worker support.
-		try {
-			const tokens = countTokens(job.transcript);
-			addDreamingTokens(accessor, job.agent_id, tokens);
-		} catch (e) {
-			logger.warn("summary-worker", "Failed to accumulate dreaming tokens (non-fatal)", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		}
-
-		// --- Session continuity scoring ---
-		try {
-			await scoreContinuity(accessor, provider, job, result.summary, memoryCfg);
-		} catch (e) {
-			logger.warn("summary-worker", "Continuity scoring failed (non-fatal)", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		}
-
-		// --- Predictor comparison (Sprint 3) ---
-		// Runs after continuity scoring has written per-memory relevance scores
-		// and session_scores. Uses dynamic imports to avoid circular deps.
-		// memoryCfg already loaded at function entry (significance gate).
-		try {
-			if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
-				const { runSessionComparison, saveComparison, updateSuccessRate, shouldTriggerTraining, detectDrift } =
-					await import("../predictor-comparison");
-				const comparison = runSessionComparison(job.session_key, job.agent_id, accessor);
-
-				if (comparison !== null) {
-					saveComparison(comparison, job.agent_id, accessor);
-					// Only update EMA when the predictor actually produced scores —
-					// otherwise predictorWon is deterministically false and the EMA
-					// accrues phantom losses during cold start or sidecar downtime.
-					if (comparison.hasPredictorScores) {
-						updateSuccessRate(job.agent_id, comparison.predictorWon, comparison.scorerConfidence);
-					}
-
-					// Drift detection
-					const driftResult = detectDrift(
-						job.agent_id,
-						accessor,
-						memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20,
-					);
-					if (driftResult.drifting) {
-						logger.warn("predictor", "Drift detected — resetting predictor state", {
-							recentWinRate: driftResult.recentWinRate,
-							windowSize: driftResult.windowSize,
-							agentId: job.agent_id,
-						});
-
-						// Reset alpha to 1.0 (full baseline weight) and EMA to neutral
-						const { updatePredictorState: resetState } = await import("../predictor-state");
-						resetState(job.agent_id, {
-							alpha: 1.0,
-							successRate: 0.5,
-						});
-
-						// Trigger retraining (non-fatal if it fails)
-						try {
-							const { getPredictorClient } = await import("../daemon");
-							const predictorClient = getPredictorClient();
-							if (predictorClient) {
-								const dbPath = join(AGENTS_DIR, "memory", "memories.db");
-								await predictorClient.trainFromDb({ db_path: dbPath });
-								logger.info("predictor", "Drift-triggered retraining complete");
-							}
-						} catch (trainErr) {
-							logger.warn("predictor", "Drift-triggered retraining failed", {
-								error: trainErr instanceof Error ? trainErr.message : String(trainErr),
-							});
-						}
-					}
-
-					// Check training trigger
-					if (shouldTriggerTraining(job.agent_id, memoryCfg.pipelineV2.predictor, accessor)) {
-						try {
-							const { getPredictorClient } = await import("../daemon");
-							const predictorClient = getPredictorClient();
-							if (predictorClient) {
-								const dbPath = join(AGENTS_DIR, "memory", "memories.db");
-								await predictorClient.trainFromDb({ db_path: dbPath });
-
-								const { updatePredictorState } = await import("../predictor-state");
-								updatePredictorState(job.agent_id, { lastTrainingAt: new Date().toISOString() });
-
-								logger.info("predictor", "Training triggered after session comparison");
-							}
-						} catch (trainErr) {
-							logger.warn("predictor", "Training trigger failed (non-fatal)", {
-								error: trainErr instanceof Error ? trainErr.message : String(trainErr),
-							});
-						}
-					}
-				}
-			}
-		} catch (err) {
-			logger.warn("predictor", "Session comparison failed (non-fatal)", {
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-
-		// --- Training pair collection for predictor federated learning ---
+	if (!provider) {
+		if (!commandMode) throw new Error("summary worker requires a sessionSynthesis inference provider");
 		if (job.session_key) {
-			try {
-				if (memoryCfg.pipelineV2.predictorPipeline.trainingTelemetry) {
-					const { collectTrainingPairs, saveTrainingPairs } = await import("../predictor-training-pairs");
-					const pairs = collectTrainingPairs(accessor, job.session_key, job.agent_id);
-					if (pairs.length > 0) {
-						saveTrainingPairs(accessor, job.agent_id, job.session_key, pairs);
+			upsertSessionTranscript(job.session_key, job.transcript, job.harness, job.project, job.agent_id);
+		}
+		return;
+	}
+
+	const today = resolveSummaryHeadingDate(job);
+	const genOpts = {
+		timeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
+		maxTokens: memoryCfg.pipelineV2.synthesis.maxTokens,
+	};
+	const result =
+		job.transcript.length > CHUNK_TARGET_CHARS
+			? await processChunked(provider, job.transcript, today, genOpts)
+			: await processSingle(provider, job.transcript, today, genOpts);
+
+	if (!result) throw new Error("Failed to parse LLM summary response");
+
+	if (
+		!commandMode &&
+		job.trigger === "session_end" &&
+		!isNoiseSession({
+			project: job.project,
+			sessionKey: job.session_key,
+			sessionId: job.session_id ?? job.id,
+			harness: job.harness,
+		})
+	) {
+		const summaryWrite = await writeSummaryArtifact({
+			agentId: job.agent_id,
+			sessionId: job.session_id ?? job.session_key ?? job.id,
+			sessionKey: job.session_key,
+			project: job.project,
+			harness: job.harness,
+			capturedAt: job.captured_at ?? job.created_at,
+			startedAt: job.started_at,
+			endedAt: job.ended_at,
+			summary: result.summary,
+			provider,
+		});
+		logger.info("summary-worker", "Wrote session summary artifact", {
+			path: summaryWrite.summaryPath,
+			sessionKey: job.session_key,
+			project: job.project,
+			summaryChars: result.summary.length,
+		});
+	}
+
+	if (commandMode) {
+		logger.info("summary-worker", "Command extraction mode: skipping summary markdown + fact insertion", {
+			sessionKey: job.session_key,
+			project: job.project,
+		});
+	} else {
+		const saved = insertSummaryFacts(accessor, job, result.facts);
+		logger.info("summary-worker", "Inserted session facts", {
+			total: result.facts.length,
+			saved,
+			deduplicated: result.facts.length - saved,
+			factsPreview: result.facts.slice(0, 10).map((fact) => fact.content),
+		});
+	}
+
+	try {
+		writeSummaryToDAG(accessor, job, result, job.agent_id);
+	} catch (e) {
+		logger.warn("summary-worker", "Failed to write session summary to DAG (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+
+	try {
+		const tokens = countTokens(job.transcript);
+		addDreamingTokens(accessor, job.agent_id, tokens);
+	} catch (e) {
+		logger.warn("summary-worker", "Failed to accumulate dreaming tokens (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+
+	try {
+		await scoreContinuity(accessor, provider, job, result.summary, memoryCfg);
+	} catch (e) {
+		logger.warn("summary-worker", "Continuity scoring failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+
+	try {
+		if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
+			const { runSessionComparison, saveComparison, updateSuccessRate, shouldTriggerTraining, detectDrift } =
+				await import("../predictor-comparison");
+			const comparison = runSessionComparison(job.session_key, job.agent_id, accessor);
+			if (comparison !== null) {
+				saveComparison(comparison, job.agent_id, accessor);
+				if (comparison.hasPredictorScores) {
+					updateSuccessRate(job.agent_id, comparison.predictorWon, comparison.scorerConfidence);
+				}
+				const driftResult = detectDrift(job.agent_id, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
+				if (driftResult.drifting) {
+					logger.warn("predictor", "Drift detected — resetting predictor state", {
+						recentWinRate: driftResult.recentWinRate,
+						windowSize: driftResult.windowSize,
+						agentId: job.agent_id,
+					});
+					const { updatePredictorState: resetState } = await import("../predictor-state");
+					resetState(job.agent_id, { alpha: 1.0, successRate: 0.5 });
+				}
+				if (shouldTriggerTraining(job.agent_id, memoryCfg.pipelineV2.predictor, accessor)) {
+					try {
+						const { getPredictorClient } = await import("../daemon");
+						const predictorClient = getPredictorClient();
+						if (predictorClient) {
+							await predictorClient.trainFromDb({ db_path: join(AGENTS_DIR, "memory", "memories.db") });
+							const { updatePredictorState } = await import("../predictor-state");
+							updatePredictorState(job.agent_id, { lastTrainingAt: new Date().toISOString() });
+							logger.info("predictor", "Training triggered after session comparison");
+						}
+					} catch (trainErr) {
+						logger.warn("predictor", "Training trigger failed (non-fatal)", {
+							error: trainErr instanceof Error ? trainErr.message : String(trainErr),
+						});
 					}
 				}
-			} catch (e) {
-				logger.warn("summary-worker", "Training pair collection failed (non-fatal)", {
-					error: e instanceof Error ? e.message : String(e),
-				});
 			}
 		}
+	} catch (err) {
+		logger.warn("predictor", "Session comparison failed (non-fatal)", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
 
+	if (job.session_key) {
 		try {
-			const { getSynthesisWorker } = await import("./index");
-			void getSynthesisWorker()
-				?.triggerNow({
-					force: true,
-					source: "session-summary",
-					agentId: job.agent_id,
-				})
-				.then((result) => {
-					if (!result.skipped) return;
-					logger.info("summary-worker", "Skipped MEMORY.md synthesis after session summary", {
-						reason: result.reason,
-					});
-				})
-				.catch((error) => {
-					logger.warn("summary-worker", "Failed to trigger MEMORY.md synthesis after session summary", {
-						error: error instanceof Error ? error.message : String(error),
-					});
-				});
+			if (memoryCfg.pipelineV2.predictorPipeline.trainingTelemetry) {
+				const { collectTrainingPairs, saveTrainingPairs } = await import("../predictor-training-pairs");
+				const pairs = collectTrainingPairs(accessor, job.session_key, job.agent_id);
+				if (pairs.length > 0) saveTrainingPairs(accessor, job.agent_id, job.session_key, pairs);
+			}
 		} catch (e) {
-			logger.warn("summary-worker", "Could not load synthesis worker for post-summary trigger", {
+			logger.warn("summary-worker", "Training pair collection failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
 	}
-	if (job.session_key && (commandMode || provider)) {
+
+	try {
+		const { getSynthesisWorker } = await import("./index");
+		void getSynthesisWorker()
+			?.triggerNow({ force: true, source: "session-summary", agentId: job.agent_id })
+			.then((triggerResult) => {
+				if (!triggerResult.skipped) return;
+				logger.info("summary-worker", "Skipped MEMORY.md synthesis after session summary", {
+					reason: triggerResult.reason,
+				});
+			})
+			.catch((error) => {
+				logger.warn("summary-worker", "Failed to trigger MEMORY.md synthesis after session summary", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
+	} catch (e) {
+		logger.warn("summary-worker", "Could not load synthesis worker for post-summary trigger", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+	}
+
+	if (job.session_key) {
 		upsertSessionTranscript(job.session_key, job.transcript, job.harness, job.project, job.agent_id);
 	}
 }
@@ -1456,127 +1391,12 @@ export function recoverSummaryJobs(accessor: DbAccessor, limit: number = RECOVER
 	});
 }
 
-export async function resolveSummaryProvider(cfg: ReturnType<typeof loadMemoryConfig>): Promise<LlmProvider> {
-	const p = cfg.pipelineV2.synthesis.provider;
-	const model = cfg.pipelineV2.synthesis.model;
-	const timeout = cfg.pipelineV2.synthesis.timeout;
-	const endpoint = cfg.pipelineV2.synthesis.endpoint;
-	const ollamaMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
-	const rawFallback = cfg.pipelineV2.extraction.fallbackProvider;
-	const fallbackProvider = rawFallback === "llama-cpp" ? "llama-cpp" : rawFallback === "none" ? null : "ollama";
-	const fallback = () => {
-		if (!fallbackProvider) {
-			throw new Error("Synthesis fallback disabled (fallbackProvider: none)");
-		}
-		return fallbackProvider === "llama-cpp"
-			? createLlamaCppProvider({
-					defaultTimeoutMs: timeout,
-					baseUrl: "http://127.0.0.1:8080",
-				})
-			: createOllamaProvider({
-					defaultTimeoutMs: timeout,
-					maxContextTokens: ollamaMaxContextTokens,
-				});
-	};
-	switch (p) {
-		case "none":
-			throw new Error("Summary worker requires an LLM provider but synthesis.provider is 'none'");
-		case "anthropic": {
-			let apiKey = process.env.ANTHROPIC_API_KEY;
-			if (!apiKey) {
-				try {
-					apiKey = (await getSecret("ANTHROPIC_API_KEY")) ?? undefined;
-				} catch {
-					// secrets store unavailable
-				}
-			}
-			if (!apiKey) {
-				logger.error(
-					"summary-worker",
-					`ANTHROPIC_API_KEY not found for summary worker — falling back to ${fallbackProvider}. Set via env or 'signet secrets set ANTHROPIC_API_KEY'`,
-				);
-				return fallback();
-			}
-			return createAnthropicProvider({ model: model || "haiku", apiKey, defaultTimeoutMs: timeout });
-		}
-		case "openrouter": {
-			let apiKey = process.env.OPENROUTER_API_KEY;
-			if (!apiKey) {
-				try {
-					apiKey = (await getSecret("OPENROUTER_API_KEY")) ?? undefined;
-				} catch {
-					// secrets store unavailable
-				}
-			}
-			if (!apiKey) {
-				logger.error(
-					"summary-worker",
-					`OPENROUTER_API_KEY not found for summary worker — falling back to ${fallbackProvider}. Set via env or 'signet secrets set OPENROUTER_API_KEY'`,
-				);
-				return fallback();
-			}
-			return createOpenRouterProvider({
-				model: model || "openai/gpt-4o-mini",
-				apiKey,
-				baseUrl: endpoint ?? "https://openrouter.ai/api/v1",
-				referer: process.env.OPENROUTER_HTTP_REFERER,
-				title: process.env.OPENROUTER_TITLE,
-				defaultTimeoutMs: timeout,
-			});
-		}
-		case "claude-code": {
-			const provider = createClaudeCodeProvider({ model: model || "haiku", defaultTimeoutMs: timeout });
-			if (await provider.available()) return provider;
-			logger.warn(
-				"summary-worker",
-				`Claude Code CLI not available for summary worker — falling back to ${fallbackProvider}`,
-			);
-			return fallback();
-		}
-		case "codex": {
-			const provider = createCodexProvider({ model: model || "gpt-5-codex-mini", defaultTimeoutMs: timeout });
-			if (await provider.available()) return provider;
-			logger.warn("summary-worker", `Codex CLI not available for summary worker — falling back to ${fallbackProvider}`);
-			return fallback();
-		}
-		case "opencode":
-			return createOpenCodeProvider({
-				model: model || "anthropic/claude-haiku-4-5-20251001",
-				baseUrl: endpoint ?? "http://127.0.0.1:4096",
-				ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
-				ollamaFallbackMaxContextTokens: ollamaMaxContextTokens,
-				defaultTimeoutMs: timeout,
-				enableStructuredOutput: cfg.pipelineV2.synthesis.structuredOutput,
-				enableOllamaFallback: rawFallback !== "none",
-			});
-		case "llama-cpp":
-			return createLlamaCppProvider({
-				model: model || "qwen3.5:4b",
-				baseUrl: endpoint ?? "http://127.0.0.1:8080",
-				defaultTimeoutMs: timeout,
-			});
-		default:
-			return createOllamaProvider({
-				...(typeof model === "string" && model.trim().length > 0 ? { model } : {}),
-				...(endpoint ? { baseUrl: endpoint } : {}),
-				defaultTimeoutMs: timeout,
-				maxContextTokens: ollamaMaxContextTokens,
-			});
-	}
-}
-
 export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let recoverTimer: ReturnType<typeof setTimeout> | null = null;
 	let stopped = false;
 
-	// Cache the LLM provider to avoid per-job getSecret calls.
-	// Re-resolve when config changes or after a TTL expires (so a
-	// newly added API key gets picked up without a restart).
 	let cachedProvider: LlmProvider | null = null;
-	let cachedProviderKey = "";
-	let cachedProviderAt = 0;
-	const PROVIDER_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 	async function tick(): Promise<void> {
 		if (stopped) return;
@@ -1647,26 +1467,10 @@ export function startSummaryWorker(accessor: DbAccessor): SummaryWorkerHandle {
 				project: job.project,
 			});
 
-			let providerForJob: LlmProvider | null = null;
-			const requiresProviderForExtraction = cfg.pipelineV2.extraction.provider !== "command";
-			const requiresProviderForSynthesis =
-				cfg.pipelineV2.synthesis.enabled && cfg.pipelineV2.synthesis.provider !== "none";
-			if (requiresProviderForExtraction || requiresProviderForSynthesis) {
-				// Cache provider across jobs — re-resolve on config change, env
-				// key rotation, or TTL expiry. Env-var key changes invalidate
-				// immediately; secrets-store-only rotations rely on the 5-min TTL.
-				const envKey = process.env.ANTHROPIC_API_KEY ?? "";
-				const keyFingerprint = envKey ? new Bun.CryptoHasher("sha256").update(envKey).digest("hex").slice(0, 8) : "";
-				const providerKey = `${cfg.pipelineV2.synthesis.provider}:${cfg.pipelineV2.synthesis.model}:${cfg.pipelineV2.synthesis.timeout}:${keyFingerprint}`;
-				const cacheExpired = Date.now() - cachedProviderAt > PROVIDER_CACHE_TTL_MS;
-				if (!cachedProvider || providerKey !== cachedProviderKey || cacheExpired) {
-					cachedProvider = await resolveSummaryProvider(cfg);
-					cachedProviderKey = providerKey;
-					cachedProviderAt = Date.now();
-				}
-				providerForJob = cachedProvider;
+			if (!cachedProvider) {
+				cachedProvider = getInferenceProvider("sessionSynthesis");
 			}
-			await processJob(accessor, providerForJob, job, cfg);
+			await processJob(accessor, cachedProvider, job, cfg);
 
 			// Mark complete
 			accessor.withWriteTx((db) => {

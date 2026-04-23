@@ -253,6 +253,10 @@ actor (the token's `sub` field) using an in-memory sliding window. Defaults:
 | `batchForget`| 60s    | 5            |
 | `forceDelete`| 60s    | 3            |
 | `admin`      | 60s    | 10           |
+| `inferenceExplain` | 60s | 120        |
+| `inferenceExecute` | 60s | 20         |
+| `inferenceGateway` | 60s | 30         |
+| `recallLlm`  | 60s    | 60           |
 
 These can be overridden in `agent.yaml`:
 
@@ -273,9 +277,9 @@ Hybrid Mode
 
 `hybrid` mode gives you the convenience of `local` mode for local tooling
 while requiring tokens from remote clients. Requests arriving with a
-`host` header of `localhost`, `127.0.0.1`, or `::1` bypass authentication
-entirely and receive full admin-equivalent access. All other origins must
-present a valid bearer token.
+TCP peer address of `127.0.0.1`, `::1`, or `::ffff:127.0.0.1` bypass
+authentication entirely and receive full admin-equivalent access. All
+other clients must present a valid bearer token.
 
 ```yaml
 auth:
@@ -284,10 +288,10 @@ auth:
 
 This is a practical default for development machines where you want the
 local dashboard and CLI to work without tokens, but also want to call the
-daemon from CI pipelines or remote agents. Note the localhost bypass is
-checked against the `Host` header, not the TCP peer address, so it is
-trusting the client to report its own address honestly. For anything
-exposed to untrusted networks, use `team` mode with a reverse proxy.
+daemon from CI pipelines or remote agents. The localhost bypass is checked
+against the actual socket peer address, not the `Host` header. For
+anything exposed to untrusted networks, use `team` mode with a reverse
+proxy.
 
 
 Network Configuration

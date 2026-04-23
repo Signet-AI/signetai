@@ -261,6 +261,220 @@ process reads all memories and asks a model to write a coherent summary.
 | `max_tokens` | number | `4000` | Max output tokens |
 
 
+Inference
+-----------------
+
+Signet's shared inference control plane is configured under the top-level
+`inference` key in `agent.yaml`.
+
+If `inference` is omitted, Signet preserves the old behavior by compiling
+`memory.pipelineV2.extraction` and `memory.pipelineV2.synthesis` into an
+implicit inference profile. That keeps existing agents working without change.
+
+Use `inference` when you want Signet to choose models across harnesses,
+accounts, APIs, and local runtimes per turn or per subtask.
+
+Example:
+
+```yaml
+inference:
+  enabled: true
+  defaultPolicy: auto
+
+  accounts:
+    claude-dot:
+      kind: subscription_session
+      providerFamily: anthropic
+      label: Dot Claude Connected
+      sessionRef: CLAUDE_DOT_SESSION
+    openrouter-main:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: OPENROUTER_API_KEY
+
+  targets:
+    opus:
+      executor: claude-code
+      account: claude-dot
+      models:
+        opus46:
+          model: opus-4.6
+          reasoning: high
+          toolUse: true
+          streaming: true
+    sonnet:
+      executor: openrouter
+      account: openrouter-main
+      privacy: remote_ok
+      endpoint: https://openrouter.ai/api/v1
+      models:
+        default:
+          model: anthropic/claude-sonnet-4-6
+          reasoning: medium
+          toolUse: true
+          streaming: true
+          costTier: medium
+    local:
+      executor: ollama
+      endpoint: http://127.0.0.1:11434
+      privacy: local_only
+      models:
+        gemma4:
+          model: gemma4
+          reasoning: medium
+          streaming: true
+          costTier: low
+
+  policies:
+    auto:
+      mode: automatic
+      defaultTargets:
+        - opus/opus46
+        - sonnet/default
+        - local/gemma4
+
+  taskClasses:
+    casual_chat:
+      reasoning: medium
+      preferredTargets:
+        - sonnet/default
+    hard_coding:
+      reasoning: high
+      toolsRequired: true
+      preferredTargets:
+        - opus/opus46
+    hipaa_sensitive:
+      privacy: local_only
+      preferredTargets:
+        - local/gemma4
+
+  workloads:
+    interactive:
+      policy: auto
+      taskClass: casual_chat
+    memoryExtraction:
+      policy: auto
+      taskClass: casual_chat
+    sessionSynthesis:
+      policy: auto
+      taskClass: casual_chat
+
+  agents:
+    rose:
+      defaultPolicy: auto
+      roster:
+        - opus/opus46
+        - sonnet/default
+        - local/gemma4
+      pinnedTargets:
+        hard_coding: opus/opus46
+```
+
+### inference.accounts
+
+Named account or credential identities used by targets.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `kind` | string | `subscription_session` or `api` |
+| `providerFamily` | string | Provider family label, for example `anthropic`, `openai`, `openrouter` |
+| `label` | string | Human-readable account label |
+| `credentialRef` | string | Secret name or env var name for API-backed targets |
+| `sessionRef` | string | Session identifier for subscription-backed targets |
+| `usageTier` | string | Optional account tier label |
+
+### inference.targets
+
+Executable route targets. A target can be a local runtime, API backend,
+subscription-backed CLI session, or gateway.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `executor` | string | `claude-code`, `codex`, `opencode`, `anthropic`, `openrouter`, `ollama`, `llama-cpp`, `openai-compatible`, or `command` |
+| `kind` | string | Optional explicit target kind. Inferred when omitted |
+| `account` | string | Account id from `inference.accounts` |
+| `endpoint` | string | Optional base URL override |
+| `command` | object | Command executor config with `bin`, optional `args`, `cwd`, and `env` |
+| `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |
+| `models` | map | Named model entries for this target |
+
+Model fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | string | Provider-native model identifier |
+| `label` | string | Optional display label |
+| `reasoning` | string | `low`, `medium`, or `high` |
+| `contextWindow` | number | Maximum prompt tokens the model can accept |
+| `toolUse` | boolean | Whether tool use is supported |
+| `streaming` | boolean | Whether streaming is supported |
+| `multimodal` | boolean | Whether multimodal input is supported |
+| `costTier` | string | `low`, `medium`, or `high` |
+| `averageLatencyMs` | number | Optional routing latency hint |
+
+### inference.policies
+
+Named routing policies that agents and workloads reference.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mode` | string | `strict`, `automatic`, or `hybrid` |
+| `allow` | array | Route refs allowed by the policy |
+| `deny` | array | Route refs denied by the policy |
+| `defaultTargets` | array | Ordered preferred target refs |
+| `taskTargets` | map | Task-class specific preferred target refs |
+| `fallbackTargets` | array | Explicit fallback refs |
+| `maxLatencyMs` | number | Hard latency ceiling used by routing |
+| `costCeiling` | string | Hard cost ceiling used by routing |
+
+### inference.taskClasses
+
+Task-family hints for automatic routing.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `reasoning` | string | Required reasoning depth |
+| `toolsRequired` | boolean | Require tool use support |
+| `streamingPreferred` | boolean | Prefer or require streaming support |
+| `multimodalRequired` | boolean | Require multimodal support |
+| `privacy` | string | Hard privacy tier, including `local_only` |
+| `maxLatencyMs` | number | Task latency budget |
+| `costCeiling` | string | Task cost ceiling |
+| `expectedInputTokens` | number | Prompt-size hint |
+| `expectedOutputTokens` | number | Output-size hint |
+| `preferredTargets` | array | Preferred target refs |
+| `keywords` | array | Lightweight classifier keywords |
+
+### inference.workloads
+
+Binds Signet-owned workloads to router policies or explicit targets.
+
+Supported workload keys:
+
+- `interactive`
+- `memoryExtraction`
+- `sessionSynthesis`
+
+Each workload can define:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `policy` | string | Named policy id |
+| `taskClass` | string | Default task class for this workload |
+| `target` | string | Explicit `target/model` pin |
+
+### inference.agents
+
+Per-agent routing overrides.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `defaultPolicy` | string | Default policy for that agent |
+| `roster` | array | Allowed target refs for that agent |
+| `preferredTargets` | map | Task-class target preferences |
+| `pinnedTargets` | map | Hard pins, usually managed by `signet route pin` |
+
+
 Pipeline V2 Config
 ------------------
 
@@ -268,6 +482,11 @@ The V2 [[pipeline|memory pipeline]] lives at `packages/daemon/src/pipeline/`. It
 LLM-based fact extraction against incoming conversation text, then decides
 whether to write new memories, update existing ones, or skip. Config lives
 under `memory.pipelineV2` in `agent.yaml`.
+
+Inference selection for extraction and session synthesis can also be routed
+through the top-level `inference.workloads` bindings. When explicit routing is
+enabled for `default`, `memoryExtraction`, `sessionSynthesis`, `widgetGeneration`, or `repair`, those workloads use the
+shared inference control plane. Legacy extraction and synthesis fields are treated as load-time compatibility input, not separate runtime providers.
 
 The config uses a nested structure with grouped sub-objects. Legacy flat
 keys (e.g. `extractionModel`, `workerPollMs`) are still supported for
@@ -374,10 +593,19 @@ Codex CLI as the extraction provider. Lower `minConfidence` to capture
 more facts at the cost of noise; raise it to write only high-confidence
 facts.
 
-For `provider: command`, the summary worker executes
-`memory.pipelineV2.extraction.command` in the summary job queue
-control-plane path. The transcript is written to a temporary file and
-its path is substituted into command arguments:
+There are two command paths with different contracts. Top-level
+`inference.targets.*.executor: command` is a normal inference provider: the
+prompt is sent on stdin, exposed as `SIGNET_PROMPT`, and the model response is
+read from stdout.
+
+Legacy `memory.pipelineV2.extraction.provider: command` keeps the old
+side-effecting extractor contract. The summary worker executes
+`memory.pipelineV2.extraction.command`, writes the transcript to a temporary
+file, substitutes that path into args/env, and expects the command to write
+memories to Signet state directly. Stdout and stderr are ignored except for
+process failure.
+
+Available legacy extraction command tokens:
 
 - `$TRANSCRIPT` (alias `$TRANSCRIPT_PATH`) — temp transcript file path
 - `$SESSION_KEY` — session key (or empty string)
@@ -385,20 +613,9 @@ its path is substituted into command arguments:
 - `$AGENT_ID` — agent id for the queued job
 - `$SIGNET_PATH` — active Signet workspace path
 
-For safety, user-derived tokens (`$SESSION_KEY`, `$PROJECT`,
-`$TRANSCRIPT`) are intended for args/env substitution. Keep `bin` and
-`cwd` fixed (or use trusted `$SIGNET_PATH` / `$AGENT_ID`), so command
-path resolution is not driven by transcript/session metadata.
-
-The command's stdout/stderr are not used as extraction output. The
-external command is responsible for writing memories to Signet state
-(for example, writing rows to `memories.db`).
-
-After command extraction succeeds, synthesis-provider hooks can still run
-(summary generation for continuity/predictor + DAG + synthesis trigger),
-but summary markdown writes and `insertSummaryFacts` are skipped in
-command mode to avoid duplicate memory writes. The external command
-remains the source of truth for fact persistence.
+For safety, user-derived tokens (`$SESSION_KEY`, `$PROJECT`, `$TRANSCRIPT`) are
+intended for args/env substitution. Keep `bin` and `cwd` fixed, or use only
+trusted `$SIGNET_PATH` / `$AGENT_ID` there.
 
 Example:
 
@@ -424,9 +641,9 @@ Controls the provider used by the `summary-worker` for session summaries.
 This is separate from fact extraction once explicitly configured.
 
 If the `synthesis` block is omitted entirely, Signet falls back to the
-resolved extraction provider, model, endpoint, and timeout. Exception:
-when `extraction.provider: command`, synthesis falls back to synthesis
-defaults (`ollama` + default synthesis model/timeout) instead.
+resolved extraction provider, model, endpoint, and timeout. When an explicit
+top-level `inference:` block exists, workload bindings decide which target
+handles synthesis.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
@@ -740,6 +957,15 @@ auth:
     modify:
       windowMs: 60000
       max: 60
+    inferenceExplain:
+      windowMs: 60000
+      max: 120
+    inferenceExecute:
+      windowMs: 60000
+      max: 20
+    inferenceGateway:
+      windowMs: 60000
+      max: 30
 ```
 
 | Field | Default | Description |
@@ -766,6 +992,10 @@ Each key controls a category of potentially destructive operations.
 | `batchForget` | 60 s | 5 | Bulk soft-delete |
 | `forceDelete` | 60 s | 3 | Hard-delete (bypasses tombstone) |
 | `admin` | 60 s | 10 | Admin API operations |
+| `inferenceExplain` | 60 s | 120 | Dry-run route decisions |
+| `inferenceExecute` | 60 s | 20 | Native routed prompt execution |
+| `inferenceGateway` | 60 s | 30 | OpenAI-compatible gateway completions |
+| `recallLlm` | 60 s | 60 | LLM-backed recall summarization |
 
 Override any limit under `auth.rateLimits.<operation>`:
 

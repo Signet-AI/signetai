@@ -46,6 +46,7 @@ Commands Overview
 | `signet configure` | Interactive config editor (`signet config` alias) |
 | `signet status` | Show daemon and agent status |
 | `signet doctor` | Run local health checks |
+| `signet route` | Inspect and control inference routing |
 | `signet dashboard` | Open web UI in browser |
 | `signet daemon` | Grouped daemon subcommands |
 | `signet desktop` | Build and install the Electron desktop app from source |
@@ -391,6 +392,53 @@ Options:
 | `-p, --path <path>` | Custom base path |
 
 If the daemon is not running, it will be started automatically.
+
+---
+
+`signet route`
+---
+
+Inspect and control the shared inference router. Requires the daemon to be
+running for `list`, `status`, `doctor`, `explain`, and `test`.
+
+```bash
+signet route list
+signet route status
+signet route doctor
+signet route explain "fix this bun test" --agent rose --task-class hard_coding
+signet route test "summarize this transcript" --agent dot --task-class casual_chat
+signet route pin opus/opus46 --agent rose --task-class hard_coding
+signet route unpin --agent rose --task-class hard_coding
+```
+
+Subcommands:
+
+| Command | Description |
+|---------|-------------|
+| `signet route list` | List router config plus runtime health |
+| `signet route status` | Show configured targets, policies, and workload bindings |
+| `signet route doctor` | Report broken or unavailable route targets |
+| `signet route explain <prompt>` | Dry-run a route decision and print the trace |
+| `signet route test <prompt>` | Execute a real prompt through the router |
+| `signet route pin <targetRef>` | Write a hard pin into `agent.yaml` |
+| `signet route unpin` | Remove a hard pin from `agent.yaml` |
+
+Common options:
+
+| Option | Description |
+|--------|-------------|
+| `--agent <agent>` | Agent id override |
+| `--task-class <taskClass>` | Task-class override |
+| `--operation <operation>` | Routing operation kind |
+| `--privacy <privacy>` | Privacy tier override |
+| `--policy <policy>` | Explicit policy override |
+| `--target <targetRef>` | Explicit target pin for the current request |
+| `--refresh` | Re-check target health before routing |
+| `--debug` | Print the full routing decision trace |
+| `--json` | Emit raw JSON |
+
+Pins are stored under `routing.agents.<agent>.pinnedTargets` in
+`$SIGNET_WORKSPACE/agent.yaml`.
 
 ---
 
