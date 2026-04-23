@@ -1293,3 +1293,18 @@ specs:
       - "Dreaming passes run as full sessions with transcript capture and self-improvement loop (Phase 2)"
       - "Pipeline V2 extraction is gated off when dreaming is enabled (Phase 2)"
     decision: null
+  - id: native-harness-memory-bridge
+    status: approved
+    path: docs/specs/approved/native-harness-memory-bridge.md
+    hard_depends_on:
+      - memory-md-rolling-window-lineage
+      - signet-runtime
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-NATIVE-HARNESS-MEMORY-BRIDGE.md
+    success_criteria:
+      - "Memories written by a native-memory harness are recallable through Signet from other harnesses without becoming Signet-authored memory rows"
+      - "Codex native memory artifacts are indexed with harness/source provenance"
+      - "Codex MCP registration avoids exposing duplicate Signet memory tools by default"
+    decision: null

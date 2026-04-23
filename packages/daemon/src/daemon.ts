@@ -48,6 +48,7 @@ import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProv
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
+import { type NativeMemoryBridgeHandle, startNativeMemoryBridge } from "./native-memory-sources";
 import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
@@ -229,6 +230,7 @@ setupDashboardRoutes(app);
 // ============================================================================
 
 let watcher: ReturnType<typeof watch> | null = null;
+let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
 
 // Track ingested files to avoid re-processing (path -> content hash)
 const ingestedMemoryFiles = new Map<string, string>();
@@ -1283,6 +1285,10 @@ async function cleanup() {
 		syncTimer = null;
 	}
 	stopMemoryImportPoller();
+	if (nativeMemoryBridge) {
+		await nativeMemoryBridge.close();
+		nativeMemoryBridge = null;
+	}
 
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
@@ -1658,6 +1664,14 @@ async function main() {
 			logger.error("daemon", "Failed to import existing memory files", undefined, errDetails);
 		});
 		startMemoryImportPoller();
+
+		if (!nativeMemoryBridge) {
+			nativeMemoryBridge = startNativeMemoryBridge();
+		}
+		nativeMemoryBridge.syncExisting().catch((e) => {
+			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+			logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
+		});
 
 		const claudeProjectsDir = join(homedir(), ".claude", "projects");
 		if (existsSync(claudeProjectsDir)) {
