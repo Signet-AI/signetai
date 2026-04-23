@@ -57,6 +57,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function parseMaxTokens(value: unknown): number | null | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (!/^[1-9]\d*$/.test(trimmed)) return null;
+	const parsed = Number.parseInt(trimmed, 10);
+	return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 interface AgentYamlFile {
 	readonly path: string;
 	readonly exists: boolean;
@@ -323,7 +332,12 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 		.option("--debug", "Print the routed decision trace")
 		.option("--json", "Output as JSON")
 		.action(async (prompt: string, options) => {
-			const maxTokens = options.maxTokens ? Number.parseInt(options.maxTokens, 10) : undefined;
+			const maxTokens = parseMaxTokens(options.maxTokens);
+			if (maxTokens === null) {
+				console.error(chalk.red("--max-tokens must be a positive integer."));
+				process.exit(1);
+				return;
+			}
 			const { ok, data } = await deps.secretApiCall("POST", "/api/inference/execute", {
 				prompt,
 				agentId: options.agent,

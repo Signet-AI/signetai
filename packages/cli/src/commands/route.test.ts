@@ -35,6 +35,58 @@ function createProgram(agentsDir: string): Command {
 }
 
 describe("registerRouteCommands", () => {
+	test("route test rejects invalid max token values before daemon calls", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
+		tempDirs.push(dir);
+		const errors: string[] = [];
+		let called = false;
+		console.error = (line?: unknown) => {
+			errors.push(String(line ?? ""));
+		};
+		Object.defineProperty(process, "exit", {
+			configurable: true,
+			value(code?: string | number | null | undefined) {
+				throw new Error(`exit ${code ?? 0}`);
+			},
+		});
+		const program = new Command();
+		registerRouteCommands(program, {
+			AGENTS_DIR: dir,
+			fetchFromDaemon: async () => null,
+			secretApiCall: async () => {
+				called = true;
+				return { ok: true, data: null };
+			},
+		});
+
+		await expect(program.parseAsync(["node", "test", "route", "test", "hello", "--max-tokens", "abc"])).rejects.toThrow(
+			"exit 1",
+		);
+
+		expect(called).toBe(false);
+		expect(errors.join("\n")).toContain("--max-tokens must be a positive integer");
+	});
+
+	test("route test forwards valid max token values as numbers", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
+		tempDirs.push(dir);
+		let requestBody: unknown;
+		console.log = () => {};
+		const program = new Command();
+		registerRouteCommands(program, {
+			AGENTS_DIR: dir,
+			fetchFromDaemon: async () => null,
+			secretApiCall: async (_method, _path, body) => {
+				requestBody = body;
+				return { ok: true, data: { text: "ok" } };
+			},
+		});
+
+		await program.parseAsync(["node", "test", "route", "test", "hello", "--max-tokens", "42"]);
+
+		expect(requestBody).toMatchObject({ maxTokens: 42 });
+	});
+
 	test("route pin refuses to rewrite an existing agent.yaml without explicit confirmation", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
 		tempDirs.push(dir);
