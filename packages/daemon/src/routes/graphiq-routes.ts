@@ -98,7 +98,7 @@ export function registerGraphiqRoutes(app: Hono): void {
 
 		const agentsDir = getAgentsDir();
 		try {
-			const cliResult = await runGraphiqCli(["index", resolved], 60_000);
+			const cliResult = await runGraphiqCli(["index", resolved], 300_000);
 			const stats = parseIndexStats(cliResult.stdout);
 			updateGraphiqActiveProject(agentsDir, {
 				projectPath: resolved,
@@ -136,9 +136,9 @@ async function installGraphiq(): Promise<{ success: boolean; source?: string; er
 
 	if (homebrewPath) {
 		try {
-			const tap = await runCommand("brew", ["tap", "aaf2tbz/graphiq"], 30_000);
+			const tap = await runCommand(homebrewPath, ["tap", "aaf2tbz/graphiq"], 30_000);
 			if (tap.code === 0 || tap.stderr.includes("already tapped")) {
-				const install = await runCommand("brew", ["install", "graphiq"], 120_000);
+				const install = await runCommand(homebrewPath, ["install", "graphiq"], 120_000);
 				if (install.code === 0 && isGraphiqInstalled()) {
 					return { success: true, source: "homebrew" };
 				}
@@ -165,7 +165,7 @@ async function updateGraphiq(): Promise<{ success: boolean; message?: string; er
 	}
 
 	try {
-		const result = await runCommand("brew", ["upgrade", "graphiq"], 120_000);
+		const result = await runCommand(homebrewPath, ["upgrade", "graphiq"], 120_000);
 		if (result.code === 0) {
 			return { success: true, message: "GraphIQ updated via Homebrew" };
 		}
