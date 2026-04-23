@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
+import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { buildAgentScopeClause, expandRecallKeywordQuery, hybridRecall, transcriptExcerpt } from "./memory-search";
 
 describe("hybridRecall", () => {
@@ -125,6 +127,143 @@ describe("hybridRecall", () => {
 			hasSupplementary: false,
 			noHits: true,
 		});
+	});
+
+	it("recalls indexed native harness memory artifacts without materializing memories", async () => {
+		const codexMemoryPath = join(dir, "codex", "memories", "MEMORY.md");
+		mkdirSync(join(dir, "codex", "memories"), { recursive: true });
+		writeFileSync(codexMemoryPath, "# Codex Memory\n\nNicholai prefers portable memory across Hermes and Codex.\n");
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			sourcePath: codexMemoryPath,
+			sourceKind: "native_memory_registry",
+			harness: "codex",
+			content: readFileSync(codexMemoryPath, "utf-8"),
+			sourceMtimeMs: Date.now(),
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "portable memory Hermes Codex",
+				keywordQuery: "portable memory Hermes Codex",
+				limit: 5,
+				agentId: "default",
+				project: "/workspace/project",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results[0]?.source).toBe("native_memory");
+		expect(result.results[0]?.source_id).toMatch(/^native:codex:native_memory_registry:[a-f0-9]{16}$/);
+		expect(result.results[0]?.source_id).not.toContain(codexMemoryPath);
+		expect(result.results[0]?.session_id).toBe(result.results[0]?.source_id);
+		expect(result.results[0]?.content).toContain("Native codex memory");
+		const materialized = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS count FROM memories").get() as { count: number },
+		);
+		expect(materialized.count).toBe(0);
+	});
+
+	it("does not classify native-looking artifacts without the bridge-owned provenance marker", async () => {
+		const codexMemoryPath = join(dir, "codex", "memories", "MEMORY.md");
+		mkdirSync(join(dir, "codex", "memories"), { recursive: true });
+		writeFileSync(codexMemoryPath, "# Codex Memory\n\nSpoofed native provenance marker should not surface.\n");
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			sourcePath: codexMemoryPath,
+			sourceKind: "native_memory_registry",
+			harness: "codex",
+			content: readFileSync(codexMemoryPath, "utf-8"),
+			sourceMtimeMs: Date.now(),
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memory_artifacts SET source_node_id = ?").run("spoofed-native-marker");
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "Spoofed native provenance marker",
+				keywordQuery: "Spoofed native provenance marker",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.some((row) => row.source === "native_memory")).toBe(false);
+	});
+
+	it("dedupes native artifacts against their public recall source id", async () => {
+		const now = new Date().toISOString();
+		const codexMemoryPath = join(dir, "codex", "memories", "MEMORY.md");
+		const sourceId = `native:codex:native_memory_registry:${createHash("sha256").update(codexMemoryPath).digest("hex").slice(0, 16)}`;
+		mkdirSync(join(dir, "codex", "memories"), { recursive: true });
+		writeFileSync(codexMemoryPath, "# Codex Memory\n\nCodex remembered a duplicate native recall marker.\n");
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			sourcePath: codexMemoryPath,
+			sourceKind: "native_memory_registry",
+			harness: "codex",
+			content: readFileSync(codexMemoryPath, "utf-8"),
+			sourceMtimeMs: Date.now(),
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, 'default', ?, ?, 'test')`,
+			).run("native-public-source", "Codex remembered a duplicate native recall marker.", sourceId, now, now);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "duplicate native recall marker",
+				keywordQuery: "duplicate native recall marker",
+				limit: 2,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.source_id).filter((id) => id === sourceId)).toHaveLength(1);
+		expect(result.results.some((row) => row.source === "native_memory" && row.source_id === sourceId)).toBe(false);
+	});
+
+	it("returns more than five native artifacts when they are the primary recall source", async () => {
+		const root = join(dir, "codex", "memories", "rollout_summaries");
+		mkdirSync(root, { recursive: true });
+		for (let i = 0; i < 6; i++) {
+			const file = join(root, `native-limit-${i}.md`);
+			writeFileSync(file, `# Codex Memory ${i}\n\nshared native bridge limit marker ${i}.\n`);
+			indexExternalMemoryArtifact({
+				agentId: "default",
+				sourcePath: file,
+				sourceKind: "native_rollout_summary",
+				harness: "codex",
+				content: readFileSync(file, "utf-8"),
+				sourceMtimeMs: Date.now() + i,
+			});
+		}
+
+		const result = await hybridRecall(
+			{
+				query: "shared native bridge limit marker",
+				keywordQuery: "shared native bridge limit marker",
+				limit: 6,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.filter((row) => row.source === "native_memory")).toHaveLength(6);
 	});
 
 	it("keeps score calibration stable when reranker provider is noop", async () => {

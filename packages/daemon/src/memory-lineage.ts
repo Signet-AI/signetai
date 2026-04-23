@@ -10,6 +10,7 @@ import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
+import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { isNoiseSession, isTempProject } from "./session-noise";
 
 function getAgentsDir(): string {
@@ -481,9 +482,13 @@ function upsertArtifactRow(
 	frontmatter: Record<string, unknown>,
 	body: string,
 	sourceMtimeMs = statSync(path).mtimeMs,
+	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
 ): void {
 	const agentId = typeof frontmatter.agent_id === "string" ? frontmatter.agent_id : "default";
-	const sourcePath = path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/");
+	const sourcePath =
+		options.trustSourcePath && typeof frontmatter.source_path === "string"
+			? frontmatter.source_path.replace(/\\/g, "/")
+			: path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/");
 	const sourceKind = typeof frontmatter.kind === "string" ? frontmatter.kind : "manifest";
 	const sessionId = typeof frontmatter.session_id === "string" ? frontmatter.session_id : sourcePath;
 	const sessionKey = typeof frontmatter.session_key === "string" ? frontmatter.session_key : null;
@@ -494,7 +499,9 @@ function upsertArtifactRow(
 	const startedAt = typeof frontmatter.started_at === "string" ? frontmatter.started_at : null;
 	const endedAt = typeof frontmatter.ended_at === "string" ? frontmatter.ended_at : null;
 	const manifestPath = typeof frontmatter.manifest_path === "string" ? frontmatter.manifest_path : null;
-	const sourceNodeId = typeof frontmatter.source_node_id === "string" ? frontmatter.source_node_id : null;
+	const rawSourceNodeId = typeof frontmatter.source_node_id === "string" ? frontmatter.source_node_id : null;
+	const sourceNodeId =
+		rawSourceNodeId === NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID && !options.trustNativeMarker ? null : rawSourceNodeId;
 	const memorySentence = typeof frontmatter.memory_sentence === "string" ? frontmatter.memory_sentence : null;
 	const quality = typeof frontmatter.memory_sentence_quality === "string" ? frontmatter.memory_sentence_quality : null;
 	const sourceSha =
@@ -551,6 +558,44 @@ function upsertArtifactRow(
 	});
 }
 
+export function indexExternalMemoryArtifact(input: {
+	readonly agentId?: string;
+	readonly sourcePath: string;
+	readonly sourceKind: string;
+	readonly harness: string;
+	readonly content: string;
+	readonly sourceMtimeMs: number;
+	readonly capturedAt?: string;
+	readonly project?: string | null;
+}): void {
+	const capturedAt =
+		input.capturedAt ??
+		(Number.isFinite(input.sourceMtimeMs) ? new Date(input.sourceMtimeMs).toISOString() : new Date().toISOString());
+	upsertArtifactRow(
+		input.sourcePath,
+		{
+			agent_id: input.agentId?.trim() || "default",
+			source_path: input.sourcePath.replace(/\\/g, "/"),
+			kind: input.sourceKind,
+			session_id: `native:${input.harness}:${input.sourcePath}`,
+			session_key: `native:${input.harness}`,
+			project: input.project ?? null,
+			harness: input.harness,
+			captured_at: capturedAt,
+			started_at: capturedAt,
+			ended_at: capturedAt,
+			updated_at: new Date().toISOString(),
+			source_node_id: NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID,
+			content_sha256: hashNormalizedBody(input.content),
+			memory_sentence: `Indexed ${input.harness} native memory from ${basename(input.sourcePath)}.`,
+			memory_sentence_quality: "fallback",
+		},
+		input.content,
+		input.sourceMtimeMs,
+		{ trustNativeMarker: true, trustSourcePath: true },
+	);
+}
+
 function canSeedColdCacheFromDbRow(currentMtimeMs: number, row: { readonly source_mtime_ms?: unknown }): boolean {
 	if (!Number.isFinite(currentMtimeMs)) return false;
 
@@ -570,14 +615,17 @@ function listCanonicalFiles(): string[] {
 		.sort();
 }
 
-function deleteArtifactRowsForPath(path: string, agentId: string | null): void {
+export function deleteArtifactRowsForPath(path: string, agentId: string | null): void {
 	const sourcePath = relativePath(path);
+	const absolutePath = path.replace(/\\/g, "/");
 	getDbAccessor().withWriteTx((db) => {
 		if (agentId) {
 			db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(sourcePath, agentId);
+			db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(absolutePath, agentId);
 			return;
 		}
 		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(sourcePath);
+		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(absolutePath);
 	});
 }
 

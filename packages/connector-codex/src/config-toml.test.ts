@@ -86,6 +86,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[mcp_servers.signet]");
 		expect(content).toContain("command = 'signet-mcp'");
+		expect(content).toContain("disabled_tools = ['memory_search'");
 		// Must not be an array — Codex's Rust parser expects Option<String>
 		expect(content).not.toContain("command = [");
 	});
@@ -214,6 +215,7 @@ describe("buildMcpBlock — TOML quoting", () => {
 	test("produces string command, not array", () => {
 		const block = buildMcpBlock({ command: "signet-mcp", args: [] });
 		expect(block).toContain("command = 'signet-mcp'");
+		expect(block).toContain("disabled_tools = ['memory_search'");
 		expect(block).not.toContain("command = [");
 	});
 

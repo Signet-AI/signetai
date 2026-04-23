@@ -151,6 +151,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `markdown-embedding-normalization-hardening` | RESEARCH-MARKDOWN-EMBEDDING-NORMALIZATION | How should Signet preserve structured markdown for embeddings while preventing repeated poison-pill retries from malformed or provider-sensitive payloads? |
 | `connector-forgecode` | RESEARCH-REFERENCE-REPOS | How should Signet bridge its portable identity, skills, and MCP surfaces into ForgeCode's `~/forge` environment without relying on unavailable lifecycle hooks? |
 | `dreaming-memory-consolidation` | LCM-PATTERNS, memory-pipeline-plan, knowledge-architecture-schema | How should Signet consolidate accumulated session knowledge into a cleaner entity graph during idle periods? |
+| `native-harness-memory-bridge` | RESEARCH-NATIVE-HARNESS-MEMORY-BRIDGE | How should Signet make harness-native memories portable without duplicating each harness's memory pipeline? |
 | `model-provider-router` | RESEARCH-INFERENCE-CONTROL-PLANE, RESEARCH-COMPETITIVE-SYSTEMS | How should Signet centralize inference across harnesses, daemon workloads, and heterogeneous provider backends under one policy surface? |
 
 ### Research Adoption Ledger (high-impact)
@@ -756,6 +757,7 @@ Legend:
 | `engram-informed-predictor-track` | planning | `docs/specs/planning/engram-informed-predictor-track.md` | `predictive-memory-scorer` | `ssm-temporal-backbone` | Engram-pattern translation lane for scorer ablations and SSM handoff contracts |
 | `ssm-temporal-backbone` | planning | `docs/specs/planning/ssm-temporal-backbone.md` | `ssm-foundation-evaluation`, `ontology-evolution-core`, `session-continuity-protocol` | `ssm-graph-traversal-model` | Shadow-mode temporal state model with fallback |
 | `ssm-graph-traversal-model` | planning | `docs/specs/planning/ssm-graph-traversal-model.md` | `ssm-temporal-backbone`, `desire-paths-epic`, `knowledge-architecture-schema` | - | SSM-assisted traversal path ranking |
+| `native-harness-memory-bridge` | approved | `docs/specs/approved/native-harness-memory-bridge.md` | `memory-md-rolling-window-lineage`, `signet-runtime` | - | Indexes native harness memory artifacts into Signet recall without materializing duplicate Signet-authored memory rows; Codex is the first adapter. |
 | `distributed-harness-orchestration` | planning | `docs/specs/planning/distributed-harness-orchestration.md` | `multi-agent-support`, `signet-runtime` | `signet-native-harness` | Stub: multi-remote harness/agent/memory orchestration |
 | `signet-native-harness` | planning | `docs/specs/planning/signet-native-harness.md` | `distributed-harness-orchestration`, `signet-runtime` | - | Stub: first-party harness track (Hermes-agent informed) |
 | `remember-recall-skill-parity` | planning | `docs/specs/planning/remember-recall-skill-parity.md` | `procedural-memory-plan` | - | Stub: /remember and /recall architecture/schema parity |

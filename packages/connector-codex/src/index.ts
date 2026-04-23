@@ -241,6 +241,15 @@ export function buildMcpBlock(mcp: { command: string; args: string[] }): string 
 	if (mcp.args.length > 0) {
 		block += `args = ${tomlInlineArray(mcp.args)}\n`;
 	}
+	block += `disabled_tools = ${tomlInlineArray([
+		"memory_search",
+		"memory_store",
+		"memory_get",
+		"memory_list",
+		"memory_modify",
+		"memory_forget",
+		"memory_feedback",
+	])}\n`;
 	return block;
 }
 
