@@ -10,6 +10,15 @@ import type {
 	PluginSdkSummary,
 	PluginToolSummary,
 } from "$lib/api";
+import {
+	type GraphiqActionResult,
+	type GraphiqStatus,
+	installGraphiq as apiInstallGraphiq,
+	uninstallGraphiq as apiUninstallGraphiq,
+	updateGraphiq as apiUpdateGraphiq,
+	getGraphiqStatus,
+	indexProjectWithGraphiq,
+} from "$lib/api";
 import { Button } from "$lib/components/ui/button/index.js";
 import { clampPage } from "$lib/stores/plugin-pagination";
 import {
@@ -25,8 +34,12 @@ import {
 	togglePlugin,
 } from "$lib/stores/plugins.svelte";
 import ChevronDown from "@lucide/svelte/icons/chevron-down";
+import Download from "@lucide/svelte/icons/download";
 import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+import Trash2 from "@lucide/svelte/icons/trash-2";
 import { onMount } from "svelte";
+
+const SIGNET_GRAPHIQ_PLUGIN_ID = "signet.graphiq";
 
 const ACTIVITY_PAGE_SIZE = 5;
 
@@ -35,7 +48,14 @@ type Drawer = "permissions" | "activity" | "advanced";
 let activityPage = $state(0);
 let openDrawer = $state<Drawer | null>(null);
 
+let graphiqStatus = $state<GraphiqStatus | null>(null);
+let graphiqLoading = $state(false);
+let graphiqAction = $state("");
+let graphiqError = $state("");
+let indexProjectPath = $state("");
+
 const selected = $derived(getSelectedPlugin());
+const isGraphiqSelected = $derived(selected?.id === SIGNET_GRAPHIQ_PLUGIN_ID);
 const selectedDiagnostics = $derived(
 	pluginsStore.diagnosticsPluginId === selected?.id && pluginsStore.diagnostics?.record.id === selected?.id
 		? pluginsStore.diagnostics
@@ -51,6 +71,12 @@ $effect(() => {
 	const page = clampPage(activityPage, selectedAuditEvents.length, ACTIVITY_PAGE_SIZE);
 	if (page !== activityPage) {
 		activityPage = page;
+	}
+});
+
+$effect(() => {
+	if (isGraphiqSelected && !graphiqStatus && !graphiqLoading) {
+		void loadGraphiqStatus();
 	}
 });
 
@@ -199,6 +225,97 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 	}
 	await togglePlugin(plugin.id, next);
 }
+
+async function loadGraphiqStatus(): Promise<void> {
+	graphiqLoading = true;
+	graphiqError = "";
+	try {
+		graphiqStatus = await getGraphiqStatus();
+	} catch {
+		graphiqStatus = null;
+		graphiqError = "Failed to load GraphIQ status";
+	}
+	graphiqLoading = false;
+}
+
+async function handleGraphiqInstall(): Promise<void> {
+	graphiqAction = "Installing...";
+	graphiqError = "";
+	try {
+		const result = await apiInstallGraphiq();
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Install failed";
+			return;
+		}
+		await Promise.all([loadPlugins(), loadGraphiqStatus()]);
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Install failed";
+	}
+}
+
+async function handleGraphiqUpdate(): Promise<void> {
+	graphiqAction = "Updating...";
+	graphiqError = "";
+	try {
+		const result = await apiUpdateGraphiq();
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Update failed";
+			return;
+		}
+		await loadGraphiqStatus();
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Update failed";
+	}
+}
+
+async function handleGraphiqUninstall(): Promise<void> {
+	const ok = window.confirm(
+		"Disable GraphIQ? The plugin will be turned off. Existing project indexes are kept on disk.",
+	);
+	if (!ok) return;
+	graphiqAction = "Disabling...";
+	graphiqError = "";
+	try {
+		const result = await apiUninstallGraphiq();
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Uninstall failed";
+			return;
+		}
+		await Promise.all([loadPlugins(), loadGraphiqStatus()]);
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Uninstall failed";
+	}
+}
+
+async function handleGraphiqIndex(): Promise<void> {
+	const path = indexProjectPath.trim();
+	if (!path) {
+		graphiqError = "Enter a project path to index.";
+		return;
+	}
+	graphiqAction = "Indexing...";
+	graphiqError = "";
+	indexProjectPath = "";
+	try {
+		const result = await indexProjectWithGraphiq(path);
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Indexing failed";
+			return;
+		}
+		await loadGraphiqStatus();
+		indexProjectPath = "";
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Indexing failed";
+	}
+}
 </script>
 
 <div class="plugins-panel">
@@ -276,6 +393,91 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 				<div><span>Updates</span><strong>{updateText(selected)}</strong></div>
 				<div><span>Last used</span><strong>{lastAuditEvent ? formatDate(lastAuditEvent.timestamp) : "No activity yet"}</strong></div>
 			</div>
+
+			{#if isGraphiqSelected}
+				<section class="graphiq-manager">
+					<div class="section-title">GraphIQ Management</div>
+
+					{#if graphiqLoading}
+						<div class="gm-loading">Loading...</div>
+					{:else if graphiqError}
+						<div class="gm-error">{graphiqError}</div>
+					{:else if graphiqStatus}
+						<div class="gm-status-row">
+							<span>Installed</span>
+							<strong>{graphiqStatus.installed ? `Yes (${graphiqStatus.installSource ?? "binary"})` : "No"}</strong>
+						</div>
+						<div class="gm-status-row">
+							<span>Enabled</span>
+							<strong>{graphiqStatus.pluginEnabled ? "Yes" : "No"}</strong>
+						</div>
+						<div class="gm-status-row">
+							<span>Active project</span>
+							<strong>{graphiqStatus.activeProject ?? "None"}</strong>
+						</div>
+						<div class="gm-status-row">
+							<span>Indexed projects</span>
+							<strong>{graphiqStatus.indexedProjects.length}</strong>
+						</div>
+
+						<div class="gm-actions">
+							{#if !graphiqStatus.installed}
+								<Button variant="outline" size="sm" onclick={handleGraphiqInstall}>
+									<Download class="size-3" />
+									Install
+								</Button>
+							{:else}
+								<Button variant="outline" size="sm" onclick={handleGraphiqUpdate}>
+									<RefreshCw class="size-3" />
+									Update
+								</Button>
+							{/if}
+							{#if graphiqStatus.pluginEnabled}
+								<Button variant="outline" size="sm" onclick={handleGraphiqUninstall}>
+									<Trash2 class="size-3" />
+									Disable
+								</Button>
+							{/if}
+						</div>
+
+						{#if graphiqAction}
+							<div class="gm-action-status">{graphiqAction}</div>
+						{/if}
+
+						<div class="gm-index">
+							<div class="section-title">Index a project</div>
+							<form class="gm-index-form" onsubmit={(e) => { e.preventDefault(); handleGraphiqIndex(); }}>
+								<input
+									type="text"
+									placeholder="/path/to/project"
+									bind:value={indexProjectPath}
+								/>
+								<Button variant="outline" size="sm" type="submit" disabled={graphiqAction !== ""}>
+									Index
+								</Button>
+							</form>
+						</div>
+
+						{#if graphiqStatus.indexedProjects.length > 0}
+							<div class="gm-projects">
+								<div class="section-title">Indexed projects</div>
+								{#each graphiqStatus.indexedProjects as project}
+									<div class="gm-project-row">
+										<span class="gm-project-path">{project.path}</span>
+										<span class="gm-project-stats">
+											{project.files ? `${project.files} files` : ""}
+											{project.symbols ? `${project.symbols} symbols` : ""}
+											{project.edges ? `${project.edges} edges` : ""}
+										</span>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					{:else}
+						<div class="gm-loading">Could not load GraphIQ status.</div>
+					{/if}
+				</section>
+			{/if}
 
 			<section class="commands-card">
 				<div class="section-title">Commands this plugin adds</div>
@@ -853,6 +1055,120 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 
 	.compact {
 		padding: var(--space-xs);
+	}
+
+	.graphiq-manager {
+		padding: var(--space-sm);
+		background: var(--sig-surface);
+		border: 1px solid var(--sig-border);
+		border-radius: var(--radius);
+		margin-bottom: var(--space-sm);
+	}
+
+	.gm-status-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 4px 0;
+		border-top: 1px solid var(--sig-border);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+	}
+
+	.gm-status-row:first-of-type {
+		border-top: none;
+	}
+
+	.gm-status-row strong {
+		color: var(--sig-text-bright);
+	}
+
+	.gm-actions {
+		display: flex;
+		gap: var(--space-xs);
+		margin-top: var(--space-sm);
+	}
+
+	.gm-action-status {
+		margin-top: var(--space-xs);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-highlight);
+	}
+
+	.gm-error {
+		padding: var(--space-xs);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-danger);
+	}
+
+	.gm-loading {
+		padding: var(--space-xs);
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+	}
+
+	.gm-index {
+		margin-top: var(--space-sm);
+	}
+
+	.gm-index-form {
+		display: flex;
+		gap: var(--space-xs);
+		margin-top: var(--space-xs);
+	}
+
+	.gm-index-form input {
+		flex: 1;
+		min-width: 0;
+		padding: 5px 8px;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		background: var(--sig-bg);
+		border: 1px solid var(--sig-border);
+		border-radius: var(--radius);
+		color: var(--sig-text-bright);
+		outline: none;
+		transition: border-color var(--dur) var(--ease);
+	}
+
+	.gm-index-form input:focus {
+		border-color: var(--sig-highlight);
+	}
+
+	.gm-index-form input::placeholder {
+		color: var(--sig-text-muted);
+	}
+
+	.gm-projects {
+		margin-top: var(--space-sm);
+	}
+
+	.gm-project-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 3px 0;
+		border-top: 1px solid var(--sig-border);
+	}
+
+	.gm-project-row:first-of-type {
+		border-top: none;
+	}
+
+	.gm-project-path {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--sig-text-bright);
+	}
+
+	.gm-project-stats {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		color: var(--sig-text-muted);
 	}
 
 	@media (max-width: 1120px) {

@@ -1583,6 +1583,62 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<Pl
 }
 
 // ============================================================================
+// GraphIQ Plugin Management
+// ============================================================================
+
+export interface GraphiqStatus {
+	installed: boolean;
+	pluginEnabled: boolean;
+	pluginState: string;
+	activeProject: string | null;
+	indexedProjects: readonly { path: string; lastIndexedAt: string; files?: number; symbols?: number; edges?: number }[];
+	installSource: string | null;
+}
+
+export interface GraphiqActionResult {
+	success: boolean;
+	message?: string;
+	error?: string;
+	source?: string;
+	project?: string;
+	stats?: { files?: number; symbols?: number; edges?: number };
+}
+
+export async function getGraphiqStatus(): Promise<GraphiqStatus> {
+	const response = await fetch(`${API_BASE}/api/graphiq/status`);
+	if (!response.ok) throw new Error("Failed to fetch GraphIQ status");
+	return response.json();
+}
+
+export async function installGraphiq(): Promise<GraphiqActionResult> {
+	const response = await fetch(`${API_BASE}/api/graphiq/install`, { method: "POST" });
+	if (!response.ok) throw new Error("Failed to install GraphIQ");
+	return response.json();
+}
+
+export async function updateGraphiq(): Promise<GraphiqActionResult> {
+	const response = await fetch(`${API_BASE}/api/graphiq/update`, { method: "POST" });
+	if (!response.ok) throw new Error("Failed to update GraphIQ");
+	return response.json();
+}
+
+export async function uninstallGraphiq(): Promise<GraphiqActionResult> {
+	const response = await fetch(`${API_BASE}/api/graphiq/uninstall`, { method: "POST" });
+	if (!response.ok) throw new Error("Failed to uninstall GraphIQ");
+	return response.json();
+}
+
+export async function indexProjectWithGraphiq(path: string): Promise<GraphiqActionResult> {
+	const response = await fetch(`${API_BASE}/api/graphiq/index`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ path }),
+	});
+	if (!response.ok) throw new Error("Failed to index project with GraphIQ");
+	return response.json();
+}
+
+// ============================================================================
 // Marketplace MCP API
 // ============================================================================
 
