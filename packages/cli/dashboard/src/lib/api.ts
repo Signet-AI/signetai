@@ -1610,22 +1610,38 @@ export async function getGraphiqStatus(): Promise<GraphiqStatus> {
 	return response.json();
 }
 
+async function parseGraphiqActionResponse(
+	response: Response,
+	fallbackError: string,
+): Promise<GraphiqActionResult> {
+	let payload: GraphiqActionResult | null = null;
+	try {
+		payload = (await response.json()) as GraphiqActionResult;
+	} catch {
+		// fall through to synthesized error payload below
+	}
+	if (response.ok) {
+		return payload ?? { success: true };
+	}
+	return {
+		success: false,
+		error: payload?.error ?? payload?.message ?? fallbackError,
+	};
+}
+
 export async function installGraphiq(): Promise<GraphiqActionResult> {
 	const response = await fetch(`${API_BASE}/api/graphiq/install`, { method: "POST" });
-	if (!response.ok) throw new Error("Failed to install GraphIQ");
-	return response.json();
+	return parseGraphiqActionResponse(response, "Failed to install GraphIQ");
 }
 
 export async function updateGraphiq(): Promise<GraphiqActionResult> {
 	const response = await fetch(`${API_BASE}/api/graphiq/update`, { method: "POST" });
-	if (!response.ok) throw new Error("Failed to update GraphIQ");
-	return response.json();
+	return parseGraphiqActionResponse(response, "Failed to update GraphIQ");
 }
 
 export async function uninstallGraphiq(): Promise<GraphiqActionResult> {
 	const response = await fetch(`${API_BASE}/api/graphiq/uninstall`, { method: "POST" });
-	if (!response.ok) throw new Error("Failed to uninstall GraphIQ");
-	return response.json();
+	return parseGraphiqActionResponse(response, "Failed to uninstall GraphIQ");
 }
 
 export async function indexProjectWithGraphiq(path: string): Promise<GraphiqActionResult> {
@@ -1634,8 +1650,7 @@ export async function indexProjectWithGraphiq(path: string): Promise<GraphiqActi
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ path }),
 	});
-	if (!response.ok) throw new Error("Failed to index project with GraphIQ");
-	return response.json();
+	return parseGraphiqActionResponse(response, "Failed to index project with GraphIQ");
 }
 
 // ============================================================================

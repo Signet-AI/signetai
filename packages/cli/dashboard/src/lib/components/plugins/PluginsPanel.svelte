@@ -75,7 +75,7 @@ $effect(() => {
 });
 
 $effect(() => {
-	if (isGraphiqSelected && !graphiqStatus && !graphiqLoading) {
+	if (isGraphiqSelected && !graphiqStatus && !graphiqLoading && !graphiqError) {
 		void loadGraphiqStatus();
 	}
 });
