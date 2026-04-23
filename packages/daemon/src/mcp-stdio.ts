@@ -15,6 +15,23 @@ const DAEMON_URL =
 	process.env.SIGNET_DAEMON_URL ??
 	`http://${process.env.SIGNET_HOST ?? "127.0.0.1"}:${process.env.SIGNET_PORT ?? "3850"}`;
 
+async function resolveAgentsDir(daemonUrl: string): Promise<string | undefined> {
+	try {
+		const res = await fetch(`${daemonUrl}/health`, { signal: AbortSignal.timeout(3000) });
+		if (!res.ok) return undefined;
+		const data = (await res.json()) as Record<string, unknown>;
+		if (typeof data.agentsDir === "string") return data.agentsDir;
+	} catch {
+		// daemon unreachable — fall through to SIGNET_PATH
+	}
+	return undefined;
+}
+
+const resolvedAgentsDir = await resolveAgentsDir(DAEMON_URL);
+if (resolvedAgentsDir && !process.env.SIGNET_PATH) {
+	process.env.SIGNET_PATH = resolvedAgentsDir;
+}
+
 const server = await createMcpServer({
 	daemonUrl: DAEMON_URL,
 	version: "0.1.0",

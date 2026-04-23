@@ -319,6 +319,25 @@ describe("createMcpServer", () => {
 		expect(readFileSync(capturePath, "utf-8")).toContain(`status --db ${dbPath}`);
 	});
 
+	it("falls back to graphiq state file when plugin registry has no graphiq entry", async () => {
+		const projectDir = join(tempAgentsDir, "project");
+		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
+		mkdirSync(dirname(dbPath), { recursive: true });
+		writeFileSync(dbPath, "");
+		updateGraphiqActiveProject(tempAgentsDir, {
+			projectPath: projectDir,
+			indexedAt: new Date("2026-04-21T00:00:00.000Z"),
+		});
+
+		const graphServer = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			enableMarketplaceProxyTools: false,
+		});
+		const result = await callTool(graphServer, "code_status", {});
+		expect(result.isError).toBeUndefined();
+	});
+
 	it("bounds GraphIQ code tool numeric inputs before subprocess calls", async () => {
 		const projectDir = join(tempAgentsDir, "project");
 		const dbPath = join(projectDir, ".graphiq", "graphiq.db");
