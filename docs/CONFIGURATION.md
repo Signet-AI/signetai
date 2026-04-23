@@ -593,31 +593,16 @@ Codex CLI as the extraction provider. Lower `minConfidence` to capture
 more facts at the cost of noise; raise it to write only high-confidence
 facts.
 
-For `provider: command`, the summary worker executes
-`memory.pipelineV2.extraction.command` in the summary job queue
-control-plane path. The transcript is written to a temporary file and
-its path is substituted into command arguments:
+For `provider: command`, the legacy extraction provider config is compiled
+into an inference target with `executor: command`. The daemon passes the prompt
+to the process on stdin and also exposes it as `SIGNET_PROMPT`. Command args and
+env values may use `$PROMPT` or `{{prompt}}` substitution. The command must
+write the model response to stdout; stderr is only used for error reporting.
 
-- `$TRANSCRIPT` (alias `$TRANSCRIPT_PATH`) — temp transcript file path
-- `$SESSION_KEY` — session key (or empty string)
-- `$PROJECT` — project path (or empty string)
-- `$AGENT_ID` — agent id for the queued job
-- `$SIGNET_PATH` — active Signet workspace path
-
-For safety, user-derived tokens (`$SESSION_KEY`, `$PROJECT`,
-`$TRANSCRIPT`) are intended for args/env substitution. Keep `bin` and
-`cwd` fixed (or use trusted `$SIGNET_PATH` / `$AGENT_ID`), so command
-path resolution is not driven by transcript/session metadata.
-
-The command's stdout/stderr are not used as extraction output. The
-external command is responsible for writing memories to Signet state
-(for example, writing rows to `memories.db`).
-
-After command extraction succeeds, synthesis-provider hooks can still run
-(summary generation for continuity/predictor + DAG + synthesis trigger),
-but summary markdown writes and `insertSummaryFacts` are skipped in
-command mode to avoid duplicate memory writes. The external command
-remains the source of truth for fact persistence.
+For safety, keep `bin` and `cwd` fixed, and put prompt-derived values only in
+args or env. Prefer the top-level `inference.targets.*.executor: command`
+configuration for new setups so the same command target can be bound to any
+workload, not just legacy extraction.
 
 Example:
 
@@ -630,10 +615,8 @@ memory:
         bin: node
         args:
           - ./scripts/custom-extractor.mjs
-          - --transcript
-          - $TRANSCRIPT
-          - --session
-          - $SESSION_KEY
+          - --prompt
+          - $PROMPT
 ```
 
 
@@ -643,9 +626,9 @@ Controls the provider used by the `summary-worker` for session summaries.
 This is separate from fact extraction once explicitly configured.
 
 If the `synthesis` block is omitted entirely, Signet falls back to the
-resolved extraction provider, model, endpoint, and timeout. Exception:
-when `extraction.provider: command`, synthesis falls back to synthesis
-defaults (`ollama` + default synthesis model/timeout) instead.
+resolved extraction provider, model, endpoint, and timeout. When an explicit
+top-level `inference:` block exists, workload bindings decide which target
+handles synthesis.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|

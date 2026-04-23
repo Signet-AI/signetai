@@ -1064,11 +1064,10 @@ extraction:
   structuredOutput: true         # send JSON schema in format field; set false for providers that reject it (e.g. GitHub Copilot)
   command:                       # required when provider: command
     bin: node
-    args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY", "--agent", "$AGENT_ID"]
-    # tokens: $TRANSCRIPT (temp file path), $SESSION_KEY, $PROJECT, $AGENT_ID, $SIGNET_PATH
-    # keep bin/cwd fixed (or trusted $SIGNET_PATH/$AGENT_ID only); use args/env for session/project tokens
-    # command stdout/stderr are ignored; command must write memories to Signet state directly
-    # after command success, synthesis hooks can run when configured, but markdown/fact writes are skipped in command mode
+    args: ["./extract.mjs", "--prompt", "$PROMPT"]
+    # prompt is sent on stdin and exposed as SIGNET_PROMPT
+    # args/env support $PROMPT and {{prompt}} substitution
+    # stdout is the model response; stderr is used only for error reporting
 
 synthesis:
   enabled: true
@@ -1076,7 +1075,7 @@ synthesis:
   model: qwen3.5:4b
   timeout: 120000                # ms, range 5000–300000
   # when omitted entirely, synthesis falls back to extraction provider/model
-  # except extraction.provider=command, which falls back to synthesis defaults
+  # explicit top-level inference.workloads bindings override legacy provider selection
 
 worker:
   pollMs: 2000                   # ms, range 100–60000
