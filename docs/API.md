@@ -145,7 +145,7 @@ silent fallback or hard-blocked extraction after boot.
       "since": "2026-03-26T06:00:00.000Z"
     }
   },
-  "routing": {
+  "inference": {
     "enabled": true,
     "source": "explicit",
     "defaultPolicy": "auto",

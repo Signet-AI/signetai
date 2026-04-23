@@ -1027,10 +1027,11 @@ sub-objects. Legacy flat keys are also supported for backward
 compatibility (nested keys take precedence).
 
 Provider selection for extraction and session synthesis can also be bound to
-the shared inference control plane through the top-level `routing.workloads`
+the shared inference control plane through the top-level `inference.workloads`
 config. If those workload bindings are present, the pipeline resolves its
-inference target through the router before falling back to the legacy provider
-fields.
+inference target through the router. Legacy extraction and synthesis provider
+fields are only used to build an implicit compatibility profile when no explicit
+`inference:` block is configured.
 
 ### Top-level flags
 
