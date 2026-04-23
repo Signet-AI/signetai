@@ -301,7 +301,6 @@ async function handleGraphiqIndex(): Promise<void> {
 	}
 	graphiqAction = "Indexing...";
 	graphiqError = "";
-	indexProjectPath = "";
 	try {
 		const result = await indexProjectWithGraphiq(path);
 		graphiqAction = "";
@@ -400,9 +399,15 @@ async function handleGraphiqIndex(): Promise<void> {
 
 					{#if graphiqLoading}
 						<div class="gm-loading">Loading...</div>
-					{:else if graphiqError}
+					{:else if !graphiqStatus}
+						<div class="gm-loading">Could not load GraphIQ status.</div>
+					{/if}
+
+					{#if graphiqError}
 						<div class="gm-error">{graphiqError}</div>
-					{:else if graphiqStatus}
+					{/if}
+
+					{#if graphiqStatus}
 						<div class="gm-status-row">
 							<span>Installed</span>
 							<strong>{graphiqStatus.installed ? `Yes (${graphiqStatus.installSource ?? "binary"})` : "No"}</strong>
@@ -473,8 +478,6 @@ async function handleGraphiqIndex(): Promise<void> {
 								{/each}
 							</div>
 						{/if}
-					{:else}
-						<div class="gm-loading">Could not load GraphIQ status.</div>
 					{/if}
 				</section>
 			{/if}
