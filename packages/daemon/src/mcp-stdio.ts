@@ -8,7 +8,7 @@
  * The daemon must be running — tool handlers call the daemon's HTTP API.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createMcpServer, refreshMarketplaceProxyTools } from "./mcp/tools.js";
@@ -28,7 +28,11 @@ function isLocalDaemonUrl(url: string): boolean {
 }
 
 function isValidAgentsDir(dir: string): boolean {
-	return isAbsolute(dir) && existsSync(dir) && readdirSync(dir, { withFileTypes: true }).some((e) => e.isDirectory());
+	try {
+		return isAbsolute(dir) && existsSync(dir) && statSync(dir).isDirectory();
+	} catch {
+		return false;
+	}
 }
 
 async function resolveAgentsDir(daemonUrl: string): Promise<string | undefined> {

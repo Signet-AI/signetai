@@ -14,6 +14,7 @@ import {
 	type GraphiqStatus,
 	installGraphiq as apiInstallGraphiq,
 	uninstallGraphiq as apiUninstallGraphiq,
+	updateGraphiq as apiUpdateGraphiq,
 	getGraphiqStatus,
 	indexProjectWithGraphiq,
 } from "$lib/api";
@@ -303,6 +304,23 @@ async function handleGraphiqUninstall(): Promise<void> {
 		graphiqError = "Uninstall failed";
 	}
 }
+
+async function handleGraphiqUpdate(): Promise<void> {
+	graphiqAction = "Updating...";
+	graphiqError = "";
+	try {
+		const result = await apiUpdateGraphiq();
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Update failed";
+			return;
+		}
+		await Promise.all([loadGraphiqStatus(), loadPlugins().then(loadSelectedPluginDetails)]);
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Update failed";
+	}
+}
 </script>
 
 <div class="plugins-panel">
@@ -363,6 +381,11 @@ async function handleGraphiqUninstall(): Promise<void> {
 						<RefreshCw class="size-3" />
 						Refresh
 					</Button>
+					{#if isGraphiqSelected && graphiqStatus?.installed}
+						<Button variant="outline" size="sm" disabled={graphiqAction !== ""} onclick={handleGraphiqUpdate}>
+							{graphiqAction === "Updating..." ? "Updating..." : "Update"}
+						</Button>
+					{/if}
 					{#if isGraphiqSelected}
 						{#if graphiqStatus && !graphiqStatus.installed}
 							<Button variant="outline" size="sm" disabled={graphiqAction !== ""} onclick={handleGraphiqInstall}>
@@ -587,7 +610,7 @@ async function handleGraphiqUninstall(): Promise<void> {
 														— indexed {formatDate(project.lastIndexedAt)}
 													</div>
 												</div>
-												<span class="soft-pill">{project === graphiqStatus.indexedProjects[0] ? "active" : ""}</span>
+												<span class="soft-pill">{project.path === graphiqStatus.activeProject ? "active" : ""}</span>
 											</div>
 										{/each}
 									</div>
