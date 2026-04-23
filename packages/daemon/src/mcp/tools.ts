@@ -179,6 +179,12 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"signet_code_status",
 	"signet_code_doctor",
 	"signet_code_constants",
+	"code_search",
+	"code_context",
+	"code_blast",
+	"code_status",
+	"code_doctor",
+	"code_constants",
 ]);
 
 const marketplaceProxyState = new WeakMap<McpServer, MarketplaceProxyState>();
