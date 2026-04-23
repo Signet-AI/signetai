@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { expandHome, resolveSessionStartTimeoutMs } from "@signet/core";
+import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
 
 // ---------------------------------------------------------------------------
 // Signet command resolution
@@ -48,7 +48,7 @@ function resolveSignetMcp(): { command: string; args: string[] } {
 
 const HOOK_EVENT_KEYS = ["SessionStart", "UserPromptSubmit", "Stop"] as const;
 const CODEX_SESSION_START_GRACE_SECONDS = 5;
-const PROMPT_SUBMIT_TIMEOUT_SECONDS = 5;
+const CODEX_PROMPT_SUBMIT_GRACE_SECONDS = 2;
 const SESSION_END_TIMEOUT_SECONDS = 30;
 
 interface MatcherGroup {
@@ -79,17 +79,30 @@ function resolveCodexSessionStartTimeoutSeconds(): number {
 	return Math.ceil(resolveSessionStartTimeoutMs(raw) / 1000) + CODEX_SESSION_START_GRACE_SECONDS;
 }
 
+function resolveCodexPromptSubmitTimeoutSeconds(): number {
+	return (
+		Math.ceil(resolvePromptSubmitTimeoutMs(readTimeoutEnv("SIGNET_PROMPT_SUBMIT_TIMEOUT")) / 1000) +
+		CODEX_PROMPT_SUBMIT_GRACE_SECONDS
+	);
+}
+
 function buildHooksFile(signetArgs: string[]): HooksFile {
-	const cmd = (subcommand: string, secs: number): MatcherGroup => ({
+	const cmd = (subcommand: string, secs: number, codexJson = true): MatcherGroup => ({
 		_signet: true,
-		hooks: [{ type: "command", command: [...signetArgs, "hook", subcommand, "-H", "codex"].join(" "), timeout: secs }],
+		hooks: [
+			{
+				type: "command",
+				command: [...signetArgs, "hook", subcommand, "-H", "codex", ...(codexJson ? ["--codex-json"] : [])].join(" "),
+				timeout: secs,
+			},
+		],
 	});
 	return {
 		_signet: true,
 		hooks: {
 			SessionStart: [cmd("session-start", resolveCodexSessionStartTimeoutSeconds())],
-			UserPromptSubmit: [cmd("user-prompt-submit", PROMPT_SUBMIT_TIMEOUT_SECONDS)],
-			Stop: [cmd("session-end", SESSION_END_TIMEOUT_SECONDS)],
+			UserPromptSubmit: [cmd("user-prompt-submit", resolveCodexPromptSubmitTimeoutSeconds())],
+			Stop: [cmd("session-end", SESSION_END_TIMEOUT_SECONDS, false)],
 		},
 	};
 }

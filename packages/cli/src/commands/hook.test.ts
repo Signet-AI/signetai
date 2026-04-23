@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Command } from "commander";
 import {
+	buildCodexHookOutput,
 	buildCompactionCompleteBody,
 	buildSessionEndBody,
 	buildSessionStartFallback,
 	buildUserPromptSubmitBody,
 	pickSessionKey,
 	registerHookCommands,
+	resolvePromptSubmitTimeout,
 	resolveSessionStartTimeout,
 	shouldReadCompactionInput,
 } from "./hook";
@@ -38,6 +40,22 @@ describe("pickSessionKey", () => {
 	});
 });
 
+describe("resolvePromptSubmitTimeout", () => {
+	test("uses prompt-submit timeout env when valid", () => {
+		const prev = process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
+		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = "9000";
+		expect(resolvePromptSubmitTimeout()).toBe(9000);
+		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = prev;
+	});
+
+	test("falls back to the default when env is invalid or too small", () => {
+		const prev = process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
+		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = "200";
+		expect(resolvePromptSubmitTimeout()).toBe(5000);
+		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = prev;
+	});
+});
+
 describe("resolveSessionStartTimeout", () => {
 	test("uses the dedicated session-start timeout env when valid", () => {
 		const prev = process.env.SIGNET_SESSION_START_TIMEOUT;
@@ -51,6 +69,29 @@ describe("resolveSessionStartTimeout", () => {
 		process.env.SIGNET_SESSION_START_TIMEOUT = "200";
 		expect(resolveSessionStartTimeout()).toBe(15000);
 		process.env.SIGNET_SESSION_START_TIMEOUT = prev;
+	});
+});
+
+describe("buildCodexHookOutput", () => {
+	test("formats Codex additional context using hookSpecificOutput", () => {
+		expect(buildCodexHookOutput("SessionStart", " recalled context ")).toEqual({
+			continue: true,
+			suppressOutput: true,
+			hookSpecificOutput: {
+				hookEventName: "SessionStart",
+				additionalContext: "recalled context",
+			},
+		});
+	});
+
+	test("emits a valid no-op Codex hook output when context is empty", () => {
+		expect(buildCodexHookOutput("UserPromptSubmit", " ")).toEqual({
+			continue: true,
+			suppressOutput: true,
+			hookSpecificOutput: {
+				hookEventName: "UserPromptSubmit",
+			},
+		});
 	});
 });
 
@@ -159,7 +200,7 @@ describe("buildUserPromptSubmitBody", () => {
 	});
 
 	test("hook command uses daemon result transport for user-prompt-submit", async () => {
-		const seen: Array<{ path: string; body: string; runtimePath: string | null }> = [];
+		const seen: Array<{ path: string; body: string; runtimePath: string | null; timeout?: number }> = [];
 		const lines: string[] = [];
 		console.log = (line?: unknown) => {
 			lines.push(String(line ?? ""));
@@ -173,6 +214,7 @@ describe("buildUserPromptSubmitBody", () => {
 					path,
 					body: typeof opts?.body === "string" ? opts.body : "",
 					runtimePath: new Headers(opts?.headers).get("x-signet-runtime-path"),
+					timeout: opts?.timeout,
 				});
 				return {
 					ok: true,
@@ -191,7 +233,36 @@ describe("buildUserPromptSubmitBody", () => {
 		expect(seen[0]?.body).toContain('"harness":"claude-code"');
 		expect(seen[0]?.body).toContain('"runtimePath":"legacy"');
 		expect(seen[0]?.runtimePath).toBe("legacy");
+		expect(seen[0]?.timeout).toBe(5000);
 		expect(lines).toContain("recalled context");
+	});
+
+	test("hook command can emit Codex user-prompt-submit JSON", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerHookCommands(program, {
+			AGENTS_DIR: "/tmp/agents",
+			fetchDaemonResult: async () => ({
+				ok: true,
+				data: { inject: "recalled context" },
+			}),
+			readStaticIdentity: () => null,
+		});
+
+		await program.parseAsync(["node", "test", "hook", "user-prompt-submit", "-H", "codex", "--codex-json"]);
+
+		expect(JSON.parse(lines[0] ?? "{}")).toEqual({
+			continue: true,
+			suppressOutput: true,
+			hookSpecificOutput: {
+				hookEventName: "UserPromptSubmit",
+				additionalContext: "recalled context",
+			},
+		});
 	});
 });
 

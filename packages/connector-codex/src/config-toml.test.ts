@@ -26,6 +26,7 @@ let configPath: string;
 let hooksPath: string;
 let previousSessionStartTimeout: string | undefined;
 let previousFetchTimeout: string | undefined;
+let previousPromptSubmitTimeout: string | undefined;
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -38,8 +39,10 @@ function restoreEnv(name: string, value: string | undefined): void {
 beforeEach(() => {
 	previousSessionStartTimeout = process.env.SIGNET_SESSION_START_TIMEOUT;
 	previousFetchTimeout = process.env.SIGNET_FETCH_TIMEOUT;
+	previousPromptSubmitTimeout = process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
 	Reflect.deleteProperty(process.env, "SIGNET_SESSION_START_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_FETCH_TIMEOUT");
+	Reflect.deleteProperty(process.env, "SIGNET_PROMPT_SUBMIT_TIMEOUT");
 	tempHome = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	codexDir = join(tempHome, ".codex");
 	configPath = join(codexDir, "config.toml");
@@ -50,6 +53,7 @@ beforeEach(() => {
 afterEach(() => {
 	restoreEnv("SIGNET_SESSION_START_TIMEOUT", previousSessionStartTimeout);
 	restoreEnv("SIGNET_FETCH_TIMEOUT", previousFetchTimeout);
+	restoreEnv("SIGNET_PROMPT_SUBMIT_TIMEOUT", previousPromptSubmitTimeout);
 	rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -285,6 +289,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(typeof handler.command).toBe("string");
 		expect(handler.command as string).toContain("hook session-start");
 		expect(handler.command as string).toContain("-H codex");
+		expect(handler.command as string).toContain("--codex-json");
 		expect(handler.timeout).toBe(20);
 	});
 
@@ -299,7 +304,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		const promptHandler = (
 			(hooks.UserPromptSubmit[0] as Record<string, unknown>).hooks as Record<string, unknown>[]
 		)[0];
-		expect(promptHandler.timeout).toBe(5);
+		expect(promptHandler.timeout).toBe(7);
 
 		const stopHandler = ((hooks.Stop[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
 		expect(stopHandler.timeout).toBe(30);
@@ -314,6 +319,19 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
 
 		expect(startHandler.timeout).toBe(23);
+	});
+
+	test("sets Codex prompt-submit timeout to Signet timeout plus grace", async () => {
+		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = "9000";
+
+		await connector().install(tempHome);
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
+		const promptHandler = (
+			(hooks.UserPromptSubmit[0] as Record<string, unknown>).hooks as Record<string, unknown>[]
+		)[0];
+
+		expect(promptHandler.timeout).toBe(11);
 	});
 
 	test("refreshes existing Signet-owned hooks to current timeouts", async () => {
@@ -435,7 +453,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		);
 
 		expect(commands).toContain("python ./scripts/custom-reviewer.py --note ' hook session-start '");
-		expect(commands.some((command) => command === "signet hook session-start -H codex")).toBe(true);
+		expect(commands.some((command) => command === "signet hook session-start -H codex --codex-json")).toBe(true);
 	});
 
 	test("does not use array-form command (regression: issue #481)", async () => {

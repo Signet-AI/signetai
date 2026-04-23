@@ -1,4 +1,8 @@
-import { STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS, resolveSessionStartTimeoutMs } from "@signet/core";
+import {
+	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
+	resolvePromptSubmitTimeoutMs,
+	resolveSessionStartTimeoutMs,
+} from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonFetchResult } from "../lib/daemon.js";
@@ -13,6 +17,7 @@ interface HookDeps {
 }
 
 const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeout();
+const PROMPT_SUBMIT_TIMEOUT_MS = resolvePromptSubmitTimeout();
 const LEGACY_RUNTIME_PATH = "legacy" as const;
 
 function legacyHookHeaders(headers?: HeadersInit): Headers {
@@ -30,6 +35,38 @@ function readTimeoutEnv(name: string): string {
 export function resolveSessionStartTimeout(): number {
 	const raw = readTimeoutEnv("SIGNET_SESSION_START_TIMEOUT") || readTimeoutEnv("SIGNET_FETCH_TIMEOUT");
 	return resolveSessionStartTimeoutMs(raw);
+}
+
+export function resolvePromptSubmitTimeout(): number {
+	return resolvePromptSubmitTimeoutMs(readTimeoutEnv("SIGNET_PROMPT_SUBMIT_TIMEOUT"));
+}
+
+type CodexHookEventName = "SessionStart" | "UserPromptSubmit";
+
+export function buildCodexHookOutput(
+	hookEventName: CodexHookEventName,
+	additionalContext?: string,
+): {
+	readonly continue: true;
+	readonly suppressOutput: true;
+	readonly hookSpecificOutput: {
+		readonly hookEventName: CodexHookEventName;
+		readonly additionalContext?: string;
+	};
+} {
+	const trimmed = additionalContext?.trim();
+	return {
+		continue: true,
+		suppressOutput: true,
+		hookSpecificOutput: {
+			hookEventName,
+			...(trimmed ? { additionalContext: trimmed } : {}),
+		},
+	};
+}
+
+function printCodexHookOutput(hookEventName: CodexHookEventName, additionalContext?: string): void {
+	console.log(JSON.stringify(buildCodexHookOutput(hookEventName, additionalContext)));
 }
 
 export function buildSessionStartFallback(
@@ -95,6 +132,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--agent-id <id>", "Agent ID")
 		.option("--context <context>", "Additional context")
 		.option("--json", "Output as JSON")
+		.option("--codex-json", "Output Codex hook JSON")
 		.action(async (options) => {
 			const input = await readJson();
 			const sessionKey = pickSessionKey(input);
@@ -133,7 +171,9 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					if (res.reason === "offline") {
 						process.stderr.write("[signet] daemon offline — using static identity\n");
 					}
-					if (options.json) {
+					if (options.codexJson) {
+						printCodexHookOutput("SessionStart", fallback);
+					} else if (options.json) {
 						console.log(JSON.stringify({ inject: fallback, identity: { name: "signet" }, memories: [] }));
 					} else {
 						console.log(fallback);
@@ -146,6 +186,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				if (res.reason === "offline") {
 					process.stderr.write("[signet] daemon not running, no identity files found\n");
 				}
+				if (options.codexJson) printCodexHookOutput("SessionStart");
 				process.exit(0);
 			}
 			const data = res.data;
@@ -153,7 +194,9 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				console.error(chalk.red(`Error: ${data.error}`));
 				process.exit(1);
 			}
-			if (options.json) {
+			if (options.codexJson) {
+				printCodexHookOutput("SessionStart", data.inject);
+			} else if (options.json) {
 				console.log(JSON.stringify(data, null, 2));
 			} else if (data.inject) {
 				console.log(data.inject);
@@ -165,6 +208,8 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.description("Get relevant memories for a user prompt")
 		.requiredOption("-H, --harness <harness>", "Harness name")
 		.option("--project <project>", "Project path")
+		.option("--json", "Output as JSON")
+		.option("--codex-json", "Output Codex hook JSON")
 		.action(async (options) => {
 			const input = await readJson();
 			const stdinProject = pickString(input?.cwd);
@@ -176,12 +221,20 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject)),
+					timeout: PROMPT_SUBMIT_TIMEOUT_MS,
 				},
 			);
 			if (!data) {
+				if (options.codexJson) printCodexHookOutput("UserPromptSubmit");
 				process.exit(0);
 			}
-			if (data.inject) console.log(data.inject);
+			if (options.codexJson) {
+				printCodexHookOutput("UserPromptSubmit", data.inject);
+			} else if (options.json) {
+				console.log(JSON.stringify(data, null, 2));
+			} else if (data.inject) {
+				console.log(data.inject);
+			}
 		});
 
 	hookCmd

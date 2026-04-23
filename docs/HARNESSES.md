@@ -240,16 +240,18 @@ registers as an MCP server so Codex can call `signet_remember` and
 ### How it works
 
 1. Codex reads `~/.codex/hooks.json` at startup and registers three hooks.
-2. On session start, Codex fires `SessionStart` → calls `signet hook session-start -H codex` → Signet returns identity + memories as `additional_context` injected into the model's context window.
-3. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex` → Signet returns per-prompt recalled memories as `additional_context`. This is blocking — Codex waits for the hook before sending to the model.
+2. On session start, Codex fires `SessionStart` → calls `signet hook session-start -H codex --codex-json` → Signet returns identity + memories as `hookSpecificOutput.additionalContext` with `suppressOutput: true`, injected into the model's context window without printing the hook payload to the user transcript.
+3. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex --codex-json` → Signet returns per-prompt recalled memories as `hookSpecificOutput.additionalContext` with `suppressOutput: true` so the context is model-visible but not printed into the user transcript. This is blocking — Codex waits for the hook before sending to the model.
 4. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
 5. The MCP server exposes `memory_store`, `memory_search`, and other memory tools that Codex can invoke directly during sessions.
 
 Codex `SessionStart` hook timeout defaults to 20 seconds: the Signet CLI
 waits up to `SIGNET_SESSION_START_TIMEOUT` (`15000` ms by default) for
 the daemon, and the generated Codex hook config adds 5 seconds of harness
-grace. Rerun `signet setup` or `signet connect codex` after upgrading to
-rewrite an existing `~/.codex/hooks.json`.
+grace. Codex `UserPromptSubmit` defaults to 7 seconds: `SIGNET_PROMPT_SUBMIT_TIMEOUT`
+(`5000` ms by default) plus 2 seconds of harness grace. Rerun `signet setup`
+or `signet connect codex` after upgrading to rewrite an existing
+`~/.codex/hooks.json`.
 
 Codex matches the session-start, prompt-submit, and session-end path, but
 it does **not** currently expose the same compaction lifecycle fidelity as
@@ -259,8 +261,8 @@ Claude Code or OpenCode.
 
 | Hook | Supported |
 |------|-----------|
-| session-start | yes — identity + memories via `additional_context` |
-| user-prompt-submit | yes — per-prompt recall via `additional_context` |
+| session-start | yes — identity + memories via `hookSpecificOutput.additionalContext` |
+| user-prompt-submit | yes — per-prompt recall via `hookSpecificOutput.additionalContext` |
 | session-end | yes — transcript extraction via `Stop` hook |
 
 ### MCP tools
