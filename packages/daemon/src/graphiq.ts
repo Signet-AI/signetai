@@ -42,7 +42,7 @@ export async function runGraphiqCli(args: readonly string[], timeoutMs = 15_000)
 	};
 }
 
-function runCommand(
+export function runCommand(
 	command: string,
 	args: readonly string[],
 	timeoutMs: number,

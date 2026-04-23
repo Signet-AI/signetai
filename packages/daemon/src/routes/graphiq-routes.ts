@@ -1,10 +1,9 @@
-import { spawn } from "node:child_process";
 import { constants, accessSync, existsSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { disableGraphiqState, enableGraphiqState, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { getActiveGraphiqDbPath, getAgentsDir, runGraphiqCli } from "../graphiq.js";
+import { getActiveGraphiqDbPath, getAgentsDir, runCommand, runGraphiqCli } from "../graphiq.js";
 import { SIGNET_GRAPHIQ_PLUGIN_ID } from "../plugins/bundled/graphiq.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
 import { authConfig } from "./state.js";
@@ -194,31 +193,3 @@ function parseIndexStats(output: string): { files?: number; symbols?: number; ed
 	};
 }
 
-function runCommand(
-	command: string,
-	args: readonly string[],
-	timeoutMs: number,
-): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
-	return new Promise((resolveResult) => {
-		const proc = spawn(command, [...args], { stdio: "pipe", windowsHide: true });
-		let stdout = "";
-		let stderr = "";
-		const timer = setTimeout(() => {
-			proc.kill("SIGTERM");
-		}, timeoutMs);
-		proc.stdout.on("data", (chunk) => {
-			stdout += chunk.toString();
-		});
-		proc.stderr.on("data", (chunk) => {
-			stderr += chunk.toString();
-		});
-		proc.on("error", (err) => {
-			clearTimeout(timer);
-			resolveResult({ code: 1, stdout, stderr: err.message });
-		});
-		proc.on("close", (code) => {
-			clearTimeout(timer);
-			resolveResult({ code: code ?? 1, stdout, stderr });
-		});
-	});
-}
