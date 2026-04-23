@@ -1,6 +1,12 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseYamlDocument, stringifyYamlDocument } from "@signet/core";
+import {
+	allTargetRefs,
+	parseRoutingConfig,
+	parseRoutingTargetRef,
+	parseYamlDocument,
+	stringifyYamlDocument,
+} from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonApiCall, DaemonFetch } from "../lib/daemon.js";
@@ -64,6 +70,22 @@ function parseMaxTokens(value: unknown): number | null | undefined {
 	if (!/^[1-9]\d*$/.test(trimmed)) return null;
 	const parsed = Number.parseInt(trimmed, 10);
 	return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function parsePinnedTargetRef(
+	data: Record<string, unknown>,
+	targetRef: string,
+): { readonly ok: true; readonly value: string } | { readonly ok: false; readonly error: string } {
+	const parsed = parseRoutingTargetRef(targetRef);
+	if (!parsed.ok) return { ok: false, error: parsed.error.message };
+	const normalized = `${parsed.value.targetId}/${parsed.value.modelId}`;
+	const config = parseRoutingConfig(data);
+	if (!config.ok) return { ok: false, error: config.error.message };
+	const knownRefs = allTargetRefs(config.value);
+	if (knownRefs.length > 0 && !knownRefs.includes(normalized)) {
+		return { ok: false, error: `Unknown target ref "${normalized}". Known targets: ${knownRefs.join(", ")}.` };
+	}
+	return { ok: true, value: normalized };
 }
 
 interface AgentYamlFile {
@@ -386,9 +408,15 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 		.action((targetRef: string, options: { agent: string; taskClass: string; rewriteAgentYaml?: boolean }) => {
 			const file = readAgentYaml(deps.AGENTS_DIR);
 			const { data } = file;
-			setPinnedTarget(data, options.agent, options.taskClass, targetRef);
+			const parsed = parsePinnedTargetRef(data, targetRef);
+			if (!parsed.ok) {
+				console.error(chalk.red(parsed.error));
+				process.exit(1);
+				return;
+			}
+			setPinnedTarget(data, options.agent, options.taskClass, parsed.value);
 			writeAgentYaml(file, data, options.rewriteAgentYaml === true);
-			console.log(chalk.green(`Pinned ${options.agent}/${options.taskClass} -> ${targetRef}`));
+			console.log(chalk.green(`Pinned ${options.agent}/${options.taskClass} -> ${parsed.value}`));
 		});
 
 	routeCmd

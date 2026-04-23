@@ -113,6 +113,65 @@ describe("registerRouteCommands", () => {
 		expect(errors.join("\n")).toContain("--rewrite-agent-yaml");
 	});
 
+	test("route pin rejects malformed target refs before writing", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
+		tempDirs.push(dir);
+		const agentYamlPath = join(dir, "agent.yaml");
+		writeFileSync(agentYamlPath, "identity:\n  name: tester\n");
+		const errors: string[] = [];
+		console.error = (line?: unknown) => {
+			errors.push(String(line ?? ""));
+		};
+		Object.defineProperty(process, "exit", {
+			configurable: true,
+			value(code?: string | number | null | undefined) {
+				throw new Error(`exit ${code ?? 0}`);
+			},
+		});
+
+		await expect(
+			createProgram(dir).parseAsync(["node", "test", "route", "pin", "not-a-target", "--rewrite-agent-yaml"]),
+		).rejects.toThrow("exit 1");
+
+		expect(readFileSync(agentYamlPath, "utf-8")).toBe("identity:\n  name: tester\n");
+		expect(errors.join("\n")).toContain("Expected target/model");
+	});
+
+	test("route pin rejects unknown target refs when inference targets are configured", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
+		tempDirs.push(dir);
+		const agentYamlPath = join(dir, "agent.yaml");
+		writeFileSync(
+			agentYamlPath,
+			`inference:
+  targets:
+    local:
+      executor: ollama
+      models:
+        gemma:
+          model: gemma
+`,
+		);
+		const errors: string[] = [];
+		console.error = (line?: unknown) => {
+			errors.push(String(line ?? ""));
+		};
+		Object.defineProperty(process, "exit", {
+			configurable: true,
+			value(code?: string | number | null | undefined) {
+				throw new Error(`exit ${code ?? 0}`);
+			},
+		});
+
+		await expect(
+			createProgram(dir).parseAsync(["node", "test", "route", "pin", "remote/sonnet", "--rewrite-agent-yaml"]),
+		).rejects.toThrow("exit 1");
+
+		expect(readFileSync(agentYamlPath, "utf-8")).not.toContain("pinnedTargets");
+		expect(errors.join("\n")).toContain('Unknown target ref "remote/sonnet"');
+		expect(errors.join("\n")).toContain("local/gemma");
+	});
+
 	test("route pin rewrites agent.yaml only when explicitly confirmed", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
 		tempDirs.push(dir);
