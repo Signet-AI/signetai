@@ -18,6 +18,7 @@ import type { TelemetryCollector, TelemetryEvent, TelemetryEventType, TelemetryP
 let app: Hono;
 let dir = "";
 let prev: string | undefined;
+let auth = "";
 
 function writeRoutingFixture(root: string): void {
 	mkdirSync(join(root, "memory"), { recursive: true });
@@ -491,19 +492,24 @@ describe("inference routing api", () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-daemon-routing-"));
 		writeRoutingFixture(dir);
 		process.env.SIGNET_PATH = dir;
-
-		const daemon = await import("./daemon");
-		app = daemon.app;
+		const fixture = createInferenceTestApp(dir, { enforceDaemonPermissions: false });
+		app = fixture.app;
+		auth = createToken(fixture.secret, { sub: "admin", scope: {}, role: "admin" }, 60);
 	});
 
 	afterAll(() => {
+		resetInferenceRouterForTests();
 		if (prev === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		if (prev !== undefined) process.env.SIGNET_PATH = prev;
 		rmSync(dir, { recursive: true, force: true });
 	});
 
 	it("exposes inference routing status", async () => {
-		const res = await app.request("http://localhost/api/inference/status");
+		const res = await app.request(
+			new Request("http://localhost/api/inference/status", {
+				headers: { Authorization: `Bearer ${auth}` },
+			}),
+		);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
 			enabled?: boolean;
@@ -518,7 +524,11 @@ describe("inference routing api", () => {
 	});
 
 	it("lists gateway models including automatic routing alias", async () => {
-		const res = await app.request("http://localhost/v1/models");
+		const res = await app.request(
+			new Request("http://localhost/v1/models", {
+				headers: { Authorization: `Bearer ${auth}` },
+			}),
+		);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
 			data?: Array<{ id?: string }>;
