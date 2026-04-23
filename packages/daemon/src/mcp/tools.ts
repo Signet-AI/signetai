@@ -173,12 +173,12 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"mcp_server_policy_get",
 	"mcp_server_policy_set",
 	"session_bypass",
-	"code_search",
-	"code_context",
-	"code_blast",
-	"code_status",
-	"code_doctor",
-	"code_constants",
+	"signet_code_search",
+	"signet_code_context",
+	"signet_code_blast",
+	"signet_code_status",
+	"signet_code_doctor",
+	"signet_code_constants",
 ]);
 
 const marketplaceProxyState = new WeakMap<McpServer, MarketplaceProxyState>();
@@ -192,12 +192,12 @@ const GRAPHIQ_CONSTANTS_TOP_MAX = 100;
 const GRAPHIQ_BLAST_DEPTH_DEFAULT = 3;
 const GRAPHIQ_BLAST_DEPTH_MAX = 10;
 const GRAPHIQ_MCP_TOOL_NAMES = new Set([
-	"code_search",
-	"code_context",
-	"code_blast",
-	"code_status",
-	"code_doctor",
-	"code_constants",
+	"signet_code_search",
+	"signet_code_context",
+	"signet_code_blast",
+	"signet_code_status",
+	"signet_code_doctor",
+	"signet_code_constants",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1983,7 +1983,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	);
 
 	server.registerTool(
-		"code_search",
+		"signet_code_search",
 		{
 			title: "Search Code",
 			description: "Search the active GraphIQ-indexed project for symbols and implementation context.",
@@ -2011,12 +2011,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				args.push("--file", safeFile.value);
 			}
 			if (debug) args.push("--debug");
-			return graphIqToolResult(args, "Code search failed", "code_search", pluginHostProvider);
+			return graphIqToolResult(args, "Code search failed", "signet_code_search", pluginHostProvider);
 		},
 	);
 
 	server.registerTool(
-		"code_context",
+		"signet_code_context",
 		{
 			title: "Code Context",
 			description: "Read full source and structural neighborhood for a symbol in the active GraphIQ project.",
@@ -2030,14 +2030,14 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return graphIqToolResult(
 				["context", safeSymbol.value],
 				"Code context failed",
-				"code_context",
+				"signet_code_context",
 				pluginHostProvider,
 			);
 		},
 	);
 
 	server.registerTool(
-		"code_blast",
+		"signet_code_blast",
 		{
 			title: "Code Blast Radius",
 			description: "Analyze impact radius for a symbol in the active GraphIQ project.",
@@ -2058,32 +2058,32 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!safeSymbol.ok) return errorResult(safeSymbol.error);
 			const boundedDepth = boundedInteger(depth, GRAPHIQ_BLAST_DEPTH_DEFAULT, GRAPHIQ_BLAST_DEPTH_MAX);
 			const args = ["blast", safeSymbol.value, "--depth", String(boundedDepth), "--direction", direction ?? "both"];
-			return graphIqToolResult(args, "Code blast failed", "code_blast", pluginHostProvider);
+			return graphIqToolResult(args, "Code blast failed", "signet_code_blast", pluginHostProvider);
 		},
 	);
 
 	server.registerTool(
-		"code_status",
+		"signet_code_status",
 		{
 			title: "Code Index Status",
 			description: "Show GraphIQ status for the active indexed project.",
 			inputSchema: z.object({}),
 		},
-		async () => graphIqToolResult(["status"], "Code status failed", "code_status", pluginHostProvider),
+		async () => graphIqToolResult(["status"], "Code status failed", "signet_code_status", pluginHostProvider),
 	);
 
 	server.registerTool(
-		"code_doctor",
+		"signet_code_doctor",
 		{
 			title: "Code Index Doctor",
 			description: "Diagnose GraphIQ artifact health for the active indexed project.",
 			inputSchema: z.object({}),
 		},
-		async () => graphIqToolResult(["doctor"], "Code doctor failed", "code_doctor", pluginHostProvider),
+		async () => graphIqToolResult(["doctor"], "Code doctor failed", "signet_code_doctor", pluginHostProvider),
 	);
 
 	server.registerTool(
-		"code_constants",
+		"signet_code_constants",
 		{
 			title: "Code Constants",
 			description: "Find shared numeric/string constants in the active GraphIQ project.",
@@ -2109,7 +2109,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}
 			const boundedTop = boundedInteger(top, GRAPHIQ_CONSTANTS_TOP_DEFAULT, GRAPHIQ_CONSTANTS_TOP_MAX);
 			args.push("--top", String(boundedTop));
-			return graphIqToolResult(args, "Code constants failed", "code_constants", pluginHostProvider);
+			return graphIqToolResult(args, "Code constants failed", "signet_code_constants", pluginHostProvider);
 		},
 	);
 

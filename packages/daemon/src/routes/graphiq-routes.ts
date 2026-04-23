@@ -1,9 +1,9 @@
-import { constants, accessSync, existsSync, statSync } from "node:fs";
+import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { disableGraphiqState, enableGraphiqState, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { getActiveGraphiqDbPath, getAgentsDir, runCommand, runGraphiqCli } from "../graphiq.js";
+import { getActiveGraphiqDbPath, getAgentsDir, runCommand } from "../graphiq.js";
 import { SIGNET_GRAPHIQ_PLUGIN_ID } from "../plugins/bundled/graphiq.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
 import { authConfig } from "./state.js";
@@ -24,18 +24,23 @@ export function registerGraphiqRoutes(app: Hono): void {
 		const host = getDefaultPluginHost();
 		const plugin = host.get(SIGNET_GRAPHIQ_PLUGIN_ID);
 
+		const projects =
+			state.indexedProjects.length > 0
+				? state.indexedProjects.map((p) => ({
+						path: p.path,
+						lastIndexedAt: p.lastIndexedAt,
+						files: p.files,
+						symbols: p.symbols,
+						edges: p.edges,
+					}))
+				: discoverGraphiqProjects(agentsDir);
+
 		return c.json({
 			installed,
 			pluginEnabled: plugin?.enabled ?? false,
 			pluginState: plugin?.state ?? "not-registered",
-			activeProject: active?.activeProject ?? null,
-			indexedProjects: state.indexedProjects.map((p) => ({
-				path: p.path,
-				lastIndexedAt: p.lastIndexedAt,
-				files: p.files,
-				symbols: p.symbols,
-				edges: p.edges,
-			})),
+			activeProject: active?.activeProject ?? projects[0]?.path ?? null,
+			indexedProjects: projects,
 			installSource: state.installSource ?? null,
 		});
 	});
@@ -85,7 +90,7 @@ export function registerGraphiqRoutes(app: Hono): void {
 		if (!existsSync(resolved)) {
 			return c.json({ success: false, error: `Project path does not exist: ${resolved}` }, 400);
 		}
-		let projectStat;
+		let projectStat: ReturnType<typeof statSync>;
 		try {
 			projectStat = statSync(resolved);
 		} catch {
@@ -111,8 +116,14 @@ export function registerGraphiqRoutes(app: Hono): void {
 
 		const agentsDir = getAgentsDir();
 		try {
-			const cliResult = await runGraphiqCli(["index", resolved], 300_000);
-			const stats = parseIndexStats(cliResult.stdout);
+			const dbDir = join(resolved, ".graphiq");
+			const dbPath = join(dbDir, "graphiq.db");
+			const result = await runCommand("graphiq", ["index", resolved, "--db", dbPath], 300_000);
+			if (result.code !== 0) {
+				const msg = result.stderr.trim() || result.stdout.trim() || `graphiq index exited with code ${result.code}`;
+				return c.json({ success: false, error: msg }, 500);
+			}
+			const stats = parseIndexStats(result.stdout);
 			updateGraphiqActiveProject(agentsDir, {
 				projectPath: resolved,
 				...stats,
@@ -207,3 +218,29 @@ function parseIndexStats(output: string): { files?: number; symbols?: number; ed
 	};
 }
 
+function discoverGraphiqProjects(
+	agentsDir: string,
+): readonly { path: string; lastIndexedAt: string; files?: number; symbols?: number; edges?: number }[] {
+	const candidates = [agentsDir, join(agentsDir, "..")];
+	const results: { path: string; lastIndexedAt: string; files?: number; symbols?: number; edges?: number }[] = [];
+	for (const dir of candidates) {
+		const manifestPath = join(dir, ".graphiq", "manifest.json");
+		if (!existsSync(manifestPath)) continue;
+		try {
+			const raw = JSON.parse(readFileSync(manifestPath, "utf-8"));
+			if (typeof raw !== "object" || raw === null) continue;
+			const indexedAt =
+				typeof raw.indexed_at === "string" ? new Date(Number(raw.indexed_at) * 1000).toISOString() : undefined;
+			results.push({
+				path: resolve(dir),
+				lastIndexedAt: indexedAt ?? new Date().toISOString(),
+				files: typeof raw.files === "number" ? raw.files : undefined,
+				symbols: typeof raw.symbols === "number" ? raw.symbols : undefined,
+				edges: typeof raw.edges === "number" ? raw.edges : undefined,
+			});
+		} catch {
+			// skip unparseable entries
+		}
+	}
+	return results;
+}

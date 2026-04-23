@@ -48,7 +48,7 @@ export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 	});
 
 	app.patch("/api/plugins/:id", async (c) => {
-		const body = await readJsonObject(c.req.raw);
+		const body = await c.req.json<Record<string, unknown>>().catch(() => null);
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const enabled = parseOptionalBoolean(body.enabled);
 		if (enabled === undefined) return c.json({ error: "enabled is required" }, 400);

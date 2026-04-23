@@ -42,12 +42,12 @@ interface RegisteredTool {
 }
 
 const GRAPHIQ_TOOL_NAMES = [
-	"code_search",
-	"code_context",
-	"code_blast",
-	"code_status",
-	"code_doctor",
-	"code_constants",
+	"signet_code_search",
+	"signet_code_context",
+	"signet_code_blast",
+	"signet_code_status",
+	"signet_code_doctor",
+	"signet_code_constants",
 ] as const;
 
 function graphiqPolicyHost(
@@ -255,12 +255,12 @@ describe("createMcpServer", () => {
 			enableMarketplaceProxyTools: false,
 		});
 		const names = getToolNames(graphServer);
-		expect(names).toContain("code_search");
-		expect(names).toContain("code_context");
-		expect(names).toContain("code_blast");
-		expect(names).toContain("code_status");
-		expect(names).toContain("code_doctor");
-		expect(names).toContain("code_constants");
+		expect(names).toContain("signet_code_search");
+		expect(names).toContain("signet_code_context");
+		expect(names).toContain("signet_code_blast");
+		expect(names).toContain("signet_code_status");
+		expect(names).toContain("signet_code_doctor");
+		expect(names).toContain("signet_code_constants");
 	});
 
 	it("gates GraphIQ code tools when plugin host blocks GraphIQ", async () => {
@@ -284,7 +284,7 @@ describe("createMcpServer", () => {
 		for (const name of GRAPHIQ_TOOL_NAMES) {
 			expect(names).toContain(name);
 		}
-		const result = await callTool(graphServer, "code_status", {});
+		const result = await callTool(graphServer, "signet_code_status", {});
 		expect(result.isError).toBe(true);
 		expect(result.content[0]?.text).toContain("GraphIQ plugin is blocked");
 	});
@@ -314,7 +314,7 @@ describe("createMcpServer", () => {
 		chmodSync(graphiqPath, 0o755);
 		process.env.PATH = `${binDir}:${originalPath ?? ""}`;
 
-		const result = await callTool(graphServer, "code_status", {});
+		const result = await callTool(graphServer, "signet_code_status", {});
 		expect(result.isError).toBeUndefined();
 		expect(readFileSync(capturePath, "utf-8")).toContain(`status --db ${dbPath}`);
 	});
@@ -334,7 +334,7 @@ describe("createMcpServer", () => {
 			version: "0.0.1-test",
 			enableMarketplaceProxyTools: false,
 		});
-		const result = await callTool(graphServer, "code_status", {});
+		const result = await callTool(graphServer, "signet_code_status", {});
 		expect(result.isError).toBeUndefined();
 	});
 
@@ -363,14 +363,23 @@ describe("createMcpServer", () => {
 			enableMarketplaceProxyTools: false,
 		});
 
-		expect(getToolPropertySchema(graphServer, "code_search", "top")).toMatchObject({ minValue: 1, maxValue: 100 });
-		expect(getToolPropertySchema(graphServer, "code_blast", "depth")).toMatchObject({ minValue: 1, maxValue: 10 });
-		expect(getToolPropertySchema(graphServer, "code_constants", "top")).toMatchObject({ minValue: 1, maxValue: 100 });
+		expect(getToolPropertySchema(graphServer, "signet_code_search", "top")).toMatchObject({
+			minValue: 1,
+			maxValue: 100,
+		});
+		expect(getToolPropertySchema(graphServer, "signet_code_blast", "depth")).toMatchObject({
+			minValue: 1,
+			maxValue: 10,
+		});
+		expect(getToolPropertySchema(graphServer, "signet_code_constants", "top")).toMatchObject({
+			minValue: 1,
+			maxValue: 100,
+		});
 
-		await callTool(graphServer, "code_search", { query: "GraphIQ", top: 10_000 });
+		await callTool(graphServer, "signet_code_search", { query: "GraphIQ", top: 10_000 });
 		expect(readFileSync(capturePath, "utf-8")).toContain("search GraphIQ --top 100 --db");
 
-		await callTool(graphServer, "code_blast", { symbol: "installGraphiqPlugin", depth: -25 });
+		await callTool(graphServer, "signet_code_blast", { symbol: "installGraphiqPlugin", depth: -25 });
 		expect(readFileSync(capturePath, "utf-8")).toContain("blast installGraphiqPlugin --depth 1 --direction both --db");
 	});
 
@@ -399,11 +408,11 @@ describe("createMcpServer", () => {
 			enableMarketplaceProxyTools: false,
 		});
 
-		const search = await callTool(graphServer, "code_search", { query: "--help" });
-		const searchFile = await callTool(graphServer, "code_search", { query: "GraphIQ", file: "--db" });
-		const context = await callTool(graphServer, "code_context", { symbol: "-v" });
-		const blast = await callTool(graphServer, "code_blast", { symbol: "--db", depth: 2 });
-		const constants = await callTool(graphServer, "code_constants", { query: "--debug" });
+		const search = await callTool(graphServer, "signet_code_search", { query: "--help" });
+		const searchFile = await callTool(graphServer, "signet_code_search", { query: "GraphIQ", file: "--db" });
+		const context = await callTool(graphServer, "signet_code_context", { symbol: "-v" });
+		const blast = await callTool(graphServer, "signet_code_blast", { symbol: "--db", depth: 2 });
+		const constants = await callTool(graphServer, "signet_code_constants", { query: "--debug" });
 
 		expect(search.isError).toBe(true);
 		expect(searchFile.isError).toBe(true);

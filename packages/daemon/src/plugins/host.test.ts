@@ -54,7 +54,7 @@ describe("PluginHostV1", () => {
 		expect(record.state).toBe("disabled");
 		expect(record.surfaces.mcpTools).toEqual([]);
 		expect(host.diagnostics(SIGNET_GRAPHIQ_PLUGIN_ID)?.plannedSurfaces.mcpTools.map((tool) => tool.name)).toContain(
-			"code_search",
+			"signet_code_search",
 		);
 	});
 
@@ -66,7 +66,7 @@ describe("PluginHostV1", () => {
 		});
 		expect(record.state).toBe("active");
 		expect(record.grantedCapabilities).toContain("mcp:tool");
-		expect(record.surfaces.mcpTools.map((tool) => tool.name)).toContain("code_search");
+		expect(record.surfaces.mcpTools.map((tool) => tool.name)).toContain("signet_code_search");
 	});
 
 	test("blocks verified bundled TypeScript runtime execution", () => {

@@ -13,8 +13,6 @@ import type {
 import {
 	type GraphiqActionResult,
 	type GraphiqStatus,
-	installGraphiq as apiInstallGraphiq,
-	uninstallGraphiq as apiUninstallGraphiq,
 	updateGraphiq as apiUpdateGraphiq,
 	getGraphiqStatus,
 	indexProjectWithGraphiq,
@@ -34,9 +32,7 @@ import {
 	togglePlugin,
 } from "$lib/stores/plugins.svelte";
 import ChevronDown from "@lucide/svelte/icons/chevron-down";
-import Download from "@lucide/svelte/icons/download";
 import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-import Trash2 from "@lucide/svelte/icons/trash-2";
 import { onMount } from "svelte";
 
 const SIGNET_GRAPHIQ_PLUGIN_ID = "signet.graphiq";
@@ -202,11 +198,23 @@ async function refreshSelected(): Promise<void> {
 		await loadPlugins();
 		return;
 	}
-	await Promise.all([
-		loadPluginDiagnostics(plugin.id),
-		loadPluginAuditEvents(plugin.id),
-		isGraphiqSelected ? loadGraphiqStatus() : Promise.resolve(),
-	]);
+	const tasks: Promise<unknown>[] = [loadPluginDiagnostics(plugin.id), loadPluginAuditEvents(plugin.id)];
+	if (isGraphiqSelected) {
+		graphiqAction = "Updating...";
+		graphiqError = "";
+		try {
+			const result = await apiUpdateGraphiq();
+			graphiqAction = "";
+			if (!result.success) {
+				graphiqError = result.error ?? "Update failed";
+			}
+		} catch {
+			graphiqAction = "";
+			graphiqError = "Update failed";
+		}
+		tasks.push(loadGraphiqStatus());
+	}
+	await Promise.all(tasks);
 }
 
 async function choosePlugin(id: string): Promise<void> {
@@ -231,6 +239,11 @@ async function handleToggle(plugin: PluginRegistryRecord): Promise<void> {
 		if (!ok) return;
 	}
 	await togglePlugin(plugin.id, next);
+	if (plugin.id === SIGNET_GRAPHIQ_PLUGIN_ID) {
+		graphiqStatus = null;
+		graphiqError = "";
+		await loadGraphiqStatus();
+	}
 }
 
 async function loadGraphiqStatus(): Promise<void> {
@@ -243,61 +256,6 @@ async function loadGraphiqStatus(): Promise<void> {
 		graphiqError = "Failed to load GraphIQ status";
 	}
 	graphiqLoading = false;
-}
-
-async function handleGraphiqInstall(): Promise<void> {
-	graphiqAction = "Installing...";
-	graphiqError = "";
-	try {
-		const result = await apiInstallGraphiq();
-		graphiqAction = "";
-		if (!result.success) {
-			graphiqError = result.error ?? "Install failed";
-			return;
-		}
-		await Promise.all([loadPlugins(), loadGraphiqStatus()]);
-	} catch {
-		graphiqAction = "";
-		graphiqError = "Install failed";
-	}
-}
-
-async function handleGraphiqUpdate(): Promise<void> {
-	graphiqAction = "Updating...";
-	graphiqError = "";
-	try {
-		const result = await apiUpdateGraphiq();
-		graphiqAction = "";
-		if (!result.success) {
-			graphiqError = result.error ?? "Update failed";
-			return;
-		}
-		await loadGraphiqStatus();
-	} catch {
-		graphiqAction = "";
-		graphiqError = "Update failed";
-	}
-}
-
-async function handleGraphiqUninstall(): Promise<void> {
-	const ok = window.confirm(
-		"Disable GraphIQ? The plugin will be turned off. Existing project indexes are kept on disk.",
-	);
-	if (!ok) return;
-	graphiqAction = "Disabling...";
-	graphiqError = "";
-	try {
-		const result = await apiUninstallGraphiq();
-		graphiqAction = "";
-		if (!result.success) {
-			graphiqError = result.error ?? "Uninstall failed";
-			return;
-		}
-		await Promise.all([loadPlugins(), loadGraphiqStatus()]);
-	} catch {
-		graphiqAction = "";
-		graphiqError = "Uninstall failed";
-	}
 }
 
 async function handleGraphiqIndex(): Promise<void> {
@@ -430,26 +388,6 @@ async function handleGraphiqIndex(): Promise<void> {
 						<div class="gm-status-row">
 							<span>Indexed projects</span>
 							<strong>{graphiqStatus.indexedProjects.length}</strong>
-						</div>
-
-						<div class="gm-actions">
-							{#if !graphiqStatus.installed}
-								<Button variant="outline" size="sm" onclick={handleGraphiqInstall}>
-									<Download class="size-3" />
-									Install
-								</Button>
-							{:else}
-								<Button variant="outline" size="sm" onclick={handleGraphiqUpdate}>
-									<RefreshCw class="size-3" />
-									Update
-								</Button>
-							{/if}
-							{#if graphiqStatus.pluginEnabled}
-								<Button variant="outline" size="sm" onclick={handleGraphiqUninstall}>
-									<Trash2 class="size-3" />
-									Disable
-								</Button>
-							{/if}
 						</div>
 
 						{#if graphiqAction}
@@ -593,6 +531,35 @@ async function handleGraphiqIndex(): Promise<void> {
 							<span>Runtime: {selectedDiagnostics?.manifest.runtime.kind ?? "unknown"}</span>
 							<span>Source: {selected.source}</span>
 						</div>
+						{#if isGraphiqSelected && graphiqStatus}
+							<div class="advanced-meta">
+								<span>Install source: {graphiqStatus.installSource ?? "unknown"}</span>
+								<span>Binary: {graphiqStatus.installed ? "found on PATH" : "not found"}</span>
+								<span>Plugin state: {graphiqStatus.pluginState}</span>
+								<span>Active project: {graphiqStatus.activeProject ?? "none"}</span>
+							</div>
+							{#if graphiqStatus.indexedProjects.length > 0}
+								<div class="surface-section">
+									<div class="section-title">Project indexes</div>
+									<div class="rows">
+										{#each graphiqStatus.indexedProjects as project (project.path)}
+											<div class="activity-row">
+												<div>
+													<div class="row-title">{project.path}</div>
+													<div class="row-sub">
+														{project.files ? `${project.files} files` : ""}
+														{project.symbols ? `${project.symbols} symbols` : ""}
+														{project.edges ? `${project.edges} edges` : ""}
+														— indexed {formatDate(project.lastIndexedAt)}
+													</div>
+												</div>
+												<span class="soft-pill">{project === graphiqStatus.indexedProjects[0] ? "active" : ""}</span>
+											</div>
+										{/each}
+									</div>
+								</div>
+							{/if}
+						{/if}
 						<div class="advanced-grid">
 							{@render SurfaceSection("Daemon Routes", selected.surfaces.daemonRoutes, routeLabel)}
 							{@render SurfaceSection("Dashboard Panels", selected.surfaces.dashboardPanels, dashboardLabel)}
@@ -1092,12 +1059,6 @@ async function handleGraphiqIndex(): Promise<void> {
 
 	.gm-status-row strong {
 		color: var(--sig-text-bright);
-	}
-
-	.gm-actions {
-		display: flex;
-		gap: var(--space-xs);
-		margin-top: var(--space-sm);
 	}
 
 	.gm-action-status {

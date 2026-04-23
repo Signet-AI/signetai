@@ -1,17 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { getGraphiqStatePath } from "@signet/core";
+import { getAgentsDir } from "../graphiq.js";
 import { getLocalSecretProviderHealth } from "../secrets.js";
 import { signetGraphiqManifest } from "./bundled/graphiq.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
-import { PluginHostV1, getDefaultPluginRegistryPath } from "./host.js";
+import { PluginHostV1 } from "./host.js";
 import type { PluginHostOptionsV1 } from "./host.js";
 
 let defaultHost: PluginHostV1 | null = null;
 
 function resolveGraphiqEnabled(): boolean {
-	const registryPath = getDefaultPluginRegistryPath();
-	const agentsDir = dirname(dirname(registryPath));
-	const statePath = join(agentsDir, "graphiq", "state.json");
+	const statePath = getGraphiqStatePath(getAgentsDir());
 	if (existsSync(statePath)) {
 		try {
 			const parsed: unknown = JSON.parse(readFileSync(statePath, "utf-8"));
