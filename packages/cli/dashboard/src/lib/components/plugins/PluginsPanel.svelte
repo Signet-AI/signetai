@@ -11,9 +11,9 @@ import type {
 	PluginToolSummary,
 } from "$lib/api";
 import {
-	type GraphiqActionResult,
 	type GraphiqStatus,
-	updateGraphiq as apiUpdateGraphiq,
+	installGraphiq as apiInstallGraphiq,
+	uninstallGraphiq as apiUninstallGraphiq,
 	getGraphiqStatus,
 	indexProjectWithGraphiq,
 } from "$lib/api";
@@ -200,18 +200,7 @@ async function refreshSelected(): Promise<void> {
 	}
 	const tasks: Promise<unknown>[] = [loadPluginDiagnostics(plugin.id), loadPluginAuditEvents(plugin.id)];
 	if (isGraphiqSelected) {
-		graphiqAction = "Updating...";
 		graphiqError = "";
-		try {
-			const result = await apiUpdateGraphiq();
-			graphiqAction = "";
-			if (!result.success) {
-				graphiqError = result.error ?? "Update failed";
-			}
-		} catch {
-			graphiqAction = "";
-			graphiqError = "Update failed";
-		}
 		tasks.push(loadGraphiqStatus());
 	}
 	await Promise.all(tasks);
@@ -280,6 +269,40 @@ async function handleGraphiqIndex(): Promise<void> {
 		graphiqError = "Indexing failed";
 	}
 }
+
+async function handleGraphiqInstall(): Promise<void> {
+	graphiqAction = "Installing...";
+	graphiqError = "";
+	try {
+		const result = await apiInstallGraphiq();
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Install failed";
+			return;
+		}
+		await Promise.all([loadGraphiqStatus(), loadPlugins().then(loadSelectedPluginDetails)]);
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Install failed";
+	}
+}
+
+async function handleGraphiqUninstall(): Promise<void> {
+	graphiqAction = "Uninstalling...";
+	graphiqError = "";
+	try {
+		const result = await apiUninstallGraphiq();
+		graphiqAction = "";
+		if (!result.success) {
+			graphiqError = result.error ?? "Uninstall failed";
+			return;
+		}
+		await Promise.all([loadGraphiqStatus(), loadPlugins().then(loadSelectedPluginDetails)]);
+	} catch {
+		graphiqAction = "";
+		graphiqError = "Uninstall failed";
+	}
+}
 </script>
 
 <div class="plugins-panel">
@@ -340,6 +363,17 @@ async function handleGraphiqIndex(): Promise<void> {
 						<RefreshCw class="size-3" />
 						Refresh
 					</Button>
+					{#if isGraphiqSelected}
+						{#if graphiqStatus && !graphiqStatus.installed}
+							<Button variant="outline" size="sm" disabled={graphiqAction !== ""} onclick={handleGraphiqInstall}>
+								Install
+							</Button>
+						{:else if graphiqStatus?.installed}
+							<Button variant="outline" size="sm" disabled={graphiqAction !== ""} onclick={handleGraphiqUninstall}>
+								Uninstall
+							</Button>
+						{/if}
+					{/if}
 					<Button
 						variant="outline"
 						size="sm"
