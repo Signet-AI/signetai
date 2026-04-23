@@ -933,6 +933,93 @@ export async function generateWithTracking(
 }
 
 // ---------------------------------------------------------------------------
+// Generic command-line provider
+// ---------------------------------------------------------------------------
+
+export interface CommandLineProviderConfig {
+	readonly name: string;
+	readonly bin: string;
+	readonly args?: readonly string[];
+	readonly cwd?: string;
+	readonly env?: Readonly<Record<string, string>>;
+	readonly defaultTimeoutMs: number;
+}
+
+function replacePromptTokens(value: string, prompt: string): string {
+	return value.split("$PROMPT").join(prompt).split("{{prompt}}").join(prompt);
+}
+
+export function createCommandLineProvider(config: CommandLineProviderConfig): LlmProvider {
+	const args = config.args ?? [];
+	return {
+		name: config.name,
+		async generate(prompt, opts): Promise<string> {
+			const timeoutMs = opts?.timeoutMs ?? config.defaultTimeoutMs;
+			return new Promise<string>((resolve, reject) => {
+				let stdout = "";
+				let stderr = "";
+				let settled = false;
+				const child = nodeSpawn(
+					config.bin,
+					args.map((arg) => replacePromptTokens(arg, prompt)),
+					{
+						cwd: config.cwd,
+						env: {
+							...process.env,
+							...Object.fromEntries(
+								Object.entries(config.env ?? {}).map(([key, value]) => [key, replacePromptTokens(value, prompt)]),
+							),
+							SIGNET_PROMPT: prompt,
+						},
+						stdio: ["pipe", "pipe", "pipe"],
+						windowsHide: true,
+					},
+				);
+				const timer = setTimeout(() => {
+					if (settled) return;
+					settled = true;
+					child.kill("SIGTERM");
+					reject(new Error(`${config.name} timeout after ${timeoutMs}ms`));
+				}, timeoutMs);
+				child.stdout?.setEncoding("utf8");
+				child.stderr?.setEncoding("utf8");
+				child.stdout?.on("data", (chunk) => {
+					stdout += String(chunk);
+				});
+				child.stderr?.on("data", (chunk) => {
+					stderr += String(chunk);
+				});
+				child.on("error", (error) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					reject(error);
+				});
+				child.on("close", (code) => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					if (code !== 0) {
+						reject(new Error(`${config.name} exited ${code}: ${stderr.slice(0, 300)}`));
+						return;
+					}
+					const text = stdout.trim();
+					if (!text) {
+						reject(new Error(`${config.name} returned empty response`));
+						return;
+					}
+					resolve(text);
+				});
+				child.stdin?.end(prompt);
+			});
+		},
+		async available(): Promise<boolean> {
+			return config.bin.includes("/") || Bun.which(config.bin) !== null;
+		},
+	};
+}
+
+// ---------------------------------------------------------------------------
 // OpenAI-compatible via HTTP API
 // ---------------------------------------------------------------------------
 

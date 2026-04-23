@@ -21,7 +21,6 @@ import {
 	recoverSummaryJobs,
 	resolveFailedSummaryJobStatus,
 	resolveSummaryHeadingDate,
-	resolveSummaryProvider,
 	runSummaryCommandProvider,
 	shouldRunSignificanceGateForJob,
 	startSummaryWorker,
@@ -704,82 +703,4 @@ setInterval(() => {}, 1000);
 		expect(existsSync(marker)).toBe(true);
 		rmSync(marker, { force: true });
 	}, 15_000);
-});
-
-describe("resolveSummaryProvider", () => {
-	it("uses explicit synthesis codex config", async () => {
-		const dir = makeAgentsDir(`memory:
-  pipelineV2:
-    extractionProvider: ollama
-    extractionModel: qwen3.5:4b
-    synthesis:
-      provider: codex
-      model: gpt-5-codex-mini
-`);
-
-		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
-		expect(provider.name).toBe("codex:gpt-5-codex-mini");
-	});
-
-	it("falls back to llama-cpp when synthesis codex is configured but CLI is unavailable", async () => {
-		Bun.which = (() => null) as typeof Bun.which;
-		const dir = makeAgentsDir(`memory:
-  pipelineV2:
-    synthesis:
-      provider: codex
-      model: gpt-5-codex-mini
-`);
-
-		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
-		expect(provider.name.startsWith("llama-cpp:")).toBe(true);
-	});
-
-	it("falls back to resolved extraction config when synthesis is absent", async () => {
-		const dir = makeAgentsDir(`memory:
-  pipelineV2:
-    extractionProvider: ollama
-    extractionModel: qwen3.5:4b
-    extractionEndpoint: http://127.0.0.1:11434
-`);
-
-		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
-		expect(provider.name).toBe("ollama:qwen3.5:4b");
-	});
-
-	it("direct ollama provider sends num_ctx so chunks are not truncated (#426)", async () => {
-		const dir = makeAgentsDir(`memory:
-  pipelineV2:
-    extractionProvider: ollama
-    extractionModel: qwen3:4b
-`);
-
-		const provider = await resolveSummaryProvider(loadMemoryConfig(dir));
-		expect(provider.name).toBe("ollama:qwen3:4b");
-
-		// Intercept fetch to verify num_ctx is included in the request
-		const original = globalThis.fetch;
-		let captured: unknown = null;
-		const mockFetch = (async (_url: URL | RequestInfo, init?: RequestInit) => {
-			if (typeof init?.body !== "string") throw new Error(`Expected string body, got: ${typeof init?.body}`);
-			captured = JSON.parse(init.body);
-			return new Response(JSON.stringify({ response: "{}", done: true }), { status: 200 });
-		}) as unknown as typeof fetch;
-		globalThis.fetch = mockFetch;
-
-		try {
-			await provider.generate("test prompt");
-		} finally {
-			globalThis.fetch = original;
-		}
-
-		expect(captured).not.toBeNull();
-		if (typeof captured !== "object" || captured === null) throw new Error("Expected object body");
-		if (!("options" in captured)) throw new Error("Expected options field");
-		const { options } = captured;
-		if (typeof options !== "object" || options === null) throw new Error("Expected options object");
-		if (!("num_ctx" in options)) throw new Error("Expected num_ctx field");
-		const { num_ctx: numCtx } = options;
-		expect(typeof numCtx).toBe("number");
-		expect(numCtx).toBeGreaterThanOrEqual(8192);
-	});
 });

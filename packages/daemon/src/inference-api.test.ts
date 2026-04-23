@@ -15,9 +15,7 @@ import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "./infe
 import { mountInferenceRoutes } from "./routes/inference";
 import type { TelemetryCollector, TelemetryEvent, TelemetryEventType, TelemetryProperties } from "./telemetry";
 
-let app: {
-	request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-};
+let app: Hono;
 let dir = "";
 let prev: string | undefined;
 
@@ -29,7 +27,7 @@ function writeRoutingFixture(root: string): void {
   pipelineV2:
     extraction:
       provider: none
-routing:
+inference:
   defaultPolicy: auto
   targets:
     remote:
@@ -80,7 +78,7 @@ function writeStreamingRoutingFixture(root: string, endpoint: string): void {
   pipelineV2:
     extraction:
       provider: none
-routing:
+inference:
   defaultPolicy: auto
   targets:
     fake:
@@ -103,6 +101,40 @@ routing:
 	);
 }
 
+function writeCommandInferenceFixture(root: string): void {
+	mkdirSync(join(root, "memory"), { recursive: true });
+	writeFileSync(
+		join(root, "agent.yaml"),
+		`memory:
+  pipelineV2:
+    extraction:
+      provider: none
+inference:
+  defaultPolicy: auto
+  targets:
+    localCli:
+      executor: command
+      command:
+        bin: ${process.execPath}
+        args:
+          - -e
+          - console.log("cli:" + process.env.SIGNET_PROMPT)
+      models:
+        default:
+          model: local-cli
+          reasoning: low
+  policies:
+    auto:
+      mode: strict
+      defaultTargets:
+        - localCli/default
+  workloads:
+    default:
+      policy: auto
+`,
+	);
+}
+
 function writeAccountFallbackRoutingFixture(
 	root: string,
 	endpoints: {
@@ -118,7 +150,7 @@ function writeAccountFallbackRoutingFixture(
   pipelineV2:
     extraction:
       provider: none
-routing:
+inference:
   defaultPolicy: auto
   accounts:
     shared:
@@ -625,6 +657,35 @@ describe("inference route hardening", () => {
 				}),
 			);
 			expect(statusRes.status).toBe(200);
+		} finally {
+			resetInferenceRouterForTests();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("executes generic command targets through the default inference workload", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-command-"));
+		writeCommandInferenceFixture(root);
+		try {
+			const { app, secret } = createInferenceTestApp(root);
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+			const res = await app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ prompt: "bring your own cli", operation: "default" }),
+				}),
+			);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				readonly text?: string;
+				readonly decision?: { readonly targetRef?: string };
+			};
+			expect(body.text).toBe("cli:bring your own cli");
+			expect(body.decision?.targetRef).toBe("localCli/default");
 		} finally {
 			resetInferenceRouterForTests();
 			rmSync(root, { recursive: true, force: true });

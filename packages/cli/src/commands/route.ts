@@ -87,12 +87,12 @@ function writeAgentYaml(file: AgentYamlFile, data: Record<string, unknown>, allo
 }
 
 function ensureRoutingAgent(data: Record<string, unknown>, agentId: string): Record<string, unknown> {
-	const routing = isRecord(data.routing) ? data.routing : {};
-	const agents = isRecord(routing.agents) ? routing.agents : {};
+	const inference = isRecord(data.inference) ? data.inference : {};
+	const agents = isRecord(inference.agents) ? inference.agents : {};
 	const agent = isRecord(agents[agentId]) ? agents[agentId] : {};
 	agents[agentId] = agent;
-	routing.agents = agents;
-	data.routing = routing;
+	inference.agents = agents;
+	data.inference = inference;
 	return agent;
 }
 
@@ -104,10 +104,10 @@ function setPinnedTarget(data: Record<string, unknown>, agentId: string, key: st
 }
 
 function removePinnedTarget(data: Record<string, unknown>, agentId: string, key: string): boolean {
-	if (!isRecord(data.routing)) return false;
-	const routing = data.routing;
-	if (!isRecord(routing.agents)) return false;
-	const agents = routing.agents;
+	if (!isRecord(data.inference)) return false;
+	const inference = data.inference;
+	if (!isRecord(inference.agents)) return false;
+	const agents = inference.agents;
 	if (!isRecord(agents[agentId])) return false;
 	const agent = agents[agentId];
 	if (!isRecord(agent.pinnedTargets)) return false;
@@ -124,7 +124,7 @@ function removePinnedTarget(data: Record<string, unknown>, agentId: string, key:
 }
 
 function printStatus(status: RouteStatusResponse): void {
-	console.log(chalk.bold("\n  Inference routing\n"));
+	console.log(chalk.bold("\n  Inference\n"));
 	console.log(chalk.dim(`  Enabled:        ${status.enabled ? "yes" : "no"}`));
 	console.log(chalk.dim(`  Source:         ${status.source}`));
 	console.log(chalk.dim(`  Default policy: ${status.defaultPolicy ?? "-"}`));
@@ -165,15 +165,15 @@ function printStatus(status: RouteStatusResponse): void {
 }
 
 export function registerRouteCommands(program: Command, deps: RouteDeps): void {
-	const routeCmd = program.command("route").description("Inspect and control Signet inference routing");
+	const routeCmd = program.command("route").description("Inspect and control Signet inference");
 
 	const list = routeCmd
 		.command("list")
-		.description("List routing config and runtime state")
+		.description("List inference config and runtime state")
 		.action(async (options) => {
 			const status = await deps.fetchFromDaemon<RouteStatusResponse>("/api/inference/status");
 			if (!status) {
-				console.error(chalk.red("Failed to get routing status from daemon"));
+				console.error(chalk.red("Failed to get inference status from daemon"));
 				process.exit(1);
 			}
 			if ((options as { json?: boolean }).json) {
@@ -186,11 +186,11 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 
 	const statusCmd = routeCmd
 		.command("status")
-		.description("Show routing health and workload bindings")
+		.description("Show inference health and workload bindings")
 		.action(async (options) => {
 			const status = await deps.fetchFromDaemon<RouteStatusResponse>("/api/inference/status");
 			if (!status) {
-				console.error(chalk.red("Failed to get routing status from daemon"));
+				console.error(chalk.red("Failed to get inference status from daemon"));
 				process.exit(1);
 			}
 			if ((options as { json?: boolean }).json) {
@@ -207,7 +207,7 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 		.action(async (options) => {
 			const status = await deps.fetchFromDaemon<RouteStatusResponse>("/api/inference/status");
 			if (!status) {
-				console.error(chalk.red("Failed to get routing status from daemon"));
+				console.error(chalk.red("Failed to get inference status from daemon"));
 				process.exit(1);
 			}
 			const issues = status.targetRefs.flatMap((targetRef) => {
@@ -244,14 +244,14 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 
 	routeCmd
 		.command("explain <prompt>")
-		.description("Dry-run a routing decision for a prompt")
+		.description("Dry-run an inference decision for a prompt")
 		.option("--agent <agent>", "Agent id")
 		.option("--task-class <taskClass>", "Task class override")
 		.option("--operation <operation>", "Operation kind", "interactive")
 		.option("--privacy <privacy>", "Privacy tier")
 		.option("--policy <policy>", "Policy override")
 		.option("--target <targetRef>", "Pin to an explicit target ref")
-		.option("--refresh", "Refresh target health before routing")
+		.option("--refresh", "Refresh target health before inference")
 		.option("--debug", "Print the full decision trace")
 		.option("--json", "Output as JSON")
 		.action(async (prompt: string, options) => {
@@ -266,7 +266,7 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 				refresh: options.refresh === true,
 			});
 			if (!ok) {
-				console.error(chalk.red(`Routing explain failed: ${JSON.stringify(data)}`));
+				console.error(chalk.red(`Inference explain failed: ${JSON.stringify(data)}`));
 				process.exit(1);
 			}
 			if (options.json) {
@@ -319,7 +319,7 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 		.option("--policy <policy>", "Policy override")
 		.option("--target <targetRef>", "Pin to an explicit target ref")
 		.option("--max-tokens <maxTokens>", "Max output tokens")
-		.option("--refresh", "Refresh target health before routing")
+		.option("--refresh", "Refresh target health before inference")
 		.option("--debug", "Print the routed decision trace")
 		.option("--json", "Output as JSON")
 		.action(async (prompt: string, options) => {

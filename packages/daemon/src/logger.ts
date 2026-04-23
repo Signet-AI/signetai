@@ -40,6 +40,7 @@ export type LogCategory =
 	| "secrets" // Secrets management
 	| "hooks" // Hook handlers
 	| "pipeline" // Extraction/decision pipeline
+	| "inference" // Inference router and provider execution
 	| "embedding-tracker" // Incremental embedding refresh tracker
 	| "summary-worker" // Session summary worker
 	| "synthesis" // MEMORY.md synthesis worker

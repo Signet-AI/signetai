@@ -261,23 +261,23 @@ process reads all memories and asks a model to write a coherent summary.
 | `max_tokens` | number | `4000` | Max output tokens |
 
 
-Inference Routing
+Inference
 -----------------
 
 Signet's shared inference control plane is configured under the top-level
-`routing` key in `agent.yaml`.
+`inference` key in `agent.yaml`.
 
-If `routing` is omitted, Signet preserves the old behavior by compiling
+If `inference` is omitted, Signet preserves the old behavior by compiling
 `memory.pipelineV2.extraction` and `memory.pipelineV2.synthesis` into an
-implicit router profile. That keeps existing agents working without change.
+implicit inference profile. That keeps existing agents working without change.
 
-Use `routing` when you want Signet to choose models across harnesses,
+Use `inference` when you want Signet to choose models across harnesses,
 accounts, APIs, and local runtimes per turn or per subtask.
 
 Example:
 
 ```yaml
-routing:
+inference:
   enabled: true
   defaultPolicy: auto
 
@@ -370,7 +370,7 @@ routing:
         hard_coding: opus/opus46
 ```
 
-### routing.accounts
+### inference.accounts
 
 Named account or credential identities used by targets.
 
@@ -383,17 +383,18 @@ Named account or credential identities used by targets.
 | `sessionRef` | string | Session identifier for subscription-backed targets |
 | `usageTier` | string | Optional account tier label |
 
-### routing.targets
+### inference.targets
 
 Executable route targets. A target can be a local runtime, API backend,
 subscription-backed CLI session, or gateway.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `executor` | string | `claude-code`, `codex`, `opencode`, `anthropic`, `openrouter`, `ollama`, or `openai-compatible` |
+| `executor` | string | `claude-code`, `codex`, `opencode`, `anthropic`, `openrouter`, `ollama`, `llama-cpp`, `openai-compatible`, or `command` |
 | `kind` | string | Optional explicit target kind. Inferred when omitted |
-| `account` | string | Account id from `routing.accounts` |
+| `account` | string | Account id from `inference.accounts` |
 | `endpoint` | string | Optional base URL override |
+| `command` | object | Command executor config with `bin`, optional `args`, `cwd`, and `env` |
 | `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |
 | `models` | map | Named model entries for this target |
 
@@ -411,7 +412,7 @@ Model fields:
 | `costTier` | string | `low`, `medium`, or `high` |
 | `averageLatencyMs` | number | Optional routing latency hint |
 
-### routing.policies
+### inference.policies
 
 Named routing policies that agents and workloads reference.
 
@@ -426,7 +427,7 @@ Named routing policies that agents and workloads reference.
 | `maxLatencyMs` | number | Hard latency ceiling used by routing |
 | `costCeiling` | string | Hard cost ceiling used by routing |
 
-### routing.taskClasses
+### inference.taskClasses
 
 Task-family hints for automatic routing.
 
@@ -444,7 +445,7 @@ Task-family hints for automatic routing.
 | `preferredTargets` | array | Preferred target refs |
 | `keywords` | array | Lightweight classifier keywords |
 
-### routing.workloads
+### inference.workloads
 
 Binds Signet-owned workloads to router policies or explicit targets.
 
@@ -462,7 +463,7 @@ Each workload can define:
 | `taskClass` | string | Default task class for this workload |
 | `target` | string | Explicit `target/model` pin |
 
-### routing.agents
+### inference.agents
 
 Per-agent routing overrides.
 
@@ -483,9 +484,9 @@ whether to write new memories, update existing ones, or skip. Config lives
 under `memory.pipelineV2` in `agent.yaml`.
 
 Inference selection for extraction and session synthesis can also be routed
-through the top-level `routing.workloads` bindings. When explicit routing is
-enabled for `memoryExtraction` or `sessionSynthesis`, those workloads use the
-shared inference control plane instead of only the legacy provider fields.
+through the top-level `inference.workloads` bindings. When explicit routing is
+enabled for `default`, `memoryExtraction`, `sessionSynthesis`, `widgetGeneration`, or `repair`, those workloads use the
+shared inference control plane. Legacy extraction and synthesis fields are treated as load-time compatibility input, not separate runtime providers.
 
 The config uses a nested structure with grouped sub-objects. Legacy flat
 keys (e.g. `extractionModel`, `workerPollMs`) are still supported for

@@ -170,8 +170,8 @@ Monitor `providerResolution.extraction.status` for `degraded` or `blocked`
 states when the configured extraction provider is unavailable at startup.
 When `pipeline.extraction.overloaded` is `true`, the extraction worker is
 intentionally backing off for `overloadBackoffMs` between polls.
-The `routing` block summarizes the shared inference control plane status.
-`source` is `explicit` when a top-level `routing:` block is present in
+The `inference` block summarizes the shared inference control plane status.
+`source` is `explicit` when a top-level `inference:` block is present in
 `agent.yaml`, `legacy-implicit` when extraction and synthesis providers are
 compiled into the router automatically, and `disabled` when no routeable
 targets exist.
@@ -191,7 +191,7 @@ Returns all runtime feature flags.
 ```
 
 
-Inference Routing
+Inference
 -----------------
 
 The daemon exposes Signet's inference control plane over both native RPC-style
@@ -3583,7 +3583,7 @@ Query raw telemetry events.
 }
 ```
 
-Inference routing emits additional local-first telemetry events:
+Inference emits additional local-first telemetry events:
 
 - `inference.route`
 - `inference.execute`

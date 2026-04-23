@@ -220,7 +220,7 @@ specs:
       - docs/research/technical/RESEARCH-INFERENCE-CONTROL-PLANE.md
       - docs/research/technical/RESEARCH-COMPETITIVE-SYSTEMS.md
     success_criteria:
-      - "Signet exposes a shared inference routing layer that can select among session-backed, API-backed, and local model targets from agent.yaml policy"
+      - "Signet exposes a shared inference layer that can select among session-backed, API-backed, and local model targets from agent.yaml policy"
       - "The daemon exposes both a Signet-native inference API and an OpenAI-compatible gateway surface backed by the same router"
       - "Daemon-managed workloads such as extraction and synthesis can route through the same policy engine instead of a separate provider selector"
       - "Operators can inspect routing decisions, health, and fallback state from the CLI and daemon status surfaces"

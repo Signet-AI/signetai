@@ -1,4 +1,4 @@
-import type { PipelineExtractionConfig, PipelineSynthesisConfig } from "./types";
+import type { PipelineCommandConfig, PipelineExtractionConfig, PipelineSynthesisConfig } from "./types";
 
 export const ROUTING_ACCOUNT_KINDS = ["subscription_session", "api"] as const;
 export const ROUTING_TARGET_KINDS = ["subscription_session", "api", "local", "gateway"] as const;
@@ -11,17 +11,21 @@ export const ROUTING_EXECUTOR_KINDS = [
 	"ollama",
 	"llama-cpp",
 	"openai-compatible",
+	"command",
 ] as const;
 export const ROUTING_POLICY_MODES = ["strict", "automatic", "hybrid"] as const;
 export const ROUTING_PRIVACY_TIERS = ["remote_ok", "restricted_remote", "local_only"] as const;
 export const ROUTING_REASONING_DEPTHS = ["low", "medium", "high"] as const;
 export const ROUTING_COST_TIERS = ["low", "medium", "high"] as const;
 export const ROUTING_OPERATION_KINDS = [
+	"default",
 	"interactive",
 	"tool_planning",
 	"code_reasoning",
 	"memory_extraction",
 	"session_synthesis",
+	"widget_generation",
+	"repair",
 	"os_agent",
 ] as const;
 
@@ -80,6 +84,7 @@ export interface RoutingTargetConfig {
 	readonly executor: RoutingExecutorKind;
 	readonly account?: string;
 	readonly endpoint?: string;
+	readonly command?: PipelineCommandConfig;
 	readonly privacy?: RoutingPrivacyTier;
 	readonly models: Readonly<Record<string, RoutingModelConfig>>;
 }
@@ -132,9 +137,12 @@ export interface RoutingConfig {
 	readonly taskClasses: Readonly<Record<string, RoutingTaskClassConfig>>;
 	readonly agents: Readonly<Record<string, AgentRoutingConfig>>;
 	readonly workloads?: {
+		readonly default?: RoutingWorkloadBinding;
 		readonly interactive?: RoutingWorkloadBinding;
 		readonly memoryExtraction?: RoutingWorkloadBinding;
 		readonly sessionSynthesis?: RoutingWorkloadBinding;
+		readonly widgetGeneration?: RoutingWorkloadBinding;
+		readonly repair?: RoutingWorkloadBinding;
 	};
 }
 
@@ -300,7 +308,7 @@ function asRoutingCostTier(value: unknown): RoutingCostTier | undefined {
 }
 
 function inferTargetKind(executor: string): RoutingTargetKind {
-	if (executor === "ollama" || executor === "llama-cpp" || executor === "openai-compatible") {
+	if (executor === "ollama" || executor === "llama-cpp" || executor === "openai-compatible" || executor === "command") {
 		return executor === "openai-compatible" ? "gateway" : "local";
 	}
 	if (executor === "anthropic" || executor === "openrouter") return "api";
@@ -423,6 +431,21 @@ function parseModelConfig(raw: unknown): RoutingModelConfig | null {
 	};
 }
 
+function parseCommandConfig(raw: unknown): PipelineCommandConfig | undefined {
+	if (!isRecord(raw)) return undefined;
+	const bin = asString(raw.bin ?? raw.command);
+	if (!bin) return undefined;
+	const args = asStringArray(raw.args);
+	const cwd = asString(raw.cwd);
+	const env = asRecordOfStrings(raw.env);
+	return {
+		bin,
+		args,
+		...(cwd ? { cwd } : {}),
+		...(Object.keys(env).length > 0 ? { env } : {}),
+	};
+}
+
 function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 	if (!isRecord(raw)) return null;
 	const executor = asString(raw.executor);
@@ -446,6 +469,7 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 		executor: executor as RoutingExecutorKind,
 		account: asString(raw.account),
 		endpoint: asString(raw.endpoint ?? raw.baseUrl ?? raw.base_url),
+		command: parseCommandConfig(raw.command),
 		privacy: asRoutingPrivacyTier(raw.privacy, inferTargetPrivacy(executor)),
 		models,
 	};
@@ -506,12 +530,15 @@ function parseWorkloadBinding(raw: unknown): RoutingWorkloadBinding | undefined 
 }
 
 export function compileLegacyRoutingConfig(opts: {
-	readonly extraction: Pick<PipelineExtractionConfig, "provider" | "model" | "endpoint">;
+	readonly extraction: Pick<PipelineExtractionConfig, "provider" | "model" | "endpoint" | "command">;
 	readonly synthesis: Pick<PipelineSynthesisConfig, "enabled" | "provider" | "model" | "endpoint">;
 }): RoutingConfig {
 	const targets: Record<string, RoutingTargetConfig> = {};
 	const policies: Record<string, RoutingPolicyConfig> = {};
 	const taskClasses: Record<string, RoutingTaskClassConfig> = {
+		default: {
+			reasoning: "medium",
+		},
 		interactive: {
 			reasoning: "medium",
 		},
@@ -523,17 +550,21 @@ export function compileLegacyRoutingConfig(opts: {
 		},
 	};
 	const workloads: {
+		default?: RoutingWorkloadBinding;
 		interactive?: RoutingWorkloadBinding;
 		memoryExtraction?: RoutingWorkloadBinding;
 		sessionSynthesis?: RoutingWorkloadBinding;
+		widgetGeneration?: RoutingWorkloadBinding;
+		repair?: RoutingWorkloadBinding;
 	} = {};
 	let defaultTargets: readonly string[] = [];
 
-	if (opts.extraction.provider !== "none" && opts.extraction.provider !== "command") {
+	if (opts.extraction.provider !== "none") {
 		targets["legacy-extraction"] = {
 			kind: inferTargetKind(opts.extraction.provider),
 			executor: opts.extraction.provider,
 			endpoint: opts.extraction.endpoint,
+			command: opts.extraction.command,
 			privacy: inferTargetPrivacy(opts.extraction.provider),
 			models: {
 				default: {
@@ -578,9 +609,21 @@ export function compileLegacyRoutingConfig(opts: {
 		defaultTargets,
 		fallbackTargets: defaultTargets,
 	};
+	workloads.default = {
+		policy: "legacy-default",
+		taskClass: "default",
+	};
 	workloads.interactive = {
 		policy: "legacy-default",
 		taskClass: "interactive",
+	};
+	workloads.widgetGeneration = {
+		policy: "legacy-default",
+		taskClass: "session_synthesis",
+	};
+	workloads.repair = {
+		policy: "legacy-default",
+		taskClass: "memory_extraction",
 	};
 
 	return {
@@ -613,9 +656,9 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 	if (!isRecord(raw)) {
 		return ok(base);
 	}
-	const embeddedRouting = isRecord(raw.routing) ? raw.routing : null;
-	const standaloneRouting = embeddedRouting ? null : hasStandaloneRoutingShape(raw) ? raw : null;
-	const routingRaw = embeddedRouting ?? standaloneRouting;
+	const embeddedInference = isRecord(raw.inference) ? raw.inference : null;
+	const standaloneInference = embeddedInference ? null : hasStandaloneRoutingShape(raw) ? raw : null;
+	const routingRaw = embeddedInference ?? standaloneInference;
 	if (!routingRaw) {
 		return ok(base);
 	}
@@ -672,6 +715,7 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 		...(base.workloads ?? {}),
 	};
 	if (isRecord(routingRaw.workloads)) {
+		const defaultBinding = parseWorkloadBinding(routingRaw.workloads.default);
 		const interactive = parseWorkloadBinding(routingRaw.workloads.interactive);
 		const memoryExtraction = parseWorkloadBinding(
 			routingRaw.workloads.memoryExtraction ?? routingRaw.workloads.memory_extraction,
@@ -679,9 +723,16 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 		const sessionSynthesis = parseWorkloadBinding(
 			routingRaw.workloads.sessionSynthesis ?? routingRaw.workloads.session_synthesis,
 		);
+		const widgetGeneration = parseWorkloadBinding(
+			routingRaw.workloads.widgetGeneration ?? routingRaw.workloads.widget_generation,
+		);
+		const repair = parseWorkloadBinding(routingRaw.workloads.repair);
+		if (defaultBinding) workloads.default = defaultBinding;
 		if (interactive) workloads.interactive = interactive;
 		if (memoryExtraction) workloads.memoryExtraction = memoryExtraction;
 		if (sessionSynthesis) workloads.sessionSynthesis = sessionSynthesis;
+		if (widgetGeneration) workloads.widgetGeneration = widgetGeneration;
+		if (repair) workloads.repair = repair;
 	}
 
 	const explicitDefaultPolicy = asString(routingRaw.defaultPolicy ?? routingRaw.default_policy);
@@ -695,7 +746,7 @@ export function parseRoutingConfig(raw: unknown, legacyConfig?: RoutingConfig): 
 	}
 
 	return ok({
-		source: embeddedRouting || standaloneRouting ? "explicit" : base.source,
+		source: embeddedInference || standaloneInference ? "explicit" : base.source,
 		enabled,
 		...(defaultPolicy ? { defaultPolicy } : {}),
 		accounts,
@@ -712,15 +763,21 @@ function workloadBindingForOperation(
 	operation: RoutingOperationKind,
 ): RoutingWorkloadBinding | undefined {
 	switch (operation) {
+		case "default":
+			return config.workloads?.default;
 		case "interactive":
 		case "tool_planning":
 		case "code_reasoning":
 		case "os_agent":
-			return config.workloads?.interactive;
+			return config.workloads?.interactive ?? config.workloads?.default;
 		case "memory_extraction":
-			return config.workloads?.memoryExtraction;
+			return config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "session_synthesis":
-			return config.workloads?.sessionSynthesis;
+			return config.workloads?.sessionSynthesis ?? config.workloads?.default;
+		case "widget_generation":
+			return config.workloads?.widgetGeneration ?? config.workloads?.sessionSynthesis ?? config.workloads?.default;
+		case "repair":
+			return config.workloads?.repair ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
 	}
 }
 

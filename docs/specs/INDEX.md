@@ -151,7 +151,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `markdown-embedding-normalization-hardening` | RESEARCH-MARKDOWN-EMBEDDING-NORMALIZATION | How should Signet preserve structured markdown for embeddings while preventing repeated poison-pill retries from malformed or provider-sensitive payloads? |
 | `connector-forgecode` | RESEARCH-REFERENCE-REPOS | How should Signet bridge its portable identity, skills, and MCP surfaces into ForgeCode's `~/forge` environment without relying on unavailable lifecycle hooks? |
 | `dreaming-memory-consolidation` | LCM-PATTERNS, memory-pipeline-plan, knowledge-architecture-schema | How should Signet consolidate accumulated session knowledge into a cleaner entity graph during idle periods? |
-| `model-provider-router` | RESEARCH-INFERENCE-CONTROL-PLANE, RESEARCH-COMPETITIVE-SYSTEMS | How should Signet centralize inference routing across harnesses, daemon workloads, and heterogeneous provider backends under one policy surface? |
+| `model-provider-router` | RESEARCH-INFERENCE-CONTROL-PLANE, RESEARCH-COMPETITIVE-SYSTEMS | How should Signet centralize inference across harnesses, daemon workloads, and heterogeneous provider backends under one policy surface? |
 
 ### Research Adoption Ledger (high-impact)
 

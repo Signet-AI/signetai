@@ -9,7 +9,7 @@
 import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
 import { getInferenceRouterOrNull } from "../inference-router.js";
-import { MissingOpenAiApiKeyError, callLegacyOpenAiChat, getInteractiveLlmProviderOrNull } from "../llm.js";
+import { getInteractiveLlmProviderOrNull } from "../llm.js";
 import { logger } from "../logger.js";
 import { loadProbeResult } from "../mcp-probe.js";
 
@@ -49,22 +49,11 @@ async function callLlm(
 		});
 	}
 
-	try {
-		return await callLegacyOpenAiChat(
-			[
-				{ role: "system", content: systemPrompt },
-				{ role: "user", content: userMessage },
-			],
-			{ model: "gpt-4o", maxTokens },
-		);
-	} catch (error) {
-		if (!(error instanceof MissingOpenAiApiKeyError)) {
-			throw error;
-		}
-		const provider = getInteractiveLlmProviderOrNull();
-		if (!provider) throw error;
-		return provider.generate(buildPrompt(systemPrompt, userMessage), { maxTokens });
+	const provider = getInteractiveLlmProviderOrNull();
+	if (!provider) {
+		throw new Error("Interactive inference provider is not configured");
 	}
+	return provider.generate(buildPrompt(systemPrompt, userMessage), { maxTokens });
 }
 
 interface ChatRequest {

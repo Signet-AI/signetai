@@ -199,7 +199,8 @@ export type RuntimeProviderName =
 	| "codex"
 	| "anthropic"
 	| "openrouter"
-	| "command";
+	| "command"
+	| "inference";
 
 export type RuntimeSynthesisProviderName =
 	| "none"
@@ -209,7 +210,8 @@ export type RuntimeSynthesisProviderName =
 	| "codex"
 	| "opencode"
 	| "anthropic"
-	| "openrouter";
+	| "openrouter"
+	| "inference";
 
 export interface ProviderRuntimeResolution {
 	extraction: {

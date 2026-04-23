@@ -13,10 +13,10 @@ const ready = {
 	accountState: "ready",
 } as const;
 
-describe("routing config + decision engine", () => {
+describe("inference config + decision engine", () => {
 	it("prefers local targets for local_only task classes", () => {
 		const parsed = parseRoutingConfig({
-			routing: {
+			inference: {
 				defaultPolicy: "auto",
 				targets: {
 					remote: {
@@ -82,7 +82,7 @@ describe("routing config + decision engine", () => {
 
 	it("prefers higher-reasoning coding targets when tools are required", () => {
 		const parsed = parseRoutingConfig({
-			routing: {
+			inference: {
 				defaultPolicy: "auto",
 				targets: {
 					sonnet: {
@@ -148,7 +148,7 @@ describe("routing config + decision engine", () => {
 		expect(decision.value.targetRef).toBe(makeRoutingTargetRef("gpt", "gpt54"));
 	});
 
-	it("keeps legacy routing implicit when agent.yaml has no routing block", () => {
+	it("keeps legacy routing implicit when agent.yaml has no inference block", () => {
 		const legacy = compileLegacyRoutingConfig({
 			extraction: {
 				provider: "ollama",
@@ -182,7 +182,7 @@ describe("routing config + decision engine", () => {
 
 	it("does not allow explicit target overrides outside the agent roster", () => {
 		const parsed = parseRoutingConfig({
-			routing: {
+			inference: {
 				defaultPolicy: "auto",
 				targets: {
 					remote: {

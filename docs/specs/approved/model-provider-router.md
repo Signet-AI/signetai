@@ -9,7 +9,7 @@ section: "Runtime"
 depends_on:
   - signet-runtime
 success_criteria:
-  - "Signet exposes a shared inference routing layer that can select among session-backed, API-backed, and local model targets from agent.yaml policy"
+  - "Signet exposes a shared inference layer that can select among session-backed, API-backed, and local model targets from agent.yaml policy"
   - "The daemon exposes both a Signet-native inference API and an OpenAI-compatible gateway surface backed by the same router"
   - "Daemon-managed workloads such as extraction and synthesis can route through the same policy engine instead of a separate provider selector"
   - "Operators can inspect routing decisions, health, and fallback state from the CLI and daemon status surfaces"
@@ -20,7 +20,7 @@ scope_boundary: "Defines Signet's inference control plane, routing schema, and d
 
 ## Problem
 
-Today inference routing is fragmented. Harnesses and daemon workloads each own
+Today inference is fragmented. Harnesses and daemon workloads each own
 separate model/provider selection paths. That prevents Signet from enforcing a
 single privacy policy, fallback strategy, or observability surface.
 
@@ -54,7 +54,7 @@ Harnesses integrate in one of two ways:
 
 ## Config contract
 
-`agent.yaml` gains a top-level `routing:` block with:
+`agent.yaml` gains a top-level `inference:` block with:
 
 - `accounts`
 - `targets`
@@ -107,7 +107,7 @@ workspace default agent context.
 
 The daemon exposes endpoints for:
 
-- listing routing config and runtime state
+- listing inference config and runtime state
 - explaining a route decision without execution
 - executing a routed prompt
 - inspecting route health and recent fallback state
@@ -138,7 +138,7 @@ The CLI exposes:
 ### Signet Runtime
 
 This spec extends `signet-runtime`: harnesses remain thin adapters over daemon
-contracts, but inference routing becomes a first-class daemon-owned contract.
+contracts, but inference becomes a first-class daemon-exposed contract.
 
 ### OpenClaw and Hermes
 
@@ -164,8 +164,8 @@ the spec stays useful as both contract and progress tracker.
 ### Done
 
 - Shared router core exists in `@signet/core` with:
-  - `routing:` config parsing
-  - legacy extraction/synthesis -> implicit routing compilation
+  - `inference:` config parsing
+  - legacy extraction/synthesis -> implicit inference compilation
   - strict / automatic / hybrid policy resolution
   - privacy, capability, context, and basic runtime-availability gates
   - route traces and fallback target ordering

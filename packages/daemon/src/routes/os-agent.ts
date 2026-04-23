@@ -17,7 +17,7 @@
 import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
 import { getInferenceRouterOrNull } from "../inference-router.js";
-import { MissingOpenAiApiKeyError, callLegacyOpenAiChat, getInteractiveLlmProviderOrNull } from "../llm.js";
+import { getInteractiveLlmProviderOrNull } from "../llm.js";
 import { logger } from "../logger.js";
 
 // ============================================================================
@@ -149,22 +149,13 @@ async function callAgentLlm(
 		raw = "";
 	}
 	if (!raw) {
-		try {
-			raw = await callLegacyOpenAiChat(messages, {
-				model: "gpt-4o",
-				maxTokens: 512,
-				temperature: 0.1,
-			});
-		} catch (error) {
-			if (!(error instanceof MissingOpenAiApiKeyError)) {
-				throw error;
-			}
-			const provider = getInteractiveLlmProviderOrNull();
-			if (!provider) throw error;
-			raw = await provider.generate(buildAgentPrompt(messages), {
-				maxTokens: 512,
-			});
+		const provider = getInteractiveLlmProviderOrNull();
+		if (!provider) {
+			throw new Error("Interactive inference provider is not configured");
 		}
+		raw = await provider.generate(buildAgentPrompt(messages), {
+			maxTokens: 512,
+		});
 	}
 
 	// Parse the action JSON
@@ -577,9 +568,9 @@ export function mountOsAgentRoutes(app: Hono): void {
 				} else {
 					// Listen to ALL sessions (broadcast mode)
 					// Register on all current sessions
-					Array.from(activeSessions.values()).forEach((session) => {
+					for (const session of activeSessions.values()) {
 						session.sseListeners.push(onEvent);
-					});
+					}
 				}
 
 				// Heartbeat
@@ -595,10 +586,10 @@ export function mountOsAgentRoutes(app: Hono): void {
 				c.req.raw.signal.addEventListener("abort", () => {
 					clearInterval(heartbeat);
 					// Remove listener from all sessions
-					Array.from(activeSessions.values()).forEach((session) => {
+					for (const session of activeSessions.values()) {
 						const idx = session.sseListeners.indexOf(onEvent);
 						if (idx >= 0) session.sseListeners.splice(idx, 1);
-					});
+					}
 				});
 			},
 		});

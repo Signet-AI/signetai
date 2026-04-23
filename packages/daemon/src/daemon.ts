@@ -44,37 +44,15 @@ import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { syncAgentWorkspaces } from "./identity-sync";
 import { getOrCreateInferenceRouter } from "./inference-router.js";
-import {
-	closeLlmProvider,
-	closeSynthesisProvider,
-	closeWidgetProvider,
-	getLlmProvider,
-	initLlmProvider,
-	initSynthesisProvider,
-	initWidgetProvider,
-} from "./llm";
+import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
-import { deadLetterPendingExtractionJobs } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
-import { initModelRegistry, stopModelRegistry } from "./pipeline/model-registry";
-import {
-	createAnthropicProvider,
-	createClaudeCodeProvider,
-	createCodexProvider,
-	createLlamaCppProvider,
-	createOllamaProvider,
-	createOpenCodeProvider,
-	createOpenRouterProvider,
-	ensureOpenCodeServer,
-	resolveDefaultOllamaFallbackMaxContextTokens,
-	stopOpenCodeServer,
-	withRateLimit,
-} from "./pipeline/provider";
-import { resolveRuntimeModel } from "./pipeline/provider-resolution";
+import { stopModelRegistry } from "./pipeline/model-registry";
+import { stopOpenCodeServer } from "./pipeline/provider";
 import { startReconciler } from "./pipeline/skill-reconciler";
 import { type PredictorClient, createPredictorClient } from "./predictor-client";
 import { type RepairContext, structuralBackfill } from "./repair-actions";
@@ -94,12 +72,9 @@ import {
 	authConfig,
 	bindAbort,
 	invalidateDiagnosticsCache,
-	isManagedOpenCodeLocalEndpoint,
-	normalizeRuntimeBaseUrl,
 	providerRuntimeResolution,
 	providerTracker,
 	readEnvTrimmed,
-	redactUrlForLogs,
 	reloadAuthState,
 	repairLimiter,
 	setCheckpointPruneTimer,
@@ -158,7 +133,7 @@ import { registerSessionRoutes } from "./routes/session-routes.js";
 import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
-import { checkEmbeddingProvider, getConfiguredProviderHints } from "./routes/utils.js";
+import { checkEmbeddingProvider } from "./routes/utils.js";
 import { mountWidgetRoutes } from "./routes/widget.js";
 import { isReadyResponse } from "./synthesis-worker-protocol";
 import { initUpdateSystem, startUpdateTimer, stopUpdateTimer } from "./update-system";
@@ -248,23 +223,6 @@ mountChangelogRoutes(app);
 mountOsChatRoutes(app);
 mountOsAgentRoutes(app);
 setupDashboardRoutes(app);
-
-// ============================================================================
-// CLI preflight check
-// ============================================================================
-
-async function checkCliAvailable(binary: string, extraEnv?: Record<string, string>): Promise<boolean> {
-	const exitCode = await new Promise<number>((resolve) => {
-		const proc = spawn(binary, ["--version"], {
-			stdio: "pipe",
-			windowsHide: true,
-			env: { ...process.env, SIGNET_NO_HOOKS: "1", ...extraEnv },
-		});
-		proc.on("close", (code) => resolve(code ?? 1));
-		proc.on("error", () => resolve(1));
-	});
-	return exitCode === 0;
-}
 
 // ============================================================================
 // File Watcher
@@ -1044,9 +1002,7 @@ async function stopPipelineRuntime(): Promise<void> {
 		await stopPipeline();
 	} catch {}
 
-	closeLlmProvider();
-	closeSynthesisProvider();
-	closeWidgetProvider();
+	closeInferenceProviderResolver();
 	stopOpenCodeServer();
 	stopModelRegistry();
 	invalidateDiagnosticsCache();
@@ -1106,641 +1062,63 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	reloadAuthState(AGENTS_DIR);
 
-	const providerHints = getConfiguredProviderHints(AGENTS_DIR);
-	const extractionFallbackProvider = memoryCfg.pipelineV2.extraction.fallbackProvider;
-	const validExtractionProviders = new Set([
-		"none",
-		"llama-cpp",
-		"ollama",
-		"claude-code",
-		"opencode",
-		"codex",
-		"anthropic",
-		"openrouter",
-		"command",
-	]);
-	const validSynthesisProviders = new Set([
-		"none",
-		"llama-cpp",
-		"ollama",
-		"claude-code",
-		"codex",
-		"opencode",
-		"anthropic",
-		"openrouter",
-	]);
+	const router = getOrCreateInferenceRouter(AGENTS_DIR);
+	const defaultAgentId = resolveDaemonAgentId();
+	initInferenceProviderResolver((workload) => {
+		switch (workload) {
+			case "memoryExtraction":
+				return router.createWorkloadProvider("memory_extraction", defaultAgentId);
+			case "sessionSynthesis":
+				return router.createWorkloadProvider("session_synthesis", defaultAgentId);
+			case "widgetGeneration":
+				return router.createWorkloadProvider("widget_generation", defaultAgentId);
+			case "repair":
+				return router.createWorkloadProvider("repair", defaultAgentId);
+			case "interactive":
+				return router.createWorkloadProvider("interactive", defaultAgentId);
+			case "default":
+				return router.createWorkloadProvider("default", defaultAgentId);
+		}
+	});
 
+	const extractionAvailable = !pipelinePaused && (await router.hasWorkload("memory_extraction"));
+	const synthesisAvailable = !pipelinePaused && (await router.hasWorkload("session_synthesis"));
 	providerRuntimeResolution.extraction = {
-		configured: providerHints.extraction,
-		resolved: memoryCfg.pipelineV2.extraction.provider,
-		effective: memoryCfg.pipelineV2.extraction.provider,
-		fallbackProvider: extractionFallbackProvider,
-		status: "active",
+		configured: memoryCfg.pipelineV2.extraction.provider,
+		resolved: "inference",
+		effective: extractionAvailable ? "inference" : "none",
+		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider,
+		status: pipelinePaused ? "paused" : extractionAvailable ? "active" : "disabled",
 		degraded: false,
 		fallbackApplied: false,
-		reason: null,
-		since: null,
+		reason: pipelinePaused
+			? "Pipeline paused"
+			: extractionAvailable
+				? null
+				: "No inference workload is configured for memoryExtraction",
+		since: extractionAvailable ? null : new Date().toISOString(),
 	};
 	providerRuntimeResolution.synthesis = {
-		configured: providerHints.synthesis,
-		resolved: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
-		effective: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
-	};
-	if (providerHints.extraction && !validExtractionProviders.has(providerHints.extraction)) {
-		logger.warn("config", "Unsupported extraction provider configured, using resolved fallback", {
-			configured: providerHints.extraction,
-			resolved: memoryCfg.pipelineV2.extraction.provider,
-		});
-	}
-	if (
-		providerHints.synthesis &&
-		memoryCfg.pipelineV2.synthesis.enabled &&
-		!validSynthesisProviders.has(providerHints.synthesis)
-	) {
-		logger.warn("config", "Unsupported synthesis provider configured, using resolved fallback", {
-			configured: providerHints.synthesis,
-			resolved: memoryCfg.pipelineV2.synthesis.provider,
-		});
-	}
-
-	let effectiveExtractionProvider = memoryCfg.pipelineV2.extraction.provider;
-	let extractionStatus: "active" | "degraded" | "blocked" | "disabled" | "paused" = "active";
-	let extractionDegraded = false;
-	let extractionFallbackApplied = false;
-	let extractionReason: string | null = null;
-	let extractionSince: string | null = null;
-	const extractionOllamaBaseUrl = normalizeRuntimeBaseUrl(
-		memoryCfg.pipelineV2.extraction.endpoint,
-		"http://127.0.0.1:11434",
-	);
-	const extractionOllamaFallbackBaseUrl =
-		memoryCfg.pipelineV2.extraction.provider === "opencode" ? "http://127.0.0.1:11434" : extractionOllamaBaseUrl;
-	const extractionOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
-		memoryCfg.pipelineV2.extraction.endpoint,
-		"http://127.0.0.1:4096",
-	);
-	const extractionOpenRouterBaseUrl = normalizeRuntimeBaseUrl(
-		memoryCfg.pipelineV2.extraction.endpoint,
-		"https://openrouter.ai/api/v1",
-	);
-	const extractionLlamaCppBaseUrl = normalizeRuntimeBaseUrl(
-		memoryCfg.pipelineV2.extraction.endpoint,
-		"http://127.0.0.1:8080",
-	);
-	const ollamaFallbackMaxContextTokens = resolveDefaultOllamaFallbackMaxContextTokens();
-	const extractionOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(extractionOpenCodeBaseUrl);
-
-	const markExtractionUnavailable = (reason: string): void => {
-		extractionReason = reason;
-		extractionSince = new Date().toISOString();
-		extractionDegraded = true;
-		const localFallback = extractionFallbackProvider === "llama-cpp" ? "llama-cpp" : "ollama";
-		if (
-			(extractionFallbackProvider === "llama-cpp" || extractionFallbackProvider === "ollama") &&
-			effectiveExtractionProvider !== localFallback
-		) {
-			effectiveExtractionProvider = localFallback;
-			extractionStatus = "degraded";
-			extractionFallbackApplied = true;
-			return;
-		}
-		effectiveExtractionProvider = "none";
-		extractionStatus = "blocked";
-		extractionFallbackApplied = false;
+		configured: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
+		resolved: synthesisAvailable ? "inference" : null,
+		effective: synthesisAvailable ? "inference" : null,
 	};
 
-	if (pipelinePaused) {
-		logger.info("config", "Pipeline paused; extraction provider startup deferred");
-		effectiveExtractionProvider = "none";
-		extractionStatus = "paused";
-	} else if (effectiveExtractionProvider === "none") {
-		logger.info("config", "Extraction provider set to 'none', pipeline LLM disabled");
-		extractionStatus = "disabled";
-	} else if (effectiveExtractionProvider === "command") {
-		logger.info(
-			"config",
-			"Extraction provider set to 'command'; summary worker will execute pipelineV2.extraction.command",
-		);
-	} else if (effectiveExtractionProvider === "opencode") {
-		if (extractionOpenCodeShouldManage) {
-			const serverReady = await ensureOpenCodeServer(4096);
-			if (!serverReady) {
-				markExtractionUnavailable("OpenCode server not available for extraction startup preflight");
-			}
-		} else {
-			logger.info("config", "Using external OpenCode endpoint for extraction", {
-				baseUrl: redactUrlForLogs(extractionOpenCodeBaseUrl),
-			});
-		}
-	} else if (effectiveExtractionProvider === "claude-code") {
-		const resolvedClaude = Bun.which("claude");
-		if (resolvedClaude === null) {
-			markExtractionUnavailable("Claude Code CLI not found during extraction startup preflight");
-		} else if (!(await checkCliAvailable(resolvedClaude))) {
-			markExtractionUnavailable("Claude Code CLI failed extraction startup preflight");
-		}
-	} else if (effectiveExtractionProvider === "codex") {
-		const resolvedCodex = Bun.which("codex");
-		if (resolvedCodex === null) {
-			markExtractionUnavailable("Codex CLI not found during extraction startup preflight");
-		} else if (!(await checkCliAvailable(resolvedCodex, { SIGNET_CODEX_BYPASS_WRAPPER: "1" }))) {
-			markExtractionUnavailable("Codex CLI failed extraction startup preflight");
-		}
-	}
-	const keyCache = new Map<"ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY", string | undefined>();
-	const getKey = async (name: "ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY"): Promise<string | undefined> => {
-		if (keyCache.has(name)) return keyCache.get(name);
-		let key = process.env[name];
-		if (!key) {
-			try {
-				key = (await getSecret(name)) ?? undefined;
-			} catch {
-				logger.warn("config", `Failed to resolve ${name} from secrets store`);
-			}
-		}
-		keyCache.set(name, key);
-		return key;
-	};
-
-	let anthropicApiKey: string | undefined;
-	const needsAnthropicForSynthesis =
-		memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider === "anthropic";
-	if (effectiveExtractionProvider === "anthropic" || needsAnthropicForSynthesis) {
-		anthropicApiKey = await getKey("ANTHROPIC_API_KEY");
-		if (!anthropicApiKey) {
-			logger.error(
-				"config",
-				`ANTHROPIC_API_KEY not found — falling back to ${extractionFallbackProvider}. Set via env or 'signet secrets set ANTHROPIC_API_KEY'`,
-			);
-			if (effectiveExtractionProvider === "anthropic") {
-				markExtractionUnavailable("ANTHROPIC_API_KEY not found for extraction startup preflight");
-			}
-		}
-	}
-
-	let openRouterApiKey: string | undefined;
-	const needsOpenRouterForSynthesis =
-		memoryCfg.pipelineV2.synthesis.enabled && memoryCfg.pipelineV2.synthesis.provider === "openrouter";
-	if (effectiveExtractionProvider === "openrouter" || needsOpenRouterForSynthesis) {
-		openRouterApiKey = await getKey("OPENROUTER_API_KEY");
-		if (!openRouterApiKey) {
-			logger.error(
-				"config",
-				`OPENROUTER_API_KEY not found — falling back to ${extractionFallbackProvider}. Set via env or 'signet secrets set OPENROUTER_API_KEY'`,
-			);
-			if (effectiveExtractionProvider === "openrouter") {
-				markExtractionUnavailable("OPENROUTER_API_KEY not found for extraction startup preflight");
-			}
-		}
-	}
-
-	const createExtractionProvider = (provider: typeof effectiveExtractionProvider) => {
-		const model = resolveRuntimeModel(
-			provider,
-			memoryCfg.pipelineV2.extraction.provider,
-			memoryCfg.pipelineV2.extraction.model,
-		);
-		const usingExtractionOllamaFallback =
-			provider === "ollama" && memoryCfg.pipelineV2.extraction.provider !== "ollama";
-		if (provider === "none") return null;
-		if (provider === "anthropic") {
-			if (!anthropicApiKey) return null;
-			return createAnthropicProvider({
-				model: model || "haiku",
-				apiKey: anthropicApiKey,
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		if (provider === "openrouter") {
-			if (!openRouterApiKey) return null;
-			return createOpenRouterProvider({
-				model: model || "openai/gpt-4o-mini",
-				apiKey: openRouterApiKey,
-				baseUrl: extractionOpenRouterBaseUrl,
-				referer: readEnvTrimmed("OPENROUTER_HTTP_REFERER"),
-				title: readEnvTrimmed("OPENROUTER_TITLE"),
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		if (provider === "opencode") {
-			return createOpenCodeProvider({
-				model: model || "anthropic/claude-haiku-4-5-20251001",
-				baseUrl: extractionOpenCodeBaseUrl,
-				ollamaFallbackBaseUrl: extractionOllamaFallbackBaseUrl,
-				ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-				enableStructuredOutput: memoryCfg.pipelineV2.extraction.structuredOutput,
-				enableOllamaFallback: extractionFallbackProvider !== "none",
-			});
-		}
-		if (provider === "claude-code") {
-			return createClaudeCodeProvider({
-				model: model || "haiku",
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		if (provider === "codex") {
-			return createCodexProvider({
-				model: model || "gpt-5-codex-mini",
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		if (provider === "llama-cpp") {
-			return createLlamaCppProvider({
-				model: model || "qwen3.5:4b",
-				baseUrl: extractionLlamaCppBaseUrl,
-				defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			});
-		}
-		return createOllamaProvider({
-			...(model ? { model } : {}),
-			baseUrl: extractionOllamaFallbackBaseUrl,
-			defaultTimeoutMs: memoryCfg.pipelineV2.extraction.timeout,
-			...(usingExtractionOllamaFallback
-				? {
-						maxContextTokens: ollamaFallbackMaxContextTokens,
-					}
-				: {}),
-		});
-	};
-
-	let llmProvider = createExtractionProvider(effectiveExtractionProvider);
-	if (llmProvider) {
-		const preflightOk = await llmProvider.available();
-		if (!preflightOk) {
-			const failedProvider = effectiveExtractionProvider;
-			const failedReason = extractionReason ?? `Extraction provider ${failedProvider} failed startup preflight`;
-			const localFallback = extractionFallbackProvider === "llama-cpp" ? "llama-cpp" : "ollama";
-			if (
-				failedProvider !== localFallback &&
-				(extractionFallbackProvider === "llama-cpp" || extractionFallbackProvider === "ollama")
-			) {
-				extractionReason = failedReason;
-				extractionSince = extractionSince ?? new Date().toISOString();
-				extractionDegraded = true;
-				extractionFallbackApplied = true;
-				extractionStatus = "degraded";
-				effectiveExtractionProvider = localFallback;
-				llmProvider = createExtractionProvider(localFallback);
-				if (!llmProvider || !(await llmProvider.available())) {
-					effectiveExtractionProvider = "none";
-					extractionStatus = "blocked";
-					extractionFallbackApplied = false;
-					extractionReason = `${failedReason}; ${localFallback} fallback startup preflight failed`;
-					llmProvider = null;
-				}
-			} else {
-				effectiveExtractionProvider = "none";
-				extractionStatus = "blocked";
-				extractionDegraded = true;
-				extractionFallbackApplied = false;
-				extractionReason =
-					extractionFallbackProvider === "none" ? `${failedReason}; fallbackProvider is none` : failedReason;
-				extractionSince = extractionSince ?? new Date().toISOString();
-				llmProvider = null;
-			}
-		}
-	}
-
-	const effectiveExtractionModel = resolveRuntimeModel(
-		effectiveExtractionProvider,
-		memoryCfg.pipelineV2.extraction.provider,
-		memoryCfg.pipelineV2.extraction.model,
-	);
-	providerRuntimeResolution.extraction = {
-		configured: providerHints.extraction,
-		resolved: memoryCfg.pipelineV2.extraction.provider,
-		effective: effectiveExtractionProvider,
-		fallbackProvider: extractionFallbackProvider,
-		status: extractionStatus,
-		degraded: extractionDegraded,
-		fallbackApplied: extractionFallbackApplied,
-		reason: extractionReason,
-		since: extractionSince,
-	};
-	if (providerHints.extraction && providerHints.extraction !== effectiveExtractionProvider) {
-		logger.warn("config", "Extraction provider resolved differently than configured", {
-			configured: providerHints.extraction,
-			resolved: memoryCfg.pipelineV2.extraction.provider,
-			effective: effectiveExtractionProvider,
-			fallbackProvider: extractionFallbackProvider,
-			status: extractionStatus,
-			reason: extractionReason,
-		});
-	}
-	logger.info("config", "Extraction provider", {
-		configured: providerHints.extraction,
-		resolved: memoryCfg.pipelineV2.extraction.provider,
-		effective: effectiveExtractionProvider,
-		fallbackProvider: extractionFallbackProvider,
-		status: extractionStatus,
-		degraded: extractionDegraded,
-		reason: extractionReason,
-		endpoint: redactUrlForLogs(
-			effectiveExtractionProvider === "ollama"
-				? extractionOllamaFallbackBaseUrl
-				: effectiveExtractionProvider === "llama-cpp"
-					? extractionLlamaCppBaseUrl
-					: effectiveExtractionProvider === "opencode"
-						? extractionOpenCodeBaseUrl
-						: effectiveExtractionProvider === "openrouter"
-							? extractionOpenRouterBaseUrl
-							: undefined,
-		),
+	logger.info("config", "Inference router workloads", {
+		extraction: extractionAvailable,
+		synthesis: synthesisAvailable,
+		interactive: await router.hasWorkload("interactive"),
+		default: await router.hasWorkload("default"),
 	});
-	const extractionModelName = effectiveExtractionModel ?? memoryCfg.pipelineV2.extraction.model;
-	if (
-		effectiveExtractionProvider === "anthropic" ||
-		effectiveExtractionProvider === "openrouter" ||
-		effectiveExtractionProvider === "opencode"
-	) {
-		logger.warn(
-			"config",
-			"Extraction is intended for Claude Code (Haiku), Codex CLI (GPT Mini) on Pro/Max, or local llama.cpp qwen3.5:4b+ / Ollama qwen3:4b+. Remote API extraction can create extreme fees fast. Set provider to 'none' to disable it on a VPS.",
-			{
-				provider: effectiveExtractionProvider,
-				model: extractionModelName,
-			},
-		);
-	}
 
-	if (
-		effectiveExtractionProvider === "claude-code" &&
-		extractionModelName &&
-		!extractionModelName.toLowerCase().includes("haiku")
-	) {
-		logger.warn("config", "Claude Code extraction is safest on Haiku. Larger models increase cost significantly.", {
-			model: extractionModelName,
-		});
-	}
-	if (
-		effectiveExtractionProvider === "codex" &&
-		extractionModelName &&
-		!extractionModelName.toLowerCase().includes("mini")
-	) {
-		logger.warn("config", "Codex extraction is safest on GPT Mini. Larger models increase cost significantly.", {
-			model: extractionModelName,
-		});
-	}
-
-	const startupExtractionBlocked = extractionStatus === "blocked" && extractionReason !== null;
-	if (startupExtractionBlocked && !llmProvider) {
-		const blockedReason = extractionReason ?? "Extraction provider unavailable during startup preflight";
-		const deadLettered = deadLetterPendingExtractionJobs(getDbAccessor(), {
-			reason: blockedReason,
-			extractionModel: effectiveExtractionModel || undefined,
-		});
-		if (deadLettered > 0) {
-			logger.warn("pipeline", "Dead-lettered pending extraction jobs at startup", {
-				count: deadLettered,
-				reason: blockedReason,
-			});
-		}
-	}
-	if (llmProvider) {
-		llmProvider = withRateLimit(llmProvider, memoryCfg.pipelineV2.extraction.rateLimit);
-		initLlmProvider(llmProvider);
-	}
-
-	if (memoryCfg.pipelineV2.modelRegistry.enabled && !pipelinePaused) {
-		const registryAnthropicApiKey = anthropicApiKey ?? (await getKey("ANTHROPIC_API_KEY"));
-		const registryOpenRouterApiKey = openRouterApiKey ?? (await getKey("OPENROUTER_API_KEY"));
-		initModelRegistry(
-			memoryCfg.pipelineV2.modelRegistry,
-			effectiveExtractionProvider === "ollama" ? extractionOllamaBaseUrl : undefined,
-			registryAnthropicApiKey,
-			registryOpenRouterApiKey,
-			effectiveExtractionProvider === "openrouter" ? extractionOpenRouterBaseUrl : undefined,
-			effectiveExtractionProvider === "llama-cpp" ? extractionLlamaCppBaseUrl : undefined,
-		);
-	}
-
-	if (pipelinePaused) {
-		providerRuntimeResolution.synthesis = {
-			configured: providerHints.synthesis,
-			resolved: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
-			effective: null,
-		};
-		logger.info("config", "Pipeline paused; synthesis provider startup deferred");
-	} else if (memoryCfg.pipelineV2.synthesis.provider === "none") {
-		logger.info("config", "Synthesis provider set to 'none', synthesis disabled");
-	} else if (memoryCfg.pipelineV2.synthesis.enabled) {
-		let effectiveSynthesisProvider: PipelineSynthesisConfig["provider"] = memoryCfg.pipelineV2.synthesis.provider;
-		const synthesisFallback =
-			extractionFallbackProvider === "llama-cpp"
-				? "llama-cpp"
-				: extractionFallbackProvider === "none"
-					? null
-					: "ollama";
-		const synthesisOllamaBaseUrl = normalizeRuntimeBaseUrl(
-			memoryCfg.pipelineV2.synthesis.endpoint,
-			"http://127.0.0.1:11434",
-		);
-		const synthesisOllamaFallbackBaseUrl =
-			memoryCfg.pipelineV2.synthesis.provider === "opencode" ? "http://127.0.0.1:11434" : synthesisOllamaBaseUrl;
-		const synthesisLlamaCppBaseUrl = normalizeRuntimeBaseUrl(
-			memoryCfg.pipelineV2.synthesis.endpoint,
-			"http://127.0.0.1:8080",
-		);
-		const synthesisOpenCodeBaseUrl = normalizeRuntimeBaseUrl(
-			memoryCfg.pipelineV2.synthesis.endpoint,
-			"http://127.0.0.1:4096",
-		);
-		const synthesisOpenRouterBaseUrl = normalizeRuntimeBaseUrl(
-			memoryCfg.pipelineV2.synthesis.endpoint,
-			"https://openrouter.ai/api/v1",
-		);
-		const synthesisOpenCodeShouldManage = isManagedOpenCodeLocalEndpoint(synthesisOpenCodeBaseUrl);
-		if (effectiveSynthesisProvider === "opencode") {
-			if (synthesisOpenCodeShouldManage) {
-				const serverReady = await ensureOpenCodeServer(4096);
-				if (!serverReady) {
-					if (synthesisFallback) {
-						logger.warn("config", `OpenCode server not available for synthesis, falling back to ${synthesisFallback}`);
-						effectiveSynthesisProvider = synthesisFallback;
-					} else {
-						logger.warn(
-							"config",
-							"OpenCode server not available for synthesis, fallback disabled (fallbackProvider: none)",
-						);
-						effectiveSynthesisProvider = "none";
-					}
-				}
-			} else {
-				logger.info("config", "Using external OpenCode endpoint for synthesis", {
-					baseUrl: redactUrlForLogs(synthesisOpenCodeBaseUrl),
-				});
-			}
-		} else if (effectiveSynthesisProvider === "anthropic") {
-			if (!anthropicApiKey) {
-				if (synthesisFallback) {
-					logger.warn("config", `ANTHROPIC_API_KEY not found for synthesis, falling back to ${synthesisFallback}`);
-					effectiveSynthesisProvider = synthesisFallback;
-				} else {
-					logger.warn(
-						"config",
-						"ANTHROPIC_API_KEY not found for synthesis, fallback disabled (fallbackProvider: none)",
-					);
-					effectiveSynthesisProvider = "none";
-				}
-			}
-		} else if (effectiveSynthesisProvider === "openrouter") {
-			if (!openRouterApiKey) {
-				if (synthesisFallback) {
-					logger.warn("config", `OPENROUTER_API_KEY not found for synthesis, falling back to ${synthesisFallback}`);
-					effectiveSynthesisProvider = synthesisFallback;
-				} else {
-					logger.warn(
-						"config",
-						"OPENROUTER_API_KEY not found for synthesis, fallback disabled (fallbackProvider: none)",
-					);
-					effectiveSynthesisProvider = "none";
-				}
-			}
-		} else if (effectiveSynthesisProvider === "claude-code") {
-			const resolvedClaude = Bun.which("claude");
-			if (resolvedClaude === null || !(await checkCliAvailable(resolvedClaude))) {
-				if (synthesisFallback) {
-					logger.warn("config", `Claude Code CLI not found, falling back to ${synthesisFallback} for synthesis`);
-					effectiveSynthesisProvider = synthesisFallback;
-				} else {
-					logger.warn("config", "Claude Code CLI not found, fallback disabled (fallbackProvider: none)");
-					effectiveSynthesisProvider = "none";
-				}
-			}
-		} else if (effectiveSynthesisProvider === "codex") {
-			const resolvedCodex = Bun.which("codex");
-			if (resolvedCodex === null || !(await checkCliAvailable(resolvedCodex, { SIGNET_CODEX_BYPASS_WRAPPER: "1" }))) {
-				if (synthesisFallback) {
-					logger.warn("config", `Codex CLI not found, falling back to ${synthesisFallback} for synthesis`);
-					effectiveSynthesisProvider = synthesisFallback;
-				} else {
-					logger.warn("config", "Codex CLI not found, fallback disabled (fallbackProvider: none)");
-					effectiveSynthesisProvider = "none";
-				}
-			}
-		}
-		providerRuntimeResolution.synthesis = {
-			configured: providerHints.synthesis,
-			resolved: memoryCfg.pipelineV2.synthesis.provider,
-			effective: effectiveSynthesisProvider,
-		};
-		if (providerHints.synthesis && providerHints.synthesis !== effectiveSynthesisProvider) {
-			logger.warn("config", "Synthesis provider resolved differently than configured", {
-				configured: providerHints.synthesis,
-				resolved: memoryCfg.pipelineV2.synthesis.provider,
-				effective: effectiveSynthesisProvider,
-			});
-		}
-		logger.info("config", "Synthesis provider", {
-			configured: providerHints.synthesis,
-			resolved: memoryCfg.pipelineV2.synthesis.provider,
-			effective: effectiveSynthesisProvider,
-			endpoint: redactUrlForLogs(
-				effectiveSynthesisProvider === "ollama"
-					? synthesisOllamaFallbackBaseUrl
-					: effectiveSynthesisProvider === "llama-cpp"
-						? synthesisLlamaCppBaseUrl
-						: effectiveSynthesisProvider === "opencode"
-							? synthesisOpenCodeBaseUrl
-							: effectiveSynthesisProvider === "openrouter"
-								? synthesisOpenRouterBaseUrl
-								: undefined,
-			),
-		});
-
-		const effectiveSynthesisModel = resolveRuntimeModel(
-			effectiveSynthesisProvider,
-			memoryCfg.pipelineV2.synthesis.provider,
-			memoryCfg.pipelineV2.synthesis.model,
-		);
-		const usingSynthesisLocalFallback =
-			(effectiveSynthesisProvider === "ollama" || effectiveSynthesisProvider === "llama-cpp") &&
-			memoryCfg.pipelineV2.synthesis.provider !== effectiveSynthesisProvider;
-
-		let synthesisProvider =
-			effectiveSynthesisProvider === "anthropic" && anthropicApiKey
-				? createAnthropicProvider({
-						model: effectiveSynthesisModel || "haiku",
-						apiKey: anthropicApiKey,
-						defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-					})
-				: effectiveSynthesisProvider === "openrouter" && openRouterApiKey
-					? createOpenRouterProvider({
-							model: effectiveSynthesisModel || "openai/gpt-4o-mini",
-							apiKey: openRouterApiKey,
-							baseUrl: synthesisOpenRouterBaseUrl,
-							referer: readEnvTrimmed("OPENROUTER_HTTP_REFERER"),
-							title: readEnvTrimmed("OPENROUTER_TITLE"),
-							defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-						})
-					: effectiveSynthesisProvider === "opencode"
-						? createOpenCodeProvider({
-								model: effectiveSynthesisModel || "anthropic/claude-haiku-4-5-20251001",
-								baseUrl: synthesisOpenCodeBaseUrl,
-								ollamaFallbackBaseUrl: synthesisOllamaFallbackBaseUrl,
-								ollamaFallbackMaxContextTokens: ollamaFallbackMaxContextTokens,
-								defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-								enableStructuredOutput: memoryCfg.pipelineV2.synthesis.structuredOutput,
-								enableOllamaFallback: synthesisFallback !== null,
-							})
-						: effectiveSynthesisProvider === "codex"
-							? createCodexProvider({
-									model: effectiveSynthesisModel || "gpt-5-codex-mini",
-									defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-								})
-							: effectiveSynthesisProvider === "claude-code"
-								? createClaudeCodeProvider({
-										model: effectiveSynthesisModel || "haiku",
-										defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-									})
-								: effectiveSynthesisProvider === "llama-cpp"
-									? createLlamaCppProvider({
-											model: effectiveSynthesisModel || "qwen3.5:4b",
-											baseUrl: synthesisLlamaCppBaseUrl,
-											defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-										})
-									: createOllamaProvider({
-											...(effectiveSynthesisModel ? { model: effectiveSynthesisModel } : {}),
-											baseUrl: synthesisOllamaFallbackBaseUrl,
-											defaultTimeoutMs: memoryCfg.pipelineV2.synthesis.timeout,
-											...(usingSynthesisLocalFallback
-												? {
-														maxContextTokens: ollamaFallbackMaxContextTokens,
-													}
-												: {}),
-										});
-		const widgetProvider = synthesisProvider;
-		synthesisProvider = withRateLimit(synthesisProvider, memoryCfg.pipelineV2.synthesis.rateLimit);
-		initSynthesisProvider(synthesisProvider);
-		// Widget generation uses the same model family by default, but should not
-		// consume the background synthesis rate-limit budget.
-		if (
-			memoryCfg.pipelineV2.synthesis.rateLimit !== undefined &&
-			Object.keys(memoryCfg.pipelineV2.synthesis.rateLimit).length > 0
-		) {
-			logger.info("pipeline", "Widget synthesis provider is exempt from the synthesis rate limit", {
-				rateLimit: memoryCfg.pipelineV2.synthesis.rateLimit,
-			});
-		}
-		initWidgetProvider(widgetProvider);
-	} else {
-		providerRuntimeResolution.synthesis = {
-			configured: providerHints.synthesis,
-			resolved: null,
-			effective: null,
-		};
-		logger.info("config", "Synthesis disabled");
-	}
-
-	if (memoryCfg.pipelineV2.enabled && !pipelinePaused && effectiveExtractionProvider !== "none") {
+	if (memoryCfg.pipelineV2.enabled && !pipelinePaused && extractionAvailable) {
 		startPipeline(
 			getDbAccessor(),
 			memoryCfg.pipelineV2,
 			memoryCfg.embedding,
 			fetchEmbedding,
 			memoryCfg.search,
-			resolveDaemonAgentId(),
+			defaultAgentId,
 			providerTracker,
 			analyticsCollector,
 			telemetry,
@@ -1839,7 +1217,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			fetchEmbedding,
 			getProvider: () => {
 				try {
-					return getLlmProvider();
+					return getInferenceProvider("repair");
 				} catch {
 					return null;
 				}

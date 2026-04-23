@@ -29,6 +29,7 @@ import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
+	createCommandLineProvider,
 	createOllamaProvider,
 	createOpenAiCompatibleProvider,
 	createOpenCodeProvider,
@@ -42,6 +43,7 @@ const SNAPSHOT_TTL_MS = 15_000;
 const DEFAULT_OPENCODE_BASE_URL = "http://127.0.0.1:4096";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
+const DEFAULT_LLAMA_CPP_BASE_URL = "http://127.0.0.1:8080/v1";
 const OBSERVED_RATE_LIMIT_TTL_MS = 60_000;
 const OBSERVED_AUTH_TTL_MS = 5 * 60_000;
 const OBSERVED_MISSING_TTL_MS = 60_000;
@@ -117,9 +119,12 @@ export interface InferenceStatusSummary {
 	readonly taskClasses: readonly string[];
 	readonly targetRefs: readonly string[];
 	readonly workloadBindings: {
+		readonly default?: string;
 		readonly interactive?: string;
 		readonly memoryExtraction?: string;
 		readonly sessionSynthesis?: string;
+		readonly widgetGeneration?: string;
+		readonly repair?: string;
 	};
 	readonly accounts: Readonly<Record<string, InferenceAccountSummary>>;
 	readonly targets: Readonly<Record<string, InferenceTargetSummary>>;
@@ -158,7 +163,7 @@ function normalizePromptPreview(prompt: string): string {
 	return prompt.slice(0, 8000);
 }
 
-function readRoutingPath(agentsDir: string): string | null {
+function readInferencePath(agentsDir: string): string | null {
 	for (const name of ["agent.yaml", "AGENT.yaml"]) {
 		const path = join(agentsDir, name);
 		if (existsSync(path)) return path;
@@ -240,9 +245,7 @@ function isRuntimeBlocked(state: RoutingRuntimeState): boolean {
 	);
 }
 
-function buildPromptFromMessages(
-	messages: readonly Array<{ readonly role: string; readonly content: string }>,
-): string {
+function buildPromptFromMessages(messages: ReadonlyArray<{ readonly role: string; readonly content: string }>): string {
 	return messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join("\n\n");
 }
 
@@ -257,7 +260,7 @@ export class InferenceRouter {
 
 	private async loadConfig(): Promise<RouterResult<LoadedRoutingConfig>> {
 		let raw: unknown = {};
-		const path = readRoutingPath(this.agentsDir);
+		const path = readInferencePath(this.agentsDir);
 		let signature = "no-config";
 		if (path) {
 			try {
@@ -269,7 +272,7 @@ export class InferenceRouter {
 					ok: false,
 					error: {
 						code: "invalid-config",
-						message: `Failed to parse routing config: ${formatExecutionError(error)}`,
+						message: `Failed to parse inference config: ${formatExecutionError(error)}`,
 					},
 				};
 			}
@@ -287,7 +290,7 @@ export class InferenceRouter {
 				ok: false,
 				error: {
 					code: "invalid-config",
-					message: `Failed to resolve legacy routing config: ${formatExecutionError(error)}`,
+					message: `Failed to resolve legacy inference config: ${formatExecutionError(error)}`,
 				},
 			};
 		}
@@ -445,11 +448,27 @@ export class InferenceRouter {
 		const config = loaded.value.config;
 		switch (operation) {
 			case "memory_extraction":
-				return Boolean(config.workloads?.memoryExtraction ?? config.defaultPolicy);
+				return Boolean(config.workloads?.memoryExtraction ?? config.workloads?.default ?? config.defaultPolicy);
 			case "session_synthesis":
-				return Boolean(config.workloads?.sessionSynthesis ?? config.defaultPolicy);
+				return Boolean(config.workloads?.sessionSynthesis ?? config.workloads?.default ?? config.defaultPolicy);
+			case "widget_generation":
+				return Boolean(
+					config.workloads?.widgetGeneration ??
+						config.workloads?.sessionSynthesis ??
+						config.workloads?.default ??
+						config.defaultPolicy,
+				);
+			case "repair":
+				return Boolean(
+					config.workloads?.repair ??
+						config.workloads?.memoryExtraction ??
+						config.workloads?.default ??
+						config.defaultPolicy,
+				);
+			case "default":
+				return Boolean(config.workloads?.default ?? config.defaultPolicy);
 			default:
-				return Boolean(config.workloads?.interactive ?? config.defaultPolicy);
+				return Boolean(config.workloads?.interactive ?? config.workloads?.default ?? config.defaultPolicy);
 		}
 	}
 
@@ -524,6 +543,25 @@ export class InferenceRouter {
 						apiKey: credential,
 						defaultTimeoutMs: 60_000,
 					});
+				case "llama-cpp":
+					return createOpenAiCompatibleProvider({
+						name: `llama-cpp:${model.model}`,
+						model: model.model,
+						baseUrl: target.endpoint ?? DEFAULT_LLAMA_CPP_BASE_URL,
+						apiKey: credential,
+						defaultTimeoutMs: 60_000,
+					});
+				case "command": {
+					if (!target.command) throw new Error(`Missing command config for target ${targetId}`);
+					return createCommandLineProvider({
+						name: `command:${targetId}`,
+						bin: target.command.bin,
+						args: target.command.args,
+						cwd: target.command.cwd,
+						env: target.command.env,
+						defaultTimeoutMs: 60_000,
+					});
+				}
 			}
 		})();
 
@@ -699,7 +737,7 @@ export class InferenceRouter {
 				};
 			} catch (error) {
 				const message = formatExecutionError(error);
-				logger.warn("routing", `Inference target ${targetRef} failed`, {
+				logger.warn("inference", `Inference target ${targetRef} failed`, {
 					targetRef,
 					error: message.slice(0, 200),
 				});
@@ -866,7 +904,7 @@ export class InferenceRouter {
 									return;
 								}
 
-								logger.warn("routing", `Inference target ${targetRef} stream failed`, {
+								logger.warn("inference", `Inference target ${targetRef} stream failed`, {
 									targetRef,
 									error: message.slice(0, 200),
 								});
@@ -903,7 +941,7 @@ export class InferenceRouter {
 				};
 			} catch (error) {
 				const message = formatExecutionError(error);
-				logger.warn("routing", `Inference target ${targetRef} failed to start stream`, {
+				logger.warn("inference", `Inference target ${targetRef} failed to start stream`, {
 					targetRef,
 					error: message.slice(0, 200),
 				});
@@ -1009,6 +1047,7 @@ export class InferenceRouter {
 				taskClasses: Object.keys(loaded.value.config.taskClasses),
 				targetRefs: allTargetRefs(loaded.value.config),
 				workloadBindings: {
+					default: loaded.value.config.workloads?.default?.policy ?? loaded.value.config.workloads?.default?.target,
 					interactive:
 						loaded.value.config.workloads?.interactive?.policy ?? loaded.value.config.workloads?.interactive?.target,
 					memoryExtraction:
@@ -1017,6 +1056,10 @@ export class InferenceRouter {
 					sessionSynthesis:
 						loaded.value.config.workloads?.sessionSynthesis?.policy ??
 						loaded.value.config.workloads?.sessionSynthesis?.target,
+					widgetGeneration:
+						loaded.value.config.workloads?.widgetGeneration?.policy ??
+						loaded.value.config.workloads?.widgetGeneration?.target,
+					repair: loaded.value.config.workloads?.repair?.policy ?? loaded.value.config.workloads?.repair?.target,
 				},
 				accounts,
 				targets,
@@ -1051,7 +1094,7 @@ export class InferenceRouter {
 		return {};
 	}
 
-	buildGatewayPrompt(messages: readonly Array<{ readonly role: string; readonly content: string }>): string {
+	buildGatewayPrompt(messages: ReadonlyArray<{ readonly role: string; readonly content: string }>): string {
 		return buildPromptFromMessages(messages);
 	}
 }

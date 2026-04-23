@@ -6,7 +6,8 @@ import {
 	parseRoutingTargetRef,
 } from "@signet/core";
 import type { Hono } from "hono";
-import type { AuthMode } from "../auth/index.js";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
+import type { AuthMode, TokenClaims } from "../auth/index.js";
 import { checkScope } from "../auth/index.js";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { TelemetryCollector, TelemetryEvent, TelemetryProperties } from "../telemetry.js";
@@ -38,7 +39,7 @@ type ValidationResult<T> =
 	| { readonly ok: true; readonly value: T }
 	| {
 			readonly ok: false;
-			readonly status: number;
+			readonly status: ContentfulStatusCode;
 			readonly message: string;
 			readonly details?: Record<string, unknown>;
 	  };
@@ -81,7 +82,11 @@ function valid<T>(value: T): ValidationResult<T> {
 	return { ok: true, value };
 }
 
-function invalid(message: string, status = 400, details?: Record<string, unknown>): ValidationResult<never> {
+function invalid(
+	message: string,
+	status: ContentfulStatusCode = 400,
+	details?: Record<string, unknown>,
+): ValidationResult<never> {
 	return { ok: false, status, message, ...(details ? { details } : {}) };
 }
 
@@ -270,9 +275,7 @@ function buildRouteRequest(body: Readonly<Record<string, unknown>>): ValidationR
 
 function applyScopedAgent(
 	authMode: AuthMode,
-	auth:
-		| { readonly claims: { readonly role?: string; readonly scope?: { readonly agent?: string } } | null }
-		| undefined,
+	auth: { readonly claims: TokenClaims | null } | undefined,
 	request: RouteRequest,
 ): ValidationResult<RouteRequest> {
 	if (authMode === "local" || (authMode === "hybrid" && !auth?.claims)) {
@@ -348,7 +351,7 @@ function buildGatewayRouteRequest(
 
 function parseGatewayMessages(
 	value: unknown,
-): ValidationResult<readonly Array<{ readonly role: string; readonly content: string }>> {
+): ValidationResult<ReadonlyArray<{ readonly role: string; readonly content: string }>> {
 	if (!Array.isArray(value) || value.length === 0) {
 		return invalid("messages are required");
 	}
@@ -477,7 +480,7 @@ function classifyInferenceErrorCode(value: string | undefined): string {
 }
 
 function summarizeAttempts(
-	attempts: readonly Array<{ readonly targetRef: string; readonly ok: boolean; readonly error?: string }>,
+	attempts: ReadonlyArray<{ readonly targetRef: string; readonly ok: boolean; readonly error?: string }>,
 ): {
 	readonly finalTargetRef: string | null;
 	readonly attemptPath: string | null;
@@ -502,7 +505,7 @@ function summarizeAttempts(
 
 function extractAttemptRecords(
 	details: unknown,
-): readonly Array<{ readonly targetRef: string; readonly ok: boolean; readonly error?: string }> {
+): ReadonlyArray<{ readonly targetRef: string; readonly ok: boolean; readonly error?: string }> {
 	if (!isRecord(details) || !Array.isArray(details.attempts)) return [];
 	return details.attempts.flatMap((attempt) => {
 		if (!isRecord(attempt) || typeof attempt.targetRef !== "string" || typeof attempt.ok !== "boolean") return [];
@@ -601,7 +604,7 @@ function recordInferenceExecutionTelemetry(
 	status: "success" | "cancelled" | "error",
 	payload: {
 		readonly decision: { readonly policyId: string; readonly taskClass: string; readonly targetRef: string };
-		readonly attempts: readonly Array<{ readonly targetRef: string; readonly ok: boolean; readonly error?: string }>;
+		readonly attempts: ReadonlyArray<{ readonly targetRef: string; readonly ok: boolean; readonly error?: string }>;
 		readonly usage?: { readonly inputTokens: number | null; readonly outputTokens: number | null } | null;
 		readonly errorCode?: string | null;
 	},
