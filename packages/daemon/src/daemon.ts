@@ -1081,12 +1081,32 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		}
 	});
 
-	const extractionAvailable = !pipelinePaused && (await router.hasWorkload("memory_extraction"));
+	const routerStatus = await router.status(false);
+	const statusValue = routerStatus.ok ? routerStatus.value : null;
+	const explicitInference = statusValue?.source === "explicit";
+	const executorForBinding = (binding: string | undefined): string | null => {
+		if (!binding?.includes("/")) return null;
+		const targetId = binding.split("/", 1)[0];
+		return targetId ? (statusValue?.targets[targetId]?.executor ?? null) : null;
+	};
+	const commandExtractionMode = memoryCfg.pipelineV2.extraction.provider === "command";
+	const extractionAvailable =
+		!pipelinePaused && (commandExtractionMode || (await router.hasWorkload("memory_extraction")));
 	const synthesisAvailable = !pipelinePaused && (await router.hasWorkload("session_synthesis"));
+	const extractionEffective = commandExtractionMode
+		? "command"
+		: (executorForBinding(statusValue?.workloadBindings.memoryExtraction) ??
+			(extractionAvailable ? "inference" : "none"));
+	const synthesisEffective =
+		executorForBinding(statusValue?.workloadBindings.sessionSynthesis) ?? (synthesisAvailable ? "inference" : null);
 	providerRuntimeResolution.extraction = {
 		configured: memoryCfg.pipelineV2.extraction.provider,
-		resolved: "inference",
-		effective: extractionAvailable ? "inference" : "none",
+		resolved: commandExtractionMode
+			? "command"
+			: explicitInference
+				? "inference"
+				: memoryCfg.pipelineV2.extraction.provider,
+		effective: extractionEffective,
 		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider,
 		status: pipelinePaused ? "paused" : extractionAvailable ? "active" : "disabled",
 		degraded: false,
@@ -1100,8 +1120,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	};
 	providerRuntimeResolution.synthesis = {
 		configured: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
-		resolved: synthesisAvailable ? "inference" : null,
-		effective: synthesisAvailable ? "inference" : null,
+		resolved: synthesisAvailable ? (explicitInference ? "inference" : memoryCfg.pipelineV2.synthesis.provider) : null,
+		effective: synthesisEffective,
 	};
 
 	logger.info("config", "Inference router workloads", {

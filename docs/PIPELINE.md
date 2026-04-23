@@ -1062,12 +1062,12 @@ extraction:
   timeout: 90000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
   structuredOutput: true         # send JSON schema in format field; set false for providers that reject it (e.g. GitHub Copilot)
-  command:                       # required when provider: command
+  command:                       # required when legacy extraction.provider: command
     bin: node
-    args: ["./extract.mjs", "--prompt", "$PROMPT"]
-    # prompt is sent on stdin and exposed as SIGNET_PROMPT
-    # args/env support $PROMPT and {{prompt}} substitution
-    # stdout is the model response; stderr is used only for error reporting
+    args: ["./extract.mjs", "--transcript", "$TRANSCRIPT", "--session", "$SESSION_KEY", "--agent", "$AGENT_ID"]
+    # tokens: $TRANSCRIPT (temp file path), $SESSION_KEY, $PROJECT, $AGENT_ID, $SIGNET_PATH
+    # command stdout/stderr are ignored; command writes memories to Signet state directly
+    # top-level inference.targets.*.executor: command is the separate stdout-based inference-provider path
 
 synthesis:
   enabled: true

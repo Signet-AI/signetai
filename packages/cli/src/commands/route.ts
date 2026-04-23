@@ -165,7 +165,7 @@ function printStatus(status: RouteStatusResponse): void {
 }
 
 export function registerRouteCommands(program: Command, deps: RouteDeps): void {
-	const routeCmd = program.command("route").description("Inspect and control Signet inference");
+	const routeCmd = program.command("route").alias("inference").description("Inspect and control Signet inference");
 
 	const list = routeCmd
 		.command("list")

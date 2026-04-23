@@ -15,13 +15,17 @@ import { type DocumentWorkerHandle, startDocumentWorker } from "./document-worke
 import type { DreamingWorkerHandle } from "./dreaming-worker";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
-import { DEFAULT_RETENTION, type RetentionConfig, type RetentionHandle, startRetentionWorker } from "./retention-worker";
+import {
+	DEFAULT_RETENTION,
+	type RetentionConfig,
+	type RetentionHandle,
+	startRetentionWorker,
+} from "./retention-worker";
 import { type StructuralClassifyHandle, startStructuralClassifyWorker } from "./structural-classify";
 import { type StructuralDependencyHandle, startStructuralDependencyWorker } from "./structural-dependency";
 import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
-
 
 export { enqueueExtractionJob } from "./worker";
 export type { WorkerStats } from "./worker";
@@ -131,6 +135,28 @@ export function startPipeline(
 	}
 	if (pipelineCfg.paused) {
 		logger.info("pipeline", "Pipeline paused; worker start skipped");
+		return;
+	}
+
+	if (pipelineCfg.extraction.provider === "command") {
+		ensureRetentionWorker(accessor, DEFAULT_RETENTION);
+		if (!documentWorkerHandle) {
+			documentWorkerHandle = startDocumentWorker({
+				accessor,
+				embeddingCfg,
+				fetchEmbedding,
+				pipelineCfg,
+			});
+		}
+		if (!summaryWorkerHandle) {
+			summaryWorkerHandle = startSummaryWorker(accessor);
+		}
+		if (!synthesisWorkerHandle && pipelineCfg.synthesis.enabled && pipelineCfg.synthesis.provider !== "none") {
+			synthesisWorkerHandle = startSynthesisWorker(pipelineCfg.synthesis);
+		}
+		logger.info("pipeline", "Pipeline started in command extraction compatibility mode", {
+			mode: "command-extraction",
+		});
 		return;
 	}
 

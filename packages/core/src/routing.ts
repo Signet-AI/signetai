@@ -559,7 +559,7 @@ export function compileLegacyRoutingConfig(opts: {
 	} = {};
 	let defaultTargets: readonly string[] = [];
 
-	if (opts.extraction.provider !== "none") {
+	if (opts.extraction.provider !== "none" && opts.extraction.provider !== "command") {
 		targets["legacy-extraction"] = {
 			kind: inferTargetKind(opts.extraction.provider),
 			executor: opts.extraction.provider,

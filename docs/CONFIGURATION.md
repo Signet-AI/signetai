@@ -593,16 +593,29 @@ Codex CLI as the extraction provider. Lower `minConfidence` to capture
 more facts at the cost of noise; raise it to write only high-confidence
 facts.
 
-For `provider: command`, the legacy extraction provider config is compiled
-into an inference target with `executor: command`. The daemon passes the prompt
-to the process on stdin and also exposes it as `SIGNET_PROMPT`. Command args and
-env values may use `$PROMPT` or `{{prompt}}` substitution. The command must
-write the model response to stdout; stderr is only used for error reporting.
+There are two command paths with different contracts. Top-level
+`inference.targets.*.executor: command` is a normal inference provider: the
+prompt is sent on stdin, exposed as `SIGNET_PROMPT`, and the model response is
+read from stdout.
 
-For safety, keep `bin` and `cwd` fixed, and put prompt-derived values only in
-args or env. Prefer the top-level `inference.targets.*.executor: command`
-configuration for new setups so the same command target can be bound to any
-workload, not just legacy extraction.
+Legacy `memory.pipelineV2.extraction.provider: command` keeps the old
+side-effecting extractor contract. The summary worker executes
+`memory.pipelineV2.extraction.command`, writes the transcript to a temporary
+file, substitutes that path into args/env, and expects the command to write
+memories to Signet state directly. Stdout and stderr are ignored except for
+process failure.
+
+Available legacy extraction command tokens:
+
+- `$TRANSCRIPT` (alias `$TRANSCRIPT_PATH`) — temp transcript file path
+- `$SESSION_KEY` — session key (or empty string)
+- `$PROJECT` — project path (or empty string)
+- `$AGENT_ID` — agent id for the queued job
+- `$SIGNET_PATH` — active Signet workspace path
+
+For safety, user-derived tokens (`$SESSION_KEY`, `$PROJECT`, `$TRANSCRIPT`) are
+intended for args/env substitution. Keep `bin` and `cwd` fixed, or use only
+trusted `$SIGNET_PATH` / `$AGENT_ID` there.
 
 Example:
 
@@ -615,8 +628,10 @@ memory:
         bin: node
         args:
           - ./scripts/custom-extractor.mjs
-          - --prompt
-          - $PROMPT
+          - --transcript
+          - $TRANSCRIPT
+          - --session
+          - $SESSION_KEY
 ```
 
 

@@ -540,8 +540,54 @@ async function processJob(
 	job: SummaryJobRow,
 	memoryCfg: ReturnType<typeof loadMemoryConfig>,
 ): Promise<void> {
-	if (!passesSignificanceGate(accessor, job, memoryCfg)) return;
-	if (!provider) throw new Error("summary worker requires a sessionSynthesis inference provider");
+	const commandMode = memoryCfg.pipelineV2.extraction.provider === "command";
+	const commandStageStatus: CommandStageStatus = commandMode ? getCommandStageStatus(accessor, job.id) : "none";
+
+	if (
+		shouldRunSignificanceGateForJob(commandMode, commandStageStatus) &&
+		!passesSignificanceGate(accessor, job, memoryCfg)
+	) {
+		return;
+	}
+
+	if (commandMode) {
+		if (commandStageStatus === "none") {
+			markCommandStageRunning(accessor, job.id);
+			try {
+				await runSummaryCommandProvider(job, memoryCfg);
+			} catch (error) {
+				clearCommandStageRunning(accessor, job.id);
+				throw error;
+			}
+			markCommandStageCompleted(accessor, job.id);
+		} else if (commandStageStatus === "complete") {
+			logger.info("summary-worker", "Command extraction already completed for this job attempt chain; skipping rerun", {
+				jobId: job.id,
+				attempt: job.attempts,
+				sessionKey: job.session_key,
+				project: job.project,
+			});
+		} else {
+			logger.warn(
+				"summary-worker",
+				"Command stage checkpoint indicates in-flight prior attempt; skipping rerun to avoid duplicate side effects",
+				{
+					jobId: job.id,
+					attempt: job.attempts,
+					sessionKey: job.session_key,
+					project: job.project,
+				},
+			);
+		}
+	}
+
+	if (!provider) {
+		if (!commandMode) throw new Error("summary worker requires a sessionSynthesis inference provider");
+		if (job.session_key) {
+			upsertSessionTranscript(job.session_key, job.transcript, job.harness, job.project, job.agent_id);
+		}
+		return;
+	}
 
 	const today = resolveSummaryHeadingDate(job);
 	const genOpts = {
@@ -556,6 +602,7 @@ async function processJob(
 	if (!result) throw new Error("Failed to parse LLM summary response");
 
 	if (
+		!commandMode &&
 		job.trigger === "session_end" &&
 		!isNoiseSession({
 			project: job.project,
@@ -584,13 +631,20 @@ async function processJob(
 		});
 	}
 
-	const saved = insertSummaryFacts(accessor, job, result.facts);
-	logger.info("summary-worker", "Inserted session facts", {
-		total: result.facts.length,
-		saved,
-		deduplicated: result.facts.length - saved,
-		factsPreview: result.facts.slice(0, 10).map((fact) => fact.content),
-	});
+	if (commandMode) {
+		logger.info("summary-worker", "Command extraction mode: skipping summary markdown + fact insertion", {
+			sessionKey: job.session_key,
+			project: job.project,
+		});
+	} else {
+		const saved = insertSummaryFacts(accessor, job, result.facts);
+		logger.info("summary-worker", "Inserted session facts", {
+			total: result.facts.length,
+			saved,
+			deduplicated: result.facts.length - saved,
+			factsPreview: result.facts.slice(0, 10).map((fact) => fact.content),
+		});
+	}
 
 	try {
 		writeSummaryToDAG(accessor, job, result, job.agent_id);

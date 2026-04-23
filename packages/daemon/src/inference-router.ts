@@ -43,11 +43,17 @@ const SNAPSHOT_TTL_MS = 15_000;
 const DEFAULT_OPENCODE_BASE_URL = "http://127.0.0.1:4096";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
-const DEFAULT_LLAMA_CPP_BASE_URL = "http://127.0.0.1:8080/v1";
+const DEFAULT_LLAMA_CPP_BASE_URL = "http://127.0.0.1:8080";
 const OBSERVED_RATE_LIMIT_TTL_MS = 60_000;
 const OBSERVED_AUTH_TTL_MS = 5 * 60_000;
 const OBSERVED_MISSING_TTL_MS = 60_000;
 const REDACTED_UPSTREAM_DETAIL = "[redacted upstream detail]";
+
+function withOpenAiVersionPath(baseUrl: string): string {
+	const trimmed = baseUrl.trim().replace(/\/+$/, "");
+	if (trimmed.endsWith("/v1")) return trimmed;
+	return `${trimmed}/v1`;
+}
 
 export interface InferenceExecutionAttempt {
 	readonly targetRef: string;
@@ -547,7 +553,7 @@ export class InferenceRouter {
 					return createOpenAiCompatibleProvider({
 						name: `llama-cpp:${model.model}`,
 						model: model.model,
-						baseUrl: target.endpoint ?? DEFAULT_LLAMA_CPP_BASE_URL,
+						baseUrl: withOpenAiVersionPath(target.endpoint ?? DEFAULT_LLAMA_CPP_BASE_URL),
 						apiKey: credential,
 						defaultTimeoutMs: 60_000,
 					});

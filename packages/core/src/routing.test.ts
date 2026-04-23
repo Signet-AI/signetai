@@ -180,6 +180,27 @@ describe("inference config + decision engine", () => {
 		expect(parsed.value.defaultPolicy).toBe("legacy-default");
 	});
 
+	it("keeps legacy command extraction as side-effect compatibility instead of router LLM extraction", () => {
+		const legacy = compileLegacyRoutingConfig({
+			extraction: {
+				provider: "command",
+				model: "custom-command",
+				endpoint: undefined,
+				command: { bin: "node", args: ["extract.mjs"] },
+			},
+			synthesis: {
+				enabled: true,
+				provider: "ollama",
+				model: "qwen3:4b",
+				endpoint: "http://127.0.0.1:11434",
+			},
+		});
+
+		expect(legacy.targets["legacy-extraction"]).toBeUndefined();
+		expect(legacy.workloads?.memoryExtraction).toBeUndefined();
+		expect(legacy.targets["legacy-synthesis"]?.executor).toBe("ollama");
+	});
+
 	it("does not allow explicit target overrides outside the agent roster", () => {
 		const parsed = parseRoutingConfig({
 			inference: {
