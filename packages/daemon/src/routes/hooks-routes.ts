@@ -264,7 +264,11 @@ function registerSessionStart(app: Hono): void {
 
 			stampHarness(body.harness);
 
-			autoConnectGraphiq(parseOptionalString(body.project));
+			try {
+				autoConnectGraphiq(parseOptionalString(body.project));
+			} catch {
+				// auto-connect is best-effort; never block session-start
+			}
 
 			if (checkBypass(body)) {
 				return c.json({ inject: "", memories: [], bypassed: true });
