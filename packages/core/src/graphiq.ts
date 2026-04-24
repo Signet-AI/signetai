@@ -72,19 +72,29 @@ export function setGraphiqActiveProject(basePath: string, activeProject: string)
 	const lockDir = `${statePath}.lock`;
 	const maxAttempts = 50;
 	const retryMs = 20;
+	let locked = false;
 
 	for (let attempt = 0; attempt < maxAttempts; attempt++) {
 		try {
 			mkdirSync(lockDir, { recursive: false });
+			locked = true;
 			break;
-		} catch {
-			if (attempt === maxAttempts - 1) return;
+		} catch (err) {
+			const code = (err as NodeJS.ErrnoException).code;
+			if (code !== "EEXIST") {
+				throw new Error(`graphiq state lock failed: ${code ?? "unknown"} — ${String(err)}`);
+			}
+			if (attempt === maxAttempts - 1) {
+				throw new Error("graphiq state lock timeout: could not acquire after 50 attempts");
+			}
 			const start = Date.now();
 			while (Date.now() - start < retryMs) {
 				// busy-wait
 			}
 		}
 	}
+
+	if (!locked) return;
 
 	try {
 		const fresh = readGraphiqState(basePath);
