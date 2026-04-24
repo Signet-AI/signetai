@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { SIGNET_GRAPHIQ_PLUGIN_ID } from "./plugins";
 
@@ -68,8 +68,38 @@ export function writeGraphiqState(basePath: string, state: GraphiqPluginState): 
 }
 
 export function setGraphiqActiveProject(basePath: string, activeProject: string): void {
-	const fresh = readGraphiqState(basePath);
-	writeGraphiqState(basePath, { ...fresh, activeProject });
+	const statePath = getGraphiqStatePath(basePath);
+	const lockDir = `${statePath}.lock`;
+	const maxAttempts = 50;
+	const retryMs = 20;
+
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		try {
+			mkdirSync(lockDir, { recursive: false });
+			break;
+		} catch {
+			if (attempt === maxAttempts - 1) return;
+			const start = Date.now();
+			while (Date.now() - start < retryMs) {
+				// busy-wait
+			}
+		}
+	}
+
+	try {
+		const fresh = readGraphiqState(basePath);
+		const tmpPath = `${statePath}.tmp`;
+		const next = { ...fresh, activeProject };
+		mkdirSync(dirname(statePath), { recursive: true });
+		writeFileSync(tmpPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+		renameSync(tmpPath, statePath);
+	} finally {
+		try {
+			rmSync(lockDir, { recursive: false, force: true });
+		} catch {
+			// lock cleanup best-effort
+		}
+	}
 }
 
 export function updateGraphiqActiveProject(

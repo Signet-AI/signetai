@@ -7,7 +7,6 @@ import {
 	readGraphiqState,
 	setGraphiqActiveProject,
 	updateGraphiqActiveProject,
-	writeGraphiqState,
 } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
