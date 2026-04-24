@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { constants, accessSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { readGraphiqState } from "@signet/core";
 
 export interface GraphiqCommandResult {
@@ -22,6 +22,24 @@ export function getActiveGraphiqDbPath(): { readonly activeProject: string; read
 	return { activeProject: state.activeProject, dbPath: project.dbPath };
 }
 
+export function resolveGraphiqBinary(): string | null {
+	const path = process.env.PATH ?? "";
+	const candidates = path
+		.split(delimiter)
+		.filter((entry) => entry.length > 0)
+		.map((entry) => join(entry, "graphiq"));
+	candidates.push(join(homedir(), ".local", "bin", "graphiq"));
+	for (const candidate of candidates) {
+		try {
+			accessSync(candidate, constants.X_OK);
+			return candidate;
+		} catch {
+			// not executable, try next
+		}
+	}
+	return null;
+}
+
 export async function runGraphiqCli(args: readonly string[], timeoutMs = 15_000): Promise<GraphiqCommandResult> {
 	const active = getActiveGraphiqDbPath();
 	if (!active) {
@@ -31,7 +49,11 @@ export async function runGraphiqCli(args: readonly string[], timeoutMs = 15_000)
 		throw new Error(`GraphIQ database not found for active project: ${active.dbPath}`);
 	}
 
-	const result = await runCommand("graphiq", [...args, "--db", active.dbPath], timeoutMs);
+	const binary = resolveGraphiqBinary();
+	if (!binary) {
+		throw new Error("GraphIQ binary not found on PATH or in ~/.local/bin. Reinstall with `signet graphiq install`.");
+	}
+	const result = await runCommand(binary, [...args, "--db", active.dbPath], timeoutMs);
 	if (result.code !== 0) {
 		throw new Error(result.stderr.trim() || result.stdout.trim() || `graphiq exited with code ${result.code}`);
 	}

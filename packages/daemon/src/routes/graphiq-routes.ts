@@ -1,6 +1,5 @@
 import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	disableGraphiqState,
@@ -11,7 +10,7 @@ import {
 } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
-import { getActiveGraphiqDbPath, getAgentsDir, runCommand } from "../graphiq.js";
+import { getActiveGraphiqDbPath, getAgentsDir, resolveGraphiqBinary, runCommand } from "../graphiq.js";
 import { SIGNET_GRAPHIQ_PLUGIN_ID } from "../plugins/bundled/graphiq.js";
 import { getDefaultPluginHost } from "../plugins/index.js";
 import { authConfig } from "./state.js";
@@ -145,19 +144,6 @@ export function registerGraphiqRoutes(app: Hono): void {
 			return c.json({ success: false, error: message }, 500);
 		}
 	});
-}
-
-function resolveGraphiqBinary(): string | null {
-	const path = process.env.PATH ?? "";
-	const candidates = path
-		.split(delimiter)
-		.filter((entry) => entry.length > 0)
-		.map((entry) => join(entry, "graphiq"));
-	candidates.push(join(homedir(), ".local", "bin", "graphiq"));
-	for (const candidate of candidates) {
-		if (isExecutable(candidate)) return candidate;
-	}
-	return null;
 }
 
 function isGraphiqInstalled(): boolean {
