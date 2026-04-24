@@ -94,7 +94,7 @@ export async function ensureGraphiqInstalled(options: {
 	}
 
 	const spinner = ora("Installing GraphIQ...").start();
-	const result = await runCommand("bash", [script, "install"]);
+	const result = await runCommand("bash", [script, "install"], { env: { GRAPHIQ_ALLOW_LATEST: "1" } });
 	if (result.code !== 0) {
 		spinner.fail("GraphIQ install failed");
 		if (result.stderr.trim()) console.error(chalk.dim(result.stderr.trim()));
@@ -264,9 +264,14 @@ function parseIndexStats(output: string): { files?: number; symbols?: number; ed
 	};
 }
 
-function runCommand(command: string, args: readonly string[]): Promise<CommandResult> {
+function runCommand(
+	command: string,
+	args: readonly string[],
+	options?: { env?: Record<string, string> },
+): Promise<CommandResult> {
 	return new Promise((resolveResult) => {
-		const proc = spawn(command, [...args], { stdio: "pipe", windowsHide: true });
+		const env = options?.env ? { ...process.env, ...options.env } : process.env;
+		const proc = spawn(command, [...args], { stdio: "pipe", windowsHide: true, env });
 		let stdout = "";
 		let stderr = "";
 		proc.stdout.on("data", (chunk) => {

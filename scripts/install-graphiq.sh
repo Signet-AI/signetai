@@ -44,8 +44,13 @@ sha256_file() {
 	fi
 }
 
-latest_release_json() {
-	local url="https://api.github.com/repos/${REPO}/releases/latest"
+release_json_for_tag() {
+	local tag="$1"
+	if [ -z "$tag" ]; then
+		latest_release_json
+		return
+	fi
+	local url="https://api.github.com/repos/${REPO}/releases/tags/${tag}"
 	if command -v curl >/dev/null 2>&1; then
 		curl -fsSL --max-time 15 "$url" 2>/dev/null
 	elif command -v wget >/dev/null 2>&1; then
@@ -59,14 +64,18 @@ cmd_install() {
 	target="$(detect_target)"
 	tarball="graphiq-${target}.tar.gz"
 
-	local release_json
-	release_json="$(latest_release_json)"
-	[ -n "$release_json" ] || die "Could not fetch release metadata from GitHub"
-
 	if [ -n "${GRAPHIQ_VERSION:-}" ]; then
 		tag="$GRAPHIQ_VERSION"
 	else
 		[ "${GRAPHIQ_ALLOW_LATEST:-}" = "1" ] || die "Set GRAPHIQ_VERSION to pin a release tag, or GRAPHIQ_ALLOW_LATEST=1 to opt into latest"
+		tag=""
+	fi
+
+	local release_json
+	release_json="$(release_json_for_tag "$tag")"
+	[ -n "$release_json" ] || die "Could not fetch release metadata from GitHub"
+
+	if [ -z "$tag" ]; then
 		tag="$(echo "$release_json" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
 	fi
 	[ -n "$tag" ] || die "Could not determine release tag"

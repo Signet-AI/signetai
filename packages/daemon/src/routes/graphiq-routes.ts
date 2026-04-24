@@ -2,7 +2,13 @@ import { constants, accessSync, existsSync, readFileSync, statSync } from "node:
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { disableGraphiqState, enableGraphiqState, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
+import {
+	disableGraphiqState,
+	enableGraphiqState,
+	readGraphiqState,
+	updateGraphiqActiveProject,
+	writeGraphiqState,
+} from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getActiveGraphiqDbPath, getAgentsDir, runCommand } from "../graphiq.js";
@@ -170,7 +176,7 @@ async function installGraphiq(): Promise<{ success: boolean; source?: string; er
 	}
 
 	try {
-		const result = await runCommand("bash", [script, "install"], 120_000);
+		const result = await runCommand("bash", [script, "install"], 120_000, { GRAPHIQ_ALLOW_LATEST: "1" });
 		if (result.code === 0 && isGraphiqInstalled()) {
 			return { success: true, source: "script" };
 		}
@@ -188,7 +194,7 @@ async function updateGraphiq(): Promise<{ success: boolean; message?: string; er
 	}
 
 	try {
-		const result = await runCommand("bash", [script, "update"], 120_000);
+		const result = await runCommand("bash", [script, "update"], 120_000, { GRAPHIQ_ALLOW_LATEST: "1" });
 		if (result.code === 0) {
 			return { success: true, message: "GraphIQ updated via script" };
 		}
@@ -254,7 +260,5 @@ export function autoConnectGraphiq(projectPath: string | undefined): void {
 	const known = state.indexedProjects.some((p) => p.path === resolved);
 	if (!known) return;
 
-	updateGraphiqActiveProject(agentsDir, {
-		projectPath,
-	});
+	writeGraphiqState(agentsDir, { ...state, activeProject: resolved });
 }

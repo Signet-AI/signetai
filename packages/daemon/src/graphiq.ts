@@ -46,9 +46,11 @@ export function runCommand(
 	command: string,
 	args: readonly string[],
 	timeoutMs: number,
+	extraEnv?: Record<string, string>,
 ): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
 	return new Promise((resolveResult) => {
-		const proc = spawn(command, [...args], { stdio: "pipe", windowsHide: true });
+		const env = extraEnv ? { ...process.env, ...extraEnv } : process.env;
+		const proc = spawn(command, [...args], { stdio: "pipe", windowsHide: true, env });
 		const hardKillGraceMs = Math.min(1_000, Math.max(100, Math.floor(timeoutMs / 4)));
 		let settled = false;
 		let stdout = "";
