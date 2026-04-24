@@ -45,7 +45,7 @@ export function createDaemonClient(port: number): {
 	) => Promise<DaemonFetchResult<T>>;
 	readonly secretApiCall: DaemonApiCall;
 } {
-	const url = `http://localhost:${port}`;
+	const url = resolveDaemonClientUrl(port);
 
 	const fetchDaemonResult = async <T>(
 		path: string,
@@ -118,6 +118,32 @@ export function createDaemonClient(port: number): {
 		fetchDaemonResult,
 		secretApiCall,
 	};
+}
+
+function readEnv(name: string): string | undefined {
+	const value = process.env[name];
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function trimTrailingSlash(value: string): string {
+	return value.replace(/\/+$/, "");
+}
+
+function resolveDaemonClientUrl(port: number): string {
+	const explicit = readEnv("SIGNET_DAEMON_URL");
+	if (explicit) {
+		return trimTrailingSlash(explicit);
+	}
+
+	const host = readEnv("SIGNET_HOST");
+	const envPort = readEnv("SIGNET_PORT");
+	if (host || envPort) {
+		return `http://${host ?? "localhost"}:${envPort ?? String(port)}`;
+	}
+
+	return `http://localhost:${port}`;
 }
 
 export async function ensureDaemonRunning(

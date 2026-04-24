@@ -253,6 +253,18 @@ grace. Codex `UserPromptSubmit` defaults to 7 seconds: `SIGNET_PROMPT_SUBMIT_TIM
 or `signet connect codex` after upgrading to rewrite an existing
 `~/.codex/hooks.json`.
 
+For a remote Signet daemon, set `SIGNET_DAEMON_URL` before running the
+Codex connector:
+
+```bash
+SIGNET_DAEMON_URL=http://192.168.0.60:3850 signet setup --harness codex
+```
+
+When `SIGNET_DAEMON_URL` is set, the Codex connector writes
+`[mcp_servers.signet] url = "<daemon>/mcp"` and bakes the same daemon URL
+into the generated lifecycle hook commands. This keeps on-demand MCP tools
+and automatic lifecycle memory pointed at the same Signet instance.
+
 Codex matches the session-start, prompt-submit, and session-end path, but
 it does **not** currently expose the same compaction lifecycle fidelity as
 Claude Code or OpenCode.
@@ -275,6 +287,10 @@ tools (namespaced as `mcp__signet__*`):
 - `memory_list` — list recent memories
 - `memory_modify` — update existing memory
 - `memory_forget` — delete a memory
+
+MCP tools do not replace hooks. MCP gives Codex on-demand tools during a
+session; hooks provide automatic identity injection, prompt-time recall,
+and session-end extraction.
 
 ### Extraction provider
 

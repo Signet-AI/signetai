@@ -27,6 +27,7 @@ let hooksPath: string;
 let previousSessionStartTimeout: string | undefined;
 let previousFetchTimeout: string | undefined;
 let previousPromptSubmitTimeout: string | undefined;
+let previousDaemonUrl: string | undefined;
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -40,9 +41,11 @@ beforeEach(() => {
 	previousSessionStartTimeout = process.env.SIGNET_SESSION_START_TIMEOUT;
 	previousFetchTimeout = process.env.SIGNET_FETCH_TIMEOUT;
 	previousPromptSubmitTimeout = process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
+	previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
 	Reflect.deleteProperty(process.env, "SIGNET_SESSION_START_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_FETCH_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_PROMPT_SUBMIT_TIMEOUT");
+	Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
 	tempHome = join(tmpdir(), `signet-codex-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	codexDir = join(tempHome, ".codex");
 	configPath = join(codexDir, "config.toml");
@@ -54,6 +57,7 @@ afterEach(() => {
 	restoreEnv("SIGNET_SESSION_START_TIMEOUT", previousSessionStartTimeout);
 	restoreEnv("SIGNET_FETCH_TIMEOUT", previousFetchTimeout);
 	restoreEnv("SIGNET_PROMPT_SUBMIT_TIMEOUT", previousPromptSubmitTimeout);
+	restoreEnv("SIGNET_DAEMON_URL", previousDaemonUrl);
 	rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -152,6 +156,39 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 
 		const content = readFileSync(configPath, "utf-8");
 		expect(content.match(/\[mcp_servers\.signet\]/g)?.length).toBe(1);
+	});
+
+	test("uses remote HTTP MCP URL when SIGNET_DAEMON_URL is configured", async () => {
+		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850";
+
+		await connector().install(tempHome);
+
+		const content = readFileSync(configPath, "utf-8");
+		expect(content).toContain("[mcp_servers.signet]");
+		expect(content).toContain("url = 'http://192.168.0.60:3850/mcp'");
+		expect(content).toContain("startup_timeout_sec = 10");
+		expect(content).toContain("tool_timeout_sec = 30");
+		expect(content).not.toContain("command = 'signet-mcp'");
+	});
+
+	test("still writes Codex lifecycle hooks when remote HTTP MCP is configured", async () => {
+		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850/";
+
+		await connector().install(tempHome);
+
+		const json = readHooksJson();
+		const hooks = json.hooks as Record<string, Record<string, unknown>[]>;
+		const startHandler = ((hooks.SessionStart[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
+		const promptHandler = (
+			(hooks.UserPromptSubmit[0] as Record<string, unknown>).hooks as Record<string, unknown>[]
+		)[0];
+
+		expect(startHandler.command).toBe(
+			"SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook session-start -H codex --codex-json",
+		);
+		expect(promptHandler.command).toBe(
+			"SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook user-prompt-submit -H codex --codex-json",
+		);
 	});
 });
 

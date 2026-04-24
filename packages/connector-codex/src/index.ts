@@ -21,12 +21,37 @@ function resolveSignetArgs(): string[] {
 
 /** Resolve signet-mcp as { command, args } for Codex config.toml.
  *  Codex expects `command` as a string and `args` as a separate array. */
-function resolveSignetMcp(): { command: string; args: string[] } {
+function resolveSignetMcp(): { command: string; args: string[] } | { url: string; startupTimeoutSec: number; toolTimeoutSec: number } {
+	const remoteDaemonUrl = resolveRemoteDaemonUrl();
+	if (remoteDaemonUrl) {
+		return {
+			url: `${remoteDaemonUrl}/mcp`,
+			startupTimeoutSec: 10,
+			toolTimeoutSec: 30,
+		};
+	}
 	if (process.platform !== "win32") return { command: "signet-mcp", args: [] };
 	const entry = process.argv[1] || "";
 	const mcpJs = join(entry, "..", "..", "bin", "mcp-stdio.js");
 	if (existsSync(mcpJs)) return { command: process.execPath, args: [mcpJs] };
 	return { command: "signet-mcp", args: [] };
+}
+
+function readEnv(name: string): string | undefined {
+	const value = process.env[name];
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function trimTrailingSlash(value: string): string {
+	return value.replace(/\/+$/, "");
+}
+
+function resolveRemoteDaemonUrl(): string | null {
+	const explicit = readEnv("SIGNET_DAEMON_URL");
+	if (!explicit) return null;
+	return trimTrailingSlash(explicit);
 }
 
 // ---------------------------------------------------------------------------
@@ -86,13 +111,28 @@ function resolveCodexPromptSubmitTimeoutSeconds(): number {
 	);
 }
 
-function buildHooksFile(signetArgs: string[]): HooksFile {
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function withRemoteDaemonEnv(command: string, remoteDaemonUrl: string | null): string {
+	if (!remoteDaemonUrl) return command;
+	if (process.platform === "win32") {
+		return `set "SIGNET_DAEMON_URL=${remoteDaemonUrl}" && ${command}`;
+	}
+	return `SIGNET_DAEMON_URL=${shellQuote(remoteDaemonUrl)} ${command}`;
+}
+
+function buildHooksFile(signetArgs: string[], remoteDaemonUrl: string | null = resolveRemoteDaemonUrl()): HooksFile {
 	const cmd = (subcommand: string, secs: number, codexJson = true): MatcherGroup => ({
 		_signet: true,
 		hooks: [
 			{
 				type: "command",
-				command: [...signetArgs, "hook", subcommand, "-H", "codex", ...(codexJson ? ["--codex-json"] : [])].join(" "),
+				command: withRemoteDaemonEnv(
+					[...signetArgs, "hook", subcommand, "-H", "codex", ...(codexJson ? ["--codex-json"] : [])].join(" "),
+					remoteDaemonUrl,
+				),
 				timeout: secs,
 			},
 		],
@@ -249,7 +289,19 @@ function tomlInlineArray(items: string[]): string {
 	return `[${items.map(tomlQuote).join(", ")}]`;
 }
 
-export function buildMcpBlock(mcp: { command: string; args: string[] }): string {
+export function buildMcpBlock(
+	mcp: { command: string; args: string[] } | { url: string; startupTimeoutSec: number; toolTimeoutSec: number },
+): string {
+	if ("url" in mcp) {
+		return [
+			"# Signet MCP server",
+			"[mcp_servers.signet]",
+			`url = ${tomlQuote(mcp.url)}`,
+			`startup_timeout_sec = ${mcp.startupTimeoutSec}`,
+			`tool_timeout_sec = ${mcp.toolTimeoutSec}`,
+			"",
+		].join("\n");
+	}
 	let block = `# Signet MCP server\n[mcp_servers.signet]\ncommand = ${tomlQuote(mcp.command)}\n`;
 	if (mcp.args.length > 0) {
 		block += `args = ${tomlInlineArray(mcp.args)}\n`;
@@ -266,7 +318,10 @@ export function buildMcpBlock(mcp: { command: string; args: string[] }): string 
 	return block;
 }
 
-function patchConfigToml(path: string, mcp: { command: string; args: string[] }): boolean {
+function patchConfigToml(
+	path: string,
+	mcp: { command: string; args: string[] } | { url: string; startupTimeoutSec: number; toolTimeoutSec: number },
+): boolean {
 	const dir = join(path, "..");
 	mkdirSync(dir, { recursive: true });
 
