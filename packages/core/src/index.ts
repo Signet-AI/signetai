@@ -174,6 +174,7 @@ export {
 	getGraphiqProjectDbPath,
 	getGraphiqStatePath,
 	readGraphiqState,
+	setGraphiqActiveProject,
 	updateGraphiqActiveProject,
 	writeGraphiqState,
 } from "./graphiq";
