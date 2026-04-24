@@ -44,6 +44,7 @@ import { writeCompactionArtifact } from "../memory-lineage.js";
 import { hybridRecall } from "../memory-search";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
 import { isNoiseSession } from "../session-noise";
+import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	type RuntimePath,
 	claimSession,
@@ -262,6 +263,8 @@ function registerSessionStart(app: Hono): void {
 			});
 
 			stampHarness(body.harness);
+
+			autoConnectGraphiq(parseOptionalString(body.project));
 
 			if (checkBypass(body)) {
 				return c.json({ inject: "", memories: [], bypassed: true });

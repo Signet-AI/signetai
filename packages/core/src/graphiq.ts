@@ -17,7 +17,7 @@ export interface GraphiqPluginState {
 	readonly pluginId: typeof SIGNET_GRAPHIQ_PLUGIN_ID;
 	readonly enabled: boolean;
 	readonly managedBy: "signet";
-	readonly installSource?: "homebrew" | "source" | "existing";
+	readonly installSource?: "script" | "homebrew" | "source" | "existing";
 	readonly activeProject?: string;
 	readonly indexedProjects: readonly GraphiqIndexedProject[];
 	readonly updatedAt: string;
@@ -162,7 +162,7 @@ function parseIndexedProject(value: unknown): GraphiqIndexedProject | null {
 }
 
 function parseInstallSource(value: unknown): GraphiqPluginState["installSource"] | undefined {
-	return value === "homebrew" || value === "source" || value === "existing" ? value : undefined;
+	return value === "script" || value === "homebrew" || value === "source" || value === "existing" ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

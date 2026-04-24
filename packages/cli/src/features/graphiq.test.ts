@@ -55,14 +55,14 @@ describe("GraphIQ plugin install", () => {
 		expect(state.activeProject).toBe(projectPath);
 	});
 
-	test("pins source fallback cargo installs to a fixed GraphIQ revision", async () => {
+	test("uses install script for GraphIQ installation", async () => {
 		const basePath = makeRoot();
 		const binDir = join(basePath, "bin");
-		const capturePath = join(basePath, "cargo-args.txt");
+		const capturePath = join(basePath, "install-args.txt");
 		mkdirSync(binDir, { recursive: true });
-		const cargoPath = join(binDir, "cargo");
-		writeFileSync(cargoPath, `#!/bin/sh\necho "$@" >> ${JSON.stringify(capturePath)}\n`);
-		chmodSync(cargoPath, 0o755);
+		const bashPath = join(binDir, "bash");
+		writeFileSync(bashPath, `#!/bin/sh\necho "$@" >> ${JSON.stringify(capturePath)}\nexit 0\n`);
+		chmodSync(bashPath, 0o755);
 
 		const originalPath = process.env.PATH;
 		process.env.PATH = binDir;
@@ -76,13 +76,8 @@ describe("GraphIQ plugin install", () => {
 			}
 		}
 
-		const cargoArgs = readFileSync(capturePath, "utf-8");
-		expect(cargoArgs).toContain(
-			"install --git https://github.com/aaf2tbz/graphiq --rev 156f31daf366e9b68d75bdaa4069058666ecc518 graphiq-cli",
-		);
-		expect(cargoArgs).toContain(
-			"install --git https://github.com/aaf2tbz/graphiq --rev 156f31daf366e9b68d75bdaa4069058666ecc518 graphiq-mcp",
-		);
+		const args = readFileSync(capturePath, "utf-8");
+		expect(args).toContain("install");
 	});
 
 	test("does not run GraphIQ without --db when active project metadata is missing", async () => {

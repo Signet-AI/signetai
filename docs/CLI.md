@@ -322,7 +322,7 @@ Manage the optional verified GraphIQ code retrieval plugin.
 
 | Command | Description |
 |---------|-------------|
-| `signet graphiq install` | Install GraphIQ with Homebrew, falling back to source, and enable the plugin |
+| `signet graphiq install` | Install GraphIQ from GitHub releases via script and enable the plugin |
 | `signet graphiq status` | Show GraphIQ status for the active indexed project |
 | `signet graphiq doctor` | Diagnose the active GraphIQ index |
 | `signet graphiq upgrade-index` | Rebuild stale artifacts for the active project |

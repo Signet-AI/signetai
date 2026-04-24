@@ -1,5 +1,6 @@
 import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { disableGraphiqState, enableGraphiqState, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
@@ -151,47 +152,41 @@ function isGraphiqInstalled(): boolean {
 	});
 }
 
-async function installGraphiq(): Promise<{ success: boolean; source?: string; error?: string }> {
-	const homebrewPath = process.env.PATH?.split(delimiter)
-		.map((d) => join(d, "brew"))
-		.find(isExecutable);
-
-	if (homebrewPath) {
-		try {
-			const tap = await runCommand(homebrewPath, ["tap", "aaf2tbz/graphiq"], 30_000);
-			if (tap.code === 0 || tap.stderr.includes("already tapped")) {
-				const install = await runCommand(homebrewPath, ["install", "graphiq"], 120_000);
-				if (install.code === 0 && isGraphiqInstalled()) {
-					return { success: true, source: "homebrew" };
-				}
-			}
-		} catch {
-			// fall through
-		}
-	}
-
-	return {
-		success: false,
-		error:
-			"Failed to install GraphIQ. Ensure Homebrew is installed, then run: brew tap aaf2tbz/graphiq && brew install graphiq",
-	};
+function getInstallScriptPath(): string {
+	const thisDir = dirname(fileURLToPath(import.meta.url));
+	return resolve(thisDir, "../../../../scripts/install-graphiq.sh");
 }
 
-async function updateGraphiq(): Promise<{ success: boolean; message?: string; error?: string }> {
-	const homebrewPath = process.env.PATH?.split(delimiter)
-		.map((d) => join(d, "brew"))
-		.find(isExecutable);
-
-	if (!homebrewPath) {
-		return { success: false, error: "Homebrew not found on PATH. GraphIQ can only be updated via Homebrew." };
+async function installGraphiq(): Promise<{ success: boolean; source?: string; error?: string }> {
+	const script = getInstallScriptPath();
+	if (!existsSync(script)) {
+		return { success: false, error: `Install script not found: ${script}` };
 	}
 
 	try {
-		const result = await runCommand(homebrewPath, ["upgrade", "graphiq"], 120_000);
-		if (result.code === 0) {
-			return { success: true, message: "GraphIQ updated via Homebrew" };
+		const result = await runCommand("bash", [script, "install"], 120_000);
+		if (result.code === 0 && isGraphiqInstalled()) {
+			return { success: true, source: "script" };
 		}
-		return { success: false, error: result.stderr.trim() || result.stdout.trim() || "brew upgrade graphiq failed" };
+		const detail = result.stderr.trim() || result.stdout.trim() || `install script exited with code ${result.code}`;
+		return { success: false, error: detail };
+	} catch (err) {
+		return { success: false, error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+async function updateGraphiq(): Promise<{ success: boolean; message?: string; error?: string }> {
+	const script = getInstallScriptPath();
+	if (!existsSync(script)) {
+		return { success: false, error: `Install script not found: ${script}` };
+	}
+
+	try {
+		const result = await runCommand("bash", [script, "update"], 120_000);
+		if (result.code === 0) {
+			return { success: true, message: "GraphIQ updated via script" };
+		}
+		return { success: false, error: result.stderr.trim() || result.stdout.trim() || "update script failed" };
 	} catch (err) {
 		return { success: false, error: err instanceof Error ? err.message : String(err) };
 	}
@@ -241,4 +236,19 @@ function discoverGraphiqProjects(
 		}
 	}
 	return results;
+}
+
+export function autoConnectGraphiq(projectPath: string | undefined): void {
+	if (!projectPath) return;
+	const dbPath = join(resolve(projectPath), ".graphiq", "graphiq.db");
+	if (!existsSync(dbPath)) return;
+
+	const agentsDir = getAgentsDir();
+	const state = readGraphiqState(agentsDir);
+	if (!state.enabled) return;
+	if (state.activeProject === resolve(projectPath)) return;
+
+	updateGraphiqActiveProject(agentsDir, {
+		projectPath,
+	});
 }

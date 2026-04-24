@@ -149,7 +149,7 @@ explains what it does before asking whether to enable it. For automation, pass
 
 GraphIQ is an optional verified managed plugin for fast local code retrieval.
 It is not installed by default. Interactive setup asks whether to install it;
-automation can pass `--with-graphiq` to install through Homebrew with source
+automation can pass `--with-graphiq` to install via script from GitHub releases,
 fallback, or `--disable-graphiq` to keep it disabled.
 
 If OpenClaw is configured to use the same workspace path, setup now enforces
