@@ -13,15 +13,29 @@ import {
 import { parseSimpleYaml } from "../yaml";
 
 const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
+const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
+const ORIGINAL_HERMES_HOME = process.env.HERMES_HOME;
 
 beforeEach(() => mkdirSync(TMP, { recursive: true }));
 afterEach(() => {
+	if (ORIGINAL_HOME === undefined) {
+		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+		delete process.env.HOME;
+	} else {
+		process.env.HOME = ORIGINAL_HOME;
+	}
 	if (ORIGINAL_HERMES_REPO === undefined) {
 		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
 		delete process.env.HERMES_REPO;
 	} else {
 		process.env.HERMES_REPO = ORIGINAL_HERMES_REPO;
+	}
+	if (ORIGINAL_HERMES_HOME === undefined) {
+		// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+		delete process.env.HERMES_HOME;
+	} else {
+		process.env.HERMES_HOME = ORIGINAL_HERMES_HOME;
 	}
 	rmSync(TMP, { recursive: true, force: true });
 });
@@ -115,6 +129,25 @@ describe("parseSimpleYaml", () => {
 });
 
 describe("detectExistingSetup", () => {
+	test("detects Hermes Agent in the default ~/.hermes install path", () => {
+		process.env.HOME = TMP;
+		mkdirSync(join(TMP, ".hermes", "plugins", "memory"), { recursive: true });
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.hermesAgent).toBe(true);
+	});
+
+	test("detects Hermes Agent from HERMES_HOME without HERMES_REPO", () => {
+		const hermesHome = join(TMP, "custom-hermes-home");
+		process.env.HERMES_HOME = hermesHome;
+		mkdirSync(join(hermesHome, "plugins", "memory"), { recursive: true });
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.hermesAgent).toBe(true);
+	});
+
 	test("detects Hermes Agent before the Signet memory plugin is installed", () => {
 		const hermesRepo = join(TMP, "hermes-agent");
 		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });

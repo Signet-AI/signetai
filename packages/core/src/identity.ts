@@ -355,6 +355,15 @@ function isForgeInstalled(agentsDir: string, home: string): boolean {
 	return findSignetForgeBinary(agentsDir, home) !== null;
 }
 
+function userHome(): string {
+	return process.env.HOME?.trim() || homedir();
+}
+
+export function resolveHermesHomePath(): string {
+	const hermesHome = process.env.HERMES_HOME?.trim();
+	return hermesHome || join(userHome(), ".hermes");
+}
+
 /**
  * Canonical list of common Hermes Agent repo install paths.
  *
@@ -362,8 +371,10 @@ function isForgeInstalled(agentsDir: string, home: string): boolean {
  * the list, eliminating parity drift between install and detection logic.
  */
 export function hermesAgentCandidateDirs(): readonly string[] {
-	const home = homedir();
+	const home = userHome();
+	const hermesHome = resolveHermesHomePath();
 	return [
+		hermesHome,
 		join(home, "hermes-agent"),
 		join(home, ".local", "share", "hermes-agent"),
 		join(home, "src", "hermes-agent"),
@@ -377,6 +388,8 @@ export function hermesAgentCandidateDirs(): readonly string[] {
  * This detects a Hermes install before the Signet plugin has been copied in.
  * It checks for the repo's `plugins/memory` tree rather than the Signet plugin
  * file, so setup can offer and install the Hermes connector on first run.
+ * Resolution order: HERMES_REPO, HERMES_HOME, ~/.hermes, legacy/common paths,
+ * then the hermes executable location.
  */
 export function resolveHermesRepoPath(): string | null {
 	const hermesRepo = process.env.HERMES_REPO?.trim();
@@ -408,7 +421,7 @@ export function resolveHermesRepoPath(): string | null {
 /**
  * Resolve the path to the Signet plugin file inside the Hermes Agent repo.
  *
- * Checks (in order): `HERMES_REPO` env var, four common install paths, then
+ * Checks (in order): `HERMES_REPO` env var, common install paths, then
  * falls back to resolving the `hermes` CLI via `which(1)` + `realpathSync`.
  *
  * Returns the full path to `plugins/memory/signet/__init__.py` when found,

@@ -241,6 +241,7 @@ export {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolveSignetForgeManagedPath,
 	resolveAgentBasePath,
+	resolveHermesHomePath,
 	resolveHermesRepoPath,
 	resolveHermesRepoPluginPath,
 	hermesAgentCandidateDirs,

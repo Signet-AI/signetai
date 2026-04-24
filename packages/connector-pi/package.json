@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-pi",
-  "version": "0.108.2",
+  "version": "0.108.3",
   "description": "Signet connector for pi",
   "type": "module",
   "main": "./dist/index.js",

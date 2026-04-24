@@ -39,6 +39,22 @@ import {
 } from "./setup-shared.js";
 import type { SetupDeps } from "./setup-types.js";
 
+export function detectedHarnessesForExistingSetup(
+	detection: SetupDetection,
+	configuredHarnessList: readonly string[],
+): string[] {
+	const detected: string[] = [];
+	if (detection.harnesses.claudeCode) detected.push("claude-code");
+	if (detection.harnesses.openclaw) detected.push("openclaw");
+	if (detection.harnesses.opencode) detected.push("opencode");
+	if (detection.harnesses.codex) detected.push("codex");
+	if (detection.harnesses.hermesAgent) detected.push("hermes-agent");
+	if (detection.harnesses.gemini) detected.push("gemini");
+	if (detection.harnesses.ohMyPi || configuredHarnessList.includes("oh-my-pi")) detected.push("oh-my-pi");
+	if (detection.harnesses.pi || configuredHarnessList.includes("pi")) detected.push("pi");
+	return detected;
+}
+
 export async function runExistingSetupWizard(
 	basePath: string,
 	detection: SetupDetection,
@@ -121,16 +137,8 @@ export async function runExistingSetupWizard(
 			}
 		}
 
-		const detectedHarnesses: string[] = [];
-		if (detection.harnesses.claudeCode) detectedHarnesses.push("claude-code");
-		if (detection.harnesses.openclaw) detectedHarnesses.push("openclaw");
-		if (detection.harnesses.opencode) detectedHarnesses.push("opencode");
-		if (detection.harnesses.codex) detectedHarnesses.push("codex");
-		if (detection.harnesses.hermesAgent) detectedHarnesses.push("hermes-agent");
-		if (detection.harnesses.gemini) detectedHarnesses.push("gemini");
 		const configuredHarnessList = readHarnesses(existingConfig.harnesses);
-		if (detection.harnesses.ohMyPi || configuredHarnessList.includes("oh-my-pi")) detectedHarnesses.push("oh-my-pi");
-		if (detection.harnesses.pi || configuredHarnessList.includes("pi")) detectedHarnesses.push("pi");
+		const detectedHarnesses = detectedHarnessesForExistingSetup(detection, configuredHarnessList);
 		const wantsForge = detection.harnesses.forge || configuredHarnessList.includes("forge");
 		const installedForgePath = findSignetForgeBinary(basePath);
 		if (wantsForge && installedForgePath) {

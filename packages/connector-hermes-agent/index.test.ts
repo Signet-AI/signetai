@@ -113,13 +113,43 @@ describe("HermesAgentConnector.install()", () => {
 		expect(connector.isInstalled()).toBe(true);
 	});
 
+	it("copies plugin files into ~/.hermes when HERMES_REPO is unset", async () => {
+		const hermesRepo = join(tmpRoot, ".hermes");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+
+		const connector = new HermesAgentConnector();
+		const result = await connector.install(tmpRoot);
+
+		const pluginDir = join(hermesRepo, "plugins", "memory", "signet");
+		expect(result.success).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Hermes Agent install not found"))).toBe(false);
+		expect(existsSync(join(pluginDir, "__init__.py"))).toBe(true);
+		expect(existsSync(join(pluginDir, "client.py"))).toBe(true);
+		expect(connector.isInstalled()).toBe(true);
+	});
+
+	it("copies plugin files into HERMES_HOME when HERMES_REPO is unset", async () => {
+		const hermesHome = join(tmpRoot, "custom-hermes-home");
+		mkdirSync(join(hermesHome, "plugins", "memory"), { recursive: true });
+		process.env.HERMES_HOME = hermesHome;
+
+		const connector = new HermesAgentConnector();
+		const result = await connector.install(tmpRoot);
+
+		const pluginDir = join(hermesHome, "plugins", "memory", "signet");
+		expect(result.success).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Hermes Agent install not found"))).toBe(false);
+		expect(existsSync(join(pluginDir, "__init__.py"))).toBe(true);
+		expect(connector.isInstalled()).toBe(true);
+	});
+
 	it("warns (does not throw) when HERMES_REPO is unset", async () => {
 		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
 
 		const result = await new HermesAgentConnector().install(tmpRoot);
 
 		expect(result.success).toBe(true);
-		expect(result.warnings.some((w) => w.includes("HERMES_REPO"))).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Hermes Agent install not found"))).toBe(true);
 	});
 
 	it("writes daemon env vars into ~/.hermes/.env when SIGNET_DAEMON_URL is set", async () => {

@@ -1,57 +1,11 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
-import { expandHome, hermesAgentCandidateDirs, resolveHermesRepoPluginPath } from "@signet/core";
+import { expandHome, resolveHermesHomePath, resolveHermesRepoPath, resolveHermesRepoPluginPath } from "@signet/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// ---------------------------------------------------------------------------
-// Hermes home discovery
-// ---------------------------------------------------------------------------
-
-/** Resolve the Hermes Agent home directory.
- *  Order: HERMES_HOME env -> ~/.hermes (default) */
-function resolveHermesHome(): string {
-	const explicit = process.env.HERMES_HOME?.trim();
-	if (explicit) return explicit;
-	return join(homedir(), ".hermes");
-}
-
-/**
- * Resolve the Hermes Agent repo directory by checking for a `plugins/memory` tree.
- * Checks HERMES_REPO env, common paths, and falls back to which(1).
- *
- * Note: this checks for Hermes presence, not Signet plugin installation.
- * Use resolveHermesRepoPluginPath() (from @signet/core) for the latter.
- */
-function resolveHermesRepo(): string | null {
-	const explicit = process.env.HERMES_REPO?.trim();
-	if (explicit && existsSync(join(explicit, "plugins", "memory"))) return explicit;
-
-	for (const candidate of hermesAgentCandidateDirs()) {
-		if (existsSync(join(candidate, "plugins", "memory"))) return candidate;
-	}
-
-	// Fallback: resolve via `hermes` CLI in PATH
-	try {
-		const hermesPath = execFileSync("which", ["hermes"], {
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "ignore"],
-			timeout: 3000,
-		}).trim();
-		if (hermesPath) {
-			const repoDir = dirname(realpathSync(hermesPath));
-			if (existsSync(join(repoDir, "plugins", "memory"))) return repoDir;
-		}
-	} catch {
-		// Not in PATH
-	}
-
-	return null;
-}
 
 // ---------------------------------------------------------------------------
 // Plugin file management
@@ -221,11 +175,11 @@ export class HermesAgentConnector extends BaseConnector {
 	readonly harnessId = "hermes-agent";
 
 	private getHermesHome(): string {
-		return resolveHermesHome();
+		return resolveHermesHomePath();
 	}
 
 	private getHermesRepo(): string | null {
-		return resolveHermesRepo();
+		return resolveHermesRepoPath();
 	}
 
 	getConfigPath(): string {
@@ -256,7 +210,7 @@ export class HermesAgentConnector extends BaseConnector {
 			}
 		} else {
 			warnings.push(
-				"Hermes Agent repo not found. Set HERMES_REPO env var to the hermes-agent directory, " +
+				"Hermes Agent install not found. Install Hermes in ~/.hermes or set HERMES_REPO to the hermes-agent directory, " +
 					"then re-run setup. Alternatively, copy the plugin manually:\n" +
 					"  cp -r <signet>/packages/connector-hermes-agent/hermes-plugin/ " +
 					"<hermes-agent>/plugins/memory/signet/",

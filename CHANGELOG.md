@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-24
-- Bug fixes: emit structured hook JSON.
+- Bug fixes: detect default install path; emit structured hook JSON.
 
 ### 2026-04-23
 - Features: add GraphIQ plugin management UI and daemon API; index native harness memories; unify LLM provider plumbing.
@@ -32,6 +32,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: scope Signet memory to named agents; align desktop release build prerequisites.
 
 ## Release Ledger
+
+## [0.108.3] - 2026-04-24
+
+Release summary: 1 bug fix.
+Tag range: `v0.108.2..v0.108.3`.
+
+### Bug Fixes
+
+- **hermes**: detect default install path (#561)
 
 ## [0.108.2] - 2026-04-24
 
