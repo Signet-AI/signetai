@@ -34,23 +34,42 @@ fetch() {
 	fi
 }
 
-latest_tag() {
+sha256_file() {
+	if command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | cut -d' ' -f1
+	elif command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d' ' -f1
+	else
+		die "Neither shasum nor sha256sum found (required for integrity check)"
+	fi
+}
+
+latest_release_json() {
 	local url="https://api.github.com/repos/${REPO}/releases/latest"
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL --max-time 15 "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
+		curl -fsSL --max-time 15 "$url" 2>/dev/null
 	elif command -v wget >/dev/null 2>&1; then
-		wget -qO- --timeout=15 "$url" 2>/dev/null | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
+		wget -qO- --timeout=15 "$url" 2>/dev/null
 	fi
 }
 
 cmd_install() {
 	need tar
-	local target tag url tmpdir tarball
+	local target tag tarball url tmpdir
 	target="$(detect_target)"
-	tag="${GRAPHIQ_VERSION:-$(latest_tag)}"
-	[ -n "$tag" ] || die "Could not determine latest release tag"
 	tarball="graphiq-${target}.tar.gz"
-	url="https://github.com/${REPO}//releases/download/${tag}/${tarball}"
+
+	local release_json
+	release_json="$(latest_release_json)"
+	[ -n "$release_json" ] || die "Could not fetch release metadata from GitHub"
+
+	tag="${GRAPHIQ_VERSION:-$(echo "$release_json" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')}"
+	[ -n "$tag" ] || die "Could not determine release tag"
+
+	local expected_sha
+	expected_sha="$(echo "$release_json" | grep -A3 "\"name\": \"${tarball}\"" | grep '"digest"' | head -1 | sed -E 's/.*sha256:([a-f0-9]+).*/\1/')"
+
+	url="https://github.com/${REPO}/releases/download/${tag}/${tarball}"
 
 	log "Installing graphiq ${tag} for ${target}..."
 
@@ -59,6 +78,18 @@ cmd_install() {
 	trap 'rm -rf "$tmpdir"' EXIT
 
 	fetch "$url" "${tmpdir}/${tarball}"
+
+	if [ -n "$expected_sha" ]; then
+		local actual_sha
+		actual_sha="$(sha256_file "${tmpdir}/${tarball}")"
+		if [ "$actual_sha" != "$expected_sha" ]; then
+			die "SHA256 mismatch for ${tarball}: expected ${expected_sha}, got ${actual_sha}"
+		fi
+		log "Integrity verified (sha256)"
+	else
+		log "WARNING: No checksum found in release metadata — skipping integrity verification"
+	fi
+
 	tar -xzf "${tmpdir}/${tarball}" -C "$tmpdir"
 
 	local bin="${tmpdir}/graphiq"
@@ -92,7 +123,10 @@ cmd_uninstall() {
 }
 
 cmd_version() {
-	if command -v graphiq >/dev/null 2>&1; then
+	local bin="${INSTALL_DIR}/graphiq"
+	if [ -f "$bin" ]; then
+		"$bin" --version 2>/dev/null || echo "unknown"
+	elif command -v graphiq >/dev/null 2>&1; then
 		graphiq --version 2>/dev/null || echo "unknown"
 	else
 		echo "not installed"

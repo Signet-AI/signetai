@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants, accessSync, existsSync, rmSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
@@ -34,9 +35,17 @@ export interface GraphiqUninstallOptions {
 
 type GraphiqInstallSource = "script" | "homebrew" | "source" | "existing";
 
+const DEFAULT_INSTALL_DIR = join(homedir(), ".local", "bin");
+
 function getInstallScriptPath(): string {
 	const thisDir = dirname(fileURLToPath(import.meta.url));
 	return resolve(thisDir, "../../../../scripts/install-graphiq.sh");
+}
+
+function hasGraphiqBinary(): boolean {
+	if (hasCommand("graphiq")) return true;
+	const direct = join(DEFAULT_INSTALL_DIR, "graphiq");
+	return isExecutable(direct);
 }
 
 export function hasCommand(command: string): boolean {
@@ -71,7 +80,7 @@ function isExecutable(path: string): boolean {
 export async function ensureGraphiqInstalled(options: {
 	installIfMissing: boolean;
 }): Promise<GraphiqInstallSource | null> {
-	if (hasCommand("graphiq")) return "existing";
+	if (hasGraphiqBinary()) return "existing";
 	if (!options.installIfMissing) return null;
 
 	const script = getInstallScriptPath();
@@ -87,11 +96,11 @@ export async function ensureGraphiqInstalled(options: {
 		if (result.stderr.trim()) console.error(chalk.dim(result.stderr.trim()));
 		return null;
 	}
-	if (hasCommand("graphiq")) {
+	if (hasGraphiqBinary()) {
 		spinner.succeed("GraphIQ installed");
 		return "script";
 	}
-	spinner.fail("GraphIQ install completed but binary not found on PATH");
+	spinner.fail("GraphIQ install completed but binary not found");
 	return null;
 }
 

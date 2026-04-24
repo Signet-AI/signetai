@@ -1,4 +1,5 @@
 import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { disableGraphiqState, enableGraphiqState, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
@@ -142,6 +143,7 @@ function isGraphiqInstalled(): boolean {
 		.split(delimiter)
 		.filter((entry) => entry.length > 0)
 		.map((entry) => join(entry, "graphiq"));
+	candidates.push(join(homedir(), ".local", "bin", "graphiq"));
 	return candidates.some((candidate) => {
 		try {
 			accessSync(candidate, constants.X_OK);
@@ -240,13 +242,15 @@ function discoverGraphiqProjects(
 
 export function autoConnectGraphiq(projectPath: string | undefined): void {
 	if (!projectPath) return;
-	const dbPath = join(resolve(projectPath), ".graphiq", "graphiq.db");
-	if (!existsSync(dbPath)) return;
+	const resolved = resolve(projectPath);
+	const dbPath = join(resolved, ".graphiq", "graphiq.db");
+	const manifestPath = join(resolved, ".graphiq", "manifest.json");
+	if (!existsSync(dbPath) || !existsSync(manifestPath)) return;
 
 	const agentsDir = getAgentsDir();
 	const state = readGraphiqState(agentsDir);
 	if (!state.enabled) return;
-	if (state.activeProject === resolve(projectPath)) return;
+	if (state.activeProject === resolved) return;
 
 	updateGraphiqActiveProject(agentsDir, {
 		projectPath,
