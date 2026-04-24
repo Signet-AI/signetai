@@ -62,6 +62,24 @@ release_json_for_tag() {
 	fetch_release_json "https://api.github.com/repos/${REPO}/releases/tags/${tag}"
 }
 
+extract_asset_sha256() {
+	local json="$1" asset_name="$2"
+	if command -v jq >/dev/null 2>&1; then
+		echo "$json" | jq -r --arg name "$asset_name" \
+			'.assets[] | select(.name == $name) | .digest // ""' 2>/dev/null \
+			| sed -E 's/^sha256://'
+		return
+	fi
+	echo "$json" | awk -v name="$asset_name" '
+		BEGIN { RS = "{"; in_asset = 0; asset_name = "" }
+		/"name"\s*:\s*"/ { gsub(/.*"name"\s*:\s*"/, ""); gsub(/".*/, ""); asset_name = $0 }
+		/"digest"\s*:\s*"/ && asset_name == name {
+			gsub(/.*"digest"\s*:\s*"/, ""); gsub(/".*/, "");
+			gsub(/^sha256:/, ""); print; found = 1; exit
+		}
+	' 2>/dev/null
+}
+
 cmd_install() {
 	need tar
 	local target tag tarball url tmpdir
@@ -80,12 +98,16 @@ cmd_install() {
 	[ -n "$release_json" ] || die "Could not fetch release metadata from GitHub"
 
 	if [ -z "$tag" ]; then
-		tag="$(echo "$release_json" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+		if command -v jq >/dev/null 2>&1; then
+			tag="$(echo "$release_json" | jq -r '.tag_name // empty' 2>/dev/null)"
+		else
+			tag="$(echo "$release_json" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+		fi
 	fi
 	[ -n "$tag" ] || die "Could not determine release tag"
 
 	local expected_sha
-	expected_sha="$(echo "$release_json" | grep -A3 "\"name\": \"${tarball}\"" | grep '"digest"' | head -1 | sed -E 's/.*sha256:([a-f0-9]+).*/\1/')"
+	expected_sha="$(extract_asset_sha256 "$release_json" "$tarball")"
 
 	url="https://github.com/${REPO}/releases/download/${tag}/${tarball}"
 
