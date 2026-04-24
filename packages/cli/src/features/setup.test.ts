@@ -5,10 +5,11 @@ import { join } from "node:path";
 import {
 	SIGNET_SECRETS_PLUGIN_ID,
 	type SetupDetection,
+	detectExistingSetup,
 	readGraphiqState,
 	updateGraphiqActiveProject,
 } from "@signet/core";
-import { runExistingSetupWizard } from "./setup-migrate.js";
+import { detectedHarnessesForExistingSetup, runExistingSetupWizard } from "./setup-migrate.js";
 import type { SetupDeps } from "./setup-types.js";
 import { setupWizard } from "./setup.js";
 
@@ -22,6 +23,10 @@ const NO_HARNESSES = {
 	forge: false,
 	hermesAgent: false,
 };
+
+const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
+const ORIGINAL_HERMES_HOME = process.env.HERMES_HOME;
 
 function fakeDetection(basePath = "/tmp/agents"): SetupDetection {
 	return {
@@ -82,6 +87,24 @@ describe("setupWizard non-interactive harness hooks", () => {
 	let root: string;
 
 	afterEach(() => {
+		if (ORIGINAL_HOME === undefined) {
+			// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+			delete process.env.HOME;
+		} else {
+			process.env.HOME = ORIGINAL_HOME;
+		}
+		if (ORIGINAL_HERMES_REPO === undefined) {
+			// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+			delete process.env.HERMES_REPO;
+		} else {
+			process.env.HERMES_REPO = ORIGINAL_HERMES_REPO;
+		}
+		if (ORIGINAL_HERMES_HOME === undefined) {
+			// biome-ignore lint/performance/noDelete: assigning undefined stores the string "undefined"
+			delete process.env.HERMES_HOME;
+		} else {
+			process.env.HERMES_HOME = ORIGINAL_HERMES_HOME;
+		}
 		if (root) {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -265,6 +288,22 @@ describe("setupWizard non-interactive harness hooks", () => {
 		const state = readGraphiqState(basePath);
 		expect(state.enabled).toBe(false);
 		expect(state.activeProject).toBe(projectPath);
+	});
+
+	it("includes Hermes in migration harnesses when detected in ~/.hermes", () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-hermes-default-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(join(root, ".hermes", "plugins", "memory"), { recursive: true });
+		process.env.HOME = root;
+		// biome-ignore lint/performance/noDelete: default ~/.hermes must be enough
+		delete process.env.HERMES_REPO;
+		// biome-ignore lint/performance/noDelete: default ~/.hermes must be enough
+		delete process.env.HERMES_HOME;
+
+		const detection = detectExistingSetup(basePath);
+		expect(detection.harnesses.hermesAgent).toBe(true);
+		expect(detectedHarnessesForExistingSetup(detection, [])).toContain("hermes-agent");
 	});
 
 	it("fails fast on unknown non-interactive harness values in the existing-install path", async () => {
