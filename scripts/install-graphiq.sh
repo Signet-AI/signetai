@@ -63,7 +63,12 @@ cmd_install() {
 	release_json="$(latest_release_json)"
 	[ -n "$release_json" ] || die "Could not fetch release metadata from GitHub"
 
-	tag="${GRAPHIQ_VERSION:-$(echo "$release_json" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')}"
+	if [ -n "${GRAPHIQ_VERSION:-}" ]; then
+		tag="$GRAPHIQ_VERSION"
+	else
+		[ "${GRAPHIQ_ALLOW_LATEST:-}" = "1" ] || die "Set GRAPHIQ_VERSION to pin a release tag, or GRAPHIQ_ALLOW_LATEST=1 to opt into latest"
+		tag="$(echo "$release_json" | grep '"tag_name"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+	fi
 	[ -n "$tag" ] || die "Could not determine release tag"
 
 	local expected_sha
@@ -79,16 +84,13 @@ cmd_install() {
 
 	fetch "$url" "${tmpdir}/${tarball}"
 
-	if [ -n "$expected_sha" ]; then
-		local actual_sha
-		actual_sha="$(sha256_file "${tmpdir}/${tarball}")"
-		if [ "$actual_sha" != "$expected_sha" ]; then
-			die "SHA256 mismatch for ${tarball}: expected ${expected_sha}, got ${actual_sha}"
-		fi
-		log "Integrity verified (sha256)"
-	else
-		log "WARNING: No checksum found in release metadata — skipping integrity verification"
+	[ -n "$expected_sha" ] || die "No checksum found in release metadata for ${tarball} — refusing to install without integrity verification"
+	local actual_sha
+	actual_sha="$(sha256_file "${tmpdir}/${tarball}")"
+	if [ "$actual_sha" != "$expected_sha" ]; then
+		die "SHA256 mismatch for ${tarball}: expected ${expected_sha}, got ${actual_sha}"
 	fi
+	log "Integrity verified (sha256)"
 
 	tar -xzf "${tmpdir}/${tarball}" -C "$tmpdir"
 
@@ -145,7 +147,8 @@ Commands:
 
 Environment:
   GRAPHIQ_INSTALL_DIR    Installation directory (default: ~/.local/bin)
-  GRAPHIQ_VERSION        Pin to a specific release tag (default: latest)
+  GRAPHIQ_VERSION        Pin to a specific release tag (required unless GRAPHIQ_ALLOW_LATEST=1)
+  GRAPHIQ_ALLOW_LATEST   Set to 1 to allow downloading the latest release tag
   GRAPHIQ_INSTALL_TIMEOUT  Download timeout in seconds (default: 120)
 EOF
 }

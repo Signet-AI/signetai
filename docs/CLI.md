@@ -180,7 +180,7 @@ Non-interactive behavior:
 - the bundled Signet Secrets core plugin is enabled by default; pass
   `--disable-signet-secrets` to opt out while leaving it installed
 - GraphIQ is optional and disabled by default; pass `--with-graphiq` to install
-  it through Homebrew, with source install as fallback
+  it via the bundled install script (downloads from GitHub releases)
 - explicit provider flags override inferred defaults
 - git: enabled unless `--skip-git` is passed
 - when OpenClaw points at this workspace and no `origin` remote exists, setup

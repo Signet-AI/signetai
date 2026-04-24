@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants, accessSync, existsSync, rmSync } from "node:fs";
-import { delimiter, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
@@ -42,10 +42,14 @@ function getInstallScriptPath(): string {
 	return resolve(thisDir, "../../../../scripts/install-graphiq.sh");
 }
 
-function hasGraphiqBinary(): boolean {
-	if (hasCommand("graphiq")) return true;
+function resolveGraphiqBinary(): string | null {
+	if (hasCommand("graphiq")) return "graphiq";
 	const direct = join(DEFAULT_INSTALL_DIR, "graphiq");
-	return isExecutable(direct);
+	return isExecutable(direct) ? direct : null;
+}
+
+function hasGraphiqBinary(): boolean {
+	return resolveGraphiqBinary() !== null;
 }
 
 export function hasCommand(command: string): boolean {
@@ -135,8 +139,14 @@ export async function indexWithGraphiq(
 		return;
 	}
 
+	const binary = resolveGraphiqBinary();
+	if (!binary) {
+		console.error(chalk.red("GraphIQ binary not found after install"));
+		return;
+	}
+
 	const spinner = ora(`Indexing ${resolved} with GraphIQ...`).start();
-	const result = await runCommand("graphiq", ["index", resolved]);
+	const result = await runCommand(binary, ["index", resolved]);
 	if (result.code !== 0) {
 		spinner.fail("GraphIQ indexing failed");
 		if (result.stderr.trim()) console.error(result.stderr.trim());
@@ -219,8 +229,9 @@ async function runGraphiqForActiveProject(
 		console.log(chalk.yellow("GraphIQ plugin is not active. Run `signet index <path>` first."));
 		return;
 	}
-	if (!hasCommand("graphiq")) {
-		console.error(chalk.red("GraphIQ is not installed or not on PATH."));
+	const binary = resolveGraphiqBinary();
+	if (!binary) {
+		console.error(chalk.red("GraphIQ binary not found. Reinstall with `signet graphiq install`."));
 		return;
 	}
 	const dbPath = state.indexedProjects.find((entry) => entry.path === state.activeProject)?.dbPath;
@@ -235,7 +246,7 @@ async function runGraphiqForActiveProject(
 		return;
 	}
 	const args = [command, "--db", dbPath];
-	const result = await runCommand("graphiq", args);
+	const result = await runCommand(binary, args);
 	if (result.stdout.trim()) console.log(result.stdout.trim());
 	if (result.stderr.trim()) console.error(result.stderr.trim());
 	if (result.code !== 0) {

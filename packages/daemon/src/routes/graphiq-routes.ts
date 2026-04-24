@@ -1,6 +1,6 @@
 import { constants, accessSync, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, resolve, dirname } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { disableGraphiqState, enableGraphiqState, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
 import type { Hono } from "hono";
@@ -116,9 +116,13 @@ export function registerGraphiqRoutes(app: Hono): void {
 
 		const agentsDir = getAgentsDir();
 		try {
+			const binary = resolveGraphiqBinary();
+			if (!binary) {
+				return c.json({ success: false, error: "GraphIQ binary not found after install" }, 500);
+			}
 			const dbDir = join(resolved, ".graphiq");
 			const dbPath = join(dbDir, "graphiq.db");
-			const result = await runCommand("graphiq", ["index", resolved, "--db", dbPath], 300_000);
+			const result = await runCommand(binary, ["index", resolved, "--db", dbPath], 300_000);
 			if (result.code !== 0) {
 				const msg = result.stderr.trim() || result.stdout.trim() || `graphiq index exited with code ${result.code}`;
 				return c.json({ success: false, error: msg }, 500);
@@ -137,21 +141,21 @@ export function registerGraphiqRoutes(app: Hono): void {
 	});
 }
 
-function isGraphiqInstalled(): boolean {
+function resolveGraphiqBinary(): string | null {
 	const path = process.env.PATH ?? "";
 	const candidates = path
 		.split(delimiter)
 		.filter((entry) => entry.length > 0)
 		.map((entry) => join(entry, "graphiq"));
 	candidates.push(join(homedir(), ".local", "bin", "graphiq"));
-	return candidates.some((candidate) => {
-		try {
-			accessSync(candidate, constants.X_OK);
-			return true;
-		} catch {
-			return false;
-		}
-	});
+	for (const candidate of candidates) {
+		if (isExecutable(candidate)) return candidate;
+	}
+	return null;
+}
+
+function isGraphiqInstalled(): boolean {
+	return resolveGraphiqBinary() !== null;
 }
 
 function getInstallScriptPath(): string {
@@ -243,14 +247,12 @@ function discoverGraphiqProjects(
 export function autoConnectGraphiq(projectPath: string | undefined): void {
 	if (!projectPath) return;
 	const resolved = resolve(projectPath);
-	const dbPath = join(resolved, ".graphiq", "graphiq.db");
-	const manifestPath = join(resolved, ".graphiq", "manifest.json");
-	if (!existsSync(dbPath) || !existsSync(manifestPath)) return;
-
 	const agentsDir = getAgentsDir();
 	const state = readGraphiqState(agentsDir);
 	if (!state.enabled) return;
 	if (state.activeProject === resolved) return;
+	const known = state.indexedProjects.some((p) => p.path === resolved);
+	if (!known) return;
 
 	updateGraphiqActiveProject(agentsDir, {
 		projectPath,
