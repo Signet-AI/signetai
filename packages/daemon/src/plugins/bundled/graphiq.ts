@@ -10,6 +10,7 @@ const GRAPHIQ_CAPABILITIES = [
 	"code:blast",
 	"code:status",
 	"code:doctor",
+	"code:dead-code",
 	"prompt:contribute:user-prompt-submit",
 	"mcp:tool",
 	"cli:command",
@@ -33,6 +34,11 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 			path: ["graphiq", "upgrade-index"],
 			summary: "Rebuild stale GraphIQ artifacts",
 			requiredCapabilities: ["cli:command", "code:doctor"],
+		},
+		{
+			path: ["graphiq", "dead-code"],
+			summary: "Find unreachable code in the active project",
+			requiredCapabilities: ["cli:command", "code:dead-code"],
 		},
 	],
 	mcpTools: [
@@ -71,6 +77,12 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 			title: "Code Constants",
 			summary: "Find shared numeric and string constants in code",
 			requiredCapabilities: ["mcp:tool", "code:search"],
+		},
+		{
+			name: "signet_code_dead_code",
+			title: "Dead Code Detection",
+			summary: "Find unreachable symbols in the active project",
+			requiredCapabilities: ["mcp:tool", "code:dead-code"],
 		},
 	],
 	dashboardPanels: [],
@@ -163,6 +175,7 @@ export const signetGraphiqManifest: PluginManifestV1 = {
 			"code:blast": { summary: "Analyze symbol blast radius" },
 			"code:status": { summary: "Inspect active code index status" },
 			"code:doctor": { summary: "Diagnose or repair active code index artifacts" },
+			"code:dead-code": { summary: "Detect unreachable code in indexed projects" },
 			"prompt:contribute:user-prompt-submit": {
 				summary: "Contribute bounded guidance for code retrieval decisions",
 			},

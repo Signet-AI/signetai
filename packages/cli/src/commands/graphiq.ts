@@ -3,6 +3,7 @@ import {
 	type GraphiqDeps,
 	indexWithGraphiq,
 	installGraphiqPlugin,
+	runGraphiqDeadCode,
 	runGraphiqDoctor,
 	showGraphiqStatus,
 	uninstallGraphiqPlugin,
@@ -37,6 +38,11 @@ export function registerGraphiqCommands(program: Command, deps: GraphiqDeps): vo
 		.command("upgrade-index")
 		.description("Rebuild stale GraphIQ artifacts for the active project")
 		.action(() => upgradeGraphiqIndex(deps));
+
+	graphiq
+		.command("dead-code")
+		.description("Find unreachable code in the active project")
+		.action(() => runGraphiqDeadCode(deps));
 
 	graphiq
 		.command("uninstall")

@@ -184,6 +184,34 @@ export async function upgradeGraphiqIndex(deps: GraphiqDeps): Promise<void> {
 	await runGraphiqForActiveProject("upgrade-index", deps);
 }
 
+export async function runGraphiqDeadCode(deps: GraphiqDeps): Promise<void> {
+	const state = readGraphiqState(deps.agentsDir);
+	if (!state.enabled || !state.activeProject) {
+		console.log(chalk.yellow("GraphIQ plugin is not active. Run `signet index <path>` first."));
+		return;
+	}
+	const binary = resolveGraphiqBinary();
+	if (!binary) {
+		console.error(chalk.red("GraphIQ binary not found. Reinstall with `signet graphiq install`."));
+		return;
+	}
+	const dbPath = state.indexedProjects.find((entry) => entry.path === state.activeProject)?.dbPath;
+	if (!dbPath) {
+		console.error(chalk.red(`GraphIQ index metadata is missing for active project: ${state.activeProject}`));
+		return;
+	}
+	if (!existsSync(dbPath)) {
+		console.error(chalk.red(`GraphIQ database not found for active project: ${dbPath}`));
+		return;
+	}
+	const result = await runCommand(binary, ["dead-code", "--db", dbPath]);
+	if (result.stdout.trim()) console.log(result.stdout.trim());
+	if (result.stderr.trim()) console.error(result.stderr.trim());
+	if (result.code !== 0) {
+		console.error(chalk.red(`graphiq dead-code exited with code ${result.code}`));
+	}
+}
+
 export async function uninstallGraphiqPlugin(options: GraphiqUninstallOptions, deps: GraphiqDeps): Promise<void> {
 	writeGraphiqPluginRegistryEnabled(deps.agentsDir, false);
 	const state = disableGraphiqState(deps.agentsDir);

@@ -44,18 +44,22 @@ sha256_file() {
 	fi
 }
 
-release_json_for_tag() {
-	local tag="$1"
-	if [ -z "$tag" ]; then
-		latest_release_json
-		return
-	fi
-	local url="https://api.github.com/repos/${REPO}/releases/tags/${tag}"
+fetch_release_json() {
+	local url="$1"
 	if command -v curl >/dev/null 2>&1; then
 		curl -fsSL --max-time 15 "$url" 2>/dev/null
 	elif command -v wget >/dev/null 2>&1; then
 		wget -qO- --timeout=15 "$url" 2>/dev/null
 	fi
+}
+
+release_json_for_tag() {
+	local tag="$1"
+	if [ -z "$tag" ]; then
+		fetch_release_json "https://api.github.com/repos/${REPO}/releases/latest"
+		return
+	fi
+	fetch_release_json "https://api.github.com/repos/${REPO}/releases/tags/${tag}"
 }
 
 cmd_install() {
