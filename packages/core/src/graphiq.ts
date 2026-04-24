@@ -67,6 +67,11 @@ export function writeGraphiqState(basePath: string, state: GraphiqPluginState): 
 	writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 }
 
+export function setGraphiqActiveProject(basePath: string, activeProject: string): void {
+	const fresh = readGraphiqState(basePath);
+	writeGraphiqState(basePath, { ...fresh, activeProject });
+}
+
 export function updateGraphiqActiveProject(
 	basePath: string,
 	input: UpdateGraphiqActiveProjectInput,

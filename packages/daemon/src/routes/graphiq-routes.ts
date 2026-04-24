@@ -5,6 +5,7 @@ import {
 	disableGraphiqState,
 	enableGraphiqState,
 	readGraphiqState,
+	setGraphiqActiveProject,
 	updateGraphiqActiveProject,
 	writeGraphiqState,
 } from "@signet/core";
@@ -246,5 +247,5 @@ export function autoConnectGraphiq(projectPath: string | undefined): void {
 	const known = state.indexedProjects.some((p) => p.path === resolved);
 	if (!known) return;
 
-	writeGraphiqState(agentsDir, { ...state, activeProject: resolved });
+	setGraphiqActiveProject(agentsDir, resolved);
 }
