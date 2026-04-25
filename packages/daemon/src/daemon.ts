@@ -115,6 +115,7 @@ import {
 	startGitSyncTimer,
 	stopGitSyncTimer,
 } from "./routes/git-sync.js";
+import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
 import { mountHealthRoutes } from "./routes/health.js";
 import { registerHooksRoutes } from "./routes/hooks-routes.js";
 import { mountInferenceRoutes } from "./routes/inference.js";
@@ -128,7 +129,6 @@ import { mountOsAgentRoutes } from "./routes/os-agent.js";
 import { mountOsChatRoutes } from "./routes/os-chat.js";
 import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
 import { registerPluginRoutes } from "./routes/plugins-routes.js";
-import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
 import { registerRepairRoutes } from "./routes/repair-routes.js";
 import { registerSecretRoutes } from "./routes/secrets-routes.js";
 import { registerSessionRoutes } from "./routes/session-routes.js";
@@ -239,9 +239,6 @@ const ingestedMemoryFiles = new Map<string, string>();
 const MEMORY_IMPORT_POLL_MS = 30_000;
 let memoryImportTimer: ReturnType<typeof setInterval> | null = null;
 let memoryImportInFlight = false;
-
-// Track synced memories to avoid duplicates
-const syncedClaudeMemories = new Set<string>();
 
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 const SYNC_DEBOUNCE_MS = 2000;
@@ -662,139 +659,6 @@ function stopMemoryImportPoller(): void {
 	memoryImportInFlight = false;
 }
 
-function startClaudeMemoryWatcher() {
-	const claudeProjectsDir = join(homedir(), ".claude", "projects");
-	if (!existsSync(claudeProjectsDir)) return;
-
-	const claudeWatcher = watch(join(claudeProjectsDir, "**", "memory", "MEMORY.md"), {
-		persistent: true,
-		ignoreInitial: true,
-	});
-
-	claudeWatcher.on("change", async (filePath) => {
-		logger.info("watcher", "Claude memory changed", { path: filePath });
-		await syncClaudeMemoryFile(filePath);
-	});
-
-	claudeWatcher.on("add", async (filePath) => {
-		logger.info("watcher", "Claude memory added", { path: filePath });
-		await syncClaudeMemoryFile(filePath);
-	});
-}
-
-async function syncExistingClaudeMemories(claudeProjectsDir: string) {
-	try {
-		const projects = readdirSync(claudeProjectsDir);
-		let totalSynced = 0;
-
-		for (const project of projects) {
-			const memoryFile = join(claudeProjectsDir, project, "memory", "MEMORY.md");
-			if (existsSync(memoryFile)) {
-				const count = await syncClaudeMemoryFile(memoryFile);
-				totalSynced += count;
-			}
-		}
-
-		if (totalSynced > 0) {
-			logger.info("watcher", "Synced existing Claude memories", {
-				count: totalSynced,
-			});
-		}
-	} catch (e) {
-		logger.error("watcher", "Failed to sync existing Claude memories", undefined, { error: String(e) });
-	}
-}
-
-async function syncClaudeMemoryFile(filePath: string): Promise<number> {
-	try {
-		const content = readFileSync(filePath, "utf-8");
-		if (!content.trim()) return 0;
-
-		const match = filePath.match(/projects\/([^/]+)\/memory/);
-		const projectId = match ? match[1] : "unknown";
-
-		const contentHash = createHash("sha256").update(content).digest("hex").slice(0, 16);
-		const existingHash = ingestedMemoryFiles.get(filePath);
-		if (existingHash === contentHash) {
-			logger.debug("watcher", "Claude memory file unchanged, skipping", {
-				path: filePath,
-			});
-			return 0;
-		}
-		ingestedMemoryFiles.set(filePath, contentHash);
-
-		const chunks = chunkMarkdownHierarchically(content, 512);
-		let inserted = 0;
-
-		for (let i = 0; i < chunks.length; i++) {
-			const chunk = chunks[i];
-
-			const sectionMatch = chunk.header.match(/^#+\s+(.+)$/);
-			const sectionName = sectionMatch ? sectionMatch[1].toLowerCase() : "";
-
-			const chunkKey = `claude:${projectId}:${createHash("sha256").update(chunk.text).digest("hex").slice(0, 16)}`;
-			if (syncedClaudeMemories.has(chunkKey)) continue;
-			syncedClaudeMemories.add(chunkKey);
-
-			try {
-				const response = await fetch(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						content: chunk.text,
-						who: "claude-code",
-						importance: chunk.level === "section" ? 0.65 : 0.55,
-						sourceType: "claude-project-memory",
-						sourceId: chunkKey,
-						tags: [
-							"claude-code",
-							"claude-project-memory",
-							sectionName,
-							`project:${projectId}`,
-							chunk.level === "section" ? "hierarchical-section" : "hierarchical-paragraph",
-						]
-							.filter(Boolean)
-							.join(","),
-					}),
-				});
-
-				if (response.ok) {
-					inserted++;
-					logger.info("watcher", "Synced Claude memory chunk", {
-						content: chunk.text.slice(0, 50),
-						section: sectionName || "(no section)",
-						level: chunk.level,
-					});
-				}
-			} catch (e) {
-				const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
-				logger.error("watcher", "Failed to sync Claude memory chunk", undefined, {
-					path: filePath,
-					chunkIndex: i,
-					...errDetails,
-				});
-			}
-		}
-
-		if (inserted > 0) {
-			logger.info("watcher", "Synced Claude memory file", {
-				path: filePath,
-				projectId,
-				chunks: inserted,
-				sections: chunks.filter((c) => c.level === "section").length,
-			});
-		}
-		return inserted;
-	} catch (e) {
-		const errDetails = e instanceof Error ? { message: e.message } : { error: String(e) };
-		logger.error("watcher", "Failed to read Claude memory file", undefined, {
-			path: filePath,
-			...errDetails,
-		});
-		return 0;
-	}
-}
-
 function startFileWatcher() {
 	// Do NOT watch the memory/ directory directly — Bun's fs.watch()
 	// opens one O_RDONLY FD per file in a watched directory and never
@@ -882,8 +746,6 @@ function startFileWatcher() {
 			);
 		}
 	});
-
-	startClaudeMemoryWatcher();
 }
 
 // ============================================================================
@@ -1674,11 +1536,6 @@ async function main() {
 			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
 			logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
 		});
-
-		const claudeProjectsDir = join(homedir(), ".claude", "projects");
-		if (existsSync(claudeProjectsDir)) {
-			syncExistingClaudeMemories(claudeProjectsDir);
-		}
 	};
 
 	bindWithRetry({

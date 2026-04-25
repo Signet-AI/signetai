@@ -18,7 +18,7 @@ export interface NativeMemorySource {
 export interface NativeMemoryFilePattern {
 	readonly glob: string;
 	readonly kind: string;
-	readonly include?: (path: string) => boolean;
+	readonly include?: (path: string, rel: string) => boolean;
 }
 
 export interface NativeMemoryBridgeHandle {
@@ -33,24 +33,44 @@ export interface NativeMemoryBridgeOptions {
 
 const indexed = new Map<string, string>();
 
-function codexMemoryRoot(): string {
-	return join(homedir(), ".codex", "memories");
+function codexRoot(): string {
+	return join(homedir(), ".codex");
 }
 
-export function codexNativeMemorySource(root = codexMemoryRoot()): NativeMemorySource {
+function claudeCodeRoot(): string {
+	return join(homedir(), ".claude");
+}
+
+export function codexNativeMemorySource(root = codexRoot()): NativeMemorySource {
 	return {
 		harness: "codex",
 		displayName: "Codex",
 		root,
 		files: [
-			{ glob: "memory_summary.md", kind: "native_memory_summary" },
-			{ glob: "MEMORY.md", kind: "native_memory_registry" },
-			{ glob: "raw_memories.md", kind: "native_raw_memories" },
+			{ glob: "memories/memory_summary.md", kind: "native_memory_summary" },
+			{ glob: "memories/MEMORY.md", kind: "native_memory_registry" },
+			{ glob: "memories/raw_memories.md", kind: "native_raw_memories" },
+			{ glob: "memories/rollout_summaries/*.md", kind: "native_rollout_summary" },
+			{ glob: "automations/*/memory.md", kind: "native_automation_memory" },
+		],
+	};
+}
+
+export function claudeCodeNativeMemorySource(root = claudeCodeRoot()): NativeMemorySource {
+	return {
+		harness: "claude-code",
+		displayName: "Claude Code",
+		root,
+		files: [
+			{ glob: "projects/*/memory/MEMORY.md", kind: "native_claude_memory_index" },
 			{
-				glob: "rollout_summaries/*.md",
-				kind: "native_rollout_summary",
-				include: (path) => path.replace(/\\/g, "/").includes("/rollout_summaries/"),
+				glob: "projects/*/memory/**/*.md",
+				kind: "native_claude_memory",
+				include: (path) => basename(path) !== "MEMORY.md",
 			},
+			{ glob: "session-memory/**/*.md", kind: "native_claude_session_memory" },
+			{ glob: "agent-memory/*/*.md", kind: "native_claude_agent_memory" },
+			{ glob: "agent-memory-local/*/*.md", kind: "native_claude_agent_memory_local" },
 		],
 	};
 }
@@ -74,14 +94,32 @@ function matchesPattern(source: NativeMemorySource, filePath: string): NativeMem
 	const root = source.root.replace(/\\/g, "/").replace(/\/$/, "");
 	const rel = normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized;
 	for (const pattern of source.files) {
-		if (pattern.include && !pattern.include(normalized)) continue;
-		if (pattern.glob === rel) return pattern;
-		if (pattern.glob.endsWith("/*.md")) {
-			const prefix = pattern.glob.slice(0, -"*.md".length);
-			if (rel.startsWith(prefix) && basename(rel).endsWith(".md")) return pattern;
-		}
+		if (pattern.include && !pattern.include(normalized, rel)) continue;
+		if (matchesGlob(pattern.glob, rel)) return pattern;
 	}
 	return null;
+}
+
+function matchesGlob(glob: string, rel: string): boolean {
+	return matchGlobParts(glob.split("/"), rel.split("/"));
+}
+
+function matchGlobParts(globParts: readonly string[], relParts: readonly string[]): boolean {
+	if (globParts.length === 0) return relParts.length === 0;
+	const [globHead, ...globTail] = globParts;
+	if (globHead === "**") {
+		return matchGlobParts(globTail, relParts) || (relParts.length > 0 && matchGlobParts(globParts, relParts.slice(1)));
+	}
+	if (relParts.length === 0) return false;
+	return matchesGlobSegment(globHead ?? "", relParts[0] ?? "") && matchGlobParts(globTail, relParts.slice(1));
+}
+
+function matchesGlobSegment(glob: string, value: string): boolean {
+	if (glob === "*") return value.length > 0;
+	if (!glob.includes("*")) return glob === value;
+	const escaped = glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+	const pattern = `^${escaped.replace(/\*/g, ".*")}$`;
+	return new RegExp(pattern).test(value);
 }
 
 function resolveBridgeAgentId(agentId?: string): string {
@@ -175,7 +213,7 @@ export function removeNativeMemoryFile(
 }
 
 export function startNativeMemoryBridge(
-	sources: readonly NativeMemorySource[] = [codexNativeMemorySource()],
+	sources: readonly NativeMemorySource[] = [codexNativeMemorySource(), claudeCodeNativeMemorySource()],
 	options: NativeMemoryBridgeOptions = {},
 ): NativeMemoryBridgeHandle {
 	const agentId = resolveBridgeAgentId(options.agentId);

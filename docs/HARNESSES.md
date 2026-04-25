@@ -183,6 +183,21 @@ claude-code` (or `signet setup`) to rewrite hook config.
 
 **SessionEnd** — automatically saves a session summary to memory.
 
+### Native memory bridge
+
+Signet indexes Claude Code-owned memdir artifacts without rewriting them or
+turning them into Signet-authored rows. The daemon watches Claude Code
+entrypoint indexes and memory files under `~/.claude/projects/*/memory/`,
+session memory under `~/.claude/session-memory/`, and agent-scoped memory
+under `~/.claude/agent-memory/` and `~/.claude/agent-memory-local/`. Matching
+content is exposed through Signet recall as `native_memory` results with
+Claude Code provenance.
+
+This replaces the older daemon-local Claude watcher that only read
+`~/.claude/projects/*/memory/MEMORY.md` and pushed chunks back through
+`/api/memory/remember`. Claude Code remains the owner of those native files;
+Signet indexes them as artifacts.
+
 ### Using /remember and /recall
 
 In Claude Code sessions, use these commands directly:
@@ -236,6 +251,14 @@ registers as an MCP server so Codex can call `signet_remember` and
 | `~/.codex/hooks.json` | Native Codex hooks — SessionStart, UserPromptSubmit, Stop |
 | `~/.codex/config.toml` | MCP server registration (`[mcp_servers.signet]`) |
 | `~/.codex/skills` | Symlink to `$SIGNET_WORKSPACE/skills` |
+
+### Native memory bridge
+
+Signet indexes Codex-owned memory artifacts without rewriting them or turning
+them into Signet-authored memory rows. The daemon watches
+`~/.codex/memories/` and automation-local `~/.codex/automations/*/memory.md`
+files, then exposes matching content through Signet recall as
+`native_memory` results with Codex provenance.
 
 ### How it works
 
