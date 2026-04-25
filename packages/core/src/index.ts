@@ -105,6 +105,8 @@ export {
 	resolveNetworkBinding,
 } from "./network";
 export type { NetworkMode } from "./network";
+export { resolveSignetDaemonUrl } from "./daemon-url";
+export type { SignetDaemonUrlOptions } from "./daemon-url";
 export {
 	search,
 	vectorSearch,

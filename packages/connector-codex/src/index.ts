@@ -2,7 +2,26 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
-import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
+import {
+	expandHome,
+	resolvePromptSubmitTimeoutMs,
+	resolveSessionStartTimeoutMs,
+	resolveSignetDaemonUrl,
+} from "@signet/core";
+
+type SignetMcpConfig =
+	| { readonly command: string; readonly args: readonly string[] }
+	| { readonly url: string; readonly startupTimeoutSec: number; readonly toolTimeoutSec: number };
+
+const CODEX_DISABLED_MCP_TOOLS = [
+	"memory_search",
+	"memory_store",
+	"memory_get",
+	"memory_list",
+	"memory_modify",
+	"memory_forget",
+	"memory_feedback",
+] as const;
 
 // ---------------------------------------------------------------------------
 // Signet command resolution
@@ -21,7 +40,7 @@ function resolveSignetArgs(): string[] {
 
 /** Resolve signet-mcp as { command, args } for Codex config.toml.
  *  Codex expects `command` as a string and `args` as a separate array. */
-function resolveSignetMcp(): { command: string; args: string[] } | { url: string; startupTimeoutSec: number; toolTimeoutSec: number } {
+function resolveSignetMcp(): SignetMcpConfig {
 	const remoteDaemonUrl = resolveRemoteDaemonUrl();
 	if (remoteDaemonUrl) {
 		return {
@@ -44,14 +63,10 @@ function readEnv(name: string): string | undefined {
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function trimTrailingSlash(value: string): string {
-	return value.replace(/\/+$/, "");
-}
-
 function resolveRemoteDaemonUrl(): string | null {
 	const explicit = readEnv("SIGNET_DAEMON_URL");
 	if (!explicit) return null;
-	return trimTrailingSlash(explicit);
+	return resolveSignetDaemonUrl();
 }
 
 // ---------------------------------------------------------------------------
@@ -115,10 +130,14 @@ function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function cmdEnvQuote(value: string): string {
+	return value.replace(/[\^"&|<>]/g, "^$&");
+}
+
 function withRemoteDaemonEnv(command: string, remoteDaemonUrl: string | null): string {
 	if (!remoteDaemonUrl) return command;
 	if (process.platform === "win32") {
-		return `set "SIGNET_DAEMON_URL=${remoteDaemonUrl}" && ${command}`;
+		return `set "SIGNET_DAEMON_URL=${cmdEnvQuote(remoteDaemonUrl)}" && ${command}`;
 	}
 	return `SIGNET_DAEMON_URL=${shellQuote(remoteDaemonUrl)} ${command}`;
 }
@@ -285,13 +304,11 @@ function tomlQuote(s: string): string {
 	return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n")}"`;
 }
 
-function tomlInlineArray(items: string[]): string {
+function tomlInlineArray(items: readonly string[]): string {
 	return `[${items.map(tomlQuote).join(", ")}]`;
 }
 
-export function buildMcpBlock(
-	mcp: { command: string; args: string[] } | { url: string; startupTimeoutSec: number; toolTimeoutSec: number },
-): string {
+export function buildMcpBlock(mcp: SignetMcpConfig): string {
 	if ("url" in mcp) {
 		return [
 			"# Signet MCP server",
@@ -299,6 +316,7 @@ export function buildMcpBlock(
 			`url = ${tomlQuote(mcp.url)}`,
 			`startup_timeout_sec = ${mcp.startupTimeoutSec}`,
 			`tool_timeout_sec = ${mcp.toolTimeoutSec}`,
+			`disabled_tools = ${tomlInlineArray(CODEX_DISABLED_MCP_TOOLS)}`,
 			"",
 		].join("\n");
 	}
@@ -306,22 +324,11 @@ export function buildMcpBlock(
 	if (mcp.args.length > 0) {
 		block += `args = ${tomlInlineArray(mcp.args)}\n`;
 	}
-	block += `disabled_tools = ${tomlInlineArray([
-		"memory_search",
-		"memory_store",
-		"memory_get",
-		"memory_list",
-		"memory_modify",
-		"memory_forget",
-		"memory_feedback",
-	])}\n`;
+	block += `disabled_tools = ${tomlInlineArray(CODEX_DISABLED_MCP_TOOLS)}\n`;
 	return block;
 }
 
-function patchConfigToml(
-	path: string,
-	mcp: { command: string; args: string[] } | { url: string; startupTimeoutSec: number; toolTimeoutSec: number },
-): boolean {
+function patchConfigToml(path: string, mcp: SignetMcpConfig): boolean {
 	const dir = join(path, "..");
 	mkdirSync(dir, { recursive: true });
 

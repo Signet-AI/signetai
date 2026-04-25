@@ -32,16 +32,17 @@
  * ```
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { randomBytes } from "node:crypto";
 import {
-	expandHome,
-	stripSignetBlock,
-	symlinkSkills,
 	type SymlinkOptions,
 	type SymlinkResult,
+	expandHome,
+	resolveSignetDaemonUrl as resolveCoreSignetDaemonUrl,
+	stripSignetBlock,
+	symlinkSkills,
 } from "@signet/core";
 
 // ============================================================================
@@ -122,7 +123,9 @@ export abstract class BaseConnector {
 			writeFileSync(tmp, cleaned, "utf-8");
 			renameSync(tmp, agentsPath);
 		} catch (err) {
-			try { unlinkSync(tmp); } catch {}
+			try {
+				unlinkSync(tmp);
+			} catch {}
 			throw err;
 		}
 		return agentsPath;
@@ -273,38 +276,8 @@ export function resolveSignetWorkspacePath(home = homedir()): string {
 	}
 }
 
-function isSafeDaemonHost(host: string): boolean {
-	return /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host);
-}
-
-function normalizeExplicitDaemonUrl(rawUrl: string): string | null {
-	try {
-		const url = new URL(rawUrl);
-		if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-		if (!url.hostname || url.username || url.password || url.hash || url.search) return null;
-		if (url.pathname !== "/" && url.pathname !== "") return null;
-		return url.toString().replace(/\/$/, "");
-	} catch {
-		return null;
-	}
-}
-
 export function resolveSignetDaemonUrl(): string {
-	const explicit = readManagedTrimmedEnv("SIGNET_DAEMON_URL");
-	if (explicit) {
-		const normalized = normalizeExplicitDaemonUrl(explicit);
-		if (normalized) return normalized;
-	}
-
-	const rawHost = readManagedTrimmedEnv("SIGNET_HOST") ?? "127.0.0.1";
-	const host = isSafeDaemonHost(rawHost) ? rawHost : "127.0.0.1";
-	const rawPort = readManagedTrimmedEnv("SIGNET_PORT") ?? "3850";
-	const parsedPort = Number.parseInt(rawPort, 10);
-	const port =
-		Number.isFinite(parsedPort) && parsedPort >= 1 && parsedPort <= 65_535
-			? String(parsedPort)
-			: "3850";
-	return `http://${host}:${port}`;
+	return resolveCoreSignetDaemonUrl();
 }
 
 export function resolveSignetAgentId(): string {
@@ -370,4 +343,4 @@ export function removeManagedExtensionFile(filePath: string, marker: string): bo
 // Re-exports
 // ============================================================================
 
-export { type SymlinkOptions, type SymlinkResult };
+export type { SymlinkOptions, SymlinkResult };

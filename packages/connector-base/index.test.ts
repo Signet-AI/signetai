@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import {
+	BaseConnector,
 	type InstallResult,
 	type UninstallResult,
-	BaseConnector,
 	removeManagedExtensionFile,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
@@ -61,11 +61,7 @@ describe("BaseConnector.stripLegacySignetBlock", () => {
 	it("removes SIGNET marker block from AGENTS.md in place", () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-test-"));
 		const file = join(dir, "AGENTS.md");
-		writeFileSync(
-			file,
-			`before\n<!-- SIGNET:START -->\nmanaged block\n<!-- SIGNET:END -->\nafter\n`,
-			"utf-8",
-		);
+		writeFileSync(file, "before\n<!-- SIGNET:START -->\nmanaged block\n<!-- SIGNET:END -->\nafter\n", "utf-8");
 
 		const connector = new TestConnector();
 		const strippedPath = connector.cleanup(dir);
@@ -101,12 +97,12 @@ describe("resolveSignetDaemonUrl", () => {
 		expect(resolveSignetDaemonUrl()).toBe("https://example.test");
 	});
 
-	it("ignores invalid explicit daemon URLs and falls back to loopback defaults", () => {
+	it("rejects invalid explicit daemon URLs instead of falling back to loopback defaults", () => {
 		process.env.SIGNET_DAEMON_URL = "file:///tmp/signet.sock";
 		process.env.SIGNET_HOST = "127.0.0.1";
 		process.env.SIGNET_PORT = "4123";
 
-		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+		expect(() => resolveSignetDaemonUrl()).toThrow("SIGNET_DAEMON_URL must use http or https");
 	});
 
 	it("rejects explicit daemon URLs with a non-root path", () => {
@@ -114,39 +110,39 @@ describe("resolveSignetDaemonUrl", () => {
 		process.env.SIGNET_HOST = "127.0.0.1";
 		process.env.SIGNET_PORT = "4123";
 
-		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+		expect(() => resolveSignetDaemonUrl()).toThrow("SIGNET_DAEMON_URL must point at the daemon origin");
 	});
 
-	it("uses the parsed numeric port rather than the raw env string", () => {
-		delete process.env.SIGNET_DAEMON_URL;
+	it("rejects invalid port values instead of falling back to the default port", () => {
+		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
 		process.env.SIGNET_HOST = "127.0.0.1";
 		process.env.SIGNET_PORT = "3850abc";
 
-		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:3850");
+		expect(() => resolveSignetDaemonUrl()).toThrow("SIGNET_PORT must be an integer");
 	});
 
-	it("falls back to localhost-safe defaults when host contains URL control characters", () => {
-		delete process.env.SIGNET_DAEMON_URL;
+	it("rejects hosts that contain URL control characters", () => {
+		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
 		process.env.SIGNET_HOST = "127.0.0.1@evil.com";
 		process.env.SIGNET_PORT = "4123";
 
-		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+		expect(() => resolveSignetDaemonUrl()).toThrow("SIGNET_HOST must be a hostname or IP address");
 	});
 
 	it("rejects degenerate host values that only contain separators", () => {
-		delete process.env.SIGNET_DAEMON_URL;
+		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
 		process.env.SIGNET_HOST = "...";
 		process.env.SIGNET_PORT = "4123";
 
-		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:4123");
+		expect(() => resolveSignetDaemonUrl()).toThrow("SIGNET_HOST must be a hostname or IP address");
 	});
 
-	it("falls back to the default port when SIGNET_PORT is out of range", () => {
-		delete process.env.SIGNET_DAEMON_URL;
+	it("rejects out-of-range port values", () => {
+		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
 		process.env.SIGNET_HOST = "127.0.0.1";
 		process.env.SIGNET_PORT = "70000";
 
-		expect(resolveSignetDaemonUrl()).toBe("http://127.0.0.1:3850");
+		expect(() => resolveSignetDaemonUrl()).toThrow("SIGNET_PORT must be an integer");
 	});
 });
 
@@ -176,9 +172,7 @@ describe("resolveSignetWorkspacePath", () => {
 			"utf-8",
 		);
 
-		expect(resolveSignetWorkspacePath()).toBe(
-			resolve(join(homedir(), rel, "..", rel, "agents")),
-		);
+		expect(resolveSignetWorkspacePath()).toBe(resolve(join(homedir(), rel, "..", rel, "agents")));
 	});
 });
 

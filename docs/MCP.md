@@ -37,6 +37,11 @@ generated hooks and `[mcp_servers.signet]` block target the same instance:
 SIGNET_DAEMON_URL=http://192.168.0.60:3850 signet setup --harness codex
 ```
 
+`SIGNET_DAEMON_URL` must point at the daemon origin only. Signet rejects
+paths, query strings, fragments, credentials, and non-HTTP protocols so a
+remote MCP registration cannot silently fall back to localhost or bake
+unsafe shell syntax into generated lifecycle hooks.
+
 
 When to Use MCP vs Hooks
 ------------------------

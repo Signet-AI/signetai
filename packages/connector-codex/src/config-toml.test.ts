@@ -168,6 +168,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain("url = 'http://192.168.0.60:3850/mcp'");
 		expect(content).toContain("startup_timeout_sec = 10");
 		expect(content).toContain("tool_timeout_sec = 30");
+		expect(content).toContain("disabled_tools = ['memory_search'");
 		expect(content).not.toContain("command = 'signet-mcp'");
 	});
 
@@ -182,6 +183,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		const promptHandler = (
 			(hooks.UserPromptSubmit[0] as Record<string, unknown>).hooks as Record<string, unknown>[]
 		)[0];
+		const stopHandler = ((hooks.Stop[0] as Record<string, unknown>).hooks as Record<string, unknown>[])[0];
 
 		expect(startHandler.command).toBe(
 			"SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook session-start -H codex --codex-json",
@@ -189,6 +191,15 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(promptHandler.command).toBe(
 			"SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook user-prompt-submit -H codex --codex-json",
 		);
+		expect(stopHandler.command).toBe("SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook session-end -H codex");
+	});
+
+	test("rejects unsafe remote daemon URLs before writing Codex config", async () => {
+		process.env.SIGNET_DAEMON_URL = 'http://192.168.0.60:3850/" && calc';
+
+		await expect(connector().install(tempHome)).rejects.toThrow("SIGNET_DAEMON_URL must point at the daemon origin");
+
+		expect(existsSync(configPath)).toBe(false);
 	});
 });
 
@@ -258,6 +269,17 @@ describe("buildMcpBlock — TOML quoting", () => {
 		expect(block).toContain("command = 'signet-mcp'");
 		expect(block).toContain("disabled_tools = ['memory_search'");
 		expect(block).not.toContain("command = [");
+	});
+
+	test("preserves disabled tool parity for remote HTTP MCP", () => {
+		const block = buildMcpBlock({
+			url: "https://signet.example.com:3850/mcp",
+			startupTimeoutSec: 10,
+			toolTimeoutSec: 30,
+		});
+
+		expect(block).toContain("url = 'https://signet.example.com:3850/mcp'");
+		expect(block).toContain("disabled_tools = ['memory_search'");
 	});
 
 	test("Windows paths with backslashes are quoted correctly", () => {

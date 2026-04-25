@@ -264,6 +264,9 @@ When `SIGNET_DAEMON_URL` is set, the Codex connector writes
 `[mcp_servers.signet] url = "<daemon>/mcp"` and bakes the same daemon URL
 into the generated lifecycle hook commands. This keeps on-demand MCP tools
 and automatic lifecycle memory pointed at the same Signet instance.
+The value must be the daemon origin only, for example
+`http://192.168.0.60:3850` or `https://signet.internal:3850`, with no
+path, query string, fragment, or embedded credentials.
 
 Codex matches the session-start, prompt-submit, and session-end path, but
 it does **not** currently expose the same compaction lifecycle fidelity as

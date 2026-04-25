@@ -1,8 +1,7 @@
+import { resolveSignetDaemonUrl } from "@signet/core";
 import chalk from "chalk";
 
-export interface DaemonFetch {
-	<T>(path: string, opts?: RequestInit & { timeout?: number }): Promise<T | null>;
-}
+export type DaemonFetch = <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
 
 export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
 
@@ -14,14 +13,12 @@ export type DaemonFetchResult<T> =
 			readonly status?: number;
 	  };
 
-export interface DaemonApiCall {
-	(
-		method: string,
-		path: string,
-		body?: unknown,
-		timeoutMs?: number,
-	): Promise<{ readonly ok: boolean; readonly data: unknown }>;
-}
+export type DaemonApiCall = (
+	method: string,
+	path: string,
+	body?: unknown,
+	timeoutMs?: number,
+) => Promise<{ readonly ok: boolean; readonly data: unknown }>;
 
 function errorName(err: unknown): string {
 	if (typeof err !== "object" || err === null) return "";
@@ -120,30 +117,8 @@ export function createDaemonClient(port: number): {
 	};
 }
 
-function readEnv(name: string): string | undefined {
-	const value = process.env[name];
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function trimTrailingSlash(value: string): string {
-	return value.replace(/\/+$/, "");
-}
-
 function resolveDaemonClientUrl(port: number): string {
-	const explicit = readEnv("SIGNET_DAEMON_URL");
-	if (explicit) {
-		return trimTrailingSlash(explicit);
-	}
-
-	const host = readEnv("SIGNET_HOST");
-	const envPort = readEnv("SIGNET_PORT");
-	if (host || envPort) {
-		return `http://${host ?? "localhost"}:${envPort ?? String(port)}`;
-	}
-
-	return `http://localhost:${port}`;
+	return resolveSignetDaemonUrl({ defaultHost: "localhost", defaultPort: port });
 }
 
 export async function ensureDaemonRunning(
