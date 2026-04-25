@@ -641,6 +641,90 @@ describe("createMcpServer", () => {
 		});
 	});
 
+	describe("SIGNET_AGENT_ID propagation", () => {
+		const originalAgentId = process.env.SIGNET_AGENT_ID;
+
+		afterEach(() => {
+			if (originalAgentId === undefined) {
+				Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			} else {
+				process.env.SIGNET_AGENT_ID = originalAgentId;
+			}
+		});
+
+		function captureFetch(): { headers?: Record<string, string>; body?: string } {
+			const cap: { headers?: Record<string, string>; body?: string } = {};
+			globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+				const headers: Record<string, string> = {};
+				const raw = init?.headers as Record<string, string> | Headers | undefined;
+				if (raw instanceof Headers) {
+					raw.forEach((value, key) => {
+						headers[key.toLowerCase()] = value;
+					});
+				} else if (raw && typeof raw === "object") {
+					for (const [key, value] of Object.entries(raw)) {
+						headers[key.toLowerCase()] = String(value);
+					}
+				}
+				cap.headers = headers;
+				cap.body = init?.body as string | undefined;
+				return new Response(
+					JSON.stringify({ method: "hybrid", results: [], meta: { totalReturned: 0, hasSupplementary: false, noHits: true } }),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}) as unknown as typeof fetch;
+			return cap;
+		}
+
+		it("injects SIGNET_AGENT_ID into POST body and request headers", async () => {
+			process.env.SIGNET_AGENT_ID = "telegram_main";
+			const cap = captureFetch();
+
+			await callTool(server, "memory_search", { query: "scoped query" });
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.agentId).toBe("telegram_main");
+			expect(cap.headers?.["x-signet-agent-id"]).toBe("telegram_main");
+		});
+
+		it("does not override an explicit body.agentId", async () => {
+			process.env.SIGNET_AGENT_ID = "telegram_main";
+			const cap = captureFetch();
+
+			await callTool(server, "memory_feedback", {
+				session_key: "session-1",
+				agent_id: "explicit_agent",
+				ratings: { "mem-1": 1 },
+			});
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.agentId).toBe("explicit_agent");
+			expect(cap.headers?.["x-signet-agent-id"]).toBe("telegram_main");
+		});
+
+		it("omits agent headers and body field when SIGNET_AGENT_ID is unset", async () => {
+			Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			const cap = captureFetch();
+
+			await callTool(server, "memory_search", { query: "unscoped query" });
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.agentId).toBeUndefined();
+			expect(cap.headers?.["x-signet-agent-id"]).toBeUndefined();
+		});
+
+		it("treats whitespace-only SIGNET_AGENT_ID as unset", async () => {
+			process.env.SIGNET_AGENT_ID = "   ";
+			const cap = captureFetch();
+
+			await callTool(server, "memory_search", { query: "blank agent id" });
+
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.agentId).toBeUndefined();
+			expect(cap.headers?.["x-signet-agent-id"]).toBeUndefined();
+		});
+	});
+
 	describe("memory_store", () => {
 		it("calls remember endpoint", async () => {
 			const cap: { body?: string } = {};

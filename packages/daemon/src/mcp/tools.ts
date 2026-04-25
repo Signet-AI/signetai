@@ -219,6 +219,10 @@ const GRAPHIQ_COMPAT_ALIASES: ReadonlyMap<string, string> = new Map([
 // Internal HTTP helper
 // ---------------------------------------------------------------------------
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function daemonFetch<T>(
 	baseUrl: string,
 	path: string,
@@ -231,6 +235,9 @@ async function daemonFetch<T>(
 ): Promise<FetchResult<T>> {
 	const { method = "GET", body, timeout = 10_000, extraHeaders } = options;
 
+	const agentId = process.env.SIGNET_AGENT_ID?.trim();
+	const agentHeaders = agentId ? { "x-signet-agent-id": agentId } : {};
+
 	const init: RequestInit = {
 		method,
 		headers: {
@@ -238,13 +245,16 @@ async function daemonFetch<T>(
 			"x-signet-runtime-path": "plugin",
 			"x-signet-actor": "mcp-server",
 			"x-signet-actor-type": "harness",
+			...agentHeaders,
 			...extraHeaders,
 		},
 		signal: AbortSignal.timeout(timeout),
 	};
 
 	if (body !== undefined) {
-		init.body = JSON.stringify(body);
+		const finalBody =
+			agentId && isPlainObject(body) && body.agentId === undefined ? { ...body, agentId } : body;
+		init.body = JSON.stringify(finalBody);
 	}
 
 	try {
