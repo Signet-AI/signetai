@@ -346,3 +346,5 @@ function readEmbeddings(rows: unknown): Array<{ readonly id: string; readonly ve
 		return [{ id, vector }];
 	});
 }
+  /* Added by bounty-bot */
+}
