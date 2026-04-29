@@ -4,6 +4,7 @@ import {
 	closeSync,
 	createReadStream,
 	existsSync,
+	fsyncSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
@@ -11,6 +12,7 @@ import {
 	renameSync,
 	rmSync,
 	statSync,
+	writeSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -486,6 +488,75 @@ export function appendCanonicalTranscriptSnapshotIfMissing(
 		);
 		knownSessionKeys?.add(key);
 		return path;
+	});
+}
+
+export function rewriteReplacingLiveOnlySessions(
+	jsonlPath: string,
+	replacements: ReadonlyMap<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>,
+): Promise<number> {
+	if (replacements.size === 0 || !existsSync(jsonlPath)) return Promise.resolve(0);
+	return withTranscriptFileLock(jsonlPath, async () => {
+		const tmpPath = `${jsonlPath}.rewrite-tmp`;
+		const replaced = new Set<string>();
+		let fd: number | null = null;
+		try {
+			fd = openSync(tmpPath, "w");
+			const lines = createInterface({
+				input: createReadStream(jsonlPath, { encoding: "utf8" }),
+				crlfDelay: Number.POSITIVE_INFINITY,
+			});
+			try {
+				for await (const line of lines) {
+					const trimmedLine = line.trim();
+					if (trimmedLine.length === 0) continue;
+					try {
+						const parsed = JSON.parse(trimmedLine) as Partial<CanonicalTranscriptRecord>;
+						if (parsed.schema !== "signet.transcript.v1" || typeof parsed.content !== "string") {
+							writeSync(fd, `${line}\n`);
+							continue;
+						}
+						const key = recordSeqCacheKey(parsed as CanonicalTranscriptRecord);
+						if (!replacements.has(key)) {
+							writeSync(fd, `${line}\n`);
+							continue;
+						}
+						if (replaced.has(key)) continue;
+						const entry = replacements.get(key);
+						if (!entry) continue;
+						const next = transcriptTextToTurns(entry.transcript)
+							.map((turn, index) => makeRecord(entry.identity, turn, index + 1))
+							.filter((record): record is CanonicalTranscriptRecord => record !== null);
+						for (const record of next) {
+							writeSync(fd, `${JSON.stringify(record)}\n`);
+						}
+						replaced.add(key);
+					} catch {
+						writeSync(fd, `${line}\n`);
+					}
+				}
+			} finally {
+				lines.close();
+			}
+			fsyncSync(fd);
+			closeSync(fd);
+			fd = null;
+			renameSync(tmpPath, jsonlPath);
+			for (const key of replaced) {
+				const entry = replacements.get(key);
+				if (!entry) continue;
+				const seq = transcriptTextToTurns(entry.transcript).reduce((count, turn) => {
+					if (makeRecord(entry.identity, turn, count + 1) === null) return count;
+					return count + 1;
+				}, 0);
+				sessionSeqCache.set(sessionSeqCacheKey(entry.identity), seq);
+			}
+			return replaced.size;
+		} catch (error) {
+			if (fd !== null) closeSync(fd);
+			rmSync(tmpPath, { force: true });
+			throw error;
+		}
 	});
 }
 

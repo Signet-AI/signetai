@@ -9,6 +9,8 @@ import {
 	appendCanonicalTranscriptTurns,
 	canonicalTranscriptPath,
 	readCanonicalTranscriptSessionKeys,
+	rewriteReplacingLiveOnlySessions,
+	sessionSeqCacheKey,
 	writeCanonicalTranscriptSnapshot,
 } from "./transcript-jsonl";
 
@@ -399,5 +401,182 @@ describe("readCanonicalTranscriptSessionKeys classification", () => {
 
 		expect(canonicalKeys.size).toBe(0);
 		expect(liveOnlyKeys.size).toBe(0);
+	});
+});
+
+describe("rewriteReplacingLiveOnlySessions", () => {
+	test("replaces live-only session with fuller data and preserves canonical sessions", async () => {
+		const root = makeRoot("rewrite-replace");
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-a",
+			sourceFormat: "db",
+			transcript: "User: A prompt\nAssistant: A reply",
+		});
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-b",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "B partial" }],
+		});
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-c",
+			sourceFormat: "db",
+			transcript: "User: C prompt\nAssistant: C reply",
+		});
+
+		const sessionBIdentity = {
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-b",
+			sourceFormat: "db" as const,
+		};
+		const replaced = await rewriteReplacingLiveOnlySessions(
+			jsonlPath,
+			new Map([
+				[
+					sessionSeqCacheKey(sessionBIdentity),
+					{ identity: sessionBIdentity, transcript: "User: B canonical\nAssistant: B reply" },
+				],
+			]),
+		);
+
+		expect(replaced).toBe(1);
+		const lines = readFileSync(jsonlPath, "utf8")
+			.split(/\r?\n/)
+			.filter((line) => line.trim().length > 0)
+			.map((line) => JSON.parse(line) as { readonly session_key: string | null; readonly source_format: string; readonly content: string });
+
+		expect(lines.some((line) => line.session_key === "session-a" && line.content.includes("A prompt"))).toBe(true);
+		expect(lines.some((line) => line.session_key === "session-c" && line.content.includes("C prompt"))).toBe(true);
+		expect(lines.some((line) => line.session_key === "session-b" && line.source_format === "live")).toBe(false);
+		expect(lines.some((line) => line.session_key === "session-b" && line.content.includes("B canonical"))).toBe(true);
+		expect(lines.filter((line) => line.session_key === "session-b").every((line) => line.source_format === "db")).toBe(true);
+	});
+
+	test("preserves chronological file order after replacement", async () => {
+		const root = makeRoot("rewrite-order");
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-a",
+			sourceFormat: "db",
+			transcript: "User: A one",
+		});
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-b",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "B only" }],
+		});
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-c",
+			sourceFormat: "db",
+			transcript: "User: C one",
+		});
+
+		const sessionBIdentity = {
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-b",
+			sourceFormat: "db" as const,
+		};
+		await rewriteReplacingLiveOnlySessions(
+			jsonlPath,
+			new Map([
+				[
+					sessionSeqCacheKey(sessionBIdentity),
+					{ identity: sessionBIdentity, transcript: "User: B canonical\nAssistant: B two" },
+				],
+			]),
+		);
+
+		const lines = readFileSync(jsonlPath, "utf8")
+			.split(/\r?\n/)
+			.filter((line) => line.trim().length > 0)
+			.map((line) => JSON.parse(line) as { readonly session_key: string | null; readonly source_format: string });
+
+		const firstA = lines.findIndex((line) => line.session_key === "session-a");
+		const firstB = lines.findIndex((line) => line.session_key === "session-b");
+		const firstC = lines.findIndex((line) => line.session_key === "session-c");
+		expect(firstA).toBeGreaterThanOrEqual(0);
+		expect(firstB).toBeGreaterThanOrEqual(0);
+		expect(firstC).toBeGreaterThanOrEqual(0);
+		expect(firstA).toBeLessThan(firstB);
+		expect(firstB).toBeLessThan(firstC);
+		expect(lines.filter((line) => line.session_key === "session-b").every((line) => line.source_format === "db")).toBe(true);
+	});
+
+	test("overwrites stale rewrite-tmp file from interrupted previous rewrite", async () => {
+		const root = makeRoot("rewrite-stale-tmp");
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "partial stale" }],
+		});
+
+		const tmpPath = `${jsonlPath}.rewrite-tmp`;
+		writeFileSync(tmpPath, "stale interrupted rewrite", "utf8");
+
+		const identity = {
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "db" as const,
+		};
+		const replaced = await rewriteReplacingLiveOnlySessions(
+			jsonlPath,
+			new Map([[sessionSeqCacheKey(identity), { identity, transcript: "User: complete one\nAssistant: complete two" }]]),
+		);
+
+		expect(replaced).toBe(1);
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content).not.toContain("stale interrupted rewrite");
+		expect(content).toContain("complete one");
+		expect(existsSync(tmpPath)).toBe(false);
+	});
+
+	test("returns 0 for empty replacements map", async () => {
+		const root = makeRoot("rewrite-empty-map");
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-empty",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "keep me" }],
+		});
+
+		const before = readFileSync(jsonlPath, "utf8");
+		const replaced = await rewriteReplacingLiveOnlySessions(jsonlPath, new Map());
+		const after = readFileSync(jsonlPath, "utf8");
+
+		expect(replaced).toBe(0);
+		expect(after).toBe(before);
 	});
 });
