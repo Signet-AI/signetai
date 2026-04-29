@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
 	getGraphiqProjectDbPath,
@@ -19,6 +22,18 @@ import {
 import { readSetupCorePluginEnabled } from "./setup-plugins.js";
 
 let tempRoot = "";
+
+function graphiqTarballForHost(): string {
+	const platform = process.platform;
+	const arch = process.arch;
+	if (platform === "darwin" && arch === "arm64") return "graphiq-aarch64-apple-darwin.tar.gz";
+	if (platform === "darwin" && arch === "x64") return "graphiq-x86_64-apple-darwin.tar.gz";
+	if (platform === "linux" && arch === "x64") return "graphiq-x86_64-unknown-linux-gnu.tar.gz";
+	if (platform === "linux" && (arch === "arm64" || arch === "arm")) {
+		return "graphiq-aarch64-unknown-linux-gnu.tar.gz";
+	}
+	throw new Error(`Unsupported host target in test: ${platform}/${arch}`);
+}
 
 function makeRoot(): string {
 	tempRoot = mkdtempSync(join(tmpdir(), "signet-graphiq-cli-"));
@@ -108,6 +123,68 @@ describe("GraphIQ plugin install", () => {
 
 		const args = readFileSync(capturePath, "utf-8");
 		expect(args).toContain("install");
+	});
+
+	test("install script exits successfully after a completed install", () => {
+		const basePath = makeRoot();
+		const fakeBin = join(basePath, "fake-bin");
+		const installDir = join(basePath, "install-bin");
+		const fixtureDir = join(basePath, "fixtures");
+		const tarballName = graphiqTarballForHost();
+		const tarballPath = join(fixtureDir, tarballName);
+		const curlPath = join(fakeBin, "curl");
+		const graphiqFixture = join(fixtureDir, "graphiq");
+		const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../scripts/install-graphiq.sh");
+		mkdirSync(fakeBin, { recursive: true });
+		mkdirSync(installDir, { recursive: true });
+		mkdirSync(fixtureDir, { recursive: true });
+		writeFileSync(graphiqFixture, "#!/bin/sh\necho graphiq fixture\n");
+		chmodSync(graphiqFixture, 0o755);
+		const tarResult = spawnSync("tar", ["-czf", tarballPath, "-C", fixtureDir, "graphiq"], { encoding: "utf-8" });
+		expect(tarResult.status).toBe(0);
+		const expectedSha = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
+		expect(expectedSha.length).toBe(64);
+		writeFileSync(
+			curlPath,
+			`#!/bin/sh
+set -eu
+url=""
+dest=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-o)
+			dest="$2"
+			shift 2
+			;;
+		*)
+			url="$1"
+			shift
+			;;
+	esac
+done
+if [ -n "$dest" ]; then
+	cp ${JSON.stringify(tarballPath)} "$dest"
+	exit 0
+fi
+cat <<'JSON'
+{"tag_name":"v3.3.1","assets":[{"name":"${tarballName}","digest":"sha256:${expectedSha}"}]}
+JSON
+`,
+		);
+		chmodSync(curlPath, 0o755);
+
+		const result = spawnSync("bash", [scriptPath, "install"], {
+			env: {
+				...process.env,
+				PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+				GRAPHIQ_ALLOW_LATEST: "1",
+				GRAPHIQ_INSTALL_DIR: installDir,
+			},
+			encoding: "utf-8",
+		});
+
+		expect(result.status).toBe(0);
+		expect(existsSync(join(installDir, "graphiq"))).toBe(true);
 	});
 
 	test("does not run GraphIQ without --db when active project metadata is missing", async () => {
