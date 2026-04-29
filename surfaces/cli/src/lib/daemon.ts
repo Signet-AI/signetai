@@ -101,7 +101,13 @@ export function createDaemonClient(port: number): {
 				data = { error: text || "Request failed" };
 			}
 			return { ok: res.ok, data };
-		} catch {
+		} catch (err) {
+			if (isTimeoutError(err)) {
+				return {
+					ok: false,
+					data: { error: `Request timed out after ${timeoutMs}ms` },
+				};
+			}
 			return {
 				ok: false,
 				data: { error: "Could not reach Signet daemon" },

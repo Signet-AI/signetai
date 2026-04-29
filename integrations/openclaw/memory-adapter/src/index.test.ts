@@ -258,7 +258,7 @@ afterEach(async () => {
 	globalThis.setInterval = originalSetInterval;
 	globalThis.clearInterval = originalClearInterval;
 	if (originalSignetPath === undefined) {
-		delete process.env.SIGNET_PATH;
+		Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	} else {
 		process.env.SIGNET_PATH = originalSignetPath;
 	}
@@ -1797,7 +1797,7 @@ describe("registration guard (#422)", () => {
 });
 
 // ===========================================================================
-// Request normalization (routing metadata + content normalization)
+// Request normalization (routing metadata only)
 // ===========================================================================
 
 describe("injectBillingBlock", () => {
@@ -1864,56 +1864,6 @@ describe("injectBillingBlock", () => {
 	});
 });
 
-describe("replaceTriggers", () => {
-	const { replaceTriggers } = _sanitization;
-
-	it("replaces OpenClaw platform name", () => {
-		const [result, changed] = replaceTriggers("Welcome to OpenClaw");
-		expect(changed).toBeTrue();
-		expect(result).not.toContain("OpenClaw");
-		expect(result).toContain("assistant platform");
-	});
-
-	it("replaces lowercase openclaw", () => {
-		const [result, changed] = replaceTriggers("path: /usr/lib/node_modules/openclaw/docs");
-		expect(changed).toBeTrue();
-		expect(result).not.toContain("openclaw");
-	});
-
-	it("replaces session management tool names", () => {
-		const input = JSON.stringify({
-			tools: [
-				{ name: "sessions_spawn" },
-				{ name: "sessions_list" },
-				{ name: "sessions_history" },
-				{ name: "sessions_send" },
-			],
-		});
-		const [result, changed] = replaceTriggers(input);
-		expect(changed).toBeTrue();
-		expect(result).not.toContain("sessions_spawn");
-		expect(result).not.toContain("sessions_list");
-		expect(result).not.toContain("sessions_history");
-		expect(result).not.toContain("sessions_send");
-		expect(result).toContain("create_task");
-		expect(result).toContain("list_tasks");
-		expect(result).toContain("get_history");
-		expect(result).toContain("send_to_task");
-	});
-
-	it("replaces 'running inside' self-declaration", () => {
-		const [result, changed] = replaceTriggers("You are running inside a harness.");
-		expect(changed).toBeTrue();
-		expect(result).toBe("You are running on a harness.");
-	});
-
-	it("returns unchanged for clean input", () => {
-		const [result, changed] = replaceTriggers("You are a helpful assistant.");
-		expect(changed).toBeFalse();
-		expect(result).toBe("You are a helpful assistant.");
-	});
-});
-
 describe("mergeBetaHeaders", () => {
 	const { mergeBetaHeaders, REQUIRED_BETAS } = _sanitization;
 
@@ -1948,7 +1898,7 @@ describe("mergeBetaHeaders", () => {
 describe("sanitizeRequest", () => {
 	const { sanitizeRequest, BILLING_BLOCK } = _sanitization;
 
-	it("injects billing block and replaces triggers", () => {
+	it("injects billing block and preserves request content", () => {
 		const request = {
 			body: JSON.stringify({
 				model: "claude-sonnet-4-20250514",
@@ -1961,9 +1911,9 @@ describe("sanitizeRequest", () => {
 		const blocks = parsed.system as Array<{ type: string; text: string }>;
 		// Billing block injected as first element
 		expect(blocks[0].text).toContain("x-anthropic-billing-header");
-		// Trigger phrases replaced
-		expect(request.body).not.toContain("OpenClaw");
-		expect(request.body).not.toContain("running inside");
+		// Product and prompt text are not rewritten.
+		expect(request.body).toContain("OpenClaw");
+		expect(request.body).toContain("running inside");
 	});
 
 	it("injects billing block even when no triggers present", () => {
@@ -1979,7 +1929,7 @@ describe("sanitizeRequest", () => {
 		expect(blocks[0].text).toContain("x-anthropic-billing-header");
 	});
 
-	it("replaces session tool names in tool definitions", () => {
+	it("preserves session tool names in tool definitions", () => {
 		const request = {
 			body: JSON.stringify({
 				system: [{ type: "text", text: "You are a helpful assistant." }],
@@ -1987,8 +1937,8 @@ describe("sanitizeRequest", () => {
 			}),
 		};
 		expect(sanitizeRequest(request)).toBeTrue();
-		expect(request.body).not.toContain("sessions_spawn");
-		expect(request.body).toContain("create_task");
+		expect(request.body).toContain("sessions_spawn");
+		expect(request.body).not.toContain("create_task");
 	});
 
 	it("does not double-inject billing block", () => {
@@ -2011,10 +1961,10 @@ describe("sanitizeRequest", () => {
 		expect(sanitizeRequest({ body: 42 })).toBeFalse();
 	});
 
-	it("handles non-JSON body with triggers", () => {
+	it("leaves non-JSON body untouched", () => {
 		const request = { body: "some text OpenClaw more text" };
-		expect(sanitizeRequest(request)).toBeTrue();
-		expect(request.body).not.toContain("OpenClaw");
+		expect(sanitizeRequest(request)).toBeFalse();
+		expect(request.body).toBe("some text OpenClaw more text");
 	});
 
 	it("returns false for non-JSON body without triggers", () => {
@@ -2069,7 +2019,7 @@ describe("installFetchSanitizer", () => {
 		globalThis.fetch = savedFetch;
 	});
 
-	it("injects billing block, replaces triggers, and merges betas", async () => {
+	it("injects billing block, preserves prompt text, and merges betas", async () => {
 		const remove = installFetchSanitizer();
 		try {
 			await globalThis.fetch("https://api.anthropic.com/v1/messages", {
@@ -2086,8 +2036,9 @@ describe("installFetchSanitizer", () => {
 			const blocks = sent.system as Array<{ type: string; text: string }>;
 			// Billing block injected
 			expect(blocks[0].text).toContain("x-anthropic-billing-header");
-			// Triggers replaced
-			expect(capturedBodies[0]).not.toContain("OpenClaw");
+			// Product and prompt text are not rewritten.
+			expect(capturedBodies[0]).toContain("OpenClaw");
+			expect(capturedBodies[0]).toContain("running inside");
 			// Beta headers merged
 			expect(capturedHeaders[0]["anthropic-beta"]).toContain("oauth-2025-04-20");
 		} finally {
@@ -2170,7 +2121,7 @@ describe("installSdkSanitizer", () => {
 			const parsed = JSON.parse(request.body as string) as Record<string, unknown>;
 			const blocks = parsed.system as Array<{ type: string; text: string }>;
 			expect(blocks[0].text).toContain("x-anthropic-billing-header");
-			expect(JSON.stringify(parsed)).not.toContain("OpenClaw");
+			expect(JSON.stringify(parsed)).toContain("OpenClaw");
 		} finally {
 			FakeAnthropic.prototype.prepareRequest = original;
 		}

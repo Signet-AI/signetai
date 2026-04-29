@@ -87,6 +87,58 @@ describe("registerRouteCommands", () => {
 		expect(requestBody).toMatchObject({ maxTokens: 42 });
 	});
 
+	test("route test rejects invalid timeout values before daemon calls", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
+		tempDirs.push(dir);
+		const errors: string[] = [];
+		let called = false;
+		console.error = (line?: unknown) => {
+			errors.push(String(line ?? ""));
+		};
+		Object.defineProperty(process, "exit", {
+			configurable: true,
+			value(code?: string | number | null | undefined) {
+				throw new Error(`exit ${code ?? 0}`);
+			},
+		});
+		const program = new Command();
+		registerRouteCommands(program, {
+			AGENTS_DIR: dir,
+			fetchFromDaemon: async () => null,
+			secretApiCall: async () => {
+				called = true;
+				return { ok: true, data: null };
+			},
+		});
+
+		await expect(program.parseAsync(["node", "test", "route", "test", "hello", "--timeout", "0"])).rejects.toThrow(
+			"exit 1",
+		);
+
+		expect(called).toBe(false);
+		expect(errors.join("\n")).toContain("--timeout must be a positive integer");
+	});
+
+	test("route test forwards valid timeout values to the daemon request", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
+		tempDirs.push(dir);
+		let requestTimeout: number | undefined;
+		console.log = () => {};
+		const program = new Command();
+		registerRouteCommands(program, {
+			AGENTS_DIR: dir,
+			fetchFromDaemon: async () => null,
+			secretApiCall: async (_method, _path, _body, timeoutMs) => {
+				requestTimeout = timeoutMs;
+				return { ok: true, data: { text: "ok" } };
+			},
+		});
+
+		await program.parseAsync(["node", "test", "route", "test", "hello", "--timeout", "60000"]);
+
+		expect(requestTimeout).toBe(60000);
+	});
+
 	test("route pin refuses to rewrite an existing agent.yaml without explicit confirmation", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-route-command-"));
 		tempDirs.push(dir);

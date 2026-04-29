@@ -4,6 +4,7 @@
  * Background service for memory, API, and dashboard hosting
  */
 
+import "./bun-socket-polyfill";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";

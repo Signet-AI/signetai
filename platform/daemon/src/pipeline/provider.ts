@@ -2082,8 +2082,6 @@ export function createCodexProvider(config?: Partial<CodexProviderConfig>): LlmP
 					"--ephemeral",
 					"--sandbox",
 					"read-only",
-					"-c",
-					"mcp_servers.signet.enabled=false",
 					"-C",
 					cfg.workingDirectory,
 					"--model",
