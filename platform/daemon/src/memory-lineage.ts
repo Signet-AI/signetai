@@ -800,9 +800,11 @@ async function doReindex(agentId?: string): Promise<void> {
 	const yielder = yieldEvery(50);
 	for (const path of files) {
 		let statKey: string;
+		let mtime: number;
 		try {
-			const s = await stat(path, { bigint: true });
-			statKey = `${s.mtimeNs}:${s.ctimeNs}:${s.size}`;
+			const s = await stat(path);
+			statKey = `${s.mtimeMs}:${s.ctimeMs}:${s.size}`;
+			mtime = s.mtimeMs;
 		} catch {
 			continue;
 		}
@@ -845,7 +847,6 @@ async function doReindex(agentId?: string): Promise<void> {
 			await yielder();
 			continue;
 		}
-		const mtime = (await stat(path)).mtimeMs;
 		upsertArtifactRow(path, parsed.frontmatter, body, mtime);
 		cache.set(path, statKey);
 		changedPaths.add(path);
