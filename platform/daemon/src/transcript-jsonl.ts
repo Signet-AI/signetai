@@ -553,9 +553,38 @@ export function rewriteReplacingLiveOnlySessions(
 ): Promise<number> {
 	if (replacements.size === 0 || !existsSync(jsonlPath)) return Promise.resolve(0);
 	return withTranscriptFileLock(jsonlPath, async () => {
+		// Re-classify inside the lock: between external classification and lock
+		// acquisition, session-end hooks may have written non-live records. Only
+		// replace sessions that are STILL live-only at the moment we hold the lock.
+		const healedKeys = new Set<string>();
+		const prescan = createInterface({
+			input: createReadStream(jsonlPath, { encoding: "utf8" }),
+			crlfDelay: Number.POSITIVE_INFINITY,
+		});
+		try {
+			for await (const line of prescan) {
+				const trimmed = line.trim();
+				if (trimmed.length === 0) continue;
+				try {
+					const parsed = JSON.parse(trimmed) as Partial<CanonicalTranscriptRecord>;
+					if (parsed.schema !== "signet.transcript.v1" || typeof parsed.content !== "string") continue;
+					const record = parsed as CanonicalTranscriptRecord;
+					const key = recordSeqCacheKey(record);
+					if (replacements.has(key) && record.source_format !== "live") {
+						healedKeys.add(key);
+					}
+				} catch {}
+			}
+		} finally {
+			prescan.close();
+		}
+		const effectiveReplacements = healedKeys.size > 0
+			? new Map([...replacements].filter(([k]) => !healedKeys.has(k)))
+			: replacements;
+		if (effectiveReplacements.size === 0) return healedKeys.size;
+
 		const tmpPath = `${jsonlPath}.rewrite-tmp`;
 		const rewritten = new Set<string>();
-		const healed = new Set<string>();
 		let fd: number | null = null;
 		try {
 			fd = openSync(tmpPath, "w");
@@ -575,23 +604,16 @@ export function rewriteReplacingLiveOnlySessions(
 						}
 					const record = parsed as CanonicalTranscriptRecord;
 					const key = recordSeqCacheKey(record);
-					if (!replacements.has(key)) {
+					if (!effectiveReplacements.has(key)) {
 						writeSync(fd, `${line}\n`);
 						continue;
 					}
-					if (rewritten.has(key) || healed.has(key)) {
-						// Only skip live-format lines; preserve any non-live records.
+					if (rewritten.has(key)) {
 						if (record.source_format === "live") continue;
 						writeSync(fd, `${line}\n`);
 						continue;
 					}
-					if (record.source_format !== "live") {
-						// Session was healed between classification and rewrite — skip replacement.
-						writeSync(fd, `${line}\n`);
-						healed.add(key);
-						continue;
-					}
-					const entry = replacements.get(key);
+					const entry = effectiveReplacements.get(key);
 					if (!entry) {
 						writeSync(fd, `${line}\n`);
 						continue;
@@ -600,7 +622,6 @@ export function rewriteReplacingLiveOnlySessions(
 						.map((turn, index) => makeRecord(entry.identity, turn, index + 1))
 						.filter((r): r is CanonicalTranscriptRecord => r !== null);
 					if (next.length === 0) {
-						// Replacement payload is empty — preserve original line (fail-closed).
 						writeSync(fd, `${line}\n`);
 						continue;
 					}
@@ -619,11 +640,8 @@ export function rewriteReplacingLiveOnlySessions(
 			closeSync(fd);
 			fd = null;
 			renameSync(tmpPath, jsonlPath);
-			// Only update seq cache for sessions that were actually rewritten.
-			// Healed sessions already have a correct (or higher) seq from the
-			// session-end hook — overwriting from the replacement would lower it.
 			for (const key of rewritten) {
-				const entry = replacements.get(key);
+				const entry = effectiveReplacements.get(key);
 				if (!entry) continue;
 				const seq = transcriptTextToTurns(entry.transcript).reduce((count, turn) => {
 					if (makeRecord(entry.identity, turn, count + 1) === null) return count;
@@ -631,7 +649,7 @@ export function rewriteReplacingLiveOnlySessions(
 				}, 0);
 				sessionSeqCache.set(sessionSeqCacheKey(entry.identity), seq);
 			}
-			return rewritten.size + healed.size;
+			return rewritten.size + healedKeys.size;
 		} catch (error) {
 			if (fd !== null) closeSync(fd);
 			rmSync(tmpPath, { force: true });

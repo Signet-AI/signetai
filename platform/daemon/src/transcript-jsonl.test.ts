@@ -1014,6 +1014,49 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		expect(liveTurn.seq).toBe(6);
 	});
 
+	test("skips replacement when session has both live and non-live records (race guard)", async () => {
+		const root = makeRoot("rewrite-race-guard");
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "live partial" }],
+		});
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "normalized",
+			turns: [{ role: "user", content: "canonical full" }, { role: "assistant", content: "canonical reply" }],
+		});
+
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+		const identity = {
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "db" as const,
+		};
+		const key = sessionSeqCacheKey(identity);
+		const replacements = new Map([
+			[key, { identity, transcript: "User: db version\nAssistant: db reply" }],
+		]);
+
+		const count = await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
+
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content).toContain("live partial");
+		expect(content).toContain("canonical full");
+		expect(content).not.toContain("db version");
+		expect(count).toBe(1);
+	});
+
 	test("preserves original lines when replacement transcript is empty", async () => {
 		const root = makeRoot("rewrite-empty-transcript");
 
