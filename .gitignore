@@ -21,6 +21,7 @@
 .bun-tmp/
 .claude/
 .codex/
+.sisyphus/
 .cursorindexingignore
 .env
 .env.*.local
@@ -36,6 +37,7 @@
 .vscode/
 .worktrees/
 /marketing/
+/packages/
 /references/
 Thumbs.db
 coverage/
