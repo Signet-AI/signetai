@@ -323,6 +323,114 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content).toContain("final reply");
 		expect(content).toContain("second session");
 	});
+
+	test("writeCanonicalTranscriptSnapshot handles large files without excessive memory (OOM guard)", async () => {
+		const root = makeRoot("snapshot-oom-guard");
+		const jsonlPath = canonicalTranscriptPath(root, "opencode");
+
+		// Pre-populate with 200 sessions × 10 turns each = 2000 JSONL records (~3–5 MB)
+		mkdirSync(dirname(jsonlPath), { recursive: true });
+		const lines: string[] = [];
+		for (let s = 0; s < 200; s++) {
+			for (let t = 0; t < 10; t++) {
+				lines.push(
+					JSON.stringify({
+						schema: "signet.transcript.v1",
+						id: `pre-${s}-${t}`,
+						captured_at: "2026-04-01T00:00:00.000Z",
+						agent_id: "default",
+						harness: "opencode",
+						session_key: `session-${s}`,
+						session_id: `session-${s}`,
+						project: null,
+						seq: t + 1,
+						role: t % 2 === 0 ? "user" : "assistant",
+						content: `Turn ${t} of session ${s} with padding ${"x".repeat(500)}`,
+						source_format: "normalized",
+						source_sha256: `sha-${s}-${t}`,
+					}),
+				);
+			}
+		}
+		writeFileSync(jsonlPath, `${lines.join("\n")}\n`, "utf8");
+
+		const sizeBefore = statSync(jsonlPath).size;
+		expect(sizeBefore).toBeGreaterThan(1_000_000); // At least 1 MB
+
+		// Replace one session (session-50)
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "opencode",
+			sessionKey: "session-50",
+			sourceFormat: "normalized",
+			transcript: "User: replaced prompt\nAssistant: replaced reply",
+		});
+
+		const content = readFileSync(jsonlPath, "utf8");
+		const records = content
+			.split("\n")
+			.filter((l) => l.trim().length > 0)
+			.map((l) => JSON.parse(l) as { session_key: string; content: string });
+
+		// session-50 records replaced
+		const session50 = records.filter((r) => r.session_key === "session-50");
+		expect(session50.length).toBe(2);
+		expect(session50[0]?.content).toBe("replaced prompt");
+		expect(session50[1]?.content).toBe("replaced reply");
+
+		// Other sessions preserved
+		const session0 = records.filter((r) => r.session_key === "session-0");
+		expect(session0.length).toBe(10);
+
+		const session199 = records.filter((r) => r.session_key === "session-199");
+		expect(session199.length).toBe(10);
+
+		// Total records: (200 - 1) * 10 + 2 = 1992
+		expect(records.length).toBe(1992);
+	});
+
+	test("writeCanonicalTranscriptSnapshot overwrites stale temp file from prior crash", async () => {
+		const root = makeRoot("snapshot-stale-tmp");
+		const jsonlPath = canonicalTranscriptPath(root, "opencode");
+
+		// Create initial JSONL with one session
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "opencode",
+			sessionKey: "existing-session",
+			sourceFormat: "live",
+			turns: [
+				{ role: "user", content: "existing prompt" },
+				{ role: "assistant", content: "existing reply" },
+			],
+		});
+
+		// Simulate a crash leaving a stale .snapshot-tmp
+		const staleTmp = `${jsonlPath}.snapshot-tmp`;
+		writeFileSync(staleTmp, "corrupted partial write\n", "utf8");
+		expect(existsSync(staleTmp)).toBe(true);
+
+		// Write a new snapshot — should overwrite the stale tmp and succeed
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "opencode",
+			sessionKey: "new-session",
+			sourceFormat: "normalized",
+			transcript: "User: new prompt\nAssistant: new reply",
+		});
+
+		// Stale tmp cleaned up (renamed over)
+		expect(existsSync(staleTmp)).toBe(false);
+
+		// Both sessions present in final JSONL
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content).toContain("existing prompt");
+		expect(content).toContain("new prompt");
+		expect(content).toContain("new reply");
+	});
 });
 
 describe("backfill replaces live-only sessions", () => {
