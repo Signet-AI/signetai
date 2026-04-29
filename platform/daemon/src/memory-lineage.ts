@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { LlmProvider } from "@signet/core";
@@ -435,6 +435,21 @@ function loadManifest(path: string): ManifestState | null {
 		frontmatter: parsed.frontmatter,
 		body: parsed.body,
 	};
+}
+
+async function loadManifestAsync(path: string): Promise<ManifestState | null> {
+	try {
+		const parsed = parseFrontmatterDocument(await readFile(path, "utf8"));
+		const rawRevision = parsed.frontmatter.revision;
+		return {
+			path,
+			revision: typeof rawRevision === "number" ? rawRevision : 0,
+			frontmatter: parsed.frontmatter,
+			body: parsed.body,
+		};
+	} catch {
+		return null;
+	}
 }
 
 function writeImmutableArtifact(seed: ArtifactSeed): string {
@@ -953,6 +968,35 @@ function saveManifest(path: string, frontmatter: Record<string, unknown>, body: 
 		throw new Error(`Failed to reload manifest ${path}`);
 	}
 	upsertArtifactRow(path, manifest.frontmatter, manifest.body);
+	return manifest;
+}
+
+async function writeAtomicAsync(path: string, content: string): Promise<void> {
+	await mkdir(getMemoryDir(), { recursive: true });
+	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+	await writeFile(tmp, content, "utf8");
+	await rename(tmp, path);
+}
+
+async function saveManifestAsync(
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+): Promise<ManifestState> {
+	const normalizedBody = normalizeMarkdownBody(body);
+	const content = `${serializeFrontmatter(frontmatter)}\n${normalizedBody}\n`;
+	await writeAtomicAsync(path, content);
+	const manifest = {
+		path,
+		revision: typeof frontmatter.revision === "number" ? frontmatter.revision : 0,
+		frontmatter,
+		body: normalizedBody,
+	};
+	let sourceMtimeMs = Date.now();
+	try {
+		sourceMtimeMs = (await stat(path)).mtimeMs;
+	} catch {}
+	upsertArtifactRow(path, manifest.frontmatter, manifest.body, sourceMtimeMs);
 	return manifest;
 }
 
@@ -1573,9 +1617,13 @@ async function syncManifestRefs(
 		prevLedgerRefsByAgent.set(agentId, set);
 		files = (await listCanonicalFiles()).filter((path) => path.endsWith("--manifest.md"));
 	}
+	const yielder = yieldEvery(20);
 	for (const path of files) {
-		const state = loadManifest(path);
-		if (!state) continue;
+		const state = await loadManifestAsync(path);
+		if (!state) {
+			await yielder();
+			continue;
+		}
 		const rel = relativePath(path);
 		const nextRefs = set.has(rel) ? [LEDGER_HEADING] : [];
 		const nextBody =
@@ -1588,9 +1636,10 @@ async function syncManifestRefs(
 			currentRefs.every((value, idx) => value === nextRefs[idx]) &&
 			normalizeMarkdownBody(state.body) === nextBody
 		) {
+			await yielder();
 			continue;
 		}
-		saveManifest(
+		await saveManifestAsync(
 			path,
 			{
 				...state.frontmatter,
@@ -1601,6 +1650,7 @@ async function syncManifestRefs(
 			},
 			nextBody,
 		);
+		await yielder();
 	}
 }
 
