@@ -206,6 +206,7 @@ jobs:
           path: |
             deploy/aur/PKGBUILD
             deploy/aur/.SRCINFO
+          include-hidden-files: true
 
       - name: Publish release assets
         if: startsWith(github.ref, 'refs/tags/')
