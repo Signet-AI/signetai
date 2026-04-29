@@ -426,18 +426,74 @@ export function writeCanonicalTranscriptSnapshot(
 	const turns = transcriptTextToTurns(input.transcript);
 	if (turns.length === 0) return Promise.resolve(null);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
-	return withTranscriptFileLock(path, () => {
-		const existing = readRecords(path).filter((record) => !sameSession(record, input));
+	return withTranscriptFileLock(path, async () => {
 		const next = turns
 			.map((turn, index) => makeRecord(input, turn, index + 1))
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
 		if (next.length === 0) return null;
-		writeRecords(path, [...existing, ...next]);
-		sessionSeqCache.set(
-			sessionSeqCacheKey(input),
-			next.reduce((max, record) => Math.max(max, record.seq), 0),
-		);
-		return path;
+
+		if (!existsSync(path)) {
+			mkdirSync(dirname(path), { recursive: true });
+			const body = next.map((r) => JSON.stringify(r)).join("\n");
+			writeFileSync(path, `${body}\n`, "utf8");
+			sessionSeqCache.set(
+				sessionSeqCacheKey(input),
+				next.reduce((max, record) => Math.max(max, record.seq), 0),
+			);
+			return path;
+		}
+
+		const tmpPath = `${path}.snapshot-tmp`;
+		let fd: number | null = null;
+		try {
+			fd = openSync(tmpPath, "w");
+			const lines = createInterface({
+				input: createReadStream(path, { encoding: "utf8" }),
+				crlfDelay: Number.POSITIVE_INFINITY,
+			});
+			try {
+				for await (const line of lines) {
+					const trimmedLine = line.trim();
+					if (trimmedLine.length === 0) continue;
+					try {
+						const parsed = JSON.parse(trimmedLine) as Partial<CanonicalTranscriptRecord>;
+						if (
+							parsed.schema !== "signet.transcript.v1" ||
+							typeof parsed.content !== "string"
+						) {
+							writeSync(fd, `${line}\n`);
+							continue;
+						}
+						if (sameSession(parsed as CanonicalTranscriptRecord, input)) {
+							continue; // Skip — will be replaced by `next` records at end
+						}
+						writeSync(fd, `${line}\n`);
+					} catch {
+						// Malformed line — preserve verbatim
+						writeSync(fd, `${line}\n`);
+					}
+				}
+			} finally {
+				lines.close();
+			}
+			// Append new canonical records for this session
+			for (const r of next) {
+				writeSync(fd, `${JSON.stringify(r)}\n`);
+			}
+			fsyncSync(fd);
+			closeSync(fd);
+			fd = null;
+			renameSync(tmpPath, path);
+			sessionSeqCache.set(
+				sessionSeqCacheKey(input),
+				next.reduce((max, record) => Math.max(max, record.seq), 0),
+			);
+			return path;
+		} catch (error) {
+			if (fd !== null) closeSync(fd);
+			rmSync(tmpPath, { force: true });
+			throw error;
+		}
 	});
 }
 
