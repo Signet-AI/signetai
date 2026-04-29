@@ -554,7 +554,8 @@ export function rewriteReplacingLiveOnlySessions(
 	if (replacements.size === 0 || !existsSync(jsonlPath)) return Promise.resolve(0);
 	return withTranscriptFileLock(jsonlPath, async () => {
 		const tmpPath = `${jsonlPath}.rewrite-tmp`;
-		const replaced = new Set<string>();
+		const rewritten = new Set<string>();
+		const healed = new Set<string>();
 		let fd: number | null = null;
 		try {
 			fd = openSync(tmpPath, "w");
@@ -578,7 +579,7 @@ export function rewriteReplacingLiveOnlySessions(
 						writeSync(fd, `${line}\n`);
 						continue;
 					}
-					if (replaced.has(key)) {
+					if (rewritten.has(key) || healed.has(key)) {
 						// Only skip live-format lines; preserve any non-live records.
 						if (record.source_format === "live") continue;
 						writeSync(fd, `${line}\n`);
@@ -587,7 +588,7 @@ export function rewriteReplacingLiveOnlySessions(
 					if (record.source_format !== "live") {
 						// Session was healed between classification and rewrite — skip replacement.
 						writeSync(fd, `${line}\n`);
-						replaced.add(key);
+						healed.add(key);
 						continue;
 					}
 					const entry = replacements.get(key);
@@ -606,7 +607,7 @@ export function rewriteReplacingLiveOnlySessions(
 					for (const r of next) {
 						writeSync(fd, `${JSON.stringify(r)}\n`);
 					}
-					replaced.add(key);
+					rewritten.add(key);
 					} catch {
 						writeSync(fd, `${line}\n`);
 					}
@@ -618,7 +619,10 @@ export function rewriteReplacingLiveOnlySessions(
 			closeSync(fd);
 			fd = null;
 			renameSync(tmpPath, jsonlPath);
-			for (const key of replaced) {
+			// Only update seq cache for sessions that were actually rewritten.
+			// Healed sessions already have a correct (or higher) seq from the
+			// session-end hook — overwriting from the replacement would lower it.
+			for (const key of rewritten) {
 				const entry = replacements.get(key);
 				if (!entry) continue;
 				const seq = transcriptTextToTurns(entry.transcript).reduce((count, turn) => {
@@ -627,7 +631,7 @@ export function rewriteReplacingLiveOnlySessions(
 				}, 0);
 				sessionSeqCache.set(sessionSeqCacheKey(entry.identity), seq);
 			}
-			return replaced.size;
+			return rewritten.size + healed.size;
 		} catch (error) {
 			if (fd !== null) closeSync(fd);
 			rmSync(tmpPath, { force: true });

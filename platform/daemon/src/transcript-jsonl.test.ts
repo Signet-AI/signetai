@@ -959,6 +959,61 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		expect(content).not.toContain("db replacement");
 	});
 
+	test("healed session does not clobber seq cache with replacement turn count", async () => {
+		const root = makeRoot("rewrite-healed-seq");
+
+		// Write 5 canonical turns (seq 1-5) via snapshot.
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "normalized",
+			transcript: [
+				"User: turn one",
+				"Assistant: reply one",
+				"User: turn two",
+				"Assistant: reply two",
+				"User: turn three",
+			].join("\n"),
+		});
+
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+		const identity = {
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "db" as const,
+		};
+		const key = sessionSeqCacheKey(identity);
+
+		// Replacement has only 2 turns — would clobber seq to 2 if cache is updated.
+		const replacements = new Map([
+			[key, { identity, transcript: "User: short\nAssistant: short reply" }],
+		]);
+
+		const count = await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
+		// Session was already healed (non-live), replacement skipped.
+		expect(count).toBe(1);
+
+		// Append a live turn — should get seq 6, not seq 3.
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "live turn six" }],
+		});
+
+		const content = readFileSync(jsonlPath, "utf8");
+		const records = content.trim().split("\n").map((l) => JSON.parse(l));
+		const liveTurn = records.find((r: Record<string, unknown>) => r.content === "live turn six");
+		expect(liveTurn).toBeTruthy();
+		expect(liveTurn.seq).toBe(6);
+	});
+
 	test("preserves original lines when replacement transcript is empty", async () => {
 		const root = makeRoot("rewrite-empty-transcript");
 
