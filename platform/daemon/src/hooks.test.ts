@@ -2186,7 +2186,7 @@ describe("handleSynthesisRequest", () => {
 				cwd: "/home/user/signetai",
 			});
 
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 			const before = await handleSynthesisRequest({ trigger: "manual" });
 			expect(before.prompt).toContain("## Session Ledger (Last 30 Days)");
 			expect(before.prompt).toContain("session=sess-pr390");
@@ -2201,7 +2201,7 @@ describe("handleSynthesisRequest", () => {
 			if (token) {
 				removeCanonicalSession("default", token, "privacy test");
 			}
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 			const after = await handleSynthesisRequest({ trigger: "manual" });
 			expect(after.prompt).not.toContain("session=sess-pr390");
 		},
@@ -2439,6 +2439,7 @@ describe("memory-lineage", () => {
 
 	test.serial("projection uses artifact frontmatter sentence and rejects low-signal frontmatter", async () => {
 		createMemoryDb([]);
+		const now = new Date().toISOString();
 
 		const written = await writeSummaryArtifact({
 			agentId: "default",
@@ -2446,9 +2447,9 @@ describe("memory-lineage", () => {
 			sessionKey: "sess-frontmatter",
 			project: "/home/user/signetai",
 			harness: "test",
-			capturedAt: "2026-03-28T22:34:06.792Z",
+			capturedAt: now,
 			startedAt: null,
-			endedAt: "2026-03-28T22:40:00.000Z",
+			endedAt: now,
 			summary:
 				"Summary body that should not appear as the ledger sentence because the projection must read the explicit memory_sentence from artifact frontmatter instead of rewriting from the body.",
 		});
@@ -2462,8 +2463,8 @@ describe("memory-lineage", () => {
 			.replace(/memory_sentence_quality: .*\n/, 'memory_sentence_quality: "ok"\n');
 		writeFileSync(fullPath, withCustom);
 
-		reindexMemoryArtifacts("default");
-		const first = renderMemoryProjection("default").content;
+		await reindexMemoryArtifacts("default");
+		const first = (await renderMemoryProjection("default")).content;
 		expect(first).toContain(customSentence);
 		expect(first).not.toContain("Summary body that should not appear as the ledger sentence");
 
@@ -2473,8 +2474,8 @@ describe("memory-lineage", () => {
 		);
 		writeFileSync(fullPath, withLowSignal);
 
-		reindexMemoryArtifacts("default");
-		const second = renderMemoryProjection("default").content;
+		await reindexMemoryArtifacts("default");
+		const second = (await renderMemoryProjection("default")).content;
 		expect(second).not.toContain("Worked on task.");
 		expect(second).toContain("Session signetai captured durable summary context");
 	});
@@ -2526,7 +2527,7 @@ describe("memory-lineage", () => {
 		);
 		writeFileSync(fullPath, tampered);
 
-		reindexMemoryArtifacts("default");
+		await reindexMemoryArtifacts("default");
 
 		const dbAfter = openTestDb();
 		const artifact = dbAfter
@@ -2570,7 +2571,7 @@ describe("memory-lineage", () => {
 				}
 			}
 
-			const content = renderMemoryProjection("default").content;
+			const content = (await renderMemoryProjection("default")).content;
 			const ledger = ledgerSection(content);
 			const count = ledger.match(/\| session=/g)?.length ?? 0;
 
@@ -2584,6 +2585,8 @@ describe("memory-lineage", () => {
 	test.serial("multi-agent projection and reindex stay scoped without cross-agent bleed", async () => {
 		createMemoryDb([]);
 		upsertAgent("agent-b", "isolated");
+		const defaultStamp = new Date(Date.now() - 1_000).toISOString();
+		const agentStamp = new Date().toISOString();
 
 		writeTranscriptArtifact({
 			agentId: "default",
@@ -2591,9 +2594,9 @@ describe("memory-lineage", () => {
 			sessionKey: "sess-shared",
 			project: "/home/user/default-proj",
 			harness: "test",
-			capturedAt: "2026-03-28T22:34:06.792Z",
+			capturedAt: defaultStamp,
 			startedAt: null,
-			endedAt: "2026-03-28T22:40:00.000Z",
+			endedAt: defaultStamp,
 			transcript:
 				"User: keep packages/daemon/src/memory-lineage.ts scoped to /tmp/default-proj.\nAssistant: confirmed default agent lineage is isolated.\n".repeat(
 					8,
@@ -2606,17 +2609,17 @@ describe("memory-lineage", () => {
 			sessionKey: "sess-shared",
 			project: "/home/user/agent-b-proj",
 			harness: "test",
-			capturedAt: "2026-03-28T22:34:07.792Z",
+			capturedAt: agentStamp,
 			startedAt: null,
-			endedAt: "2026-03-28T22:40:01.000Z",
+			endedAt: agentStamp,
 			transcript:
 				"User: keep packages/daemon/src/memory-lineage.ts scoped to /tmp/agent-b-proj.\nAssistant: confirmed agent-b lineage is isolated.\n".repeat(
 					8,
 				),
 		});
 
-		const defaultView = renderMemoryProjection("default").content;
-		const agentView = renderMemoryProjection("agent-b").content;
+		const defaultView = (await renderMemoryProjection("default")).content;
+		const agentView = (await renderMemoryProjection("agent-b")).content;
 
 		expect(defaultView).toContain("/home/user/default-proj");
 		expect(defaultView).not.toContain("/home/user/agent-b-proj");
@@ -2626,6 +2629,7 @@ describe("memory-lineage", () => {
 
 	test.serial("projection emits workspace-root-relative wikilinks", async () => {
 		createMemoryDb([]);
+		const now = new Date().toISOString();
 
 		await writeSummaryArtifact({
 			agentId: "default",
@@ -2633,14 +2637,14 @@ describe("memory-lineage", () => {
 			sessionKey: "sess-links",
 			project: "/home/user/signetai",
 			harness: "test",
-			capturedAt: "2026-03-28T22:34:06.792Z",
+			capturedAt: now,
 			startedAt: null,
-			endedAt: "2026-03-28T22:40:00.000Z",
+			endedAt: now,
 			summary:
 				"Confirmed the Signet projection emits workspace-root-relative wikilinks for summary, transcript, and manifest lineage artifacts during rolling ledger rendering.",
 		});
 
-		const content = renderMemoryProjection("default").content;
+		const content = (await renderMemoryProjection("default")).content;
 		expect(content).toMatch(/\[\[memory\/.+--summary\.md\|summary\]\]/);
 		expect(content).toMatch(/\[\[memory\/.+--manifest\.md\|manifest\]\]/);
 		expect(content).not.toContain(TEST_DIR);

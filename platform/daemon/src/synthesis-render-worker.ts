@@ -23,7 +23,7 @@ if (parentPort === null) {
 
 const port = parentPort;
 
-port.on("message", (msg: unknown) => {
+port.on("message", async (msg: unknown) => {
 	const request: WorkerRequest | null = isInitRequest(msg)
 		? msg
 		: isRenderRequest(msg)
@@ -39,7 +39,7 @@ port.on("message", (msg: unknown) => {
 	}
 
 	try {
-		const result = renderMemoryProjection(request.agentId);
+		const result = await renderMemoryProjection(request.agentId);
 		postMessage({
 			type: "result",
 			requestId: request.requestId,

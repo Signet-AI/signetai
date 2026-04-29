@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
+import { yieldEvery } from "./async-yield";
 import { getAgentScope } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
@@ -260,11 +262,6 @@ function fsTimestamp(iso: string): string {
 
 function artifactFileName(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
 	return `${fsTimestamp(capturedAt)}--${sessionToken}--${kind}.md`;
-}
-
-function artifactStatKey(path: string): string {
-	const stat = statSync(path, { bigint: true });
-	return `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;
 }
 
 function artifactPath(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
@@ -660,10 +657,11 @@ export function indexCanonicalTranscriptJsonl(input: {
 	);
 }
 
-function listCanonicalFiles(): string[] {
+async function listCanonicalFiles(): Promise<string[]> {
 	const dir = getMemoryDir();
 	if (!existsSync(dir)) return [];
-	return readdirSync(dir)
+	const entries = await readdir(dir);
+	return entries
 		.filter((name) => /^\d{4}-\d{2}-\d{2}T.*--[a-z2-7]{16}--(summary|transcript|compaction|manifest)\.md$/.test(name))
 		.map((name) => join(dir, name))
 		.sort();
@@ -711,9 +709,9 @@ export function deleteArtifactRowsForPath(path: string, agentId: string | null):
 	});
 }
 
-export function reindexMemoryArtifacts(agentId?: string): void {
+export async function reindexMemoryArtifacts(agentId?: string): Promise<void> {
 	const scope = agentId?.trim() || null;
-	const files = listCanonicalFiles();
+	const files = await listCanonicalFiles();
 	const stopTimer = logger.time("resources", "reindexMemoryArtifacts");
 	const cacheKey = scope ?? "*";
 	const cache = artifactIndexCache.get(cacheKey) ?? new Map<string, string>();
@@ -780,15 +778,35 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 	});
 
 	const fileSet = new Set(files);
+	const yielder = yieldEvery(50);
 	for (const path of files) {
-		const statKey = artifactStatKey(path);
-		if (cache.get(path) === statKey) continue;
+		let statKey: string;
+		try {
+			const s = await stat(path, { bigint: true });
+			statKey = `${s.mtimeNs}:${s.ctimeNs}:${s.size}`;
+		} catch {
+			continue;
+		}
+		if (cache.get(path) === statKey) {
+			await yielder();
+			continue;
+		}
 
-		const parsed = parseFrontmatterDocument(readFileSync(path, "utf8"));
+		let content: string;
+		try {
+			content = await readFile(path, "utf8");
+		} catch {
+			cache.set(path, statKey);
+			await yielder();
+			continue;
+		}
+
+		const parsed = parseFrontmatterDocument(content);
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
 		if (scope && nextAgent !== scope) {
 			deleteArtifactRowsForPath(path, scope);
 			cache.set(path, statKey);
+			await yielder();
 			continue;
 		}
 		const match = path.match(/--([a-z2-7]{16})--/);
@@ -797,6 +815,7 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 			deleteArtifactRowsForPath(path, scope);
 			cache.set(path, statKey);
 			changedPaths.add(path);
+			await yielder();
 			continue;
 		}
 		const body = normalizeMarkdownBody(parsed.body);
@@ -804,12 +823,14 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 			deleteArtifactRowsForPath(path, scope);
 			cache.set(path, statKey);
 			changedPaths.add(path);
+			await yielder();
 			continue;
 		}
-		const mtime = statSync(path).mtimeMs;
+		const mtime = (await stat(path)).mtimeMs;
 		upsertArtifactRow(path, parsed.frontmatter, body, mtime);
 		cache.set(path, statKey);
 		changedPaths.add(path);
+		await yielder();
 	}
 
 	for (const path of cache.keys()) {
@@ -1504,11 +1525,11 @@ function renderIndexSection(indexBlock: string, base: ReadonlyArray<string>): st
 	return "";
 }
 
-function syncManifestRefs(
+async function syncManifestRefs(
 	refs: ReadonlyArray<string>,
 	changedManifests: ReadonlySet<string> | undefined,
 	agentId: string,
-): void {
+): Promise<void> {
 	const set = new Set(refs);
 	let files: string[];
 	if (changedManifests !== undefined) {
@@ -1530,7 +1551,7 @@ function syncManifestRefs(
 		files = [...absFiles];
 	} else {
 		prevLedgerRefsByAgent.set(agentId, set);
-		files = listCanonicalFiles().filter((path) => path.endsWith("--manifest.md"));
+		files = (await listCanonicalFiles()).filter((path) => path.endsWith("--manifest.md"));
 	}
 	for (const path of files) {
 		const state = loadManifest(path);
@@ -1563,12 +1584,12 @@ function syncManifestRefs(
 	}
 }
 
-export function renderMemoryProjection(agentId = "default"): {
+export async function renderMemoryProjection(agentId = "default"): Promise<{
 	content: string;
 	fileCount: number;
 	indexBlock: string;
-} {
-	reindexMemoryArtifacts(agentId);
+}> {
+	await reindexMemoryArtifacts(agentId);
 	const changedManifests = lastChangedManifestsByAgent.get(agentId);
 	lastChangedManifestsByAgent.delete(agentId);
 	const memories = readTopMemories(agentId);
@@ -1615,7 +1636,7 @@ export function renderMemoryProjection(agentId = "default"): {
 		}),
 	];
 	const ledgerBlock = renderLedgerSection(ledger, parts);
-	syncManifestRefs(ledgerBlock.refs, changedManifests, agentId);
+	await syncManifestRefs(ledgerBlock.refs, changedManifests, agentId);
 	parts.push(ledgerBlock.block);
 	const trimmedIndex = renderIndexSection(indexBlock, parts);
 	if (trimmedIndex.length > 0) {

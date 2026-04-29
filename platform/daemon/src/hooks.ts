@@ -3893,7 +3893,7 @@ export async function handleSynthesisRequest(
 	const worker = getSynthesisWorker();
 	if (worker === null) {
 		logger.warn("hooks", "Synthesis render worker not available, falling back to synchronous render");
-		const rendered = renderMemoryProjection(agentId);
+		const rendered = await renderMemoryProjection(agentId);
 		if (opts?.writeToDisk === true) {
 			writeMemoryMd(rendered.content, { agentId });
 		}
@@ -3918,7 +3918,7 @@ export async function handleSynthesisRequest(
 			w.off("exit", onExit);
 		}
 
-		function fallbackToSync(message: string, error?: Error): void {
+		async function fallbackToSync(message: string, error?: Error): Promise<void> {
 			if (settled) return;
 			settled = true;
 			cleanup();
@@ -3930,7 +3930,7 @@ export async function handleSynthesisRequest(
 			});
 			logger.warn("hooks", "Synthesis render worker failed, falling back to synchronous render", error ?? { message });
 			try {
-				const rendered = renderMemoryProjection(agentId);
+				const rendered = await renderMemoryProjection(agentId);
 				if (opts?.writeToDisk === true) {
 					writeMemoryMd(rendered.content, { agentId });
 				}
@@ -3948,20 +3948,20 @@ export async function handleSynthesisRequest(
 
 		function onError(err: Error): void {
 			logger.error("hooks", "Synthesis render worker failed", err);
-			fallbackToSync("Synthesis render worker failed", err);
+			void fallbackToSync("Synthesis render worker failed", err);
 		}
 
 		function onExit(code: number): void {
 			if (settled) return;
 			const err = new Error(`Synthesis render worker exited before responding (code=${code})`);
 			logger.error("hooks", err.message, err);
-			fallbackToSync(err.message, err);
+			void fallbackToSync(err.message, err);
 		}
 
 		const timer = setTimeout(() => {
 			const err = new Error("Synthesis render worker timed out");
 			logger.warn("hooks", err.message);
-			fallbackToSync(err.message, err);
+			void fallbackToSync(err.message, err);
 		}, 30_000);
 
 		function handler(msg: unknown): void {
@@ -3984,7 +3984,7 @@ export async function handleSynthesisRequest(
 			} else if (isRenderError(msg)) {
 				const err = new Error(`Synthesis render worker error: ${msg.error}`);
 				logger.error("hooks", err.message, err);
-				fallbackToSync(err.message, err);
+				void fallbackToSync(err.message, err);
 			}
 		}
 
