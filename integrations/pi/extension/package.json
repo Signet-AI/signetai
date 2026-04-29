@@ -1,6 +1,6 @@
 {
   "name": "@signet/pi-extension",
-  "version": "0.109.5",
+  "version": "0.109.6",
   "description": "Signet runtime extension for pi — session lifecycle hooks and memory recall",
   "type": "module",
   "main": "dist/signet-pi.mjs",
