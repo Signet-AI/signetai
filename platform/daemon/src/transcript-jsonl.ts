@@ -37,12 +37,17 @@ export interface CanonicalTranscriptRecord {
 	readonly source_sha256: string;
 }
 
+export interface TranscriptSessionKeyClassification {
+	readonly canonicalKeys: Set<string>;
+	readonly liveOnlyKeys: Set<string>;
+}
+
 export interface TranscriptTurn {
 	readonly role: TranscriptRole;
 	readonly content: string;
 }
 
-interface TranscriptIdentity {
+export interface TranscriptIdentity {
 	readonly basePath?: string;
 	readonly agentId: string;
 	readonly harness: string;
@@ -313,7 +318,7 @@ function sameSession(record: CanonicalTranscriptRecord, input: TranscriptIdentit
 	);
 }
 
-function sessionSeqCacheKey(input: TranscriptIdentity): string {
+export function sessionSeqCacheKey(input: TranscriptIdentity): string {
 	return [
 		input.agentId.trim() || "default",
 		sanitizeHarnessPath(input.harness),
@@ -348,10 +353,11 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 	readonly basePath?: string;
 	readonly harness: string;
 	readonly agentId?: string;
-}): Promise<Set<string>> {
+}): Promise<TranscriptSessionKeyClassification> {
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
-	const keys = new Set<string>();
-	if (!existsSync(path)) return keys;
+	const canonicalKeys = new Set<string>();
+	const liveOnlyKeys = new Set<string>();
+	if (!existsSync(path)) return { canonicalKeys, liveOnlyKeys };
 	const agentId = input.agentId?.trim() || null;
 	const lines = createInterface({
 		input: createReadStream(path, { encoding: "utf8" }),
@@ -366,7 +372,13 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 				if (parsed.schema !== "signet.transcript.v1" || typeof parsed.content !== "string") continue;
 				const record = parsed as CanonicalTranscriptRecord;
 				if (agentId !== null && record.agent_id !== agentId) continue;
-				keys.add(recordSeqCacheKey(record));
+				const key = recordSeqCacheKey(record);
+				if (record.source_format !== "live") {
+					canonicalKeys.add(key);
+					liveOnlyKeys.delete(key);
+					continue;
+				}
+				if (!canonicalKeys.has(key)) liveOnlyKeys.add(key);
 			} catch {
 				// Ignore malformed historical lines rather than blocking capture.
 			}
@@ -374,7 +386,7 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 	} finally {
 		lines.close();
 	}
-	return keys;
+	return { canonicalKeys, liveOnlyKeys };
 }
 
 async function hasSessionRecord(path: string, input: TranscriptIdentity): Promise<boolean> {

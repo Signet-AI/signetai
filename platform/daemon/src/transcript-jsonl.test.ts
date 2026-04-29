@@ -8,6 +8,7 @@ import {
 	appendCanonicalTranscriptSnapshotIfMissing,
 	appendCanonicalTranscriptTurns,
 	canonicalTranscriptPath,
+	readCanonicalTranscriptSessionKeys,
 	writeCanonicalTranscriptSnapshot,
 } from "./transcript-jsonl";
 
@@ -319,5 +320,84 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content).toContain("final prompt");
 		expect(content).toContain("final reply");
 		expect(content).toContain("second session");
+	});
+});
+
+describe("readCanonicalTranscriptSessionKeys classification", () => {
+	test("classifies canonical and live-only sessions separately", async () => {
+		const root = makeRoot("classify-separate");
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "partial live turn" }],
+		});
+
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-2",
+			sourceFormat: "db",
+			transcript: "User: canonical prompt\nAssistant: canonical reply",
+		});
+
+		const { canonicalKeys, liveOnlyKeys } = await readCanonicalTranscriptSessionKeys({
+			basePath: root,
+			harness: "codex",
+			agentId: "default",
+		});
+
+		expect(canonicalKeys.size).toBe(1);
+		expect(liveOnlyKeys.size).toBe(1);
+		for (const key of canonicalKeys) {
+			expect(liveOnlyKeys.has(key)).toBe(false);
+		}
+	});
+
+	test("promotes session to canonical when it has both live and non-live records", async () => {
+		const root = makeRoot("classify-promote");
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "live partial" }],
+		});
+
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "normalized",
+			transcript: "User: canonical final\nAssistant: canonical reply",
+		});
+
+		const { canonicalKeys, liveOnlyKeys } = await readCanonicalTranscriptSessionKeys({
+			basePath: root,
+			harness: "codex",
+			agentId: "default",
+		});
+
+		expect(canonicalKeys.size).toBe(1);
+		expect(liveOnlyKeys.size).toBe(0);
+	});
+
+	test("returns empty sets for nonexistent file", async () => {
+		const root = makeRoot("classify-empty");
+		const { canonicalKeys, liveOnlyKeys } = await readCanonicalTranscriptSessionKeys({
+			basePath: root,
+			harness: "codex",
+			agentId: "default",
+		});
+
+		expect(canonicalKeys.size).toBe(0);
+		expect(liveOnlyKeys.size).toBe(0);
 	});
 });
