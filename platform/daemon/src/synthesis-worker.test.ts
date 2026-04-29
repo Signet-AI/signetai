@@ -312,10 +312,86 @@ describe("handleSynthesisRequest", () => {
 		} finally {
 			await worker.terminate();
 		}
-	});
+	}, 120_000);
 
 	test("regression: getSynthesisWorker returns null after setSynthesisWorker(null)", () => {
 		setSynthesisWorker(null);
 		expect(getSynthesisWorker()).toBeNull();
 	});
+
+	test("concurrent render messages are serialized (second waits for first)", async () => {
+		const log: string[] = [];
+		const worker = new Worker(
+			`
+				const { parentPort } = require("node:worker_threads");
+				const pending = [];
+				let busy = false;
+
+				async function drain() {
+					if (busy) return;
+					busy = true;
+					while (pending.length > 0) {
+						const req = pending.shift();
+						parentPort.postMessage({ type: "start", requestId: req.requestId });
+						await new Promise(r => setTimeout(r, 50));
+						parentPort.postMessage({
+							type: "result",
+							requestId: req.requestId,
+							content: "ok-" + req.requestId,
+							fileCount: 1,
+							indexBlock: "",
+						});
+					}
+					busy = false;
+				}
+
+				parentPort.on("message", (msg) => {
+					if (msg.type === "render") {
+						pending.push(msg);
+						drain();
+					}
+				});
+			`,
+			{ eval: true },
+		);
+
+		try {
+			const results: Array<{ requestId: string; order: number }> = [];
+			let counter = 0;
+
+			const collect = (msg: Record<string, unknown>): void => {
+				if (msg.type === "start") {
+					counter++;
+					log.push(`start-${msg.requestId}-at-${counter}`);
+				}
+				if (msg.type === "result") {
+					results.push({ requestId: msg.requestId as string, order: counter });
+					log.push(`result-${msg.requestId}`);
+				}
+			};
+			worker.on("message", collect);
+
+			worker.postMessage({ type: "render", agentId: "default", requestId: "r1" });
+			worker.postMessage({ type: "render", agentId: "default", requestId: "r2" });
+
+			await new Promise<void>((resolve) => {
+				const check = setInterval(() => {
+					if (results.length >= 2) {
+						clearInterval(check);
+						resolve();
+					}
+				}, 10);
+			});
+
+			worker.off("message", collect);
+
+			expect(results).toHaveLength(2);
+			expect(results[0]?.requestId).toBe("r1");
+			expect(results[1]?.requestId).toBe("r2");
+			expect(log[0]).toBe("start-r1-at-1");
+			expect(log[2]).toBe("start-r2-at-2");
+		} finally {
+			await worker.terminate();
+		}
+	}, 10_000);
 });

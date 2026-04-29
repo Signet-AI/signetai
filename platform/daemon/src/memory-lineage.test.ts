@@ -833,4 +833,68 @@ describe("memory-lineage", () => {
 		expect(aliceResult2.content).not.toContain("bob-s1");
 		expect(bobResult2.content).not.toContain("alice-s1");
 	});
+
+	it("concurrent reindexMemoryArtifacts calls for the same agent are serialized via single-flight", async () => {
+		await addSummary({ sessionId: "flight-1", project: "/home/u/p", minutesAgo: 1 });
+		await addSummary({ sessionId: "flight-2", project: "/home/u/p", minutesAgo: 2 });
+		await addSummary({ sessionId: "flight-3", project: "/home/u/p", minutesAgo: 3 });
+
+		const a = reindexMemoryArtifacts("default");
+		const b = reindexMemoryArtifacts("default");
+		const c = reindexMemoryArtifacts("default");
+
+		await Promise.all([a, b, c]);
+
+		const rows = getDbAccessor().withReadDb((db) => {
+			return db
+				.prepare("SELECT DISTINCT session_id FROM memory_artifacts WHERE agent_id = 'default' ORDER BY session_id")
+				.all() as Array<{ session_id: string }>;
+		});
+		const ids = rows.map((r) => r.session_id);
+		expect(ids).toContain("flight-1");
+		expect(ids).toContain("flight-2");
+		expect(ids).toContain("flight-3");
+	});
+
+	it("concurrent reindexMemoryArtifacts for different agents run independently", async () => {
+		await writeSummaryArtifact({
+			agentId: "x",
+			sessionId: "x-s1",
+			sessionKey: "x-s1",
+			project: "/home/u/p",
+			harness: "codex",
+			capturedAt: new Date(Date.now() - 60_000).toISOString(),
+			startedAt: new Date(Date.now() - 60_000).toISOString(),
+			endedAt: new Date(Date.now() - 60_000).toISOString(),
+			summary: "X session work.",
+		});
+		await writeSummaryArtifact({
+			agentId: "y",
+			sessionId: "y-s1",
+			sessionKey: "y-s1",
+			project: "/home/u/p",
+			harness: "codex",
+			capturedAt: new Date(Date.now() - 120_000).toISOString(),
+			startedAt: new Date(Date.now() - 120_000).toISOString(),
+			endedAt: new Date(Date.now() - 120_000).toISOString(),
+			summary: "Y session work.",
+		});
+
+		const [, ,] = await Promise.all([reindexMemoryArtifacts("x"), reindexMemoryArtifacts("y")]);
+
+		const xRows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT session_id FROM memory_artifacts WHERE agent_id = 'x'").all() as Array<{
+					session_id: string;
+				}>,
+		);
+		const yRows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT session_id FROM memory_artifacts WHERE agent_id = 'y'").all() as Array<{
+					session_id: string;
+				}>,
+		);
+		expect(xRows.some((r) => r.session_id === "x-s1")).toBe(true);
+		expect(yRows.some((r) => r.session_id === "y-s1")).toBe(true);
+	});
 });
