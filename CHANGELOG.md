@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-04-29
-- Bug fixes: harden desktop release builds; make transcript backfill idempotent; prevent OOM crash-loop in transcript backfill.
+- Bug fixes: streaming rewrite for live-only transcript sessions during backfill; repair Codex provider and test timeouts; preserve prompt content in provider requests; harden desktop release builds; make transcript backfill idempotent; prevent OOM crash-loop in transcript backfill.
 
 ### 2026-04-26
 - Features: store transcripts as canonical jsonl.
@@ -35,6 +35,32 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: dedupe summary fact hash collisions; suppress OpenCode notifications for extraction sessions; skip unchanged artifact reindex on cold start; make writeImmutableArtifact idempotent for job retries.
 
 ## Release Ledger
+
+## [0.109.9] - 2026-04-29
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.8..v0.109.9`.
+
+### Bug Fixes
+
+- **daemon**: streaming rewrite for live-only transcript sessions during backfill (#594)
+
+## [0.109.8] - 2026-04-29
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.109.7..v0.109.8`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.109.7] - 2026-04-29
+
+Release summary: 2 bug fixes.
+Tag range: `v0.109.6..v0.109.7`.
+
+### Bug Fixes
+
+- **inference**: repair Codex provider and test timeouts (#585)
+- **openclaw**: preserve prompt content in provider requests (#598)
 
 ## [0.109.6] - 2026-04-29
 
