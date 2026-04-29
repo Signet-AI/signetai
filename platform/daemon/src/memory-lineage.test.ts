@@ -856,7 +856,7 @@ describe("memory-lineage", () => {
 		expect(ids).toContain("flight-3");
 	});
 
-	it("concurrent reindexMemoryArtifacts for different agents run independently", async () => {
+	it("concurrent reindexMemoryArtifacts for different agents complete through the serialized queue", async () => {
 		await writeSummaryArtifact({
 			agentId: "x",
 			sessionId: "x-s1",
@@ -896,5 +896,45 @@ describe("memory-lineage", () => {
 		);
 		expect(xRows.some((r) => r.session_id === "x-s1")).toBe(true);
 		expect(yRows.some((r) => r.session_id === "y-s1")).toBe(true);
+	});
+
+	it("serializes concurrent global and scoped reindexMemoryArtifacts calls", async () => {
+		await writeSummaryArtifact({
+			agentId: "global-a",
+			sessionId: "global-a-s1",
+			sessionKey: "global-a-s1",
+			project: "/home/u/p",
+			harness: "codex",
+			capturedAt: new Date(Date.now() - 60_000).toISOString(),
+			startedAt: new Date(Date.now() - 60_000).toISOString(),
+			endedAt: new Date(Date.now() - 60_000).toISOString(),
+			summary: "Global A session work.",
+		});
+		await writeSummaryArtifact({
+			agentId: "global-b",
+			sessionId: "global-b-s1",
+			sessionKey: "global-b-s1",
+			project: "/home/u/p",
+			harness: "codex",
+			capturedAt: new Date(Date.now() - 120_000).toISOString(),
+			startedAt: new Date(Date.now() - 120_000).toISOString(),
+			endedAt: new Date(Date.now() - 120_000).toISOString(),
+			summary: "Global B session work.",
+		});
+
+		await Promise.all([reindexMemoryArtifacts(), reindexMemoryArtifacts("global-a")]);
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT agent_id, session_id FROM memory_artifacts WHERE session_id IN (?, ?)")
+					.all("global-a-s1", "global-b-s1") as Array<{
+					agent_id: string;
+					session_id: string;
+				}>,
+		);
+
+		expect(rows.some((r) => r.agent_id === "global-a" && r.session_id === "global-a-s1")).toBe(true);
+		expect(rows.some((r) => r.agent_id === "global-b" && r.session_id === "global-b-s1")).toBe(true);
 	});
 });

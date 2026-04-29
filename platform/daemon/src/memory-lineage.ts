@@ -709,20 +709,23 @@ export function deleteArtifactRowsForPath(path: string, agentId: string | null):
 	});
 }
 
-// Per-agentId single-flight: second callers await the first's result instead of interleaving.
+// Coalesce duplicate scoped reindexes, but serialize all scopes. A global
+// reindex and a scoped reindex both mutate shared artifact tables/caches.
 const reindexFlights = new Map<string, Promise<void>>();
+let reindexTail: Promise<void> = Promise.resolve();
 
 export async function reindexMemoryArtifacts(agentId?: string): Promise<void> {
 	const key = agentId?.trim() || "*";
 	const existing = reindexFlights.get(key);
 	if (existing) return existing;
-	const flight = doReindex(agentId);
+
+	const run = reindexTail.catch(() => {}).then(() => doReindex(agentId));
+	const flight = run.finally(() => {
+		if (reindexFlights.get(key) === flight) reindexFlights.delete(key);
+	});
 	reindexFlights.set(key, flight);
-	try {
-		await flight;
-	} finally {
-		reindexFlights.delete(key);
-	}
+	reindexTail = flight.catch(() => {});
+	await flight;
 }
 
 async function doReindex(agentId?: string): Promise<void> {
