@@ -46,7 +46,6 @@ export interface TranscriptHit {
 
 interface BackfillSeen {
 	readonly classification: TranscriptSessionKeyClassification;
-	readonly allKeys: Set<string>;
 }
 
 function createBackfillSeenReader(basePath: string, agentId?: string): (harness: string) => Promise<BackfillSeen> {
@@ -57,11 +56,19 @@ function createBackfillSeenReader(basePath: string, agentId?: string): (harness:
 		if (existing) return existing;
 		const loaded = readCanonicalTranscriptSessionKeys({ basePath, harness, agentId }).then((classification) => ({
 			classification,
-			allKeys: new Set([...classification.canonicalKeys, ...classification.liveOnlyKeys]),
 		}));
 		seen.set(key, loaded);
 		return loaded;
 	};
+}
+
+function knownBackfillKeys(classification: TranscriptSessionKeyClassification): Set<string> {
+	return new Set([...classification.canonicalKeys, ...classification.liveOnlyKeys]);
+}
+
+function markBackfillCanonical(classification: TranscriptSessionKeyClassification, key: string): void {
+	classification.liveOnlyKeys.delete(key);
+	classification.canonicalKeys.add(key);
 }
 
 function tableExists(name: string): boolean {
@@ -135,7 +142,7 @@ async function backfillMarkdownTranscriptArtifacts(
 				sourcePath: `memory/${name}`,
 				transcript: parsed.body,
 			};
-			const { classification, allKeys } = await getSeen(harness);
+			const { classification } = await getSeen(harness);
 			const key = sessionSeqCacheKey(input);
 			if (classification.liveOnlyKeys.has(key)) {
 				const replacements =
@@ -154,7 +161,9 @@ async function backfillMarkdownTranscriptArtifacts(
 				liveOnlyReplacements.set(harness, replacements);
 				continue;
 			}
-			await appendCanonicalTranscriptSnapshotIfMissing(input, allKeys);
+			if (await appendCanonicalTranscriptSnapshotIfMissing(input, knownBackfillKeys(classification))) {
+				markBackfillCanonical(classification, key);
+			}
 		} catch (error) {
 			failures++;
 			logger.warn("transcripts", "Markdown transcript backfill failed", {
@@ -171,8 +180,7 @@ async function backfillMarkdownTranscriptArtifacts(
 			await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
 			const { classification } = await getSeen(harness);
 			for (const key of replacements.keys()) {
-				classification.liveOnlyKeys.delete(key);
-				classification.canonicalKeys.add(key);
+				markBackfillCanonical(classification, key);
 			}
 		} catch (error) {
 			failures++;
@@ -231,7 +239,7 @@ async function backfillDatabaseTranscripts(
 					sourceFormat: "db" as const,
 					transcript: row.content,
 				};
-				const { classification, allKeys } = await getSeen(harness);
+				const { classification } = await getSeen(harness);
 				const key = sessionSeqCacheKey(input);
 				if (classification.liveOnlyKeys.has(key)) {
 					const replacements =
@@ -249,7 +257,9 @@ async function backfillDatabaseTranscripts(
 					liveOnlyReplacements.set(harness, replacements);
 					continue;
 				}
-				await appendCanonicalTranscriptSnapshotIfMissing(input, allKeys);
+				if (await appendCanonicalTranscriptSnapshotIfMissing(input, knownBackfillKeys(classification))) {
+					markBackfillCanonical(classification, key);
+				}
 			}
 			offset += PAGE_SIZE;
 			await new Promise((resolve) => setTimeout(resolve, 0));
@@ -260,8 +270,7 @@ async function backfillDatabaseTranscripts(
 			await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
 			const { classification } = await getSeen(harness);
 			for (const key of replacements.keys()) {
-				classification.liveOnlyKeys.delete(key);
-				classification.canonicalKeys.add(key);
+				markBackfillCanonical(classification, key);
 			}
 		}
 	} catch (error) {

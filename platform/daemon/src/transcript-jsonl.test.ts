@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, write
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
 import {
 	appendCanonicalTranscriptSnapshotIfMissing,
@@ -23,6 +24,7 @@ function makeRoot(name: string): string {
 }
 
 afterEach(() => {
+	closeDbAccessor();
 	for (const root of roots.splice(0)) {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -483,6 +485,23 @@ describe("backfill replaces live-only sessions", () => {
 			);
 	}
 
+	function initTranscriptDb(root: string): void {
+		initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
+		getDbAccessor().withWriteTx((db) => {
+			db.exec(
+				`CREATE TABLE IF NOT EXISTS session_transcripts (
+					session_key TEXT NOT NULL,
+					content TEXT NOT NULL,
+					harness TEXT,
+					project TEXT,
+					agent_id TEXT,
+					created_at TEXT,
+					updated_at TEXT
+				)`,
+			);
+		});
+	}
+
 	test("markdown backfill replaces live-only session with fuller artifact data", async () => {
 		const root = makeRoot("backfill-live-replace");
 
@@ -509,6 +528,55 @@ describe("backfill replaces live-only sessions", () => {
 		expect(lines.some((line) => line.session_key === "live-session" && line.source_format === "markdown")).toBe(true);
 		expect(lines.some((line) => line.session_key === "live-session" && line.content.includes("fuller migrated reply"))).toBe(true);
 		expect(lines.some((line) => line.session_key === "live-session" && line.content.includes("partial live prompt"))).toBe(false);
+	});
+
+	test("does not duplicate a session when DB backfill follows markdown live-only promotion", async () => {
+		const root = makeRoot("backfill-markdown-db-same-session");
+		initTranscriptDb(root);
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "shared-session",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "partial live prompt" }],
+		});
+
+		writeTranscriptArtifact({
+			root,
+			fileName: "2026-04-29T00-00-00Z--sharedsession000--transcript.md",
+			sessionKey: "shared-session",
+			transcript: "User: markdown prompt\nAssistant: markdown reply",
+		});
+
+		getDbAccessor()
+			.withWriteTx((db) =>
+				db
+					.prepare(
+						`INSERT INTO session_transcripts (
+							session_key, content, harness, project, agent_id, created_at, updated_at
+						) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					)
+					.run(
+						"shared-session",
+						"User: db prompt\nAssistant: db reply",
+						"codex",
+						null,
+						"default",
+						"2026-04-29T00:01:00.000Z",
+						"2026-04-29T00:01:00.000Z",
+					),
+			);
+
+		await ensureCanonicalTranscriptHistory(root, "default");
+
+		const lines = readJsonlLines(root).filter((line) => line.session_key === "shared-session");
+		expect(lines).toHaveLength(2);
+		expect(lines.every((line) => line.source_format === "markdown")).toBe(true);
+		expect(lines.some((line) => line.content.includes("markdown reply"))).toBe(true);
+		expect(lines.some((line) => line.content.includes("db reply"))).toBe(false);
+		expect(lines.some((line) => line.source_format === "live")).toBe(false);
 	});
 
 	test("canonical sessions are not replaced during backfill", async () => {
