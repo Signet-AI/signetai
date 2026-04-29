@@ -220,7 +220,7 @@ describe("validateOllamaModelNonInteractive", () => {
 			throw new Error("Connection refused");
 		});
 
-		const result = await validateOllamaModelNonInteractive("nomic-embed-text");
+		const result = await validateOllamaModelNonInteractive("nomic-embed-text", { hasOllamaCommand: true });
 		expect(result.available).toBe(false);
 		expect(result.modelInstalled).toBe(false);
 		expect(result.error).toContain("not reachable");
@@ -231,7 +231,7 @@ describe("validateOllamaModelNonInteractive", () => {
 			async () => new Response(JSON.stringify({ models: [{ name: "nomic-embed-text:latest" }] }), { status: 200 }),
 		);
 
-		const result = await validateOllamaModelNonInteractive("nomic-embed-text");
+		const result = await validateOllamaModelNonInteractive("nomic-embed-text", { hasOllamaCommand: true });
 		expect(result.available).toBe(true);
 		expect(result.modelInstalled).toBe(true);
 		expect(result.error).toBeUndefined();
@@ -240,9 +240,16 @@ describe("validateOllamaModelNonInteractive", () => {
 	it("returns error when model is missing and ollama reports no models", async () => {
 		globalThis.fetch = mock(async () => new Response(JSON.stringify({ models: [] }), { status: 200 }));
 
-		const result = await validateOllamaModelNonInteractive("nomic-embed-text");
+		const result = await validateOllamaModelNonInteractive("nomic-embed-text", { hasOllamaCommand: true });
 		expect(result.available).toBe(true);
 		expect(result.modelInstalled).toBe(false);
 		expect(result.error).toContain("Failed to pull");
+	});
+
+	it("returns error when ollama is not installed", async () => {
+		const result = await validateOllamaModelNonInteractive("nomic-embed-text", { hasOllamaCommand: false });
+		expect(result.available).toBe(false);
+		expect(result.modelInstalled).toBe(false);
+		expect(result.error).toContain("not installed");
 	});
 });

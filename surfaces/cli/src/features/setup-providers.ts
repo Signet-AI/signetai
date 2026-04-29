@@ -20,12 +20,16 @@ export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"
 	return { provider: "openai", model, dimensions: getEmbeddingDimensions(model) };
 }
 
-export async function validateOllamaModelNonInteractive(model: string): Promise<{
+export async function validateOllamaModelNonInteractive(
+	model: string,
+	opts?: { readonly hasOllamaCommand?: boolean },
+): Promise<{
 	readonly available: boolean;
 	readonly modelInstalled: boolean;
 	readonly error?: string;
 }> {
-	if (!hasCommand("ollama")) {
+	const ollamaInstalled = opts?.hasOllamaCommand ?? hasCommand("ollama");
+	if (!ollamaInstalled) {
 		return {
 			available: false,
 			modelInstalled: false,
