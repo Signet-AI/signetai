@@ -21,7 +21,40 @@ if (parentPort === null) {
 
 const port = parentPort;
 
-port.on("message", async (msg: unknown) => {
+// Serialize renders: only one renderMemoryProjection in flight at a time.
+const renderQueue: Array<{ agentId: string; requestId: string }> = [];
+let rendering = false;
+
+async function drainRenderQueue(): Promise<void> {
+	if (rendering) return;
+	rendering = true;
+	try {
+		let req = renderQueue.shift();
+		while (req !== undefined) {
+			try {
+				const result = await renderMemoryProjection(req.agentId);
+				postMessage({
+					type: "result",
+					requestId: req.requestId,
+					content: result.content,
+					fileCount: result.fileCount,
+					indexBlock: result.indexBlock,
+				} satisfies RenderResult);
+			} catch (err) {
+				postMessage({
+					type: "error",
+					requestId: req.requestId,
+					error: err instanceof Error ? err.message : String(err),
+				} satisfies RenderError);
+			}
+			req = renderQueue.shift();
+		}
+	} finally {
+		rendering = false;
+	}
+}
+
+port.on("message", (msg: unknown) => {
 	const request: WorkerRequest | null = isInitRequest(msg) ? msg : isRenderRequest(msg) ? msg : null;
 
 	if (request === null) return;
@@ -32,22 +65,8 @@ port.on("message", async (msg: unknown) => {
 		return;
 	}
 
-	try {
-		const result = await renderMemoryProjection(request.agentId);
-		postMessage({
-			type: "result",
-			requestId: request.requestId,
-			content: result.content,
-			fileCount: result.fileCount,
-			indexBlock: result.indexBlock,
-		} satisfies RenderResult);
-	} catch (err) {
-		postMessage({
-			type: "error",
-			requestId: request.requestId,
-			error: err instanceof Error ? err.message : String(err),
-		} satisfies RenderError);
-	}
+	renderQueue.push({ agentId: request.agentId, requestId: request.requestId });
+	void drainRenderQueue();
 });
 
 port.on("error", (err) => {

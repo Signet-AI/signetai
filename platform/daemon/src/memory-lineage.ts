@@ -709,7 +709,23 @@ export function deleteArtifactRowsForPath(path: string, agentId: string | null):
 	});
 }
 
+// Per-agentId single-flight: second callers await the first's result instead of interleaving.
+const reindexFlights = new Map<string, Promise<void>>();
+
 export async function reindexMemoryArtifacts(agentId?: string): Promise<void> {
+	const key = agentId?.trim() || "*";
+	const existing = reindexFlights.get(key);
+	if (existing) return existing;
+	const flight = doReindex(agentId);
+	reindexFlights.set(key, flight);
+	try {
+		await flight;
+	} finally {
+		reindexFlights.delete(key);
+	}
+}
+
+async function doReindex(agentId?: string): Promise<void> {
 	const scope = agentId?.trim() || null;
 	const files = await listCanonicalFiles();
 	const stopTimer = logger.time("resources", "reindexMemoryArtifacts");
