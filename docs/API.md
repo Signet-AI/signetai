@@ -19,7 +19,8 @@ port are configurable via environment variables (see [[configuration]]).
 Base URL: http://localhost:3850
 SIGNET_PORT  — override port (default: 3850)
 SIGNET_HOST  — daemon host for local calls (default: 127.0.0.1)
-SIGNET_BIND  — bind host override (default: SIGNET_HOST)
+SIGNET_BIND  — bind host override (defaults to the configured network mode:
+               127.0.0.1 for localhost mode, 0.0.0.0 for tailscale mode)
 ```
 
 Authentication
@@ -86,7 +87,7 @@ No authentication required. Lightweight liveness check.
   "status": "healthy",
   "uptime": 3600.5,
   "pid": 12345,
-  "version": "0.1.69",
+  "version": "0.109.9",
   "port": 3850,
   "agentsDir": "/home/user/.agents"
 }
@@ -109,7 +110,9 @@ silent fallback or hard-blocked extraction after boot.
   "uptime": 3600.5,
   "startedAt": "2026-02-21T10:00:00.000Z",
   "port": 3850,
-  "host": "localhost",
+  "host": "127.0.0.1",
+  "bindHost": "127.0.0.1",
+  "networkMode": "localhost",
   "agentsDir": "/home/user/.agents",
   "memoryDb": true,
   "pipelineV2": {
@@ -117,9 +120,18 @@ silent fallback or hard-blocked extraction after boot.
     "paused": false,
     "shadowMode": false,
     "mutationsFrozen": false,
-    "graphEnabled": false,
-    "autonomousEnabled": false,
-    "extractionModel": "qwen3:4b"
+    "graph": {
+      "enabled": true,
+      "extractionWritesEnabled": false
+    },
+    "autonomous": {
+      "enabled": true,
+      "allowUpdateDelete": true
+    },
+    "extraction": {
+      "provider": "llama-cpp",
+      "model": "qwen3.5:4b"
+    }
   },
   "pipeline": {
     "extraction": {
@@ -134,17 +146,22 @@ silent fallback or hard-blocked extraction after boot.
   },
   "providerResolution": {
     "extraction": {
-      "configured": "claude-code",
-      "resolved": "claude-code",
-      "effective": "ollama",
-      "fallbackProvider": "ollama",
-      "status": "degraded",
-      "degraded": true,
-      "fallbackApplied": true,
-      "reason": "Claude Code CLI not found during extraction startup preflight",
-      "since": "2026-03-26T06:00:00.000Z"
+      "configured": "llama-cpp",
+      "resolved": "llama-cpp",
+      "effective": "llama-cpp",
+      "fallbackProvider": "llama-cpp",
+      "status": "active",
+      "degraded": false,
+      "fallbackApplied": false,
+      "reason": null,
+      "since": null
     }
   },
+  "logging": {
+    "logDir": "/home/user/.agents/.daemon/logs",
+    "logFile": "/home/user/.agents/.daemon/logs/signet-2026-04-29.log"
+  },
+  "activeSessions": 1,
   "inference": {
     "enabled": true,
     "source": "explicit",

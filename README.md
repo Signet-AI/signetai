@@ -19,7 +19,7 @@
 <a href="https://github.com/openclaw/openclaw"><img src="https://img.shields.io/badge/OpenClaw-Compatible-orange?style=for-the-badge" alt="OpenClaw Compatible"></a>
 <a href="./docs/BENCHMARKING.md#current-longmemeval-score"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97.6% answer accuracy"></a>
 
-**97.6% LongMemEval answer accuracy**<br />
+**97.6% average LongMemEval answer accuracy**<br />
 Readable record · inspectable recall · harnesses are replaceable
 
 [Website](https://signetai.sh) · [Docs](https://signetai.sh/docs) · [Benchmarks](./docs/BENCHMARKING.md) · [Vision](VISION.md) · [Discussions](https://github.com/Signet-AI/signetai/discussions) · [Discord](https://discord.gg/Psdeg7sQm7) · [Contributing](docs/CONTRIBUTING.md) · [AI Policy](AI_POLICY.md)
@@ -223,15 +223,15 @@ underneath it.
 
 [LongMemEval](https://arxiv.org/abs/2410.10813) measures whether a memory
 system can recover and use facts across long-running, multi-session
-assistant conversations. Signet's current published run scores **97.6% answer
-accuracy** under the MemoryBench `rules` profile.
+assistant conversations. Signet's latest tracked MemoryBench runs average
+**97.6% answer accuracy** under the `rules` profile.
 
 That profile keeps the benchmark contract strict: memories are ingested through
 `/api/memory/remember`, recalled through `/api/memory/recall`, and answered
 from bounded daemon recall results. Search does not call an LLM.
 
 See [Benchmarks](./docs/BENCHMARKING.md#current-longmemeval-score) for the
-methodology and run workflow.
+methodology, scoring note, and run workflow.
 
 ## Install (detailed)
 

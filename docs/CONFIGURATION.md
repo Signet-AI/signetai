@@ -1105,8 +1105,8 @@ editing the config file is impractical.
 |----------|---------|-------------|
 | `SIGNET_PATH` | — | Runtime override for agents directory |
 | `SIGNET_PORT` | `3850` | Daemon HTTP port |
-| `SIGNET_HOST` | `127.0.0.1` | Daemon host for local calls and default bind address |
-| `SIGNET_BIND` | `SIGNET_HOST` | Explicit bind address override (`0.0.0.0`, etc.) |
+| `SIGNET_HOST` | `127.0.0.1` | Daemon host for local calls |
+| `SIGNET_BIND` | network mode bind | Explicit bind address override (`0.0.0.0`, etc.); defaults to `127.0.0.1` in localhost mode and `0.0.0.0` in tailscale mode |
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |

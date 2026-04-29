@@ -93,7 +93,7 @@ describe("memory-lineage", () => {
 			});
 		}
 
-		const rendered = renderMemoryProjection("default").content;
+		const rendered = (await renderMemoryProjection("default")).content;
 
 		expect(rendered).toContain("## Session Ledger (Last 30 Days)");
 		expect(rendered).toContain("older ledger rows clipped:");
@@ -285,7 +285,7 @@ describe("memory-lineage", () => {
 				db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ?").run("default");
 			});
 
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const count = getDbAccessor().withReadDb(
 				(db) =>
@@ -299,7 +299,7 @@ describe("memory-lineage", () => {
 		it("second call with no mtime change → no-op", async () => {
 			await addSummary({ sessionId: "no-op", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
 
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const before = getDbAccessor().withReadDb(
 				(db) =>
@@ -314,7 +314,7 @@ describe("memory-lineage", () => {
 			);
 
 			await Bun.sleep(5);
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const after = getDbAccessor().withReadDb(
 				(db) =>
@@ -355,7 +355,7 @@ describe("memory-lineage", () => {
 				db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ?").run("default");
 			});
 
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const rows = getDbAccessor().withReadDb(
 				(db) =>
@@ -376,7 +376,7 @@ describe("memory-lineage", () => {
 
 		it("new file added → picked up on next call", async () => {
 			await addSummary({ sessionId: "new-file-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const baseline = getDbAccessor().withReadDb(
 				(db) =>
@@ -390,7 +390,7 @@ describe("memory-lineage", () => {
 				db.prepare("DELETE FROM memory_artifacts WHERE session_id = ?").run("new-file-b");
 			});
 
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const after = getDbAccessor().withReadDb(
 				(db) =>
@@ -425,7 +425,7 @@ describe("memory-lineage", () => {
 			);
 			expect(before.count).toBeGreaterThan(0);
 
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const after = getDbAccessor().withReadDb(
 				(db) =>
@@ -439,7 +439,7 @@ describe("memory-lineage", () => {
 		it("deleted file → removed from DB", async () => {
 			await addSummary({ sessionId: "delete-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
 			await addSummary({ sessionId: "delete-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const target = getDbAccessor().withReadDb(
 				(db) =>
@@ -455,7 +455,7 @@ describe("memory-lineage", () => {
 			);
 
 			rmSync(join(dir, target.source_path), { force: true });
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const row = getDbAccessor().withReadDb(
 				(db) =>
@@ -490,7 +490,7 @@ describe("memory-lineage", () => {
 			});
 
 			resetProjectionPurgeState();
-			reindexMemoryArtifacts(agentId);
+			await reindexMemoryArtifacts(agentId);
 
 			const rows = getDbAccessor().withReadDb(
 				(db) =>
@@ -505,7 +505,7 @@ describe("memory-lineage", () => {
 
 		it("cold cache revalidates artifacts instead of trusting persisted source_mtime_ms", async () => {
 			await addSummary({ sessionId: "mtime-seeded-skip", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const oldStamp = "2000-01-01T00:00:00.000Z";
 			getDbAccessor().withWriteTx((db) => {
@@ -513,7 +513,7 @@ describe("memory-lineage", () => {
 			});
 
 			resetProjectionPurgeState();
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const rows = getDbAccessor().withReadDb(
 				(db) =>
@@ -532,7 +532,7 @@ describe("memory-lineage", () => {
 				project: "/home/nicholai/signet/signetai",
 				minutesAgo: 1,
 			});
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const rows = getDbAccessor().withReadDb(
 				(db) =>
@@ -552,7 +552,7 @@ describe("memory-lineage", () => {
 			});
 
 			resetProjectionPurgeState();
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const after = getDbAccessor().withReadDb(
 				(db) =>
@@ -573,7 +573,7 @@ describe("memory-lineage", () => {
 				project: "/home/nicholai/signet/signetai",
 				minutesAgo: 1,
 			});
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const target = getDbAccessor().withReadDb(
 				(db) =>
@@ -597,7 +597,7 @@ describe("memory-lineage", () => {
 			utimesSync(fullPath, bumped, bumped);
 
 			resetProjectionPurgeState();
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const after = getDbAccessor().withReadDb(
 				(db) =>
@@ -615,7 +615,7 @@ describe("memory-lineage", () => {
 				project: "/home/nicholai/signet/signetai",
 				minutesAgo: 1,
 			});
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const target = getDbAccessor().withReadDb(
 				(db) =>
@@ -637,7 +637,7 @@ describe("memory-lineage", () => {
 			utimesSync(join(dir, target.source_path), bumped, bumped);
 
 			resetProjectionPurgeState();
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const after = getDbAccessor().withReadDb(
 				(db) =>
@@ -655,7 +655,7 @@ describe("memory-lineage", () => {
 				project: "/home/nicholai/signet/signetai",
 				minutesAgo: 2,
 			});
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const baseline = getDbAccessor().withReadDb(
 				(db) =>
@@ -677,7 +677,7 @@ describe("memory-lineage", () => {
 			});
 
 			resetProjectionPurgeState();
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const after = getDbAccessor().withReadDb(
 				(db) =>
@@ -694,10 +694,10 @@ describe("memory-lineage", () => {
 			await addSummary({ sessionId: "parity-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
 
 			// Cold call: cache is empty, full reindex runs
-			const cold = renderMemoryProjection("default");
+			const cold = await renderMemoryProjection("default");
 
 			// Warm call: cache is populated, incremental reindex skips all files
-			const warm = renderMemoryProjection("default");
+			const warm = await renderMemoryProjection("default");
 
 			expect(warm.content).toBe(cold.content);
 			expect(warm.fileCount).toBe(cold.fileCount);
@@ -706,7 +706,7 @@ describe("memory-lineage", () => {
 		it("cold-start cache reconciles DB rows for files deleted while daemon was down", async () => {
 			await addSummary({ sessionId: "ghost-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
 			await addSummary({ sessionId: "ghost-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const target = getDbAccessor().withReadDb(
 				(db) =>
@@ -722,7 +722,7 @@ describe("memory-lineage", () => {
 			rmSync(join(dir, target.source_path), { force: true });
 			resetProjectionPurgeState();
 
-			reindexMemoryArtifacts("default");
+			await reindexMemoryArtifacts("default");
 
 			const row = getDbAccessor().withReadDb(
 				(db) =>
@@ -737,7 +737,7 @@ describe("memory-lineage", () => {
 			await addSummary({ sessionId: "ref-a", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
 			await addSummary({ sessionId: "ref-b", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
 
-			renderMemoryProjection("default");
+			await renderMemoryProjection("default");
 
 			const manifestRow = getDbAccessor().withReadDb(
 				(db) =>
@@ -757,7 +757,7 @@ describe("memory-lineage", () => {
 				db.prepare("DELETE FROM memory_artifacts WHERE session_id = ?").run("ref-b");
 			});
 
-			renderMemoryProjection("default");
+			await renderMemoryProjection("default");
 
 			const after = readFileSync(manifestPath, "utf8");
 			expect(after).not.toContain("Session Ledger");
@@ -801,19 +801,19 @@ describe("memory-lineage", () => {
 			summary: "Bob session one work.",
 		});
 
-		const aliceResult1 = renderMemoryProjection("alice");
+		const aliceResult1 = await renderMemoryProjection("alice");
 		expect(aliceResult1.content).toContain("alice-s1");
 
-		const bobResult1 = renderMemoryProjection("bob");
+		const bobResult1 = await renderMemoryProjection("bob");
 		expect(bobResult1.content).toContain("bob-s1");
 
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("DELETE FROM memory_artifacts WHERE session_id = ? AND agent_id = ?").run("alice-s2", "alice");
 		});
 
-		const aliceResult2 = renderMemoryProjection("alice");
+		const aliceResult2 = await renderMemoryProjection("alice");
 
-		const bobResult2 = renderMemoryProjection("bob");
+		const bobResult2 = await renderMemoryProjection("bob");
 		expect(bobResult2.content).toContain("bob-s1");
 
 		const bobManifest = getDbAccessor().withReadDb(
@@ -832,5 +832,109 @@ describe("memory-lineage", () => {
 
 		expect(aliceResult2.content).not.toContain("bob-s1");
 		expect(bobResult2.content).not.toContain("alice-s1");
+	});
+
+	it("concurrent reindexMemoryArtifacts calls for the same agent are serialized via single-flight", async () => {
+		await addSummary({ sessionId: "flight-1", project: "/home/u/p", minutesAgo: 1 });
+		await addSummary({ sessionId: "flight-2", project: "/home/u/p", minutesAgo: 2 });
+		await addSummary({ sessionId: "flight-3", project: "/home/u/p", minutesAgo: 3 });
+
+		const a = reindexMemoryArtifacts("default");
+		const b = reindexMemoryArtifacts("default");
+		const c = reindexMemoryArtifacts("default");
+
+		await Promise.all([a, b, c]);
+
+		const rows = getDbAccessor().withReadDb((db) => {
+			return db
+				.prepare("SELECT DISTINCT session_id FROM memory_artifacts WHERE agent_id = 'default' ORDER BY session_id")
+				.all() as Array<{ session_id: string }>;
+		});
+		const ids = rows.map((r) => r.session_id);
+		expect(ids).toContain("flight-1");
+		expect(ids).toContain("flight-2");
+		expect(ids).toContain("flight-3");
+	});
+
+	it("concurrent reindexMemoryArtifacts for different agents complete through the serialized queue", async () => {
+		await writeSummaryArtifact({
+			agentId: "x",
+			sessionId: "x-s1",
+			sessionKey: "x-s1",
+			project: "/home/u/p",
+			harness: "codex",
+			capturedAt: new Date(Date.now() - 60_000).toISOString(),
+			startedAt: new Date(Date.now() - 60_000).toISOString(),
+			endedAt: new Date(Date.now() - 60_000).toISOString(),
+			summary: "X session work.",
+		});
+		await writeSummaryArtifact({
+			agentId: "y",
+			sessionId: "y-s1",
+			sessionKey: "y-s1",
+			project: "/home/u/p",
+			harness: "codex",
+			capturedAt: new Date(Date.now() - 120_000).toISOString(),
+			startedAt: new Date(Date.now() - 120_000).toISOString(),
+			endedAt: new Date(Date.now() - 120_000).toISOString(),
+			summary: "Y session work.",
+		});
+
+		const [, ,] = await Promise.all([reindexMemoryArtifacts("x"), reindexMemoryArtifacts("y")]);
+
+		const xRows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT session_id FROM memory_artifacts WHERE agent_id = 'x'").all() as Array<{
+					session_id: string;
+				}>,
+		);
+		const yRows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT session_id FROM memory_artifacts WHERE agent_id = 'y'").all() as Array<{
+					session_id: string;
+				}>,
+		);
+		expect(xRows.some((r) => r.session_id === "x-s1")).toBe(true);
+		expect(yRows.some((r) => r.session_id === "y-s1")).toBe(true);
+	});
+
+	it("serializes concurrent global and scoped reindexMemoryArtifacts calls", async () => {
+		await writeSummaryArtifact({
+			agentId: "global-a",
+			sessionId: "global-a-s1",
+			sessionKey: "global-a-s1",
+			project: "/home/u/p",
+			harness: "codex",
+			capturedAt: new Date(Date.now() - 60_000).toISOString(),
+			startedAt: new Date(Date.now() - 60_000).toISOString(),
+			endedAt: new Date(Date.now() - 60_000).toISOString(),
+			summary: "Global A session work.",
+		});
+		await writeSummaryArtifact({
+			agentId: "global-b",
+			sessionId: "global-b-s1",
+			sessionKey: "global-b-s1",
+			project: "/home/u/p",
+			harness: "codex",
+			capturedAt: new Date(Date.now() - 120_000).toISOString(),
+			startedAt: new Date(Date.now() - 120_000).toISOString(),
+			endedAt: new Date(Date.now() - 120_000).toISOString(),
+			summary: "Global B session work.",
+		});
+
+		await Promise.all([reindexMemoryArtifacts(), reindexMemoryArtifacts("global-a")]);
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT agent_id, session_id FROM memory_artifacts WHERE session_id IN (?, ?)")
+					.all("global-a-s1", "global-b-s1") as Array<{
+					agent_id: string;
+					session_id: string;
+				}>,
+		);
+
+		expect(rows.some((r) => r.agent_id === "global-a" && r.session_id === "global-a-s1")).toBe(true);
+		expect(rows.some((r) => r.agent_id === "global-b" && r.session_id === "global-b-s1")).toBe(true);
 	});
 });

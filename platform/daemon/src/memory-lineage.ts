@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { getAgentScope } from "./agent-id";
+import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
@@ -262,11 +264,6 @@ function artifactFileName(capturedAt: string, sessionToken: string, kind: Artifa
 	return `${fsTimestamp(capturedAt)}--${sessionToken}--${kind}.md`;
 }
 
-function artifactStatKey(path: string): string {
-	const stat = statSync(path, { bigint: true });
-	return `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;
-}
-
 function artifactPath(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
 	return join(getMemoryDir(), artifactFileName(capturedAt, sessionToken, kind));
 }
@@ -438,6 +435,21 @@ function loadManifest(path: string): ManifestState | null {
 		frontmatter: parsed.frontmatter,
 		body: parsed.body,
 	};
+}
+
+async function loadManifestAsync(path: string): Promise<ManifestState | null> {
+	try {
+		const parsed = parseFrontmatterDocument(await readFile(path, "utf8"));
+		const rawRevision = parsed.frontmatter.revision;
+		return {
+			path,
+			revision: typeof rawRevision === "number" ? rawRevision : 0,
+			frontmatter: parsed.frontmatter,
+			body: parsed.body,
+		};
+	} catch {
+		return null;
+	}
 }
 
 function writeImmutableArtifact(seed: ArtifactSeed): string {
@@ -660,10 +672,11 @@ export function indexCanonicalTranscriptJsonl(input: {
 	);
 }
 
-function listCanonicalFiles(): string[] {
+async function listCanonicalFiles(): Promise<string[]> {
 	const dir = getMemoryDir();
 	if (!existsSync(dir)) return [];
-	return readdirSync(dir)
+	const entries = await readdir(dir);
+	return entries
 		.filter((name) => /^\d{4}-\d{2}-\d{2}T.*--[a-z2-7]{16}--(summary|transcript|compaction|manifest)\.md$/.test(name))
 		.map((name) => join(dir, name))
 		.sort();
@@ -711,9 +724,28 @@ export function deleteArtifactRowsForPath(path: string, agentId: string | null):
 	});
 }
 
-export function reindexMemoryArtifacts(agentId?: string): void {
+// Coalesce duplicate scoped reindexes, but serialize all scopes. A global
+// reindex and a scoped reindex both mutate shared artifact tables/caches.
+const reindexFlights = new Map<string, Promise<void>>();
+let reindexTail: Promise<void> = Promise.resolve();
+
+export async function reindexMemoryArtifacts(agentId?: string): Promise<void> {
+	const key = agentId?.trim() || "*";
+	const existing = reindexFlights.get(key);
+	if (existing) return existing;
+
+	const run = reindexTail.catch(() => {}).then(() => doReindex(agentId));
+	const flight = run.finally(() => {
+		if (reindexFlights.get(key) === flight) reindexFlights.delete(key);
+	});
+	reindexFlights.set(key, flight);
+	reindexTail = flight.catch(() => {});
+	await flight;
+}
+
+async function doReindex(agentId?: string): Promise<void> {
 	const scope = agentId?.trim() || null;
-	const files = listCanonicalFiles();
+	const files = await listCanonicalFiles();
 	const stopTimer = logger.time("resources", "reindexMemoryArtifacts");
 	const cacheKey = scope ?? "*";
 	const cache = artifactIndexCache.get(cacheKey) ?? new Map<string, string>();
@@ -780,15 +812,37 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 	});
 
 	const fileSet = new Set(files);
+	const yielder = yieldEvery(50);
 	for (const path of files) {
-		const statKey = artifactStatKey(path);
-		if (cache.get(path) === statKey) continue;
+		let statKey: string;
+		let mtime: number;
+		try {
+			const s = await stat(path);
+			statKey = `${s.mtimeMs}:${s.ctimeMs}:${s.size}`;
+			mtime = s.mtimeMs;
+		} catch {
+			continue;
+		}
+		if (cache.get(path) === statKey) {
+			await yielder();
+			continue;
+		}
 
-		const parsed = parseFrontmatterDocument(readFileSync(path, "utf8"));
+		let content: string;
+		try {
+			content = await readFile(path, "utf8");
+		} catch {
+			cache.set(path, statKey);
+			await yielder();
+			continue;
+		}
+
+		const parsed = parseFrontmatterDocument(content);
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
 		if (scope && nextAgent !== scope) {
 			deleteArtifactRowsForPath(path, scope);
 			cache.set(path, statKey);
+			await yielder();
 			continue;
 		}
 		const match = path.match(/--([a-z2-7]{16})--/);
@@ -797,6 +851,7 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 			deleteArtifactRowsForPath(path, scope);
 			cache.set(path, statKey);
 			changedPaths.add(path);
+			await yielder();
 			continue;
 		}
 		const body = normalizeMarkdownBody(parsed.body);
@@ -804,12 +859,13 @@ export function reindexMemoryArtifacts(agentId?: string): void {
 			deleteArtifactRowsForPath(path, scope);
 			cache.set(path, statKey);
 			changedPaths.add(path);
+			await yielder();
 			continue;
 		}
-		const mtime = statSync(path).mtimeMs;
 		upsertArtifactRow(path, parsed.frontmatter, body, mtime);
 		cache.set(path, statKey);
 		changedPaths.add(path);
+		await yielder();
 	}
 
 	for (const path of cache.keys()) {
@@ -912,6 +968,35 @@ function saveManifest(path: string, frontmatter: Record<string, unknown>, body: 
 		throw new Error(`Failed to reload manifest ${path}`);
 	}
 	upsertArtifactRow(path, manifest.frontmatter, manifest.body);
+	return manifest;
+}
+
+async function writeAtomicAsync(path: string, content: string): Promise<void> {
+	await mkdir(getMemoryDir(), { recursive: true });
+	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+	await writeFile(tmp, content, "utf8");
+	await rename(tmp, path);
+}
+
+async function saveManifestAsync(
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+): Promise<ManifestState> {
+	const normalizedBody = normalizeMarkdownBody(body);
+	const content = `${serializeFrontmatter(frontmatter)}\n${normalizedBody}\n`;
+	await writeAtomicAsync(path, content);
+	const manifest = {
+		path,
+		revision: typeof frontmatter.revision === "number" ? frontmatter.revision : 0,
+		frontmatter,
+		body: normalizedBody,
+	};
+	let sourceMtimeMs = Date.now();
+	try {
+		sourceMtimeMs = (await stat(path)).mtimeMs;
+	} catch {}
+	upsertArtifactRow(path, manifest.frontmatter, manifest.body, sourceMtimeMs);
 	return manifest;
 }
 
@@ -1504,11 +1589,11 @@ function renderIndexSection(indexBlock: string, base: ReadonlyArray<string>): st
 	return "";
 }
 
-function syncManifestRefs(
+async function syncManifestRefs(
 	refs: ReadonlyArray<string>,
 	changedManifests: ReadonlySet<string> | undefined,
 	agentId: string,
-): void {
+): Promise<void> {
 	const set = new Set(refs);
 	let files: string[];
 	if (changedManifests !== undefined) {
@@ -1530,11 +1615,15 @@ function syncManifestRefs(
 		files = [...absFiles];
 	} else {
 		prevLedgerRefsByAgent.set(agentId, set);
-		files = listCanonicalFiles().filter((path) => path.endsWith("--manifest.md"));
+		files = (await listCanonicalFiles()).filter((path) => path.endsWith("--manifest.md"));
 	}
+	const yielder = yieldEvery(20);
 	for (const path of files) {
-		const state = loadManifest(path);
-		if (!state) continue;
+		const state = await loadManifestAsync(path);
+		if (!state) {
+			await yielder();
+			continue;
+		}
 		const rel = relativePath(path);
 		const nextRefs = set.has(rel) ? [LEDGER_HEADING] : [];
 		const nextBody =
@@ -1547,9 +1636,10 @@ function syncManifestRefs(
 			currentRefs.every((value, idx) => value === nextRefs[idx]) &&
 			normalizeMarkdownBody(state.body) === nextBody
 		) {
+			await yielder();
 			continue;
 		}
-		saveManifest(
+		await saveManifestAsync(
 			path,
 			{
 				...state.frontmatter,
@@ -1560,15 +1650,16 @@ function syncManifestRefs(
 			},
 			nextBody,
 		);
+		await yielder();
 	}
 }
 
-export function renderMemoryProjection(agentId = "default"): {
+export async function renderMemoryProjection(agentId = "default"): Promise<{
 	content: string;
 	fileCount: number;
 	indexBlock: string;
-} {
-	reindexMemoryArtifacts(agentId);
+}> {
+	await reindexMemoryArtifacts(agentId);
 	const changedManifests = lastChangedManifestsByAgent.get(agentId);
 	lastChangedManifestsByAgent.delete(agentId);
 	const memories = readTopMemories(agentId);
@@ -1615,7 +1706,7 @@ export function renderMemoryProjection(agentId = "default"): {
 		}),
 	];
 	const ledgerBlock = renderLedgerSection(ledger, parts);
-	syncManifestRefs(ledgerBlock.refs, changedManifests, agentId);
+	await syncManifestRefs(ledgerBlock.refs, changedManifests, agentId);
 	parts.push(ledgerBlock.block);
 	const trimmedIndex = renderIndexSection(indexBlock, parts);
 	if (trimmedIndex.length > 0) {

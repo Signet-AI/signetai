@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { watch } from "chokidar";
 import { resolveDaemonAgentId } from "./agent-id";
+import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { indexExternalMemoryArtifact, softDeleteArtifactRowsForPath } from "./memory-lineage";
@@ -75,18 +77,17 @@ export function claudeCodeNativeMemorySource(root = claudeCodeRoot()): NativeMem
 	};
 }
 
-function walkMarkdownFiles(dir: string): string[] {
-	if (!existsSync(dir)) return [];
-	const out: string[] = [];
-	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+async function* walkMarkdownFiles(dir: string): AsyncGenerator<string> {
+	if (!existsSync(dir)) return;
+	const entries = await readdir(dir, { withFileTypes: true });
+	for (const entry of entries) {
 		const path = join(dir, entry.name);
 		if (entry.isDirectory()) {
-			out.push(...walkMarkdownFiles(path));
+			yield* walkMarkdownFiles(path);
 		} else if (entry.isFile() && entry.name.endsWith(".md")) {
-			out.push(path);
+			yield path;
 		}
 	}
-	return out.sort();
 }
 
 function matchesPattern(source: NativeMemorySource, filePath: string): NativeMemoryFilePattern | null {
@@ -243,10 +244,12 @@ export function startNativeMemoryBridge(
 
 	const syncExisting = async (): Promise<number> => {
 		let count = 0;
+		const yielder = yieldEvery(20);
 		for (const source of sources) {
 			if (!existsSync(source.root)) continue;
-			for (const file of walkMarkdownFiles(source.root)) {
+			for await (const file of walkMarkdownFiles(source.root)) {
 				if (await indexNativeMemoryFile(source, file, agentId)) count++;
+				await yielder();
 			}
 		}
 		return count;
