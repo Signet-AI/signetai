@@ -2,13 +2,13 @@ import { parentPort } from "node:worker_threads";
 import { initDbAccessorLite } from "./db-accessor";
 import { renderMemoryProjection } from "./memory-lineage";
 import {
-	isInitRequest,
-	isRenderRequest,
 	type ReadyResponse,
 	type RenderError,
 	type RenderResult,
 	type WorkerRequest,
 	type WorkerResponse,
+	isInitRequest,
+	isRenderRequest,
 } from "./synthesis-worker-protocol";
 
 function postMessage(message: WorkerResponse): void {
@@ -16,19 +16,13 @@ function postMessage(message: WorkerResponse): void {
 }
 
 if (parentPort === null) {
-	throw new Error(
-		"synthesis-render-worker must run as a worker thread — parentPort is null",
-	);
+	throw new Error("synthesis-render-worker must run as a worker thread — parentPort is null");
 }
 
 const port = parentPort;
 
 port.on("message", async (msg: unknown) => {
-	const request: WorkerRequest | null = isInitRequest(msg)
-		? msg
-		: isRenderRequest(msg)
-			? msg
-			: null;
+	const request: WorkerRequest | null = isInitRequest(msg) ? msg : isRenderRequest(msg) ? msg : null;
 
 	if (request === null) return;
 

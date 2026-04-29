@@ -5,10 +5,10 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { watch } from "chokidar";
 import { resolveDaemonAgentId } from "./agent-id";
+import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { indexExternalMemoryArtifact, softDeleteArtifactRowsForPath } from "./memory-lineage";
-import { yieldEvery } from "./async-yield";
 
 export interface NativeMemorySource {
 	readonly harness: string;
