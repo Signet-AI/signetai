@@ -516,21 +516,41 @@ export function rewriteReplacingLiveOnlySessions(
 							writeSync(fd, `${line}\n`);
 							continue;
 						}
-						const key = recordSeqCacheKey(parsed as CanonicalTranscriptRecord);
-						if (!replacements.has(key)) {
-							writeSync(fd, `${line}\n`);
-							continue;
-						}
-						if (replaced.has(key)) continue;
-						const entry = replacements.get(key);
-						if (!entry) continue;
-						const next = transcriptTextToTurns(entry.transcript)
-							.map((turn, index) => makeRecord(entry.identity, turn, index + 1))
-							.filter((record): record is CanonicalTranscriptRecord => record !== null);
-						for (const record of next) {
-							writeSync(fd, `${JSON.stringify(record)}\n`);
-						}
+					const record = parsed as CanonicalTranscriptRecord;
+					const key = recordSeqCacheKey(record);
+					if (!replacements.has(key)) {
+						writeSync(fd, `${line}\n`);
+						continue;
+					}
+					if (replaced.has(key)) {
+						// Only skip live-format lines; preserve any non-live records.
+						if (record.source_format === "live") continue;
+						writeSync(fd, `${line}\n`);
+						continue;
+					}
+					if (record.source_format !== "live") {
+						// Session was healed between classification and rewrite — skip replacement.
+						writeSync(fd, `${line}\n`);
 						replaced.add(key);
+						continue;
+					}
+					const entry = replacements.get(key);
+					if (!entry) {
+						writeSync(fd, `${line}\n`);
+						continue;
+					}
+					const next = transcriptTextToTurns(entry.transcript)
+						.map((turn, index) => makeRecord(entry.identity, turn, index + 1))
+						.filter((r): r is CanonicalTranscriptRecord => r !== null);
+					if (next.length === 0) {
+						// Replacement payload is empty — preserve original line (fail-closed).
+						writeSync(fd, `${line}\n`);
+						continue;
+					}
+					for (const r of next) {
+						writeSync(fd, `${JSON.stringify(r)}\n`);
+					}
+					replaced.add(key);
 					} catch {
 						writeSync(fd, `${line}\n`);
 					}

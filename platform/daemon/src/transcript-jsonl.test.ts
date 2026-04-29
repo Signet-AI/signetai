@@ -807,4 +807,79 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		expect(replaced).toBe(0);
 		expect(after).toBe(before);
 	});
+
+	test("preserves non-live records for a replaced session key", async () => {
+		const root = makeRoot("rewrite-preserve-nonlive");
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "live turn one" }],
+		});
+
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "normalized",
+			transcript: "User: canonical turn\nAssistant: canonical reply",
+		});
+
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+		const identity = {
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "db" as const,
+		};
+		const key = sessionSeqCacheKey(identity);
+		const replacements = new Map([
+			[key, { identity, transcript: "User: db replacement\nAssistant: db reply" }],
+		]);
+
+		await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
+
+		const content = readFileSync(jsonlPath, "utf8");
+		// Session was already healed (non-live records) — replacement skipped
+		expect(content).toContain("canonical turn");
+		expect(content).toContain("canonical reply");
+		expect(content).not.toContain("db replacement");
+	});
+
+	test("preserves original lines when replacement transcript is empty", async () => {
+		const root = makeRoot("rewrite-empty-transcript");
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "preserve me" }],
+		});
+
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+		const identity = {
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "db" as const,
+		};
+		const key = sessionSeqCacheKey(identity);
+		const replacements = new Map([
+			[key, { identity, transcript: "" }],
+		]);
+
+		const count = await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
+
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content).toContain("preserve me");
+		expect(count).toBe(0);
+	});
 });
