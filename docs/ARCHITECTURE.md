@@ -183,24 +183,22 @@ are called "shadow decisions" because they are always proposals first.
 controlled-write mode. For each `add` proposal, the worker checks
 confidence against `minFactConfidenceForWrite`, normalizes and hashes
 the content, checks for an existing memory with the same hash, and
-inserts via `txIngestEnvelope`. `update` and `delete` actions are
-blocked in the current implementation — they are recorded in history
-with a `blockedDestructive` reason. Contradiction detection (negation
-and antonym analysis) flags high-risk cases for review.
+inserts via `txIngestEnvelope`. `update` and `delete` proposals are
+blocked unless `autonomous.allowUpdateDelete` is true. When enabled,
+updates go through `txModifyMemory`, deletes go through `txForgetMemory`,
+and the previous target state is archived to the cold tier first. Pinned
+memories are not deleted without force. Contradiction detection can still
+block high-risk update proposals and record them for review.
 
 **Inline entity linking** (`inline-entity-linker.ts`): runs
 synchronously at write time inside `withWriteTx`, before any async
 pipeline work. It extracts candidate proper nouns from memory
-content, resolves or creates entities, infers aspects from verb
-patterns, and writes entity → aspect → attribute structures plus
-`memory_entity_mentions` rows. This makes entities immediately
-queryable via KA traversal without waiting for the async extraction
-worker. The linker also auto-detects decision language (14 regex
-patterns in `DECISION_PATTERNS`) and promotes matching attributes to
-`constraint` kind with elevated importance (0.85), ensuring decisions
-always surface in recall per invariant 5. The async pipeline still
-runs later for deeper analysis (supersession, dependency synthesis,
-confidence calibration).
+content and links the memory to entities that already exist for the same
+`agent_id` by writing `memory_entity_mentions` rows. It does not create
+entities, aspects, attributes, or dependency edges from raw text. Structured
+remember payloads, explicit user/agent actions, and reviewed repair passes
+own semantic graph authorship. The async pipeline still runs later for
+extraction, decisions, and optional graph persistence.
 
 **Hints worker** (`prospective-index.ts`): generates hypothetical
 future queries ("hints") for each memory at write time. For each new
@@ -235,11 +233,12 @@ would do before enabling writes.
 | `enabled` | Master pipeline switch |
 | `shadowMode` | Extract and propose, never write |
 | `mutationsFrozen` | Reads only; pipeline stays quiet |
-| `graphEnabled` | Run graph entity persistence |
-| `autonomousEnabled` | Allow agent-triggered repairs |
-| `autonomousFrozen` | Hard stop on all autonomous actions |
+| `graph.enabled` | Enable graph reads, traversal, and recall boosting |
+| `graph.extractionWritesEnabled` | Let background extraction persist graph entity triples |
+| `autonomous.enabled` | Allow scheduled maintenance and repair |
+| `autonomous.frozen` | Hard stop on autonomous maintenance actions |
 | `hints.enabled` | Run prospective hint generation at write time |
-| `maintenanceMode` | `observe` or `execute` for maintenance worker |
+| `autonomous.maintenanceMode` | `observe` or `execute` for maintenance worker |
 
 ---
 
@@ -545,8 +544,8 @@ scan.
   immediately outside the normal schedule.
 
 All repair actions pass through a policy gate (`checkRepairGate`). The
-gate checks `autonomousFrozen` first (hard stop), then
-`autonomousEnabled` for agent-role callers (operators and daemon bypass
+gate checks `autonomous.frozen` first (hard stop), then
+`autonomous.enabled` for agent-role callers (operators and daemon bypass
 this), then a rate limiter with per-action cooldown and hourly budget.
 Each successful repair writes an audit event to `memory_history` with
 `memory_id = 'system'`.
@@ -557,7 +556,7 @@ recommendations from the report, and either logs them (`observe` mode)
 or executes them (`execute` mode). A halt tracker prevents the same
 ineffective repair from running more than 3 consecutive cycles without
 improving the composite score. The worker only starts its interval
-timer when `autonomousEnabled && !autonomousFrozen`.
+timer when `autonomous.enabled && !autonomous.frozen`.
 
 ---
 
@@ -907,8 +906,9 @@ $SIGNET_WORKSPACE/
         └── daemon-YYYY-MM-DD.log
 ```
 
-The daemon binds to localhost only. All data stays local by design.
-The daemon collects local-only operational telemetry (latency
+By default the daemon binds to loopback. It can also bind for a configured
+network mode such as Tailscale, with auth and CORS controls governing remote
+access. All data stays local by design. The daemon collects local-only operational telemetry (latency
 histograms, usage counters, error ring buffer) accessible at
 `/api/telemetry/*`. No data is sent externally.
 

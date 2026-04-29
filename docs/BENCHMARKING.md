@@ -9,6 +9,17 @@ Signet runtime package. Runtime code still belongs under `platform/`, human
 surfaces under `surfaces/`, integrations under `integrations/`, and reusable
 libraries under `libs/`.
 
+## Current LongMemEval score
+
+Signet's latest tracked MemoryBench LongMemEval runs average **97.6% answer
+accuracy** under the `rules` profile. This is an average across the current
+tracked local and canary score set, not a claim that every individual run lands
+at exactly that value.
+
+For the underlying run ledger and per-run accuracy, Hit@K, F1, MRR, NDCG,
+latency, and context-size notes, see
+[`docs/BENCHMARKING-PROGRESS.md`](./BENCHMARKING-PROGRESS.md).
+
 ## Default developer run
 
 ```bash

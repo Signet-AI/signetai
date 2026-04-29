@@ -53,25 +53,25 @@ production data.
 **Controlled-write mode** is active when `enabled` is true, `shadowMode` is
 false, and `mutationsFrozen` is false. In this mode, ADD and NONE decisions
 are applied. ADD creates new memory rows and embeddings; NONE is recorded
-for audit only. Destructive decisions (UPDATE and DELETE) are blocked by
-default and require the separate `allowUpdateDelete` flag.
+for audit only. UPDATE and DELETE proposals are blocked unless
+`autonomous.allowUpdateDelete` is true.
 
-**Full mode** is the same as controlled-write mode with `allowUpdateDelete`
-set to true. In the current implementation, destructive mutations are
-recognized in the decision output but their application is reserved for a
-future phase — they are blocked with reason
-`destructive_mutations_not_implemented` and logged.
+**Full mode** is controlled-write mode with `allowUpdateDelete` set to true.
+In this mode UPDATE proposals modify the referenced memory through the mutation
+API path, and DELETE proposals soft-delete the referenced memory through the
+forget path. The previous target state is archived to the cold tier first, and
+pinned memories are skipped rather than deleted.
 
 The five config flags in detail:
 
 - `enabled` — Master switch. When false, no extraction jobs are processed.
 - `shadowMode` — Run extraction and decisions without writing any facts.
 - `allowUpdateDelete` — Permit UPDATE/DELETE decisions to mutate existing
-  memories. Currently infrastructure-only; mutations are not yet applied.
+  memories through guarded modify/forget paths.
 - `mutationsFrozen` — Emergency brake. Disables all writes even if
   `shadowMode` is false.
-- `autonomousFrozen` — Disables the maintenance worker's scheduled interval
-  even if `autonomousEnabled` is true.
+- `autonomous.frozen` — Disables the maintenance worker's scheduled interval
+  even if `autonomous.enabled` is true.
 
 
 Extraction Stage
@@ -342,7 +342,7 @@ and exposed on the pipeline status endpoint: `feedbackAspectsUpdated`,
 Graph-Augmented Search
 ---
 
-At query time, when `graphEnabled` is true and the caller requests a graph
+At query time, when `graph.enabled` is true and the caller requests a graph
 boost, `getGraphBoostIds` is called synchronously against the read database.
 The function returns a set of memory IDs that should receive a score boost
 in the final recall ranking.
@@ -494,8 +494,8 @@ Maintenance Worker
 ---
 
 The maintenance worker performs autonomous diagnostics and, optionally,
-self-repair. It is governed by `autonomousEnabled` and `autonomousFrozen`.
-If `autonomousEnabled` is false or `autonomousFrozen` is true, the interval
+self-repair. It is governed by `autonomous.enabled` and `autonomous.frozen`.
+If `autonomous.enabled` is false or `autonomous.frozen` is true, the interval
 never starts, though the worker's `tick()` method remains callable for
 on-demand inspection.
 
@@ -594,9 +594,10 @@ the baseline pipeline remains unchanged.
 Optional Reranking
 ---
 
-After baseline hybrid search returns a scored candidate list, an optional
-reranking pass can reorder the top-N entries using a cross-encoder or other
-scoring model. Reranking is disabled by default (`reranker.enabled: false`).
+After baseline hybrid search returns a scored candidate list, a reranking pass
+can reorder the top-N entries. Reranking is enabled by default, but the default
+provider is the pass-through `noopReranker` unless a concrete reranker path is
+selected.
 
 The `rerank` function accepts a query string, a mutable candidate list, a
 `RerankProvider` callback, and a `RerankConfig`. It slices the list at
@@ -653,9 +654,9 @@ prompted to return a JSON object with `contradicts` (boolean), `confidence`
 (0–1), and `reasoning` (string).
 
 Semantic contradiction detection is gated by `semanticContradictionEnabled`
-(default `false`). When enabled, the LLM call uses a configurable timeout
-controlled by `semanticContradictionTimeoutMs` (default 45 seconds, range
-5s–300s). On timeout or parse failure, the result defaults to "no
+(default `true`). When enabled, the LLM call uses a configurable timeout
+controlled by `semanticContradictionTimeoutMs` (default 120 seconds, range
+5s-300s). On timeout or parse failure, the result defaults to "no
 contradiction" — the check is advisory and never blocks a proposal.
 
 These same detection primitives are reused by the retroactive supersession
@@ -668,8 +669,8 @@ details.
 ```yaml
 memory:
   pipelineV2:
-    semanticContradictionEnabled: false
-    semanticContradictionTimeoutMs: 45000  # ms, range 5000–300000
+    semanticContradictionEnabled: true
+    semanticContradictionTimeoutMs: 120000  # ms, range 5000-300000
 ```
 
 
@@ -1039,8 +1040,8 @@ fields are only used to build an implicit compatibility profile when no explicit
 enabled                         true
 shadowMode                      false
 mutationsFrozen                 false
-semanticContradictionEnabled        false
-semanticContradictionTimeoutMs      45000   # ms, range 5000–300000
+semanticContradictionEnabled        true
+semanticContradictionTimeoutMs      120000  # ms, range 5000-300000
 telemetryEnabled                    false
 ```
 
@@ -1071,8 +1072,8 @@ extraction:
 
 synthesis:
   enabled: true
-  provider: llama-cpp            # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
-  model: qwen3.5:4b
+  provider: ollama               # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter"
+  model: qwen3:4b
   timeout: 120000                # ms, range 5000–300000
   # when omitted entirely, synthesis falls back to extraction provider/model
   # explicit top-level inference.workloads bindings override legacy provider selection
@@ -1091,15 +1092,19 @@ graph:
   boostTimeoutMs: 500            # ms, range 50–5000
 
 structural:
-  enabled: true
+  enabled: false
   classifyBatchSize: 8           # range 1–20
   dependencyBatchSize: 5         # range 1–10
   pollIntervalMs: 10000          # ms, range 2000–120000
-  synthesisEnabled: true
+  synthesisEnabled: false
   synthesisIntervalMs: 60000     # ms, range 10000–600000
   synthesisTopEntities: 20       # range 5–100
   synthesisMaxFacts: 10          # range 3–50
   synthesisMaxStallMs: 1800000   # 30 min, set 0 to disable
+  supersessionEnabled: true
+  supersessionSweepEnabled: true
+  supersessionSemanticFallback: false
+  supersessionMinConfidence: 0.7
 
 reranker:
   enabled: true
@@ -1132,9 +1137,10 @@ documents:
   maxContentBytes: 10485760      # 10 MB, range 1 KB–100 MB
 
 guardrails:
-  maxContentChars: 500           # range 50–100000
-  chunkTargetChars: 300          # range 50–50000
+  maxContentChars: 800           # range 50–100000
+  chunkTargetChars: 600          # range 50–50000
   recallTruncateChars: 500       # range 50–100000
+  contextBudgetChars: 4000
 
 continuity:
   enabled: true

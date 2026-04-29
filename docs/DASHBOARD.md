@@ -37,60 +37,47 @@ is not already running, it starts it first.
 Layout
 ------
 
-The dashboard is a single-page app with three regions:
+The dashboard is a single-page app with a collapsible left navigation rail and
+a main workspace.
 
-- **Left sidebar** — agent identity summary, connector status, and a
-  file list for config editing.
-- **Center panel** — the main tabbed workspace.
-- **Right sidebar** — a compact memory panel with quick search. Hidden
-  when the Memory tab is active.
+- **Left navigation rail** — Overview, Ontology, Tasks, Audit, Secrets,
+  Skills, Settings, theme toggle, and project/release access.
+- **Main workspace** — lazy-loaded dashboard surfaces for the selected area.
 
-The header shows daemon version, total memory count, and connected
-harness count.
+The sidebar footer shows the daemon version and pending restart state when
+available.
 
 
 Left Sidebar
 ------------
 
-The left sidebar has three sections.
-
-**Identity** shows the agent name and creature type from `IDENTITY.md`,
-plus a quick count of total memories and active connectors.
-
-**Connectors** lists each configured harness (Claude Code, OpenCode,
-OpenClaw, etc.) and whether the harness config file exists on disk. A
-green indicator means the file is present and the harness is synced. If
-a connector shows `OFF`, run `signet sync` or save `AGENTS.md` to
-trigger a re-sync.
-
-**Config Files** lists all `.md` and `.yaml` files found in `$SIGNET_WORKSPACE/`.
-Clicking a file opens it in the Config editor.
+The sidebar is intentionally navigation-only. Identity, harness, config,
+pipeline, connector, and log details live inside Overview, Ontology, Settings,
+and Audit surfaces rather than as separate sidebar panels.
 
 
 Tabs
 ----
 
-**Config** — A CodeMirror 6 editor for your agent's identity files.
-Files are loaded from `$SIGNET_WORKSPACE/`. The editor provides syntax
-highlighting (markdown for `.md` files, YAML for `.yaml`), line
-numbers, bracket matching, fold gutters, search (`Ctrl+F`), and undo
-history. Use `Cmd+S` / `Ctrl+S` to save. Saving `AGENTS.md` triggers
-harness sync within 2 seconds. The editor uses a custom dark theme
-matching the dashboard design language, with a light theme variant
-activated by the `data-theme="light"` attribute.
+**Overview** — Home surface for daemon status, memory health, harness state,
+marketplace spotlights, pinned entity clusters, and upgrade/restart signals.
 
-**Settings** — A YAML editor (also CodeMirror 6) for `agent.yaml`.
-Modify embedding provider, pipeline V2 flags, search settings, memory
-retention windows, and auth configuration without leaving the browser.
-Changes are saved directly to `$SIGNET_WORKSPACE/agent.yaml`.
+**Ontology** — Unified memory workspace. It combines memory search, timeline,
+knowledge/entity inspection, and constellation/embedding exploration behind
+the `cortex-memory` route. Legacy hashes such as `#memory`, `#embeddings`,
+and `#knowledge` redirect here.
 
-**Memory** — Browse and search your memory database. Search runs hybrid
-(semantic + keyword) lookup. You can filter by type, tags, source
-harness, pinned status, importance score, and date. Each memory card has
-a "Find Similar" button that runs a vector similarity search. The count
-shown reflects your current filter state.
+**Settings** — Form-driven configuration editor for identity, embedding,
+memory, pipeline, connector, and review settings. Changes are saved to the
+resolved config files under `$SIGNET_WORKSPACE/`.
 
-**Embeddings** — A 3D force-directed graph of your memory space
+**Memory search** — Browse and search your memory database from the ontology
+workspace. Search runs hybrid (semantic + keyword) lookup. You can filter by
+type, tags, source harness, pinned status, importance score, and date. Each
+memory card has a "Find Similar" action that runs vector similarity search.
+The count shown reflects your current filter state.
+
+**Embeddings / Constellation** — A 3D force-directed graph of your memory space
 (powered by `3d-force-graph` / Three.js). Memories with vector
 embeddings appear as nodes; edges connect k-nearest neighbors.
 
@@ -138,7 +125,7 @@ Clicking an entity node opens an inspector panel showing the entity type,
 aspects list, dependency edges, and memory count. Clicking a memory node
 opens the existing memory detail panel.
 
-**Predictor Metrics Tab**
+**Predictor Metrics**
 
 When the predictive memory scorer is enabled, a Predictor tab surfaces
 scorer health metrics:
@@ -148,17 +135,16 @@ scorer health metrics:
 - Drift detection status (flags when model performance has degraded)
 - Training pair count (total comparison pairs accumulated)
 
-The predictor follows the current runtime config. If
-`predictor.enabled` is set to `false`, the tab shows a "not enabled"
-placeholder instead of live scorer metrics.
+The predictor follows the current runtime config. Current navigation routes
+predictor status through Settings and related ontology health panels; legacy
+`#predictor` hashes continue to resolve to Settings.
 
 
 **Pipeline — Active Sessions**
 
-The Pipeline tab includes a SessionList component that displays all
-active sessions with per-session bypass toggles. Each row shows the
-session key, harness name, runtime path, and a Switch control to
-enable or disable bypass. Toggling the switch calls
+The Settings pipeline section includes active-session controls with per-session
+bypass toggles. Each row shows the session key, harness name, runtime path, and
+a Switch control to enable or disable bypass. Toggling the switch calls
 `POST /api/sessions/:key/bypass` (see [[api#Sessions]]). When bypass
 is on, all hooks for that session return empty no-op responses — MCP
 tools still work normally.
@@ -166,7 +152,7 @@ tools still work normally.
 The session list auto-refreshes every 30 seconds and is only visible
 when at least one session is active.
 
-**Logs** — Real-time daemon log stream via Server-Sent Events
+**Audit** — Diagnostics and logs. The log view streams daemon events via Server-Sent Events
 (`/api/logs/stream`). A Live/Stop toggle controls the stream.
 Entries are color-coded by level (`debug`, `info`, `warn`, `error`)
 and labeled by category: `daemon`, `api`, `memory`, `sync`, `git`,
@@ -182,9 +168,9 @@ encrypted provider and 1Password compatibility flow. You can add new
 secrets (via a password input) or delete existing ones. For CLI use,
 prefer `signet secret put <NAME>`.
 
-**Skills** — Lists installed skills and lets you browse the skills.sh
-registry. Click a skill name to read its full `SKILL.md` before
-installing. Already-installed skills are marked.
+**Skills** — Lists installed skills and marketplace catalog entries from
+Signet, skills.sh, and ClawHub sources. Click a skill name to read details
+before installing. Already-installed skills are marked.
 
 The Skills tab also includes **Plugins**, a registry view for core and
 installed Signet extensions. It shows plugin state, health, capability
