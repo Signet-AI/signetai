@@ -20,6 +20,44 @@ export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"
 	return { provider: "openai", model, dimensions: getEmbeddingDimensions(model) };
 }
 
+export async function validateOllamaModelNonInteractive(model: string): Promise<{
+	readonly available: boolean;
+	readonly modelInstalled: boolean;
+	readonly error?: string;
+}> {
+	if (!hasCommand("ollama")) {
+		return {
+			available: false,
+			modelInstalled: false,
+			error: "Ollama is not installed. Install it from https://ollama.com and re-run 'signet setup'.",
+		};
+	}
+
+	const service = await queryOllamaModels();
+	if (!service.available) {
+		return {
+			available: false,
+			modelInstalled: false,
+			error: `Ollama is not reachable${service.error ? `: ${service.error}` : ""}. Start it with: ollama serve`,
+		};
+	}
+
+	if (!hasOllamaModel(service.models, model)) {
+		console.log(chalk.yellow(`  Model '${model}' not found locally. Attempting to pull...`));
+		const pulled = await pullOllamaModel(model);
+		if (!pulled) {
+			return {
+				available: true,
+				modelInstalled: false,
+				error: `Failed to pull '${model}'. Run 'ollama pull ${model}' manually and re-run 'signet setup'.`,
+			};
+		}
+		return { available: true, modelInstalled: true };
+	}
+
+	return { available: true, modelInstalled: true };
+}
+
 export async function preflightOllamaEmbedding(model: string): Promise<{
 	provider: "native" | "ollama" | "openai" | "none";
 	model?: string;

@@ -1352,6 +1352,7 @@ registerAppCommands(program, {
 			signetLogo,
 			startDaemon,
 			syncBuiltinSkills,
+			syncNativeEmbeddingModel,
 			syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
 		}),
 	showDoctor: (options) => showDoctor(options, healthDeps),

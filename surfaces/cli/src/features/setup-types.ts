@@ -59,6 +59,9 @@ export interface SetupDeps {
 		basePath: string,
 	) => { installed: string[]; updated: string[]; skipped: string[] };
 	readonly syncWorkspaceSourceRepo: (basePath: string) => Promise<WorkspaceSourceRepoSyncResult>;
+	readonly syncNativeEmbeddingModel: (
+		basePath: string,
+	) => Promise<{ readonly status: "updated" | "current" | "skipped" | "error"; readonly message: string }>;
 }
 
 export interface FreshSetupConfig {

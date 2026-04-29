@@ -1557,6 +1557,36 @@ async function main() {
 			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
 			logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
 		});
+
+		const startupCfg = loadMemoryConfig(AGENTS_DIR);
+		if (startupCfg.embedding.provider !== "none") {
+			checkEmbeddingProvider(startupCfg.embedding)
+				.then((embeddingStatus) => {
+					if (!embeddingStatus.available) {
+						logger.warn(
+							"daemon",
+							`Embedding provider '${startupCfg.embedding.provider}' is unavailable: ${embeddingStatus.error ?? "unknown error"}`,
+						);
+						logger.warn(
+							"daemon",
+							"Vector search and memory embeddings will not work until this is resolved. Run 'signet sync' or reconfigure with 'signet setup'.",
+						);
+					} else if (embeddingStatus.error) {
+						logger.warn("daemon", `Embedding provider using fallback: ${embeddingStatus.error}`);
+					} else {
+						logger.info(
+							"daemon",
+							`Embedding provider '${startupCfg.embedding.provider}' is ready (model: ${startupCfg.embedding.model})`,
+						);
+					}
+				})
+				.catch((e) => {
+					logger.warn(
+						"daemon",
+						`Embedding provider health check failed: ${e instanceof Error ? e.message : String(e)}`,
+					);
+				});
+		}
 	};
 
 	bindWithRetry({

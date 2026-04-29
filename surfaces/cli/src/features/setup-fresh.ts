@@ -242,6 +242,16 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		spinner.text = "Starting daemon...";
 		const daemonStarted = await deps.startDaemon(cfg.basePath);
 
+		if (daemonStarted && cfg.embeddingProvider === "native") {
+			spinner.text = "Warming native embedding model...";
+			const nativeResult = await deps.syncNativeEmbeddingModel(cfg.basePath);
+			if (nativeResult.status === "error") {
+				console.log(chalk.yellow(`\n  ⚠ Native embedding model warmup failed: ${nativeResult.message}`));
+				console.log(chalk.dim("    Embeddings will be unavailable until this is resolved."));
+				console.log(chalk.dim("    Run 'signet sync' to retry, or reconfigure with 'signet setup'."));
+			}
+		}
+
 		spinner.succeed(chalk.green("Signet initialized!"));
 
 		console.log();
