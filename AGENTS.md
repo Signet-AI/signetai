@@ -186,6 +186,7 @@ bun test platform/daemon/src/pipeline/worker.test.ts
 | `@signet/connector-opencode` | `integrations/opencode/connector` | OpenCode install-time integration | node |
 | `@signet/connector-openclaw` | `integrations/openclaw/connector` | OpenClaw install-time integration | node |
 | `@signet/connector-codex` | `integrations/codex/connector` | Codex CLI install-time integration | node |
+| `@signet/connector-forge` | `integrations/forge/connector` | Forge install-time integration | node |
 | `@signet/connector-gemini` | `integrations/gemini/connector` | Gemini CLI install-time integration | node |
 | `@signet/connector-oh-my-pi` | `integrations/oh-my-pi/connector` | Oh My Pi install-time integration | node |
 | `@signet/connector-pi` | `integrations/pi/connector` | Pi install-time integration | node |

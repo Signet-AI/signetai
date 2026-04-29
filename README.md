@@ -373,11 +373,13 @@ Connectors
 | [`@signet/connector-opencode`](./integrations/opencode/connector) | OpenCode integration |
 | [`@signet/connector-openclaw`](./integrations/openclaw/connector) | OpenClaw integration |
 | [`@signet/connector-codex`](./integrations/codex/connector) | Codex CLI integration |
+| [`@signet/connector-forge`](./integrations/forge/connector) | Forge integration |
 | [`@signet/connector-gemini`](./integrations/gemini/connector) | Gemini CLI integration |
 | [`@signet/connector-oh-my-pi`](./integrations/oh-my-pi/connector) | Oh My Pi integration |
 | [`@signet/connector-hermes-agent`](./integrations/hermes-agent/connector) | Hermes Agent integration |
 | [`@signet/connector-pi`](./integrations/pi/connector) | Pi coding agent integration |
 | [`@signet/oh-my-pi-extension`](./integrations/oh-my-pi/extension) | Oh My Pi extension bridge |
+| [`@signet/pi-extension-base`](./integrations/pi/extension-base) | Shared Pi and Oh My Pi extension utilities |
 | [`@signet/pi-extension`](./integrations/pi/extension) | Pi extension — memory tools, lifecycle, and session hooks |
 | [`@signet/opencode-plugin`](./integrations/opencode/plugin) | OpenCode runtime plugin — memory tools and session hooks |
 | [`@signetai/signet-memory-openclaw`](./integrations/openclaw/memory-adapter) | OpenClaw runtime plugin |
