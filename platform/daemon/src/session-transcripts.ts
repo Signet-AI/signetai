@@ -5,9 +5,14 @@ import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { sanitizeFtsQuery } from "./memory-search";
 import {
+	type TranscriptIdentity,
+	type TranscriptSessionKeyClassification,
 	appendCanonicalTranscriptSnapshotIfMissing,
+	canonicalTranscriptPath,
 	readCanonicalTranscriptSessionKeys,
+	rewriteReplacingLiveOnlySessions,
 	sanitizeHarnessPath,
+	sessionSeqCacheKey,
 } from "./transcript-jsonl";
 
 interface TranscriptRow {
@@ -39,13 +44,21 @@ export interface TranscriptHit {
 	readonly rank: number;
 }
 
-function createBackfillSeenReader(basePath: string, agentId?: string): (harness: string) => Promise<Set<string>> {
-	const seen = new Map<string, Promise<Set<string>>>();
+interface BackfillSeen {
+	readonly classification: TranscriptSessionKeyClassification;
+	readonly allKeys: Set<string>;
+}
+
+function createBackfillSeenReader(basePath: string, agentId?: string): (harness: string) => Promise<BackfillSeen> {
+	const seen = new Map<string, Promise<BackfillSeen>>();
 	return (harness: string) => {
 		const key = sanitizeHarnessPath(harness);
 		const existing = seen.get(key);
 		if (existing) return existing;
-		const loaded = readCanonicalTranscriptSessionKeys({ basePath, harness, agentId });
+		const loaded = readCanonicalTranscriptSessionKeys({ basePath, harness, agentId }).then((classification) => ({
+			classification,
+			allKeys: new Set([...classification.canonicalKeys, ...classification.liveOnlyKeys]),
+		}));
 		seen.set(key, loaded);
 		return loaded;
 	};
@@ -92,11 +105,15 @@ function parseArtifactFrontmatter(content: string): { frontmatter: Record<string
 async function backfillMarkdownTranscriptArtifacts(
 	basePath: string,
 	agentId: string | undefined,
-	getSeen: (harness: string) => Promise<Set<string>>,
+	getSeen: (harness: string) => Promise<BackfillSeen>,
 ): Promise<number> {
 	const memoryDir = join(basePath, "memory");
 	if (!existsSync(memoryDir)) return 0;
 	let failures = 0;
+	const liveOnlyReplacements = new Map<
+		string,
+		Map<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>
+	>();
 	const files = readdirSync(memoryDir).filter((name) => name.endsWith("--transcript.md"));
 	for (const [i, name] of files.entries()) {
 		const path = join(memoryDir, name);
@@ -106,21 +123,38 @@ async function backfillMarkdownTranscriptArtifacts(
 			const rowAgentId = parsed.frontmatter.agent_id || "default";
 			if (agentId && rowAgentId !== agentId) continue;
 			const harness = parsed.frontmatter.harness || "unknown";
-			await appendCanonicalTranscriptSnapshotIfMissing(
-				{
-					basePath,
-					agentId: rowAgentId,
-					harness,
-					sessionKey: parsed.frontmatter.session_key || null,
-					sessionId: parsed.frontmatter.session_id || null,
-					project: parsed.frontmatter.project || null,
-					capturedAt: parsed.frontmatter.captured_at || new Date().toISOString(),
-					sourceFormat: "markdown",
-					sourcePath: `memory/${name}`,
-					transcript: parsed.body,
-				},
-				await getSeen(harness),
-			);
+			const input = {
+				basePath,
+				agentId: rowAgentId,
+				harness,
+				sessionKey: parsed.frontmatter.session_key || null,
+				sessionId: parsed.frontmatter.session_id || null,
+				project: parsed.frontmatter.project || null,
+				capturedAt: parsed.frontmatter.captured_at || new Date().toISOString(),
+				sourceFormat: "markdown" as const,
+				sourcePath: `memory/${name}`,
+				transcript: parsed.body,
+			};
+			const { classification, allKeys } = await getSeen(harness);
+			const key = sessionSeqCacheKey(input);
+			if (classification.liveOnlyKeys.has(key)) {
+				const replacements =
+					liveOnlyReplacements.get(harness) ||
+					new Map<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>();
+				replacements.set(key, {
+					identity: {
+						agentId: input.agentId,
+						harness: input.harness,
+						sessionKey: input.sessionKey,
+						sessionId: input.sessionId,
+						sourceFormat: "markdown",
+					},
+					transcript: input.transcript,
+				});
+				liveOnlyReplacements.set(harness, replacements);
+				continue;
+			}
+			await appendCanonicalTranscriptSnapshotIfMissing(input, allKeys);
 		} catch (error) {
 			failures++;
 			logger.warn("transcripts", "Markdown transcript backfill failed", {
@@ -130,16 +164,39 @@ async function backfillMarkdownTranscriptArtifacts(
 		}
 		if (i > 0 && i % 100 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
 	}
+	for (const [harness, replacements] of liveOnlyReplacements.entries()) {
+		if (replacements.size === 0) continue;
+		const jsonlPath = canonicalTranscriptPath(basePath, harness);
+		try {
+			await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
+			const { classification } = await getSeen(harness);
+			for (const key of replacements.keys()) {
+				classification.liveOnlyKeys.delete(key);
+				classification.canonicalKeys.add(key);
+			}
+		} catch (error) {
+			failures++;
+			logger.warn("transcripts", "Markdown transcript backfill rewrite failed", {
+				error: error instanceof Error ? error.message : String(error),
+				harness,
+				path: jsonlPath,
+			});
+		}
+	}
 	return failures;
 }
 
 async function backfillDatabaseTranscripts(
 	basePath: string,
 	agentId: string | undefined,
-	getSeen: (harness: string) => Promise<Set<string>>,
+	getSeen: (harness: string) => Promise<BackfillSeen>,
 ): Promise<boolean> {
 	if (!tableExists("session_transcripts")) return true;
 	const PAGE_SIZE = 100;
+	const liveOnlyReplacements = new Map<
+		string,
+		Map<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>
+	>();
 	try {
 		let offset = 0;
 		while (true) {
@@ -164,22 +221,48 @@ async function backfillDatabaseTranscripts(
 				const rowAgentId = row.agent_id?.trim() || "default";
 				if (agentId && rowAgentId !== agentId) continue;
 				const harness = row.harness?.trim() || "unknown";
-				await appendCanonicalTranscriptSnapshotIfMissing(
-					{
-						basePath,
-						agentId: rowAgentId,
-						harness,
-						sessionKey: row.session_key,
-						project: row.project,
-						capturedAt: row.updated_at || row.created_at || new Date().toISOString(),
-						sourceFormat: "db",
-						transcript: row.content,
-					},
-					await getSeen(harness),
-				);
+				const input = {
+					basePath,
+					agentId: rowAgentId,
+					harness,
+					sessionKey: row.session_key,
+					project: row.project,
+					capturedAt: row.updated_at || row.created_at || new Date().toISOString(),
+					sourceFormat: "db" as const,
+					transcript: row.content,
+				};
+				const { classification, allKeys } = await getSeen(harness);
+				const key = sessionSeqCacheKey(input);
+				if (classification.liveOnlyKeys.has(key)) {
+					const replacements =
+						liveOnlyReplacements.get(harness) ||
+						new Map<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>();
+					replacements.set(key, {
+						identity: {
+							agentId: input.agentId,
+							harness: input.harness,
+							sessionKey: input.sessionKey,
+							sourceFormat: "db",
+						},
+						transcript: input.transcript,
+					});
+					liveOnlyReplacements.set(harness, replacements);
+					continue;
+				}
+				await appendCanonicalTranscriptSnapshotIfMissing(input, allKeys);
 			}
 			offset += PAGE_SIZE;
 			await new Promise((resolve) => setTimeout(resolve, 0));
+		}
+		for (const [harness, replacements] of liveOnlyReplacements.entries()) {
+			if (replacements.size === 0) continue;
+			const jsonlPath = canonicalTranscriptPath(basePath, harness);
+			await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
+			const { classification } = await getSeen(harness);
+			for (const key of replacements.keys()) {
+				classification.liveOnlyKeys.delete(key);
+				classification.canonicalKeys.add(key);
+			}
 		}
 	} catch (error) {
 		logger.warn("transcripts", "Database transcript backfill failed", {

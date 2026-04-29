@@ -325,6 +325,157 @@ describe("backfill OOM regression (#587)", () => {
 	});
 });
 
+describe("backfill replaces live-only sessions", () => {
+	function writeTranscriptArtifact(params: {
+		readonly root: string;
+		readonly fileName: string;
+		readonly agentId?: string;
+		readonly harness?: string;
+		readonly sessionKey: string;
+		readonly sessionId?: string;
+		readonly capturedAt?: string;
+		readonly transcript: string;
+	}): void {
+		const artifact = join(params.root, "memory", params.fileName);
+		mkdirSync(dirname(artifact), { recursive: true });
+		writeFileSync(
+			artifact,
+			[
+				"---",
+				'kind: "transcript"',
+				`agent_id: ${JSON.stringify(params.agentId || "default")}`,
+				`harness: ${JSON.stringify(params.harness || "codex")}`,
+				`session_key: ${JSON.stringify(params.sessionKey)}`,
+				`session_id: ${JSON.stringify(params.sessionId || params.sessionKey)}`,
+				`captured_at: ${JSON.stringify(params.capturedAt || "2026-04-28T00:00:00.000Z")}`,
+				"---",
+				params.transcript,
+				"",
+			].join("\n"),
+			"utf8",
+		);
+	}
+
+	function readJsonlLines(root: string): Array<{
+		readonly session_key: string | null;
+		readonly source_format: string;
+		readonly content: string;
+	}> {
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+		return readFileSync(jsonlPath, "utf8")
+			.split(/\r?\n/)
+			.filter((line) => line.trim().length > 0)
+			.map(
+				(line) =>
+					JSON.parse(line) as {
+						readonly session_key: string | null;
+						readonly source_format: string;
+						readonly content: string;
+					},
+			);
+	}
+
+	test("markdown backfill replaces live-only session with fuller artifact data", async () => {
+		const root = makeRoot("backfill-live-replace");
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "live-session",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "partial live prompt" }],
+		});
+
+		writeTranscriptArtifact({
+			root,
+			fileName: "2026-04-29T00-00-00Z--livesession000000--transcript.md",
+			sessionKey: "live-session",
+			transcript: "User: fuller migrated prompt\nAssistant: fuller migrated reply",
+		});
+
+		await ensureCanonicalTranscriptHistory(root, "default");
+
+		const lines = readJsonlLines(root);
+		expect(lines.some((line) => line.session_key === "live-session" && line.source_format === "live")).toBe(false);
+		expect(lines.some((line) => line.session_key === "live-session" && line.source_format === "markdown")).toBe(true);
+		expect(lines.some((line) => line.session_key === "live-session" && line.content.includes("fuller migrated reply"))).toBe(true);
+		expect(lines.some((line) => line.session_key === "live-session" && line.content.includes("partial live prompt"))).toBe(false);
+	});
+
+	test("canonical sessions are not replaced during backfill", async () => {
+		const root = makeRoot("backfill-canonical-untouched");
+
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "canonical-session",
+			sourceFormat: "db",
+			transcript: "User: canonical source\nAssistant: canonical source reply",
+		});
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "live-session",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "live only content" }],
+		});
+
+		writeTranscriptArtifact({
+			root,
+			fileName: "2026-04-29T00-00-00Z--canon-session0000--transcript.md",
+			sessionKey: "canonical-session",
+			transcript: "User: markdown should not replace canonical\nAssistant: markdown should not replace canonical",
+		});
+		writeTranscriptArtifact({
+			root,
+			fileName: "2026-04-29T00-00-00Z--live-session00000--transcript.md",
+			sessionKey: "live-session",
+			transcript: "User: markdown replacement for live\nAssistant: markdown replacement reply",
+		});
+
+		await ensureCanonicalTranscriptHistory(root, "default");
+
+		const lines = readJsonlLines(root);
+		expect(lines.some((line) => line.session_key === "canonical-session" && line.content.includes("canonical source reply"))).toBe(
+			true,
+		);
+		expect(lines.some((line) => line.session_key === "canonical-session" && line.content.includes("markdown should not replace canonical"))).toBe(
+			false,
+		);
+		expect(lines.some((line) => line.session_key === "live-session" && line.source_format === "live")).toBe(false);
+		expect(lines.some((line) => line.session_key === "live-session" && line.content.includes("markdown replacement reply"))).toBe(true);
+	});
+
+	test("new sessions still appended normally", async () => {
+		const root = makeRoot("backfill-new-append");
+
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "existing-session",
+			sourceFormat: "db",
+			transcript: "User: existing canonical\nAssistant: existing reply",
+		});
+
+		writeTranscriptArtifact({
+			root,
+			fileName: "2026-04-29T00-00-00Z--new-session0000000--transcript.md",
+			sessionKey: "new-session",
+			transcript: "User: new markdown prompt\nAssistant: new markdown reply",
+		});
+
+		await ensureCanonicalTranscriptHistory(root, "default");
+
+		const lines = readJsonlLines(root);
+		expect(lines.some((line) => line.session_key === "existing-session" && line.content.includes("existing reply"))).toBe(true);
+		expect(lines.some((line) => line.session_key === "new-session" && line.content.includes("new markdown reply"))).toBe(true);
+	});
+});
+
 describe("readCanonicalTranscriptSessionKeys classification", () => {
 	test("classifies canonical and live-only sessions separately", async () => {
 		const root = makeRoot("classify-separate");
