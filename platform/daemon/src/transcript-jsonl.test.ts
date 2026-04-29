@@ -474,6 +474,83 @@ describe("backfill replaces live-only sessions", () => {
 		expect(lines.some((line) => line.session_key === "existing-session" && line.content.includes("existing reply"))).toBe(true);
 		expect(lines.some((line) => line.session_key === "new-session" && line.content.includes("new markdown reply"))).toBe(true);
 	});
+
+	test("handles many live-only sessions without full-file parse (OOM guard)", async () => {
+		const root = makeRoot("backfill-oom-guard");
+		const memDir = join(root, "memory");
+
+		// Pre-populate with canonical data (creates a non-trivial file)
+		for (let i = 0; i < 50; i++) {
+			await writeCanonicalTranscriptSnapshot({
+				basePath: root,
+				agentId: "default",
+				harness: "codex",
+				sessionKey: `canonical-${i}`,
+				sourceFormat: "normalized",
+				transcript: `User: canonical prompt ${i} ${"x".repeat(200)}\nAssistant: canonical reply ${i} ${"y".repeat(200)}`,
+			});
+		}
+
+		// Add 20 live-only sessions
+		for (let i = 0; i < 20; i++) {
+			await appendCanonicalTranscriptTurns({
+				basePath: root,
+				agentId: "default",
+				harness: "codex",
+				sessionKey: `live-${i}`,
+				sessionId: `live-${i}`,
+				sourceFormat: "live",
+				turns: [
+					{ role: "user", content: `live prompt ${i}` },
+					{ role: "assistant", content: `live reply ${i}` },
+				],
+			});
+		}
+
+		// Create markdown artifacts with fuller data for all 20 live-only sessions
+		mkdirSync(memDir, { recursive: true });
+		for (let i = 0; i < 20; i++) {
+			writeFileSync(
+				join(memDir, `2026-04-29T00-00-00Z--oomguard${String(i).padStart(6, "0")}--transcript.md`),
+				[
+					"---",
+					'kind: "transcript"',
+					'agent_id: "default"',
+					'harness: "codex"',
+					`session_key: "live-${i}"`,
+					`session_id: "live-${i}"`,
+					`captured_at: "2026-04-29T00:00:${String(i).padStart(2, "0")}.000Z"`,
+					"---",
+					`User: full prompt ${i}`,
+					`Assistant: full reply ${i}`,
+					`User: follow-up ${i}`,
+					`Assistant: follow-up reply ${i}`,
+					"",
+				].join("\n"),
+				"utf8",
+			);
+		}
+
+		await ensureCanonicalTranscriptHistory(root, "default");
+
+		const jsonlPath = join(memDir, "codex", "transcripts", "transcript.jsonl");
+		const content = readFileSync(jsonlPath, "utf8");
+
+		// All 20 live-only sessions replaced
+		for (let i = 0; i < 20; i++) {
+			expect(content).not.toContain(`live prompt ${i}`);
+			expect(content).toContain(`full prompt ${i}`);
+			expect(content).toContain(`follow-up ${i}`);
+		}
+
+		// All 50 canonical sessions untouched
+		for (let i = 0; i < 50; i++) {
+			expect(content).toContain(`canonical prompt ${i}`);
+		}
+
+		// Marker written
+		expect(existsSync(join(memDir, ".canonical-transcript-backfill-v1.default"))).toBe(true);
+	});
 });
 
 describe("readCanonicalTranscriptSessionKeys classification", () => {
