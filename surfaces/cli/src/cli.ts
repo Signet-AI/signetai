@@ -937,7 +937,21 @@ async function syncNativeEmbeddingModel(basePath: string): Promise<{
 
 		if (!blocked) {
 			const urls = await getReachableDaemonUrls();
-			const url = urls[0];
+			let url: string | undefined;
+			for (const candidate of urls) {
+				try {
+					const statusRes = await fetch(`${candidate}/api/status`, {
+						signal: AbortSignal.timeout(3000),
+					});
+					if (statusRes.ok) {
+						const statusBody: unknown = await statusRes.json();
+						if (isRecord(statusBody) && (statusBody.agentsDir as string) === basePath) {
+							url = candidate;
+							break;
+						}
+					}
+				} catch {}
+			}
 			if (!url) {
 				result = {
 					status: "error",
