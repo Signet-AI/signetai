@@ -626,8 +626,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			const ollamaCheck = await validateOllamaModelNonInteractive(configuredModel);
 			if (!ollamaCheck.available || !ollamaCheck.modelInstalled) {
 				console.log(chalk.yellow(`  ⚠ ${ollamaCheck.error ?? "Ollama embedding model not available"}`));
-				console.log(chalk.dim("    Vector search will not work until the model is available."));
-				console.log(chalk.dim("    Run 'signet setup' interactively to reconfigure, or install the model manually."));
+				console.log(chalk.yellow("  Downgrading embedding provider to 'native' (built-in ONNX)."));
+				embeddingProvider = "native";
+				embeddingModel = "nomic-embed-text-v1.5";
+				embeddingDimensions = 768;
 			}
 		} else {
 			console.log();

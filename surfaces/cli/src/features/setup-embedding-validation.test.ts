@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type SetupDetection, detectExistingSetup } from "@signet/core";
+import type { SetupDetection } from "@signet/core";
+import { validateOllamaModelNonInteractive } from "./setup-providers.js";
 import type { SetupDeps } from "./setup-types.js";
 import { setupWizard } from "./setup.js";
 
@@ -27,23 +28,6 @@ function freshDetection(basePath = "/tmp/agents"): SetupDetection {
 		agentsMd: false,
 		configYaml: false,
 		memoryDb: false,
-		identityFiles: [],
-		hasMemoryDir: false,
-		memoryLogCount: 0,
-		hasClawdhub: false,
-		hasClaudeSkills: false,
-		harnesses: { ...NO_HARNESSES },
-	};
-}
-
-function existingDetection(basePath = "/tmp/agents"): SetupDetection {
-	return {
-		basePath,
-		agentsDir: true,
-		agentYaml: true,
-		agentsMd: false,
-		configYaml: false,
-		memoryDb: true,
 		identityFiles: [],
 		hasMemoryDir: false,
 		memoryLogCount: 0,
@@ -182,5 +166,83 @@ describe("fresh setup native embedding model validation", () => {
 		await setupWizard({ nonInteractive: true, embeddingProvider: "none" }, deps);
 
 		expect(syncNativeEmbeddingModel.mock.calls.length).toBe(0);
+	});
+
+	it("downgrades to native when ollama is unreachable in non-interactive mode", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ollama-downgrade-"));
+		const basePath = join(root, "agents");
+
+		const syncNativeEmbeddingModel = mock(async () => ({
+			status: "current" as const,
+			message: "nomic-ai/nomic-embed-text-v1.5",
+		}));
+
+		const logCalls: string[] = [];
+		const originalLog = console.log;
+		console.log = (...args: unknown[]) => {
+			logCalls.push(args.join(" "));
+		};
+
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = mock(async () => {
+			throw new Error("Connection refused");
+		});
+
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: basePath,
+				normalizeAgentPath: mock((p: string) => p),
+				detectExistingSetup: mock(() => freshDetection(basePath)),
+				syncNativeEmbeddingModel,
+			});
+
+			await setupWizard({ nonInteractive: true, embeddingProvider: "ollama" }, deps);
+
+			const output = logCalls.join("\n");
+			expect(output).toContain("Downgrading");
+			expect(syncNativeEmbeddingModel.mock.calls.length).toBeGreaterThanOrEqual(1);
+		} finally {
+			console.log = originalLog;
+			globalThis.fetch = originalFetch;
+		}
+	});
+});
+
+describe("validateOllamaModelNonInteractive", () => {
+	const originalFetch = globalThis.fetch;
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	it("returns error when ollama service is not reachable", async () => {
+		globalThis.fetch = mock(async () => {
+			throw new Error("Connection refused");
+		});
+
+		const result = await validateOllamaModelNonInteractive("nomic-embed-text");
+		expect(result.available).toBe(false);
+		expect(result.modelInstalled).toBe(false);
+		expect(result.error).toContain("not reachable");
+	});
+
+	it("returns success when model is already installed", async () => {
+		globalThis.fetch = mock(
+			async () => new Response(JSON.stringify({ models: [{ name: "nomic-embed-text:latest" }] }), { status: 200 }),
+		);
+
+		const result = await validateOllamaModelNonInteractive("nomic-embed-text");
+		expect(result.available).toBe(true);
+		expect(result.modelInstalled).toBe(true);
+		expect(result.error).toBeUndefined();
+	});
+
+	it("returns error when model is missing and ollama reports no models", async () => {
+		globalThis.fetch = mock(async () => new Response(JSON.stringify({ models: [] }), { status: 200 }));
+
+		const result = await validateOllamaModelNonInteractive("nomic-embed-text");
+		expect(result.available).toBe(true);
+		expect(result.modelInstalled).toBe(false);
+		expect(result.error).toContain("Failed to pull");
 	});
 });
