@@ -79,9 +79,12 @@ function sliceSection(content: string, heading: string): string {
 	return content.slice(start, end);
 }
 
-/** Normalize a route path for comparison (strip trailing slash, lowercase). */
+/** Normalize a route path for comparison (strip trailing slash, Hono param regexes, lowercase). */
 function normRoute(p: string): string {
-	return p.replace(/\/+$/, "").toLowerCase();
+	return p
+		.replace(/\{[^}]+\}/g, "")
+		.replace(/\/+$/, "")
+		.toLowerCase();
 }
 
 function routeKey(method: string, path: string): string {
@@ -145,29 +148,29 @@ interface DocRoute {
 	methods: string[];
 }
 
-function parseClaudeMdRoutes(content: string): DocRoute[] {
+function parseApiRoutes(content: string): DocRoute[] {
 	const routes: DocRoute[] = [];
-	const tablePattern = /^\|\s*`([^`]+)`\s*\|\s*([A-Z/]+)\s*\|\s*(.*?)\s*\|\s*$/gm;
 
+	const headingPattern = /^###\s+(GET|POST|PUT|PATCH|DELETE|ALL)\s+(`?)(\/[^\s`]+)\2\s*$/gm;
 	let match: RegExpExecArray | null = null;
+	while ((match = headingPattern.exec(content)) !== null) {
+		routes.push({ endpoint: match[3], methods: [match[1].toUpperCase()] });
+	}
+
+	const tablePattern = /^\|\s*(GET|POST|PUT|PATCH|DELETE|ALL)\s*\|\s*`(\/[^`]+)`\s*\|/gm;
 	while ((match = tablePattern.exec(content)) !== null) {
-		const endpoint = match[1];
-		const methodStr = match[2];
-		if (endpoint === "Endpoint" || methodStr === "Method") continue;
-		const methods = methodStr.split("/").map((m) => m.trim().toUpperCase());
-		routes.push({ endpoint, methods });
+		routes.push({ endpoint: match[2], methods: [match[1].toUpperCase()] });
 	}
 
 	return routes;
 }
 
-function checkRouteDrift(claudeMd: string): {
+function checkRouteDrift(apiMd: string): {
 	missingFromDocs: RouteEntry[];
 	extraInDocs: DocRoute[];
 } {
 	const sourceRoutes = extractRoutesFromSource();
-	const endpointSection = sliceSection(claudeMd, "## HTTP API Endpoints");
-	const docRoutes = endpointSection ? parseClaudeMdRoutes(endpointSection) : [];
+	const docRoutes = parseApiRoutes(apiMd);
 
 	// Build a set of documented route keys; expand ALL to specific HTTP methods
 	// to mirror source-side expansion so comparison is symmetric.
@@ -223,13 +226,13 @@ function checkRouteDrift(claudeMd: string): {
 // ---------------------------------------------------------------------------
 
 interface MigrationDrift {
-	documentedRanges: { location: string; text: string }[];
+	documentedReferences: { location: string; text: string }[];
 	actualFiles: string[];
 	actualMax: string;
 	hasDrift: boolean;
 }
 
-function checkMigrationDrift(claudeMd: string): MigrationDrift {
+function checkMigrationDrift(architectureMd: string): MigrationDrift {
 	const migFiles = globDir("platform/core/src/migrations", /^\d{3}.*\.ts$/)
 		.filter((f) => !f.includes(".test.") && f !== "index.ts")
 		.sort();
@@ -237,35 +240,24 @@ function checkMigrationDrift(claudeMd: string): MigrationDrift {
 	const actualMax = migFiles.length > 0 ? migFiles[migFiles.length - 1] : "";
 	const maxNum = actualMax.match(/^(\d{3})/)?.[1] ?? "000";
 
-	const ranges: { location: string; text: string }[] = [];
-	// Bound the scan to the migrations section to avoid false positives from
-	// unrelated text elsewhere in CLAUDE.md (e.g. changelogs, step counts).
-	const sectionHeader = "## Database Migrations";
-	const sectionStart = claudeMd.indexOf(sectionHeader);
-	// If the section is absent, leave migSection empty so ranges stays empty
-	// and the hasDrift ternary correctly signals drift when migration files exist.
-	const migSection = sliceSection(claudeMd, sectionHeader);
-	// Compute line offset so reported locations point to the correct file line.
-	const lineOffset = sectionStart === -1 ? 0 : claudeMd.slice(0, sectionStart).split("\n").length - 1;
+	const references: { location: string; text: string }[] = [];
+	const sectionHeader = "Database Schema\n---------------";
+	const sectionStart = architectureMd.indexOf(sectionHeader);
+	const migSection = sliceSection(architectureMd, sectionHeader);
+	const lineOffset = sectionStart === -1 ? 0 : architectureMd.slice(0, sectionStart).split("\n").length - 1;
 	const lines = migSection.split("\n");
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
-		const rangeMatch = line.match(/(\d{3})[\w-]*\s+through\s+(\d{3})[\w-]*/);
-		if (rangeMatch) {
-			ranges.push({ location: `CLAUDE.md:${lineOffset + i + 1}`, text: rangeMatch[0] });
+		const latestMatch = line.match(/latest migration is `?(\d{3}[\w.-]+)`?/i);
+		if (latestMatch) {
+			references.push({ location: `docs/ARCHITECTURE.md:${lineOffset + i + 1}`, text: latestMatch[1] });
 		}
 	}
 
-	const hasDrift =
-		ranges.length === 0
-			? migFiles.length > 0
-			: ranges.some((r) => {
-					const endNum = r.text.match(/through\s+(\d{3})/)?.[1];
-					return endNum !== maxNum;
-				});
+	const hasDrift = references.length === 0 ? migFiles.length > 0 : references.some((r) => !r.text.startsWith(maxNum));
 
 	return {
-		documentedRanges: ranges,
+		documentedReferences: references,
 		actualFiles: migFiles,
 		actualMax,
 		hasDrift,
@@ -375,6 +367,7 @@ function parsePackageTable(content: string, sectionHeader: string): Map<string, 
 	if (!tableContent) return new Map();
 
 	const pkgPattern = /`([^`]+)`/;
+	const linkPattern = /\]\(([^)]+)\)/;
 	const result = new Map<string, string>();
 
 	for (const line of tableContent.split("\n")) {
@@ -386,7 +379,9 @@ function parsePackageTable(content: string, sectionHeader: string): Map<string, 
 		if (cells.length < 2) continue;
 		const nameMatch = cells[0].match(pkgPattern);
 		if (nameMatch && nameMatch[1] !== "Package") {
-			result.set(nameMatch[1], line);
+			const pathMatch = cells[0].match(linkPattern) ?? cells[1].match(pkgPattern);
+			const key = pathMatch ? pathMatch[1].replace(/^\.\//, "").replace(/\/$/, "") : nameMatch[1];
+			result.set(key, line);
 		}
 	}
 
@@ -395,26 +390,26 @@ function parsePackageTable(content: string, sectionHeader: string): Map<string, 
 
 function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
 	const actual = getActualPackages();
-	const actualNames = new Set(actual.map((p) => p.name));
+	const actualDirs = new Set(actual.map((p) => p.dir));
 
 	const results: PackageTableDrift[] = [];
 
 	// CLAUDE.md
-	const claudeTable = parsePackageTable(claudeMd, "## Packages");
+	const claudeTable = parsePackageTable(claudeMd, "## Package map");
 	results.push({
-		file: "CLAUDE.md",
-		missingFromTable: actual.filter((p) => !claudeTable.has(p.name)),
-		extraInTable: [...claudeTable.keys()].filter((name) => !actualNames.has(name)),
+		file: "AGENTS.md",
+		missingFromTable: actual.filter((p) => !claudeTable.has(p.dir)),
+		extraInTable: [...claudeTable.keys()].filter((dir) => !actualDirs.has(dir) && !fileExists(dir)),
 	});
 
 	// README.md
 	if (fileExists("README.md")) {
 		const readme = read("README.md");
-		const readmeTable = parsePackageTable(readme, "Packages\n===");
+		const readmeTable = parsePackageTable(readme, "## Packages");
 		results.push({
 			file: "README.md",
-			missingFromTable: actual.filter((p) => !readmeTable.has(p.name)),
-			extraInTable: [...readmeTable.keys()].filter((name) => !actualNames.has(name)),
+			missingFromTable: actual.filter((p) => !readmeTable.has(p.dir)),
+			extraInTable: [...readmeTable.keys()].filter((dir) => !actualDirs.has(dir) && !fileExists(dir)),
 		});
 	}
 
@@ -439,24 +434,26 @@ interface DriftReport {
 
 function generateReport(): DriftReport {
 	const claudeMd = read("CLAUDE.md");
-	const routes = checkRouteDrift(claudeMd);
-	const migrations = checkMigrationDrift(claudeMd);
+	const apiMd = read("docs/API.md");
+	const architectureMd = read("docs/ARCHITECTURE.md");
+	const routes = checkRouteDrift(apiMd);
+	const migrations = checkMigrationDrift(architectureMd);
 	const keyFiles = checkKeyFilesDrift(claudeMd);
 	const packages = checkPackageDrift(claudeMd);
 
 	const summary: string[] = [];
 
 	if (routes.missingFromDocs.length > 0) {
-		summary.push(`${routes.missingFromDocs.length} route(s) in source but missing from CLAUDE.md`);
+		summary.push(`${routes.missingFromDocs.length} route(s) in source but missing from docs/API.md`);
 	}
 	if (routes.extraInDocs.length > 0) {
-		summary.push(`${routes.extraInDocs.length} route(s) in CLAUDE.md but not found in source`);
+		summary.push(`${routes.extraInDocs.length} route(s) in docs/API.md but not found in source`);
 	}
 	if (migrations.hasDrift) {
 		const migSummary =
-			migrations.documentedRanges.length === 0
-				? `Migration range not documented; actual latest is ${migrations.actualMax}`
-				: `Migration range stale: documented max differs from actual (${migrations.actualMax})`;
+			migrations.documentedReferences.length === 0
+				? `Latest migration not documented; actual latest is ${migrations.actualMax}`
+				: `Latest migration reference stale: documented latest differs from actual (${migrations.actualMax})`;
 		summary.push(migSummary);
 	}
 	if (keyFiles.missing.length > 0) {
@@ -499,7 +496,7 @@ function formatMarkdown(report: DriftReport): string {
 		lines.push("## Route Drift", "");
 
 		if (report.routes.missingFromDocs.length > 0) {
-			lines.push("### Missing from CLAUDE.md", "");
+			lines.push("### Missing from docs/API.md", "");
 			lines.push("| Method | Path | Source File |");
 			lines.push("|--------|------|-------------|");
 			for (const r of report.routes.missingFromDocs) {
@@ -509,7 +506,7 @@ function formatMarkdown(report: DriftReport): string {
 		}
 
 		if (report.routes.extraInDocs.length > 0) {
-			lines.push("### In CLAUDE.md but not in source", "");
+			lines.push("### In docs/API.md but not in source", "");
 			lines.push("| Methods | Endpoint |");
 			lines.push("|---------|----------|");
 			for (const r of report.routes.extraInDocs) {
@@ -522,17 +519,17 @@ function formatMarkdown(report: DriftReport): string {
 	if (report.migrations.hasDrift) {
 		lines.push("## Migration Drift", "");
 		if (report.migrations.actualMax === "") {
-			lines.push("_No migration files found on disk. Remove or comment out the documented range._", "");
+			lines.push("_No migration files found on disk. Remove or comment out the documented latest migration._", "");
 		} else {
 			lines.push(`Actual latest: \`${report.migrations.actualMax}\``, "");
 		}
-		if (report.migrations.documentedRanges.length === 0) {
+		if (report.migrations.documentedReferences.length === 0) {
 			lines.push(
-				"_No migration range found in CLAUDE.md. The `## Database Migrations` section may be missing or contain no `NNN through NNN` pattern._",
+				"_No latest migration reference found in docs/ARCHITECTURE.md. The `Database Schema` section should state the current latest migration file._",
 				"",
 			);
 		} else {
-			for (const r of report.migrations.documentedRanges) {
+			for (const r of report.migrations.documentedReferences) {
 				lines.push(`- ${r.location}: "${r.text}"`);
 			}
 			lines.push("");

@@ -8,6 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-04-29
 - Bug fixes: streaming rewrite for live-only transcript sessions during backfill; repair Codex provider and test timeouts; preserve prompt content in provider requests; harden desktop release builds; make transcript backfill idempotent; prevent OOM crash-loop in transcript backfill.
+- Docs: fix documentation drift.
 
 ### 2026-04-26
 - Features: store transcripts as canonical jsonl.
@@ -35,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: dedupe summary fact hash collisions; suppress OpenCode notifications for extraction sessions; skip unchanged artifact reindex on cold start; make writeImmutableArtifact idempotent for job retries.
 
 ## Release Ledger
+
+## [0.109.10] - 2026-04-29
+
+Release summary: 1 docs update.
+Tag range: `v0.109.9..v0.109.10`.
+
+### Docs
+
+- fix documentation drift (#600)
 
 ## [0.109.9] - 2026-04-29
 
