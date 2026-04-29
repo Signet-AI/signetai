@@ -887,9 +887,9 @@ export function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = S
 
 // ---------------------------------------------------------------------------
 // Request normalization layer — ensures outgoing provider requests carry the
-// correct routing metadata and content normalization for subscription-tier
-// OAuth token flows. Without this, OAuth-authenticated requests may be
-// misrouted or rejected by the upstream gateway.
+// correct routing metadata for subscription-tier OAuth token flows. Without
+// this, OAuth-authenticated requests may be misrouted or rejected by the
+// upstream gateway.
 //
 // The plugin hook API does not expose the assembled request body, so we
 // intercept at two layers:
@@ -918,20 +918,6 @@ const REQUIRED_BETAS = [
 	"effort-2025-11-24",
 ] as const;
 
-// Content normalization rules — these specific strings in the request body
-// cause upstream rejection when present. Other tool names, prompt structure,
-// workspace files, and config paths are unaffected.
-const TRIGGER_REPLACEMENTS: ReadonlyArray<readonly [string, string]> = [
-	["OpenClaw", "assistant platform"],
-	["openclaw", "assistant platform"],
-	["sessions_spawn", "create_task"],
-	["sessions_list", "list_tasks"],
-	["sessions_history", "get_history"],
-	["sessions_send", "send_to_task"],
-	["sessions_yield", "yield_turn"],
-	["running inside", "running on"],
-] as const;
-
 /**
  * Inject the routing metadata block as system[0] if not already present.
  * Handles both string and array system prompt formats.
@@ -958,43 +944,20 @@ function injectBillingBlock(body: Record<string, unknown>): boolean {
 }
 
 /**
- * Replace verified trigger phrases in a string.
- * Returns the cleaned string and whether any replacement occurred.
- */
-function replaceTriggers(input: string): [string, boolean] {
-	let result = input;
-	let changed = false;
-	for (const [find, replace] of TRIGGER_REPLACEMENTS) {
-		if (result.includes(find)) {
-			result = result.split(find).join(replace);
-			changed = true;
-		}
-	}
-	return [result, changed];
-}
-
-/**
- * Normalize a serialized JSON request body: inject routing block and
- * apply content replacements. Modifies the carrier object in-place.
+ * Normalize a serialized JSON request body by injecting the routing block.
+ * Modifies the carrier object in-place.
  */
 function sanitizeRequest(request: { body?: unknown }): boolean {
 	if (!request.body || typeof request.body !== "string") return false;
 	try {
 		const body = JSON.parse(request.body) as Record<string, unknown>;
 		const injected = injectBillingBlock(body);
-		const serialized = JSON.stringify(body);
-		const [cleaned, replaced] = replaceTriggers(serialized);
-		if (injected || replaced) {
-			request.body = cleaned;
+		if (injected) {
+			request.body = JSON.stringify(body);
 			return true;
 		}
 	} catch {
-		// Not valid JSON — try raw string sweep for trigger phrases only
-		const [cleaned, replaced] = replaceTriggers(request.body as string);
-		if (replaced) {
-			request.body = cleaned;
-			return true;
-		}
+		// Not valid JSON — leave opaque request bodies untouched.
 	}
 	return false;
 }
@@ -2431,11 +2394,10 @@ export function _resetRegistration(): void {
 	}
 }
 
-/** @internal Test-only exports for system prompt sanitization. */
+/** @internal Test-only exports for provider request normalization. */
 export const _sanitization = {
 	isAnthropicApiUrl,
 	injectBillingBlock,
-	replaceTriggers,
 	sanitizeRequest,
 	mergeBetaHeaders,
 	readClaudeCodeOAuthToken,
@@ -2445,7 +2407,6 @@ export const _sanitization = {
 	installSdkSanitizer,
 	BILLING_BLOCK,
 	REQUIRED_BETAS,
-	TRIGGER_REPLACEMENTS,
 } as const;
 
 export default signetPlugin;

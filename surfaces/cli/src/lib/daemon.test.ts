@@ -104,6 +104,20 @@ describe("createDaemonClient", () => {
 		expect(result.data).toEqual({ error: "Could not reach Signet daemon" });
 	});
 
+	test("secretApiCall reports timeout failures accurately", async () => {
+		globalThis.fetch = async () => {
+			const err = new Error("timed out");
+			Object.defineProperty(err, "name", { value: "TimeoutError" });
+			throw err;
+		};
+
+		const client = createDaemonClient(3850);
+		const result = await client.secretApiCall("POST", "/api/inference/execute", { prompt: "hi" }, 60000);
+
+		expect(result.ok).toBe(false);
+		expect(result.data).toEqual({ error: "Request timed out after 60000ms" });
+	});
+
 	test("secretApiCall falls back to text error payload when response is not json", async () => {
 		globalThis.fetch = async () =>
 			new Response("bad gateway", {

@@ -367,17 +367,43 @@ describe("createCodexProvider", () => {
 		}) as unknown as typeof Bun.spawn;
 
 		const provider = createCodexProvider({ model: "gpt-5.3-codex" });
-		const result = await provider.generateWithUsage!("test");
+		if (!provider.generateWithUsage) {
+			throw new Error("expected generateWithUsage on Codex provider");
+		}
+		const result = await provider.generateWithUsage("test");
 		expect(result.text).toBe("done");
 		expect(result.usage?.inputTokens).toBe(12);
 		expect(result.usage?.cacheReadTokens).toBe(5);
 		expect(result.usage?.outputTokens).toBe(7);
 		expect(capturedArgs).not.toContain("-a");
 		expect(capturedArgs).toContain("--ephemeral");
-		expect(capturedArgs).toContain("mcp_servers.signet.enabled=false");
+		expect(capturedArgs).not.toContain("mcp_servers.signet.enabled=false");
 		expect(typeof capturedEnv?.HOME).toBe("string");
 		expect(capturedEnv?.HOME).not.toBe(process.env.HOME);
 		expect(typeof capturedEnv?.CODEX_HOME).toBe("string");
+	});
+
+	it("does not disable Signet MCP through an incomplete Codex config override", async () => {
+		let capturedArgs: string[] = [];
+		Bun.spawn = mock((args: string[]) => {
+			capturedArgs = args;
+			return {
+				stdout: streamFromString(
+					'{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+				),
+				stderr: streamFromString(""),
+				exited: Promise.resolve(0),
+				kill() {},
+			};
+		}) as unknown as typeof Bun.spawn;
+
+		const provider = createCodexProvider({ model: "gpt-5.3-codex" });
+		if (!provider.generateWithUsage) {
+			throw new Error("expected generateWithUsage on Codex provider");
+		}
+		await provider.generateWithUsage("test");
+
+		expect(capturedArgs).not.toContain("mcp_servers.signet.enabled=false");
 	});
 
 	it("spawns Codex with a sterile temp home and readonly copied auth", async () => {

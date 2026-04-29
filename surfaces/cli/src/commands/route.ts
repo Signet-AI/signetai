@@ -64,12 +64,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseMaxTokens(value: unknown): number | null | undefined {
+	return parsePositiveIntegerOption(value);
+}
+
+function parseTimeoutMs(value: unknown): number | null | undefined {
+	return parsePositiveIntegerOption(value, 600_000);
+}
+
+function parsePositiveIntegerOption(value: unknown, max?: number): number | null | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "string") return null;
 	const trimmed = value.trim();
 	if (!/^[1-9]\d*$/.test(trimmed)) return null;
 	const parsed = Number.parseInt(trimmed, 10);
-	return Number.isSafeInteger(parsed) ? parsed : null;
+	if (!Number.isSafeInteger(parsed)) return null;
+	if (max !== undefined && parsed > max) return null;
+	return parsed;
 }
 
 function parsePinnedTargetRef(
@@ -350,6 +360,7 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 		.option("--policy <policy>", "Policy override")
 		.option("--target <targetRef>", "Pin to an explicit target ref")
 		.option("--max-tokens <maxTokens>", "Max output tokens")
+		.option("--timeout <ms>", "Request timeout in milliseconds, up to 600000")
 		.option("--refresh", "Refresh target health before inference")
 		.option("--debug", "Print the routed decision trace")
 		.option("--json", "Output as JSON")
@@ -360,17 +371,28 @@ export function registerRouteCommands(program: Command, deps: RouteDeps): void {
 				process.exit(1);
 				return;
 			}
-			const { ok, data } = await deps.secretApiCall("POST", "/api/inference/execute", {
-				prompt,
-				agentId: options.agent,
-				taskClass: options.taskClass,
-				operation: options.operation,
-				privacy: options.privacy,
-				explicitPolicy: options.policy,
-				explicitTargets: options.target ? [options.target] : undefined,
-				maxTokens,
-				refresh: options.refresh === true,
-			});
+			const timeoutMs = parseTimeoutMs(options.timeout);
+			if (timeoutMs === null) {
+				console.error(chalk.red("--timeout must be a positive integer no greater than 600000."));
+				process.exit(1);
+				return;
+			}
+			const { ok, data } = await deps.secretApiCall(
+				"POST",
+				"/api/inference/execute",
+				{
+					prompt,
+					agentId: options.agent,
+					taskClass: options.taskClass,
+					operation: options.operation,
+					privacy: options.privacy,
+					explicitPolicy: options.policy,
+					explicitTargets: options.target ? [options.target] : undefined,
+					maxTokens,
+					refresh: options.refresh === true,
+				},
+				timeoutMs,
+			);
 			if (!ok) {
 				console.error(chalk.red(`Routing test failed: ${JSON.stringify(data)}`));
 				process.exit(1);

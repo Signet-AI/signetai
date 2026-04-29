@@ -406,7 +406,7 @@ signet route list
 signet route status
 signet route doctor
 signet route explain "fix this bun test" --agent rose --task-class hard_coding
-signet route test "summarize this transcript" --agent dot --task-class casual_chat
+signet route test "summarize this transcript" --agent dot --task-class casual_chat --timeout 60000
 signet route pin opus/opus46 --agent rose --task-class hard_coding
 signet route unpin --agent rose --task-class hard_coding
 ```
@@ -433,6 +433,7 @@ Common options:
 | `--privacy <privacy>` | Privacy tier override |
 | `--policy <policy>` | Explicit policy override |
 | `--target <targetRef>` | Explicit target pin for the current request |
+| `--timeout <ms>` | Request timeout for `route test`, up to 600000 ms |
 | `--refresh` | Re-check target health before routing |
 | `--debug` | Print the full routing decision trace |
 | `--json` | Emit raw JSON |
