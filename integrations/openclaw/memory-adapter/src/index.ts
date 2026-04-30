@@ -606,7 +606,7 @@ export async function onSessionEnd(
 		reason?: string;
 	} = {},
 ): Promise<SessionEndResult | null> {
-	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-end", {
+	daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-end", {
 		method: "POST",
 		body: {
 			harness,
@@ -620,7 +620,11 @@ export async function onSessionEnd(
 			runtimePath: RUNTIME_PATH,
 		},
 		timeout: WRITE_TIMEOUT,
+	}).catch((e) => {
+		console.warn("[signet] session-end fire-and-forget failed:", e);
 	});
+
+	return null;
 }
 
 // ============================================================================

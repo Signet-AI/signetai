@@ -49,6 +49,8 @@ export interface LifecycleDeps {
 	readonly config: LifecycleConfig;
 }
 
+const SESSION_END_TIMEOUT = 3000;
+
 export function defaultStaticFallback(_reason: "offline" | "timeout"): string {
 	const signetPath = readTrimmedRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
 	return readStaticIdentity(signetPath) ?? "";
@@ -88,7 +90,7 @@ async function submitSessionEnd(deps: LifecycleDeps, payload: SessionEndPayload)
 			cwd: payload.project,
 			...(payload.transcript ? { transcript: payload.transcript } : {}),
 		},
-		deps.config.writeTimeout,
+		SESSION_END_TIMEOUT,
 	);
 	return result !== null;
 }
