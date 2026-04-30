@@ -16,6 +16,7 @@ const targets: Array<{
 	{ entrypoint: "../../platform/daemon/src/daemon.ts", outfile: "./dist/daemon.js" },
 	{ entrypoint: "../../platform/daemon/src/mcp-stdio.ts", outfile: "./dist/mcp-stdio.js" },
 	{ entrypoint: "../../platform/daemon/src/synthesis-render-worker.ts", outfile: "./dist/synthesis-render-worker.js" },
+	{ entrypoint: "../../platform/daemon/src/pipeline/extraction-thread.ts", outfile: "./dist/extraction-thread.js" },
 ];
 
 let ok = true;
