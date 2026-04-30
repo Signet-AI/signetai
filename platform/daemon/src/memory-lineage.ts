@@ -777,6 +777,26 @@ async function doReindex(agentId?: string): Promise<void> {
 	}
 	const pendingUpserts: PendingUpsert[] = [];
 	const pendingDeletes: string[] = [];
+	// Stage cache mutations separately — only apply after successful commit.
+	// This prevents the shared-state bug where a rolled-back transaction
+	// leaves the in-memory cache advanced, causing future reindexes to skip files.
+	const stagedCacheUpdates: Array<{ path: string; statKey: string }> = [];
+	const stagedCacheDeletes: string[] = [];
+	const stagedChangedPaths: string[] = [];
+	const commitStagedUpdates = (): void => {
+		for (const { path, statKey } of stagedCacheUpdates) {
+			cache.set(path, statKey);
+		}
+		for (const path of stagedCacheDeletes) {
+			cache.delete(path);
+		}
+		for (const path of stagedChangedPaths) {
+			changedPaths.add(path);
+		}
+		stagedCacheUpdates.length = 0;
+		stagedCacheDeletes.length = 0;
+		stagedChangedPaths.length = 0;
+	};
 	const flushUpsertBatch = (): boolean => {
 		if (pendingUpserts.length === 0) return false;
 		getDbAccessor().withWriteTx((db) => {
@@ -785,6 +805,7 @@ async function doReindex(agentId?: string): Promise<void> {
 			}
 		});
 		pendingUpserts.length = 0;
+		commitStagedUpdates();
 		return true;
 	};
 	const flushDeleteBatch = (): boolean => {
@@ -795,6 +816,7 @@ async function doReindex(agentId?: string): Promise<void> {
 			}
 		});
 		pendingDeletes.length = 0;
+		commitStagedUpdates();
 		return true;
 	};
 	lastChangedManifestsByAgent.delete(cacheKey);
@@ -878,7 +900,7 @@ async function doReindex(agentId?: string): Promise<void> {
 		try {
 			content = await readFile(path, "utf8");
 		} catch {
-			cache.set(path, statKey);
+			stagedCacheUpdates.push({ path, statKey });
 			continue;
 		}
 
@@ -886,50 +908,50 @@ async function doReindex(agentId?: string): Promise<void> {
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
 		if (scope && nextAgent !== scope) {
 			pendingDeletes.push(path);
+			stagedCacheUpdates.push({ path, statKey });
 			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
 				await yielder();
 			}
-			cache.set(path, statKey);
 			continue;
 		}
 		const match = path.match(/--([a-z2-7]{16})--/);
 		const sessionToken = match?.[1];
 		if (sessionToken && tombstones.has(sessionToken)) {
 			pendingDeletes.push(path);
+			stagedCacheUpdates.push({ path, statKey });
+			stagedChangedPaths.push(path);
 			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
 				await yielder();
 			}
-			cache.set(path, statKey);
-			changedPaths.add(path);
 			continue;
 		}
 		const body = normalizeMarkdownBody(parsed.body);
 		if (!isValidArtifact(path, parsed.frontmatter, body)) {
 			pendingDeletes.push(path);
+			stagedCacheUpdates.push({ path, statKey });
+			stagedChangedPaths.push(path);
 			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
 				await yielder();
 			}
-			cache.set(path, statKey);
-			changedPaths.add(path);
 			continue;
 		}
 		pendingUpserts.push({ path, frontmatter: parsed.frontmatter, body, mtime });
+		stagedCacheUpdates.push({ path, statKey });
+		stagedChangedPaths.push(path);
 		if (pendingUpserts.length >= REINDEX_BATCH_SIZE && flushUpsertBatch()) {
 			await yielder();
 		}
-		cache.set(path, statKey);
-		changedPaths.add(path);
 	}
 
 	for (const path of cache.keys()) {
 		if (fileSet.has(path)) continue;
 		if (path.includes(".jsonl#")) continue;
 		pendingDeletes.push(path);
+		stagedCacheDeletes.push(path);
+		stagedChangedPaths.push(path);
 		if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
 			await yielder();
 		}
-		cache.delete(path);
-		changedPaths.add(path);
 	}
 
 	if (flushUpsertBatch()) {
@@ -938,6 +960,9 @@ async function doReindex(agentId?: string): Promise<void> {
 	if (flushDeleteBatch()) {
 		await yielder();
 	}
+	// Commit any remaining staged items that didn't belong to a DB batch
+	// (e.g. unreadable files that only need cache marking).
+	commitStagedUpdates();
 
 	lastChangedManifestsByAgent.set(
 		cacheKey,

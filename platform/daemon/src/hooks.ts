@@ -3136,11 +3136,6 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		transcript = storedTranscript;
 	}
 
-	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
-		logger.info("hooks", "Session end extraction skipped — pipeline disabled");
-		return { memoriesSaved: 0 };
-	}
-
 	// Safety cap against degenerate inputs (corrupt files, etc).
 	// The summary worker handles long transcripts via chunked
 	// map-reduce summarization, so this is a last-resort guard.
@@ -3186,6 +3181,11 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
+	}
+
+	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
+		logger.info("hooks", "Session end extraction skipped — pipeline disabled");
+		return { memoriesSaved: 0 };
 	}
 
 	const hasSummaryLength = transcript.length >= 500;
