@@ -87,7 +87,7 @@ No authentication required. Lightweight liveness check.
   "status": "healthy",
   "uptime": 3600.5,
   "pid": 12345,
-  "version": "0.109.9",
+  "version": "0.109.16",
   "port": 3850,
   "agentsDir": "/home/user/.agents"
 }
@@ -105,7 +105,7 @@ silent fallback or hard-blocked extraction after boot.
 ```json
 {
   "status": "running",
-  "version": "0.1.69",
+  "version": "0.109.16",
   "pid": 12345,
   "uptime": 3600.5,
   "startedAt": "2026-02-21T10:00:00.000Z",
@@ -2849,10 +2849,10 @@ is passed.
 
 ```json
 {
-  "currentVersion": "0.1.69",
-  "latestVersion": "0.1.70",
+  "currentVersion": "0.109.16",
+  "latestVersion": "0.109.17",
   "updateAvailable": true,
-  "releaseUrl": "https://github.com/Signet-AI/signetai/releases/tag/v0.1.70",
+  "releaseUrl": "https://github.com/Signet-AI/signetai/releases/tag/v0.109.17",
   "releaseNotes": "...",
   "publishedAt": "2026-02-20T12:00:00Z",
   "restartRequired": false,
@@ -2922,7 +2922,7 @@ update.
   "success": true,
   "message": "Update installed. Restart daemon to apply.",
   "output": "...",
-  "installedVersion": "0.1.70",
+  "installedVersion": "0.109.17",
   "restartRequired": true
 }
 ```
@@ -3686,7 +3686,7 @@ with version and timestamp metadata.
 ```json
 {
   "meta": {
-    "version": "0.1.69",
+    "version": "0.109.16",
     "exportedAt": "2026-02-21T10:00:00.000Z",
     "entityId": "uuid"
   },
