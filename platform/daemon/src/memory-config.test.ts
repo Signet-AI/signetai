@@ -1252,6 +1252,27 @@ describe("loadPipelineConfig", () => {
 		expect(result.worker.overloadBackoffMs).toBe(DEFAULT_PIPELINE_V2.worker.overloadBackoffMs);
 	});
 
+	it("defaults threadedExtraction to true when absent", () => {
+		const result = loadPipelineConfig({
+			memory: { pipelineV2: { enabled: true } },
+		});
+
+		expect(result.worker.threadedExtraction).toBe(true);
+	});
+
+	it("respects explicit threadedExtraction: false opt-out", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: true,
+					worker: { threadedExtraction: false },
+				},
+			},
+		});
+
+		expect(result.worker.threadedExtraction).toBe(false);
+	});
+
 	it("uses defaults for maintenance config when absent", () => {
 		const result = loadPipelineConfig({
 			memory: { pipelineV2: { enabled: true } },
