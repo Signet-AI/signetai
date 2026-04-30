@@ -3225,9 +3225,6 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 			jobId,
 			feedbackTelemetry: getFeedbackTelemetry(),
 		});
-	}
-
-	if (hasSummaryLength) {
 		logger.info("hooks", "Session end transcript queued", {
 			harness: req.harness,
 			project: req.cwd,
