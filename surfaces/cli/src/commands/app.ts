@@ -31,6 +31,7 @@ interface PathOptions {
 
 interface StatusOptions extends PathOptions {
 	json?: boolean;
+	target?: string;
 }
 
 interface AppDeps {
@@ -109,8 +110,9 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 
 	const doctor = program
 		.command("doctor")
+		.argument("[target]", "Optional doctor target (hermes)")
 		.description("Run local health checks and suggest fixes")
-		.action(deps.showDoctor);
+		.action((target: string | undefined, options: StatusOptions) => deps.showDoctor({ ...options, target }));
 	withJson(withPath(doctor));
 
 	const migrate = program

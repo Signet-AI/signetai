@@ -30,9 +30,12 @@ from typing import Any, Dict, List, Optional
 from agent.memory_provider import MemoryProvider
 
 try:
-    from plugins.memory.signet.client import SignetClient
+    from .client import SignetClient
 except ImportError:  # pragma: no cover — only missing during Hermes bootstrap
-    SignetClient = None  # type: ignore[assignment,misc]
+    try:
+        from plugins.memory.signet.client import SignetClient
+    except ImportError:
+        SignetClient = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -413,7 +416,8 @@ class SignetMemoryProvider(MemoryProvider):
             "Active. Memories are auto-recalled each turn via hybrid search. "
             "Use memory_search to query memory, memory_store to save facts, "
             "and memory_get/memory_list/memory_modify/memory_forget for direct "
-            "memory management."
+            "memory management. If Hermes reports Unknown tool for these names, "
+            "run `signet doctor hermes` and restart Hermes."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -714,9 +718,12 @@ class SignetMemoryProvider(MemoryProvider):
         t.start()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        """Return Signet tool schemas."""
-        if not self._client:
-            return []
+        """Return Signet tool schemas.
+
+        Hermes indexes memory-provider tool dispatch before provider
+        initialization. Keep schemas stable even while the daemon is offline;
+        handle_tool_call() returns the runtime connectivity error.
+        """
         return list(ALL_TOOL_SCHEMAS)
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
