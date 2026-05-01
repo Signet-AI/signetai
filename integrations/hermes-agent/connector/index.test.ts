@@ -503,6 +503,22 @@ describe("HermesAgentConnector.install()", () => {
 		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toBe("memory: [\n");
 	});
 
+	it("warns instead of patching non-mapping memory blocks", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(join(hermesHome, "config.yaml"), "model: test\nmemory:\n  - honcho\n  - archival\n");
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Could not safely patch Hermes memory.provider"))).toBe(true);
+		expect(result.configsPatched ?? []).not.toContain(join(hermesHome, "config.yaml"));
+		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toBe(
+			"model: test\nmemory:\n  - honcho\n  - archival\n",
+		);
+	});
+
 	it("writes daemon env vars into ~/.hermes/.env when SIGNET_DAEMON_URL is set", async () => {
 		const hermesRepo = join(tmpRoot, "hermes-agent");
 		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });

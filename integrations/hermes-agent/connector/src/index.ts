@@ -176,6 +176,14 @@ function leadingWhitespaceLength(line: string): number | null {
 	return match ? (match[1]?.length ?? null) : null;
 }
 
+function isYamlMappingEntry(value: string): boolean {
+	const trimmed = value.trimStart();
+	if (trimmed.startsWith("-")) return false;
+	const colon = trimmed.indexOf(":");
+	if (colon <= 0) return false;
+	return trimmed.slice(0, colon).trim().length > 0;
+}
+
 function findMemoryBlock(lines: string[]): MemoryBlock | "missing" | null {
 	const starts: number[] = [];
 	for (let i = 0; i < lines.length; i++) {
@@ -205,7 +213,10 @@ function findMemoryBlock(lines: string[]): MemoryBlock | "missing" | null {
 	const childIndent = indent ?? 2;
 	for (let i = start + 1; i < end; i++) {
 		const line = lines[i] ?? "";
-		if (leadingWhitespaceLength(line) === childIndent && /^provider:\s*/.test(line.slice(childIndent))) {
+		if (leadingWhitespaceLength(line) !== childIndent) continue;
+		const child = line.slice(childIndent);
+		if (!isYamlMappingEntry(child)) return null;
+		if (/^provider:\s*/.test(child)) {
 			provider = i;
 			break;
 		}
