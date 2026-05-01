@@ -831,6 +831,16 @@ export class HermesAgentConnector extends BaseConnector {
 		if (providerConfig.backupPath) {
 			filesWritten.push(providerConfig.backupPath);
 		}
+		if (!isProviderConfigured(hermesHome)) {
+			return {
+				success: false,
+				message:
+					"Hermes Agent integration incomplete — Signet provider was deployed but not activated in Hermes config",
+				filesWritten,
+				configsPatched,
+				warnings,
+			};
+		}
 
 		if (hermesRepo) {
 			const probe = probeHermesProvider(hermesRepo);
