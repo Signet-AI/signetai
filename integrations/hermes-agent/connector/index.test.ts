@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HermesAgentConnector } from "./src/index.js";
+import { HermesAgentConnector, diagnoseHermesIntegration } from "./src/index.js";
 
 const originalEnv = {
 	HOME: process.env.HOME,
@@ -75,28 +76,36 @@ describe("HermesAgentConnector.isInstalled()", () => {
 		const hermesRepo = join(tmpRoot, "hermes-agent");
 		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
 		process.env.HERMES_REPO = hermesRepo;
+		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
 
 		expect(new HermesAgentConnector().isInstalled()).toBe(false);
 	});
 
-	it("returns true only when signet/__init__.py is present in plugins/memory", () => {
+	it("returns false when the plugin exists but Hermes is not configured to use signet", async () => {
 		const hermesRepo = join(tmpRoot, "hermes-agent");
-		const pluginDir = join(hermesRepo, "plugins", "memory", "signet");
-		mkdirSync(pluginDir, { recursive: true });
-		writeFileSync(join(pluginDir, "__init__.py"), "# signet plugin\n");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
+		process.env.HERMES_REPO = hermesRepo;
+		await new HermesAgentConnector().install(tmpRoot);
+		writeFileSync(join(process.env.HERMES_HOME, "config.yaml"), "memory:\n  provider: honcho\n");
+
+		expect(new HermesAgentConnector().isInstalled()).toBe(false);
+	});
+
+	it("returns true when a fixed Signet provider is installed and activated", async () => {
+		const hermesRepo = join(tmpRoot, "hermes-agent");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
 		process.env.HERMES_REPO = hermesRepo;
 
-		expect(new HermesAgentConnector().isInstalled()).toBe(true);
-	});
+		await new HermesAgentConnector().install(tmpRoot);
 
-	it("returns false when HERMES_REPO is not set and no known install paths exist", () => {
-		// HOME is a fresh tmp dir with no hermes paths
-		expect(new HermesAgentConnector().isInstalled()).toBe(false);
+		expect(new HermesAgentConnector().isInstalled()).toBe(true);
 	});
 });
 
 describe("HermesAgentConnector.install()", () => {
-	it("copies plugin files into plugins/memory/signet/ when HERMES_REPO is set", async () => {
+	it("copies plugin files into both user and repo plugin locations when HERMES_REPO is set", async () => {
 		const hermesRepo = join(tmpRoot, "hermes-agent");
 		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
 		process.env.HERMES_REPO = hermesRepo;
@@ -105,51 +114,124 @@ describe("HermesAgentConnector.install()", () => {
 		const connector = new HermesAgentConnector();
 		const result = await connector.install(tmpRoot);
 
-		const pluginDir = join(hermesRepo, "plugins", "memory", "signet");
+		const repoPluginDir = join(hermesRepo, "plugins", "memory", "signet");
+		const userPluginDir = join(process.env.HERMES_HOME, "plugins", "signet");
 		expect(result.success).toBe(true);
-		expect(existsSync(join(pluginDir, "__init__.py"))).toBe(true);
-		expect(existsSync(join(pluginDir, "client.py"))).toBe(true);
-		expect(existsSync(join(pluginDir, "plugin.yaml"))).toBe(true);
+		expect(existsSync(join(repoPluginDir, "__init__.py"))).toBe(true);
+		expect(existsSync(join(repoPluginDir, "client.py"))).toBe(true);
+		expect(existsSync(join(repoPluginDir, "plugin.yaml"))).toBe(true);
+		expect(existsSync(join(repoPluginDir, "signet.install.json"))).toBe(true);
+		expect(existsSync(join(userPluginDir, "__init__.py"))).toBe(true);
+		expect(existsSync(join(userPluginDir, "client.py"))).toBe(true);
+		expect(existsSync(join(userPluginDir, "plugin.yaml"))).toBe(true);
+		expect(existsSync(join(userPluginDir, "signet.install.json"))).toBe(true);
 		expect(connector.isInstalled()).toBe(true);
 	});
 
-	it("copies plugin files into ~/.hermes when HERMES_REPO is unset", async () => {
-		const hermesRepo = join(tmpRoot, ".hermes");
-		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
-
-		const connector = new HermesAgentConnector();
-		const result = await connector.install(tmpRoot);
-
-		const pluginDir = join(hermesRepo, "plugins", "memory", "signet");
-		expect(result.success).toBe(true);
-		expect(result.warnings.some((w) => w.includes("Hermes Agent install not found"))).toBe(false);
-		expect(existsSync(join(pluginDir, "__init__.py"))).toBe(true);
-		expect(existsSync(join(pluginDir, "client.py"))).toBe(true);
-		expect(connector.isInstalled()).toBe(true);
-	});
-
-	it("copies plugin files into HERMES_HOME when HERMES_REPO is unset", async () => {
-		const hermesHome = join(tmpRoot, "custom-hermes-home");
-		mkdirSync(join(hermesHome, "plugins", "memory"), { recursive: true });
+	it("copies plugin files into $HERMES_HOME/plugins/signet when HERMES_REPO is unset", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
 		process.env.HERMES_HOME = hermesHome;
 
 		const connector = new HermesAgentConnector();
 		const result = await connector.install(tmpRoot);
 
-		const pluginDir = join(hermesHome, "plugins", "memory", "signet");
+		const pluginDir = join(hermesHome, "plugins", "signet");
 		expect(result.success).toBe(true);
 		expect(result.warnings.some((w) => w.includes("Hermes Agent install not found"))).toBe(false);
 		expect(existsSync(join(pluginDir, "__init__.py"))).toBe(true);
+		expect(existsSync(join(pluginDir, "client.py"))).toBe(true);
+		expect(existsSync(join(pluginDir, "signet.install.json"))).toBe(true);
 		expect(connector.isInstalled()).toBe(true);
 	});
 
-	it("warns (does not throw) when HERMES_REPO is unset", async () => {
+	it("copies plugin files into HERMES_HOME when HERMES_REPO is unset", async () => {
+		const hermesHome = join(tmpRoot, "custom-hermes-home");
+		process.env.HERMES_HOME = hermesHome;
+
+		const connector = new HermesAgentConnector();
+		const result = await connector.install(tmpRoot);
+
+		const pluginDir = join(hermesHome, "plugins", "signet");
+		expect(result.success).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Hermes Agent install not found"))).toBe(false);
+		expect(existsSync(join(pluginDir, "__init__.py"))).toBe(true);
+		expect(existsSync(join(pluginDir, "signet.install.json"))).toBe(true);
+		expect(connector.isInstalled()).toBe(true);
+	});
+
+	it("treats stale marker hashes as not installed", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		process.env.HERMES_HOME = hermesHome;
+
+		await new HermesAgentConnector().install(tmpRoot);
+		writeFileSync(
+			join(hermesHome, "plugins", "signet", "signet.install.json"),
+			JSON.stringify({
+				connector: "@signet/connector-hermes-agent",
+				schemaVersion: 1,
+				connectorVersion: "0.0.0",
+				sourceHash: "stale",
+				targetKind: "user",
+				installedAt: "2026-01-01T00:00:00.000Z",
+			}),
+		);
+
+		expect(new HermesAgentConnector().isInstalled()).toBe(false);
+	});
+
+	it("reports Hermes diagnostic failures with repair hints", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		process.env.HERMES_HOME = hermesHome;
+
+		const report = await diagnoseHermesIntegration({
+			hermesHome,
+			hermesRepo: null,
+			daemonUrl: "http://127.0.0.1:1",
+		});
+
+		expect(report.ok).toBe(false);
+		expect(report.checks.map((check) => check.id)).toContain("tool-routing");
+		expect(report.checks.every((check) => typeof check.detail === "string" && check.detail.length > 0)).toBe(true);
+		expect(report.warnings.some((warning) => warning.includes("Hermes checkout was not found"))).toBe(true);
+	});
+
+	it("activates signet as Hermes memory provider in config.yaml", async () => {
 		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
 
 		const result = await new HermesAgentConnector().install(tmpRoot);
 
 		expect(result.success).toBe(true);
-		expect(result.warnings.some((w) => w.includes("Hermes Agent install not found"))).toBe(true);
+		expect(result.configsPatched).toContain(join(process.env.HERMES_HOME, "config.yaml"));
+		expect(readFileSync(join(process.env.HERMES_HOME, "config.yaml"), "utf-8")).toContain(
+			"memory:\n  provider: signet\n",
+		);
+	});
+
+	it("preserves existing Hermes config when activating signet", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(join(hermesHome, "config.yaml"), "model: test\nmemory:\n  nudge_interval: 10\n");
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+		const config = readFileSync(join(hermesHome, "config.yaml"), "utf-8");
+
+		expect(result.success).toBe(true);
+		expect(config).toContain("model: test\n");
+		expect(config).toContain("memory:\n  provider: signet\n  nudge_interval: 10\n");
+	});
+
+	it("warns instead of patching unsafe memory config YAML", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(join(hermesHome, "config.yaml"), "memory: [\n");
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Could not safely patch Hermes memory.provider"))).toBe(true);
+		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toBe("memory: [\n");
 	});
 
 	it("writes daemon env vars into ~/.hermes/.env when SIGNET_DAEMON_URL is set", async () => {
@@ -268,6 +350,65 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain('if tool_name in ("memory_search", "recall", "signet_search")');
 	});
 
+	it("returns Signet tool schemas before daemon initialization", () => {
+		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
+		const schemasFn = plugin.slice(plugin.indexOf("def get_tool_schemas"), plugin.indexOf("def handle_tool_call"));
+
+		expect(schemasFn).toContain("return list(ALL_TOOL_SCHEMAS)");
+		expect(schemasFn).not.toContain("if not self._client");
+		expect(plugin).toContain('return json.dumps({"error": "Signet daemon is not connected."})');
+	});
+
+	it("registers Signet tools with a Hermes-style memory manager before daemon initialization", () => {
+		const fixture = join(tmpRoot, "python-fixture");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+		writeFileSync(
+			join(fixture, "agent", "memory_manager.py"),
+			[
+				"class MemoryManager:",
+				"    def __init__(self):",
+				"        self._tool_to_provider = {}",
+				"    def add_provider(self, provider):",
+				"        for schema in provider.get_tool_schemas():",
+				"            self._tool_to_provider[schema['name']] = provider",
+				"    def get_all_tool_names(self):",
+				"        return set(self._tool_to_provider.keys())",
+				"    def has_tool(self, name):",
+				"        return name in self._tool_to_provider",
+				"",
+			].join("\n"),
+		);
+
+		const result = spawnSync(
+			"python",
+			[
+				"-c",
+				[
+					"from plugins.memory.signet import SignetMemoryProvider",
+					"from agent.memory_manager import MemoryManager",
+					"provider = SignetMemoryProvider()",
+					"manager = MemoryManager()",
+					"manager.add_provider(provider)",
+					"names = manager.get_all_tool_names()",
+					"assert 'memory_search' in names",
+					"assert 'recall' in names",
+					"assert manager.has_tool('memory_store')",
+					"print(','.join(sorted(names)))",
+				].join("\n"),
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("memory_search");
+		expect(result.stdout).toContain("remember");
+	});
+
 	it("does not force agentId into explicit recall requests", () => {
 		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
 
@@ -351,9 +492,35 @@ describe("HermesAgentConnector.uninstall()", () => {
 		expect(connector.isInstalled()).toBe(true);
 
 		const result = await connector.uninstall();
-		const pluginDir = join(hermesRepo, "plugins", "memory", "signet");
-		expect(result.filesRemoved).toContain(pluginDir);
+		const repoPluginDir = join(hermesRepo, "plugins", "memory", "signet");
+		const userPluginDir = join(process.env.HERMES_HOME, "plugins", "signet");
+		expect(result.filesRemoved).toContain(repoPluginDir);
+		expect(result.filesRemoved).toContain(userPluginDir);
 		expect(connector.isInstalled()).toBe(false);
+	});
+
+	it("clears memory.provider only when it is signet", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(join(hermesHome, "config.yaml"), "memory:\n  provider: signet\n  nudge_interval: 10\n");
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().uninstall();
+
+		expect(result.configsPatched).toContain(join(hermesHome, "config.yaml"));
+		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toContain("memory:\n  provider: ''\n");
+	});
+
+	it("does not clear another active memory provider", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(join(hermesHome, "config.yaml"), "memory:\n  provider: honcho\n");
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().uninstall();
+
+		expect(result.configsPatched ?? []).not.toContain(join(hermesHome, "config.yaml"));
+		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toContain("provider: honcho");
 	});
 
 	it("removes persisted Signet env vars including SIGNET_TOKEN", async () => {

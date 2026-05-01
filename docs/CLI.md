@@ -46,6 +46,7 @@ Commands Overview
 | `signet configure` | Interactive config editor (`signet config` alias) |
 | `signet status` | Show daemon and agent status |
 | `signet doctor` | Run local health checks |
+| `signet doctor hermes` | Check Hermes Agent plugin freshness, config activation, and tool routing |
 | `signet route` | Inspect and control inference routing |
 | `signet dashboard` | Open web UI in browser |
 | `signet daemon` | Grouped daemon subcommands |
@@ -90,6 +91,7 @@ menu.
     signet setup
     signet status
     signet doctor
+    signet doctor hermes
     signet daemon start
     signet remember "Nicholai prefers command-first CLIs"
 ```
@@ -99,6 +101,7 @@ Use explicit commands for interactive flows:
 - `signet setup` — initialize or migrate a workspace
 - `signet configure` — edit agent settings interactively
 - `signet doctor` — troubleshoot local issues
+- `signet doctor hermes` — troubleshoot Hermes Agent integration issues
 
 ---
 

@@ -1,9 +1,11 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
-import { expandHome, resolveHermesHomePath, resolveHermesRepoPath, resolveHermesRepoPluginPath } from "@signet/core";
+import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -22,21 +24,71 @@ function getPluginSourceDir(): string {
 	throw new Error("Cannot find hermes-plugin directory in connector package");
 }
 
-function getPluginTargetDir(hermesRepo: string): string {
+const PLUGIN_FILES = ["__init__.py", "client.py", "plugin.yaml", "README.md"] as const;
+const INSTALL_MARKER_FILE = "signet.install.json";
+const REQUIRED_TOOL_NAMES = [
+	"memory_search",
+	"memory_store",
+	"memory_get",
+	"memory_list",
+	"memory_modify",
+	"memory_forget",
+	"recall",
+	"remember",
+] as const;
+
+export interface HermesDiagnosticCheck {
+	readonly id: string;
+	readonly label: string;
+	readonly ok: boolean;
+	readonly detail: string;
+	readonly fix?: string;
+}
+
+export interface HermesDoctorReport {
+	readonly ok: boolean;
+	readonly hermesHome: string;
+	readonly hermesRepo: string | null;
+	readonly configPath: string;
+	readonly userPluginDir: string;
+	readonly repoPluginDir: string | null;
+	readonly toolNames: readonly string[];
+	readonly checks: readonly HermesDiagnosticCheck[];
+	readonly warnings: readonly string[];
+}
+
+interface InstallMarker {
+	readonly connector: "@signet/connector-hermes-agent";
+	readonly schemaVersion: 1;
+	readonly connectorVersion: string;
+	readonly sourceHash: string;
+	readonly targetKind: "user" | "repo";
+	readonly installedAt: string;
+}
+
+interface HermesProbeResult {
+	readonly ok: boolean;
+	readonly toolNames: readonly string[];
+	readonly error: string | null;
+}
+
+function getRepoPluginTargetDir(hermesRepo: string): string {
 	return join(hermesRepo, "plugins", "memory", "signet");
 }
 
-/** Copy the Signet memory plugin into the Hermes plugins directory. */
-function installPlugin(hermesRepo: string): string[] {
+function getUserPluginTargetDir(hermesHome: string): string {
+	return join(hermesHome, "plugins", "signet");
+}
+
+/** Copy the Signet memory plugin into a Hermes plugin directory. */
+function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"]): string[] {
 	const sourceDir = getPluginSourceDir();
-	const targetDir = getPluginTargetDir(hermesRepo);
 
 	mkdirSync(targetDir, { recursive: true });
 
-	const files = ["__init__.py", "client.py", "plugin.yaml", "README.md"];
 	const written: string[] = [];
 
-	for (const file of files) {
+	for (const file of PLUGIN_FILES) {
 		const src = join(sourceDir, file);
 		const dst = join(targetDir, file);
 		if (existsSync(src)) {
@@ -44,13 +96,13 @@ function installPlugin(hermesRepo: string): string[] {
 			written.push(dst);
 		}
 	}
+	written.push(writeInstallMarker(targetDir, targetKind));
 
 	return written;
 }
 
 /** Remove the Signet memory plugin from the Hermes plugins directory. */
-function uninstallPlugin(hermesRepo: string): string[] {
-	const targetDir = getPluginTargetDir(hermesRepo);
+function uninstallPlugin(targetDir: string): string[] {
 	const removed: string[] = [];
 
 	if (existsSync(targetDir)) {
@@ -65,26 +117,293 @@ function uninstallPlugin(hermesRepo: string): string[] {
 // Config patching
 // ---------------------------------------------------------------------------
 
-/** Read the Hermes CLI config.yaml if it exists. */
-function readConfigYaml(hermesHome: string): string | null {
-	const configPath = join(hermesHome, "cli-config.yaml");
+function getConfigCandidates(hermesHome: string): string[] {
+	return [join(hermesHome, "config.yaml"), join(hermesHome, "cli-config.yaml")];
+}
+
+function resolveConfigPath(hermesHome: string): string {
+	for (const candidate of getConfigCandidates(hermesHome)) {
+		if (existsSync(candidate)) return candidate;
+	}
+	return join(hermesHome, "config.yaml");
+}
+
+function readConfigYaml(hermesHome: string): { path: string; content: string } | null {
+	const configPath = resolveConfigPath(hermesHome);
 	if (!existsSync(configPath)) return null;
 	try {
-		return readFileSync(configPath, "utf-8");
+		return { path: configPath, content: readFileSync(configPath, "utf-8") };
 	} catch {
 		return null;
 	}
 }
 
-/** Check if memory.provider is already set to "signet" in config. */
+interface MemoryBlock {
+	start: number;
+	end: number;
+	provider: number | null;
+}
+
+function isBlankOrComment(line: string): boolean {
+	const trimmed = line.trim();
+	return trimmed === "" || trimmed.startsWith("#");
+}
+
+function parseScalar(value: string): string {
+	const stripped = value.split("#", 1)[0]?.trim() ?? "";
+	if ((stripped.startsWith('"') && stripped.endsWith('"')) || (stripped.startsWith("'") && stripped.endsWith("'"))) {
+		return stripped.slice(1, -1);
+	}
+	return stripped;
+}
+
+function findMemoryBlock(lines: string[]): MemoryBlock | "missing" | null {
+	const starts: number[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		if (/^memory:\s*(?:#.*)?$/.test(lines[i] ?? "")) starts.push(i);
+		if (/^memory:\s*\S/.test(lines[i] ?? "")) return null;
+	}
+	if (starts.length === 0) return "missing";
+	if (starts.length !== 1) return null;
+	const start = starts[0] ?? 0;
+	let end = lines.length;
+	for (let i = start + 1; i < lines.length; i++) {
+		const line = lines[i] ?? "";
+		if (!isBlankOrComment(line) && !/^\s/.test(line)) {
+			end = i;
+			break;
+		}
+	}
+	let provider: number | null = null;
+	for (let i = start + 1; i < end; i++) {
+		if (/^\s+provider:\s*/.test(lines[i] ?? "")) {
+			provider = i;
+			break;
+		}
+	}
+	return { start, end, provider };
+}
+
+function providerLineIsSignet(line: string): boolean {
+	const match = /^\s+provider:\s*(.*)$/.exec(line);
+	return match ? parseScalar(match[1] ?? "") === "signet" : false;
+}
+
 function isProviderConfigured(hermesHome: string): boolean {
-	const content = readConfigYaml(hermesHome);
-	if (!content) return false;
-	// Simple YAML check — look for "provider: signet" under memory section
+	const config = readConfigYaml(hermesHome);
+	if (!config) return false;
+	const lines = config.content.split(/\r?\n/);
+	const block = findMemoryBlock(lines);
 	return (
-		/memory:\s*\n\s+provider:\s*["']?signet["']?/m.test(content) ||
-		/^memory\.provider:\s*["']?signet["']?/m.test(content)
+		block !== null &&
+		typeof block === "object" &&
+		block.provider !== null &&
+		block.provider !== undefined &&
+		providerLineIsSignet(lines[block.provider] ?? "")
 	);
+}
+
+function configureProvider(hermesHome: string, warnings: string[]): string | null {
+	const configPath = resolveConfigPath(hermesHome);
+	let content = "";
+	if (existsSync(configPath)) {
+		try {
+			content = readFileSync(configPath, "utf-8");
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			warnings.push(`Could not read Hermes config at ${configPath}: ${msg}`);
+			return null;
+		}
+	}
+
+	const lines = content ? content.replace(/\r\n/g, "\n").split("\n") : [];
+	const block = findMemoryBlock(lines);
+	if (content && block === null) {
+		warnings.push(
+			`Could not safely patch Hermes memory.provider in ${configPath}. Run: hermes config set memory.provider signet`,
+		);
+		return null;
+	}
+
+	if (block !== null && typeof block === "object" && block.provider !== null && block.provider !== undefined) {
+		if (providerLineIsSignet(lines[block.provider] ?? "")) return null;
+		lines[block.provider] = `${(lines[block.provider] ?? "").match(/^\s*/)?.[0] ?? "  "}provider: signet`;
+	} else if (block !== null && typeof block === "object") {
+		lines.splice(block.start + 1, 0, "  provider: signet");
+	} else {
+		if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
+		lines.push("memory:", "  provider: signet");
+	}
+
+	mkdirSync(dirname(configPath), { recursive: true });
+	writeFileSync(configPath, `${lines.join("\n").replace(/\n+$/g, "")}\n`);
+	return configPath;
+}
+
+function clearProvider(hermesHome: string): string | null {
+	const config = readConfigYaml(hermesHome);
+	if (!config) return null;
+	const lines = config.content.replace(/\r\n/g, "\n").split("\n");
+	const block = findMemoryBlock(lines);
+	if (block === null || typeof block !== "object" || block.provider === null || block.provider === undefined)
+		return null;
+	if (!providerLineIsSignet(lines[block.provider] ?? "")) return null;
+	lines[block.provider] = `${(lines[block.provider] ?? "").match(/^\s*/)?.[0] ?? "  "}provider: ''`;
+	writeFileSync(config.path, `${lines.join("\n").replace(/\n+$/g, "")}\n`);
+	return config.path;
+}
+
+function pluginHasStaticToolSchemas(pluginFile: string): boolean {
+	if (!existsSync(pluginFile)) return false;
+	const content = readFileSync(pluginFile, "utf-8");
+	return (
+		content.includes("Hermes indexes memory-provider tool dispatch before provider") &&
+		content.includes("return list(ALL_TOOL_SCHEMAS)") &&
+		!/def get_tool_schemas[\s\S]{0,220}if not self\._client:[\s\S]{0,80}return \[\]/.test(content)
+	);
+}
+
+function getConnectorPackageJsonPath(): string | null {
+	const candidates = [
+		join(__dirname, "..", "package.json"),
+		join(__dirname, "..", "..", "package.json"),
+		join(__dirname, "..", "..", "..", "package.json"),
+	];
+	return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+function getConnectorVersion(): string {
+	const packageJsonPath = getConnectorPackageJsonPath();
+	if (!packageJsonPath) return "unknown";
+	try {
+		const parsed = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as { version?: unknown };
+		return typeof parsed.version === "string" ? parsed.version : "unknown";
+	} catch {
+		return "unknown";
+	}
+}
+
+function computePluginSourceHash(): string {
+	const sourceDir = getPluginSourceDir();
+	const hash = createHash("sha256");
+	for (const file of PLUGIN_FILES) {
+		const path = join(sourceDir, file);
+		hash.update(file);
+		hash.update("\0");
+		if (existsSync(path)) {
+			hash.update(readFileSync(path));
+		}
+		hash.update("\0");
+	}
+	return hash.digest("hex");
+}
+
+function writeInstallMarker(targetDir: string, targetKind: InstallMarker["targetKind"]): string {
+	const markerPath = join(targetDir, INSTALL_MARKER_FILE);
+	const marker: InstallMarker = {
+		connector: "@signet/connector-hermes-agent",
+		schemaVersion: 1,
+		connectorVersion: getConnectorVersion(),
+		sourceHash: computePluginSourceHash(),
+		targetKind,
+		installedAt: new Date().toISOString(),
+	};
+	writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`);
+	return markerPath;
+}
+
+function readInstallMarker(targetDir: string): InstallMarker | null {
+	const markerPath = join(targetDir, INSTALL_MARKER_FILE);
+	if (!existsSync(markerPath)) return null;
+	try {
+		const parsed = JSON.parse(readFileSync(markerPath, "utf-8")) as Partial<InstallMarker>;
+		if (
+			parsed.connector === "@signet/connector-hermes-agent" &&
+			parsed.schemaVersion === 1 &&
+			typeof parsed.connectorVersion === "string" &&
+			typeof parsed.sourceHash === "string" &&
+			(parsed.targetKind === "user" || parsed.targetKind === "repo") &&
+			typeof parsed.installedAt === "string"
+		) {
+			return parsed as InstallMarker;
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+function pluginMarkerIsFresh(targetDir: string): boolean {
+	const marker = readInstallMarker(targetDir);
+	return marker !== null && marker.sourceHash === computePluginSourceHash();
+}
+
+function pluginLooksCurrent(targetDir: string): boolean {
+	return pluginHasStaticToolSchemas(join(targetDir, "__init__.py")) && pluginMarkerIsFresh(targetDir);
+}
+
+function probeHermesProvider(hermesRepo: string): HermesProbeResult {
+	if (!existsSync(hermesRepo)) {
+		return { ok: false, toolNames: [], error: `Hermes repo not found at ${hermesRepo}` };
+	}
+
+	const script = [
+		"import json",
+		"from plugins.memory import load_memory_provider",
+		"from agent.memory_manager import MemoryManager",
+		"provider = load_memory_provider('signet')",
+		"manager = MemoryManager()",
+		"manager.add_provider(provider)",
+		"names = sorted(manager.get_all_tool_names())",
+		"required = ['memory_search', 'memory_store', 'memory_get', 'memory_list', 'memory_modify', 'memory_forget', 'recall', 'remember']",
+		"print(json.dumps({'toolNames': names, 'missing': [name for name in required if name not in names]}))",
+	].join("\n");
+
+	const python = process.env.PYTHON?.trim() || "python";
+	const result = spawnSync(python, ["-c", script], {
+		cwd: hermesRepo,
+		env: { ...process.env, PYTHONPATH: hermesRepo },
+		encoding: "utf-8",
+		timeout: 5_000,
+	});
+
+	if (result.error) {
+		return { ok: false, toolNames: [], error: result.error.message };
+	}
+	if (result.status !== 0) {
+		const err = `${result.stderr || result.stdout || `python exited ${result.status}`}`.trim();
+		return { ok: false, toolNames: [], error: err };
+	}
+
+	try {
+		const parsed = JSON.parse(result.stdout.trim()) as { toolNames?: unknown; missing?: unknown };
+		const toolNames = Array.isArray(parsed.toolNames)
+			? parsed.toolNames.filter((name): name is string => typeof name === "string")
+			: [];
+		const missing = Array.isArray(parsed.missing)
+			? parsed.missing.filter((name): name is string => typeof name === "string")
+			: [];
+		return {
+			ok: missing.length === 0,
+			toolNames,
+			error: missing.length > 0 ? `Missing tools: ${missing.join(", ")}` : null,
+		};
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		return { ok: false, toolNames: [], error: `Could not parse Hermes provider probe output: ${msg}` };
+	}
+}
+
+async function checkDaemon(daemonUrl: string): Promise<{ ok: boolean; detail: string }> {
+	const baseUrl = daemonUrl.replace(/\/+$/, "");
+	try {
+		const resp = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1_000) });
+		if (resp.ok) return { ok: true, detail: `${baseUrl}/health returned HTTP ${resp.status}` };
+		return { ok: false, detail: `${baseUrl}/health returned HTTP ${resp.status}` };
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		return { ok: false, detail: `${baseUrl}/health unreachable: ${msg}` };
+	}
 }
 
 function sanitizedEnv(name: string): string {
@@ -183,7 +502,7 @@ export class HermesAgentConnector extends BaseConnector {
 	}
 
 	getConfigPath(): string {
-		return join(this.getHermesHome(), "cli-config.yaml");
+		return resolveConfigPath(this.getHermesHome());
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
@@ -199,22 +518,26 @@ export class HermesAgentConnector extends BaseConnector {
 		const hermesHome = this.getHermesHome();
 		const hermesRepo = this.getHermesRepo();
 
-		// 1. Install the Python plugin into plugins/memory/signet/
+		// 1. Install the Python plugin into the current user-plugin location.
+		try {
+			const pluginFiles = installPlugin(getUserPluginTargetDir(hermesHome), "user");
+			filesWritten.push(...pluginFiles);
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			warnings.push(`Failed to install Hermes user plugin files: ${msg}`);
+		}
+
+		// Bundled repo providers take precedence over user plugins in Hermes.
+		// Refresh that copy too when the repo is discoverable so stale schemas
+		// cannot shadow the fixed Signet provider.
 		if (hermesRepo) {
 			try {
-				const pluginFiles = installPlugin(hermesRepo);
+				const pluginFiles = installPlugin(getRepoPluginTargetDir(hermesRepo), "repo");
 				filesWritten.push(...pluginFiles);
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
-				warnings.push(`Failed to install plugin files: ${msg}`);
+				warnings.push(`Failed to refresh Hermes repo plugin files: ${msg}`);
 			}
-		} else {
-			warnings.push(
-				"Hermes Agent install not found. Install Hermes in ~/.hermes or set HERMES_REPO to the hermes-agent directory, " +
-					"then re-run setup. Alternatively, copy the plugin manually:\n" +
-					"  cp -r <signet>/integrations/hermes-agent/connector/hermes-plugin/ " +
-					"<hermes-agent>/plugins/memory/signet/",
-			);
 		}
 
 		// 2. Write env config for the Signet daemon connection
@@ -288,19 +611,26 @@ export class HermesAgentConnector extends BaseConnector {
 
 		await ensureNamedAgentRegistered(configuredDaemonUrl, configuredSignetAgentId, warnings);
 
-		// 3. Provide guidance on completing setup
-		if (!isProviderConfigured(hermesHome)) {
+		// 3. Activate Signet as the external Hermes memory provider.
+		const providerConfigPath = configureProvider(hermesHome, warnings);
+		if (providerConfigPath) {
+			configsPatched.push(providerConfigPath);
+		}
+
+		if (hermesRepo) {
+			const probe = probeHermesProvider(hermesRepo);
+			if (!probe.ok) {
+				warnings.push(
+					`Hermes Signet provider installed, but Hermes did not expose all Signet memory tools during verification: ${probe.error ?? "unknown error"}. Run: signet doctor hermes`,
+				);
+			}
+		} else {
 			warnings.push(
-				"To activate Signet as your memory provider, run:\n" +
-					"  hermes memory setup\n" +
-					"and select 'signet', or manually:\n" +
-					"  hermes config set memory.provider signet",
+				"Hermes repo was not found, so install-time provider verification was skipped. Run: signet doctor hermes",
 			);
 		}
 
-		const message = hermesRepo
-			? "Hermes Agent integration installed — Signet memory plugin deployed"
-			: "Hermes Agent integration partially installed — plugin files need manual copy";
+		const message = "Hermes Agent integration installed — Signet memory provider deployed and activated";
 
 		return {
 			success: true,
@@ -317,12 +647,20 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesRepo = this.getHermesRepo();
 		if (hermesRepo) {
-			const removed = uninstallPlugin(hermesRepo);
+			const removed = uninstallPlugin(getRepoPluginTargetDir(hermesRepo));
 			filesRemoved.push(...removed);
 		}
 
 		// Clean up env vars
 		const hermesHome = this.getHermesHome();
+		const userPluginRemoved = uninstallPlugin(getUserPluginTargetDir(hermesHome));
+		filesRemoved.push(...userPluginRemoved);
+
+		const clearedProviderPath = clearProvider(hermesHome);
+		if (clearedProviderPath) {
+			configsPatched.push(clearedProviderPath);
+		}
+
 		const envPath = join(hermesHome, ".env");
 		if (existsSync(envPath)) {
 			try {
@@ -349,8 +687,115 @@ export class HermesAgentConnector extends BaseConnector {
 	}
 
 	isInstalled(): boolean {
-		return resolveHermesRepoPluginPath() !== null;
+		const hermesHome = this.getHermesHome();
+		const hermesRepo = this.getHermesRepo();
+		const pluginDirs = [
+			getUserPluginTargetDir(hermesHome),
+			...(hermesRepo ? [getRepoPluginTargetDir(hermesRepo)] : []),
+		];
+		return pluginDirs.some((dir) => pluginLooksCurrent(dir)) && isProviderConfigured(hermesHome);
 	}
+
+	async diagnose(): Promise<HermesDoctorReport> {
+		const hermesHome = this.getHermesHome();
+		const hermesRepo = this.getHermesRepo();
+		return diagnoseHermesIntegration({
+			hermesHome,
+			hermesRepo,
+			daemonUrl: (process.env.SIGNET_DAEMON_URL?.trim() || "http://localhost:3850").replace(/[\r\n]+/g, ""),
+		});
+	}
+}
+
+export async function diagnoseHermesIntegration(opts?: {
+	readonly hermesHome?: string;
+	readonly hermesRepo?: string | null;
+	readonly daemonUrl?: string;
+}): Promise<HermesDoctorReport> {
+	const hermesHome = opts?.hermesHome ?? resolveHermesHomePath();
+	const hermesRepo = opts?.hermesRepo ?? resolveHermesRepoPath();
+	const daemonUrl = opts?.daemonUrl ?? (process.env.SIGNET_DAEMON_URL?.trim() || "http://localhost:3850");
+	const configPath = resolveConfigPath(hermesHome);
+	const userPluginDir = getUserPluginTargetDir(hermesHome);
+	const repoPluginDir = hermesRepo ? getRepoPluginTargetDir(hermesRepo) : null;
+	const checks: HermesDiagnosticCheck[] = [];
+	const warnings: string[] = [];
+	const userPluginCurrent = pluginLooksCurrent(userPluginDir);
+	const repoPluginCurrent = repoPluginDir ? pluginLooksCurrent(repoPluginDir) : false;
+	const probe = hermesRepo
+		? probeHermesProvider(hermesRepo)
+		: { ok: false, toolNames: [], error: "Hermes repo not found" };
+	const daemon = await checkDaemon(daemonUrl);
+
+	checks.push({
+		id: "daemon-health",
+		label: "Signet daemon",
+		ok: daemon.ok,
+		detail: daemon.detail,
+		fix: daemon.ok ? undefined : "Run `signet daemon start`, then retry `signet doctor hermes`.",
+	});
+	checks.push({
+		id: "provider-config",
+		label: "Hermes memory provider",
+		ok: isProviderConfigured(hermesHome),
+		detail: existsSync(configPath)
+			? `${configPath} ${isProviderConfigured(hermesHome) ? "sets" : "does not set"} memory.provider=signet`
+			: `${configPath} does not exist`,
+		fix: isProviderConfigured(hermesHome) ? undefined : "Run `signet setup --harness hermes-agent`.",
+	});
+	checks.push({
+		id: "user-plugin",
+		label: "User plugin copy",
+		ok: userPluginCurrent,
+		detail: userPluginCurrent
+			? `${userPluginDir} matches bundled Signet plugin`
+			: `${userPluginDir} is missing or stale`,
+		fix: userPluginCurrent ? undefined : "Run `signet setup --harness hermes-agent`.",
+	});
+	checks.push({
+		id: "repo-plugin",
+		label: "Hermes repo plugin copy",
+		ok: repoPluginDir !== null && repoPluginCurrent,
+		detail:
+			repoPluginDir === null
+				? "Hermes checkout not found"
+				: repoPluginCurrent
+					? `${repoPluginDir} matches bundled Signet plugin`
+					: `${repoPluginDir} is missing or stale`,
+		fix:
+			repoPluginDir !== null && repoPluginCurrent
+				? undefined
+				: "Set HERMES_REPO to the Hermes Agent checkout, then run `signet setup --harness hermes-agent`.",
+	});
+	checks.push({
+		id: "tool-routing",
+		label: "Hermes tool routing",
+		ok: probe.ok,
+		detail: probe.ok
+			? `Hermes exposes ${REQUIRED_TOOL_NAMES.join(", ")}`
+			: `Hermes provider probe failed: ${probe.error ?? "unknown error"}`,
+		fix: probe.ok
+			? undefined
+			: "Run `signet setup --harness hermes-agent`; if this stays broken, restart Hermes after install.",
+	});
+
+	if (!hermesRepo) {
+		warnings.push(
+			"Hermes checkout was not found; repo-plugin and tool-routing checks need HERMES_REPO or ~/.hermes/hermes-agent.",
+		);
+	}
+
+	return {
+		ok: checks.every((check) => check.ok),
+		hermesHome,
+		hermesRepo,
+		configPath,
+		userPluginDir,
+		repoPluginDir,
+		toolNames: probe.toolNames,
+		checks,
+		warnings,
+	};
 }
 
 export function createConnector(): HermesAgentConnector {
