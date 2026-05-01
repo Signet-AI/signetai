@@ -702,11 +702,14 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesHome = this.getHermesHome();
 		const hermesRepo = this.getHermesRepo();
+		let userPluginInstalled = false;
+		let repoPluginInstalled = false;
 
 		// 1. Install the Python plugin into the current user-plugin location.
 		try {
 			const pluginFiles = installPlugin(getUserPluginTargetDir(hermesHome), "user");
 			filesWritten.push(...pluginFiles);
+			userPluginInstalled = true;
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
 			warnings.push(`Failed to install Hermes user plugin files: ${msg}`);
@@ -719,10 +722,23 @@ export class HermesAgentConnector extends BaseConnector {
 			try {
 				const pluginFiles = installPlugin(getRepoPluginTargetDir(hermesRepo), "repo");
 				filesWritten.push(...pluginFiles);
+				repoPluginInstalled = true;
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
 				warnings.push(`Failed to refresh Hermes repo plugin files: ${msg}`);
 			}
+		}
+		const usablePluginTargetInstalled = hermesRepo ? repoPluginInstalled : userPluginInstalled;
+		if (!usablePluginTargetInstalled) {
+			return {
+				success: false,
+				message: hermesRepo
+					? "Hermes Agent integration failed — could not refresh the Hermes repo Signet provider"
+					: "Hermes Agent integration failed — could not install the Hermes user Signet provider",
+				filesWritten,
+				configsPatched,
+				warnings,
+			};
 		}
 
 		// 2. Write env config for the Signet daemon connection

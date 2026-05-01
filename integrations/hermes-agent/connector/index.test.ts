@@ -222,6 +222,57 @@ describe("HermesAgentConnector.install()", () => {
 		expect(connector.isInstalled()).toBe(true);
 	});
 
+	it("fails when the user plugin is the only usable target and cannot be written", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(join(hermesHome, "plugins"), "not a directory");
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(false);
+		expect(result.message).toContain("could not install the Hermes user Signet provider");
+		expect(result.warnings.some((w) => w.includes("Failed to install Hermes user plugin files"))).toBe(true);
+		expect(result.configsPatched ?? []).not.toContain(join(hermesHome, "config.yaml"));
+		expect(readFileSync(join(hermesHome, "plugins"), "utf-8")).toBe("not a directory");
+	});
+
+	it("succeeds when the user plugin copy fails but the repo plugin copy is refreshed", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		const hermesRepo = join(tmpRoot, "hermes-agent");
+		mkdirSync(hermesHome, { recursive: true });
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		writeFileSync(join(hermesHome, "plugins"), "not a directory");
+		process.env.HERMES_HOME = hermesHome;
+		process.env.HERMES_REPO = hermesRepo;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(true);
+		expect(result.warnings.some((w) => w.includes("Failed to install Hermes user plugin files"))).toBe(true);
+		expect(existsSync(join(hermesRepo, "plugins", "memory", "signet", "signet.install.json"))).toBe(true);
+		expect(new HermesAgentConnector().isInstalled()).toBe(true);
+	});
+
+	it("fails when a discoverable repo plugin copy cannot be refreshed", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		const hermesRepo = join(tmpRoot, "hermes-agent");
+		mkdirSync(hermesHome, { recursive: true });
+		mkdirSync(join(hermesRepo, "plugins"), { recursive: true });
+		writeFileSync(join(hermesRepo, "plugins", "memory"), "not a directory");
+		process.env.HERMES_HOME = hermesHome;
+		process.env.HERMES_REPO = hermesRepo;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(false);
+		expect(result.message).toContain("could not refresh the Hermes repo Signet provider");
+		expect(result.warnings.some((w) => w.includes("Failed to refresh Hermes repo plugin files"))).toBe(true);
+		expect(existsSync(join(hermesHome, "plugins", "signet", "signet.install.json"))).toBe(true);
+		expect(result.configsPatched ?? []).not.toContain(join(hermesHome, "config.yaml"));
+		expect(new HermesAgentConnector().isInstalled()).toBe(false);
+	});
+
 	it("treats stale marker hashes as not installed", async () => {
 		const hermesHome = join(tmpRoot, ".hermes");
 		process.env.HERMES_HOME = hermesHome;
