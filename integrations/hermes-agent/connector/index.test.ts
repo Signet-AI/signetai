@@ -258,6 +258,34 @@ describe("HermesAgentConnector.install()", () => {
 		expect(report.warnings.some((warning) => warning.includes("Hermes checkout was not found"))).toBe(true);
 	});
 
+	it("accepts a current user-plugin-only install in Hermes diagnostics", async () => {
+		const originalFetch = globalThis.fetch;
+		const hermesHome = join(tmpRoot, ".hermes");
+		process.env.HERMES_HOME = hermesHome;
+
+		globalThis.fetch = (async () => new Response("ok", { status: 200 })) as typeof fetch;
+
+		try {
+			await new HermesAgentConnector().install(tmpRoot);
+
+			const report = await diagnoseHermesIntegration({
+				hermesHome,
+				hermesRepo: null,
+				daemonUrl: "http://127.0.0.1:3850",
+			});
+			const checks = Object.fromEntries(report.checks.map((check) => [check.id, check]));
+
+			expect(report.ok).toBe(true);
+			expect(checks["user-plugin"]?.ok).toBe(true);
+			expect(checks["repo-plugin"]?.ok).toBe(true);
+			expect(checks["tool-routing"]?.ok).toBe(true);
+			expect(checks["repo-plugin"]?.detail).toContain("using user plugin copy only");
+			expect(checks["tool-routing"]?.detail).toContain("runtime probe skipped without Hermes checkout");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	it("activates signet as Hermes memory provider in config.yaml", async () => {
 		process.env.HERMES_HOME = join(tmpRoot, ".hermes");
 
@@ -332,6 +360,29 @@ describe("HermesAgentConnector.install()", () => {
 		expect(config).not.toContain("provider: signet\n  nudge_interval");
 	});
 
+	it("backs up the dotted provider when both provider forms need cleanup", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(
+			join(hermesHome, "config.yaml"),
+			"model: test\nmemory:\n  provider: stale\n  nudge_interval: 10\nmemory.provider: honcho\n",
+		);
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+		const backup = JSON.parse(readFileSync(join(hermesHome, "signet.provider.backup.json"), "utf-8"));
+
+		expect(result.success).toBe(true);
+		expect(result.filesWritten).toContain(join(hermesHome, "signet.provider.backup.json"));
+		expect(backup).toMatchObject({
+			providerKind: "dotted",
+			previousProvider: "honcho",
+		});
+		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toBe(
+			"model: test\nmemory:\n  nudge_interval: 10\nmemory.provider: signet\n",
+		);
+	});
+
 	it("removes nested provider when dotted memory.provider is active", async () => {
 		const hermesHome = join(tmpRoot, ".hermes");
 		mkdirSync(hermesHome, { recursive: true });
@@ -343,9 +394,15 @@ describe("HermesAgentConnector.install()", () => {
 
 		const result = await new HermesAgentConnector().install(tmpRoot);
 		const config = readFileSync(join(hermesHome, "config.yaml"), "utf-8");
+		const backup = JSON.parse(readFileSync(join(hermesHome, "signet.provider.backup.json"), "utf-8"));
 
 		expect(result.success).toBe(true);
 		expect(result.configsPatched).toContain(join(hermesHome, "config.yaml"));
+		expect(result.filesWritten).toContain(join(hermesHome, "signet.provider.backup.json"));
+		expect(backup).toMatchObject({
+			providerKind: "nested",
+			previousProvider: "honcho",
+		});
 		expect(config).toBe("model: test\nmemory:\n  nudge_interval: 10\nmemory.provider: signet\n");
 	});
 
@@ -756,6 +813,26 @@ describe("HermesAgentConnector.uninstall()", () => {
 		expect(result.configsPatched).toContain(join(hermesHome, "config.yaml"));
 		expect(result.filesRemoved).toContain(join(hermesHome, "signet.provider.backup.json"));
 		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toBe("model: test\nmemory.provider: honcho\n");
+	});
+
+	it("restores a removed nested provider when dotted signet is uninstalled", async () => {
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(
+			join(hermesHome, "config.yaml"),
+			"model: test\nmemory:\n  provider: honcho\n  nudge_interval: 10\nmemory.provider: signet\n",
+		);
+		process.env.HERMES_HOME = hermesHome;
+
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		const result = await connector.uninstall();
+
+		expect(result.configsPatched).toContain(join(hermesHome, "config.yaml"));
+		expect(result.filesRemoved).toContain(join(hermesHome, "signet.provider.backup.json"));
+		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toBe(
+			"model: test\nmemory:\n  provider: honcho\n  nudge_interval: 10\nmemory.provider: ''\n",
+		);
 	});
 
 	it("does not clear another active memory provider", async () => {

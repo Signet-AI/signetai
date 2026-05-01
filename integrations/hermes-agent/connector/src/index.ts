@@ -341,7 +341,8 @@ function configureProvider(
 	let backupPath: string | null = null;
 	if (dottedProvider !== null) {
 		let changed = false;
-		if (!dottedProviderLineIsSignet(lines[dottedProvider] ?? "")) {
+		const dottedWasSignet = dottedProviderLineIsSignet(lines[dottedProvider] ?? "");
+		if (!dottedWasSignet) {
 			backupPath = writeProviderBackup(
 				hermesHome,
 				configPath,
@@ -352,6 +353,15 @@ function configureProvider(
 			changed = true;
 		}
 		if (block !== null && typeof block === "object" && block.provider !== null && block.provider !== undefined) {
+			if (dottedWasSignet) {
+				const nestedBackupPath = writeProviderBackup(
+					hermesHome,
+					configPath,
+					"nested",
+					parseProviderLine(lines[block.provider] ?? "") ?? "",
+				);
+				backupPath = nestedBackupPath ?? backupPath;
+			}
 			lines.splice(block.provider, 1);
 			changed = true;
 		}
@@ -398,6 +408,14 @@ function restoreOrClearProvider(hermesHome: string): { configPath: string | null
 	let configChanged = false;
 	if (dottedProvider !== null && dottedProviderLineIsSignet(lines[dottedProvider] ?? "")) {
 		setDottedProviderLine(lines, dottedProvider, backup?.providerKind === "dotted" ? backup.previousProvider : "''");
+		if (backup?.providerKind === "nested") {
+			if (block !== null && typeof block === "object") {
+				lines.splice(block.start + 1, 0, `${" ".repeat(block.indent)}provider: ${backup.previousProvider}`);
+			} else {
+				if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
+				lines.push("memory:", `  provider: ${backup.previousProvider}`);
+			}
+		}
 		configChanged = true;
 	} else if (
 		block !== null &&
@@ -884,7 +902,7 @@ export async function diagnoseHermesIntegration(opts?: {
 	readonly daemonUrl?: string;
 }): Promise<HermesDoctorReport> {
 	const hermesHome = opts?.hermesHome ?? resolveHermesHomePath();
-	const hermesRepo = opts?.hermesRepo ?? resolveHermesRepoPath();
+	const hermesRepo = opts && "hermesRepo" in opts ? (opts.hermesRepo ?? null) : resolveHermesRepoPath();
 	const daemonUrl = opts?.daemonUrl ?? (process.env.SIGNET_DAEMON_URL?.trim() || "http://localhost:3850");
 	const configPath = resolveConfigPath(hermesHome);
 	const userPluginDir = getUserPluginTargetDir(hermesHome);
@@ -895,7 +913,9 @@ export async function diagnoseHermesIntegration(opts?: {
 	const repoPluginCurrent = repoPluginDir ? pluginLooksCurrent(repoPluginDir) : false;
 	const probe = hermesRepo
 		? probeHermesProvider(hermesRepo)
-		: { ok: false, toolNames: [], error: "Hermes repo not found" };
+		: userPluginCurrent
+			? { ok: true, toolNames: REQUIRED_TOOL_NAMES, error: null }
+			: { ok: false, toolNames: [], error: "Hermes repo not found and user plugin is missing or stale" };
 	const daemon = await checkDaemon(daemonUrl);
 
 	checks.push({
@@ -926,15 +946,15 @@ export async function diagnoseHermesIntegration(opts?: {
 	checks.push({
 		id: "repo-plugin",
 		label: "Hermes repo plugin copy",
-		ok: repoPluginDir !== null && repoPluginCurrent,
+		ok: repoPluginDir === null || repoPluginCurrent,
 		detail:
 			repoPluginDir === null
-				? "Hermes checkout not found"
+				? "Hermes checkout not found; using user plugin copy only"
 				: repoPluginCurrent
 					? `${repoPluginDir} matches bundled Signet plugin`
 					: `${repoPluginDir} is missing or stale`,
 		fix:
-			repoPluginDir !== null && repoPluginCurrent
+			repoPluginDir === null || repoPluginCurrent
 				? undefined
 				: "Set HERMES_REPO to the Hermes Agent checkout, then run `signet setup --harness hermes-agent`.",
 	});
@@ -943,7 +963,9 @@ export async function diagnoseHermesIntegration(opts?: {
 		label: "Hermes tool routing",
 		ok: probe.ok,
 		detail: probe.ok
-			? `Hermes exposes ${REQUIRED_TOOL_NAMES.join(", ")}`
+			? hermesRepo
+				? `Hermes exposes ${REQUIRED_TOOL_NAMES.join(", ")}`
+				: `User plugin advertises ${REQUIRED_TOOL_NAMES.join(", ")}; runtime probe skipped without Hermes checkout`
 			: `Hermes provider probe failed: ${probe.error ?? "unknown error"}`,
 		fix: probe.ok
 			? undefined
@@ -952,7 +974,7 @@ export async function diagnoseHermesIntegration(opts?: {
 
 	if (!hermesRepo) {
 		warnings.push(
-			"Hermes checkout was not found; repo-plugin and tool-routing checks need HERMES_REPO or ~/.hermes/hermes-agent.",
+			"Hermes checkout was not found; repo-plugin install is optional, and runtime tool-routing probes need HERMES_REPO or ~/.hermes/hermes-agent.",
 		);
 	}
 
