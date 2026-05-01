@@ -774,49 +774,56 @@ async function doReindex(agentId?: string): Promise<void> {
 		readonly frontmatter: Record<string, unknown>;
 		readonly body: string;
 		readonly mtime: number;
+		readonly statKey: string;
+		readonly markChanged: boolean;
+	}
+	interface PendingDelete {
+		readonly path: string;
+		readonly statKey: string | null;
+		readonly markChanged: boolean;
 	}
 	const pendingUpserts: PendingUpsert[] = [];
-	const pendingDeletes: string[] = [];
-	// Stage cache mutations separately — only apply after successful commit.
-	// This prevents the shared-state bug where a rolled-back transaction
-	// leaves the in-memory cache advanced, causing future reindexes to skip files.
-	const stagedCacheUpdates: Array<{ path: string; statKey: string }> = [];
-	const stagedCacheDeletes: string[] = [];
-	const stagedChangedPaths: string[] = [];
-	const commitStagedUpdates = (): void => {
-		for (const { path, statKey } of stagedCacheUpdates) {
-			cache.set(path, statKey);
+	const pendingDeletes: PendingDelete[] = [];
+	// Cache-only updates for files that need no DB write (e.g. unreadable).
+	const cacheOnlyUpdates: Array<{ path: string; statKey: string }> = [];
+	const commitBatchCacheUpserts = (batch: readonly PendingUpsert[]): void => {
+		for (const item of batch) {
+			cache.set(item.path, item.statKey);
+			if (item.markChanged) changedPaths.add(item.path);
 		}
-		for (const path of stagedCacheDeletes) {
-			cache.delete(path);
+	};
+	const commitBatchCacheDeletes = (batch: readonly PendingDelete[]): void => {
+		for (const item of batch) {
+			if (item.statKey !== null) {
+				cache.set(item.path, item.statKey);
+			} else {
+				cache.delete(item.path);
+			}
+			if (item.markChanged) changedPaths.add(item.path);
 		}
-		for (const path of stagedChangedPaths) {
-			changedPaths.add(path);
-		}
-		stagedCacheUpdates.length = 0;
-		stagedCacheDeletes.length = 0;
-		stagedChangedPaths.length = 0;
 	};
 	const flushUpsertBatch = (): boolean => {
 		if (pendingUpserts.length === 0) return false;
+		const batch = [...pendingUpserts];
 		getDbAccessor().withWriteTx((db) => {
-			for (const item of pendingUpserts) {
+			for (const item of batch) {
 				upsertArtifactRowInTx(db as WriteDb as Database, item.path, item.frontmatter, item.body, item.mtime);
 			}
 		});
 		pendingUpserts.length = 0;
-		commitStagedUpdates();
+		commitBatchCacheUpserts(batch);
 		return true;
 	};
 	const flushDeleteBatch = (): boolean => {
 		if (pendingDeletes.length === 0) return false;
+		const batch = [...pendingDeletes];
 		getDbAccessor().withWriteTx((db) => {
-			for (const path of pendingDeletes) {
-				deleteArtifactRowsForPathInTx(db as WriteDb as Database, path, scope);
+			for (const item of batch) {
+				deleteArtifactRowsForPathInTx(db as WriteDb as Database, item.path, scope);
 			}
 		});
 		pendingDeletes.length = 0;
-		commitStagedUpdates();
+		commitBatchCacheDeletes(batch);
 		return true;
 	};
 	lastChangedManifestsByAgent.delete(cacheKey);
@@ -900,15 +907,14 @@ async function doReindex(agentId?: string): Promise<void> {
 		try {
 			content = await readFile(path, "utf8");
 		} catch {
-			stagedCacheUpdates.push({ path, statKey });
+			cacheOnlyUpdates.push({ path, statKey });
 			continue;
 		}
 
 		const parsed = parseFrontmatterDocument(content);
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
 		if (scope && nextAgent !== scope) {
-			pendingDeletes.push(path);
-			stagedCacheUpdates.push({ path, statKey });
+			pendingDeletes.push({ path, statKey, markChanged: false });
 			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
 				await yielder();
 			}
@@ -917,9 +923,7 @@ async function doReindex(agentId?: string): Promise<void> {
 		const match = path.match(/--([a-z2-7]{16})--/);
 		const sessionToken = match?.[1];
 		if (sessionToken && tombstones.has(sessionToken)) {
-			pendingDeletes.push(path);
-			stagedCacheUpdates.push({ path, statKey });
-			stagedChangedPaths.push(path);
+			pendingDeletes.push({ path, statKey, markChanged: true });
 			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
 				await yielder();
 			}
@@ -927,17 +931,13 @@ async function doReindex(agentId?: string): Promise<void> {
 		}
 		const body = normalizeMarkdownBody(parsed.body);
 		if (!isValidArtifact(path, parsed.frontmatter, body)) {
-			pendingDeletes.push(path);
-			stagedCacheUpdates.push({ path, statKey });
-			stagedChangedPaths.push(path);
+			pendingDeletes.push({ path, statKey, markChanged: true });
 			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
 				await yielder();
 			}
 			continue;
 		}
-		pendingUpserts.push({ path, frontmatter: parsed.frontmatter, body, mtime });
-		stagedCacheUpdates.push({ path, statKey });
-		stagedChangedPaths.push(path);
+		pendingUpserts.push({ path, frontmatter: parsed.frontmatter, body, mtime, statKey, markChanged: true });
 		if (pendingUpserts.length >= REINDEX_BATCH_SIZE && flushUpsertBatch()) {
 			await yielder();
 		}
@@ -946,9 +946,7 @@ async function doReindex(agentId?: string): Promise<void> {
 	for (const path of cache.keys()) {
 		if (fileSet.has(path)) continue;
 		if (path.includes(".jsonl#")) continue;
-		pendingDeletes.push(path);
-		stagedCacheDeletes.push(path);
-		stagedChangedPaths.push(path);
+		pendingDeletes.push({ path, statKey: null, markChanged: true });
 		if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
 			await yielder();
 		}
@@ -960,9 +958,10 @@ async function doReindex(agentId?: string): Promise<void> {
 	if (flushDeleteBatch()) {
 		await yielder();
 	}
-	// Commit any remaining staged items that didn't belong to a DB batch
-	// (e.g. unreadable files that only need cache marking).
-	commitStagedUpdates();
+	// Commit cache-only items (no DB dependency — safe to apply unconditionally).
+	for (const { path: p, statKey: sk } of cacheOnlyUpdates) {
+		cache.set(p, sk);
+	}
 
 	lastChangedManifestsByAgent.set(
 		cacheKey,

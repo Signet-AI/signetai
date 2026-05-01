@@ -3183,11 +3183,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		}
 	}
 
-	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
-		logger.info("hooks", "Session end extraction skipped — pipeline disabled");
-		return { memoriesSaved: 0 };
-	}
-
+	const pipelineEnabled = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
 	const hasSummaryLength = transcript.length >= 500;
 	let jobId: string | undefined;
 
@@ -3201,7 +3197,9 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		harness: req.harness,
 	});
 
-	if (noiseSession) {
+	if (!pipelineEnabled) {
+		logger.info("hooks", "Session end extraction skipped — pipeline disabled");
+	} else if (noiseSession) {
 		logger.debug("hooks", "Session end summary skipped for noise session", {
 			harness: req.harness,
 			project: req.cwd,
