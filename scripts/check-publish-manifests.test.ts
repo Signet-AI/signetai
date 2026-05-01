@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,23 @@ function writeJson(file: string, value: unknown): void {
 }
 
 describe("check-publish-manifests", () => {
+	test("keeps Hermes plugin assets in the signetai publish package", () => {
+		const root = join(import.meta.dir, "..");
+		const manifest = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {
+			files?: unknown;
+			scripts?: Record<string, string>;
+		};
+
+		expect(manifest.files).toContain("hermes-plugin");
+		expect(manifest.scripts?.["copy:hermes-plugin"]).toContain(
+			"../../integrations/hermes-agent/connector/hermes-plugin",
+		);
+		expect(manifest.scripts?.prebuild).toContain("copy:hermes-plugin");
+		expect(existsSync(join(root, "integrations", "hermes-agent", "connector", "hermes-plugin", "__init__.py"))).toBe(
+			true,
+		);
+	});
+
 	test("treats manifests with publishConfig.access public as publishable", () => {
 		expect(
 			isPublishableWorkspacePackage({

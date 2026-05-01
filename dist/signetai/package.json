@@ -11,6 +11,7 @@
     "bin",
     "dist",
     "dashboard",
+    "hermes-plugin",
     "scripts",
     "templates",
     "skills",
@@ -24,7 +25,8 @@
     "build:dashboard": "bun ../../scripts/prepare-dashboard-bundle.ts .",
     "copy:skills": "rm -rf skills && cp -r ../../skills skills",
     "copy:scripts": "mkdir -p scripts && cp ../../scripts/install-graphiq.sh scripts/install-graphiq.sh",
-    "prebuild": "bun run copy:skills && bun run copy:scripts",
+    "copy:hermes-plugin": "rm -rf hermes-plugin && cp -r ../../integrations/hermes-agent/connector/hermes-plugin hermes-plugin",
+    "prebuild": "bun run copy:skills && bun run copy:scripts && bun run copy:hermes-plugin",
     "prepublishOnly": "bun run build"
   },
   "keywords": [
