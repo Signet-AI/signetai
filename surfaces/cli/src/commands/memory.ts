@@ -11,6 +11,11 @@ import ora from "ora";
 
 const MEMORY_RECALL_TIMEOUT_MS = 30_000;
 
+function collectHint(value: string, previous: string[] = []): string[] {
+	const hint = value.trim();
+	return hint.length > 0 ? [...previous, hint] : previous;
+}
+
 interface MemoryDeps {
 	readonly ensureDaemonForSecrets: () => Promise<boolean>;
 	readonly secretApiCall: (
@@ -33,6 +38,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("-i, --importance <n>", "Importance (0-1)", Number.parseFloat, 0.7)
 		.option("--critical", "Mark as critical (pinned)", false)
 		.option("--agent <name>", "Agent ID to associate with this memory")
+		.option("--hint <hint>", "Prospective recall hint (repeatable)", collectHint)
 		.option("--private", "Set visibility to private", false)
 		.action(async (content: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
@@ -47,6 +53,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					importance: options.importance,
 					pinned: options.critical,
 					agentId: options.agent,
+					hints: options.hint,
 					visibility: options.private ? "private" : undefined,
 				}),
 			);
