@@ -292,6 +292,9 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(result.inject).toContain("[memory] prompt submit observability now logs fallback engine transitions");
 		expect(result.inject).toContain("Use the memories below as starting context before acting");
 		expect(result.inject).toContain("run 1-3 targeted recalls with /recall or memory_search");
+		expect(result.inject).toContain("Ask natural questions with entity + event + timeframe when possible");
+		expect(result.inject).toContain("Avoid bag-of-keywords recall queries");
+		expect(result.inject).toContain("Treat graph expansion as supporting context, not proof");
 		expect(result.inject).not.toContain("[signet:recall");
 	});
 

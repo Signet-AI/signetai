@@ -3248,6 +3248,9 @@ describe("buildSignetSystemPrompt", () => {
 		expect(prompt).toContain("Memory Check Loop");
 		expect(prompt).toContain("before commands, file edits, architectural choices");
 		expect(prompt).toContain("run 1-3 targeted recalls with mcp__signet__memory_search");
+		expect(prompt).toContain("shape recall queries as natural questions with an entity, event, and timeframe");
+		expect(prompt).toContain("avoid bag-of-keywords queries");
+		expect(prompt).toContain("treat graph expansion as supporting context, not proof");
 		expect(prompt).toContain("do not treat a missing automatic memory match as proof no prior context exists");
 		expect(prompt).toContain("before acting, know what context you found");
 	});

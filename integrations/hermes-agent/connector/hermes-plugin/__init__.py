@@ -46,11 +46,21 @@ logger = logging.getLogger(__name__)
 
 MEMORY_SEARCH_SCHEMA = {
     "name": "memory_search",
-    "description": "Search Signet memories using hybrid vector + keyword search.",
+    "description": (
+        "Search Signet memories using hybrid vector + keyword search. "
+        "Ask a natural-language question with entity, event, and timeframe when possible. "
+        "Avoid bag-of-keywords queries; use keyword_query only when you intentionally need exact lexical matching."
+    ),
     "parameters": {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query text."},
+            "query": {
+                "type": "string",
+                "description": (
+                    "Natural-language recall question. Include the relevant entity/person/project, event or decision, "
+                    "and timeframe when known; avoid diagnostic keyword soup."
+                ),
+            },
             "limit": {"type": "integer", "description": "Max results to return (default 10, max 50)."},
             "project": {"type": "string", "description": "Optional project path filter."},
             "expand": {"type": "boolean", "description": "Include lossless session transcripts as sources."},
@@ -217,7 +227,7 @@ MEMORY_FORGET_SCHEMA = {
 
 RECALL_ALIAS_SCHEMA = {
     "name": "recall",
-    "description": "Alias for memory_search.",
+    "description": "Alias for memory_search. Use the same natural-language query discipline; avoid bag-of-keywords queries.",
     "parameters": MEMORY_SEARCH_SCHEMA["parameters"],
 }
 

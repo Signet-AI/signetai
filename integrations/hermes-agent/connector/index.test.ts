@@ -184,6 +184,10 @@ describe("HermesAgentConnector.install()", () => {
 		expect(existsSync(join(repoPluginDir, "client.py"))).toBe(true);
 		expect(existsSync(join(repoPluginDir, "plugin.yaml"))).toBe(true);
 		expect(existsSync(join(repoPluginDir, "signet.install.json"))).toBe(true);
+		expect(readFileSync(join(repoPluginDir, "__init__.py"), "utf-8")).toContain(
+			"Ask a natural-language question with entity, event, and timeframe when possible",
+		);
+		expect(readFileSync(join(repoPluginDir, "__init__.py"), "utf-8")).toContain("Avoid bag-of-keywords queries");
 		expect(existsSync(join(userPluginDir, "__init__.py"))).toBe(true);
 		expect(existsSync(join(userPluginDir, "client.py"))).toBe(true);
 		expect(existsSync(join(userPluginDir, "plugin.yaml"))).toBe(true);
