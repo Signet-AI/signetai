@@ -138,7 +138,8 @@ MEMORY_STORE_SCHEMA = {
             "hints": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Prospective recall hints and alternate phrasings for retrieving this memory later.",
+                "minItems": 1,
+                "description": "Required agent-provided prospective recall hints and alternate phrasings for retrieving this memory later.",
             },
             "transcript": {
                 "type": "string",
@@ -166,7 +167,7 @@ MEMORY_STORE_SCHEMA = {
                 },
             },
         },
-        "required": ["content"],
+        "required": ["content", "hints"],
     },
 }
 
@@ -816,6 +817,9 @@ class SignetMemoryProvider(MemoryProvider):
             structured = store_args.get("structured")
             if not isinstance(structured, dict):
                 structured = None
+            hints = _string_list(store_args.get("hints"))
+            if not hints:
+                return json.dumps({"error": "Missing required parameter: hints"})
             result = self._client.remember(
                 content,
                 importance=importance,
@@ -823,7 +827,7 @@ class SignetMemoryProvider(MemoryProvider):
                 memory_type=str(store_args.get("type", "") or ""),
                 pinned=store_args.get("pinned") if isinstance(store_args.get("pinned"), bool) else None,
                 project=str(store_args.get("project", "") or self._project),
-                hints=_string_list(store_args.get("hints")),
+                hints=hints,
                 transcript=str(store_args.get("transcript", "") or ""),
                 structured=structured,
                 who="hermes-agent",

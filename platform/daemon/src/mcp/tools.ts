@@ -860,9 +860,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				tags: z.string().optional().describe("Comma-separated tags for categorization"),
 				pinned: z.boolean().optional().describe("Pin this memory — prevents decay, bypasses 0.95^days aging"),
 				hints: z
-					.array(z.string())
-					.optional()
-					.describe("Prospective recall hints and alternate phrasings for retrieving this memory later"),
+					.array(z.string().trim().min(1))
+					.min(1)
+					.describe("Required agent-provided prospective recall hints and alternate phrasings for retrieving this memory later"),
 				createdAt: z
 					.string()
 					.optional()

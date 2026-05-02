@@ -855,6 +855,11 @@ function cosineSimilarity(query: Float32Array, memory: Float32Array): number {
 // Main search orchestration
 // ---------------------------------------------------------------------------
 
+// Hints are synthetic retrieval scouts. Pure hint matches should rescue recall,
+// not outrank directly grounded lexical/vector/structured evidence. A hint
+// supported by direct evidence can keep its score; only hint-only rows are capped.
+const HINT_ONLY_SCORE_CAP = 0.75;
+
 export async function hybridRecall(
 	params: RecallParams,
 	cfg: ResolvedMemoryConfig,
@@ -1066,8 +1071,9 @@ export async function hybridRecall(
 			source = "structured";
 		}
 		if (hint > 0 && hint >= score) {
-			score = hint;
-			source = bm25 > 0 || vec > 0 ? "hybrid" : "hint";
+			const hasDirectEvidence = bm25 > 0 || vec > 0 || structured > 0;
+			score = hasDirectEvidence ? hint : Math.min(hint, HINT_ONLY_SCORE_CAP);
+			source = bm25 > 0 || vec > 0 ? "hybrid" : structured > 0 ? "sec" : "hint";
 		}
 		if (structured > 0 && structured >= score) {
 			score = structured;
@@ -1602,6 +1608,15 @@ export async function hybridRecall(
 			});
 		}
 	}
+
+	for (const row of scored) {
+		const hasDirectEvidence =
+			(bm25Map.get(row.id) ?? 0) > 0 ||
+			(vectorMap.get(row.id) ?? 0) > 0 ||
+			(structuredEvidenceMap.get(row.id) ?? 0) > 0;
+		if (row.source === "hint" && !hasDirectEvidence) row.score = Math.min(row.score, HINT_ONLY_SCORE_CAP);
+	}
+	scored.sort((a, b) => b.score - a.score);
 
 	// Over-fetch before hydration when scoped. Vector search can't
 	// pre-filter by scope, so out-of-scope IDs get dropped at

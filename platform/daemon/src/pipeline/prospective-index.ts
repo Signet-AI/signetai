@@ -57,8 +57,28 @@ function buildPrompt(content: string, max: number): string {
 // Hint generation
 // ---------------------------------------------------------------------------
 
-/** Check if a line looks like a question or conversational cue (not CoT noise). */
+const PROMPT_RESIDUE_PATTERNS = [
+	/\bhowever\b/i,
+	/\bbut note\b/i,
+	/\balternatively\b/i,
+	/\bthe problem says\b/i,
+	/\bthe fact says\b/i,
+	/\bdiverse questions?\b/i,
+	/\bdiverse cues?\b/i,
+	/\bwe need to\b/i,
+	/\blet'?s\b/i,
+	/\bmake sure\b/i,
+];
+
+const GENERIC_LABEL_CUE_PATTERNS = [
+	/^(who requested|when|current status|what is the current status)\s*:/i,
+	/^(direct|temporal|relational|indirect|conversational)\s*:/i,
+];
+
+/** Check if a line looks like a useful question or conversational cue (not prompt residue). */
 function isHintLine(line: string): boolean {
+	if (PROMPT_RESIDUE_PATTERNS.some((pattern) => pattern.test(line))) return false;
+	if (GENERIC_LABEL_CUE_PATTERNS.some((pattern) => pattern.test(line))) return false;
 	if (line.endsWith("?")) return true;
 	// Conversational cues: "Tell me about...", "Describe...", etc.
 	if (

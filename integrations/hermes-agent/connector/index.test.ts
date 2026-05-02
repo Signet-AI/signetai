@@ -799,12 +799,15 @@ describe("Hermes Agent bundled plugin", () => {
 		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
 
 		expect(plugin).toContain('"hints"');
+		expect(plugin).toContain('"required": ["content", "hints"]');
+		expect(plugin).toContain('"minItems": 1');
 		expect(plugin).toContain('"transcript"');
 		expect(plugin).toContain('"structured"');
 		expect(plugin).toContain('"entityName"');
 		expect(plugin).toContain('"attributes"');
 		expect(plugin).toContain("Prospective recall hints");
-		expect(plugin).toContain('hints=_string_list(store_args.get("hints"))');
+		expect(plugin).toContain('hints = _string_list(store_args.get("hints"))');
+		expect(plugin).toContain('Missing required parameter: hints');
 		expect(plugin).toContain('transcript=str(store_args.get("transcript", "") or "")');
 		expect(plugin).toContain("structured=structured");
 		expect(client).toContain("hints: Optional[List[str]] = None");
