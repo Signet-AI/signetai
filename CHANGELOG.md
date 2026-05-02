@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-02
-- Bug fixes: pass remember hints through; guide recall query shape.
+- Bug fixes: sanitize generated hints; pass remember hints through; guide recall query shape.
 
 ### 2026-05-01
 - Bug fixes: include Hermes plugin in signetai package; harden connector install and diagnostics.
@@ -35,6 +35,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: replace brew/cargo install with shell script; add session auto-connect.
 
 ## Release Ledger
+
+## [0.109.21] - 2026-05-02
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.20..v0.109.21`.
+
+### Bug Fixes
+
+- **memory**: sanitize generated hints (#619)
 
 ## [0.109.20] - 2026-05-02
 
