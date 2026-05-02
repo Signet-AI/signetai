@@ -60,7 +60,7 @@ function makePendingEmbedding(): {
 	return { promise, resolve: resolveEmbedding };
 }
 
-function makeDeps(): PromptDeps {
+function makeDeps(opts: { readonly agentFeedback?: boolean } = {}): PromptDeps {
 	return {
 		logger: {
 			debug() {},
@@ -76,7 +76,7 @@ function makeDeps(): PromptDeps {
 					...cfg.pipelineV2,
 					predictorPipeline: {
 						...cfg.pipelineV2.predictorPipeline,
-						agentFeedback: false,
+						agentFeedback: opts.agentFeedback ?? false,
 					},
 					continuity: {
 						...cfg.pipelineV2.continuity,
@@ -167,6 +167,22 @@ describe("handleUserPromptSubmit observability", () => {
 		const payload = submitCalls[0]?.[2];
 		expect(payload?.engine).toBe("no-query");
 		expect(payload?.memoryCount).toBe(0);
+	});
+
+	it("uses Pi-native memory tools in no-memory prompt guidance", async () => {
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "pi",
+				userMessage: "   ",
+			},
+			makeDeps(),
+		);
+
+		expect(result.inject).toContain("No strong automatic memory match was injected");
+		expect(result.inject).toContain("run 1-3 targeted Signet recalls with signet_recall");
+		expect(result.inject).toContain("save it with /remember or signet_remember");
+		expect(result.inject).not.toContain("memory_search");
+		expect(result.inject).not.toContain("memory_store");
 	});
 
 	it("removes Secrets prompt contribution when signet.secrets is disabled", async () => {
@@ -296,6 +312,89 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(result.inject).toContain("Avoid bag-of-keywords recall queries");
 		expect(result.inject).toContain("Treat graph expansion as supporting context, not proof");
 		expect(result.inject).not.toContain("[signet:recall");
+	});
+
+	it("uses Pi-native memory tools when injecting prompt-submit memories", async () => {
+		hybridRecallMock.mockResolvedValueOnce({
+			results: [
+				{
+					id: "mem-pi-guidance",
+					score: 0.95,
+					content: "Pi prompt guidance should use native Signet tool names",
+					created_at: "2026-03-26T20:10:00.000Z",
+				},
+			],
+		});
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "pi",
+				userMessage: "show pi prompt guidance behavior",
+				sessionKey: "session-pi-guidance",
+			},
+			makeDeps(),
+		);
+
+		expect(result.engine).toBe("hybrid");
+		expect(result.inject).toContain("## Relevant Memory");
+		expect(result.inject).toContain("Pi prompt guidance should use native Signet tool names");
+		expect(result.inject).toContain("run 1-3 targeted recalls with signet_recall");
+		expect(result.inject).toContain("save it with /remember or signet_remember");
+		expect(result.inject).not.toContain("memory_search");
+		expect(result.inject).not.toContain("memory_store");
+	});
+
+	it("requests feedback with the namespaced MCP tool for non-Pi harnesses", async () => {
+		hybridRecallMock.mockResolvedValueOnce({
+			results: [
+				{
+					id: "mem-feedback-codex",
+					score: 0.95,
+					content: "feedback guidance should name the Codex MCP feedback tool",
+					created_at: "2026-03-26T20:10:00.000Z",
+				},
+			],
+		});
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "show codex feedback guidance",
+				sessionKey: "session-codex-feedback",
+			},
+			makeDeps({ agentFeedback: true }),
+		);
+
+		expect(result.inject).toContain("mcp__signet__memory_feedback");
+		expect(result.inject).toContain('Pass session_key "session-codex-feedback"');
+		expect(result.inject).not.toContain("signet_memory_feedback tool");
+	});
+
+	it("requests feedback with the Pi-native feedback tool for Pi", async () => {
+		hybridRecallMock.mockResolvedValueOnce({
+			results: [
+				{
+					id: "mem-feedback-pi",
+					score: 0.95,
+					content: "feedback guidance should name the Pi feedback tool",
+					created_at: "2026-03-26T20:10:00.000Z",
+				},
+			],
+		});
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "pi",
+				userMessage: "show pi feedback guidance",
+				sessionKey: "session-pi-feedback",
+			},
+			makeDeps({ agentFeedback: true }),
+		);
+
+		expect(result.inject).toContain("signet_memory_feedback");
+		expect(result.inject).not.toContain("mcp__signet__memory_feedback");
+		expect(result.inject).not.toContain('Pass session_key "session-pi-feedback"');
+		expect(result.inject).not.toContain("memory_store");
 	});
 
 	it("uses prompt-submit embeddings when they return within the hook budget", async () => {
