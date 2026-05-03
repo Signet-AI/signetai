@@ -3136,19 +3136,11 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		transcript = storedTranscript;
 	}
 
-	// Safety cap against degenerate inputs (corrupt files, etc).
-	// The summary worker handles long transcripts via chunked
-	// map-reduce summarization, so this is a last-resort guard.
-	const MAX_TRANSCRIPT_CHARS = 100_000;
-	let truncated = false;
-	if (transcript.length > MAX_TRANSCRIPT_CHARS) {
-		logger.warn("hooks", "Transcript exceeds safety cap, truncating", {
-			original: transcript.length,
-			cap: MAX_TRANSCRIPT_CHARS,
-		});
-		transcript = `${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}\n[truncated]`;
-		truncated = true;
-	}
+	// Keep retention/indexing lossless. The summary worker receives a
+	// capped copy below, but transcript artifacts and live transcript
+	// storage must preserve the full canonical transcript.
+	const retainedTranscript = transcript;
+
 	// Derive a stable session identity for artifact paths.  When the
 	// transcript is empty and no explicit sessionId was provided,
 	// deriveSessionEndFallbackId returns a random UUID — making this call
@@ -3158,13 +3150,14 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	// (b) very short (1–499 char) transcripts do write a transcript
 	// artifact with a non-deterministic path, but the summary job is
 	// still skipped, limiting blast radius.
-	const sessionId = req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, transcript);
+	const sessionId =
+		req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, retainedTranscript);
 
 	// Lossless retention: write transcript immediately regardless of length
 	// or whether the summary worker succeeds later.
-	if (transcript && sessionKey) {
+	if (retainedTranscript && sessionKey) {
 		try {
-			upsertSessionTranscript(sessionKey, transcript, req.harness, req.cwd ?? null, agentId);
+			upsertSessionTranscript(sessionKey, retainedTranscript, req.harness, req.cwd ?? null, agentId);
 			await writeCanonicalTranscriptFromSnapshot({
 				agentId,
 				harness: req.harness,
@@ -3172,7 +3165,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				sessionId,
 				project: req.cwd ?? null,
 				rawTranscript,
-				transcript,
+				transcript: retainedTranscript,
 				capturedAt: endedAt,
 				transcriptPath: req.transcriptPath,
 			});
@@ -3183,8 +3176,24 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		}
 	}
 
+	// Safety cap against degenerate inputs (corrupt files, etc).
+	// The summary worker handles long transcripts via chunked
+	// map-reduce summarization, so this is a last-resort guard for
+	// extraction only — not for transcript retention.
+	const MAX_TRANSCRIPT_CHARS = 100_000;
+	let summaryTranscript = retainedTranscript;
+	let truncated = false;
+	if (summaryTranscript.length > MAX_TRANSCRIPT_CHARS) {
+		logger.warn("hooks", "Transcript exceeds safety cap, truncating summary input", {
+			original: summaryTranscript.length,
+			cap: MAX_TRANSCRIPT_CHARS,
+		});
+		summaryTranscript = `${summaryTranscript.slice(0, MAX_TRANSCRIPT_CHARS)}\n[truncated]`;
+		truncated = true;
+	}
+
 	const pipelineEnabled = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
-	const hasSummaryLength = transcript.length >= 500;
+	const hasSummaryLength = summaryTranscript.length >= 500;
 	let jobId: string | undefined;
 
 	// Queue for async processing by the summary worker instead of
@@ -3209,7 +3218,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	} else if (hasSummaryLength) {
 		jobId = enqueueSummaryJob(getDbAccessor(), {
 			harness: req.harness,
-			transcript,
+			transcript: summaryTranscript,
 			sessionKey,
 			sessionId,
 			project: req.cwd,
@@ -3228,15 +3237,15 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 			project: req.cwd,
 			sessionKey,
 			transcriptPath: req.transcriptPath,
-			transcriptChars: transcript.length,
+			transcriptChars: summaryTranscript.length,
 			truncated,
-			preview: transcript.slice(0, 500),
+			preview: summaryTranscript.slice(0, 500),
 		});
 	}
 
 	setImmediate(() => {
 		deferSessionEndWork({
-			transcript,
+			transcript: retainedTranscript,
 			rawTranscript,
 			sessionKey,
 			sessionId,
@@ -3264,8 +3273,18 @@ function deferSessionEndWork(params: {
 	transcriptPath: string | undefined;
 	memoryCfg: ReturnType<typeof loadMemoryConfig>;
 }): void {
-	const { transcript, rawTranscript, sessionKey, sessionId, agentId, harness, cwd, endedAt, transcriptPath, memoryCfg } =
-		params;
+	const {
+		transcript,
+		rawTranscript,
+		sessionKey,
+		sessionId,
+		agentId,
+		harness,
+		cwd,
+		endedAt,
+		transcriptPath,
+		memoryCfg,
+	} = params;
 
 	if (rawTranscript) {
 		try {

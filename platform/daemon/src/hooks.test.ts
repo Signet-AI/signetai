@@ -67,6 +67,10 @@ function ensureDir(path: string): void {
 	mkdirSync(path, { recursive: true });
 }
 
+async function flushSessionEndDeferredWork(): Promise<void> {
+	await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 /** Create an isolated test DB with the full schema */
 function createMemoryDb(
 	memories: Array<{
@@ -1778,6 +1782,7 @@ describe("handleSessionEnd", () => {
 		});
 
 		expect(result.queued).toBe(true);
+		await flushSessionEndDeferredWork();
 
 		const files = readdirSync(join(TEST_DIR, "memory")).sort();
 		const manifestFile = files.find((name) => name.endsWith("--manifest.md"));
@@ -1791,6 +1796,45 @@ describe("handleSessionEnd", () => {
 		expect(transcript).toContain("please update packages/daemon/src/hooks.ts");
 		expect(manifest).toContain('summary_path: "memory/');
 		expect(manifest).toContain('transcript_path: "memory/test/transcripts/transcript.jsonl"');
+	});
+
+	test.serial("writes full canonical transcript artifacts while capping summary input", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "long-transcript.txt");
+		const tailMarker = "LOSSLESS_RETENTION_TAIL_MARKER";
+		const longTranscript = `User: ${"a".repeat(101_000)} ${tailMarker}\nAssistant: retained the full canonical transcript.\n`;
+		writeFileSync(transcriptPath, longTranscript);
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-long-retention",
+			sessionId: "sess-long-retention",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(true);
+		await flushSessionEndDeferredWork();
+
+		const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
+		expect(transcript).toContain(tailMarker);
+		expect(transcript).not.toContain("[truncated]");
+
+		const db = openTestDb();
+		try {
+			const stored = db
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get("sess-long-retention", "default") as { content: string } | undefined;
+			const queued = db
+				.prepare("SELECT transcript FROM summary_jobs WHERE session_key = ?")
+				.get("sess-long-retention") as { transcript: string } | undefined;
+
+			expect(stored?.content).toContain(tailMarker);
+			expect(queued?.transcript).toContain("[truncated]");
+			expect(queued?.transcript).not.toContain(tailMarker);
+		} finally {
+			db.close();
+		}
 	});
 
 	test.serial("falls back to the stored live transcript when session-end input is missing", async () => {
@@ -1878,6 +1922,7 @@ describe("handleSessionEnd", () => {
 		});
 
 		expect(result.queued).toBe(true);
+		await flushSessionEndDeferredWork();
 
 		const transcript = readFileSync(join(TEST_DIR, "memory", "codex", "transcripts", "transcript.jsonl"), "utf-8");
 		expect(transcript).toContain("Run diagnostics");
@@ -1966,6 +2011,7 @@ describe("handleSessionEnd", () => {
 
 			expect(first.queued).toBe(true);
 			expect(second.queued).toBe(true);
+			await flushSessionEndDeferredWork();
 
 			const files = readdirSync(join(TEST_DIR, "memory")).sort();
 			expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
