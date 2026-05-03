@@ -12,6 +12,7 @@
  * ```
  */
 
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +59,55 @@ export interface SessionStartResult {
 export interface SessionEndResult {
 	success: boolean;
 	memoriesExtracted: number;
+}
+
+export interface SessionEndFireAndForgetPayload {
+	harness: "claude-code";
+	sessionId?: string;
+	transcriptPath?: string;
+}
+
+type DetachedSpawn = typeof spawn;
+
+const SESSION_END_FIRE_AND_FORGET_SCRIPT = `
+const [url, body] = process.argv.slice(1);
+try {
+  await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    signal: AbortSignal.timeout(10000),
+  });
+} catch {
+  // Best-effort fire-and-forget hook. The parent hook process must not wait.
+}
+`;
+
+export function dispatchSessionEndFireAndForget(
+	daemonUrl: string,
+	payload: SessionEndFireAndForgetPayload,
+	spawnImpl: DetachedSpawn = spawn,
+): boolean {
+	try {
+		const child = spawnImpl(
+			process.execPath,
+			[
+				"--eval",
+				SESSION_END_FIRE_AND_FORGET_SCRIPT,
+				`${daemonUrl.replace(/\/$/, "")}/api/hooks/session-end`,
+				JSON.stringify(payload),
+			],
+			{
+				detached: true,
+				stdio: "ignore",
+			},
+		);
+		child.unref();
+		return true;
+	} catch (error) {
+		console.warn("[signet] session-end fire-and-forget dispatch failed:", error);
+		return false;
+	}
 }
 
 // Returns the timeout written into the Claude Code hook config. This is
@@ -251,24 +301,11 @@ export class ClaudeCodeConnector extends BaseConnector {
 	 * Called when a session ends
 	 */
 	async onSessionEnd(ctx: SessionContext): Promise<SessionEndResult> {
-		fetch(`${this.daemonUrl}/api/hooks/session-end`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				harness: "claude-code",
-				sessionId: ctx.sessionId,
-				transcriptPath: ctx.transcriptPath,
-			}),
-			signal: AbortSignal.timeout(10000),
-		})
-			.then(async (res) => {
-				if (!res.ok) {
-					console.warn("[signet] Session end hook failed:", res.status);
-				}
-			})
-			.catch((e) => {
-				console.warn("[signet] session-end fire-and-forget failed:", e);
-			});
+		dispatchSessionEndFireAndForget(this.daemonUrl, {
+			harness: "claude-code",
+			sessionId: ctx.sessionId,
+			transcriptPath: ctx.transcriptPath,
+		});
 
 		return { success: true, memoriesExtracted: 0 };
 	}
@@ -470,7 +507,6 @@ export class ClaudeCodeConnector extends BaseConnector {
 			atomicWriteJson(claudeJsonPath, config);
 		}
 	}
-
 }
 
 // ============================================================================
