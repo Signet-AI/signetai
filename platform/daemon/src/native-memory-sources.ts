@@ -18,6 +18,7 @@ import {
 } from "./obsidian-source-embeddings";
 import {
 	indexObsidianSourceStructure,
+	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
 	sourceIdForObsidianRoot,
 } from "./obsidian-source-graph";
@@ -318,9 +319,16 @@ export function removeNativeMemoryFile(
 	indexed.delete(fingerprintKey(source, filePath, agentId));
 	softDeleteArtifactRowsForPath(filePath, agentId);
 	if (source.harness === "obsidian") {
+		const sourceId = source.sourceId ?? sourceIdForObsidianRoot(source.root);
 		purgeObsidianSourceFileEmbeddings({
-			sourceId: source.sourceId ?? sourceIdForObsidianRoot(source.root),
+			sourceId,
 			agentId,
+			root: source.root,
+			filePath,
+		});
+		purgeObsidianSourceFileStructure({
+			agentId,
+			sourceId,
 			root: source.root,
 			filePath,
 		});

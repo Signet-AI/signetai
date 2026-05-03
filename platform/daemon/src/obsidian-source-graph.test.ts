@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { indexObsidianSourceStructure, purgeObsidianSourceStructure } from "./obsidian-source-graph";
+import {
+	indexObsidianSourceStructure,
+	purgeObsidianSourceFileStructure,
+	purgeObsidianSourceStructure,
+} from "./obsidian-source-graph";
 
 describe("Obsidian source graph structure", () => {
 	let dir = "";
@@ -161,6 +165,110 @@ describe("Obsidian source graph structure", () => {
 			).count,
 		}));
 		expect(remaining).toEqual({ entities: 0, attrs: 0, deps: 0, communities: 0 });
+	});
+
+	it("refreshes a changed note by removing stale headings, claims, and wiki-link dependencies", () => {
+		const doc = join(vault, "literature", "Arch-Linux", "mutable.md");
+		writeFileSync(
+			doc,
+			"# Mutable\n\nThis original paragraph should disappear after re-indexing this source note.\n\n## Old Heading\n\nSee [[Old Target]].\n",
+		);
+		indexObsidianSourceStructure({
+			agentId: "obsidian-graph-agent",
+			sourceId: "obsidian:test-vault",
+			sourceName: "Test Vault",
+			root: vault,
+			filePath: doc,
+			content: readFileSync(doc, "utf-8"),
+		});
+
+		writeFileSync(
+			doc,
+			"# Mutable\n\nThis replacement paragraph should be the only active source claim after refresh.\n\n## New Heading\n\nSee [[New Target]].\n",
+		);
+		indexObsidianSourceStructure({
+			agentId: "obsidian-graph-agent",
+			sourceId: "obsidian:test-vault",
+			sourceName: "Test Vault",
+			root: vault,
+			filePath: doc,
+			content: readFileSync(doc, "utf-8"),
+		});
+
+		const rows = getDbAccessor().withReadDb((db) => ({
+			aspects: db
+				.prepare(
+					`SELECT ea.name FROM entity_aspects ea
+					 JOIN entities e ON e.id = ea.entity_id
+					 WHERE e.agent_id = ? AND e.source_path = ? ORDER BY ea.name`,
+				)
+				.all("obsidian-graph-agent", doc) as Array<{ name: string }>,
+			attrs: db
+				.prepare("SELECT content FROM entity_attributes WHERE agent_id = ? AND source_path = ? ORDER BY content")
+				.all("obsidian-graph-agent", doc) as Array<{ content: string }>,
+			deps: db
+				.prepare("SELECT reason FROM entity_dependencies WHERE agent_id = ? AND source_path = ? ORDER BY reason")
+				.all("obsidian-graph-agent", doc) as Array<{ reason: string }>,
+		}));
+
+		expect(rows.aspects.map((row) => row.name)).toContain("New Heading");
+		expect(rows.aspects.map((row) => row.name)).not.toContain("Old Heading");
+		expect(rows.attrs.some((row) => row.content.includes("replacement paragraph"))).toBe(true);
+		expect(rows.attrs.some((row) => row.content.includes("original paragraph"))).toBe(false);
+		expect(rows.deps.some((row) => row.reason.includes("New Target"))).toBe(true);
+		expect(rows.deps.some((row) => row.reason.includes("Old Target"))).toBe(false);
+	});
+
+	it("purges graph structure for a removed source file without dropping sibling notes", () => {
+		const doc = join(vault, "literature", "Arch-Linux", "removed.md");
+		const sibling = join(vault, "literature", "Arch-Linux", "sibling.md");
+		writeFileSync(doc, "# Removed\n\nA removed note claim should leave the graph when the source file disappears.\n");
+		writeFileSync(sibling, "# Sibling\n\nA sibling note claim should remain after another source file is purged.\n");
+		for (const filePath of [doc, sibling]) {
+			indexObsidianSourceStructure({
+				agentId: "obsidian-graph-agent",
+				sourceId: "obsidian:test-vault",
+				sourceName: "Test Vault",
+				root: vault,
+				filePath,
+				content: readFileSync(filePath, "utf-8"),
+			});
+		}
+
+		const purged = purgeObsidianSourceFileStructure({
+			agentId: "obsidian-graph-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath: doc,
+		});
+
+		expect(purged.entities).toBeGreaterThan(0);
+		const remaining = getDbAccessor().withReadDb((db) => ({
+			removedEntities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_path = ?")
+					.get("obsidian-graph-agent", doc) as { count: number }
+			).count,
+			removedAttrs: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE agent_id = ? AND source_path = ?")
+					.get("obsidian-graph-agent", doc) as { count: number }
+			).count,
+			siblingEntities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_path = ?")
+					.get("obsidian-graph-agent", sibling) as { count: number }
+			).count,
+			siblingAttrs: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE agent_id = ? AND source_path = ?")
+					.get("obsidian-graph-agent", sibling) as { count: number }
+			).count,
+		}));
+		expect(remaining.removedEntities).toBe(0);
+		expect(remaining.removedAttrs).toBe(0);
+		expect(remaining.siblingEntities).toBeGreaterThan(0);
+		expect(remaining.siblingAttrs).toBeGreaterThan(0);
 	});
 
 	it("keeps same-agent vaults with identical relative paths isolated by source id", () => {

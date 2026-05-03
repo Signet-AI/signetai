@@ -449,6 +449,53 @@ describe("native memory sources", () => {
 		expect(row.content).toContain("native Obsidian graph context");
 	});
 
+	it("removes Obsidian graph rows when a source markdown file disappears", async () => {
+		const root = join(dir, "vault");
+		const source = obsidianNativeMemorySource(root, "Research Vault", "obsidian:remove-file-vault");
+		const file = join(root, "permanent", "Deleted.md");
+		mkdirSync(join(root, "permanent"), { recursive: true });
+		writeFileSync(file, "# Deleted\n\nThis graph claim should disappear when the markdown file is removed.\n");
+
+		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(true);
+		const before = getDbAccessor().withReadDb((db) => ({
+			entities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_path = ?")
+					.get("agent-native", file) as { count: number }
+			).count,
+			attrs: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE agent_id = ? AND source_path = ?")
+					.get("agent-native", file) as { count: number }
+			).count,
+		}));
+		expect(before.entities).toBeGreaterThan(0);
+		expect(before.attrs).toBeGreaterThan(0);
+
+		removeNativeMemoryFile(source, file, "agent-native");
+
+		const after = getDbAccessor().withReadDb((db) => ({
+			artifacts: (
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0",
+					)
+					.get("agent-native", file) as { count: number }
+			).count,
+			entities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_path = ?")
+					.get("agent-native", file) as { count: number }
+			).count,
+			attrs: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE agent_id = ? AND source_path = ?")
+					.get("agent-native", file) as { count: number }
+			).count,
+		}));
+		expect(after).toEqual({ artifacts: 0, entities: 0, attrs: 0 });
+	});
+
 	it("embeds heading-aware Obsidian source chunks when embedding options are provided", async () => {
 		const root = join(dir, "vault");
 		const file = join(root, "permanent", "Signet.md");

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import type { WriteDb } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
@@ -30,6 +30,13 @@ export interface PurgeObsidianSourceStructureInput {
 	readonly agentId?: string;
 	readonly sourceId: string;
 	readonly root: string;
+}
+
+export interface PurgeObsidianSourceFileStructureInput {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly root: string;
+	readonly filePath: string;
 }
 
 export interface PurgeObsidianSourceStructureResult {
@@ -324,6 +331,68 @@ function folderRelatives(root: string, filePath: string): string[] {
 	return parts.map((_part, idx) => parts.slice(0, idx + 1).join("/"));
 }
 
+function purgeOrphanedDocumentReferences(db: WriteDb, agentId: string, sourceId: string, root: string): number {
+	return db
+		.prepare(
+			`DELETE FROM entities
+			 WHERE agent_id = ?
+			   AND source_id = ?
+			   AND source_root = ?
+			   AND entity_type = 'source_document_reference'
+			   AND NOT EXISTS (
+			     SELECT 1 FROM entity_dependencies d
+			     WHERE d.agent_id = entities.agent_id
+			       AND (d.source_entity_id = entities.id OR d.target_entity_id = entities.id)
+			   )`,
+		)
+		.run(agentId, sourceId, root).changes;
+}
+
+function purgeObsidianSourceFileStructureInTx(
+	db: WriteDb,
+	input: PurgeObsidianSourceFileStructureInput,
+): PurgeObsidianSourceStructureResult {
+	const root = normalizedRoot(input.root);
+	const filePath = normalizedPath(input.filePath);
+	const fileRel = relPath(root, filePath);
+	const documentEntityId = idFor(input.agentId, input.sourceId, "document", fileRel);
+
+	const attributes = db
+		.prepare(
+			`DELETE FROM entity_attributes
+			 WHERE agent_id = ?
+			   AND source_id = ?
+			   AND source_root = ?
+			   AND source_path = ?`,
+		)
+		.run(input.agentId, input.sourceId, root, filePath).changes;
+	const aspects = db
+		.prepare("DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?")
+		.run(input.agentId, documentEntityId).changes;
+	const dependencies = db
+		.prepare(
+			`DELETE FROM entity_dependencies
+			 WHERE agent_id = ?
+			   AND source_id = ?
+			   AND source_root = ?
+			   AND source_path = ?`,
+		)
+		.run(input.agentId, input.sourceId, root, filePath).changes;
+	const entities =
+		db
+			.prepare(
+				`DELETE FROM entities
+				 WHERE agent_id = ?
+				   AND source_id = ?
+				   AND source_root = ?
+				   AND source_path = ?
+				   AND entity_type IN ('source_document', 'source_document_reference')`,
+			)
+			.run(input.agentId, input.sourceId, root, filePath).changes +
+		purgeOrphanedDocumentReferences(db, input.agentId, input.sourceId, root);
+	return { entities, attributes, dependencies, communities: aspects };
+}
+
 export function indexObsidianSourceStructure(
 	input: IndexObsidianSourceStructureInput,
 ): IndexObsidianSourceStructureResult {
@@ -333,6 +402,11 @@ export function indexObsidianSourceStructure(
 	const now = new Date().toISOString();
 	const content = stripFrontmatter(input.content);
 	return getDbAccessor().withWriteTx((db) => {
+		// A source file is authoritative: before rebuilding its projection,
+		// remove the prior per-file headings/claims/links so deleted Markdown
+		// structure does not linger as stale graph facts.
+		purgeObsidianSourceFileStructureInTx(db, input);
+
 		let folderEntitiesTouched = 0;
 		let documentEntitiesTouched = 0;
 		let communitiesTouched = 0;
@@ -541,6 +615,12 @@ export function indexObsidianSourceStructure(
 			attributesTouched,
 		};
 	});
+}
+
+export function purgeObsidianSourceFileStructure(
+	input: PurgeObsidianSourceFileStructureInput,
+): PurgeObsidianSourceStructureResult {
+	return getDbAccessor().withWriteTx((db) => purgeObsidianSourceFileStructureInTx(db, input));
 }
 
 export function purgeObsidianSourceStructure(
