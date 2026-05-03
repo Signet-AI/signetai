@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -101,6 +101,35 @@ describe("sources-config", () => {
 		expect(
 			readdirSync(agentsDir).some((name) => name.includes("sources.json.tmp") || name === "sources.json.lock"),
 		).toBe(false);
+	});
+
+	it("refuses to overwrite a corrupt sources config during mutating operations", () => {
+		const agentsDir = tmp();
+		const vault = join(agentsDir, "vault");
+		mkdirSync(vault, { recursive: true });
+		const configPath = getSourcesConfigPath(agentsDir);
+		writeFileSync(configPath, "{ not valid json", "utf8");
+
+		expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		const result = addObsidianSource({ root: vault, name: "Vault A" }, agentsDir);
+
+		expect(result.ok).toBe(false);
+		if (result.ok === true) throw new Error("expected addObsidianSource to fail");
+		expect(result.error).toContain("refusing to overwrite");
+		expect(readFileSync(configPath, "utf8")).toBe("{ not valid json");
+	});
+
+	it("refuses to remove sources when the config is corrupt", () => {
+		const agentsDir = tmp();
+		const configPath = getSourcesConfigPath(agentsDir);
+		writeFileSync(configPath, "{ not valid json", "utf8");
+
+		const removed = removeSource("obsidian:any", agentsDir);
+
+		expect(removed.ok).toBe(false);
+		if (removed.ok === true) throw new Error("expected removeSource to fail");
+		expect(removed.error).toContain("refusing to overwrite");
+		expect(readFileSync(configPath, "utf8")).toBe("{ not valid json");
 	});
 
 	it("returns a not-found result when removing an unknown source", () => {

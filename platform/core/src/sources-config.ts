@@ -72,11 +72,39 @@ export function saveSourcesConfig(config: SignetSourcesConfig, agentsDir = getAg
 	renameSync(tmp, path);
 }
 
+function loadSourcesConfigForWrite(agentsDir = getAgentsDir()): SignetSourcesConfig {
+	const path = getSourcesConfigPath(agentsDir);
+	if (!existsSync(path)) return emptyConfig();
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		throw new Error(`Sources config is not readable JSON; refusing to overwrite ${path}: ${detail}`);
+	}
+	if (!isRecord(parsed) || parsed.version !== SOURCES_CONFIG_VERSION || !Array.isArray(parsed.sources)) {
+		throw new Error(`Sources config is invalid; refusing to overwrite ${path}`);
+	}
+	if (!parsed.sources.every(isSourceEntry)) {
+		throw new Error(`Sources config contains invalid source entries; refusing to overwrite ${path}`);
+	}
+	return { version: SOURCES_CONFIG_VERSION, sources: parsed.sources };
+}
+
 export function addObsidianSource(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	return withSourcesConfigLock(agentsDir, () => addObsidianSourceUnlocked(input, agentsDir));
 }
 
 function addObsidianSourceUnlocked(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	try {
+		return addObsidianSourceChecked(input, agentsDir);
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
+function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	const trimmedRoot = input.root.trim();
 	if (!trimmedRoot) return { ok: false, error: "Obsidian vault path is required" };
 	const root = resolve(trimmedRoot);
@@ -88,7 +116,7 @@ function addObsidianSourceUnlocked(input: AddObsidianSourceInput, agentsDir = ge
 	}
 
 	const now = input.now ?? new Date().toISOString();
-	const cfg = loadSourcesConfig(agentsDir);
+	const cfg = loadSourcesConfigForWrite(agentsDir);
 	const existing = cfg.sources.find((source) => source.kind === "obsidian" && source.root === root);
 	if (existing) {
 		const updated = { ...existing, name: cleanName(input.name) ?? existing.name, enabled: true, updatedAt: now };
@@ -129,7 +157,7 @@ function markSourceIndexedUnlocked(
 	indexedAt = new Date().toISOString(),
 	agentsDir = getAgentsDir(),
 ): void {
-	const cfg = loadSourcesConfig(agentsDir);
+	const cfg = loadSourcesConfigForWrite(agentsDir);
 	saveSourcesConfig(
 		{
 			version: SOURCES_CONFIG_VERSION,
@@ -146,9 +174,18 @@ export function removeSource(sourceId: string, agentsDir = getAgentsDir()): Remo
 }
 
 function removeSourceUnlocked(sourceId: string, agentsDir = getAgentsDir()): RemoveSourceResult {
+	try {
+		return removeSourceChecked(sourceId, agentsDir);
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
+function removeSourceChecked(sourceId: string, agentsDir = getAgentsDir()): RemoveSourceResult {
 	const id = sourceId.trim();
 	if (!id) return { ok: false, error: "Source id is required" };
-	const cfg = loadSourcesConfig(agentsDir);
+	const cfg = loadSourcesConfigForWrite(agentsDir);
 	const source = cfg.sources.find((entry) => entry.id === id);
 	if (!source) return { ok: false, error: `Source not found: ${id}` };
 	saveSourcesConfig(
