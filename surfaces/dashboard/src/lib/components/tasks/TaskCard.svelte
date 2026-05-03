@@ -138,7 +138,7 @@ const lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 	}
 
 	.task-name {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--sig-text-bright);
@@ -149,7 +149,7 @@ const lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 	}
 
 	.task-harness {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.06em;
 		color: var(--sig-text-muted);
@@ -163,7 +163,7 @@ const lastRunLabel = $derived(formatRelativeTime(task.last_run_at));
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.04em;
 		color: var(--sig-text-muted);

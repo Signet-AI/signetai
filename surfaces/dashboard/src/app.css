@@ -9,6 +9,58 @@ svg.lucide {
 /* Dark is default; light activates via data-theme="light" */
 @custom-variant dark (&:is(:root:not([data-theme="light"]) *));
 
+/* === Necto Mono === */
+@font-face {
+	font-family: "Necto Mono";
+	src: url("/fonts/NectoMono-Regular.otf") format("opentype");
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+/* === VT323 — CRT terminal body === */
+@font-face {
+	font-family: "VT323";
+	src: url("/fonts/VT323-Regular.woff2") format("woff2");
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+/* === Pixelify Sans — variable pixel display (400-700) === */
+@font-face {
+	font-family: "Pixelify Sans";
+	src: url("/fonts/PixelifySans-Regular.woff2") format("woff2");
+	font-weight: 400 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+/* === Silkscreen — LCD micro labels === */
+@font-face {
+	font-family: "Silkscreen";
+	src: url("/fonts/Silkscreen-Regular.woff2") format("woff2");
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: "Silkscreen";
+	src: url("/fonts/Silkscreen-Bold.woff2") format("woff2");
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+/* === Tiny5 — ultra-picocell labels === */
+@font-face {
+	font-family: "Tiny5";
+	src: url("/fonts/Tiny5-Regular.woff2") format("woff2");
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
 /* === Dark theme (default) === */
 :root {
 	--radius: 6px;
@@ -103,9 +155,16 @@ svg.lucide {
 	--sig-log-category-retention: #f87171;
 
 	/* Typography & spacing */
-	--font-display: "Neue Haas Grotesk Display", "Neue Haas Grotesk Display Pro", "Neue Haas Grotesk Text", "Helvetica Neue", Arial, sans-serif;
-	--font-mono: "IBM Plex Mono", "Geist Mono", monospace;
-	--font-sans: var(--font-display);
+	--sig-font-body: "Pixelify Sans", "Silkscreen", monospace;
+	--sig-font-display: "Silkscreen", "Tiny5", monospace;
+	--sig-font-mono: "VT323", "Pixelify Sans", monospace;
+	--sig-font-micro: "Tiny5", "Silkscreen", monospace;
+	/* Compatibility aliases used by existing component CSS and canvas code. */
+	--font-body: var(--sig-font-body);
+	--font-display: var(--sig-font-display);
+	--font-mono: var(--sig-font-mono);
+	--font-micro: var(--sig-font-micro);
+	--font-sans: var(--sig-font-body);
 
 	--space-xs: 4px;
 	--space-sm: 8px;
@@ -213,6 +272,12 @@ svg.lucide {
 
 /* === Tailwind v4 theme registration === */
 @theme inline {
+	--font-sans: var(--sig-font-body);
+	--font-mono: var(--sig-font-mono);
+	--font-body: var(--sig-font-body);
+	--font-display: var(--sig-font-display);
+	--font-micro: var(--sig-font-micro);
+
 	--radius-sm: var(--radius);
 	--radius-md: var(--radius);
 	--radius-lg: var(--radius);
@@ -248,6 +313,14 @@ svg.lucide {
 	--color-sidebar-ring: var(--sidebar-ring);
 }
 
+/* === Font contract === */
+@layer utilities {
+	.font-body { font-family: var(--sig-font-body) !important; }
+	.font-display { font-family: var(--sig-font-display) !important; }
+	.font-mono { font-family: var(--sig-font-mono) !important; }
+	.font-micro { font-family: var(--sig-font-micro) !important; }
+}
+
 /* === Base layer === */
 @layer base {
 	*,
@@ -265,13 +338,36 @@ svg.lucide {
 	body {
 		@apply bg-background text-foreground;
 	}
+
+	html,
+	body {
+		font-family: var(--sig-font-body);
+		font-synthesis: none;
+	}
+
+	body,
+	body :where(:not(svg):not(svg *):not(code):not(pre):not(kbd):not(samp)) {
+		font-family: var(--sig-font-body);
+	}
+
+	button,
+	input,
+	select,
+	textarea,
+	optgroup,
+	[role="button"],
+	[role="combobox"],
+	[role="menuitem"],
+	[data-sidebar] {
+		font-family: var(--sig-font-mono) !important;
+	}
 }
 
 /* === Global styles === */
 html {
 	background: var(--sig-bg);
 	color: var(--sig-text);
-	font-family: var(--font-mono);
+	font-family: var(--font-body);
 	font-size: 13px;
 	line-height: 1.55;
 	-webkit-font-smoothing: antialiased;
@@ -387,23 +483,29 @@ textarea {
 
 /* Typography */
 h1,
-h2,
-h3 {
+h2 {
 	font-family: var(--font-display);
-	font-weight: 600;
+	font-weight: 700;
 	line-height: 1.1;
 	color: var(--sig-text-bright);
 	text-transform: uppercase;
 }
 
+h3 {
+	font-family: var(--font-body);
+	font-weight: 600;
+	line-height: 1.2;
+	color: var(--sig-text-bright);
+}
+
 h1 {
-	font-size: 1.5rem;
-	letter-spacing: 0.06em;
+	font-size: 1.75rem;
+	letter-spacing: 0.1em;
 }
 
 h2 {
-	font-size: 1rem;
-	letter-spacing: 0.05em;
+	font-size: 1.125rem;
+	letter-spacing: 0.08em;
 }
 
 h3 {
@@ -411,35 +513,57 @@ h3 {
 	letter-spacing: 0.04em;
 }
 
+/* Terminal / CRT font utility */
+.font-terminal {
+	font-family: "VT323", monospace !important;
+	font-size: 1.05em;
+	line-height: 1.4;
+}
+
+/* Retro micro label utility */
+.font-micro {
+	font-family: var(--font-micro), monospace;
+	font-size: var(--font-size-xs);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
 /* Prose styles for rendered markdown */
 .prose {
-	font-family: var(--font-mono);
-	font-size: 13px;
+	font-family: var(--font-body);
+	font-size: var(--font-size-base);
 	line-height: 1.7;
 	color: var(--sig-text);
 }
 
 .prose h1,
-.prose h2,
-.prose h3 {
+.prose h2 {
 	font-family: var(--font-display);
-	font-weight: 600;
+	font-weight: 700;
 	color: var(--sig-text-bright);
 	text-transform: uppercase;
 	margin: 1.5em 0 0.5em;
 	line-height: 1.2;
 }
 
+.prose h3 {
+	font-family: var(--font-body);
+	font-weight: 600;
+	color: var(--sig-text-bright);
+	margin: 1.5em 0 0.5em;
+	line-height: 1.2;
+}
+
 .prose h1 {
 	font-size: 1.25rem;
-	letter-spacing: 0.06em;
+	letter-spacing: 0.08em;
 	border-bottom: 1px solid var(--sig-border);
 	padding-bottom: 0.4em;
 }
 
 .prose h2 {
 	font-size: 1rem;
-	letter-spacing: 0.05em;
+	letter-spacing: 0.06em;
 }
 
 .prose h3 {

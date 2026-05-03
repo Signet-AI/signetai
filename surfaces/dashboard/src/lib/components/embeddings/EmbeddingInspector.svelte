@@ -110,7 +110,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 
 <aside class={`flex flex-col gap-3 p-3 overflow-y-auto ${containerClass}`}>
 	<div class="flex items-center justify-between gap-2">
-		<span class="font-[family-name:var(--font-mono)] text-[11px] tracking-[0.06em] uppercase text-[var(--sig-text)]">Inspector</span>
+		<span class="font-mono text-[11px] tracking-[0.06em] uppercase text-[var(--sig-text)]">Inspector</span>
 		{#if graphSelected}
 			<button
 				class="text-[11px] text-[var(--sig-accent)] bg-transparent border-none cursor-pointer p-0 hover:underline"
@@ -123,21 +123,21 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 		<!-- Entity inspection mode -->
 		<div class="flex flex-wrap gap-[6px]">
 			<span
-				class="font-[family-name:var(--font-mono)] text-[10px] border px-[7px] py-[2px]"
+				class="font-mono text-[10px] border px-[7px] py-[2px]"
 				style={`color: ${entityTypeColor(selectedEntityData.entityType)}; border-color: ${entityTypeColor(selectedEntityData.entityType)}; background: rgba(255,255,255,0.04);`}
 			>
 				{selectedEntityData.entityType}
 			</span>
 			{#if selectedEntityData.pinned}
-				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.08)]">pinned</span>
+				<span class="font-mono text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.08)]">pinned</span>
 			{/if}
 		</div>
 
-		<div class="font-[family-name:var(--font-mono)] text-[14px] text-[var(--sig-text-bright)] font-bold">
+		<div class="font-mono text-[14px] text-[var(--sig-text-bright)] font-bold">
 			{selectedEntityData.name}
 		</div>
 
-		<div class="grid grid-cols-3 gap-1 text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+		<div class="grid grid-cols-3 gap-1 text-[10px] font-mono text-[var(--sig-text-muted)]">
 			<div class="border border-[var(--sig-border-strong)] px-2 py-1 text-center">
 				<div class="text-[var(--sig-text-bright)]">{selectedEntityData.aspects.length}</div>
 				<div>aspects</div>
@@ -154,7 +154,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 
 		<div class="flex gap-2">
 			<button
-				class="px-3 py-1 font-[family-name:var(--font-mono)] text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)]"
+				class="px-3 py-1 font-mono text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)]"
 				onclick={onfocusembedding}
 			>
 				Center
@@ -162,14 +162,14 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 		</div>
 
 		{#if selectedEntityData.aspects.length > 0}
-			<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Aspects ({selectedEntityData.aspects.length})</div>
+			<div class="font-mono text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Aspects ({selectedEntityData.aspects.length})</div>
 			<div class="flex flex-col gap-2">
 				{#each selectedEntityData.aspects as aspect}
 					<button
 						class="grid grid-cols-[auto_1fr] gap-2 items-start w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 						onclick={() => onselectembedding(`aspect:${aspect.id}`)}
 					>
-						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-accent)] whitespace-nowrap">w{Math.round(aspect.weight * 100)}%</span>
+						<span class="font-mono text-[10px] text-[var(--sig-accent)] whitespace-nowrap">w{Math.round(aspect.weight * 100)}%</span>
 						<span class="text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-2">{aspect.name}</span>
 					</button>
 				{/each}
@@ -177,7 +177,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 		{/if}
 
 		{#if entityDependencies.length > 0}
-			<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Dependencies</div>
+			<div class="font-mono text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Dependencies</div>
 			<div class="flex flex-col gap-2">
 				{#each entityDependencies as dep}
 					{@const isOutgoing = dep.sourceEntityId === selectedEntityData.id}
@@ -186,7 +186,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 						class="grid grid-cols-[auto_1fr] gap-2 items-start w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 						onclick={() => onselectembedding(`entity:${otherEntityId}`)}
 					>
-						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-accent)] whitespace-nowrap">{isOutgoing ? '->' : '<-'} {dep.dependencyType}</span>
+						<span class="font-mono text-[10px] text-[var(--sig-accent)] whitespace-nowrap">{isOutgoing ? '->' : '<-'} {dep.dependencyType}</span>
 						<span class="text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-2">{entityNameById(otherEntityId)}</span>
 					</button>
 				{/each}
@@ -196,11 +196,11 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 	{:else if isAspectSelected && selectedAspectData}
 		<!-- Aspect inspection mode -->
 		<div class="flex flex-wrap gap-[6px]">
-			<span class="font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)] text-[var(--sig-text)]">aspect</span>
-			<span class="font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)] text-[var(--sig-text)]">weight {Math.round(selectedAspectData.weight * 100)}%</span>
+			<span class="font-mono text-[10px] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)] text-[var(--sig-text)]">aspect</span>
+			<span class="font-mono text-[10px] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)] text-[var(--sig-text)]">weight {Math.round(selectedAspectData.weight * 100)}%</span>
 		</div>
 
-		<div class="font-[family-name:var(--font-mono)] text-[14px] text-[var(--sig-text-bright)] font-bold">
+		<div class="font-mono text-[14px] text-[var(--sig-text-bright)] font-bold">
 			{selectedAspectData.name}
 		</div>
 
@@ -209,14 +209,14 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 				class="w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 				onclick={() => parentEntity && onselectembedding(`entity:${parentEntity.id}`)}
 			>
-				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase">Parent entity</span>
+				<span class="font-mono text-[10px] text-[var(--sig-text-muted)] uppercase">Parent entity</span>
 				<div class="text-[12px] text-[var(--sig-text-bright)]">{parentEntity.name}</div>
 			</button>
 		{/if}
 
 		<div class="flex gap-2">
 			<button
-				class="px-3 py-1 font-[family-name:var(--font-mono)] text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)]"
+				class="px-3 py-1 font-mono text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)]"
 				onclick={onfocusembedding}
 			>
 				Center
@@ -224,14 +224,14 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 		</div>
 
 		{#if selectedAspectData.attributes.length > 0}
-			<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Attributes ({selectedAspectData.attributes.length})</div>
+			<div class="font-mono text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Attributes ({selectedAspectData.attributes.length})</div>
 			<div class="flex flex-col gap-2">
 				{#each selectedAspectData.attributes as attr}
 					<button
 						class="grid grid-cols-[auto_1fr] gap-2 items-start w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 						onclick={() => onselectembedding(`attr:${attr.id}`)}
 					>
-						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-accent)] whitespace-nowrap">{attr.kind}</span>
+						<span class="font-mono text-[10px] text-[var(--sig-accent)] whitespace-nowrap">{attr.kind}</span>
 						<span class="text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-2">{attr.content}</span>
 					</button>
 				{/each}
@@ -241,8 +241,8 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 	{:else if isAttributeSelected && selectedAttributeData}
 		<!-- Attribute inspection mode -->
 		<div class="flex flex-wrap gap-[6px]">
-			<span class="font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)] text-[var(--sig-text)]">{selectedAttributeData.kind}</span>
-			<span class="font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)] text-[var(--sig-text)]">importance {Math.round(selectedAttributeData.importance * 100)}%</span>
+			<span class="font-mono text-[10px] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)] text-[var(--sig-text)]">{selectedAttributeData.kind}</span>
+			<span class="font-mono text-[10px] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)] text-[var(--sig-text)]">importance {Math.round(selectedAttributeData.importance * 100)}%</span>
 		</div>
 
 		<p class="m-0 text-[13px] leading-[1.55] text-[var(--sig-text-bright)] whitespace-pre-wrap break-words">
@@ -254,7 +254,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 				class="w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 				onclick={() => parentEntity && onselectembedding(`entity:${parentEntity.id}`)}
 			>
-				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase">Parent entity</span>
+				<span class="font-mono text-[10px] text-[var(--sig-text-muted)] uppercase">Parent entity</span>
 				<div class="text-[12px] text-[var(--sig-text-bright)]">{parentEntity.name}</div>
 			</button>
 		{/if}
@@ -264,14 +264,14 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 				class="w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 				onclick={() => parentAspect && onselectembedding(`aspect:${parentAspect.id}`)}
 			>
-				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase">Parent aspect</span>
+				<span class="font-mono text-[10px] text-[var(--sig-text-muted)] uppercase">Parent aspect</span>
 				<div class="text-[12px] text-[var(--sig-text-bright)]">{parentAspect.name}</div>
 			</button>
 		{/if}
 
 		<div class="flex gap-2">
 			<button
-				class="px-3 py-1 font-[family-name:var(--font-mono)] text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)]"
+				class="px-3 py-1 font-mono text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)]"
 				onclick={onfocusembedding}
 			>
 				Center
@@ -281,12 +281,12 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 		{#if selectedAttributeData.memoryId}
 			{@const linkedMem = embeddingById.get(selectedAttributeData.memoryId)}
 			{#if linkedMem}
-				<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Linked memory</div>
+				<div class="font-mono text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Linked memory</div>
 				<button
 					class="grid grid-cols-[auto_1fr] gap-2 items-start w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 					onclick={() => linkedMem && onselectembedding(linkedMem.id)}
 				>
-					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-accent)] whitespace-nowrap">{linkedMem.who ?? 'memory'}</span>
+					<span class="font-mono text-[10px] text-[var(--sig-accent)] whitespace-nowrap">{linkedMem.who ?? 'memory'}</span>
 					<span class="text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-2">{embeddingLabel(linkedMem)}</span>
 				</button>
 			{/if}
@@ -294,17 +294,17 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 
 	{:else if graphSelected}
 		<div class="flex flex-wrap gap-[6px]">
-			<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">{graphSelected.who ?? 'unknown'}</span>
+			<span class="font-mono text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">{graphSelected.who ?? 'unknown'}</span>
 			{#if graphSelected.type}
-				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">{graphSelected.type}</span>
+				<span class="font-mono text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">{graphSelected.type}</span>
 			{/if}
-			<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">importance {Math.round((graphSelected.importance ?? 0) * 100)}%</span>
+			<span class="font-mono text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">importance {Math.round((graphSelected.importance ?? 0) * 100)}%</span>
 			{#if graphSelected.pinned}
-				<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.08)]">pinned</span>
+				<span class="font-mono text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.08)]">pinned</span>
 			{/if}
 		</div>
 
-		<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-accent)] border border-[var(--sig-border-strong)] px-[7px] py-[5px] bg-transparent break-all">
+		<div class="font-mono text-[10px] text-[var(--sig-accent)] border border-[var(--sig-border-strong)] px-[7px] py-[5px] bg-transparent break-all">
 			{embeddingSourceLabel(graphSelected)}
 		</div>
 
@@ -315,27 +315,27 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 		{#if graphSelected.tags?.length}
 			<div class="flex flex-wrap gap-[6px]">
 				{#each graphSelected.tags.slice(0, 8) as tag}
-					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">#{tag}</span>
+					<span class="font-mono text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-[7px] py-[2px] bg-[rgba(255,255,255,0.04)]">#{tag}</span>
 				{/each}
 			</div>
 		{/if}
 
 		<div class="flex gap-2">
 			<button
-				class="px-3 py-1 font-[family-name:var(--font-mono)] text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)] disabled:opacity-40 disabled:cursor-not-allowed"
+				class="px-3 py-1 font-mono text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)] disabled:opacity-40 disabled:cursor-not-allowed"
 				onclick={onfocusembedding}
 			>
 				Center
 			</button>
 			<button
-				class="px-3 py-1 font-[family-name:var(--font-mono)] text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)] disabled:opacity-40 disabled:cursor-not-allowed"
+				class="px-3 py-1 font-mono text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)] disabled:opacity-40 disabled:cursor-not-allowed"
 				onclick={onpintoggle}
 				disabled={pinBusy}
 			>
 				{pinBusy ? 'Saving...' : graphSelected.pinned ? 'Unpin' : 'Pin'}
 			</button>
 			<button
-				class="px-3 py-1 font-[family-name:var(--font-mono)] text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)] disabled:opacity-40 disabled:cursor-not-allowed"
+				class="px-3 py-1 font-mono text-[10px] font-medium tracking-[0.1em] uppercase bg-transparent border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] cursor-pointer enabled:hover:bg-[var(--sig-text-bright)] enabled:hover:text-[var(--sig-bg)] disabled:opacity-40 disabled:cursor-not-allowed"
 				onclick={onloadglobalsimilar}
 				disabled={loadingGlobalSimilar}
 			>
@@ -351,13 +351,13 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 
 		<div class="self-start flex border border-[var(--sig-border-strong)] overflow-hidden">
 			<button
-				class="px-2 py-0.5 text-[10px] font-medium font-[family-name:var(--font-mono)] bg-transparent border-none cursor-pointer tracking-[0.04em] hover:text-[var(--sig-text)] hover:bg-[var(--sig-surface-raised)] {relationMode === 'similar' ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)]'}"
+				class="px-2 py-0.5 text-[10px] font-medium font-mono bg-transparent border-none cursor-pointer tracking-[0.04em] hover:text-[var(--sig-text)] hover:bg-[var(--sig-surface-raised)] {relationMode === 'similar' ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)]'}"
 				onclick={() => onsetrelationmode('similar')}
 			>
 				Similar
 			</button>
 			<button
-				class="px-2 py-0.5 text-[10px] font-medium font-[family-name:var(--font-mono)] bg-transparent border-none cursor-pointer tracking-[0.04em] hover:text-[var(--sig-text)] hover:bg-[var(--sig-surface-raised)] {relationMode === 'dissimilar' ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)]'}"
+				class="px-2 py-0.5 text-[10px] font-medium font-mono bg-transparent border-none cursor-pointer tracking-[0.04em] hover:text-[var(--sig-text)] hover:bg-[var(--sig-surface-raised)] {relationMode === 'dissimilar' ? 'text-[var(--sig-text-bright)] bg-[var(--sig-surface-raised)]' : 'text-[var(--sig-text-muted)]'}"
 				onclick={() => onsetrelationmode('dissimilar')}
 			>
 				Dissimilar
@@ -377,7 +377,7 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 							class="grid grid-cols-[auto_1fr] gap-2 items-start w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 							onclick={() => onselectembedding(item.id)}
 						>
-							<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-accent)] whitespace-nowrap">
+							<span class="font-mono text-[10px] text-[var(--sig-accent)] whitespace-nowrap">
 								{Math.round(relation.score * 1000) / 1000}
 							</span>
 							<span class="text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-2">
@@ -394,14 +394,14 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 				Finding similar memories...
 			</div>
 		{:else if globalSimilar.length > 0}
-			<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Global similar</div>
+			<div class="font-mono text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Global similar</div>
 			<div class="flex flex-col gap-2">
 				{#each globalSimilar as item}
 					<button
 						class="grid grid-cols-[auto_1fr] gap-2 items-start w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 						onclick={() => onopenglobalsimilar(item)}
 					>
-						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-accent)] whitespace-nowrap">global</span>
+						<span class="font-mono text-[10px] text-[var(--sig-accent)] whitespace-nowrap">global</span>
 						<span class="text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-2">{item.content}</span>
 					</button>
 				{/each}
@@ -413,14 +413,14 @@ function getEmbeddingById(id: string): EmbeddingPoint | null {
 		</div>
 
 		{#if embeddingSearch && embeddingSearchMatches.length > 0}
-			<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Search matches</div>
+			<div class="font-mono text-[10px] text-[var(--sig-text-muted)] tracking-[0.04em] uppercase">Search matches</div>
 			<div class="flex flex-col gap-2">
 				{#each embeddingSearchMatches as item}
 					<button
 						class="grid grid-cols-[auto_1fr] gap-2 items-start w-full text-left border border-[var(--sig-border-strong)] bg-[rgba(255,255,255,0.03)] text-[var(--sig-text)] px-2 py-[7px] cursor-pointer hover:border-[var(--sig-text-muted)] hover:bg-[var(--sig-surface-raised)]"
 						onclick={() => onselectembedding(item.id)}
 					>
-						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-accent)] whitespace-nowrap">{item.who}</span>
+						<span class="font-mono text-[10px] text-[var(--sig-accent)] whitespace-nowrap">{item.who}</span>
 						<span class="text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-2">{embeddingLabel(item)}</span>
 					</button>
 				{/each}

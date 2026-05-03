@@ -731,7 +731,7 @@ onMount(() => {
 	}
 
 	.tab-header-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);
@@ -746,7 +746,7 @@ onMount(() => {
 		border: 1px solid var(--sig-border-strong);
 		border-radius: var(--radius);
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.06em;
 		cursor: pointer;
@@ -773,7 +773,7 @@ onMount(() => {
 
 	:global(.secrets-add-input) {
 		flex: 1;
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 11px !important;
 		background: var(--sig-surface) !important;
 		border-color: var(--sig-border) !important;
@@ -792,7 +792,7 @@ onMount(() => {
 		border: 1px solid var(--sig-border-strong);
 		border-radius: var(--radius);
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.06em;
 		cursor: pointer;
@@ -902,7 +902,7 @@ onMount(() => {
 	}
 
 	.panel-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		margin-left: auto;
@@ -910,7 +910,7 @@ onMount(() => {
 	}
 
 	.panel-status {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.08em;
 		margin-left: auto;
@@ -950,7 +950,7 @@ onMount(() => {
 		justify-content: center;
 		gap: 4px;
 		padding: var(--space-lg) var(--space-md);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.08em;
 		color: var(--sig-text-muted);
@@ -998,7 +998,7 @@ onMount(() => {
 	}
 
 	.secret-name {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--sig-text-bright);
@@ -1010,7 +1010,7 @@ onMount(() => {
 	}
 
 	.secret-mask {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		letter-spacing: 0.1em;
@@ -1042,7 +1042,7 @@ onMount(() => {
 	}
 
 	.secret-delete-text {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 	}
 
@@ -1055,7 +1055,7 @@ onMount(() => {
 	}
 
 	.op-status {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.04em;
 		color: var(--sig-text-muted);
@@ -1077,7 +1077,7 @@ onMount(() => {
 
 	:global(.secrets-op-input) {
 		flex: 1;
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 11px !important;
 		background: var(--sig-bg) !important;
 		border-color: var(--sig-border) !important;
@@ -1100,7 +1100,7 @@ onMount(() => {
 		border: 1px solid var(--sig-border-strong);
 		border-radius: var(--radius);
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.06em;
 		cursor: pointer;
@@ -1142,7 +1142,7 @@ onMount(() => {
 	}
 
 	.op-option-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.08em;
 		color: var(--sig-text-muted);
@@ -1150,7 +1150,7 @@ onMount(() => {
 
 	:global(.secrets-op-input-sm) {
 		width: 60px !important;
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 10px !important;
 		background: var(--sig-bg) !important;
 		border-color: var(--sig-border) !important;
@@ -1172,7 +1172,7 @@ onMount(() => {
 	}
 
 	.op-vaults-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.08em;
 		color: var(--sig-text-muted);
@@ -1204,13 +1204,13 @@ onMount(() => {
 	}
 
 	.op-vault-name {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text);
 	}
 
 	.op-vaults-empty {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.08em;
 		color: var(--sig-text-muted);
@@ -1226,7 +1226,7 @@ onMount(() => {
 
 	/* Tip */
 	.op-tip {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.06em;
 		color: var(--sig-text-muted);

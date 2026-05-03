@@ -52,7 +52,7 @@ const versionLabel = $derived.by(() => {
 	<CardContent class="flex-1 flex flex-col px-3 pb-3 pt-0">
 		{#if items.length === 0}
 			<p
-				class="font-[family-name:var(--font-mono)] text-[10px]
+				class="font-mono text-[10px]
 					leading-4 text-[var(--sig-text-muted)]"
 			>
 				No changelog available
@@ -66,7 +66,7 @@ const versionLabel = $derived.by(() => {
 							style="background: var(--sig-text-muted)"
 						></span>
 						<span
-							class="min-w-0 font-[family-name:var(--font-mono)] text-[10px]
+							class="min-w-0 font-mono text-[10px]
 								leading-[14px] text-[var(--sig-text-muted)]"
 						>
 							{item}

@@ -81,6 +81,7 @@ import { registerRouteCommands } from "./commands/route.js";
 import { registerSecretCommands } from "./commands/secret.js";
 import { registerSessionCommands } from "./commands/session.js";
 import { registerSkillCommands } from "./commands/skill.js";
+import { registerSourcesCommands } from "./commands/sources.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
 import { registerWorkspaceCommands } from "./commands/workspace.js";
@@ -1461,6 +1462,11 @@ registerSkillCommands(program, {
 	SKILLS_DIR,
 	fetchFromDaemon,
 	isDaemonRunning,
+});
+
+registerSourcesCommands(program, {
+	agentsDir: AGENTS_DIR,
+	secretApiCall,
 });
 
 registerMcpCommands(program, {

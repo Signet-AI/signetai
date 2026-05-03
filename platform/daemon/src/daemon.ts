@@ -42,7 +42,12 @@ import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProv
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
-import { type NativeMemoryBridgeHandle, startNativeMemoryBridge } from "./native-memory-sources";
+import {
+	type NativeMemoryBridgeHandle,
+	claudeCodeNativeMemorySource,
+	codexNativeMemorySource,
+	startNativeMemoryBridge,
+} from "./native-memory-sources";
 import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import type { WorkerInit } from "./pipeline/extraction-thread-protocol";
@@ -129,6 +134,7 @@ import { registerSecretRoutes } from "./routes/secrets-routes.js";
 import { registerSessionRoutes } from "./routes/session-routes.js";
 import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
+import { registerSourcesRoutes } from "./routes/sources-routes.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
 import { checkEmbeddingProvider } from "./routes/utils.js";
 import { mountWidgetRoutes } from "./routes/widget.js";
@@ -188,6 +194,7 @@ registerPluginRoutes(app);
 registerGraphiqRoutes(app);
 registerSecretRoutes(app);
 registerSessionRoutes(app, { gitConfig, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync });
+registerSourcesRoutes(app);
 registerPipelineRoutes(app);
 registerTelemetryRoutes(app);
 registerMiscRoutes(app);
@@ -1546,7 +1553,12 @@ async function main() {
 		startMemoryImportPoller();
 
 		if (!nativeMemoryBridge) {
-			nativeMemoryBridge = startNativeMemoryBridge();
+			nativeMemoryBridge = startNativeMemoryBridge([codexNativeMemorySource(), claudeCodeNativeMemorySource()], {
+				agentsDir: AGENTS_DIR,
+				includeConfiguredSources: true,
+				embeddingConfig: memoryCfg.embedding,
+				fetchEmbedding,
+			});
 		}
 		nativeMemoryBridge.syncExisting().catch((e) => {
 			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };

@@ -28,7 +28,7 @@ let { description, children }: Props = $props();
 	}
 
 	.section-description {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		line-height: 1.6;
 		color: var(--sig-text-muted);

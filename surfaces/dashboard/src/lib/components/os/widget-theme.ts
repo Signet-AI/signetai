@@ -5,7 +5,7 @@ import { PAGE_AGENT_SCRIPT } from "./page-agent-bundle";
 
 export const WIDGET_BASE_CSS = `
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { font-family: 'Geist Mono', 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.5; color: var(--sig-text); background: var(--sig-bg); -webkit-font-smoothing: antialiased; }
+html { font-family: var(--font-body), 'Necto Mono', monospace; font-size: 13px; line-height: 1.5; color: var(--sig-text); background: var(--sig-bg); -webkit-font-smoothing: antialiased; }
 body { margin: 0; padding: 8px; min-height: 100%; }
 
 /* Form elements */
@@ -301,8 +301,6 @@ export function buildSrcdoc(html: string, serverId: string): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700&family=Chakra+Petch:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>${theme}\n${WIDGET_BASE_CSS}</style>
 <script>${WIDGET_BRIDGE_SCRIPT}<\/script>
 <script>${PAGE_AGENT_SCRIPT}<\/script>

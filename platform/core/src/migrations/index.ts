@@ -69,6 +69,8 @@ import { up as entityAttributeGroupKey } from "./060-entity-attribute-group-key"
 import { up as memoryArtifactSourceMtime } from "./061-memory-artifact-source-mtime";
 import { up as memoryArtifactSoftDelete } from "./062-memory-artifact-soft-delete";
 import { up as contentOnlyMemoriesFtsUpdate } from "./063-content-only-memories-fts-update";
+import { up as sourceGraphProvenance } from "./064-source-graph-provenance";
+import { up as sourceEmbeddingAgentScope } from "./065-source-embedding-agent-scope";
 
 // -- Public interface consumed by Database.init() --
 
@@ -596,6 +598,27 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 63,
 		name: "content-only-memories-fts-update",
 		up: contentOnlyMemoriesFtsUpdate,
+	},
+	{
+		version: 64,
+		name: "source-graph-provenance",
+		up: sourceGraphProvenance,
+		artifacts: {
+			columns: [
+				{ table: "entities", column: "source_path" },
+				{ table: "entity_communities", column: "source_path" },
+				{ table: "entity_attributes", column: "source_path" },
+				{ table: "entity_dependencies", column: "source_path" },
+			],
+		},
+	},
+	{
+		version: 65,
+		name: "source-embedding-agent-scope",
+		up: sourceEmbeddingAgentScope,
+		artifacts: {
+			columns: [{ table: "embeddings", column: "agent_id", optional: true }],
+		},
 	},
 ];
 

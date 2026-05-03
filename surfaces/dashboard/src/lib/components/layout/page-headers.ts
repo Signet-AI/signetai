@@ -50,6 +50,10 @@ export const PAGE_HEADERS = {
 		title: "Skills",
 		eyebrow: "Skills and Tool Servers",
 	},
+	sources: {
+		title: "Sources",
+		eyebrow: "External context index",
+	},
 	tasks: {
 		title: "Tasks",
 		eyebrow: "Scheduled agent prompts",

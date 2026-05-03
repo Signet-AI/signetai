@@ -120,7 +120,7 @@ function dismiss() {
 		padding: 0 12px;
 		background: var(--sig-bg);
 		border-bottom: 1px solid var(--sig-border);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.06em;
 		flex-shrink: 0;

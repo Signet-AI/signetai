@@ -200,7 +200,7 @@ function handleRefresh(): void {
 								<div class="edit-popover">
 									<span class="sig-eyebrow">Correct memory</span>
 									<Textarea
-										class="mt-2 min-h-[60px] text-[11px] font-[family-name:var(--font-mono)]
+										class="mt-2 min-h-[60px] text-[11px] font-mono
 											bg-[var(--sig-bg)] border-[var(--sig-border)]
 											text-[var(--sig-text)]"
 										value={editContent[m.id] ?? m.content}
@@ -272,7 +272,7 @@ function handleRefresh(): void {
 	}
 
 	.insights-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);
@@ -284,7 +284,7 @@ function handleRefresh(): void {
 		gap: 4px;
 		padding: 3px 8px;
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.08em;
 		cursor: pointer;
@@ -336,7 +336,7 @@ function handleRefresh(): void {
 	}
 
 	.entry-idx {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-highlight);
 		opacity: 0.4;
@@ -351,7 +351,7 @@ function handleRefresh(): void {
 	}
 
 	.entry-date {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.06em;
 		color: var(--sig-text-muted);
@@ -364,7 +364,7 @@ function handleRefresh(): void {
 	}
 
 	.entry-tag {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		padding: 1px 6px;
 		background: var(--sig-bg);
@@ -376,7 +376,7 @@ function handleRefresh(): void {
 
 	/* --- Content --- */
 	.entry-content {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		line-height: 1.6;
 		color: var(--sig-text);
@@ -395,7 +395,7 @@ function handleRefresh(): void {
 	}
 
 	.action-btn {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.08em;
 		padding: 2px 8px;
@@ -424,7 +424,7 @@ function handleRefresh(): void {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);

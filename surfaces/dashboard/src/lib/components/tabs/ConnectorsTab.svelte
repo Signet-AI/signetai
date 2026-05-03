@@ -215,7 +215,7 @@ onMount(() => {
 						></span>
 						<div class="flex flex-col gap-0.5 min-w-0 flex-1">
 							<span class="text-[12px] font-medium text-[var(--sig-text-bright)]
-								font-[family-name:var(--font-display)] tracking-[0.04em]">
+								font-display tracking-[0.04em]">
 								{h.name}
 							</span>
 							<span class="sig-eyebrow truncate">
@@ -277,7 +277,7 @@ onMount(() => {
 							</Badge>
 							<div class="flex flex-col gap-0.5 min-w-0 flex-1">
 								<span class="text-[12px] font-medium text-[var(--sig-text-bright)]
-									font-[family-name:var(--font-display)] tracking-[0.04em]">
+									font-display tracking-[0.04em]">
 									{conn.display_name ?? conn.id}
 								</span>
 								<span class="sig-eyebrow">

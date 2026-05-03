@@ -15,12 +15,13 @@
   ],
   "scripts": {
     "build": "bun run build:cli",
+    "build:workspace-deps": "cd ../.. && bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run --filter '@signet/connector-claude-code' --filter '@signet/connector-codex' --filter '@signet/connector-forge' --filter '@signet/connector-gemini' --filter '@signet/connector-hermes-agent' --filter '@signet/connector-opencode' --filter '@signet/connector-openclaw' build",
     "build:cli": "bun build ./src/cli.ts --outfile ./dist/cli.js --target node --external better-sqlite3",
     "build:dashboard": "cd ../dashboard && bun install && bun run build",
     "dev": "bun --watch src/cli.ts",
     "dev:dashboard": "cd ../dashboard && bun run dev",
     "copy:skills": "rm -rf skills && cp -r ../../skills skills",
-    "prebuild": "bun run copy:skills",
+    "prebuild": "bun run build:workspace-deps && bun run copy:skills",
     "prepublishOnly": "bun run build",
     "test": "bun test"
   },

@@ -151,7 +151,7 @@ async function checkPredictor(): Promise<void> {
 	}
 
 	.tasks-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);
@@ -182,7 +182,7 @@ async function checkPredictor(): Promise<void> {
 		border: 1px solid var(--sig-border-strong);
 		border-radius: var(--radius);
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.06em;
 		cursor: pointer;

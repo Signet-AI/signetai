@@ -200,7 +200,7 @@ onMount(() => {
 						border border-[var(--sig-border-strong)]
 						bg-[var(--sig-surface-raised)]
 						text-[var(--sig-text-bright)] text-[11px]
-						font-[family-name:var(--font-mono)]
+						font-mono
 						outline-none focus:border-[var(--sig-accent)]
 						pr-8"
 					value={sk.query}
@@ -221,7 +221,7 @@ onMount(() => {
 					href="https://skills.sh"
 					target="_blank"
 					rel="noopener"
-					class="font-[family-name:var(--font-mono)] text-[10px]
+					class="font-mono text-[10px]
 						text-[var(--sig-text-muted)]
 						hover:text-[var(--sig-accent)] no-underline"
 				>
@@ -232,7 +232,7 @@ onMount(() => {
 					href="https://clawhub.ai"
 					target="_blank"
 					rel="noopener"
-					class="font-[family-name:var(--font-mono)] text-[10px]
+					class="font-mono text-[10px]
 						text-[var(--sig-text-muted)]
 						hover:text-[var(--sig-accent)] no-underline"
 				>
@@ -244,7 +244,7 @@ onMount(() => {
 					target="_blank"
 					rel="noopener"
 					class="inline-flex items-center gap-[5px]
-						font-[family-name:var(--font-mono)] text-[10px]
+						font-mono text-[10px]
 						text-[var(--sig-success)] no-underline
 						hover:underline"
 				>
@@ -269,13 +269,13 @@ onMount(() => {
 			<Tabs.List class="bg-transparent h-auto gap-0 rounded-none border-none">
 				<Tabs.Trigger
 					value="browse"
-					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
+					class="font-mono text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
 				>
 					Browse{sk.catalogTotal ? ` (${sk.catalogTotal.toLocaleString()})` : ""}
 				</Tabs.Trigger>
 				<Tabs.Trigger
 					value="installed"
-					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
+					class="font-mono text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
 				>
 					Installed ({sk.installed.length})
 				</Tabs.Trigger>
@@ -286,7 +286,7 @@ onMount(() => {
 			<div class="flex items-center gap-2 ml-auto pr-[var(--space-md)]">
 				<!-- Sort dropdown -->
 				<div class="flex items-center gap-1">
-					<span class="text-[9px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)] uppercase tracking-wider">Sort</span>
+					<span class="text-[9px] font-mono text-[var(--sig-text-muted)] uppercase tracking-wider">Sort</span>
 					<Select.Root type="single" value={sk.sortBy} onValueChange={(v) => { sk.sortBy = parseSort(v ?? "installs"); }}>
 						<Select.Trigger class="sort-select">{activeSortLabel}</Select.Trigger>
 						<Select.Content class="sort-select-content">
@@ -298,7 +298,7 @@ onMount(() => {
 				</div>
 
 				<div class="flex items-center gap-1">
-					<span class="text-[9px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)] uppercase tracking-wider">Provider</span>
+					<span class="text-[9px] font-mono text-[var(--sig-text-muted)] uppercase tracking-wider">Provider</span>
 					<Select.Root type="single" value={sk.providerFilter} onValueChange={(v) => { sk.providerFilter = parseProvider(v ?? "all"); }}>
 						<Select.Trigger class="provider-select">{activeProviderLabel}</Select.Trigger>
 						<Select.Content class="sort-select-content">
@@ -355,7 +355,7 @@ onMount(() => {
 
 <style>
 	:global(.sort-select) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-bright);
 		background: var(--sig-surface-raised);
@@ -389,12 +389,12 @@ onMount(() => {
 	}
 
 	:global(.sort-select-item) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 	}
 
 	:global(.provider-select) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-bright);
 		background: var(--sig-surface-raised);

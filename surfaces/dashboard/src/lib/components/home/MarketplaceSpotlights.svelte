@@ -219,7 +219,7 @@ function handleClick(): void {
 	}
 
 	.spotlights-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);
@@ -273,7 +273,7 @@ function handleClick(): void {
 		border: 1px solid var(--sig-icon-border);
 		display: grid;
 		place-items: center;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		font-weight: 700;
 		color: var(--sig-icon-fg);
@@ -297,7 +297,7 @@ function handleClick(): void {
 	}
 
 	.spotlight-name {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		font-weight: 600;
 		color: var(--sig-text-bright);
@@ -312,7 +312,7 @@ function handleClick(): void {
 
 	.spotlight-badge {
 		flex-shrink: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		padding: 1px 4px;
 		border: 1px solid var(--sig-border-strong);
@@ -322,7 +322,7 @@ function handleClick(): void {
 	}
 
 	.spotlight-desc {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		line-height: 1.4;
@@ -336,7 +336,7 @@ function handleClick(): void {
 
 	.spotlight-usage {
 		margin: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
@@ -348,7 +348,7 @@ function handleClick(): void {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);

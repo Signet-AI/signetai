@@ -214,7 +214,7 @@ const graphH = 160;
 		flex-shrink: 0;
 	}
 	.total-value {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 32px;
 		font-weight: 700;
 		color: var(--sig-highlight-text, var(--sig-text-bright));
@@ -222,7 +222,7 @@ const graphH = 160;
 		font-variant-numeric: tabular-nums;
 	}
 	.total-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		text-transform: uppercase;
 		letter-spacing: 0.15em;
@@ -256,7 +256,7 @@ const graphH = 160;
 		gap: 1px;
 	}
 	.stat-value {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 14px;
 		font-weight: 600;
 		color: var(--sig-text-bright);
@@ -268,7 +268,7 @@ const graphH = 160;
 		font-weight: 400;
 	}
 	.stat-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
@@ -285,7 +285,7 @@ const graphH = 160;
 		grid-template-columns: 1fr auto auto;
 		gap: var(--space-sm);
 		align-items: center;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		position: relative;
 		padding: 3px 4px;
@@ -328,7 +328,7 @@ const graphH = 160;
 	.panel-empty {
 		padding: var(--space-md);
 		text-align: center;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 	}
 </style>

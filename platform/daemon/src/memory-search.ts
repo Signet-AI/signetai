@@ -64,6 +64,7 @@ export interface RecallResult {
 	source: string;
 	source_id?: string;
 	session_id?: string;
+	source_path?: string;
 	type: string;
 	tags: string | null;
 	pinned: boolean;
@@ -521,6 +522,15 @@ interface NativeArtifactRecallHit {
 	readonly rank: number;
 }
 
+interface SourceChunkVectorHit {
+	readonly embeddingId: string;
+	readonly sourceId: string;
+	readonly sourcePath: string;
+	readonly chunkText: string;
+	readonly score: number;
+	readonly createdAt: string;
+}
+
 function nativeIdSegment(value: string | null | undefined): string {
 	return (
 		value
@@ -534,6 +544,75 @@ function nativeIdSegment(value: string | null | undefined): string {
 function nativeArtifactPublicId(hit: NativeArtifactRecallHit): string {
 	const digest = createHash("sha256").update(hit.sourcePath).digest("hex").slice(0, 16);
 	return `native:${nativeIdSegment(hit.harness)}:${nativeIdSegment(hit.sourceKind)}:${digest}`;
+}
+
+function nativeArtifactRecallContent(hit: NativeArtifactRecallHit): string {
+	if (hit.harness === "obsidian") {
+		return `[Obsidian vault note: ${hit.sourcePath}]\n${hit.content}`;
+	}
+	return `[Native ${hit.harness ?? "harness"} memory: ${hit.sourcePath}]\n${hit.content}`;
+}
+
+function nativeArtifactRecallSource(hit: NativeArtifactRecallHit): string {
+	return hit.harness === "obsidian" ? "source_obsidian" : "native_memory";
+}
+
+function nativeArtifactRecallTags(hit: NativeArtifactRecallHit): string {
+	return [hit.harness, hit.harness === "obsidian" ? "source" : "native-memory", hit.sourceKind]
+		.filter(Boolean)
+		.join(",");
+}
+
+function sourcePathFromChunkText(chunkText: string): string {
+	const line = chunkText.split("\n").find((part) => part.toLowerCase().startsWith("source_path:"));
+	return line?.slice("source_path:".length).trim() ?? "";
+}
+
+function buildSourceChunkVectorHits(
+	queryVec: Float32Array | null,
+	existingSourceIds: ReadonlySet<string>,
+	limit: number,
+	agentId?: string,
+): SourceChunkVectorHit[] {
+	if (!queryVec || limit <= 0 || !agentId) return [];
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const agentWhere = agentId ? " AND agent_id = ?" : "";
+			const rows = db
+				.prepare(
+					`SELECT id, source_id, vector, chunk_text, created_at
+					 FROM embeddings
+					 WHERE source_type = 'source_obsidian_chunk' AND vector IS NOT NULL${agentWhere}`,
+				)
+				.all(...(agentId ? [agentId] : [])) as Array<{
+				id: string;
+				source_id: string;
+				vector: Buffer;
+				chunk_text: string;
+				created_at: string;
+			}>;
+			return rows
+				.map((row) => ({
+					embeddingId: row.id,
+					sourceId: row.source_id,
+					sourcePath: sourcePathFromChunkText(row.chunk_text),
+					chunkText: row.chunk_text,
+					score: cosineSimilarity(
+						queryVec,
+						new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4),
+					),
+					createdAt: row.created_at,
+				}))
+				.filter((row) => row.score > 0 && !existingSourceIds.has(row.sourceId))
+				.sort((a, b) => b.score - a.score)
+				.slice(0, limit);
+		});
+	} catch (e) {
+		logger.warn("memory", "Source chunk vector recall failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+		return [];
+	}
 }
 
 function sessionIdFromSourceId(sourceId: string): string {
@@ -730,7 +809,7 @@ function buildNativeArtifactRecallHits(
 				"JOIN memory_artifacts ma ON ma.rowid = memory_artifacts_fts.rowid",
 				"WHERE memory_artifacts_fts MATCH ?",
 				"AND ma.agent_id = ?",
-				"AND ma.source_kind LIKE 'native_%'",
+				"AND (ma.source_kind LIKE 'native_%' OR ma.source_kind LIKE 'source_%')",
 				"AND COALESCE(ma.is_deleted, 0) = 0",
 				"AND ma.source_node_id = ?",
 				"AND ma.harness IS NOT NULL",
@@ -1626,10 +1705,46 @@ export async function hybridRecall(
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 
 	if (topIds.length === 0) {
+		const sourceChunkHits = buildSourceChunkVectorHits(queryVecF32, new Set(), limit, params.agentId);
+		if (sourceChunkHits.length > 0) {
+			const results = sourceChunkHits.slice(0, limit).map((hit): RecallResult => {
+				const content = `[Obsidian vault chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
+				const truncated = content.length > recallTruncate;
+				return {
+					id: `source-chunk:${hit.embeddingId}`,
+					content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+					content_length: content.length,
+					truncated,
+					score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
+					source: "source_obsidian",
+					source_id: hit.sourceId,
+					session_id: hit.sourceId,
+					type: "source_obsidian_chunk",
+					tags: "obsidian,source,source_obsidian_chunk,vector",
+					pinned: false,
+					importance: 0.6,
+					who: "obsidian",
+					project: null,
+					created_at: hit.createdAt,
+					source_path: hit.sourcePath,
+					supplementary: true,
+				};
+			});
+			return {
+				results,
+				query,
+				method: "hybrid",
+				meta: {
+					totalReturned: results.length,
+					hasSupplementary: true,
+					noHits: false,
+				},
+			};
+		}
 		const nativeHits = buildNativeArtifactRecallHits(params, expandedQuery, new Set());
 		if (nativeHits.length > 0) {
 			const results = nativeHits.slice(0, limit).map((hit): RecallResult => {
-				const content = `[Native ${hit.harness ?? "harness"} memory]\n${hit.content}`;
+				const content = nativeArtifactRecallContent(hit);
 				const truncated = content.length > recallTruncate;
 				const sourceId = nativeArtifactPublicId(hit);
 				return {
@@ -1638,16 +1753,17 @@ export async function hybridRecall(
 					content_length: content.length,
 					truncated,
 					score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
-					source: "native_memory",
+					source: nativeArtifactRecallSource(hit),
 					source_id: sourceId,
 					session_id: sourceId,
 					type: hit.sourceKind,
-					tags: [hit.harness, "native-memory", hit.sourceKind].filter(Boolean).join(","),
+					tags: nativeArtifactRecallTags(hit),
 					pinned: false,
 					importance: 0.55,
 					who: hit.harness ?? "",
 					project: hit.project,
 					created_at: hit.updatedAt,
+					source_path: hit.sourcePath,
 					supplementary: true,
 				};
 			});
@@ -1805,10 +1921,45 @@ export async function hybridRecall(
 
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
+		const sourceChunkHits = buildSourceChunkVectorHits(
+			queryVecF32,
+			existingSourceIds,
+			limit - results.length,
+			params.agentId,
+		);
+		for (const hit of sourceChunkHits) {
+			if (results.length >= limit) break;
+			const content = `[Obsidian vault chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
+			const truncated = content.length > recallTruncate;
+			results.push({
+				id: `source-chunk:${hit.embeddingId}`,
+				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+				content_length: content.length,
+				truncated,
+				score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
+				source: "source_obsidian",
+				source_id: hit.sourceId,
+				session_id: hit.sourceId,
+				type: "source_obsidian_chunk",
+				tags: "obsidian,source,source_obsidian_chunk,vector",
+				pinned: false,
+				importance: 0.6,
+				who: "obsidian",
+				project: null,
+				created_at: hit.createdAt,
+				source_path: hit.sourcePath,
+				supplementary: true,
+			});
+			existingSourceIds.add(hit.sourceId);
+		}
+	}
+
+	if (results.length < limit) {
+		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
 		const nativeHits = buildNativeArtifactRecallHits(params, expandedQuery, existingSourceIds);
 		for (const hit of nativeHits) {
 			if (results.length >= limit) break;
-			const content = `[Native ${hit.harness ?? "harness"} memory]\n${hit.content}`;
+			const content = nativeArtifactRecallContent(hit);
 			const truncated = content.length > recallTruncate;
 			const sourceId = nativeArtifactPublicId(hit);
 			results.push({
@@ -1817,16 +1968,17 @@ export async function hybridRecall(
 				content_length: content.length,
 				truncated,
 				score: Math.round(Math.max(0.01, Math.min(1, hit.rank * 0.85)) * 100) / 100,
-				source: "native_memory",
+				source: nativeArtifactRecallSource(hit),
 				source_id: sourceId,
 				session_id: sourceId,
 				type: hit.sourceKind,
-				tags: [hit.harness, "native-memory", hit.sourceKind].filter(Boolean).join(","),
+				tags: nativeArtifactRecallTags(hit),
 				pinned: false,
 				importance: 0.55,
 				who: hit.harness ?? "",
 				project: hit.project,
 				created_at: hit.updatedAt,
+				source_path: hit.sourcePath,
 				supplementary: true,
 			});
 		}

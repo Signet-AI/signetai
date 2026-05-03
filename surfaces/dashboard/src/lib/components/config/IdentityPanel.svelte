@@ -388,7 +388,7 @@ export function discard(): void {
 	}
 
 	.budget-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.02em;
 		white-space: nowrap;
@@ -407,7 +407,7 @@ export function discard(): void {
 		align-items: center;
 		justify-content: center;
 		flex: 1;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: var(--font-size-sm);
 		color: var(--sig-text-muted);
 	}
@@ -428,7 +428,7 @@ export function discard(): void {
 
 	.jump-filter input {
 		width: 100%;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-bright);
 		background: var(--sig-bg);
@@ -452,7 +452,7 @@ export function discard(): void {
 		gap: 6px;
 		width: 100%;
 		padding: 6px 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text);
 		background: transparent;
@@ -498,7 +498,7 @@ export function discard(): void {
 
 	.jump-empty {
 		padding: 12px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-muted);
 		text-align: center;

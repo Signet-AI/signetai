@@ -193,7 +193,7 @@ $effect(() => {
 	}
 
 	.status-indicator {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		font-weight: 600;
@@ -212,7 +212,7 @@ $effect(() => {
 	}
 
 	.panel-link {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.08em;
 		color: var(--sig-accent);
@@ -266,7 +266,7 @@ $effect(() => {
 	}
 
 	.split-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.08em;
 		color: var(--sig-text-muted);
@@ -286,7 +286,7 @@ $effect(() => {
 	.stat-row {
 		display: flex;
 		align-items: baseline;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		line-height: 2;
 		letter-spacing: 0.04em;
@@ -321,7 +321,7 @@ $effect(() => {
 		align-items: center;
 		justify-content: center;
 		height: 100%;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);

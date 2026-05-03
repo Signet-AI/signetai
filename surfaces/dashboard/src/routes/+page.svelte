@@ -297,7 +297,7 @@ $effect(() => {
 <Toaster
 	position="bottom-right"
 	toastOptions={{
-		class: "!font-[family-name:var(--font-mono)] !text-[12px] !border-[var(--sig-border-strong)] !bg-[var(--sig-surface-raised)] !text-[var(--sig-text-bright)]",
+		class: "!font-mono !text-[12px] !border-[var(--sig-border-strong)] !bg-[var(--sig-surface-raised)] !text-[var(--sig-text-bright)]",
 	}}
 />
 

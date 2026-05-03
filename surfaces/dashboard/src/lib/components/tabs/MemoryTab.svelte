@@ -510,7 +510,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 	<div class="filter-row flex flex-wrap items-center gap-2">
 		<Select.Root type="single" value={mem.filterWho} onValueChange={(v) => { mem.filterWho = v ?? ""; }}>
 			<Select.Trigger
-				class="font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[120px] max-w-[180px]"
+				class="font-mono text-[11px] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[120px] max-w-[180px]"
 				onkeydown={(e) => {
 					// Let navigation keys work even when select is focused
 					if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "ArrowRight") {

@@ -37,7 +37,7 @@ let open = $state(false);
 		align-items: center;
 		gap: 6px;
 		padding: 4px 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		font-weight: 500;
 		text-transform: uppercase;

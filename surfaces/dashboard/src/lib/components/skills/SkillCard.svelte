@@ -176,7 +176,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 					<span class="stat">/{item.name}</span>
 				{/if}
 				{#if item.builtin}
-					<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
+					<Badge variant="outline" class="rounded-lg font-mono text-[9px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
 				{/if}
 			{/if}
 		</div>
@@ -189,7 +189,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 					<Button
 						variant="outline"
 						size="sm"
-						class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-accent)] text-[var(--sig-accent)] cursor-default"
+						class="flex-1 h-auto rounded-lg font-mono text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-accent)] text-[var(--sig-accent)] cursor-default"
 						disabled
 					>
 						PRE-INSTALLED
@@ -198,7 +198,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 					<Button
 						variant="outline"
 						size="sm"
-						class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)] hover:shadow-[0_0_12px_rgba(220,38,38,0.35)] hover:scale-[1.02]"
+						class="flex-1 h-auto rounded-lg font-mono text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)] hover:shadow-[0_0_12px_rgba(220,38,38,0.35)] hover:scale-[1.02]"
 						onclick={(e: MouseEvent) => { e.stopPropagation(); onuninstall?.(); }}
 						disabled={uninstalling}
 					>
@@ -208,7 +208,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 					<Button
 						variant="outline"
 						size="sm"
-						class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-text-muted)] hover:shadow-[0_0_12px_rgba(255,255,255,0.1)] hover:scale-[1.02]"
+						class="flex-1 h-auto rounded-lg font-mono text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-text-muted)] hover:shadow-[0_0_12px_rgba(255,255,255,0.1)] hover:scale-[1.02]"
 						onclick={(e: MouseEvent) => { e.stopPropagation(); oninstall?.(); }}
 						disabled={installing}
 					>
@@ -223,7 +223,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 					<Button
 						variant="outline"
 						size="sm"
-						class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)] hover:shadow-[0_0_12px_rgba(220,38,38,0.35)] hover:scale-[1.02]"
+						class="flex-1 h-auto rounded-lg font-mono text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)] hover:shadow-[0_0_12px_rgba(220,38,38,0.35)] hover:scale-[1.02]"
 						onclick={(e: MouseEvent) => { e.stopPropagation(); onuninstall?.(); }}
 						disabled={uninstalling}
 					>
@@ -304,7 +304,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 		justify-content: center;
 		border-radius: 3px;
 		border: 1px solid var(--sig-icon-border);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		font-weight: 700;
 		color: var(--sig-icon-fg);
@@ -346,7 +346,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 	}
 
 	.card-name {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--sig-text-bright);
@@ -364,7 +364,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 
 	.provider-badge {
 		flex-shrink: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		padding: 1px 5px;
 		border: 1px solid var(--sig-border-strong);
@@ -383,7 +383,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 	}
 
 	.card-desc {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		line-height: 1.5;
@@ -407,7 +407,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 		display: inline-flex;
 		align-items: center;
 		gap: 3px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		font-variant-numeric: tabular-nums;
@@ -421,7 +421,7 @@ const isInstalled = $derived(isSkill(item) ? true : isSearchResult(item) ? item.
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;

@@ -35,14 +35,14 @@ function dismiss() {
 			<span
 				class="text-[10px] font-bold uppercase tracking-[0.08em]
 					text-[var(--sig-accent)]
-					font-[family-name:var(--font-display)]
+					font-display
 					shrink-0"
 			>
 				New
 			</span>
 			<span
 				class="text-[12px] text-[var(--sig-text)]
-					font-[family-name:var(--font-mono)]
+					font-mono
 					truncate"
 			>
 				Browser extension — quick memory access from any tab
@@ -59,7 +59,7 @@ function dismiss() {
 					bg-[var(--sig-surface)] border border-[var(--sig-border-strong)]
 					hover:bg-[var(--sig-accent)] hover:text-[var(--sig-bg)]
 					transition-all duration-200
-					font-[family-name:var(--font-mono)]
+					font-mono
 					no-underline cursor-pointer"
 			>
 				Install

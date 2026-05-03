@@ -85,7 +85,7 @@ const content = $derived.by((): FooterSlot | null => {
 		background: var(--sig-bg);
 		border-top: 1px solid var(--sig-border);
 		flex-shrink: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
