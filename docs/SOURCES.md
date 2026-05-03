@@ -130,8 +130,9 @@ The watcher path is deliberately conservative:
 - overlapping sync requests are coalesced into one trailing resync;
 - content fingerprints prevent unchanged files from being reprocessed;
 - removed files are soft-deleted from source artifacts and have their source-owned chunks purged;
-- disconnected sources stop participating in future configured-source scans;
-- queue/backpressure settings prevent unbounded pending source work.
+- disconnected sources stop participating in future configured-source scans.
+
+The v1 safety model is deliberately conservative rather than a general-purpose queue. It serializes source-wide scans with single-flight state and collapses overlapping requests into one trailing resync. It does not expose tunable queue depth or backpressure settings yet.
 
 Renames are treated as delete + add in v1. That keeps the lifecycle safe and predictable.
 
