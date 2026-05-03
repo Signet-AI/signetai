@@ -15,6 +15,17 @@ function writeJson(file: string, value: unknown): void {
 }
 
 describe("check-publish-manifests", () => {
+	test("keeps threaded extraction worker in standalone daemon and meta-package builds", () => {
+		const root = join(import.meta.dir, "..");
+		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
+		const metaPackageBuild = readFileSync(join(root, "dist", "signetai", "build-daemon.ts"), "utf-8");
+
+		expect(daemonBuild).toContain('entrypoint: "./src/pipeline/extraction-thread.ts"');
+		expect(daemonBuild).toContain('outfile: "./dist/extraction-thread.js"');
+		expect(metaPackageBuild).toContain('entrypoint: "../../platform/daemon/src/pipeline/extraction-thread.ts"');
+		expect(metaPackageBuild).toContain('outfile: "./dist/extraction-thread.js"');
+	});
+
 	test("keeps Hermes plugin assets in the signetai publish package", () => {
 		const root = join(import.meta.dir, "..");
 		const manifest = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {
