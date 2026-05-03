@@ -751,11 +751,13 @@ function findPhantomVersions(
 		if (!missing && migration.artifacts.columns) {
 			for (const col of migration.artifacts.columns) {
 				if (!tables.has(col.table)) {
+					if (col.optional) continue;
 					missing = true;
 					break;
 				}
 				const cols = tableColumns(db, col.table, colCache);
 				if (!cols.has(col.column)) {
+					if (col.optional) continue;
 					missing = true;
 					break;
 				}
