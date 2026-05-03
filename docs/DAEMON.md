@@ -66,9 +66,9 @@ Configuration
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SIGNET_PORT` | `3850` | HTTP server port |
-| `SIGNET_HOST` | `127.0.0.1` | Daemon host for local calls and default bind address |
-| `SIGNET_BIND` | `SIGNET_HOST` | Explicit bind address override (for example `0.0.0.0`) |
-| `SIGNET_PATH` | `$SIGNET_WORKSPACE` | Base agents directory |
+| `SIGNET_HOST` | `127.0.0.1` | Daemon host used for local calls |
+| `SIGNET_BIND` | network mode bind | Explicit bind address override; defaults to `127.0.0.1` in localhost mode and `0.0.0.0` in tailscale mode |
+| `SIGNET_PATH` | `~/.agents` | Runtime override for the agents directory |
 | `SIGNET_LOG_FILE` | — | Optional explicit log file path |
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
@@ -84,7 +84,7 @@ When log path overrides are set:
 |------|-------------|
 | `$SIGNET_WORKSPACE/.daemon/pid` | Process ID file |
 | `$SIGNET_WORKSPACE/.daemon/logs/` | Log directory |
-| `$SIGNET_WORKSPACE/.daemon/logs/daemon-YYYY-MM-DD.log` | Daily log file |
+| `$SIGNET_WORKSPACE/.daemon/logs/signet-YYYY-MM-DD.log` | Daily log file |
 | `$SIGNET_WORKSPACE/.daemon/logs/daemon.out.log` | stdout capture |
 | `$SIGNET_WORKSPACE/.daemon/logs/daemon.err.log` | stderr capture |
 
@@ -101,10 +101,11 @@ The pipeline lives at `platform/daemon/src/pipeline/` and is managed
 by `startPipeline()` / `stopPipeline()`. Four workers run in parallel:
 
 **Extraction worker** (`worker.ts`) polls the `memory_jobs` queue for
-pending extraction jobs. Each job runs the conversation through Ollama
-(default model: `qwen3:4b`), then passes the result to the decision
-stage which decides whether to write, update, or skip. The provider
-and decision stages run outside write locks to keep contention low.
+pending extraction jobs. Each job runs the conversation through the
+configured extraction provider (default `llama-cpp` with model
+`qwen3.5:4b`), then passes the result to the decision stage which
+decides whether to write, update, or skip. The provider and decision
+stages run outside write locks to keep contention low.
 
 **Document worker** (`document-worker.ts`) polls `memory_jobs` for
 `document_ingest` jobs. It fetches remote URLs if needed, chunks the
@@ -131,10 +132,10 @@ Pipeline config modes:
 |-----------|--------|
 | `shadowMode` | Extract memories but do not write them |
 | `mutationsFrozen` | Read-only; no writes at all |
-| `graphEnabled` | Enable knowledge graph traversal on recall |
-| `autonomousEnabled` | Allow the maintenance worker to run repairs |
-| `autonomousFrozen` | Pause autonomous repairs without disabling |
-| `maintenanceMode` | `"observe"` (log only) or `"execute"` (act) |
+| `graph.enabled` | Enable knowledge graph traversal on recall |
+| `autonomous.enabled` | Allow the maintenance worker to run repairs |
+| `autonomous.frozen` | Pause autonomous repairs without disabling |
+| `autonomous.maintenanceMode` | `"observe"` (log only) or `"execute"` (act) |
 
 ### Session Tracker
 
@@ -250,9 +251,20 @@ GET /health
   "status": "healthy",
   "uptime": 3600,
   "pid": 12345,
-  "version": "0.1.0",
+  "version": "0.109.x",
   "port": 3850,
-  "agentsDir": "/home/user/.agents"
+  "agentsDir": "/home/user/.agents",
+  "db": true,
+  "shuttingDown": false,
+  "updateAvailable": false,
+  "pendingRestart": false,
+  "pipeline": {
+    "extractionRunning": true,
+    "extractionStalled": false,
+    "extractionPending": 0,
+    "extractionBackoffMs": 0
+  },
+  "resources": { "...": "..." }
 }
 ```
 
@@ -265,14 +277,28 @@ GET /api/status
 ```json
 {
   "status": "running",
-  "version": "0.1.0",
+  "version": "0.109.x",
   "pid": 12345,
   "uptime": 3600,
   "startedAt": "2025-02-17T16:00:00.000Z",
   "port": 3850,
-  "host": "localhost",
+  "host": "127.0.0.1",
+  "bindHost": "127.0.0.1",
+  "networkMode": "localhost",
   "agentsDir": "/home/user/.agents",
-  "memoryDb": true
+  "memoryDb": true,
+  "pipelineV2": { "...": "..." },
+  "pipeline": { "extraction": { "...": "..." } },
+  "providerResolution": { "extraction": { "...": "..." } },
+  "logging": {
+    "logDir": "/home/user/.agents/.daemon/logs",
+    "logFile": "/home/user/.agents/.daemon/logs/signet-2026-04-29.log"
+  },
+  "activeSessions": 0,
+  "bypassedSessions": 0,
+  "agentCreatedAt": "2025-02-17T16:00:00.000Z",
+  "update": { "...": "..." },
+  "embedding": { "...": "..." }
 }
 ```
 
@@ -328,9 +354,9 @@ Security
 
 ### Network Binding
 
-The daemon binds to `localhost` by default and is not reachable from
-other machines. Set `SIGNET_HOST` to expose it on a broader interface,
-but pair that with auth mode `team` or `hybrid`.
+The daemon binds to loopback by default and is not reachable from
+other machines. Set `network.mode: tailscale` or `SIGNET_BIND` to expose it
+on a broader interface, but pair that with auth mode `team` or `hybrid`.
 
 ### Auth Modes
 
@@ -349,7 +375,7 @@ Logging
 -------
 
 Logs are written to the console and to a daily file at
-`$SIGNET_WORKSPACE/.daemon/logs/daemon-YYYY-MM-DD.log` by default. When
+`$SIGNET_WORKSPACE/.daemon/logs/signet-YYYY-MM-DD.log` by default. When
 `SIGNET_LOG_FILE` is set, logs are written to that exact file.
 When `SIGNET_LOG_DIR` is set (and `SIGNET_LOG_FILE` is unset), daily
 logs are written under `$SIGNET_LOG_DIR/`.
