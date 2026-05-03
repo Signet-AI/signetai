@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addObsidianSource, getSourcesConfigPath, loadSourcesConfig, removeSource } from "./sources-config";
+import {
+	addObsidianSource,
+	getSourcesConfigPath,
+	loadSourcesConfig,
+	markSourceIndexed,
+	removeSource,
+} from "./sources-config";
 
 let dir = "";
 
@@ -70,6 +76,31 @@ describe("sources-config", () => {
 		if (removed.ok === false) throw new Error(removed.error);
 		expect(removed.source.id).toBe(added.source.id);
 		expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+	});
+
+	it("uses unique temp files and leaves no stale lock or tmp files after sequential mutations", () => {
+		const agentsDir = tmp();
+		const vaultA = join(agentsDir, "vault-a");
+		const vaultB = join(agentsDir, "vault-b");
+		mkdirSync(vaultA, { recursive: true });
+		mkdirSync(vaultB, { recursive: true });
+
+		const first = addObsidianSource({ root: vaultA, name: "Vault A" }, agentsDir);
+		const second = addObsidianSource({ root: vaultB, name: "Vault B" }, agentsDir);
+		expect(first.ok).toBe(true);
+		expect(second.ok).toBe(true);
+		if (first.ok === false || second.ok === false) throw new Error("expected sources to be added");
+
+		markSourceIndexed(first.source.id, "2026-01-03T00:00:00.000Z", agentsDir);
+		const removed = removeSource(second.source.id, agentsDir);
+		expect(removed.ok).toBe(true);
+
+		const cfg = loadSourcesConfig(agentsDir);
+		expect(cfg.sources.map((source) => source.id)).toEqual([first.source.id]);
+		expect(cfg.sources[0]?.lastIndexedAt).toBe("2026-01-03T00:00:00.000Z");
+		expect(
+			readdirSync(agentsDir).some((name) => name.includes("sources.json.tmp") || name === "sources.json.lock"),
+		).toBe(false);
 	});
 
 	it("returns a not-found result when removing an unknown source", () => {

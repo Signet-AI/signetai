@@ -171,7 +171,9 @@ export function buildObsidianSourceChunks(input: {
 				return;
 			}
 			for (const piece of splitLongText(trimmed)) {
-				const chunkId = `${input.sourceId}:${relativePath}#${slug(section.headingPath) || "overview"}:${chunkIndex}`;
+				const headingKey = slug(section.headingPath) || "overview";
+				const lineKey = `${section.startLine}-${section.endLine}`;
+				const chunkId = `${input.sourceId}:${relativePath}#${headingKey}:${lineKey}:${chunkIndex}`;
 				const chunkText = [
 					`source_id: ${input.sourceId}`,
 					`source_path: ${filePath}`,
@@ -277,8 +279,13 @@ export async function indexObsidianSourceEmbeddings(
 	getDbAccessor().withWriteTx((db) => {
 		const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
 		const stale = db
-			.prepare("SELECT id, content_hash FROM embeddings WHERE source_type = ? AND source_id LIKE ? AND agent_id = ?")
-			.all(OBSIDIAN_CHUNK_SOURCE_TYPE, `${prefix}%`, input.agentId) as Array<{ id: string; content_hash: string }>;
+			.prepare(
+				"SELECT id, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
+			)
+			.all(OBSIDIAN_CHUNK_SOURCE_TYPE, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
+			id: string;
+			content_hash: string;
+		}>;
 		const staleIds = stale.filter((row) => !currentHashes.has(row.content_hash)).map((row) => row.id);
 		if (staleIds.length > 0) {
 			syncVecDeleteByEmbeddingIds(db, staleIds);
@@ -302,17 +309,22 @@ export function purgeObsidianSourceEmbeddings(input: PurgeObsidianSourceEmbeddin
 function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): number {
 	return getDbAccessor().withWriteTx((db) => {
 		const agentWhere = agentId ? " AND agent_id = ?" : "";
+		const upper = prefixUpperBound(prefix);
 		const args = agentId
-			? [OBSIDIAN_CHUNK_SOURCE_TYPE, `${prefix}%`, agentId]
-			: [OBSIDIAN_CHUNK_SOURCE_TYPE, `${prefix}%`];
+			? [OBSIDIAN_CHUNK_SOURCE_TYPE, prefix, upper, agentId]
+			: [OBSIDIAN_CHUNK_SOURCE_TYPE, prefix, upper];
 		const rows = db
-			.prepare(`SELECT id FROM embeddings WHERE source_type = ? AND source_id LIKE ?${agentWhere}`)
+			.prepare(`SELECT id FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
 			.all(...args) as Array<{ id: string }>;
 		const ids = rows.map((row) => row.id);
 		syncVecDeleteByEmbeddingIds(db, ids);
 		const result = db
-			.prepare(`DELETE FROM embeddings WHERE source_type = ? AND source_id LIKE ?${agentWhere}`)
+			.prepare(`DELETE FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
 			.run(...args);
 		return result.changes;
 	});
+}
+
+function prefixUpperBound(prefix: string): string {
+	return `${prefix}\uffff`;
 }

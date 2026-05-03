@@ -565,6 +565,33 @@ describe("native memory sources", () => {
 		expect(rows).toEqual([{ source_path: outsideFile }]);
 	});
 
+	it("purges source artifacts without treating wildcard characters in roots as LIKE patterns", async () => {
+		const root = join(dir, "vault_%");
+		const siblingRoot = join(dir, "vault_AX");
+		const source = obsidianNativeMemorySource(root, "Wildcard Vault", "obsidian:wildcard-vault");
+		const siblingSource = obsidianNativeMemorySource(siblingRoot, "Sibling Vault", "obsidian:sibling-vault");
+		const file = join(root, "notes", "Remove.md");
+		const siblingFile = join(siblingRoot, "notes", "Keep.md");
+		mkdirSync(join(root, "notes"), { recursive: true });
+		mkdirSync(join(siblingRoot, "notes"), { recursive: true });
+		writeFileSync(file, "# Remove\n\nOnly this wildcard-root source artifact should be purged.\n");
+		writeFileSync(siblingFile, "# Keep\n\nThis sibling source artifact should not be matched by SQL wildcards.\n");
+
+		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(true);
+		expect(await indexNativeMemoryFile(siblingSource, siblingFile, "agent-native")).toBe(true);
+
+		const purged = purgeNativeMemorySourceArtifacts(source, "agent-native");
+
+		expect(purged).toBeGreaterThanOrEqual(1);
+		const remaining = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT source_path FROM memory_artifacts WHERE agent_id = ? ORDER BY source_path")
+					.all("agent-native") as Array<{ source_path: string }>,
+		);
+		expect(remaining).toEqual([{ source_path: siblingFile }]);
+	});
+
 	it("purges a disconnected source across source-owned agent scopes when no agent id is supplied", async () => {
 		const root = join(dir, "vault");
 		const source = obsidianNativeMemorySource(root, "Research Vault", "obsidian:cross-agent-vault");

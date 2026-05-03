@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
 import { type EmbeddingConfig, loadMemoryConfig } from "./memory-config";
 import { hybridRecall } from "./memory-search";
-import { indexObsidianSourceEmbeddings, purgeObsidianSourceEmbeddings } from "./obsidian-source-embeddings";
+import {
+	buildObsidianSourceChunks,
+	indexObsidianSourceEmbeddings,
+	purgeObsidianSourceEmbeddings,
+	purgeObsidianSourceFileEmbeddings,
+} from "./obsidian-source-embeddings";
 
 const embeddingConfig: EmbeddingConfig = {
 	provider: "native",
@@ -97,6 +102,62 @@ describe("Obsidian source embeddings", () => {
 		expect(rows.some((row) => row.chunk_text.includes("heading: Source Memory"))).toBe(true);
 		expect(rows.some((row) => row.chunk_text.includes("Chunk Strategy"))).toBe(true);
 		expect(rows.every((row) => /lines: \d+-\d+/.test(row.chunk_text))).toBe(true);
+	});
+
+	it("keeps chunk IDs distinct for repeated heading paths", () => {
+		const filePath = join(vault, "literature", "repeated-headings.md");
+		const chunks = buildObsidianSourceChunks({
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath,
+			content:
+				"# Notes\n\nThe first repeated heading has enough durable source text to become a standalone retrieval chunk.\n\n# Notes\n\nThe second repeated heading has enough durable source text to become a different standalone retrieval chunk.\n",
+		});
+
+		expect(chunks).toHaveLength(2);
+		expect(new Set(chunks.map((chunk) => chunk.id)).size).toBe(chunks.length);
+		expect(chunks.every((chunk) => chunk.id.includes("#notes:"))).toBe(true);
+	});
+
+	it("purges file chunks without treating wildcard characters in paths as LIKE patterns", async () => {
+		const filePath = join(vault, "literature", "note_%A.md");
+		const siblingPath = join(vault, "literature", "note_XA.md");
+		const content = "# Source\n\nThis source note has enough durable text to create an embedded Obsidian source chunk.";
+		await indexObsidianSourceEmbeddings({
+			agentId: "obsidian-embedding-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath,
+			content,
+			embeddingConfig,
+			fetchEmbedding: async () => testVector(1),
+		});
+		await indexObsidianSourceEmbeddings({
+			agentId: "obsidian-embedding-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath: siblingPath,
+			content,
+			embeddingConfig,
+			fetchEmbedding: async () => testVector(2),
+		});
+
+		const purged = purgeObsidianSourceFileEmbeddings({
+			agentId: "obsidian-embedding-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath,
+		});
+
+		expect(purged).toBeGreaterThan(0);
+		const remaining = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT source_id FROM embeddings WHERE source_type = 'source_obsidian_chunk' ORDER BY source_id")
+					.all() as Array<{ source_id: string }>,
+		);
+		expect(remaining).toHaveLength(1);
+		expect(remaining[0]?.source_id).toContain("note_XA.md#");
 	});
 
 	it("purges stale source chunk embeddings for a disconnected Obsidian source", async () => {

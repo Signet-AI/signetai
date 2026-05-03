@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
@@ -67,12 +67,16 @@ export function loadSourcesConfig(agentsDir = getAgentsDir()): SignetSourcesConf
 export function saveSourcesConfig(config: SignetSourcesConfig, agentsDir = getAgentsDir()): void {
 	const path = getSourcesConfigPath(agentsDir);
 	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}`;
+	const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
 	writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 	renameSync(tmp, path);
 }
 
 export function addObsidianSource(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addObsidianSourceUnlocked(input, agentsDir));
+}
+
+function addObsidianSourceUnlocked(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	const trimmedRoot = input.root.trim();
 	if (!trimmedRoot) return { ok: false, error: "Obsidian vault path is required" };
 	const root = resolve(trimmedRoot);
@@ -117,6 +121,14 @@ export function markSourceIndexed(
 	indexedAt = new Date().toISOString(),
 	agentsDir = getAgentsDir(),
 ): void {
+	withSourcesConfigLock(agentsDir, () => markSourceIndexedUnlocked(sourceId, indexedAt, agentsDir));
+}
+
+function markSourceIndexedUnlocked(
+	sourceId: string,
+	indexedAt = new Date().toISOString(),
+	agentsDir = getAgentsDir(),
+): void {
 	const cfg = loadSourcesConfig(agentsDir);
 	saveSourcesConfig(
 		{
@@ -130,6 +142,10 @@ export function markSourceIndexed(
 }
 
 export function removeSource(sourceId: string, agentsDir = getAgentsDir()): RemoveSourceResult {
+	return withSourcesConfigLock(agentsDir, () => removeSourceUnlocked(sourceId, agentsDir));
+}
+
+function removeSourceUnlocked(sourceId: string, agentsDir = getAgentsDir()): RemoveSourceResult {
 	const id = sourceId.trim();
 	if (!id) return { ok: false, error: "Source id is required" };
 	const cfg = loadSourcesConfig(agentsDir);
@@ -147,6 +163,33 @@ export function removeSource(sourceId: string, agentsDir = getAgentsDir()): Remo
 
 function emptyConfig(): SignetSourcesConfig {
 	return { version: SOURCES_CONFIG_VERSION, sources: [] };
+}
+
+function withSourcesConfigLock<T>(agentsDir: string, fn: () => T): T {
+	const configPath = getSourcesConfigPath(agentsDir);
+	mkdirSync(dirname(configPath), { recursive: true });
+	const lockDir = `${configPath}.lock`;
+	let locked = false;
+	for (let attempt = 0; attempt < 500; attempt++) {
+		try {
+			mkdirSync(lockDir);
+			locked = true;
+			break;
+		} catch (err) {
+			if (!isFileExistsError(err)) throw err;
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+		}
+	}
+	if (!locked) throw new Error(`Timed out waiting for Sources config lock: ${lockDir}`);
+	try {
+		return fn();
+	} finally {
+		rmSync(lockDir, { recursive: true, force: true });
+	}
+}
+
+function isFileExistsError(err: unknown): boolean {
+	return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === "EEXIST";
 }
 
 function cleanName(value: string | undefined): string | null {

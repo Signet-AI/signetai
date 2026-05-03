@@ -352,14 +352,16 @@ export function purgeNativeMemorySourceArtifacts(source: NativeMemorySource, age
 	}
 	const artifactRows = getDbAccessor().withWriteTx((db) => {
 		const agentWhere = agentId ? "agent_id = ? AND " : "";
+		const rootUpperBound = prefixUpperBound(rootPrefix);
 		const params = agentId
-			? [agentId, source.harness, `${rootPrefix}%`, ...source.files.map((file) => file.kind)]
-			: [source.harness, `${rootPrefix}%`, ...source.files.map((file) => file.kind)];
+			? [agentId, source.harness, rootPrefix, rootUpperBound, ...source.files.map((file) => file.kind)]
+			: [source.harness, rootPrefix, rootUpperBound, ...source.files.map((file) => file.kind)];
 		const result = db
 			.prepare(
 				`DELETE FROM memory_artifacts
 				 WHERE ${agentWhere}harness = ?
-				   AND source_path LIKE ?
+				   AND source_path >= ?
+				   AND source_path < ?
 				   AND source_kind IN (${source.files.map(() => "?").join(", ")})`,
 			)
 			.run(...params);
@@ -378,6 +380,10 @@ export function purgeNativeMemorySourceArtifacts(source: NativeMemorySource, age
 		});
 	}
 	return artifactRows + embeddingRows;
+}
+
+function prefixUpperBound(prefix: string): string {
+	return `${prefix}\uffff`;
 }
 
 export function startNativeMemoryBridge(
