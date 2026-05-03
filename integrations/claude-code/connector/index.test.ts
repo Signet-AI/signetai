@@ -14,7 +14,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	if (origHome !== undefined) process.env.HOME = origHome;
-	else process.env.HOME = undefined;
+	else Reflect.deleteProperty(process.env, "HOME");
 	if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
 });
 
