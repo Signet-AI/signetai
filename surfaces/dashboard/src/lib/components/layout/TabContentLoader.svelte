@@ -175,6 +175,14 @@ const {
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}
+{:else if activeTab === "sources"}
+	{#await import("$lib/components/tabs/SourcesTab.svelte")}
+		{@render skeletonCards()}
+	{:then module}
+		<module.default />
+	{:catch error}
+		{@render skeletonError(error)}
+	{/await}
 {:else if activeTab === "tasks"}
 	{#await import("$lib/components/cortex/CortexTasksPanel.svelte")}
 		{@render skeletonList()}

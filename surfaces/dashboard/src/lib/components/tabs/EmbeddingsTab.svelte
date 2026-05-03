@@ -1917,7 +1917,7 @@ $effect(() => {
 			>
 				<button
 					type="button"
-					class="pointer-events-auto px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.74)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
+					class="pointer-events-auto px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] bg-[rgba(5,5,5,0.74)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
 					onclick={unlockHoverPreview}
 				>
 					{ActionLabels.Unlock} preview
@@ -1930,7 +1930,7 @@ $effect(() => {
 				<div class="pointer-events-auto">
 					<button
 						type="button"
-						class="flex items-center gap-1.5 px-2 py-[4px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[rgba(255,255,255,0.22)] bg-[rgba(5,5,5,0.75)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
+						class="flex items-center gap-1.5 px-2 py-[4px] font-mono text-[10px] uppercase border border-[rgba(255,255,255,0.22)] bg-[rgba(5,5,5,0.75)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
 						onclick={() => (healthExpanded = !healthExpanded)}
 					>
 						<span
@@ -1946,25 +1946,25 @@ $effect(() => {
 					{#if healthExpanded}
 						<div class="mt-1 border border-[rgba(255,255,255,0.22)] bg-[rgba(5,5,5,0.92)] px-2 py-2 w-[320px]">
 							<div class="flex items-center justify-between mb-2">
-								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em]">Constellation Health</span>
-								<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)]">{healthReport.config.provider}/{healthReport.config.model}</span>
+								<span class="font-mono text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em]">Constellation Health</span>
+								<span class="font-mono text-[10px] text-[var(--sig-text-muted)]">{healthReport.config.provider}/{healthReport.config.model}</span>
 							</div>
 							{#if healthFixStatus}
 								<div class="mb-2 border border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.03)] px-1.5 py-1.5">
-									<div class="font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text)] leading-[1.3]">{healthFixStatus}</div>
+									<div class="font-mono text-[9px] text-[var(--sig-text)] leading-[1.3]">{healthFixStatus}</div>
 									{#if healthFixDetails}
-										<div class="mt-0.5 font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)] leading-[1.3]">{healthFixDetails}</div>
+										<div class="mt-0.5 font-mono text-[9px] text-[var(--sig-text-muted)] leading-[1.3]">{healthFixDetails}</div>
 									{/if}
 									{#if healthFixProgress}
 										<div class="mt-1">
-											<div class="flex items-center justify-between font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)]">
+											<div class="flex items-center justify-between font-mono text-[9px] text-[var(--sig-text-muted)]">
 												<span>{healthFixProgress.completed.toLocaleString()} / {healthFixProgress.baseline.toLocaleString()}</span>
 												<span>{Math.round(healthFixProgress.percent)}%</span>
 											</div>
 											<div class="mt-1 h-[5px] border border-[rgba(255,255,255,0.2)] bg-[rgba(255,255,255,0.05)]">
 												<div class="h-full bg-[#c4a24a]" style={`width:${Math.max(0, Math.min(100, healthFixProgress.percent))}%`}></div>
 											</div>
-											<div class="mt-1 font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)]">
+											<div class="mt-1 font-mono text-[9px] text-[var(--sig-text-muted)]">
 												{healthFixProgress.remaining.toLocaleString()} remaining · {healthFixProgress.coverage} coverage
 											</div>
 										</div>
@@ -1980,14 +1980,14 @@ $effect(() => {
 										></span>
 										<div class="flex-1 min-w-0">
 											<div class="flex items-center justify-between gap-2">
-												<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)]">{check.name}</span>
-												<span class="font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)] uppercase">{check.status}</span>
+												<span class="font-mono text-[10px] text-[var(--sig-text)]">{check.name}</span>
+												<span class="font-mono text-[9px] text-[var(--sig-text-muted)] uppercase">{check.status}</span>
 											</div>
-											<div class="font-[family-name:var(--font-mono)] text-[9px] text-[var(--sig-text-muted)] leading-[1.3] mt-0.5">{check.message}</div>
+											<div class="font-mono text-[9px] text-[var(--sig-text-muted)] leading-[1.3] mt-0.5">{check.message}</div>
 											{#if check.fix && check.status !== "ok"}
 												<button
 													type="button"
-													class="mt-1 font-[family-name:var(--font-mono)] text-[9px] text-[#c4a24a] hover:text-[var(--sig-text-bright)] underline underline-offset-2 disabled:opacity-40 disabled:no-underline"
+													class="mt-1 font-mono text-[9px] text-[#c4a24a] hover:text-[var(--sig-text-bright)] underline underline-offset-2 disabled:opacity-40 disabled:no-underline"
 													disabled={healthFixBusy}
 													onclick={() => runFix(check)}
 												>
@@ -2006,7 +2006,7 @@ $effect(() => {
 
 			<div class="absolute left-3 top-3 bottom-3 z-[8] pointer-events-none flex flex-col justify-end items-start max-w-[220px]">
 				<Collapsible.Root bind:open={legendOpen} class="pointer-events-auto flex min-w-[180px] max-h-full flex-col-reverse">
-					<Collapsible.Trigger class="flex w-full items-center gap-2 px-3 py-1.5 min-w-[180px] border border-[var(--sig-border)] text-[10px] font-[family-name:var(--font-mono)] uppercase tracking-[0.06em] text-[var(--sig-text-muted)] bg-transparent" aria-expanded={legendOpen}>
+					<Collapsible.Trigger class="flex w-full items-center gap-2 px-3 py-1.5 min-w-[180px] border border-[var(--sig-border)] text-[10px] font-mono uppercase tracking-[0.06em] text-[var(--sig-text-muted)] bg-transparent" aria-expanded={legendOpen}>
 						<span>Legend</span>
 						<ChevronDown class={`size-3 text-[var(--sig-text-muted)] transition-transform ${legendOpen ? 'rotate-180' : ''}`} />
 					</Collapsible.Trigger>
@@ -2023,7 +2023,7 @@ $effect(() => {
 							</div>
 							<div class="flex flex-wrap gap-1 mb-1.5">
 								{#each legendSourceCounts as source}
-									<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.14)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'bg-[rgba(255,255,255,0.08)] text-[var(--sig-text-bright)]' : 'bg-transparent text-[var(--sig-text-muted)]'}">
+									<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-mono text-[10px] border border-[rgba(255,255,255,0.14)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'bg-[rgba(255,255,255,0.08)] text-[var(--sig-text-bright)]' : 'bg-transparent text-[var(--sig-text-muted)]'}">
 										{source.who} {source.count}
 									</span>
 								{/each}
@@ -2031,7 +2031,7 @@ $effect(() => {
 						{:else if nodeColorMode === "source"}
 							<div class="flex flex-wrap gap-1 mb-1.5">
 								{#each legendSourceCounts as source}
-									<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-[family-name:var(--font-mono)] text-[10px] border border-[rgba(255,255,255,0.14)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'bg-[rgba(255,255,255,0.08)] text-[var(--sig-text-bright)]' : 'bg-transparent text-[var(--sig-text-muted)]'}">
+									<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-mono text-[10px] border border-[rgba(255,255,255,0.14)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'bg-[rgba(255,255,255,0.08)] text-[var(--sig-text-bright)]' : 'bg-transparent text-[var(--sig-text-muted)]'}">
 										<span class="inline-block w-[6px] h-[6px] rounded-full" style={`background:${sourceColorRgba(source.who, 1)}`}></span>
 										{source.who} {source.count}
 									</span>
@@ -2061,11 +2061,11 @@ $effect(() => {
 						</div>
 						{#if showEntityOverlay}
 							<div class="mt-2 pt-2 border-t border-[rgba(255,255,255,0.1)]">
-								<div class="text-[10px] font-[family-name:var(--font-mono)] uppercase tracking-[0.06em] text-[var(--sig-text-muted)] mb-1">Knowledge Graph</div>
+								<div class="text-[10px] font-mono uppercase tracking-[0.06em] text-[var(--sig-text-muted)] mb-1">Knowledge Graph</div>
 								<div class="flex flex-wrap gap-1 mb-1.5">
 									{#each Object.entries(entityTypeColors) as [type, color]}
 										{#if type !== "unknown"}
-											<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] border border-[rgba(255,255,255,0.14)] bg-transparent">
+											<span class="h-5 inline-flex items-center gap-1 px-1.5 py-0 font-mono text-[10px] text-[var(--sig-text-muted)] border border-[rgba(255,255,255,0.14)] bg-transparent">
 												<span class="inline-block w-[8px] h-[8px]" style={`background:${color}; clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);`}></span>
 												{type}
 											</span>
@@ -2105,7 +2105,7 @@ $effect(() => {
 		{/if}
 
 		<div
-			class="absolute left-[14px] z-[6] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] tracking-[0.08em] uppercase pointer-events-none"
+			class="absolute left-[14px] z-[6] font-mono text-[10px] text-[var(--sig-text-muted)] tracking-[0.08em] uppercase pointer-events-none"
 			style:top="20px"
 			aria-hidden="true"
 		>:: &#9675; &#9675; 01 10 11 // latent topology</div>
@@ -2124,18 +2124,18 @@ $effect(() => {
 				style="position:absolute;top:0;left:0;will-change:transform"
 			>
 				<div class="flex items-center gap-1.5 flex-wrap mb-1.5">
-					<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{previewHovered.who ?? "unknown"}</span>
+					<span class="font-mono text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{previewHovered.who ?? "unknown"}</span>
 					{#if previewHovered.type}
-						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{previewHovered.type}</span>
+						<span class="font-mono text-[10px] text-[var(--sig-text)] border border-[var(--sig-border-strong)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.04)]">{previewHovered.type}</span>
 					{/if}
 					{#if previewHovered.pinned}
-						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.08)]">pinned</span>
+						<span class="font-mono text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.08)]">pinned</span>
 					{/if}
 					{#if hoverLockedId}
-						<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.08)]">locked</span>
+						<span class="font-mono text-[10px] text-[var(--sig-text-bright)] border border-[var(--sig-text-bright)] px-1.5 py-[1px] bg-[rgba(255,255,255,0.08)]">locked</span>
 					{/if}
 				</div>
-				<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] mb-1.5">
+				<div class="font-mono text-[10px] text-[var(--sig-text-muted)] mb-1.5">
 					importance {Math.round((previewHovered.importance ?? 0) * 100)}% · {formatShortDate(previewHovered.createdAt)} · linked {effectiveHoverNeighbors.length}
 				</div>
 				<p class="m-0 text-[12px] leading-[1.45] text-[var(--sig-text-bright)] line-clamp-3">
@@ -2146,7 +2146,7 @@ $effect(() => {
 				</div>
 				{#if effectiveHoverNeighbors.length > 0}
 					<div class="mt-2 pt-2 border-t border-[rgba(255,255,255,0.14)]">
-						<div class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em] mb-1">Local neighbors</div>
+						<div class="font-mono text-[10px] text-[var(--sig-text-muted)] uppercase tracking-[0.06em] mb-1">Local neighbors</div>
 						<div class="space-y-1">
 							{#each effectiveHoverNeighbors as relation}
 								{@const item = embeddingById.get(relation.id)}
@@ -2190,11 +2190,11 @@ $effect(() => {
 				/>
 			{:else if graphStatus}
 				<div class="absolute inset-0 flex items-center justify-center bg-[#050505]">
-					<span class="text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)] text-[11px]">{graphStatus}</span>
+					<span class="text-[var(--sig-text-muted)] font-mono text-[11px]">{graphStatus}</span>
 				</div>
 			{:else if graphError}
 				<div class="absolute inset-0 flex items-center justify-center bg-[#050505]">
-					<span class="text-[var(--sig-danger)] font-[family-name:var(--font-mono)] text-[11px]">{graphError}</span>
+					<span class="text-[var(--sig-danger)] font-mono text-[11px]">{graphError}</span>
 				</div>
 			{/if}
 		</div>
@@ -2224,7 +2224,7 @@ $effect(() => {
 				/>
 			{:else if canvas3dLoading}
 				<div class="absolute inset-0 flex items-center justify-center bg-[#050505]">
-					<span class="text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)] text-[11px]">{graphStatus || "Loading 3D..."}</span>
+					<span class="text-[var(--sig-text-muted)] font-mono text-[11px]">{graphStatus || "Loading 3D..."}</span>
 				</div>
 			{/if}
 		</div>
@@ -2233,7 +2233,7 @@ $effect(() => {
 		<div class="w-[360px] min-w-[320px] border-l border-[var(--sig-border)] bg-[var(--sig-surface)] flex flex-col min-h-0 max-lg:w-full max-lg:min-w-0 max-lg:max-h-[48%] max-lg:border-l-0 max-lg:border-t max-lg:border-t-[var(--sig-border)]">
 			<div class="p-3 border-b border-[var(--sig-border)] space-y-2 overflow-y-auto">
 				<Collapsible.Root bind:open={controlsMenuOpen} class="border border-[var(--sig-border)]">
-					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 border-none text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] text-[var(--sig-highlight)]" style="background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 94%);">
+					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 border-none text-[10px] uppercase tracking-[0.08em] font-mono text-[var(--sig-highlight)]" style="background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 94%);">
 						<span>View Controls</span>
 						<ChevronDown class={`size-3 text-[var(--sig-text-muted)] transition-transform ${controlsMenuOpen ? 'rotate-180' : ''}`} />
 					</Collapsible.Trigger>
@@ -2242,30 +2242,30 @@ $effect(() => {
 							<div class="flex items-center gap-2">
 								<input
 									type="text"
-									class="flex-1 font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-bright)] bg-[var(--sig-surface)] border border-[var(--sig-border-strong)] px-[9px] py-[6px] outline-none"
+									class="flex-1 font-mono text-[11px] text-[var(--sig-text-bright)] bg-[var(--sig-surface)] border border-[var(--sig-border-strong)] px-[9px] py-[6px] outline-none"
 									bind:value={embeddingSearch}
 									bind:this={searchInputEl}
 									oninput={() => (activePresetId = "custom-live")}
 									placeholder="Search constellation"
 								/>
 								{#if embeddingSearch}
-									<span class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] border border-[var(--sig-border)] px-2 py-1">{embeddingSearchMatches.length}</span>
+									<span class="font-mono text-[10px] text-[var(--sig-text-muted)] border border-[var(--sig-border)] px-2 py-1">{embeddingSearchMatches.length}</span>
 								{/if}
 							</div>
-							<div class="text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">Window {activeProjectionWindow.offset + 1}-{activeProjectionWindow.offset + embeddings.length} / {embeddingsTotal}</div>
+							<div class="text-[10px] font-mono text-[var(--sig-text-muted)]">Window {activeProjectionWindow.offset + 1}-{activeProjectionWindow.offset + embeddings.length} / {embeddingsTotal}</div>
 							<div class="flex flex-wrap gap-1">
-								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showPinnedOnly ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={togglePinnedOnly}>Pinned</button>
-								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showNeighborhoodOnly ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleNeighborhoodOnly}>Neighborhood</button>
-								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {clusterLensMode ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleClusterLens}>Lens</button>
-								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={resetProjectionFilters}>{ActionLabels.Reset}</button>
+								<button class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] {showPinnedOnly ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={togglePinnedOnly}>Pinned</button>
+								<button class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] {showNeighborhoodOnly ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleNeighborhoodOnly}>Neighborhood</button>
+								<button class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] {clusterLensMode ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={toggleClusterLens}>Lens</button>
+								<button class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={resetProjectionFilters}>{ActionLabels.Reset}</button>
 							</div>
 							<div class="border border-[var(--sig-border)] px-2 py-2 space-y-1.5">
-								<div class="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">Color Mode</div>
+								<div class="font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">Color Mode</div>
 								<div class="flex flex-wrap gap-1">
-									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {nodeColorMode === 'newness' ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => (nodeColorMode = "newness")}>Newness</button>
-									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {nodeColorMode === 'source' ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => (nodeColorMode = "source")}>Source</button>
+									<button class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] {nodeColorMode === 'newness' ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => (nodeColorMode = "newness")}>Newness</button>
+									<button class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] {nodeColorMode === 'source' ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => (nodeColorMode = "source")}>Source</button>
 									<button
-										class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {nodeColorMode === 'none' ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+										class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] {nodeColorMode === 'none' ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
 										onclick={() => {
 											nodeColorMode = "none";
 											showNewSinceLastSeen = false;
@@ -2276,11 +2276,11 @@ $effect(() => {
 								</div>
 							</div>
 							<div class="border border-[var(--sig-border)] px-2 py-2 space-y-1.5">
-								<div class="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">Overlays</div>
+								<div class="font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">Overlays</div>
 								<div class="flex flex-wrap gap-1">
-									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showNewSinceLastSeen && nodeColorMode !== 'none' ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'} {nodeColorMode === 'none' ? 'opacity-60 cursor-not-allowed' : ''}" onclick={() => (showNewSinceLastSeen = !showNewSinceLastSeen)} disabled={nodeColorMode === "none"}>New since last seen</button>
+									<button class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] {showNewSinceLastSeen && nodeColorMode !== 'none' ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'} {nodeColorMode === 'none' ? 'opacity-60 cursor-not-allowed' : ''}" onclick={() => (showNewSinceLastSeen = !showNewSinceLastSeen)} disabled={nodeColorMode === "none"}>New since last seen</button>
 									<button
-										class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {showEntityOverlay ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
+										class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] {showEntityOverlay ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}"
 										onclick={() => { showEntityOverlay = !showEntityOverlay; if (graphInitialized) reloadEmbeddingsGraph(); }}
 									>
 										{entityOverlayLoading ? 'Loading...' : 'Entities'}
@@ -2288,9 +2288,9 @@ $effect(() => {
 								</div>
 							</div>
 							<div class="border border-[var(--sig-border)] px-2 py-2 space-y-1.5" style="accent-color: var(--sig-highlight);">
-								<div class="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">Graph Physics</div>
+								<div class="font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)]">Graph Physics</div>
 								<label class="block">
-									<div class="flex items-center justify-between text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+									<div class="flex items-center justify-between text-[10px] font-mono text-[var(--sig-text-muted)]">
 										<span>center force</span>
 										<span>{graphPhysics.centerForce.toFixed(2)}</span>
 									</div>
@@ -2304,7 +2304,7 @@ $effect(() => {
 									/>
 								</label>
 								<label class="block">
-									<div class="flex items-center justify-between text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+									<div class="flex items-center justify-between text-[10px] font-mono text-[var(--sig-text-muted)]">
 										<span>repel force</span>
 										<span>{Math.round(graphPhysics.repelForce)}</span>
 									</div>
@@ -2318,7 +2318,7 @@ $effect(() => {
 									/>
 								</label>
 								<label class="block">
-									<div class="flex items-center justify-between text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+									<div class="flex items-center justify-between text-[10px] font-mono text-[var(--sig-text-muted)]">
 										<span>link force</span>
 										<span>{graphPhysics.linkForce.toFixed(2)}</span>
 									</div>
@@ -2332,7 +2332,7 @@ $effect(() => {
 									/>
 								</label>
 								<label class="block">
-									<div class="flex items-center justify-between text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+									<div class="flex items-center justify-between text-[10px] font-mono text-[var(--sig-text-muted)]">
 										<span>link distance</span>
 										<span>{Math.round(graphPhysics.linkDistance)}</span>
 									</div>
@@ -2347,7 +2347,7 @@ $effect(() => {
 								</label>
 								<button
 									type="button"
-									class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
+									class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]"
 									onclick={() => updateGraphPhysics(DEFAULT_GRAPH_PHYSICS)}
 								>
 									Physics Reset
@@ -2358,28 +2358,28 @@ $effect(() => {
 				</Collapsible.Root>
 
 				<Collapsible.Root bind:open={presetsMenuOpen} class="border border-[var(--sig-border)]">
-					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 border-none text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] text-[var(--sig-highlight)]" style="background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 94%);">
+					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 border-none text-[10px] uppercase tracking-[0.08em] font-mono text-[var(--sig-highlight)]" style="background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 94%);">
 						<span>Presets</span>
 						<ChevronDown class={`size-3 text-[var(--sig-text-muted)] transition-transform ${presetsMenuOpen ? 'rotate-180' : ''}`} />
 					</Collapsible.Trigger>
 					<Collapsible.Content>
 						<div class="p-2 border-t border-[var(--sig-border)] flex flex-wrap gap-1">
 							{#each builtinPresets as preset}
-								<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] {activePresetId === preset.id ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => applyPreset(preset)}>{preset.name}</button>
+								<button class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] {activePresetId === preset.id ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => applyPreset(preset)}>{preset.name}</button>
 							{/each}
 							{#each customPresets as preset}
 								<div class="inline-flex items-center border border-[var(--sig-border-strong)]">
-									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] {activePresetId === preset.id ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => applyPreset(preset)}>{preset.name}</button>
-									<button class="px-1.5 py-[2px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={() => removeCustomPreset(preset.id)} aria-label={`Delete ${preset.name} preset`}>×</button>
+									<button class="px-2 py-[2px] font-mono text-[10px] {activePresetId === preset.id ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => applyPreset(preset)}>{preset.name}</button>
+									<button class="px-1.5 py-[2px] font-mono text-[10px] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={() => removeCustomPreset(preset.id)} aria-label={`Delete ${preset.name} preset`}>×</button>
 								</div>
 							{/each}
-							<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={saveCurrentPreset}>{ActionLabels.Save}</button>
+							<button class="px-2 py-[2px] font-mono text-[10px] uppercase border border-[var(--sig-border-strong)] text-[var(--sig-text-muted)] hover:text-[var(--sig-text-bright)]" onclick={saveCurrentPreset}>{ActionLabels.Save}</button>
 						</div>
 					</Collapsible.Content>
 				</Collapsible.Root>
 
 				<Collapsible.Root bind:open={sourcesMenuOpen} class="border border-[var(--sig-border)]">
-					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 border-none text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] text-[var(--sig-highlight)]" style="background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 94%);">
+					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 border-none text-[10px] uppercase tracking-[0.08em] font-mono text-[var(--sig-highlight)]" style="background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 94%);">
 						<span>Sources</span>
 						<ChevronDown class={`size-3 text-[var(--sig-text-muted)] transition-transform ${sourcesMenuOpen ? 'rotate-180' : ''}`} />
 					</Collapsible.Trigger>
@@ -2389,7 +2389,7 @@ $effect(() => {
 								<span class="text-[10px] text-[var(--sig-text-muted)]">No sources</span>
 							{:else}
 								{#each sourceCounts as source}
-									<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleSourceFromPanel(source.who)}>{source.who} {source.count}</button>
+									<button class="px-2 py-[2px] font-mono text-[10px] border border-[var(--sig-border-strong)] {selectedSources.size === 0 || selectedSources.has(source.who) ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleSourceFromPanel(source.who)}>{source.who} {source.count}</button>
 								{/each}
 							{/if}
 						</div>
@@ -2397,18 +2397,18 @@ $effect(() => {
 				</Collapsible.Root>
 
 				<Collapsible.Root bind:open={showAdvancedFilters} class="border border-[var(--sig-border)]">
-					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 border-none text-[10px] uppercase tracking-[0.08em] font-[family-name:var(--font-mono)] text-[var(--sig-highlight)]" style="background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 94%);">
+					<Collapsible.Trigger class="flex w-full items-center justify-between px-2 py-1.5 border-none text-[10px] uppercase tracking-[0.08em] font-mono text-[var(--sig-highlight)]" style="background: color-mix(in srgb, var(--sig-highlight), var(--sig-bg) 94%);">
 						<span>Advanced</span>
 						<ChevronDown class={`size-3 text-[var(--sig-text-muted)] transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`} />
 					</Collapsible.Trigger>
 					<Collapsible.Content>
 						<div class="p-2 border-t border-[var(--sig-border)] space-y-2">
 							<div class="flex items-center gap-1 flex-wrap">
-								<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Window</span>
-								<input type="number" min="0" max="100000" class="w-[70px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionRangeMin} onblur={syncProjectionWindowInputs} />
-								<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">to</span>
-								<input type="number" min="1" max="100000" class="w-[70px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionRangeMax} onblur={syncProjectionWindowInputs} />
-								<select class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionTimePreset}>
+								<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-mono">Window</span>
+								<input type="number" min="0" max="100000" class="w-[70px] font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionRangeMin} onblur={syncProjectionWindowInputs} />
+								<span class="text-[10px] text-[var(--sig-text-muted)] font-mono">to</span>
+								<input type="number" min="1" max="100000" class="w-[70px] font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionRangeMax} onblur={syncProjectionWindowInputs} />
+								<select class="font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionTimePreset}>
 									<option value="all">time: all</option>
 									<option value="24h">time: 24h</option>
 									<option value="7d">time: 7d</option>
@@ -2419,46 +2419,46 @@ $effect(() => {
 							</div>
 							{#if projectionTimePreset === "custom"}
 								<div class="flex items-center gap-1 flex-wrap">
-									<input type="date" class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionSinceDate} />
-									<input type="date" class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionUntilDate} />
+									<input type="date" class="font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionSinceDate} />
+									<input type="date" class="font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionUntilDate} />
 								</div>
 							{/if}
 							<div class="flex items-center gap-1 flex-wrap">
-								<select class="font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionPinnedFilter}>
+								<select class="font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionPinnedFilter}>
 									<option value="all">pins: all</option>
 									<option value="pinned">pins: pinned</option>
 									<option value="unpinned">pins: unpinned</option>
 								</select>
-								<input type="text" class="w-[140px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionSearch} placeholder="server query" />
-								<input type="text" class="w-[110px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionTagFilter} placeholder="tags csv" />
-								<input type="text" class="w-[60px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionImportanceMin} placeholder="imp>" />
-								<input type="text" class="w-[60px] font-[family-name:var(--font-mono)] text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionImportanceMax} placeholder="imp<" />
+								<input type="text" class="w-[140px] font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionSearch} placeholder="server query" />
+								<input type="text" class="w-[110px] font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionTagFilter} placeholder="tags csv" />
+								<input type="text" class="w-[60px] font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionImportanceMin} placeholder="imp>" />
+								<input type="text" class="w-[60px] font-mono text-[10px] text-[var(--sig-text-bright)] bg-[var(--sig-bg)] border border-[var(--sig-border-strong)] px-1.5 py-[2px] outline-none" bind:value={projectionImportanceMax} placeholder="imp<" />
 							</div>
 							<div class="flex items-center gap-1 flex-wrap">
-								<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Harness</span>
+								<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-mono">Harness</span>
 								{#if harnessOptions.length === 0}
-									<span class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">none</span>
+									<span class="text-[10px] text-[var(--sig-text-muted)] font-mono">none</span>
 								{:else}
 									{#each harnessOptions as harness}
-										<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] {selectedHarnesses.has(harness) ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleHarness(harness)}>{harness}</button>
+										<button class="px-2 py-[2px] font-mono text-[10px] border border-[var(--sig-border-strong)] {selectedHarnesses.has(harness) ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleHarness(harness)}>{harness}</button>
 									{/each}
 								{/if}
 							</div>
 							{#if typeCounts.length > 0 || selectedServerTypes.size > 0}
 								<div class="flex items-center gap-1 flex-wrap">
-									<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Type</span>
+									<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-mono">Type</span>
 									{#each [...new Set([...selectedServerTypes, ...typeCounts.map((entry) => entry.value)])] as value}
 										{@const count = typeCounts.find((entry) => entry.value === value)?.count ?? 0}
-										<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] {selectedServerTypes.has(value) ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleServerType(value)}>{value}{count > 0 ? ` ${count}` : ""}</button>
+										<button class="px-2 py-[2px] font-mono text-[10px] border border-[var(--sig-border-strong)] {selectedServerTypes.has(value) ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleServerType(value)}>{value}{count > 0 ? ` ${count}` : ""}</button>
 									{/each}
 								</div>
 							{/if}
 							{#if sourceTypeCounts.length > 0 || selectedServerSourceTypes.size > 0}
 								<div class="flex items-center gap-1 flex-wrap">
-									<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-[family-name:var(--font-mono)]">Source type</span>
+									<span class="px-1 text-[10px] text-[var(--sig-text-muted)] uppercase font-mono">Source type</span>
 									{#each [...new Set([...selectedServerSourceTypes, ...sourceTypeCounts.map((entry) => entry.value)])] as value}
 										{@const count = sourceTypeCounts.find((entry) => entry.value === value)?.count ?? 0}
-										<button class="px-2 py-[2px] font-[family-name:var(--font-mono)] text-[10px] border border-[var(--sig-border-strong)] {selectedServerSourceTypes.has(value) ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleServerSourceType(value)}>{value}{count > 0 ? ` ${count}` : ""}</button>
+										<button class="px-2 py-[2px] font-mono text-[10px] border border-[var(--sig-border-strong)] {selectedServerSourceTypes.has(value) ? 'text-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),var(--sig-bg)_90%)]' : 'text-[var(--sig-text-muted)] bg-transparent'}" onclick={() => toggleServerSourceType(value)}>{value}{count > 0 ? ` ${count}` : ""}</button>
 									{/each}
 								</div>
 							{/if}

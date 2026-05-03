@@ -231,7 +231,7 @@ async function handleInstall(): Promise<void> {
 	}
 
 	.field-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		font-weight: 500;
 		color: var(--sig-text-muted);
@@ -246,7 +246,7 @@ async function handleInstall(): Promise<void> {
 	}
 
 	.field-input {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 13px;
 		padding: 8px 10px;
 		border: 1px solid var(--sig-border);
@@ -272,7 +272,7 @@ async function handleInstall(): Promise<void> {
 	}
 
 	.field-hint {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		opacity: 0.6;
@@ -309,7 +309,7 @@ async function handleInstall(): Promise<void> {
 	}
 
 	.btn {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 12px;
 		font-weight: 500;
 		padding: 6px 14px;

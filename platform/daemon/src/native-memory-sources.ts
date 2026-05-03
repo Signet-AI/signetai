@@ -2,17 +2,32 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { loadSourcesConfig } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
+import type { EmbeddingConfig } from "./memory-config";
 import { indexExternalMemoryArtifact, softDeleteArtifactRowsForPath } from "./memory-lineage";
+import {
+	type SourceEmbeddingFetch,
+	indexObsidianSourceEmbeddings,
+	purgeObsidianSourceEmbeddings,
+	purgeObsidianSourceFileEmbeddings,
+} from "./obsidian-source-embeddings";
+import {
+	indexObsidianSourceStructure,
+	purgeObsidianSourceFileStructure,
+	purgeObsidianSourceStructure,
+	sourceIdForObsidianRoot,
+} from "./obsidian-source-graph";
 
 export interface NativeMemorySource {
 	readonly harness: string;
 	readonly displayName: string;
 	readonly root: string;
+	readonly sourceId?: string;
 	readonly files: readonly NativeMemoryFilePattern[];
 }
 
@@ -30,6 +45,10 @@ export interface NativeMemoryBridgeHandle {
 export interface NativeMemoryBridgeOptions {
 	readonly agentId?: string;
 	readonly pollIntervalMs?: number;
+	readonly embeddingConfig?: EmbeddingConfig;
+	readonly fetchEmbedding?: SourceEmbeddingFetch;
+	readonly agentsDir?: string;
+	readonly includeConfiguredSources?: boolean;
 }
 
 interface IndexedNativeMemory {
@@ -78,6 +97,34 @@ export function claudeCodeNativeMemorySource(root = claudeCodeRoot()): NativeMem
 			{ glob: "agent-memory-local/*/*.md", kind: "native_claude_agent_memory_local" },
 		],
 	};
+}
+
+export function obsidianNativeMemorySource(
+	root: string,
+	displayName = "Obsidian",
+	sourceId = sourceIdForObsidianRoot(root),
+): NativeMemorySource {
+	return {
+		harness: "obsidian",
+		displayName,
+		root,
+		sourceId,
+		files: [
+			{
+				glob: "**/*.md",
+				kind: "source_obsidian_markdown",
+				include: (_path, rel) =>
+					!rel.split("/").some((part) => part === ".obsidian" || part === ".trash" || part === ".hermes"),
+			},
+		],
+	};
+}
+
+export function configuredNativeMemorySources(agentsDir?: string): NativeMemorySource[] {
+	const configured = loadSourcesConfig(agentsDir)
+		.sources.filter((source) => source.enabled && source.kind === "obsidian")
+		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id));
+	return [codexNativeMemorySource(), claudeCodeNativeMemorySource(), ...configured];
 }
 
 async function* walkMarkdownFiles(dir: string): AsyncGenerator<string> {
@@ -131,6 +178,21 @@ function resolveBridgeAgentId(agentId?: string): string {
 	return trimmed ? trimmed : resolveDaemonAgentId();
 }
 
+function activeBridgeSources(
+	baseSources: readonly NativeMemorySource[],
+	options: NativeMemoryBridgeOptions,
+): NativeMemorySource[] {
+	if (!options.includeConfiguredSources) return [...baseSources];
+	const configured = loadSourcesConfig(options.agentsDir)
+		.sources.filter((source) => source.enabled && source.kind === "obsidian")
+		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id));
+	const byKey = new Map<string, NativeMemorySource>();
+	for (const source of [...baseSources, ...configured]) {
+		byKey.set(source.sourceId ?? `${source.harness}:${source.root}`, source);
+	}
+	return [...byKey.values()];
+}
+
 function fingerprintKey(source: NativeMemorySource, filePath: string, agentId: string): string {
 	return `${agentId}:${source.harness}:${filePath}`;
 }
@@ -163,6 +225,7 @@ export async function indexNativeMemoryFile(
 	source: NativeMemorySource,
 	filePath: string,
 	agentId = resolveDaemonAgentId(),
+	options: Pick<NativeMemoryBridgeOptions, "embeddingConfig" | "fetchEmbedding"> = {},
 ): Promise<boolean> {
 	const pattern = matchesPattern(source, filePath);
 	if (!pattern) return false;
@@ -201,6 +264,36 @@ export async function indexNativeMemoryFile(
 			content,
 			sourceMtimeMs: mtimeMs,
 		});
+		if (source.harness === "obsidian" && pattern.kind === "source_obsidian_markdown") {
+			const sourceId = source.sourceId ?? sourceIdForObsidianRoot(source.root);
+			indexObsidianSourceStructure({
+				agentId,
+				sourceId,
+				sourceName: source.displayName,
+				root: source.root,
+				filePath,
+				content,
+			});
+			if (options.embeddingConfig && options.fetchEmbedding) {
+				const embeddingResult = await indexObsidianSourceEmbeddings({
+					agentId,
+					sourceId,
+					root: source.root,
+					filePath,
+					content,
+					embeddingConfig: options.embeddingConfig,
+					fetchEmbedding: options.fetchEmbedding,
+				});
+				if (embeddingResult.embedded > 0) {
+					logger.info("watcher", "Embedded Obsidian source chunks", {
+						path: filePath,
+						chunks: embeddingResult.chunks,
+						embedded: embeddingResult.embedded,
+						skipped: embeddingResult.skipped,
+					});
+				}
+			}
+		}
 		indexed.set(key, { contentHash: hash });
 		logger.info("watcher", "Indexed native memory artifact", {
 			harness: source.harness,
@@ -225,6 +318,72 @@ export function removeNativeMemoryFile(
 ): void {
 	indexed.delete(fingerprintKey(source, filePath, agentId));
 	softDeleteArtifactRowsForPath(filePath, agentId);
+	if (source.harness === "obsidian") {
+		const sourceId = source.sourceId ?? sourceIdForObsidianRoot(source.root);
+		purgeObsidianSourceFileEmbeddings({
+			sourceId,
+			agentId,
+			root: source.root,
+			filePath,
+		});
+		purgeObsidianSourceFileStructure({
+			agentId,
+			sourceId,
+			root: source.root,
+			filePath,
+		});
+	}
+}
+
+export function purgeNativeMemorySourceArtifacts(source: NativeMemorySource, agentId?: string): number {
+	const normalizedRoot = resolve(source.root).replace(/\\/g, "/").replace(/\/$/, "");
+	const rootPrefix = `${normalizedRoot}/`;
+	for (const key of indexed.keys()) {
+		const parts = key.split(":");
+		const cachedAgentId = parts[0];
+		const cachedHarness = parts[1];
+		const cachedPath = parts.slice(2).join(":").replace(/\\/g, "/");
+		if (
+			(!agentId || cachedAgentId === agentId) &&
+			cachedHarness === source.harness &&
+			cachedPath.startsWith(rootPrefix)
+		)
+			indexed.delete(key);
+	}
+	const artifactRows = getDbAccessor().withWriteTx((db) => {
+		const agentWhere = agentId ? "agent_id = ? AND " : "";
+		const rootUpperBound = prefixUpperBound(rootPrefix);
+		const params = agentId
+			? [agentId, source.harness, rootPrefix, rootUpperBound, ...source.files.map((file) => file.kind)]
+			: [source.harness, rootPrefix, rootUpperBound, ...source.files.map((file) => file.kind)];
+		const result = db
+			.prepare(
+				`DELETE FROM memory_artifacts
+				 WHERE ${agentWhere}harness = ?
+				   AND source_path >= ?
+				   AND source_path < ?
+				   AND source_kind IN (${source.files.map(() => "?").join(", ")})`,
+			)
+			.run(...params);
+		return result.changes;
+	});
+	let embeddingRows = 0;
+	if (source.harness === "obsidian") {
+		embeddingRows = purgeObsidianSourceEmbeddings({
+			sourceId: source.sourceId ?? sourceIdForObsidianRoot(source.root),
+			agentId: agentId ?? undefined,
+		});
+		purgeObsidianSourceStructure({
+			agentId,
+			sourceId: source.sourceId ?? sourceIdForObsidianRoot(source.root),
+			root: source.root,
+		});
+	}
+	return artifactRows + embeddingRows;
+}
+
+function prefixUpperBound(prefix: string): string {
+	return `${prefix}\uffff`;
 }
 
 export function startNativeMemoryBridge(
@@ -234,17 +393,17 @@ export function startNativeMemoryBridge(
 	const agentId = resolveBridgeAgentId(options.agentId);
 	const known = new Map<string, Set<string>>();
 
-	const syncExisting = async (): Promise<number> => {
+	const runScan = async (): Promise<number> => {
 		let count = 0;
 		const yielder = yieldEvery(20);
-		for (const source of sources) {
+		for (const source of activeBridgeSources(sources, options)) {
 			const key = sourceStateKey(source, agentId);
 			const current = new Set<string>();
 			if (existsSync(source.root)) {
 				for await (const file of walkMarkdownFiles(source.root)) {
 					if (!matchesPattern(source, file)) continue;
 					current.add(file);
-					if (await indexNativeMemoryFile(source, file, agentId)) count++;
+					if (await indexNativeMemoryFile(source, file, agentId, options)) count++;
 					await yielder();
 				}
 			}
@@ -258,22 +417,37 @@ export function startNativeMemoryBridge(
 		}
 		return count;
 	};
-	let polling = false;
+
+	let syncInFlight: Promise<number> | null = null;
+	let resyncRequested = false;
+	const syncExisting = async (): Promise<number> => {
+		if (syncInFlight) {
+			resyncRequested = true;
+			return syncInFlight;
+		}
+		syncInFlight = Promise.resolve()
+			.then(async () => {
+				let total = 0;
+				do {
+					resyncRequested = false;
+					total += await runScan();
+				} while (resyncRequested);
+				return total;
+			})
+			.finally(() => {
+				syncInFlight = null;
+			});
+		return syncInFlight;
+	};
 	const pollIntervalMs = options.pollIntervalMs ?? 10_000;
 	const pollTimer =
 		pollIntervalMs > 0
 			? setInterval(() => {
-					if (polling) return;
-					polling = true;
-					syncExisting()
-						.catch((err) => {
-							logger.warn("watcher", "Failed polling native memory sources", {
-								error: err instanceof Error ? err.message : String(err),
-							});
-						})
-						.finally(() => {
-							polling = false;
+					syncExisting().catch((err) => {
+						logger.warn("watcher", "Failed polling native memory sources", {
+							error: err instanceof Error ? err.message : String(err),
 						});
+					});
 				}, pollIntervalMs)
 			: null;
 	pollTimer?.unref?.();
@@ -282,6 +456,7 @@ export function startNativeMemoryBridge(
 		syncExisting,
 		async close(): Promise<void> {
 			if (pollTimer) clearInterval(pollTimer);
+			if (syncInFlight) await syncInFlight.catch(() => 0);
 		},
 	};
 }

@@ -216,15 +216,15 @@ async function submitReviewForDetail(): Promise<void> {
 							{/if}
 							{#if sk.detailMeta}
 								{#if sk.detailMeta.user_invocable}
-									<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">
+									<Badge variant="outline" class="rounded-lg font-mono text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">
 										/{sk.detailMeta.name}
 									</Badge>
 								{/if}
 								{#if sk.detailMeta.builtin}
-									<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
+									<Badge variant="outline" class="rounded-lg font-mono text-[10px] uppercase tracking-[0.08em] border-[var(--sig-accent)] text-[var(--sig-accent)]">Built-in</Badge>
 								{/if}
 								{#if sk.detailMeta.arg_hint}
-									<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">
+									<Badge variant="outline" class="rounded-lg font-mono text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">
 										{sk.detailMeta.arg_hint}
 									</Badge>
 								{/if}
@@ -235,12 +235,12 @@ async function submitReviewForDetail(): Promise<void> {
 					<!-- Action button -->
 					<div class="shrink-0">
 						{#if sk.detailMeta?.builtin}
-							<Badge variant="outline" class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">System</Badge>
+							<Badge variant="outline" class="rounded-lg font-mono text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]">System</Badge>
 						{:else if isInstalled}
 							<Button
 								variant="outline"
 								size="sm"
-								class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
+								class="rounded-lg font-mono text-[10px] uppercase tracking-[0.08em] border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
 								onclick={() => sk.detailMeta && doUninstall(sk.detailMeta.name)}
 								disabled={sk.uninstalling === sk.detailMeta?.name}
 							>
@@ -250,7 +250,7 @@ async function submitReviewForDetail(): Promise<void> {
 							<Button
 								variant="outline"
 								size="sm"
-								class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
+								class="rounded-lg font-mono text-[10px] uppercase tracking-[0.08em] border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
 								onclick={() => sk.selectedName && doInstall(sk.selectedName)}
 								disabled={sk.installing === sk.selectedName}
 							>
@@ -494,7 +494,7 @@ async function submitReviewForDetail(): Promise<void> {
 	}
 
 	.provider-badge {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		padding: 1px 5px;
 		border: 1px solid var(--sig-border-strong);
@@ -519,7 +519,7 @@ async function submitReviewForDetail(): Promise<void> {
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		font-variant-numeric: tabular-nums;
@@ -533,7 +533,7 @@ async function submitReviewForDetail(): Promise<void> {
 		text-align: left;
 		margin-top: 12px;
 		padding: 6px 10px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text);
 		background: var(--sig-bg);
@@ -554,7 +554,7 @@ async function submitReviewForDetail(): Promise<void> {
 	.detail-provider-link {
 		display: inline-block;
 		margin-top: 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-accent);
 		text-decoration: none;
@@ -589,7 +589,7 @@ async function submitReviewForDetail(): Promise<void> {
 
 	.trust-label {
 		display: block;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
@@ -598,7 +598,7 @@ async function submitReviewForDetail(): Promise<void> {
 
 	.trust-value {
 		display: block;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text);
 		margin-top: 2px;
@@ -606,7 +606,7 @@ async function submitReviewForDetail(): Promise<void> {
 
 	.trust-reason {
 		margin: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		line-height: 1.45;
 		color: var(--sig-text-muted);
@@ -660,7 +660,7 @@ async function submitReviewForDetail(): Promise<void> {
 		border: 1px solid var(--sig-border);
 		background: var(--sig-surface-raised);
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -676,7 +676,7 @@ async function submitReviewForDetail(): Promise<void> {
 	.review-muted,
 	.review-meta,
 	.review-body {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
@@ -699,7 +699,7 @@ async function submitReviewForDetail(): Promise<void> {
 
 	:global(.review-input),
 	:global(.review-textarea) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 	}
 
@@ -712,7 +712,7 @@ async function submitReviewForDetail(): Promise<void> {
 	:global(.review-rating) {
 		height: 32px;
 		padding: 0 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		background: var(--sig-surface);
 		border: 1px solid var(--sig-border-strong);
@@ -726,7 +726,7 @@ async function submitReviewForDetail(): Promise<void> {
 	}
 
 	:global(.review-rating-item) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 	}
 
@@ -738,7 +738,7 @@ async function submitReviewForDetail(): Promise<void> {
 	}
 
 	.review-gate {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		line-height: 1.4;
 		color: var(--sig-text-muted);
@@ -750,7 +750,7 @@ async function submitReviewForDetail(): Promise<void> {
 
 	:global(.review-submit) {
 		height: 30px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;

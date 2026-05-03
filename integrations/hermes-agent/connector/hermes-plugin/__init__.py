@@ -30,9 +30,12 @@ from typing import Any, Dict, List, Optional
 from agent.memory_provider import MemoryProvider
 
 try:
-    from plugins.memory.signet.client import SignetClient
+    from .client import SignetClient
 except ImportError:  # pragma: no cover — only missing during Hermes bootstrap
-    SignetClient = None  # type: ignore[assignment,misc]
+    try:
+        from plugins.memory.signet.client import SignetClient
+    except ImportError:
+        SignetClient = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +46,21 @@ logger = logging.getLogger(__name__)
 
 MEMORY_SEARCH_SCHEMA = {
     "name": "memory_search",
-    "description": "Search Signet memories using hybrid vector + keyword search.",
+    "description": (
+        "Search Signet memories using hybrid vector + keyword search. "
+        "Ask a natural-language question with entity, event, and timeframe when possible. "
+        "Avoid bag-of-keywords queries; use keyword_query only when you intentionally need exact lexical matching."
+    ),
     "parameters": {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Search query text."},
+            "query": {
+                "type": "string",
+                "description": (
+                    "Natural-language recall question. Include the relevant entity/person/project, event or decision, "
+                    "and timeframe when known; avoid diagnostic keyword soup."
+                ),
+            },
             "limit": {"type": "integer", "description": "Max results to return (default 10, max 50)."},
             "project": {"type": "string", "description": "Optional project path filter."},
             "expand": {"type": "boolean", "description": "Include lossless session transcripts as sources."},
@@ -125,7 +138,8 @@ MEMORY_STORE_SCHEMA = {
             "hints": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Prospective recall hints and alternate phrasings for retrieving this memory later.",
+                "minItems": 1,
+                "description": "Required agent-provided prospective recall hints and alternate phrasings for retrieving this memory later.",
             },
             "transcript": {
                 "type": "string",
@@ -153,7 +167,7 @@ MEMORY_STORE_SCHEMA = {
                 },
             },
         },
-        "required": ["content"],
+        "required": ["content", "hints"],
     },
 }
 
@@ -214,7 +228,7 @@ MEMORY_FORGET_SCHEMA = {
 
 RECALL_ALIAS_SCHEMA = {
     "name": "recall",
-    "description": "Alias for memory_search.",
+    "description": "Alias for memory_search. Use the same natural-language query discipline; avoid bag-of-keywords queries.",
     "parameters": MEMORY_SEARCH_SCHEMA["parameters"],
 }
 
@@ -413,7 +427,8 @@ class SignetMemoryProvider(MemoryProvider):
             "Active. Memories are auto-recalled each turn via hybrid search. "
             "Use memory_search to query memory, memory_store to save facts, "
             "and memory_get/memory_list/memory_modify/memory_forget for direct "
-            "memory management."
+            "memory management. If Hermes reports Unknown tool for these names, "
+            "run `signet doctor hermes` and restart Hermes."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -714,9 +729,12 @@ class SignetMemoryProvider(MemoryProvider):
         t.start()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        """Return Signet tool schemas."""
-        if not self._client:
-            return []
+        """Return Signet tool schemas.
+
+        Hermes indexes memory-provider tool dispatch before provider
+        initialization. Keep schemas stable even while the daemon is offline;
+        handle_tool_call() returns the runtime connectivity error.
+        """
         return list(ALL_TOOL_SCHEMAS)
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
@@ -799,6 +817,9 @@ class SignetMemoryProvider(MemoryProvider):
             structured = store_args.get("structured")
             if not isinstance(structured, dict):
                 structured = None
+            hints = _string_list(store_args.get("hints"))
+            if not hints:
+                return json.dumps({"error": "Missing required parameter: hints"})
             result = self._client.remember(
                 content,
                 importance=importance,
@@ -806,7 +827,7 @@ class SignetMemoryProvider(MemoryProvider):
                 memory_type=str(store_args.get("type", "") or ""),
                 pinned=store_args.get("pinned") if isinstance(store_args.get("pinned"), bool) else None,
                 project=str(store_args.get("project", "") or self._project),
-                hints=_string_list(store_args.get("hints")),
+                hints=hints,
                 transcript=str(store_args.get("transcript", "") or ""),
                 structured=structured,
                 who="hermes-agent",

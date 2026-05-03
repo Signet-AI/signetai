@@ -121,7 +121,7 @@ const modes: { id: DecorationMode; label: string; icon: typeof Monitor; desc: st
 	}
 
 	.mode-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--sig-text-bright);
@@ -130,13 +130,13 @@ const modes: { id: DecorationMode; label: string; icon: typeof Monitor; desc: st
 	}
 
 	.mode-desc {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
 
 	.not-available {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-muted);
 	}
@@ -176,7 +176,7 @@ const modes: { id: DecorationMode; label: string; icon: typeof Monitor; desc: st
 	.scale-value {
 		min-width: 48px;
 		text-align: center;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 12px;
 		font-weight: 600;
 		color: var(--sig-text-bright);

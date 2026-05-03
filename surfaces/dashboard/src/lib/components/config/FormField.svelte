@@ -15,7 +15,7 @@ let { label, description, children, layout = "horizontal" }: Props = $props();
 
 {#if layout === "vertical"}
 	<div class="flex flex-col gap-1">
-		<Label class="font-[family-name:var(--font-mono)] text-[11px] font-medium
+		<Label class="font-mono text-[11px] font-medium
 			text-[var(--sig-text-bright)] uppercase tracking-[0.06em]">
 			{label}
 			{#if description}
@@ -32,7 +32,7 @@ let { label, description, children, layout = "horizontal" }: Props = $props();
 {:else}
 	<div class="form-field-horizontal">
 		<div class="field-label">
-			<span class="font-[family-name:var(--font-mono)] text-[11px] font-medium
+			<span class="font-mono text-[11px] font-medium
 				text-[var(--sig-text-bright)] uppercase tracking-[0.06em]">
 				{label}
 			</span>
@@ -69,7 +69,7 @@ let { label, description, children, layout = "horizontal" }: Props = $props();
 		-webkit-line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		font-weight: normal;
 		color: var(--sig-text-muted);

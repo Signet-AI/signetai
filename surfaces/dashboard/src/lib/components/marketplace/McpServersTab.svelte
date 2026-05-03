@@ -247,13 +247,13 @@ async function removeFromDetail(serverId: string): Promise<void> {
 			<Tabs.List class="bg-transparent h-auto gap-0 rounded-none border-none">
 				<Tabs.Trigger
 					value="browse"
-					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
+					class="font-mono text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
 				>
 					Browse{mcpMarket.catalogTotal ? ` (${mcpMarket.catalogTotal.toLocaleString()})` : ""}
 				</Tabs.Trigger>
 				<Tabs.Trigger
 					value="installed"
-					class="font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
+					class="font-mono text-[11px] text-[var(--sig-text-muted)] data-[state=active]:text-[var(--sig-text-bright)] data-[state=active]:border-b-[var(--sig-text-bright)] border-b-2 border-b-transparent rounded-none bg-transparent px-[var(--space-md)] py-[var(--space-xs)] hover:text-[var(--sig-text)] data-[state=active]:shadow-none"
 				>
 					Installed ({mcpMarket.installed.length})
 				</Tabs.Trigger>
@@ -336,7 +336,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 								<Button
 									variant="outline"
 									size="sm"
-									class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)] hover:shadow-[0_0_12px_rgba(220,38,38,0.35)] hover:scale-[1.02]"
+									class="flex-1 h-auto rounded-lg font-mono text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)] hover:shadow-[0_0_12px_rgba(220,38,38,0.35)] hover:scale-[1.02]"
 									onclick={(event: MouseEvent) => {
 										event.stopPropagation();
 										void removeMarketplaceMcpServer(server.id);
@@ -404,7 +404,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 								<Button
 									variant="outline"
 									size="sm"
-									class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)] hover:shadow-[0_0_12px_rgba(220,38,38,0.35)] hover:scale-[1.02]"
+									class="flex-1 h-auto rounded-lg font-mono text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)] hover:shadow-[0_0_12px_rgba(220,38,38,0.35)] hover:scale-[1.02]"
 									onclick={(event: MouseEvent) => {
 										event.stopPropagation();
 										const serverId = installedServerByCatalogId.get(entry.id);
@@ -420,7 +420,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 								<Button
 									variant="outline"
 									size="sm"
-									class="flex-1 h-auto rounded-lg font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-text-muted)] hover:shadow-[0_0_12px_rgba(255,255,255,0.1)] hover:scale-[1.02]"
+									class="flex-1 h-auto rounded-lg font-mono text-[9px] uppercase tracking-[0.08em] px-2 py-1 border-[var(--sig-border-strong)] text-[var(--sig-text)] transition-all duration-150 hover:bg-[var(--sig-surface-raised)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-text-muted)] hover:shadow-[0_0_12px_rgba(255,255,255,0.1)] hover:scale-[1.02]"
 									onclick={(event: MouseEvent) => {
 										event.stopPropagation();
 										openInstallSheet(entry);
@@ -476,7 +476,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	.search-input {
 		flex: 1;
 		min-width: 220px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		padding: 6px 8px;
 		background: var(--sig-surface-raised);
@@ -497,7 +497,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	}
 
 	:global(.select-trigger) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		padding: 5px 8px;
 		height: auto;
@@ -525,7 +525,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	}
 
 	:global(.select-item) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 	}
 
@@ -540,7 +540,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		gap: 8px;
 		padding: 8px 10px;
 		border-bottom: 1px solid var(--sig-border);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
@@ -552,7 +552,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-muted);
 	}
@@ -564,14 +564,14 @@ async function removeFromDetail(serverId: string): Promise<void> {
 	.panel-alert {
 		padding: 8px 10px;
 		border-bottom: 1px solid var(--sig-border);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-danger);
 		background: color-mix(in srgb, var(--sig-danger) 10%, transparent);
 	}
 
 	.panel-reset {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-accent);
 		border: none;
@@ -621,7 +621,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		display: flex;
 		gap: 6px;
 		flex-wrap: wrap;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
@@ -690,7 +690,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		border: 1px solid var(--sig-icon-border);
 		display: grid;
 		place-items: center;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		font-weight: 700;
 		letter-spacing: 0.06em;
@@ -759,7 +759,7 @@ async function removeFromDetail(serverId: string): Promise<void> {
 		border: 1px dashed var(--sig-border);
 		border-radius: 6px;
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;

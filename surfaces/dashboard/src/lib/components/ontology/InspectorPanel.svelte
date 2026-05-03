@@ -515,7 +515,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.panel-title {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: 0.1em;
@@ -524,7 +524,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.panel-status {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 	}
@@ -590,7 +590,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.entity-canonical {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
@@ -601,7 +601,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.section-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: 0.1em;
@@ -633,7 +633,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.meta-key {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		min-width: 70px;
@@ -653,7 +653,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	:global(.meta-badge) {
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 9px !important;
 		padding: 0px 5px !important;
 		height: auto !important;
@@ -662,7 +662,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.desc-text {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		line-height: 1.5;
 		color: var(--sig-text);
@@ -674,7 +674,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-bright);
 		border: none;
@@ -699,7 +699,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.breadcrumb-link {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-bright);
 		border: none;
@@ -754,20 +754,20 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.aspect-name {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--sig-text-bright);
 	}
 
 	.aspect-weight {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 	}
 
 	.aspect-attr-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 	}
@@ -808,7 +808,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	:global(.attr-kind-badge) {
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 8px !important;
 		padding: 0px 4px !important;
 		height: auto !important;
@@ -818,14 +818,14 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.attr-score {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		color: var(--sig-text-muted);
 		white-space: nowrap;
 	}
 
 	.attr-card-content {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text);
 		line-height: 1.4;
@@ -837,7 +837,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.empty-hint {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		padding: 4px 0;
@@ -858,7 +858,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.dep-direction {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-warning);
 		width: 24px;
@@ -866,7 +866,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	:global(.dep-type-badge) {
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 8px !important;
 		padding: 0px 4px !important;
 		height: auto !important;
@@ -876,7 +876,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.dep-target {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-bright);
 		flex: 1;
@@ -895,7 +895,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.dep-strength {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		flex-shrink: 0;
@@ -910,7 +910,7 @@ function navigateTo(id: string, kind: "entity" | "aspect" | "attribute"): void {
 	}
 
 	.empty-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		text-transform: uppercase;

@@ -79,7 +79,7 @@ let { autoCard, name, icon }: Props = $props();
 	}
 
 	.auto-card-name {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--sig-text-bright);
@@ -101,7 +101,7 @@ let { autoCard, name, icon }: Props = $props();
 		align-items: center;
 		gap: 4px;
 		padding: 3px 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text);
 		cursor: pointer;

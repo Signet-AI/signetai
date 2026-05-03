@@ -97,7 +97,7 @@ const rendered = $derived.by(() => {
 				<Button
 					variant="outline"
 					size="sm"
-					class="h-auto rounded-lg gap-1 font-[family-name:var(--font-mono)] text-[10px]
+					class="h-auto rounded-lg gap-1 font-mono text-[10px]
 						font-medium uppercase tracking-[0.1em] px-2 py-[3px]
 						text-[var(--sig-text-muted)] border-[var(--sig-border)]
 						hover:text-[var(--sig-text)] hover:border-[var(--sig-border-strong)]"
@@ -110,7 +110,7 @@ const rendered = $derived.by(() => {
 				<Button
 					variant="outline"
 					size="sm"
-					class="h-auto rounded-lg gap-1 font-[family-name:var(--font-mono)] text-[10px]
+					class="h-auto rounded-lg gap-1 font-mono text-[10px]
 						font-medium uppercase tracking-[0.1em] px-2 py-[3px]
 						border-[var(--sig-accent)] text-[var(--sig-text-bright)]
 						hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]
@@ -124,7 +124,7 @@ const rendered = $derived.by(() => {
 			<Button
 				variant="outline"
 				size="sm"
-				class="h-auto rounded-lg gap-1 font-[family-name:var(--font-mono)] text-[10px]
+				class="h-auto rounded-lg gap-1 font-mono text-[10px]
 					font-medium uppercase tracking-[0.1em] px-2 py-[3px]
 					text-[var(--sig-text)] border-[var(--sig-border-strong)]
 					hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-text-muted)]"
@@ -177,7 +177,7 @@ const rendered = $derived.by(() => {
 	}
 
 	.md-viewer-filename {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: var(--font-size-sm);
 	}
 
@@ -186,7 +186,7 @@ const rendered = $derived.by(() => {
 	}
 
 	.md-viewer-budget {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		letter-spacing: 0.02em;
@@ -213,14 +213,14 @@ const rendered = $derived.by(() => {
 	}
 
 	.md-viewer-save-meta {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		letter-spacing: 0.02em;
 	}
 
 	.md-viewer-save-state {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;

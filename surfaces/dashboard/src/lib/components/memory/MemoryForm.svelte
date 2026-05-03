@@ -275,7 +275,7 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 								max="1"
 								step="0.05"
 								bind:value={importance}
-								class="{inputClass} font-[family-name:var(--font-mono)]"
+								class="{inputClass} font-mono"
 							/>
 						</div>
 					</div>
@@ -341,7 +341,7 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 						</p>
 						<div
 							class="flex flex-wrap gap-1 text-[9px]
-								font-[family-name:var(--font-mono)]
+								font-mono
 								text-[var(--sig-text-muted)]"
 						>
 							{#if editing.type}
@@ -412,7 +412,7 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 				{#if error}
 					<p
 						class="m-0 text-[11px] text-red-400
-							font-[family-name:var(--font-mono)]"
+							font-mono"
 					>
 						{error}
 					</p>

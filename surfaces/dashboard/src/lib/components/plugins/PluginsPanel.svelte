@@ -757,7 +757,7 @@ async function handleGraphiqUpdate(): Promise<void> {
 	.eyebrow,
 	.section-title,
 	.activity-head {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		font-weight: 700;
 		letter-spacing: 0.1em;
@@ -783,7 +783,7 @@ async function handleGraphiqUpdate(): Promise<void> {
 	p {
 		max-width: 760px;
 		margin: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		line-height: 1.45;
 		color: var(--sig-text-muted);
@@ -845,7 +845,7 @@ async function handleGraphiqUpdate(): Promise<void> {
 	.drawer-empty,
 	.status-strip span,
 	.status-strip strong {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
@@ -916,7 +916,7 @@ async function handleGraphiqUpdate(): Promise<void> {
 		padding: 1px 5px;
 		border: 1px solid var(--sig-border);
 		border-radius: 999px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -1040,7 +1040,7 @@ async function handleGraphiqUpdate(): Promise<void> {
 	.permission-group-card ul {
 		margin: 4px 0 0;
 		padding-left: 1rem;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		line-height: 1.55;
 		color: var(--sig-text-muted);
@@ -1105,7 +1105,7 @@ async function handleGraphiqUpdate(): Promise<void> {
 		align-items: center;
 		padding: 4px 0;
 		border-top: 1px solid var(--sig-border);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
@@ -1120,21 +1120,21 @@ async function handleGraphiqUpdate(): Promise<void> {
 
 	.gm-action-status {
 		margin-top: var(--space-xs);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-highlight);
 	}
 
 	.gm-error {
 		padding: var(--space-xs);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-danger);
 	}
 
 	.gm-loading {
 		padding: var(--space-xs);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
@@ -1153,7 +1153,7 @@ async function handleGraphiqUpdate(): Promise<void> {
 		flex: 1;
 		min-width: 0;
 		padding: 5px 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		background: var(--sig-bg);
 		border: 1px solid var(--sig-border);
@@ -1194,7 +1194,7 @@ async function handleGraphiqUpdate(): Promise<void> {
 	}
 
 	.gm-project-stats {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 	}

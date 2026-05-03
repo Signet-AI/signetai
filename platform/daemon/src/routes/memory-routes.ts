@@ -1,25 +1,28 @@
-import {vectorSearch} from "@signet/core";
-import type {Hono} from "hono";
-import {getAgentScope, resolveAgentId} from "../agent-id";
-import {checkScope, requirePermission, requireRateLimit} from "../auth";
-import {normalizeAndHashContent} from "../content-normalization";
-import {getDbAccessor} from "../db-accessor";
-import {syncVecDeleteBySourceId, syncVecInsert, vectorToBlob} from "../db-helpers";
-import {fetchEmbedding} from "../embedding-fetch";
-import {buildEmbeddingHealth} from "../embedding-health";
-import {linkMemoryToEntities} from "../inline-entity-linker";
-import {logger} from "../logger";
-import {loadMemoryConfig} from "../memory-config";
-import {hybridRecall, type RecallParams} from "../memory-search";
-import {buildMemoryTimeline} from "../memory-timeline";
-import {recordPathFeedback} from "../path-feedback";
-import {enqueueDocumentIngestJob} from "../pipeline";
-import {parseFeedback, recordAgentFeedback} from "../session-memories";
-import {upsertSessionTranscript} from "../session-transcripts";
-import {txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory} from "../transactions";
-import {cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection} from "../umap-projection";
+import { vectorSearch } from "@signet/core";
+import type { Hono } from "hono";
+import { getAgentScope, resolveAgentId } from "../agent-id";
+import { checkScope, requirePermission, requireRateLimit } from "../auth";
+import { normalizeAndHashContent } from "../content-normalization";
+import { getDbAccessor } from "../db-accessor";
+import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { fetchEmbedding } from "../embedding-fetch";
+import { buildEmbeddingHealth } from "../embedding-health";
+import { linkMemoryToEntities } from "../inline-entity-linker";
+import { logger } from "../logger";
+import { loadMemoryConfig } from "../memory-config";
+import { type RecallParams, hybridRecall } from "../memory-search";
+import { buildMemoryTimeline } from "../memory-timeline";
+import { recordPathFeedback } from "../path-feedback";
+import { enqueueDocumentIngestJob } from "../pipeline";
+import { parseFeedback, recordAgentFeedback } from "../session-memories";
+import { upsertSessionTranscript } from "../session-transcripts";
+import { txForgetMemory, txIngestEnvelope, txModifyMemory, txRecoverMemory } from "../transactions";
+import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "../umap-projection";
 import {
 	AGENTS_DIR,
+	INTERNAL_SELF_HOST,
+	PORT,
+	PROJECTION_ERROR_TTL_MS,
 	authBatchForgetLimiter,
 	authConfig,
 	authForgetLimiter,
@@ -27,22 +30,19 @@ import {
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
 	hasMemoriesSessionIdColumnCache,
-	INTERNAL_SELF_HOST,
-	PORT,
-	PROJECTION_ERROR_TTL_MS,
 	projectionErrors,
 	projectionInFlight,
 	queueExtractionJob,
 } from "./state";
 import {
+	type FilterParams,
+	type ForgetCandidatesRequest,
 	blobToVector,
 	buildForgetConfirmToken,
 	buildWhere,
 	buildWhereRaw,
 	checkEmbeddingProvider,
 	chunkBySentence,
-	type FilterParams,
-	type ForgetCandidatesRequest,
 	inferType,
 	isMissingEmbeddingsTableError,
 	loadForgetCandidates,
@@ -1985,6 +1985,11 @@ export function registerMemoryRoutes(app: Hono): void {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		try {
+			const agentId = resolveAgentId({
+				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+				sessionKey: c.req.header("x-signet-session-key"),
+			});
+			const agentScope = getAgentScope(agentId);
 			const result = await hybridRecall(
 				{
 					query: q,
@@ -1996,6 +2001,9 @@ export function registerMemoryRoutes(app: Hono): void {
 					importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
 					since,
 					expand: expand === "1" || expand === "true",
+					agentId,
+					readPolicy: agentScope.readPolicy,
+					policyGroup: agentScope.policyGroup,
 					...(scopeProject ? { project: scopeProject } : {}),
 				},
 				cfg,
@@ -2330,7 +2338,10 @@ export function registerMemoryRoutes(app: Hono): void {
 		const { cached, total } = getDbAccessor().withReadDb((db) => {
 			const cachedResult = getCachedProjection(db, nComponents);
 			const countRow = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
-			const count = typeof countRow === "object" && countRow !== null && "count" in countRow && typeof countRow.count === "number" ? countRow.count : 0;
+			const count =
+				typeof countRow === "object" && countRow !== null && "count" in countRow && typeof countRow.count === "number"
+					? countRow.count
+					: 0;
 			return { cached: cachedResult, total: count };
 		});
 
@@ -2364,8 +2375,10 @@ export function registerMemoryRoutes(app: Hono): void {
 				try {
 					const result = getDbAccessor().withReadDb((db) => computeProjection(db, nComponents));
 					const count = getDbAccessor().withReadDb((db) => {
-					const row = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
-					return typeof row === "object" && row !== null && "count" in row && typeof row.count === "number" ? row.count : 0;
+						const row = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
+						return typeof row === "object" && row !== null && "count" in row && typeof row.count === "number"
+							? row.count
+							: 0;
 					});
 					getDbAccessor().withWriteTx((db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {

@@ -519,7 +519,7 @@ onMount(() => {
 	}
 
 	.panel-title {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: 0.1em;
@@ -528,7 +528,7 @@ onMount(() => {
 	}
 
 	.panel-status {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		letter-spacing: 0.05em;
@@ -574,7 +574,7 @@ onMount(() => {
 	}
 
 	.legend-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		text-transform: uppercase;

@@ -60,7 +60,7 @@ function open(link: QuickLink): void {
 	}
 
 	.link-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;

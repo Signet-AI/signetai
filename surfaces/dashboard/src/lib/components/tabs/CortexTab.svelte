@@ -77,7 +77,7 @@ let { activeTab, memories, agentId, onopenglobalsimilar, ontimelinegeneratedforc
 		align-items: center;
 		justify-content: center;
 		flex: 1;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-muted);
 		text-transform: uppercase;
@@ -89,7 +89,7 @@ let { activeTab, memories, agentId, onopenglobalsimilar, ontimelinegeneratedforc
 		align-items: center;
 		justify-content: center;
 		flex: 1;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-danger);
 	}

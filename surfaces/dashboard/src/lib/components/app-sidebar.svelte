@@ -9,6 +9,7 @@ import {
 	navigateSidebarPrev,
 	setFocusZone,
 	setSidebarItem,
+	setSidebarNavigationOrder,
 } from "$lib/stores/focus.svelte";
 import { type TabId, nav, setTab } from "$lib/stores/navigation.svelte";
 import BarChart3 from "@lucide/svelte/icons/bar-chart-3";
@@ -19,6 +20,7 @@ import Github from "@lucide/svelte/icons/github";
 import ListTodo from "@lucide/svelte/icons/list-todo";
 import Moon from "@lucide/svelte/icons/moon";
 import Orbit from "@lucide/svelte/icons/orbit";
+import PlugZap from "@lucide/svelte/icons/plug-zap";
 import ShieldAlert from "@lucide/svelte/icons/shield-alert";
 import ShieldCheck from "@lucide/svelte/icons/shield-check";
 import Sun from "@lucide/svelte/icons/sun";
@@ -39,6 +41,8 @@ interface Props {
 const { identity, harnesses, memCount, daemonStatus, theme, onthemetoggle, onprefetchembeddings }: Props = $props();
 
 const sidebar = useSidebar();
+const SIDEBAR_NAV_ORDER_STORAGE_KEY = "signet:dashboard:sidebar-nav-order";
+
 
 function maybePrefetchEmbeddings(id: string): void {
 	if (id !== "cortex-memory") return;
@@ -52,14 +56,100 @@ type NavItem = {
 	icon: typeof Orbit;
 };
 
-const navItems: NavItem[] = [
+const defaultNavItems: NavItem[] = [
 	{ id: "home", focusId: "home", label: "Overview", icon: BarChart3 },
 	{ id: "cortex-memory", focusId: "memory", label: "Ontology", icon: Orbit },
 	{ id: "tasks", focusId: "tasks", label: "Tasks", icon: ListTodo },
 	{ id: "audit", focusId: "audit", label: "Audit", icon: ShieldAlert },
 	{ id: "secrets", focusId: "secrets", label: "Secrets", icon: ShieldCheck },
 	{ id: "skills", focusId: "skills", label: "Skills", icon: BookOpen },
+	{ id: "sources", focusId: "sources", label: "Sources", icon: PlugZap },
 ];
+
+let navItems = $state([...defaultNavItems]);
+let draggedNavId = $state<TabId | null>(null);
+let dragTargetNavId = $state<TabId | null>(null);
+
+function navOrderIsValid(order: unknown): order is TabId[] {
+	if (!Array.isArray(order)) return false;
+	const defaultIds = defaultNavItems.map((item) => item.id);
+	return order.length === defaultIds.length && defaultIds.every((id) => order.includes(id));
+}
+
+function syncSidebarFocusOrder(): void {
+	setSidebarNavigationOrder(navItems.map((item) => item.focusId));
+}
+
+function applyNavOrder(order: TabId[]): void {
+	const itemById = new Map(defaultNavItems.map((item) => [item.id, item]));
+	navItems = order.map((id) => itemById.get(id)).filter((item): item is NavItem => Boolean(item));
+	syncSidebarFocusOrder();
+}
+
+function persistNavOrder(): void {
+	localStorage.setItem(SIDEBAR_NAV_ORDER_STORAGE_KEY, JSON.stringify(navItems.map((item) => item.id)));
+}
+
+function loadSavedNavOrder(): void {
+	const saved = localStorage.getItem(SIDEBAR_NAV_ORDER_STORAGE_KEY);
+	if (!saved) return;
+
+	try {
+		const parsed = JSON.parse(saved);
+		if (navOrderIsValid(parsed)) {
+			applyNavOrder(parsed);
+		}
+	} catch {
+		localStorage.removeItem(SIDEBAR_NAV_ORDER_STORAGE_KEY);
+	}
+}
+
+function moveNavItem(sourceId: TabId, targetId: TabId): void {
+	if (sourceId === targetId) return;
+	const sourceIndex = navItems.findIndex((item) => item.id === sourceId);
+	const targetIndex = navItems.findIndex((item) => item.id === targetId);
+	if (sourceIndex < 0 || targetIndex < 0) return;
+
+	const nextItems = [...navItems];
+	const [moved] = nextItems.splice(sourceIndex, 1);
+	nextItems.splice(targetIndex, 0, moved);
+	navItems = nextItems;
+	syncSidebarFocusOrder();
+	persistNavOrder();
+}
+
+function handleNavDragStart(e: DragEvent, item: NavItem): void {
+	draggedNavId = item.id;
+	dragTargetNavId = item.id;
+	e.dataTransfer?.setData("text/plain", item.id);
+	if (e.dataTransfer) {
+		e.dataTransfer.effectAllowed = "move";
+	}
+}
+
+function handleNavDragOver(e: DragEvent, item: NavItem): void {
+	if (!draggedNavId || draggedNavId === item.id) return;
+	e.preventDefault();
+	dragTargetNavId = item.id;
+	if (e.dataTransfer) {
+		e.dataTransfer.dropEffect = "move";
+	}
+}
+
+function handleNavDrop(e: DragEvent, item: NavItem): void {
+	e.preventDefault();
+	const sourceId = draggedNavId ?? (e.dataTransfer?.getData("text/plain") as TabId | undefined);
+	if (sourceId) {
+		moveNavItem(sourceId, item.id);
+	}
+	draggedNavId = null;
+	dragTargetNavId = null;
+}
+
+function handleNavDragEnd(): void {
+	draggedNavId = null;
+	dragTargetNavId = null;
+}
 
 function openGithub(): void {
 	window.open("https://github.com/Signet-AI/signetai", "_blank");
@@ -86,8 +176,10 @@ function focusIdForTab(tab: TabId): SidebarFocusItem {
 	return "home";
 }
 
-// Initialize sidebar focus on mount — derive from current active tab
+// Initialize saved sidebar order and focus on mount — derive from current active tab
 onMount(() => {
+	syncSidebarFocusOrder();
+	loadSavedNavOrder();
 	if (!focus.sidebarItem) {
 		setSidebarItem(focusIdForTab(nav.activeTab));
 	}
@@ -144,7 +236,7 @@ function activateItem(item: NavItem): void {
 		<Sidebar.Menu>
 			<Sidebar.MenuItem>
 				<Sidebar.MenuButton
-					class="h-auto py-2.5 font-[family-name:var(--font-display)]"
+					class="h-auto py-2.5 font-display"
 					onclick={() => sidebar.toggle()}
 				>
 					{#snippet child({ props })}
@@ -159,15 +251,15 @@ function activateItem(item: NavItem): void {
 								transition-[opacity,width] duration-200 ease-out
 								group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:w-0">
 								<span
-									class="text-[13px] font-bold tracking-[0.12em]
-										uppercase text-[var(--sig-text-bright)]"
+									class="text-[15px] font-bold tracking-[0.12em]
+										uppercase text-[var(--sig-text-bright)] font-display"
 								>
 									SIGNET
 								</span>
 								<span
-									class="text-[10px] tracking-[0.04em]
+									class="text-[11px] tracking-[0.04em]
 										text-[var(--sig-text-muted)]
-										font-[family-name:var(--font-mono)]"
+										font-mono"
 								>
 									{identity?.name ?? "Agent"}
 								</span>
@@ -186,9 +278,18 @@ function activateItem(item: NavItem): void {
 					{#each navItems as item (item.id)}
 						{@const active = isActive(item)}
 						<Sidebar.MenuItem>
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<div
 								class="nav-blend-item"
 								class:nav-blend-item--active={active}
+								class:nav-blend-item--dragging={draggedNavId === item.id}
+								class:nav-blend-item--drop-target={dragTargetNavId === item.id && draggedNavId !== item.id}
+								draggable="true"
+								ondragstart={(e) => handleNavDragStart(e, item)}
+								ondragover={(e) => handleNavDragOver(e, item)}
+								ondrop={(e) => handleNavDrop(e, item)}
+								ondragend={handleNavDragEnd}
+								title="Drag to rearrange"
 							>
 								<Sidebar.MenuButton
 									data-sidebar-item={item.focusId}
@@ -204,8 +305,8 @@ function activateItem(item: NavItem): void {
 									tooltipContent={item.label}
 								>
 									<item.icon class="size-4" />
-									<span class="text-xs uppercase tracking-[0.06em]
-										font-[family-name:var(--font-mono)]
+									<span class="text-[13px] uppercase tracking-[0.06em]
+										font-mono
 										overflow-hidden whitespace-nowrap
 										transition-opacity duration-200 ease-out
 										group-data-[collapsible=icon]:opacity-0"
@@ -234,7 +335,7 @@ function activateItem(item: NavItem): void {
 					tooltipContent="Settings"
 				>
 					<Cog class="size-4" />
-					<span class="text-xs font-[family-name:var(--font-mono)]
+					<span class="text-[13px] font-mono
 						overflow-hidden whitespace-nowrap
 						transition-opacity duration-200 ease-out
 						group-data-[collapsible=icon]:opacity-0"
@@ -258,7 +359,7 @@ function activateItem(item: NavItem): void {
 					{:else}
 						<Moon class="size-4" />
 					{/if}
-					<span class="text-xs font-[family-name:var(--font-mono)]
+					<span class="text-[13px] font-mono
 						overflow-hidden whitespace-nowrap
 						transition-opacity duration-200 ease-out
 						group-data-[collapsible=icon]:opacity-0"
@@ -281,7 +382,7 @@ function activateItem(item: NavItem): void {
 					>
 						<Github class="size-4" />
 						<span
-							class="text-xs font-[family-name:var(--font-mono)]
+							class="text-[13px] font-mono
 								overflow-hidden whitespace-nowrap
 								transition-opacity duration-200 ease-out
 								group-data-[collapsible=icon]:opacity-0"
@@ -304,8 +405,8 @@ function activateItem(item: NavItem): void {
 			{#if daemonStatus}
 				<Sidebar.MenuItem>
 					<span
-						class="px-2 py-1 text-[10px] tracking-[0.06em]
-							font-[family-name:var(--font-mono)]
+						class="px-2 py-1 text-[11px] tracking-[0.06em]
+							font-mono
 							overflow-hidden whitespace-nowrap
 							transition-opacity duration-200 ease-out
 							group-data-[collapsible=icon]:opacity-0
@@ -339,6 +440,18 @@ function activateItem(item: NavItem): void {
 		border-radius: 6px;
 		transition: background 0.15s ease, box-shadow 0.15s ease;
 	}
+
+	.nav-blend-item--dragging {
+		opacity: 0.45;
+	}
+
+	.nav-blend-item--drop-target {
+		background: color-mix(in srgb, var(--sig-highlight-muted) 70%, transparent);
+		box-shadow:
+			inset 2px 0 0 var(--sig-highlight),
+			inset 0 0 0 1px var(--sig-highlight-dim);
+	}
+
 
 	.nav-blend-item:hover:not(.nav-blend-item--active) {
 		background: rgba(255, 255, 255, 0.04);

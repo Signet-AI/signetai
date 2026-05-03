@@ -184,7 +184,7 @@ function handleGroupDrop(e: DragEvent, groupId: string): void {
 		border: none;
 		background: transparent;
 		color: var(--sig-text);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		cursor: pointer;
 		text-align: left;
@@ -228,7 +228,7 @@ function handleGroupDrop(e: DragEvent, groupId: string): void {
 		border: 1px solid var(--sig-border-strong);
 		border-radius: 3px;
 		padding: 1px 4px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-bright);
 		flex: 1;
@@ -245,7 +245,7 @@ function handleGroupDrop(e: DragEvent, groupId: string): void {
 		border: 1px solid var(--sig-border-strong);
 		border-radius: 4px;
 		padding: 3px 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-bright);
 		outline: none;

@@ -5,14 +5,15 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
+const daemonProxyTarget = process.env.SIGNET_DAEMON_URL ?? "http://localhost:3850";
 
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		proxy: {
-			"/api": "http://localhost:3850",
-			"/health": "http://localhost:3850",
-			"/memory": "http://localhost:3850",
+			"/api": daemonProxyTarget,
+			"/health": daemonProxyTarget,
+			"/memory": daemonProxyTarget,
 		},
 	},
 	resolve: {

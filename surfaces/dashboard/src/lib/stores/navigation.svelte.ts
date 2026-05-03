@@ -19,6 +19,7 @@ export type TabId =
 	| "logs"
 	| "secrets"
 	| "skills"
+	| "sources"
 	| "tasks"
 	| "connectors"
 	| "predictor"
@@ -35,6 +36,7 @@ const VALID_TABS: ReadonlySet<string> = new Set<TabId>([
 	"audit",
 	"secrets",
 	"skills",
+	"sources",
 	"tasks",
 	"changelog",
 	"os",
@@ -74,6 +76,7 @@ const HASH_ALIASES: ReadonlyMap<string, TabId> = new Map([
 	["pipeline", "settings"],
 	["predictor", "settings"],
 	["connectors", "settings"],
+	["sources", "sources"],
 	["logs", "audit"],
 	["audit/logs", "audit"],
 	["audit/troubleshooter", "audit"],
@@ -112,6 +115,7 @@ const HASH_CANONICAL: ReadonlyMap<string, string> = new Map([
 	["pipeline", "settings"],
 	["predictor", "settings"],
 	["connectors", "settings"],
+	["sources", "sources"],
 	["engine/pipeline", "settings"],
 	["engine/predictor", "settings"],
 	["engine/connectors", "settings"],

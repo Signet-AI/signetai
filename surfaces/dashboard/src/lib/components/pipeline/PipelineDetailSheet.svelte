@@ -53,11 +53,11 @@ const queueMetrics = $derived.by(() => {
 	<Sheet.Content side="right" class="w-[380px] bg-[var(--sig-bg)] border-l border-[var(--sig-border)]">
 		{#if def && state}
 			<Sheet.Header>
-				<Sheet.Title class="flex items-center gap-2 font-[family-name:var(--font-display)] text-[var(--sig-text-bright)]">
+				<Sheet.Title class="flex items-center gap-2 font-display text-[var(--sig-text-bright)]">
 					{def.label}
 					<Badge
 						variant="outline"
-						class="text-[9px] px-1.5 py-0 font-[family-name:var(--font-mono)]
+						class="text-[9px] px-1.5 py-0 font-mono
 							{state.health === 'healthy' ? 'border-[#4a7a5e] text-[#4a7a5e]' :
 							 state.health === 'degraded' ? 'border-[#b8860b] text-[#b8860b]' :
 							 state.health === 'unhealthy' ? 'border-[#8a4a48] text-[#8a4a48]' :
@@ -67,7 +67,7 @@ const queueMetrics = $derived.by(() => {
 					</Badge>
 				</Sheet.Title>
 				{#if def.description}
-					<Sheet.Description class="text-[11px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">
+					<Sheet.Description class="text-[11px] text-[var(--sig-text-muted)] font-mono">
 						{def.description}
 					</Sheet.Description>
 				{/if}
@@ -76,25 +76,25 @@ const queueMetrics = $derived.by(() => {
 			<div class="mt-4 space-y-4 overflow-y-auto pr-2" style="max-height: calc(100vh - 140px);">
 				<!-- Metrics -->
 				<section>
-					<h4 class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] mb-2 font-[family-name:var(--font-display)]">
+					<h4 class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] mb-2 font-display">
 						Metrics
 					</h4>
 					<div class="grid grid-cols-3 gap-2">
 						<div class="p-2 rounded bg-[var(--sig-surface)] border border-[var(--sig-border)]">
 							<div class="text-[9px] text-[var(--sig-text-muted)] uppercase">Score</div>
-							<div class="text-[15px] text-[var(--sig-text-bright)] font-[family-name:var(--font-mono)]">
+							<div class="text-[15px] text-[var(--sig-text-bright)] font-mono">
 								{state.score > 0 ? (state.score * 100).toFixed(0) + "%" : "--"}
 							</div>
 						</div>
 						<div class="p-2 rounded bg-[var(--sig-surface)] border border-[var(--sig-border)]">
 							<div class="text-[9px] text-[var(--sig-text-muted)] uppercase">Queue</div>
-							<div class="text-[15px] text-[var(--sig-text-bright)] font-[family-name:var(--font-mono)]">
+							<div class="text-[15px] text-[var(--sig-text-bright)] font-mono">
 								{state.queueDepth}
 							</div>
 						</div>
 						<div class="p-2 rounded bg-[var(--sig-surface)] border border-[var(--sig-border)]">
 							<div class="text-[9px] text-[var(--sig-text-muted)] uppercase">Errors</div>
-							<div class="text-[15px] font-[family-name:var(--font-mono)]"
+							<div class="text-[15px] font-mono"
 								class:text-[#8a4a48]={state.errorCount > 0}
 								class:text-[var(--sig-text-bright)]={state.errorCount === 0}
 							>
@@ -107,10 +107,10 @@ const queueMetrics = $derived.by(() => {
 				<!-- Queue breakdown (if available) -->
 				{#if queueMetrics}
 					<section>
-						<h4 class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] mb-2 font-[family-name:var(--font-display)]">
+						<h4 class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] mb-2 font-display">
 							Queue Details
 						</h4>
-						<div class="space-y-1 text-[11px] font-[family-name:var(--font-mono)]">
+						<div class="space-y-1 text-[11px] font-mono">
 							{#each Object.entries(queueMetrics) as [key, val]}
 								{#if typeof val === "object" && val !== null}
 									<div class="text-[var(--sig-text-muted)] mt-1">{key}</div>
@@ -134,10 +134,10 @@ const queueMetrics = $derived.by(() => {
 				<!-- Last activity -->
 				{#if state.lastActivity}
 					<section>
-						<h4 class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] mb-1 font-[family-name:var(--font-display)]">
+						<h4 class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] mb-1 font-display">
 							Last Activity
 						</h4>
-						<span class="text-[11px] text-[var(--sig-text)] font-[family-name:var(--font-mono)]">
+						<span class="text-[11px] text-[var(--sig-text)] font-mono">
 							{formatTime(state.lastActivity)}
 						</span>
 					</section>
@@ -145,12 +145,12 @@ const queueMetrics = $derived.by(() => {
 
 				<!-- Recent logs -->
 				<section>
-					<h4 class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] mb-2 font-[family-name:var(--font-display)]">
+					<h4 class="text-[10px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)] mb-2 font-display">
 						Recent Logs ({state.recentLogs.length})
 					</h4>
 					<div class="space-y-px max-h-[300px] overflow-y-auto">
 						{#each state.recentLogs as log}
-							<div class="flex gap-2 py-1 px-1 text-[10px] font-[family-name:var(--font-mono)] hover:bg-[var(--sig-surface-raised)] rounded">
+							<div class="flex gap-2 py-1 px-1 text-[10px] font-mono hover:bg-[var(--sig-surface-raised)] rounded">
 								<span class="text-[var(--sig-text-muted)] shrink-0 w-[52px]">
 									{formatTime(log.timestamp)}
 								</span>

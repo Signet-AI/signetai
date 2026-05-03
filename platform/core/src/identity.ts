@@ -377,6 +377,7 @@ export function hermesAgentCandidateDirs(): readonly string[] {
 	const hermesHome = resolveHermesHomePath();
 	return [
 		hermesHome,
+		join(hermesHome, "hermes-agent"),
 		join(home, "hermes-agent"),
 		join(home, ".local", "share", "hermes-agent"),
 		join(home, "src", "hermes-agent"),

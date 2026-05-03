@@ -464,7 +464,7 @@ function ansiToHtml(text: string): string {
 	}
 
 	.ts-panel-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		background: var(--sig-bg);
@@ -500,7 +500,7 @@ function ansiToHtml(text: string): string {
 		overflow-y: auto;
 		padding: 10px 14px;
 		background: var(--sig-bg);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		line-height: 1.55;
 		color: var(--sig-text);
@@ -542,7 +542,7 @@ function ansiToHtml(text: string): string {
 		border: 1px solid color-mix(in srgb, var(--panel-color) 25%, var(--sig-border)) !important;
 		border-radius: 6px !important;
 		color: var(--sig-text-bright) !important;
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 10px !important;
 		letter-spacing: 0.03em;
 		padding: 0 10px !important;
@@ -556,12 +556,12 @@ function ansiToHtml(text: string): string {
 		background: var(--sig-surface) !important;
 		border: 1px solid var(--sig-border) !important;
 		border-radius: 6px !important;
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 10px !important;
 	}
 
 	:global(.ts-select-item) {
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 10px !important;
 		color: var(--sig-text) !important;
 		padding: 6px 10px !important;
@@ -589,7 +589,7 @@ function ansiToHtml(text: string): string {
 		border: 1px solid color-mix(in srgb, var(--panel-color) 35%, var(--sig-border));
 		border-radius: 6px;
 		color: var(--panel-color);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		font-weight: 600;
 		letter-spacing: 0.06em;

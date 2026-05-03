@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-gemini",
-  "version": "0.109.16",
+  "version": "0.110.0",
   "description": "Signet connector for Gemini CLI",
   "type": "module",
   "main": "./dist/index.js",

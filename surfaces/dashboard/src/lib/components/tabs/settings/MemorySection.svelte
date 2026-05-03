@@ -19,7 +19,7 @@ import { st } from "$lib/stores/settings.svelte";
 		</FormField>
 
 		<AdvancedSection>
-			<p class="text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-warning,#d4a017)] mb-3">
+			<p class="text-[10px] font-mono text-[var(--sig-warning,#d4a017)] mb-3">
 				Changing paths can break your setup. Only modify if you know what you're doing.
 			</p>
 			<FormField label="Database path" description="SQLite database file for structured memory storage.">

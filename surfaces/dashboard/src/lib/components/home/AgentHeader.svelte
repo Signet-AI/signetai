@@ -247,14 +247,14 @@ const rightRows: Row[] = $derived([
 	}
 
 	.eyebrow-left {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.14em;
 		color: var(--sig-text-muted);
 	}
 
 	.eyebrow-right {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-accent);
@@ -280,13 +280,6 @@ const rightRows: Row[] = $derived([
 		line-height: 0.9;
 	}
 
-	/* Neon glow only in dark mode */
-	:global(:root:not([data-theme="light"])) .agent-name {
-		text-shadow:
-			0 0 30px var(--sig-highlight-dim),
-			0 0 60px var(--sig-highlight-dim);
-	}
-
 	.hero-stat {
 		display: flex;
 		align-items: flex-end;
@@ -295,7 +288,7 @@ const rightRows: Row[] = $derived([
 	}
 
 	.hero-number {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 36px;
 		font-weight: 700;
 		line-height: 0.9;
@@ -305,7 +298,7 @@ const rightRows: Row[] = $derived([
 	}
 
 	.hero-unit {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		line-height: 1.4;
 		letter-spacing: 0.1em;

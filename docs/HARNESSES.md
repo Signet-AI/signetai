@@ -705,18 +705,25 @@ Hermes lifecycle.
 
 | Location | Description |
 |----------|-------------|
+| `~/.hermes/plugins/signet/__init__.py` | User-level Signet `MemoryProvider` implementation |
+| `~/.hermes/plugins/signet/client.py` | User-level HTTP client for the Signet daemon API |
+| `~/.hermes/plugins/signet/plugin.yaml` | User-level plugin metadata |
+| `~/.hermes/plugins/signet/signet.install.json` | Install marker with connector version and plugin source hash |
 | `<hermes-repo>/plugins/memory/signet/__init__.py` | Signet `MemoryProvider` implementation |
 | `<hermes-repo>/plugins/memory/signet/client.py` | HTTP client for the Signet daemon API |
 | `<hermes-repo>/plugins/memory/signet/plugin.yaml` | Plugin metadata |
+| `<hermes-repo>/plugins/memory/signet/signet.install.json` | Install marker with connector version and plugin source hash |
+| `~/.hermes/config.yaml` | `memory.provider: signet` activation |
 | `~/.hermes/.env` | Daemon connection environment variables |
 
 ### How it works
 
 1. `signet setup` (with `hermes-agent` selected) copies the Python plugin
-   into `plugins/memory/signet/` inside the Hermes Agent repo and writes
-   daemon connection env vars to `~/.hermes/.env`.
-2. The user activates the plugin via `hermes memory setup` (select "signet")
-   or `hermes config set memory.provider signet`.
+   into both `~/.hermes/plugins/signet/` and, when discovered,
+   `<hermes-repo>/plugins/memory/signet/`.
+2. The connector writes install markers, daemon connection env vars to
+   `~/.hermes/.env`, and activates the provider by setting
+   `memory.provider: signet` in Hermes config.
 3. At session start, Hermes calls `initialize()` on the plugin, which fires
    `POST /api/hooks/session-start` to load identity, memories, and system
    prompt injection from the daemon.
@@ -758,7 +765,9 @@ stores the task+result pair as a Signet memory tagged `["delegation", "subagent"
 
 - Hermes Agent installed (repo with `plugins/memory/` directory)
 - Signet daemon running (`signet start`)
-- Plugin activated via `hermes memory setup` or `hermes config set memory.provider signet`
+- `signet setup --harness hermes-agent`
+- `signet doctor hermes` reports daemon health, plugin freshness, config
+  activation, and Hermes tool routing
 
 ---
 

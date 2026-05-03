@@ -115,7 +115,7 @@ const activeDoc = $derived(docFor(activeView));
 			<div class="min-w-0">
 				<div class="sig-heading text-[var(--sig-text-bright)]">Project</div>
 				<p
-					class="mt-1 max-w-2xl font-[family-name:var(--font-mono)] text-[11px]
+					class="mt-1 max-w-2xl font-mono text-[11px]
 						leading-5 text-[var(--sig-text-muted)]"
 				>
 					Overview, roadmap, and changelog.
@@ -199,14 +199,14 @@ const activeDoc = $derived(docFor(activeView));
 				>
 					<div class="sig-heading text-[var(--sig-text-bright)]">Project Unavailable</div>
 					<p
-						class="mt-2 max-w-md font-[family-name:var(--font-mono)] text-[11px]
+						class="mt-2 max-w-md font-mono text-[11px]
 							leading-5 text-[var(--sig-text-muted)]"
 					>
 						Couldn&apos;t load README, roadmap, or changelog.
 					</p>
 					<button
 						class="mt-4 text-[11px] uppercase tracking-[0.08em]
-							font-[family-name:var(--font-mono)] text-[var(--sig-accent)]
+							font-mono text-[var(--sig-accent)]
 							transition-opacity hover:opacity-80"
 						onclick={() => void load()}
 					>
@@ -230,7 +230,7 @@ const activeDoc = $derived(docFor(activeView));
 							{titleFor("readme")}
 						</CardTitle>
 						<CardDescription
-							class="font-[family-name:var(--font-mono)] text-[11px] leading-5
+							class="font-mono text-[11px] leading-5
 								text-[var(--sig-text-muted)]"
 						>
 							{descriptionFor("readme")}
@@ -283,7 +283,7 @@ const activeDoc = $derived(docFor(activeView));
 							{titleFor("roadmap")}
 						</CardTitle>
 						<CardDescription
-							class="font-[family-name:var(--font-mono)] text-[11px] leading-5
+							class="font-mono text-[11px] leading-5
 								text-[var(--sig-text-muted)]"
 						>
 							{descriptionFor("roadmap")}
@@ -336,7 +336,7 @@ const activeDoc = $derived(docFor(activeView));
 							{titleFor("changelog")}
 						</CardTitle>
 						<CardDescription
-							class="font-[family-name:var(--font-mono)] text-[11px] leading-5
+							class="font-mono text-[11px] leading-5
 								text-[var(--sig-text-muted)]"
 						>
 							{descriptionFor("changelog")}
@@ -415,7 +415,7 @@ const activeDoc = $derived(docFor(activeView));
 							{titleFor(activeView)}
 						</CardTitle>
 						<CardDescription
-							class="font-[family-name:var(--font-mono)] text-[11px] leading-5
+							class="font-mono text-[11px] leading-5
 								text-[var(--sig-text-muted)]"
 						>
 							{descriptionFor(activeView)}
@@ -464,7 +464,7 @@ const activeDoc = $derived(docFor(activeView));
 		border: 0;
 		background: transparent;
 		padding: 0.55rem 0.75rem;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		font-weight: 600;
 		letter-spacing: 0.08em;
@@ -511,7 +511,7 @@ const activeDoc = $derived(docFor(activeView));
 	}
 
 	.doc-body :global(h3) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: var(--font-size-sm);
 		font-weight: 600;
 		text-transform: uppercase;
@@ -522,7 +522,7 @@ const activeDoc = $derived(docFor(activeView));
 	}
 
 	.doc-body :global(p) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: var(--font-size-sm);
 		line-height: 1.8;
 		color: var(--sig-text-muted);
@@ -530,7 +530,7 @@ const activeDoc = $derived(docFor(activeView));
 	}
 
 	.doc-body :global(ul) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: var(--font-size-sm);
 		line-height: 1.75;
 		color: var(--sig-text-muted);
@@ -584,7 +584,7 @@ const activeDoc = $derived(docFor(activeView));
 	}
 
 	.doc-empty {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: var(--font-size-sm);
 		line-height: 1.7;
 		color: var(--sig-text-muted);

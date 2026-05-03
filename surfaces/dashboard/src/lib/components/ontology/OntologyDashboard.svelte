@@ -118,7 +118,7 @@ function clearSearch(): void {
 	.search-indicator {
 		position: absolute;
 		right: 32px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		pointer-events: none;
@@ -145,7 +145,7 @@ function clearSearch(): void {
 	}
 
 	:global(.search-input) {
-		font-family: var(--font-mono) !important;
+		font-family: var(--font-body) !important;
 		font-size: 11px !important;
 		height: 30px !important;
 		min-height: 30px !important;
@@ -210,7 +210,7 @@ function clearSearch(): void {
 	}
 
 	.umap-float-title {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: 0.1em;

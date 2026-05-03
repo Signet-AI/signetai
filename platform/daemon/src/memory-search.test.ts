@@ -640,6 +640,7 @@ describe("hybridRecall", () => {
 
 		expect(result.results[0]?.id).toBe("mem-spotify");
 		expect(result.results[0]?.source).toBe("hint");
+		expect(result.results[0]?.score).toBeLessThan(0.8);
 	});
 
 	it("uses structured path candidates when lexical recall misses a music platform", async () => {
@@ -690,6 +691,11 @@ describe("hybridRecall", () => {
 				now,
 				now,
 			);
+
+			db.prepare(
+				`INSERT INTO memory_hints (id, memory_id, agent_id, hint, created_at)
+				 VALUES (?, ?, 'default', ?, ?)`,
+			).run("hint-spotify-structured", "mem-spotify-structured", "What music streaming service has the user been using lately?", now);
 		});
 
 		const cfg = loadMemoryConfig(dir);
@@ -714,6 +720,7 @@ describe("hybridRecall", () => {
 		const hit = result.results.find((row) => row.id === "mem-spotify-structured");
 		expect(hit).toBeDefined();
 		expect(["structured", "sec"]).toContain(hit?.source);
+		expect(hit?.score).toBeGreaterThan(0.75);
 	});
 
 	it("uses structured path candidates when lexical recall misses a shampoo brand", async () => {

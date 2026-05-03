@@ -177,7 +177,7 @@ function getColumnTasks(key: string): ScheduledTask[] {
 	}
 
 	.column-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		margin-left: auto;
@@ -198,7 +198,7 @@ function getColumnTasks(key: string): ScheduledTask[] {
 		justify-content: center;
 		min-height: 80px;
 		padding: var(--space-sm) var(--space-md);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.08em;
 		color: var(--sig-text-muted);
@@ -223,7 +223,7 @@ function getColumnTasks(key: string): ScheduledTask[] {
 		justify-content: center;
 		gap: 4px;
 		height: 100%;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);

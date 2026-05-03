@@ -28,10 +28,10 @@ import {
 } from "./pipeline-settings";
 
 const selectTriggerClass =
-	"font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
+	"font-mono text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
 const selectContentClass =
-	"font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-lg";
-const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
+	"font-mono text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-lg";
+const selectItemClass = "font-mono text-[11px] rounded-lg";
 
 const EXTRACTION_SAFETY_TEXT =
 	"intended usage: claude code on haiku, codex cli on gpt mini with a pro/max subscription, or local providers (llama.cpp or ollama) at qwen3.5:4b or larger. remote api extraction can stack up extreme fees fast. set provider to none on a vps if you do not want background extraction.";
@@ -558,14 +558,14 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 			</FormField>
 		{/each}
 
-		<div class="font-[family-name:var(--font-mono)] text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
+		<div class="font-mono text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
 			Model Registry
 		</div>
 		<FormField label="modelRegistryEnabled" description="Auto-discover available models from each provider. New models appear without code changes.">
 			<Switch checked={st.aBool(["memory", "pipelineV2", "modelRegistry", "enabled"])} onCheckedChange={setBool(["memory", "pipelineV2", "modelRegistry", "enabled"])} />
 		</FormField>
 
-		<div class="font-[family-name:var(--font-mono)] text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
+		<div class="font-mono text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
 			Predictor
 		</div>
 		<FormField label="enabled" description="Enable the predictive memory scorer. Learns which memories are most useful based on agent feedback.">

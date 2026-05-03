@@ -24,7 +24,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { dirname, join, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
 import { CodexConnector } from "@signet/connector-codex";
@@ -81,6 +81,7 @@ import { registerRouteCommands } from "./commands/route.js";
 import { registerSecretCommands } from "./commands/secret.js";
 import { registerSessionCommands } from "./commands/session.js";
 import { registerSkillCommands } from "./commands/skill.js";
+import { registerSourcesCommands } from "./commands/sources.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
 import { registerWorkspaceCommands } from "./commands/workspace.js";
@@ -328,6 +329,22 @@ async function configureHarnessHooks(
 			const result = await connector.install(basePath);
 			if (!result.success) {
 				console.warn(chalk.yellow(`  Warning: Hermes Agent integration setup failed: ${result.message}`));
+			} else {
+				console.log(chalk.green(`  ✓ ${result.message}`));
+				if (result.filesWritten.some((path) => path.includes(`${sep}plugins${sep}signet${sep}`))) {
+					console.log(chalk.green("  ✓ Hermes user plugin refreshed"));
+				}
+				if (result.filesWritten.some((path) => path.includes(`${sep}plugins${sep}memory${sep}signet${sep}`))) {
+					console.log(chalk.green("  ✓ Hermes repo plugin refreshed"));
+				}
+				if (
+					(result.configsPatched ?? []).some((path) => path.endsWith("config.yaml") || path.endsWith("cli-config.yaml"))
+				) {
+					console.log(chalk.green("  ✓ Hermes memory.provider set to signet"));
+				}
+				if ((result.configsPatched ?? []).some((path) => path.endsWith(".env"))) {
+					console.log(chalk.green("  ✓ Hermes Signet environment updated"));
+				}
 			}
 			for (const w of result.warnings ?? []) {
 				console.warn(chalk.yellow(`  ${w}`));
@@ -1445,6 +1462,11 @@ registerSkillCommands(program, {
 	SKILLS_DIR,
 	fetchFromDaemon,
 	isDaemonRunning,
+});
+
+registerSourcesCommands(program, {
+	agentsDir: AGENTS_DIR,
+	secretApiCall,
 });
 
 registerMcpCommands(program, {

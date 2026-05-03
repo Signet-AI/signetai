@@ -600,7 +600,7 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-msg-content {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 12px;
 		line-height: 1.5;
 		color: var(--sig-text);
@@ -617,7 +617,7 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-msg-time {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		padding: 0 4px;
@@ -639,7 +639,7 @@ function scrollToWidget(serverId: string): void {
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		padding: 2px 6px;
@@ -671,7 +671,7 @@ function scrollToWidget(serverId: string): void {
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-accent);
 		padding: 2px 8px;
@@ -700,7 +700,7 @@ function scrollToWidget(serverId: string): void {
 	}
 
 	.chat-status-text {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		margin-left: 4px;
@@ -784,7 +784,7 @@ function scrollToWidget(serverId: string): void {
 	.chat-input {
 		flex: 1;
 		min-width: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 12px;
 		color: var(--sig-text);
 		background: var(--sig-bg);

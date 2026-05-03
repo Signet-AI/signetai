@@ -116,7 +116,7 @@ Harness hook fires (session-start / user-prompt / session-end)
     → connector calls daemon HTTP API
     → /api/hooks/remember enqueues memory_jobs row (type: extract)
     → inline entity linker runs synchronously at write time
-      (no LLM — proper noun extraction, aspect/attribute creation)
+      (no LLM — links candidate proper nouns to existing same-agent entities)
     → extraction worker leases job, calls LLM for facts + entities
     → decision worker evaluates each fact against existing memories
     → controlled writes: new memories inserted via txIngestEnvelope

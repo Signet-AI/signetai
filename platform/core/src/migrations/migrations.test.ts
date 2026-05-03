@@ -12,7 +12,7 @@ import { readMemoriesFtsSql } from "../fts-schema";
 import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
 import { up as threadHeadsMigration } from "./048-thread-heads";
-import { MIGRATIONS, runMigrations } from "./index";
+import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
 	return new Database(":memory:");
@@ -989,6 +989,30 @@ describe("migration framework", () => {
 			.query<{ version: number }, []>("SELECT version FROM schema_migrations ORDER BY version")
 			.all();
 		expect(migrations.length).toBe(MIGRATIONS.length);
+	});
+
+	test("phantom migration detection honors optional artifacts when their table is absent", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const auditBefore = db
+			.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 65")
+			.get();
+		expect(auditBefore?.count).toBe(1);
+
+		db.run("DROP TABLE embeddings");
+		expect(hasPendingMigrations(db)).toBe(false);
+
+		runMigrations(db);
+
+		const auditAfter = db
+			.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 65")
+			.get();
+		expect(auditAfter?.count).toBe(auditBefore?.count);
+		const migration65 = db
+			.query<{ version: number }, []>("SELECT version FROM schema_migrations WHERE version = 65")
+			.get();
+		expect(migration65?.version).toBe(65);
 	});
 
 	test("post-DDL verification: all declared artifacts exist after migration", () => {

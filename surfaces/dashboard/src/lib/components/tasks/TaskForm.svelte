@@ -186,7 +186,7 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 			<div class="flex flex-col gap-2 px-4 pb-3">
 				<div class="flex items-center justify-between">
 					<span class="text-[10px] font-bold uppercase tracking-[0.1em]
-						text-[var(--sig-text-muted)] font-[family-name:var(--font-display)]">
+						text-[var(--sig-text-muted)] font-display">
 						Start from a template
 					</span>
 					<button
@@ -288,7 +288,7 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 									<span class="flex items-center justify-between w-full gap-2">
 										<span>{preset.label}</span>
 										<span class="text-[10px] text-[var(--sig-text-muted)]
-											font-[family-name:var(--font-mono)] opacity-60">
+											font-mono opacity-60">
 											{preset.expression}
 										</span>
 									</span>
@@ -310,7 +310,7 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 					<Input
 						bind:value={cronExpression}
 						placeholder="*/15 * * * *"
-						class="{inputClass} font-[family-name:var(--font-mono)]"
+						class="{inputClass} font-mono"
 					/>
 					<span class="text-[10px] text-[var(--sig-text-muted)] opacity-60">
 						minute hour day-of-month month day-of-week
@@ -326,7 +326,7 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 				<Input
 					bind:value={workingDirectory}
 					placeholder="/path/to/project"
-					class="{inputClass} font-[family-name:var(--font-mono)]"
+					class="{inputClass} font-mono"
 				/>
 			</div>
 
@@ -407,7 +407,7 @@ const selectItemClass = "text-[12px] text-[var(--sig-text)]";
 					/>
 					<span class="text-[10px] text-[var(--sig-text-muted)] leading-[1.6]">
 						Runs with <code
-							class="text-[10px] font-[family-name:var(--font-mono)]
+							class="text-[10px] font-mono
 								text-[var(--sig-text)] bg-[var(--sig-surface-raised)] px-1 py-px"
 						>--dangerously-skip-permissions</code> — no approval gates.
 					</span>

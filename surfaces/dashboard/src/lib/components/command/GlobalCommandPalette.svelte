@@ -89,7 +89,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 				<Search class="size-4 shrink-0 text-[var(--sig-text-muted)]" />
 				<input
 					type="text"
-					class="flex-1 bg-transparent px-3 py-3 text-[12px] font-[family-name:var(--font-mono)] text-[var(--sig-text-bright)] outline-none placeholder:text-[var(--sig-text-muted)]"
+					class="flex-1 bg-transparent px-3 py-3 text-[12px] font-mono text-[var(--sig-text-bright)] outline-none placeholder:text-[var(--sig-text-muted)]"
 					placeholder="Search commands..."
 					bind:value={query}
 					onkeydown={handleKeydown}
@@ -105,7 +105,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 					{#each filteredItems as item, index}
 						<button
 							type="button"
-							class="w-full flex items-center justify-between px-3 py-2 text-[11px] font-[family-name:var(--font-mono)] text-[var(--sig-text)] hover:bg-[var(--sig-surface)] cursor-pointer {index === selectedIndex ? 'bg-[var(--sig-surface)] text-[var(--sig-text-bright)]' : ''}"
+							class="w-full flex items-center justify-between px-3 py-2 text-[11px] font-mono text-[var(--sig-text)] hover:bg-[var(--sig-surface)] cursor-pointer {index === selectedIndex ? 'bg-[var(--sig-surface)] text-[var(--sig-text-bright)]' : ''}"
 							onclick={() => item.action()}
 							onmouseenter={() => selectedIndex = index}
 						>
