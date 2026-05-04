@@ -147,6 +147,50 @@ describe("check-publish-manifests", () => {
 		}
 	});
 
+	test("keeps bundled Signet internals out of the OpenClaw adapter runtime manifest", () => {
+		const root = join(import.meta.dir, "..");
+		const rootPackageFile = join(root, "package.json");
+		const adapterFile = join(root, "integrations", "openclaw", "memory-adapter", "package.json");
+		const sdkFile = join(root, "libs", "sdk", "package.json");
+		const coreFile = join(root, "platform", "core", "package.json");
+
+		const rootPackage = JSON.parse(readFileSync(rootPackageFile, "utf-8")) as {
+			devDependencies?: Record<string, string>;
+			scripts?: Record<string, string>;
+		};
+		const adapter = JSON.parse(readFileSync(adapterFile, "utf-8")) as {
+			dependencies?: Record<string, string>;
+			devDependencies?: Record<string, string>;
+		};
+
+		expect(rootPackage.devDependencies?.["@signet/sdk"]).toBe("workspace:*");
+		expect(rootPackage.scripts?.["build:deps"]).toStartWith("bun run --filter '@signet/sdk' build && ");
+		expect(adapter.dependencies?.["@signet/sdk"]).toBeUndefined();
+		expect(adapter.devDependencies?.["@signet/sdk"]).toBeDefined();
+
+		const workspacePackages = collectWorkspacePackages([adapterFile, sdkFile, coreFile]);
+
+		expect(collectManifestIssues([adapterFile], workspacePackages)).toHaveLength(0);
+
+		const releaseRewrittenAdapterDir = mkdtempSync(join(tmpdir(), "signet-openclaw-release-manifest-"));
+		try {
+			const releaseRewrittenAdapterFile = join(releaseRewrittenAdapterDir, "package.json");
+			writeJson(releaseRewrittenAdapterFile, {
+				...JSON.parse(readFileSync(adapterFile, "utf-8")),
+				version: "1.2.3",
+				devDependencies: {
+					...adapter.devDependencies,
+					"@signet/core": "1.2.3",
+					"@signet/sdk": "1.2.3",
+				},
+			});
+
+			expect(collectManifestIssues([releaseRewrittenAdapterFile], workspacePackages)).toHaveLength(0);
+		} finally {
+			rmSync(releaseRewrittenAdapterDir, { recursive: true, force: true });
+		}
+	});
+
 	test("allows runtime dependencies on publishable workspace packages", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-publish-manifests-"));
 		try {

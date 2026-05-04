@@ -6,6 +6,7 @@
       "name": "signet",
       "devDependencies": {
         "@biomejs/biome": "^1.9.0",
+        "@signet/sdk": "workspace:*",
         "@types/node": "^24.5.2",
         "bun-types": "^1.3.9",
         "turbo": "^2.9.6",
@@ -146,11 +147,11 @@
       "name": "@signetai/signet-memory-openclaw",
       "version": "0.110.3",
       "dependencies": {
-        "@signet/sdk": "workspace:*",
         "@sinclair/typebox": "0.34.47",
       },
       "devDependencies": {
         "@signet/core": "workspace:*",
+        "@signet/sdk": "workspace:*",
         "@types/node": "^22.0.0",
       },
       "peerDependencies": {
