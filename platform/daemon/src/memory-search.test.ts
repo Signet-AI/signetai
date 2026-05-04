@@ -122,11 +122,27 @@ describe("hybridRecall", () => {
 		);
 
 		expect(result.results).toEqual([]);
-		expect(result.meta).toEqual({
+		expect(result.meta).toMatchObject({
 			totalReturned: 0,
 			hasSupplementary: false,
 			noHits: true,
 		});
+		expect(result.meta.timings.totalMs).toBeGreaterThanOrEqual(0);
+		expect(result.meta.timings.stages.map((stage) => stage.name)).toEqual(
+			expect.arrayContaining([
+				"memory_fts",
+				"hints_fts",
+				"query_embedding_wait",
+				"flat_score_merge",
+				"final_rank",
+				"source_chunk_vector_fallback",
+				"native_artifact_fallback",
+				"transcript_fallback",
+			]),
+		);
+		for (const stage of result.meta.timings.stages) {
+			expect(stage.durationMs).toBeGreaterThanOrEqual(0);
+		}
 	});
 
 	it("falls back to keyword recall when embedding throws synchronously", async () => {
@@ -154,6 +170,42 @@ describe("hybridRecall", () => {
 		);
 
 		expect(result.results.map((row) => row.id)).toContain("mem-keyword-sync-throw");
+	});
+
+	it("falls back to keyword recall when embedding rejects before the delayed wait", async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown): void => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const now = new Date().toISOString();
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT INTO memories (
+						id, content, type, agent_id, created_at, updated_at, updated_by
+					) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+				).run("mem-keyword-async-reject", "keyword recall survives fast async embedding rejection", now, now);
+			});
+
+			const result = await hybridRecall(
+				{
+					query: "keyword recall fast async rejection",
+					keywordQuery: "keyword recall fast async rejection",
+					limit: 5,
+					agentId: "default",
+					readPolicy: "isolated",
+				},
+				loadMemoryConfig(dir),
+				() => Promise.reject(new Error("embedding unavailable")),
+			);
+			await Bun.sleep(0);
+
+			expect(result.results.map((row) => row.id)).toContain("mem-keyword-async-reject");
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
 	});
 
 	it("excludes soft-deleted memories from BM25/FTS keyword recall", async () => {
@@ -186,6 +238,48 @@ describe("hybridRecall", () => {
 		);
 
 		expect(result.results.map((row) => row.id)).not.toContain("mem-bm25-deleted");
+	});
+
+	it("keeps hint recall scoped to live memories for the requesting agent", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test', 1)`,
+			).run("mem-hint-deleted", "deleted hint target has unrelated body", now, now);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'agent-b', ?, ?, 'test')`,
+			).run("mem-hint-other-agent", "other agent hint target has unrelated body", now, now);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-hint-live", "live hint target has unrelated body", now, now);
+			const stmt = db.prepare(
+				`INSERT INTO memory_hints (id, memory_id, agent_id, hint, created_at)
+				 VALUES (?, ?, ?, ?, ?)`,
+			);
+			stmt.run("hint-deleted", "mem-hint-deleted", "default", "hint-scope-marker", now);
+			stmt.run("hint-other-agent", "mem-hint-other-agent", "agent-b", "hint-scope-marker", now);
+			stmt.run("hint-live", "mem-hint-live", "default", "hint-scope-marker", now);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "hint-scope-marker",
+				keywordQuery: "hint-scope-marker",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toEqual(["mem-hint-live"]);
 	});
 
 	it("recalls indexed native harness memory artifacts without materializing memories", async () => {
@@ -695,7 +789,12 @@ describe("hybridRecall", () => {
 			db.prepare(
 				`INSERT INTO memory_hints (id, memory_id, agent_id, hint, created_at)
 				 VALUES (?, ?, 'default', ?, ?)`,
-			).run("hint-spotify-structured", "mem-spotify-structured", "What music streaming service has the user been using lately?", now);
+			).run(
+				"hint-spotify-structured",
+				"mem-spotify-structured",
+				"What music streaming service has the user been using lately?",
+				now,
+			);
 		});
 
 		const cfg = loadMemoryConfig(dir);

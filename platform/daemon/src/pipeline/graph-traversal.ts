@@ -111,6 +111,8 @@ function getEntityNames(db: ReadDb, ids: ReadonlyArray<string>): string[] {
 	const entityIds = sanitizeEntityIds(ids);
 	if (entityIds.length === 0) return [];
 	const placeholders = entityIds.map(() => "?").join(", ");
+	// Keep entities_fts first; broad query tokens can otherwise make
+	// SQLite scan all agent entities before applying the FTS rowid match.
 	const rows = db
 		.prepare(
 			`SELECT id, name
@@ -209,7 +211,7 @@ function resolveByQueryTokens(db: ReadDb, agentId: string, queryTokens: Readonly
 		const rows = db
 			.prepare(
 				`SELECT e.id FROM entities_fts
-				 JOIN entities e ON e.rowid = entities_fts.rowid
+					 CROSS JOIN entities e ON e.rowid = entities_fts.rowid
 				 WHERE entities_fts MATCH ?
 				   AND e.agent_id = ?
 				 ORDER BY rank
@@ -395,11 +397,12 @@ export function traverseKnowledgeGraph(
 			const constraintRows = db
 				.prepare(
 					`SELECT e.name as entity_name, ea.content, ea.importance
-					 FROM entity_attributes ea
-					 JOIN entity_aspects asp ON asp.id = ea.aspect_id
-					 JOIN entities e ON e.id = asp.entity_id
-					 WHERE asp.entity_id = ?
-					   AND asp.agent_id = ?
+						 FROM entity_aspects asp INDEXED BY idx_entity_aspects_entity
+						 CROSS JOIN entity_attributes ea INDEXED BY idx_entity_attributes_aspect
+						   ON ea.aspect_id = asp.id
+						 JOIN entities e ON e.id = asp.entity_id
+						 WHERE asp.entity_id = ?
+						   AND asp.agent_id = ?
 					   AND ea.agent_id = ?
 					   AND ea.kind = 'constraint'
 					   AND ea.status = 'active'
@@ -426,15 +429,15 @@ export function traverseKnowledgeGraph(
 
 			// Apply optional aspect name filter for on-demand expansion
 			const aspectQuery = config.aspectFilter
-				? `SELECT id FROM entity_aspects
-					 WHERE entity_id = ? AND agent_id = ?
-					   AND canonical_name LIKE ?
-					 ORDER BY weight DESC
-					 LIMIT ?`
-				: `SELECT id FROM entity_aspects
-					 WHERE entity_id = ? AND agent_id = ?
-					 ORDER BY weight DESC
-					 LIMIT ?`;
+				? `SELECT id FROM entity_aspects INDEXED BY idx_entity_aspects_entity
+						 WHERE entity_id = ? AND agent_id = ?
+						   AND canonical_name LIKE ?
+						 ORDER BY weight DESC
+						 LIMIT ?`
+				: `SELECT id FROM entity_aspects INDEXED BY idx_entity_aspects_entity
+						 WHERE entity_id = ? AND agent_id = ?
+						 ORDER BY weight DESC
+						 LIMIT ?`;
 
 			const aspectArgs = config.aspectFilter
 				? [entityId, agentId, `%${config.aspectFilter}%`, config.maxAspectsPerEntity]
@@ -452,10 +455,10 @@ export function traverseKnowledgeGraph(
 					const scopeArgs: unknown[] = config.scope === null ? [] : [config.scope];
 					attributeRows = db
 						.prepare(
-							`SELECT ea.memory_id, ea.importance FROM entity_attributes ea
-							 JOIN memories m ON m.id = ea.memory_id
-							 WHERE ea.aspect_id = ?
-							   AND ea.agent_id = ?
+							`SELECT ea.memory_id, ea.importance FROM entity_attributes ea INDEXED BY idx_entity_attributes_aspect
+								 JOIN memories m ON m.id = ea.memory_id
+								 WHERE ea.aspect_id = ?
+								   AND ea.agent_id = ?
 							   AND ea.status = 'active'
 							   AND m.is_deleted = 0 ${scopeClause}
 							 ORDER BY ea.importance DESC
@@ -468,10 +471,10 @@ export function traverseKnowledgeGraph(
 				} else {
 					attributeRows = db
 						.prepare(
-							`SELECT memory_id, importance FROM entity_attributes
-							 WHERE aspect_id = ?
-							   AND agent_id = ?
-							   AND status = 'active'
+							`SELECT memory_id, importance FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
+								 WHERE aspect_id = ?
+								   AND agent_id = ?
+								   AND status = 'active'
 							 ORDER BY importance DESC
 							 LIMIT ?`,
 						)
@@ -548,8 +551,9 @@ export function traverseKnowledgeGraph(
 			const dependencyRows = db
 				.prepare(
 					`SELECT id, source_entity_id, target_entity_id FROM entity_dependencies
-					 WHERE agent_id = ?
-					   AND source_entity_id IN (${dependencyPlaceholders})
+						 INDEXED BY idx_entity_dependencies_source
+						 WHERE agent_id = ?
+						   AND source_entity_id IN (${dependencyPlaceholders})
 					   AND (COALESCE(confidence, 0.7) * strength) >= ?
 					   AND COALESCE(confidence, 0.7) >= ?
 					 ORDER BY (COALESCE(confidence, 0.7) * strength) DESC

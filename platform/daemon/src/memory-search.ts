@@ -83,6 +83,7 @@ export interface RecallResponse {
 		totalReturned: number;
 		hasSupplementary: boolean;
 		noHits: boolean;
+		timings: RecallTimings;
 	};
 	entities?: Array<{
 		name: string;
@@ -96,6 +97,64 @@ export interface RecallResponse {
 }
 
 export type EmbedFn = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
+
+export interface RecallStageTiming {
+	name: string;
+	durationMs: number;
+}
+
+export interface RecallTimings {
+	totalMs: number;
+	stages: RecallStageTiming[];
+}
+
+type UntimedRecallResponse = Omit<RecallResponse, "meta"> & {
+	meta: Omit<RecallResponse["meta"], "timings">;
+};
+
+const RECALL_TIMING_LOG_THRESHOLD_MS = 1000;
+
+function roundDuration(ms: number): number {
+	return Math.round(ms * 100) / 100;
+}
+
+function createRecallTimingCollector(): {
+	readonly record: (name: string, start: number) => void;
+	readonly time: <T>(name: string, fn: () => T) => T;
+	readonly timeAsync: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
+	readonly finish: () => RecallTimings;
+} {
+	const start = performance.now();
+	const stages: RecallStageTiming[] = [];
+	const record = (name: string, stageStart: number): void => {
+		stages.push({ name, durationMs: roundDuration(performance.now() - stageStart) });
+	};
+	return {
+		record,
+		time<T>(name: string, fn: () => T): T {
+			const stageStart = performance.now();
+			try {
+				return fn();
+			} finally {
+				record(name, stageStart);
+			}
+		},
+		async timeAsync<T>(name: string, fn: () => Promise<T>): Promise<T> {
+			const stageStart = performance.now();
+			try {
+				return await fn();
+			} finally {
+				record(name, stageStart);
+			}
+		},
+		finish(): RecallTimings {
+			return {
+				totalMs: roundDuration(performance.now() - start),
+				stages: [...stages],
+			};
+		},
+	};
+}
 
 // ---------------------------------------------------------------------------
 // Agent scope clause (exported for testing)
@@ -950,15 +1009,44 @@ export async function hybridRecall(
 	const limit = params.limit ?? 10;
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
+	const timings = createRecallTimingCollector();
+	const finish = (response: UntimedRecallResponse): RecallResponse => {
+		const recallTimings = timings.finish();
+		if (recallTimings.totalMs >= RECALL_TIMING_LOG_THRESHOLD_MS) {
+			logger.warn("memory", "Recall stage timings", {
+				agentId: params.agentId ?? "default",
+				limit,
+				resultCount: response.meta.totalReturned,
+				totalMs: recallTimings.totalMs,
+				stages: recallTimings.stages,
+			});
+		}
+		return {
+			...response,
+			meta: {
+				...response.meta,
+				timings: recallTimings,
+			},
+		};
+	};
 
 	const filter = buildFilterClause(params);
 	const scoped = params.scope !== undefined;
 	const queryVecPromise = (() => {
+		const embeddingStart = performance.now();
+		let promise: Promise<number[] | null>;
 		try {
-			return Promise.resolve(embedFn(query, cfg.embedding));
+			promise = Promise.resolve(embedFn(query, cfg.embedding));
 		} catch (e) {
-			return Promise.reject(e);
+			promise = Promise.reject(e);
 		}
+		const timed = promise.finally(() => {
+			timings.record("query_embedding_total", embeddingStart);
+		});
+		// The actual error path is handled later at query_embedding_wait, but
+		// Bun can report a fast rejection before synchronous DB work reaches it.
+		timed.catch(() => undefined);
+		return timed;
 	})();
 	let graphQueryTokens: string[] | undefined;
 	let focalCache: { agentId: string; value: ReturnType<typeof resolveFocalEntities> } | null = null;
@@ -983,30 +1071,34 @@ export async function hybridRecall(
 	const hintMap = new Map<string, number>();
 	const traversalEvidenceMap = new Map<string, number>();
 	try {
-		getDbAccessor().withReadDb((db) => {
-			const ftsRows = (
-				db.prepare(`
+		timings.time("memory_fts", () => {
+			getDbAccessor().withReadDb((db) => {
+				// CROSS JOIN keeps SQLite from scanning memories first via
+				// low-selectivity filters before applying the FTS rowid match.
+				const ftsRows = (
+					db.prepare(`
         SELECT m.id, bm25(memories_fts) AS raw_score
         FROM memories_fts
-        JOIN memories m ON memories_fts.rowid = m.rowid
+        CROSS JOIN memories m ON memories_fts.rowid = m.rowid
         WHERE memories_fts MATCH ?
           AND m.is_deleted = 0${filter.sql}
         ORDER BY raw_score
         LIMIT ?
       `) as any
-			).all(keywordQuery, ...filter.args, cfg.search.top_k) as Array<{
-				id: string;
-				raw_score: number;
-			}>;
+				).all(keywordQuery, ...filter.args, cfg.search.top_k) as Array<{
+					id: string;
+					raw_score: number;
+				}>;
 
-			// Min-max normalize BM25 scores to [0,1] within the batch
-			const rawScores = ftsRows.map((r) => Math.abs(r.raw_score));
-			const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
-			const normalizer = maxRaw > 0 ? maxRaw : 1;
-			for (const row of ftsRows) {
-				const normalised = Math.abs(row.raw_score) / normalizer;
-				bm25Map.set(row.id, normalised);
-			}
+				// Min-max normalize BM25 scores to [0,1] within the batch
+				const rawScores = ftsRows.map((r) => Math.abs(r.raw_score));
+				const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
+				const normalizer = maxRaw > 0 ? maxRaw : 1;
+				for (const row of ftsRows) {
+					const normalised = Math.abs(row.raw_score) / normalizer;
+					bm25Map.set(row.id, normalised);
+				}
+			});
 		});
 	} catch (e) {
 		logger.warn("memory", "FTS search failed, continuing with vector only", {
@@ -1019,38 +1111,36 @@ export async function hybridRecall(
 	// elevates its parent memory via Math.max (not additive stacking).
 	if (cfg.pipelineV2.hints?.enabled) {
 		try {
-			getDbAccessor().withReadDb((db) => {
-				const sql = scoped
-					? `SELECT h.memory_id AS id, bm25(memory_hints_fts) AS raw_score
+			timings.time("hints_fts", () => {
+				getDbAccessor().withReadDb((db) => {
+					// Keep memory_hints_fts first; the agent/scope indexes are much
+					// less selective than the FTS match on large workspaces.
+					const sql = `SELECT h.memory_id AS id, bm25(memory_hints_fts) AS raw_score
 					   FROM memory_hints_fts
-					   JOIN memory_hints h ON memory_hints_fts.rowid = h.rowid
-					   JOIN memories m ON m.id = h.memory_id
-					   WHERE memory_hints_fts MATCH ? AND h.agent_id = ? AND m.scope = ?
-					   ORDER BY raw_score LIMIT ?`
-					: `SELECT h.memory_id AS id, bm25(memory_hints_fts) AS raw_score
-					   FROM memory_hints_fts
-					   JOIN memory_hints h ON memory_hints_fts.rowid = h.rowid
-					   WHERE memory_hints_fts MATCH ? AND h.agent_id = ?
+					   CROSS JOIN memory_hints h ON memory_hints_fts.rowid = h.rowid
+					   CROSS JOIN memories m ON m.id = h.memory_id
+					   WHERE memory_hints_fts MATCH ?
+					     AND h.agent_id = ?
+					     AND m.is_deleted = 0${filter.sql}
 					   ORDER BY raw_score LIMIT ?`;
 
-				const agentId = params.agentId ?? "default";
-				const args = scoped
-					? [keywordQuery, agentId, params.scope, cfg.search.top_k]
-					: [keywordQuery, agentId, cfg.search.top_k];
+					const agentId = params.agentId ?? "default";
+					const args = [keywordQuery, agentId, ...filter.args, cfg.search.top_k];
 
-				const rows = (db.prepare(sql) as any).all(...args) as Array<{
-					id: string;
-					raw_score: number;
-				}>;
+					const rows = (db.prepare(sql) as any).all(...args) as Array<{
+						id: string;
+						raw_score: number;
+					}>;
 
-				// Normalize hint scores the same way as memory FTS
-				const rawScores = rows.map((r) => Math.abs(r.raw_score));
-				const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
-				const normalizer = maxRaw > 0 ? maxRaw : 1;
-				for (const row of rows) {
-					const hint = Math.abs(row.raw_score) / normalizer;
-					hintMap.set(row.id, Math.max(hintMap.get(row.id) ?? 0, hint));
-				}
+					// Normalize hint scores the same way as memory FTS
+					const rawScores = rows.map((r) => Math.abs(r.raw_score));
+					const maxRaw = rawScores.length > 0 ? Math.max(...rawScores) : 1;
+					const normalizer = maxRaw > 0 ? maxRaw : 1;
+					for (const row of rows) {
+						const hint = Math.abs(row.raw_score) / normalizer;
+						hintMap.set(row.id, Math.max(hintMap.get(row.id) ?? 0, hint));
+					}
+				});
 			});
 		} catch (e) {
 			// memory_hints_fts may not exist on pre-038 databases — silent fallback
@@ -1067,7 +1157,7 @@ export async function hybridRecall(
 	// without changing the recall channels or final ranking math.
 	let queryVecF32: Float32Array | null = null;
 	try {
-		const queryVec = await queryVecPromise;
+		const queryVec = await timings.timeAsync("query_embedding_wait", () => queryVecPromise);
 		if (queryVec) queryVecF32 = new Float32Array(queryVec);
 	} catch (e) {
 		logger.warn("memory", "Embedding failed", { error: String(e) });
@@ -1082,14 +1172,16 @@ export async function hybridRecall(
 	if (queryVecF32) {
 		const vecLimit = scoped ? cfg.search.top_k * 2 : cfg.search.top_k;
 		try {
-			getDbAccessor().withReadDb((db) => {
-				const vecResults = vectorSearch(db as any, queryVecF32!, {
-					limit: vecLimit,
-					type: params.type as "fact" | "preference" | "decision" | undefined,
+			timings.time("vector_search", () => {
+				getDbAccessor().withReadDb((db) => {
+					const vecResults = vectorSearch(db as any, queryVecF32!, {
+						limit: vecLimit,
+						type: params.type as "fact" | "preference" | "decision" | undefined,
+					});
+					for (const r of vecResults) {
+						vectorMap.set(r.id, r.score);
+					}
 				});
-				for (const r of vecResults) {
-					vectorMap.set(r.id, r.score);
-				}
 			});
 		} catch (e) {
 			logger.warn("memory", "Vector search failed, using keyword only", {
@@ -1108,13 +1200,15 @@ export async function hybridRecall(
 	if (cfg.pipelineV2.graph.enabled) {
 		try {
 			const agentId = params.agentId ?? "default";
-			const candidates = getDbAccessor().withReadDb((db) =>
-				findStructuredPathCandidates(db, query, agentId, {
-					limit: cfg.search.top_k,
-					minScore,
-					filterSql: filter.sql,
-					filterArgs: filter.args,
-				}),
+			const candidates = timings.time("structured_path_candidates", () =>
+				getDbAccessor().withReadDb((db) =>
+					findStructuredPathCandidates(db, query, agentId, {
+						limit: cfg.search.top_k,
+						minScore,
+						filterSql: filter.sql,
+						filterArgs: filter.args,
+					}),
+				),
 			);
 			for (const [id, score] of candidates) structuredCandidateMap.set(id, score);
 		} catch (e) {
@@ -1128,166 +1222,171 @@ export async function hybridRecall(
 	const allIds = new Set([...bm25Map.keys(), ...hintMap.keys(), ...vectorMap.keys(), ...structuredCandidateMap.keys()]);
 	const flatScored: Array<{ id: string; score: number; source: string }> = [];
 
-	for (const id of allIds) {
-		const bm25 = bm25Map.get(id) ?? 0;
-		const hint = hintMap.get(id) ?? 0;
-		const vec = vectorMap.get(id) ?? 0;
-		const structured = structuredCandidateMap.get(id) ?? 0;
-		let score: number;
-		let source: string;
+	timings.time("flat_score_merge", () => {
+		for (const id of allIds) {
+			const bm25 = bm25Map.get(id) ?? 0;
+			const hint = hintMap.get(id) ?? 0;
+			const vec = vectorMap.get(id) ?? 0;
+			const structured = structuredCandidateMap.get(id) ?? 0;
+			let score: number;
+			let source: string;
 
-		if (bm25 > 0 && vec > 0) {
-			score = alpha * vec + (1 - alpha) * bm25;
-			source = "hybrid";
-		} else if (vec > 0) {
-			score = vec;
-			source = "vector";
-		} else if (bm25 > 0) {
-			score = bm25;
-			source = "keyword";
-		} else {
-			score = structured;
-			source = "structured";
-		}
-		if (hint > 0 && hint >= score) {
-			const hasDirectEvidence = bm25 > 0 || vec > 0 || structured > 0;
-			score = hasDirectEvidence ? hint : Math.min(hint, HINT_ONLY_SCORE_CAP);
-			source = bm25 > 0 || vec > 0 ? "hybrid" : structured > 0 ? "sec" : "hint";
-		}
-		if (structured > 0 && structured >= score) {
-			score = structured;
-			source = bm25 > 0 || vec > 0 || hint > 0 ? "sec" : "structured";
+			if (bm25 > 0 && vec > 0) {
+				score = alpha * vec + (1 - alpha) * bm25;
+				source = "hybrid";
+			} else if (vec > 0) {
+				score = vec;
+				source = "vector";
+			} else if (bm25 > 0) {
+				score = bm25;
+				source = "keyword";
+			} else {
+				score = structured;
+				source = "structured";
+			}
+			if (hint > 0 && hint >= score) {
+				const hasDirectEvidence = bm25 > 0 || vec > 0 || structured > 0;
+				score = hasDirectEvidence ? hint : Math.min(hint, HINT_ONLY_SCORE_CAP);
+				source = bm25 > 0 || vec > 0 ? "hybrid" : structured > 0 ? "sec" : "hint";
+			}
+			if (structured > 0 && structured >= score) {
+				score = structured;
+				source = bm25 > 0 || vec > 0 || hint > 0 ? "sec" : "structured";
+			}
+
+			if (score >= minScore) flatScored.push({ id, score, source });
 		}
 
-		if (score >= minScore) flatScored.push({ id, score, source });
-	}
-
-	flatScored.sort((a, b) => b.score - a.score);
+		flatScored.sort((a, b) => b.score - a.score);
+	});
 
 	// --- Score pipeline: traversal-primary vs legacy boost ---
 	const traversalPrimary =
 		cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled && cfg.pipelineV2.traversal?.primary !== false;
 
-	let scored: Array<{ id: string; score: number; source: string }>;
+	let scored: Array<{ id: string; score: number; source: string }> = [];
 
 	if (traversalPrimary) {
-		// Channel A: graph traversal (primary retrieval path per DP-6)
-		const traversalScored: Array<{ id: string; score: number; source: string }> = [];
+		timings.time("traversal_primary", () => {
+			// Channel A: graph traversal (primary retrieval path per DP-6)
+			const traversalScored: Array<{ id: string; score: number; source: string }> = [];
 
-		if (cfg.pipelineV2.traversal) {
-			try {
-				const traversalCfg = cfg.pipelineV2.traversal;
-				const queryTokens = getGraphQueryTokens();
-				if (queryTokens.length > 0) {
-					const agentId = params.agentId ?? "default";
-					const focal = getFocalEntities(agentId);
+			if (cfg.pipelineV2.traversal) {
+				try {
+					const traversalCfg = cfg.pipelineV2.traversal;
+					const queryTokens = getGraphQueryTokens();
+					if (queryTokens.length > 0) {
+						const agentId = params.agentId ?? "default";
+						const focal = getFocalEntities(agentId);
 
-					if (focal.entityIds.length > 0) {
-						const traversal = getDbAccessor().withReadDb((db) =>
-							traverseKnowledgeGraph(focal.entityIds, db, agentId, {
-								maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
-								maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
-								maxDependencyHops: traversalCfg.maxDependencyHops,
-								minDependencyStrength: traversalCfg.minDependencyStrength,
-								maxBranching: traversalCfg.maxBranching,
-								maxTraversalPaths: traversalCfg.maxTraversalPaths,
-								minConfidence: traversalCfg.minConfidence,
-								timeoutMs: traversalCfg.timeoutMs,
-								scope: params.scope,
-							}),
-						);
-
-						// Cosine re-scoring: when query embedding is available,
-						// blend structural importance with semantic similarity so
-						// traversal results rank by relevance, not just graph
-						// proximity.  Without this, uniform importance (0.5/0.8)
-						// makes traversal ordering effectively random.
-						const cosineMap = new Map<string, number>();
-						if (queryVecF32 && traversal.memoryScores.size > 0) {
-							const ids = [...traversal.memoryScores.keys()];
-							const ph = ids.map(() => "?").join(", ");
-							const embRows = getDbAccessor().withReadDb(
-								(db) =>
-									db
-										.prepare(
-											`SELECT source_id, vector FROM embeddings
-										 WHERE source_id IN (${ph}) AND vector IS NOT NULL`,
-										)
-										.all(...ids) as Array<{
-										source_id: string;
-										vector: Buffer | null;
-									}>,
+						if (focal.entityIds.length > 0) {
+							const traversal = getDbAccessor().withReadDb((db) =>
+								traverseKnowledgeGraph(focal.entityIds, db, agentId, {
+									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
+									maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
+									maxDependencyHops: traversalCfg.maxDependencyHops,
+									minDependencyStrength: traversalCfg.minDependencyStrength,
+									maxBranching: traversalCfg.maxBranching,
+									maxTraversalPaths: traversalCfg.maxTraversalPaths,
+									minConfidence: traversalCfg.minConfidence,
+									timeoutMs: traversalCfg.timeoutMs,
+									scope: params.scope,
+								}),
 							);
-							const qv = queryVecF32;
-							for (const row of embRows) {
-								if (!row.vector) continue;
-								const mv = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
-								const cosine = cosineSimilarity(qv, mv);
-								cosineMap.set(row.source_id, cosine);
-								semanticEvidenceMap.set(row.source_id, Math.max(semanticEvidenceMap.get(row.source_id) ?? 0, cosine));
-							}
-						}
 
-						const cosineWeight = 0.7;
-						for (const [memoryId, importance] of traversal.memoryScores) {
-							const cosine = cosineMap.get(memoryId) ?? 0;
-							const imp = Math.max(minScore, Math.min(1, importance));
-							traversalEvidenceMap.set(memoryId, Math.max(traversalEvidenceMap.get(memoryId) ?? 0, imp));
-							const score = cosine > 0 ? cosineWeight * cosine + (1 - cosineWeight) * imp : imp;
-							traversalScored.push({
-								id: memoryId,
-								score,
-								source: "traversal",
+							// Cosine re-scoring: when query embedding is available,
+							// blend structural importance with semantic similarity so
+							// traversal results rank by relevance, not just graph
+							// proximity. Without this, uniform importance (0.5/0.8)
+							// makes traversal ordering effectively random.
+							const cosineMap = new Map<string, number>();
+							if (queryVecF32 && traversal.memoryScores.size > 0) {
+								const ids = [...traversal.memoryScores.keys()];
+								const ph = ids.map(() => "?").join(", ");
+								const embRows = getDbAccessor().withReadDb(
+									(db) =>
+										db
+											.prepare(
+												`SELECT source_id, vector FROM embeddings
+											 WHERE source_id IN (${ph}) AND vector IS NOT NULL`,
+											)
+											.all(...ids) as Array<{
+											source_id: string;
+											vector: Buffer | null;
+										}>,
+								);
+								const qv = queryVecF32;
+								for (const row of embRows) {
+									if (!row.vector) continue;
+									const mv = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
+									const cosine = cosineSimilarity(qv, mv);
+									cosineMap.set(row.source_id, cosine);
+									semanticEvidenceMap.set(row.source_id, Math.max(semanticEvidenceMap.get(row.source_id) ?? 0, cosine));
+								}
+							}
+
+							const cosineWeight = 0.7;
+							for (const [memoryId, importance] of traversal.memoryScores) {
+								const cosine = cosineMap.get(memoryId) ?? 0;
+								const imp = Math.max(minScore, Math.min(1, importance));
+								traversalEvidenceMap.set(memoryId, Math.max(traversalEvidenceMap.get(memoryId) ?? 0, imp));
+								const score = cosine > 0 ? cosineWeight * cosine + (1 - cosineWeight) * imp : imp;
+								traversalScored.push({
+									id: memoryId,
+									score,
+									source: "traversal",
+								});
+							}
+
+							setTraversalStatus({
+								phase: "recall",
+								at: new Date().toISOString(),
+								source: focal.source,
+								focalEntityNames: focal.entityNames,
+								focalEntities: focal.entityIds.length,
+								traversedEntities: traversal.entityCount,
+								memoryCount: traversal.memoryIds.size,
+								constraintCount: traversal.constraints.length,
+								timedOut: traversal.timedOut,
 							});
 						}
-
-						setTraversalStatus({
-							phase: "recall",
-							at: new Date().toISOString(),
-							source: focal.source,
-							focalEntityNames: focal.entityNames,
-							focalEntities: focal.entityIds.length,
-							traversedEntities: traversal.entityCount,
-							memoryCount: traversal.memoryIds.size,
-							constraintCount: traversal.constraints.length,
-							timedOut: traversal.timedOut,
-						});
 					}
+				} catch (e) {
+					logger.warn("memory", "Traversal channel failed (non-fatal)", {
+						error: e instanceof Error ? e.message : String(e),
+					});
 				}
-			} catch (e) {
-				logger.warn("memory", "Traversal channel failed (non-fatal)", {
-					error: e instanceof Error ? e.message : String(e),
-				});
 			}
-		}
 
-		// Channel merge: ensure flat candidates are eligible to compete in the
-		// final sorted pool. Flat gets at least 40% of pre-sort slots so hub
-		// entities (high-mention traversal walks) can't exclude keyword/vector
-		// matches entirely. After the sort, final top-N is score-ordered —
-		// the guarantee is eligibility, not placement.
-		const traversalIds = new Set(traversalScored.map((s) => s.id));
-		const flatOnly = flatScored.filter((s) => !traversalIds.has(s.id));
-		const candidateBudget = Math.max(limit, Math.min(cfg.search.top_k, limit * 4));
-		const minFlat = Math.ceil(candidateBudget * 0.4);
-		const maxTraversal = candidateBudget - Math.min(minFlat, flatOnly.length);
-		scored = [
-			...traversalScored.slice(0, maxTraversal),
-			// When traversal underperforms its cap, flat absorbs the surplus
-			// slots — this is intentional, not a bug. Keep the pre-SEC pool
-			// wider than the final limit so structured evidence can rescue
-			// lower raw-rank but better path-matched candidates.
-			...flatOnly.slice(0, candidateBudget - Math.min(maxTraversal, traversalScored.length)),
-		];
-		scored.sort((a, b) => b.score - a.score);
+			// Channel merge: ensure flat candidates are eligible to compete in the
+			// final sorted pool. Flat gets at least 40% of pre-sort slots so hub
+			// entities (high-mention traversal walks) can't exclude keyword/vector
+			// matches entirely. After the sort, final top-N is score-ordered.
+			const traversalIds = new Set(traversalScored.map((s) => s.id));
+			const flatOnly = flatScored.filter((s) => !traversalIds.has(s.id));
+			const candidateBudget = Math.max(limit, Math.min(cfg.search.top_k, limit * 4));
+			const minFlat = Math.ceil(candidateBudget * 0.4);
+			const maxTraversal = candidateBudget - Math.min(minFlat, flatOnly.length);
+			scored = [
+				...traversalScored.slice(0, maxTraversal),
+				// When traversal underperforms its cap, flat absorbs the surplus
+				// slots — this is intentional, not a bug. Keep the pre-SEC pool
+				// wider than the final limit so structured evidence can rescue
+				// lower raw-rank but better path-matched candidates.
+				...flatOnly.slice(0, candidateBudget - Math.min(maxTraversal, traversalScored.length)),
+			];
+			scored.sort((a, b) => b.score - a.score);
+		});
 	} else {
 		scored = flatScored;
 
 		// --- Graph boost: pull up memories linked via knowledge graph ---
 		if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.graph.boostWeight > 0) {
 			try {
-				const graphResult = getDbAccessor().withReadDb((db) =>
-					getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs, params.agentId),
+				const graphResult = timings.time("graph_boost", () =>
+					getDbAccessor().withReadDb((db) =>
+						getGraphBoostIds(query, db, cfg.pipelineV2.graph.boostTimeoutMs, params.agentId),
+					),
 				);
 				if (graphResult.graphLinkedIds.size > 0) {
 					const gw = cfg.pipelineV2.graph.boostWeight;
@@ -1309,47 +1408,48 @@ export async function hybridRecall(
 		// --- KA traversal boost: structural one-hop retrieval via KA tables ---
 		if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled) {
 			try {
-				const traversalCfg = cfg.pipelineV2.traversal;
-				const queryTokens = getGraphQueryTokens();
-				if (queryTokens.length > 0) {
-					const agentId = params.agentId ?? "default";
-					const focal = getFocalEntities(agentId);
+				timings.time("traversal_boost", () => {
+					const traversalCfg = cfg.pipelineV2.traversal;
+					const queryTokens = getGraphQueryTokens();
+					if (traversalCfg && queryTokens.length > 0) {
+						const agentId = params.agentId ?? "default";
+						const focal = getFocalEntities(agentId);
 
-					if (focal.entityIds.length > 0) {
-						const traversal = getDbAccessor().withReadDb((db) =>
-							traverseKnowledgeGraph(focal.entityIds, db, agentId, {
-								maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
-								maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
-								maxDependencyHops: traversalCfg.maxDependencyHops,
-								minDependencyStrength: traversalCfg.minDependencyStrength,
-								maxBranching: traversalCfg.maxBranching,
-								maxTraversalPaths: traversalCfg.maxTraversalPaths,
-								minConfidence: traversalCfg.minConfidence,
-								timeoutMs: traversalCfg.timeoutMs,
-							}),
-						);
+						if (focal.entityIds.length > 0) {
+							const traversal = getDbAccessor().withReadDb((db) =>
+								traverseKnowledgeGraph(focal.entityIds, db, agentId, {
+									maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
+									maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
+									maxDependencyHops: traversalCfg.maxDependencyHops,
+									minDependencyStrength: traversalCfg.minDependencyStrength,
+									maxBranching: traversalCfg.maxBranching,
+									maxTraversalPaths: traversalCfg.maxTraversalPaths,
+									minConfidence: traversalCfg.minConfidence,
+									timeoutMs: traversalCfg.timeoutMs,
+								}),
+							);
 
-						const tw = traversalCfg.boostWeight;
-						const scoredById = new Map(scored.map((row) => [row.id, row]));
-						const missingIds: string[] = [];
+							const tw = traversalCfg.boostWeight;
+							const scoredById = new Map(scored.map((row) => [row.id, row]));
+							const missingIds: string[] = [];
 
-						for (const memoryId of traversal.memoryIds) {
-							const existing = scoredById.get(memoryId);
-							if (existing) {
-								existing.score = (1 - tw) * existing.score + tw;
-								traversalEvidenceMap.set(memoryId, Math.max(traversalEvidenceMap.get(memoryId) ?? 0, tw));
-							} else {
-								missingIds.push(memoryId);
+							for (const memoryId of traversal.memoryIds) {
+								const existing = scoredById.get(memoryId);
+								if (existing) {
+									existing.score = (1 - tw) * existing.score + tw;
+									traversalEvidenceMap.set(memoryId, Math.max(traversalEvidenceMap.get(memoryId) ?? 0, tw));
+								} else {
+									missingIds.push(memoryId);
+								}
 							}
-						}
 
-						if (missingIds.length > 0) {
-							const placeholders = missingIds.map(() => "?").join(", ");
-							const baseRows = getDbAccessor().withReadDb(
-								(db) =>
-									db
-										.prepare(
-											`SELECT
+							if (missingIds.length > 0) {
+								const placeholders = missingIds.map(() => "?").join(", ");
+								const baseRows = getDbAccessor().withReadDb(
+									(db) =>
+										db
+											.prepare(
+												`SELECT
 												 m.id,
 												 COALESCE(MAX(ea.importance), m.importance, 0.5) AS traversal_score
 											 FROM memories m
@@ -1361,39 +1461,40 @@ export async function hybridRecall(
 											   AND m.is_deleted = 0
 											 ${filter.sql}
 											 GROUP BY m.id, m.importance`,
-										)
-										.all(agentId, ...missingIds, ...filter.args) as Array<{
-										id: string;
-										traversal_score: number;
-									}>,
-							);
+											)
+											.all(agentId, ...missingIds, ...filter.args) as Array<{
+											id: string;
+											traversal_score: number;
+										}>,
+								);
 
-							for (const row of baseRows) {
-								const traversalScore = Math.max(minScore, Math.min(1, row.traversal_score));
-								traversalEvidenceMap.set(row.id, Math.max(traversalEvidenceMap.get(row.id) ?? 0, traversalScore));
-								scored.push({
-									id: row.id,
-									score: traversalScore,
-									source: "ka_traversal",
-								});
+								for (const row of baseRows) {
+									const traversalScore = Math.max(minScore, Math.min(1, row.traversal_score));
+									traversalEvidenceMap.set(row.id, Math.max(traversalEvidenceMap.get(row.id) ?? 0, traversalScore));
+									scored.push({
+										id: row.id,
+										score: traversalScore,
+										source: "ka_traversal",
+									});
+								}
 							}
+
+							scored.sort((a, b) => b.score - a.score);
+
+							setTraversalStatus({
+								phase: "recall",
+								at: new Date().toISOString(),
+								source: focal.source,
+								focalEntityNames: focal.entityNames,
+								focalEntities: focal.entityIds.length,
+								traversedEntities: traversal.entityCount,
+								memoryCount: traversal.memoryIds.size,
+								constraintCount: traversal.constraints.length,
+								timedOut: traversal.timedOut,
+							});
 						}
-
-						scored.sort((a, b) => b.score - a.score);
-
-						setTraversalStatus({
-							phase: "recall",
-							at: new Date().toISOString(),
-							source: focal.source,
-							focalEntityNames: focal.entityNames,
-							focalEntities: focal.entityIds.length,
-							traversedEntities: traversal.entityCount,
-							memoryCount: traversal.memoryIds.size,
-							constraintCount: traversal.constraints.length,
-							timedOut: traversal.timedOut,
-						});
 					}
-				}
+				});
 			} catch (e) {
 				logger.warn("memory", "KA traversal boost failed (non-fatal)", {
 					error: e instanceof Error ? e.message : String(e),
@@ -1418,6 +1519,7 @@ export async function hybridRecall(
 	// prevents graph-only memories from outranking directly anchored evidence,
 	// while still letting prospective hints rescue class-to-instance matches.
 	if (scored.length > 0) {
+		const structuredEvidenceStart = performance.now();
 		try {
 			const byId = new Map<string, { id: string; score: number; source: string }>();
 			for (const row of scored) mergeCandidate(byId, row);
@@ -1482,10 +1584,14 @@ export async function hybridRecall(
 			logger.warn("memory", "Structured evidence shaping failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
+		} finally {
+			timings.record("structured_evidence", structuredEvidenceStart);
 		}
 	}
 
-	applyRehearsalBoost(scored, cfg.search);
+	timings.time("rehearsal_boost", () => {
+		applyRehearsalBoost(scored, cfg.search);
+	});
 
 	// --- Optional reranker hook ---
 	let recallSummary: string | undefined;
@@ -1493,6 +1599,7 @@ export async function hybridRecall(
 	// Set inside the reranker block; consumed after final results are assembled.
 	let summarizeLeft = 0;
 	if (cfg.pipelineV2.reranker.enabled) {
+		const rerankerStageStart = performance.now();
 		try {
 			const rerankStart = Date.now();
 			const topForRerank = scored.slice(0, cfg.pipelineV2.reranker.topN);
@@ -1557,6 +1664,8 @@ export async function hybridRecall(
 			logger.warn("memory", "Reranker failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
+		} finally {
+			timings.record("reranker", rerankerStageStart);
 		}
 	}
 
@@ -1565,6 +1674,7 @@ export async function hybridRecall(
 	// gravity (penalize zero-term-overlap semantic hits), hub (penalize
 	// high-degree entity dominance), resolution (boost actionable types).
 	if (scored.length > 0) {
+		const dampeningStart = performance.now();
 		try {
 			const dampenIds = scored.map((s) => s.id);
 			const dampenPh = dampenIds.map(() => "?").join(", ");
@@ -1670,11 +1780,14 @@ export async function hybridRecall(
 			logger.warn("memory", "Dampening failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
+		} finally {
+			timings.record("dampening", dampeningStart);
 		}
 	}
 
 	let currentness = new Map<string, CurrentnessInfo>();
 	if (scored.length > 0) {
+		const currentnessStart = performance.now();
 		try {
 			currentness = loadCurrentnessInfo(
 				scored.map((row) => row.id),
@@ -1685,17 +1798,21 @@ export async function hybridRecall(
 			logger.warn("memory", "Currentness shaping failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
+		} finally {
+			timings.record("currentness", currentnessStart);
 		}
 	}
 
-	for (const row of scored) {
-		const hasDirectEvidence =
-			(bm25Map.get(row.id) ?? 0) > 0 ||
-			(vectorMap.get(row.id) ?? 0) > 0 ||
-			(structuredEvidenceMap.get(row.id) ?? 0) > 0;
-		if (row.source === "hint" && !hasDirectEvidence) row.score = Math.min(row.score, HINT_ONLY_SCORE_CAP);
-	}
-	scored.sort((a, b) => b.score - a.score);
+	timings.time("final_rank", () => {
+		for (const row of scored) {
+			const hasDirectEvidence =
+				(bm25Map.get(row.id) ?? 0) > 0 ||
+				(vectorMap.get(row.id) ?? 0) > 0 ||
+				(structuredEvidenceMap.get(row.id) ?? 0) > 0;
+			if (row.source === "hint" && !hasDirectEvidence) row.score = Math.min(row.score, HINT_ONLY_SCORE_CAP);
+		}
+		scored.sort((a, b) => b.score - a.score);
+	});
 
 	// Over-fetch before hydration when scoped. Vector search can't
 	// pre-filter by scope, so out-of-scope IDs get dropped at
@@ -1705,7 +1822,9 @@ export async function hybridRecall(
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 
 	if (topIds.length === 0) {
-		const sourceChunkHits = buildSourceChunkVectorHits(queryVecF32, new Set(), limit, params.agentId);
+		const sourceChunkHits = timings.time("source_chunk_vector_fallback", () =>
+			buildSourceChunkVectorHits(queryVecF32, new Set(), limit, params.agentId),
+		);
 		if (sourceChunkHits.length > 0) {
 			const results = sourceChunkHits.slice(0, limit).map((hit): RecallResult => {
 				const content = `[Obsidian vault chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
@@ -1730,7 +1849,7 @@ export async function hybridRecall(
 					supplementary: true,
 				};
 			});
-			return {
+			return finish({
 				results,
 				query,
 				method: "hybrid",
@@ -1739,9 +1858,11 @@ export async function hybridRecall(
 					hasSupplementary: true,
 					noHits: false,
 				},
-			};
+			});
 		}
-		const nativeHits = buildNativeArtifactRecallHits(params, expandedQuery, new Set());
+		const nativeHits = timings.time("native_artifact_fallback", () =>
+			buildNativeArtifactRecallHits(params, expandedQuery, new Set()),
+		);
 		if (nativeHits.length > 0) {
 			const results = nativeHits.slice(0, limit).map((hit): RecallResult => {
 				const content = nativeArtifactRecallContent(hit);
@@ -1767,7 +1888,7 @@ export async function hybridRecall(
 					supplementary: true,
 				};
 			});
-			return {
+			return finish({
 				results,
 				query,
 				method: "keyword",
@@ -1776,9 +1897,11 @@ export async function hybridRecall(
 					hasSupplementary: true,
 					noHits: false,
 				},
-			};
+			});
 		}
-		const transcriptHits = buildTranscriptRecallHits(params, expandedQuery, new Set());
+		const transcriptHits = timings.time("transcript_fallback", () =>
+			buildTranscriptRecallHits(params, expandedQuery, new Set()),
+		);
 		if (transcriptHits.length > 0) {
 			const transcriptSummaries = loadStructuredSummariesBySourceId(
 				params,
@@ -1810,7 +1933,7 @@ export async function hybridRecall(
 					supplementary: true,
 				};
 			});
-			return {
+			return finish({
 				results,
 				query,
 				method: "keyword",
@@ -1819,9 +1942,9 @@ export async function hybridRecall(
 					hasSupplementary: true,
 					noHits: false,
 				},
-			};
+			});
 		}
-		return {
+		return finish({
 			results: [],
 			query,
 			method: "hybrid",
@@ -1830,7 +1953,7 @@ export async function hybridRecall(
 				hasSupplementary: false,
 				noHits: true,
 			},
-		};
+		});
 	}
 
 	// --- Fetch full memory rows ---
@@ -1853,26 +1976,28 @@ export async function hybridRecall(
 			: { sql: "", args: [] };
 	const placeholders = topIds.map(() => "?").join(", ");
 
-	const rows = getDbAccessor().withReadDb(
-		(db) =>
-			db
-				.prepare(
-					`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at
+	const rows = timings.time("hydrate_memory_rows", () =>
+		getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at
         FROM memories m
-        WHERE m.id IN (${placeholders})${scopeClause}${projectClause}${agentScope.sql}`,
-				)
-				.all(...topIds, ...scopeArgs, ...projectArgs, ...agentScope.args) as Array<{
-				id: string;
-				content: string;
-				source_id: string | null;
-				type: string;
-				tags: string | null;
-				pinned: number;
-				importance: number;
-				who: string;
-				project: string | null;
-				created_at: string;
-			}>,
+        WHERE m.id IN (${placeholders}) AND m.is_deleted = 0${scopeClause}${projectClause}${agentScope.sql}`,
+					)
+					.all(...topIds, ...scopeArgs, ...projectArgs, ...agentScope.args) as Array<{
+					id: string;
+					content: string;
+					source_id: string | null;
+					type: string;
+					tags: string | null;
+					pinned: number;
+					importance: number;
+					who: string;
+					project: string | null;
+					created_at: string;
+				}>,
+		),
 	);
 
 	// Update access tracking (don't fail if this fails).
@@ -1880,12 +2005,14 @@ export async function hybridRecall(
 	// array — so the synthetic llm_summary card injected later is never
 	// included here and never touches the memories table.
 	try {
-		getDbAccessor().withWriteTx((db) => {
-			db.prepare(
-				`UPDATE memories
+		timings.time("access_tracking_update", () => {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`UPDATE memories
           SET last_accessed = datetime('now'), access_count = access_count + 1
-          WHERE id IN (${placeholders})`,
-			).run(...topIds);
+          WHERE id IN (${placeholders}) AND is_deleted = 0`,
+				).run(...topIds);
+			});
 		});
 	} catch (e) {
 		logger.warn("memory", "Failed to update access tracking", e as Error);
@@ -1894,38 +2021,37 @@ export async function hybridRecall(
 	const rowMap = new Map(rows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
 	// injected after assembly and the array is capped to `limit` at that point.
-	const results: RecallResult[] = scored
-		.slice(0, limit)
-		.filter((s) => rowMap.has(s.id))
-		.map((s) => {
-			const r = rowMap.get(s.id)!;
-			const content = annotateCurrentness(r.content, currentness.get(r.id));
-			const isTruncated = content.length > recallTruncate;
-			return {
-				id: r.id,
-				content: isTruncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-				content_length: content.length,
-				truncated: isTruncated,
-				score: Math.round(s.score * 100) / 100,
-				source: s.source,
-				...(r.source_id ? { source_id: r.source_id, session_id: sessionIdFromSourceId(r.source_id) } : {}),
-				type: r.type,
-				tags: r.tags,
-				pinned: !!r.pinned,
-				importance: r.importance,
-				who: r.who,
-				project: r.project,
-				created_at: r.created_at,
-			};
-		});
+	const results: RecallResult[] = timings.time("assemble_results", () =>
+		scored
+			.slice(0, limit)
+			.filter((s) => rowMap.has(s.id))
+			.map((s) => {
+				const r = rowMap.get(s.id)!;
+				const content = annotateCurrentness(r.content, currentness.get(r.id));
+				const isTruncated = content.length > recallTruncate;
+				return {
+					id: r.id,
+					content: isTruncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+					content_length: content.length,
+					truncated: isTruncated,
+					score: Math.round(s.score * 100) / 100,
+					source: s.source,
+					...(r.source_id ? { source_id: r.source_id, session_id: sessionIdFromSourceId(r.source_id) } : {}),
+					type: r.type,
+					tags: r.tags,
+					pinned: !!r.pinned,
+					importance: r.importance,
+					who: r.who,
+					project: r.project,
+					created_at: r.created_at,
+				};
+			}),
+	);
 
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
-		const sourceChunkHits = buildSourceChunkVectorHits(
-			queryVecF32,
-			existingSourceIds,
-			limit - results.length,
-			params.agentId,
+		const sourceChunkHits = timings.time("source_chunk_vector_supplement", () =>
+			buildSourceChunkVectorHits(queryVecF32, existingSourceIds, limit - results.length, params.agentId),
 		);
 		for (const hit of sourceChunkHits) {
 			if (results.length >= limit) break;
@@ -1956,7 +2082,9 @@ export async function hybridRecall(
 
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
-		const nativeHits = buildNativeArtifactRecallHits(params, expandedQuery, existingSourceIds);
+		const nativeHits = timings.time("native_artifact_supplement", () =>
+			buildNativeArtifactRecallHits(params, expandedQuery, existingSourceIds),
+		);
 		for (const hit of nativeHits) {
 			if (results.length >= limit) break;
 			const content = nativeArtifactRecallContent(hit);
@@ -1988,6 +2116,7 @@ export async function hybridRecall(
 	// Skip when limit < 2: can't fit a summary card without evicting the only
 	// real memory, which would leave the caller with nothing to verify against.
 	if (summarizeLeft > 0 && results.length > 0 && limit >= 2) {
+		const llmSummaryStart = performance.now();
 		try {
 			const summCandidates = results.slice(0, 12).map((r) => ({ id: r.id, content: r.content, score: r.score }));
 			const s = await summarizeRecallWithLlm(getLlmProvider(), query, summCandidates, summarizeLeft);
@@ -1996,6 +2125,8 @@ export async function hybridRecall(
 			logger.warn("memory", "LLM summary failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
+		} finally {
+			timings.record("llm_summary", llmSummaryStart);
 		}
 	}
 
@@ -2027,6 +2158,7 @@ export async function hybridRecall(
 	const existingIds = new Set(results.map((r) => r.id));
 
 	if (decisionIds.length > 0 && cfg.pipelineV2.graph.enabled) {
+		const rationaleStart = performance.now();
 		try {
 			const supplementary = getDbAccessor().withReadDb((db) => {
 				// Find entities linked to decision memories
@@ -2094,6 +2226,8 @@ export async function hybridRecall(
 			logger.warn("memory", "Rationale linking failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
+		} finally {
+			timings.record("rationale_linking", rationaleStart);
 		}
 	}
 
@@ -2102,6 +2236,7 @@ export async function hybridRecall(
 	let focalEids: string[] = [];
 
 	if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled) {
+		const entityContextStart = performance.now();
 		try {
 			const queryTokens = getGraphQueryTokens();
 			if (queryTokens.length > 0) {
@@ -2147,7 +2282,7 @@ export async function hybridRecall(
 						.map((ent) => {
 							const aspects = db
 								.prepare(
-									`SELECT id, name FROM entity_aspects
+									`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
 								 WHERE entity_id = ? AND agent_id = ?
 								 ORDER BY weight DESC LIMIT 10`,
 								)
@@ -2160,7 +2295,7 @@ export async function hybridRecall(
 									.map((asp) => {
 										const attrs = db
 											.prepare(
-												`SELECT content, status, importance FROM entity_attributes
+												`SELECT content, status, importance FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
 										 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'
 										 ORDER BY importance DESC LIMIT 5`,
 											)
@@ -2188,6 +2323,8 @@ export async function hybridRecall(
 			logger.warn("memory", "Entity context fetch failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
+		} finally {
+			timings.record("entity_context", entityContextStart);
 		}
 	}
 
@@ -2197,6 +2334,7 @@ export async function hybridRecall(
 	// actual memories that answer the query, cap their scores below the
 	// lowest real result score.
 	if (focalEids.length > 0) {
+		const constructedStart = performance.now();
 		try {
 			const agentId = params.agentId ?? "default";
 			const cap = Math.max(3, Math.ceil(limit * 0.3));
@@ -2233,6 +2371,8 @@ export async function hybridRecall(
 			logger.warn("memory", "Constructed context failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
+		} finally {
+			timings.record("constructed_context", constructedStart);
 		}
 	}
 
@@ -2241,6 +2381,7 @@ export async function hybridRecall(
 	// lossless backing source. Use them as a mechanical rescue channel for
 	// cases where the extracted memory compressed away the exact detail.
 	if (params.expand) {
+		const transcriptExpansionStart = performance.now();
 		const sourceIds = new Set(
 			results
 				.map((result) => rowMap.get(result.id)?.source_id ?? result.source_id)
@@ -2286,11 +2427,13 @@ export async function hybridRecall(
 			results.sort((a, b) => b.score - a.score);
 			if (results.length > limit) results.length = limit;
 		}
+		timings.record("transcript_expansion", transcriptExpansionStart);
 	}
 
 	// --- Lossless expansion: fetch raw session transcripts ---
 	let sources: Record<string, string> | undefined;
 	if (params.expand) {
+		const sourceExpansionStart = performance.now();
 		try {
 			const keys = [
 				...new Set([...rowMap.values()].map((r) => r.source_id).filter((s): s is string => s !== null && s !== "")),
@@ -2314,10 +2457,13 @@ export async function hybridRecall(
 			}
 		} catch {
 			// Non-fatal — table may not exist pre-migration
+		} finally {
+			timings.record("source_expansion_fetch", sourceExpansionStart);
 		}
 	}
 
 	if (params.expand && sources) {
+		const sourceExcerptStart = performance.now();
 		for (const result of results.filter((row) => row.source !== "transcript").slice(0, Math.min(5, limit))) {
 			const sourceId = rowMap.get(result.id)?.source_id ?? result.source_id;
 			if (!sourceId) continue;
@@ -2330,9 +2476,10 @@ export async function hybridRecall(
 			result.content_length = content.length;
 			result.truncated = content.length > recallTruncate;
 		}
+		timings.record("source_excerpt_merge", sourceExcerptStart);
 	}
 
-	return {
+	return finish({
 		results,
 		query,
 		method: vectorMap.size > 0 ? "hybrid" : "keyword",
@@ -2343,5 +2490,5 @@ export async function hybridRecall(
 		},
 		entities: entityContext && entityContext.length > 0 ? entityContext : undefined,
 		sources,
-	};
+	});
 }

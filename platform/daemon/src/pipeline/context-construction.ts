@@ -132,7 +132,7 @@ export function constructContextBlocks(
 	for (const ent of entities) {
 		const aspects = db
 			.prepare(
-				`SELECT id, name FROM entity_aspects
+				`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
 				 WHERE entity_id = ? AND agent_id = ?
 				 ORDER BY weight DESC LIMIT 10`,
 			)
@@ -146,7 +146,7 @@ export function constructContextBlocks(
 		for (const asp of aspects) {
 			const attrs = db
 				.prepare(
-					`SELECT content, importance FROM entity_attributes
+					`SELECT content, importance FROM entity_attributes INDEXED BY idx_entity_attributes_aspect
 					 WHERE aspect_id = ? AND agent_id = ?
 					   AND status = 'active' AND kind != 'constraint'
 					 ORDER BY importance DESC LIMIT 5`,
@@ -168,8 +168,9 @@ export function constructContextBlocks(
 		const constraints = db
 			.prepare(
 				`SELECT DISTINCT ea.content, ea.importance
-				 FROM entity_attributes ea
-				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
+				 FROM entity_aspects asp INDEXED BY idx_entity_aspects_entity
+				 CROSS JOIN entity_attributes ea INDEXED BY idx_entity_attributes_aspect
+				   ON ea.aspect_id = asp.id
 				 WHERE asp.entity_id = ? AND ea.agent_id = ?
 				   AND ea.kind = 'constraint' AND ea.status = 'active'
 				 ORDER BY ea.importance DESC LIMIT 10`,
@@ -186,7 +187,7 @@ export function constructContextBlocks(
 		const deps = db
 			.prepare(
 				`SELECT ed.target_entity_id, e.name
-				 FROM entity_dependencies ed
+				 FROM entity_dependencies ed INDEXED BY idx_entity_dependencies_source
 				 JOIN entities e ON e.id = ed.target_entity_id
 				 WHERE ed.source_entity_id = ? AND ed.agent_id = ?
 				   AND ed.strength >= 0.3
