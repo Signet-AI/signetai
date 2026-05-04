@@ -157,7 +157,11 @@ function matchesGlob(glob: string, rel: string): boolean {
 
 function isExcludedByGlobs(rel: string, excludeGlobs: readonly string[]): boolean {
 	const normalized = rel.replace(/\\/g, "/").replace(/^\.\//, "");
-	return excludeGlobs.some((glob) => matchesGlob(glob.replace(/\\/g, "/"), normalized));
+	return excludeGlobs.some((glob) => {
+		const normalizedGlob = glob.replace(/\\/g, "/").replace(/^\.\//, "");
+		const vaultWideGlob = normalizedGlob.includes("/") ? normalizedGlob : `**/${normalizedGlob}`;
+		return matchesGlob(vaultWideGlob, normalized);
+	});
 }
 
 function matchGlobParts(globParts: readonly string[], relParts: readonly string[]): boolean {

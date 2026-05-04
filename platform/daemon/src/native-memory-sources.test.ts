@@ -468,6 +468,16 @@ describe("native memory sources", () => {
 		expect(await indexNativeMemoryFile(source, file, "agent-obsidian")).toBe(false);
 	});
 
+	it("treats bare Obsidian exclude globs as vault-wide filename patterns", async () => {
+		const root = join(dir, "vault");
+		mkdirSync(join(root, "nested"), { recursive: true });
+		const nestedFile = join(root, "nested", "Draft.tmp.md");
+		writeFileSync(nestedFile, "# Draft\n\nThis nested file should be excluded by a bare filename glob.\n");
+
+		const source = obsidianNativeMemorySource(root, "Vault", "obsidian:test", ["*.tmp.md"]);
+		expect(await indexNativeMemoryFile(source, nestedFile, "agent-obsidian")).toBe(false);
+	});
+
 	it("removes Obsidian graph rows when a source markdown file disappears", async () => {
 		const root = join(dir, "vault");
 		const source = obsidianNativeMemorySource(root, "Research Vault", "obsidian:remove-file-vault");
