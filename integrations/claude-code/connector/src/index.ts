@@ -70,9 +70,10 @@ export interface SessionEndFireAndForgetPayload {
 type DetachedSpawn = typeof spawn;
 
 const SESSION_END_FIRE_AND_FORGET_SCRIPT = `
-const url = process.env.SIGNET_SESSION_END_URL;
-const body = process.env.SIGNET_SESSION_END_BODY;
-if (url && body) {
+void (async () => {
+  const url = process.env.SIGNET_SESSION_END_URL;
+  const body = process.env.SIGNET_SESSION_END_BODY;
+  if (!url || !body) return;
   try {
     await fetch(url, {
       method: "POST",
@@ -80,12 +81,9 @@ if (url && body) {
       body,
       signal: AbortSignal.timeout(10000),
     });
-  } catch {
-    // Best-effort fire-and-forget hook. The parent hook process must not wait.
-  }
-}
+  } catch {}
+})();
 `;
-
 export function dispatchSessionEndFireAndForget(
 	daemonUrl: string,
 	payload: SessionEndFireAndForgetPayload,

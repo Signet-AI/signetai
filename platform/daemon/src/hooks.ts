@@ -3278,7 +3278,7 @@ async function deferSessionEndWork(params: {
 	endedAt: string;
 	transcriptPath: string | undefined;
 	memoryCfg: ReturnType<typeof loadMemoryConfig>;
-}): void {
+}): Promise<void> {
 	const {
 		transcript,
 		rawTranscript,
