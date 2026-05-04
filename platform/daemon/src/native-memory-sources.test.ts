@@ -635,6 +635,92 @@ describe("native memory sources", () => {
 		expect(remaining.count).toBe(0);
 	});
 
+	it("purges previously indexed Obsidian files that become excluded after restart", async () => {
+		const root = join(dir, "vault");
+		const privateFile = join(root, "private", "Secret.md");
+		mkdirSync(join(root, "private"), { recursive: true });
+		writeFileSync(
+			privateFile,
+			"# Secret\n\nPreviously indexed private source content with enough text for source chunk embeddings.\n",
+		);
+		const addedInitial = addObsidianSource({ root, name: "Exclude Vault", excludeGlobs: [] }, dir);
+		expect(addedInitial.ok).toBe(true);
+		if (addedInitial.ok === false) throw new Error(addedInitial.error);
+		const sourceId = addedInitial.source.id;
+		const initialSource = obsidianNativeMemorySource(root, "Exclude Vault", sourceId, []);
+
+		expect(
+			await indexNativeMemoryFile(initialSource, privateFile, "agent-native", {
+				embeddingConfig: { provider: "native", model: "test", dimensions: 3, base_url: "" },
+				fetchEmbedding: async () => [1, 2, 3],
+			}),
+		).toBe(true);
+
+		const before = getDbAccessor().withReadDb((db) => ({
+			artifacts: (
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0",
+					)
+					.get("agent-native", privateFile) as { count: number }
+			).count,
+			chunks: (
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM embeddings WHERE agent_id = ? AND source_type = 'source_obsidian_chunk' AND source_id >= ? AND source_id < ?",
+					)
+					.get("agent-native", `${sourceId}:`, `${sourceId}:\uffff`) as { count: number }
+			).count,
+			entities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_path = ?")
+					.get("agent-native", privateFile) as { count: number }
+			).count,
+		}));
+		expect(before.artifacts).toBe(1);
+		expect(before.chunks).toBeGreaterThan(0);
+		expect(before.entities).toBeGreaterThan(0);
+
+		const added = addObsidianSource({ root, name: "Exclude Vault", excludeGlobs: ["private/**"] }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const handle = startNativeMemoryBridge([codexNativeMemorySource(join(dir, ".codex"))], {
+			agentId: "agent-native",
+			agentsDir: dir,
+			includeConfiguredSources: true,
+			pollIntervalMs: 0,
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(0);
+		} finally {
+			await handle.close();
+		}
+
+		const after = getDbAccessor().withReadDb((db) => ({
+			artifacts: (
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0",
+					)
+					.get("agent-native", privateFile) as { count: number }
+			).count,
+			chunks: (
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM embeddings WHERE agent_id = ? AND source_type = 'source_obsidian_chunk' AND source_id >= ? AND source_id < ?",
+					)
+					.get("agent-native", `${sourceId}:`, `${sourceId}:\uffff`) as { count: number }
+			).count,
+			entities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_path = ?")
+					.get("agent-native", privateFile) as { count: number }
+			).count,
+		}));
+		expect(after).toEqual({ artifacts: 0, chunks: 0, entities: 0 });
+	});
+
 	it("does not mark a configured Obsidian source indexed when the root is missing", async () => {
 		const root = join(dir, "missing-vault");
 		mkdirSync(root, { recursive: true });

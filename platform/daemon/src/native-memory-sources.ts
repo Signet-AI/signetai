@@ -226,6 +226,42 @@ function nativeArtifactRowExists(filePath: string, agentId: string): boolean {
 	}
 }
 
+function activeNativeArtifactPaths(source: NativeMemorySource, agentId: string): string[] {
+	const normalizedRoot = resolve(source.root).replace(/\\/g, "/").replace(/\/$/, "");
+	const rootPrefix = `${normalizedRoot}/`;
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const rows = db
+				.prepare(
+					`SELECT source_path FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND harness = ?
+					   AND source_path >= ?
+					   AND source_path < ?
+					   AND source_kind IN (${source.files.map(() => "?").join(", ")})
+					   AND COALESCE(is_deleted, 0) = 0`,
+				)
+				.all(
+					agentId,
+					source.harness,
+					rootPrefix,
+					prefixUpperBound(rootPrefix),
+					...source.files.map((file) => file.kind),
+				) as Array<{
+				source_path: string;
+			}>;
+			return rows.map((row) => row.source_path);
+		});
+	} catch (err) {
+		logger.warn("watcher", "Failed listing active native memory artifacts", {
+			harness: source.harness,
+			root: source.root,
+			error: err instanceof Error ? err.message : String(err),
+		});
+		return [];
+	}
+}
+
 export async function indexNativeMemoryFile(
 	source: NativeMemorySource,
 	filePath: string,
@@ -411,6 +447,10 @@ export function startNativeMemoryBridge(
 					current.add(file);
 					if (await indexNativeMemoryFile(source, file, agentId, options)) count++;
 					await yielder();
+				}
+				const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
+				for (const file of activeNativeArtifactPaths(source, agentId)) {
+					if (!currentPaths.has(file.replace(/\\/g, "/"))) removeNativeMemoryFile(source, file, agentId);
 				}
 			}
 			const previous = known.get(key);
