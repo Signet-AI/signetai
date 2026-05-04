@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
@@ -8,6 +9,7 @@ import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
 import { getAgentScope } from "./agent-id";
 import { yieldEvery } from "./async-yield";
+import type { WriteDb } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
@@ -32,6 +34,7 @@ const LOW_SIGNAL_SENTENCES = new Set(["Investigated issue.", "Worked on task.", 
 const PROJECTION_HEADROOM_TOKENS = 256;
 export const MEMORY_PROJECTION_MAX_TOKENS = Math.max(512, MEMORY_HEAD_MAX_TOKENS - PROJECTION_HEADROOM_TOKENS);
 export const NOISE_PURGE_REASON = "automatic projection cleanup for temp/test sessions";
+const REINDEX_BATCH_SIZE = 50;
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 let projTok: Tiktoken | null = null;
@@ -506,7 +509,8 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 	return path;
 }
 
-function upsertArtifactRow(
+function upsertArtifactRowInTx(
+	db: Database,
 	path: string,
 	frontmatter: Record<string, unknown>,
 	body: string,
@@ -536,56 +540,66 @@ function upsertArtifactRow(
 	const sourceSha =
 		typeof frontmatter.content_sha256 === "string" ? frontmatter.content_sha256 : hashNormalizedBody(body);
 	const updatedAt = typeof frontmatter.updated_at === "string" ? frontmatter.updated_at : new Date().toISOString();
+	db.prepare(
+		`INSERT INTO memory_artifacts (
+			agent_id, source_path, source_sha256, source_kind, session_id,
+			session_key, session_token, project, harness, captured_at,
+			started_at, ended_at, manifest_path, source_node_id,
+			memory_sentence, memory_sentence_quality, content, updated_at,
+			source_mtime_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id, source_path) DO UPDATE SET
+			source_sha256 = excluded.source_sha256,
+			source_kind = excluded.source_kind,
+			session_id = excluded.session_id,
+			session_key = excluded.session_key,
+			session_token = excluded.session_token,
+			project = excluded.project,
+			harness = excluded.harness,
+			captured_at = excluded.captured_at,
+			started_at = excluded.started_at,
+			ended_at = excluded.ended_at,
+			manifest_path = excluded.manifest_path,
+			source_node_id = excluded.source_node_id,
+			memory_sentence = excluded.memory_sentence,
+			memory_sentence_quality = excluded.memory_sentence_quality,
+			content = excluded.content,
+			updated_at = excluded.updated_at,
+			source_mtime_ms = excluded.source_mtime_ms,
+			is_deleted = 0,
+			deleted_at = NULL`,
+	).run(
+		agentId,
+		sourcePath,
+		sourceSha,
+		sourceKind,
+		sessionId,
+		sessionKey,
+		sessionToken,
+		project,
+		harness,
+		capturedAt,
+		startedAt,
+		endedAt,
+		manifestPath,
+		sourceNodeId,
+		memorySentence,
+		quality,
+		body,
+		updatedAt,
+		sourceMtimeMs,
+	);
+}
+
+function upsertArtifactRow(
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	sourceMtimeMs = statSync(path).mtimeMs,
+	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
+): void {
 	getDbAccessor().withWriteTx((db) => {
-		db.prepare(
-			`INSERT INTO memory_artifacts (
-				agent_id, source_path, source_sha256, source_kind, session_id,
-				session_key, session_token, project, harness, captured_at,
-				started_at, ended_at, manifest_path, source_node_id,
-				memory_sentence, memory_sentence_quality, content, updated_at,
-				source_mtime_ms
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(agent_id, source_path) DO UPDATE SET
-				source_sha256 = excluded.source_sha256,
-				source_kind = excluded.source_kind,
-				session_id = excluded.session_id,
-				session_key = excluded.session_key,
-				session_token = excluded.session_token,
-				project = excluded.project,
-				harness = excluded.harness,
-				captured_at = excluded.captured_at,
-				started_at = excluded.started_at,
-				ended_at = excluded.ended_at,
-				manifest_path = excluded.manifest_path,
-				source_node_id = excluded.source_node_id,
-				memory_sentence = excluded.memory_sentence,
-				memory_sentence_quality = excluded.memory_sentence_quality,
-				content = excluded.content,
-				updated_at = excluded.updated_at,
-				source_mtime_ms = excluded.source_mtime_ms,
-				is_deleted = 0,
-				deleted_at = NULL`,
-		).run(
-			agentId,
-			sourcePath,
-			sourceSha,
-			sourceKind,
-			sessionId,
-			sessionKey,
-			sessionToken,
-			project,
-			harness,
-			capturedAt,
-			startedAt,
-			endedAt,
-			manifestPath,
-			sourceNodeId,
-			memorySentence,
-			quality,
-			body,
-			updatedAt,
-			sourceMtimeMs,
-		);
+		upsertArtifactRowInTx(db as WriteDb as Database, path, frontmatter, body, sourceMtimeMs, options);
 	});
 }
 
@@ -710,17 +724,21 @@ export function softDeleteArtifactRowsForPath(
 	});
 }
 
-export function deleteArtifactRowsForPath(path: string, agentId: string | null): void {
+function deleteArtifactRowsForPathInTx(db: Database, path: string, agentId: string | null): void {
 	const sourcePath = relativePath(path);
 	const absolutePath = path.replace(/\\/g, "/");
+	if (agentId) {
+		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(sourcePath, agentId);
+		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(absolutePath, agentId);
+		return;
+	}
+	db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(sourcePath);
+	db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(absolutePath);
+}
+
+export function deleteArtifactRowsForPath(path: string, agentId: string | null): void {
 	getDbAccessor().withWriteTx((db) => {
-		if (agentId) {
-			db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(sourcePath, agentId);
-			db.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?").run(absolutePath, agentId);
-			return;
-		}
-		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(sourcePath);
-		db.prepare("DELETE FROM memory_artifacts WHERE source_path = ?").run(absolutePath);
+		deleteArtifactRowsForPathInTx(db as WriteDb as Database, path, agentId);
 	});
 }
 
@@ -746,10 +764,68 @@ export async function reindexMemoryArtifacts(agentId?: string): Promise<void> {
 async function doReindex(agentId?: string): Promise<void> {
 	const scope = agentId?.trim() || null;
 	const files = await listCanonicalFiles();
+	const t0 = performance.now();
 	const stopTimer = logger.time("resources", "reindexMemoryArtifacts");
 	const cacheKey = scope ?? "*";
 	const cache = artifactIndexCache.get(cacheKey) ?? new Map<string, string>();
 	const changedPaths = new Set<string>();
+	interface PendingUpsert {
+		readonly path: string;
+		readonly frontmatter: Record<string, unknown>;
+		readonly body: string;
+		readonly mtime: number;
+		readonly statKey: string;
+		readonly markChanged: boolean;
+	}
+	interface PendingDelete {
+		readonly path: string;
+		readonly statKey: string | null;
+		readonly markChanged: boolean;
+	}
+	const pendingUpserts: PendingUpsert[] = [];
+	const pendingDeletes: PendingDelete[] = [];
+	// Cache-only updates for files that need no DB write (e.g. unreadable).
+	const cacheOnlyUpdates: Array<{ path: string; statKey: string }> = [];
+	const commitBatchCacheUpserts = (batch: readonly PendingUpsert[]): void => {
+		for (const item of batch) {
+			cache.set(item.path, item.statKey);
+			if (item.markChanged) changedPaths.add(item.path);
+		}
+	};
+	const commitBatchCacheDeletes = (batch: readonly PendingDelete[]): void => {
+		for (const item of batch) {
+			if (item.statKey !== null) {
+				cache.set(item.path, item.statKey);
+			} else {
+				cache.delete(item.path);
+			}
+			if (item.markChanged) changedPaths.add(item.path);
+		}
+	};
+	const flushUpsertBatch = (): boolean => {
+		if (pendingUpserts.length === 0) return false;
+		const batch = [...pendingUpserts];
+		getDbAccessor().withWriteTx((db) => {
+			for (const item of batch) {
+				upsertArtifactRowInTx(db as WriteDb as Database, item.path, item.frontmatter, item.body, item.mtime);
+			}
+		});
+		pendingUpserts.length = 0;
+		commitBatchCacheUpserts(batch);
+		return true;
+	};
+	const flushDeleteBatch = (): boolean => {
+		if (pendingDeletes.length === 0) return false;
+		const batch = [...pendingDeletes];
+		getDbAccessor().withWriteTx((db) => {
+			for (const item of batch) {
+				deleteArtifactRowsForPathInTx(db as WriteDb as Database, item.path, scope);
+			}
+		});
+		pendingDeletes.length = 0;
+		commitBatchCacheDeletes(batch);
+		return true;
+	};
 	lastChangedManifestsByAgent.delete(cacheKey);
 
 	try {
@@ -812,7 +888,7 @@ async function doReindex(agentId?: string): Promise<void> {
 	});
 
 	const fileSet = new Set(files);
-	const yielder = yieldEvery(50);
+	const yielder = yieldEvery(REINDEX_BATCH_SIZE);
 	for (const path of files) {
 		let statKey: string;
 		let mtime: number;
@@ -821,6 +897,7 @@ async function doReindex(agentId?: string): Promise<void> {
 			statKey = `${s.mtimeMs}:${s.ctimeMs}:${s.size}`;
 			mtime = s.mtimeMs;
 		} catch {
+			await yielder();
 			continue;
 		}
 		if (cache.get(path) === statKey) {
@@ -832,48 +909,60 @@ async function doReindex(agentId?: string): Promise<void> {
 		try {
 			content = await readFile(path, "utf8");
 		} catch {
-			cache.set(path, statKey);
-			await yielder();
+			cacheOnlyUpdates.push({ path, statKey });
 			continue;
 		}
 
 		const parsed = parseFrontmatterDocument(content);
 		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
 		if (scope && nextAgent !== scope) {
-			deleteArtifactRowsForPath(path, scope);
-			cache.set(path, statKey);
-			await yielder();
+			pendingDeletes.push({ path, statKey, markChanged: false });
+			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
+				await yielder();
+			}
 			continue;
 		}
 		const match = path.match(/--([a-z2-7]{16})--/);
 		const sessionToken = match?.[1];
 		if (sessionToken && tombstones.has(sessionToken)) {
-			deleteArtifactRowsForPath(path, scope);
-			cache.set(path, statKey);
-			changedPaths.add(path);
-			await yielder();
+			pendingDeletes.push({ path, statKey, markChanged: true });
+			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
+				await yielder();
+			}
 			continue;
 		}
 		const body = normalizeMarkdownBody(parsed.body);
 		if (!isValidArtifact(path, parsed.frontmatter, body)) {
-			deleteArtifactRowsForPath(path, scope);
-			cache.set(path, statKey);
-			changedPaths.add(path);
-			await yielder();
+			pendingDeletes.push({ path, statKey, markChanged: true });
+			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
+				await yielder();
+			}
 			continue;
 		}
-		upsertArtifactRow(path, parsed.frontmatter, body, mtime);
-		cache.set(path, statKey);
-		changedPaths.add(path);
-		await yielder();
+		pendingUpserts.push({ path, frontmatter: parsed.frontmatter, body, mtime, statKey, markChanged: true });
+		if (pendingUpserts.length >= REINDEX_BATCH_SIZE && flushUpsertBatch()) {
+			await yielder();
+		}
 	}
 
 	for (const path of cache.keys()) {
 		if (fileSet.has(path)) continue;
 		if (path.includes(".jsonl#")) continue;
-		deleteArtifactRowsForPath(path, scope);
-		cache.delete(path);
-		changedPaths.add(path);
+		pendingDeletes.push({ path, statKey: null, markChanged: true });
+		if (pendingDeletes.length >= REINDEX_BATCH_SIZE && flushDeleteBatch()) {
+			await yielder();
+		}
+	}
+
+	if (flushUpsertBatch()) {
+		await yielder();
+	}
+	if (flushDeleteBatch()) {
+		await yielder();
+	}
+	// Commit cache-only items (no DB dependency — safe to apply unconditionally).
+	for (const { path: p, statKey: sk } of cacheOnlyUpdates) {
+		cache.set(p, sk);
 	}
 
 	lastChangedManifestsByAgent.set(
@@ -881,8 +970,14 @@ async function doReindex(agentId?: string): Promise<void> {
 		new Set([...changedPaths].filter((path) => path.endsWith("--manifest.md"))),
 	);
 	artifactIndexCache.set(cacheKey, cache);
+	const elapsed = Math.round(performance.now() - t0);
 
-	stopTimer({ fileCount: files.length });
+	stopTimer({
+		fileCount: files.length,
+		duration: elapsed,
+		batchCount: Math.ceil(changedPaths.size / REINDEX_BATCH_SIZE),
+		changedFiles: changedPaths.size,
+	});
 }
 
 function isValidArtifact(path: string, frontmatter: Record<string, unknown>, body: string): boolean {

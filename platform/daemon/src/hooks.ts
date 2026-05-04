@@ -129,6 +129,12 @@ function getMemoryDbPath(): string {
 	return join(getAgentsDir(), "memory", "memories.db");
 }
 
+const deferredSessionEndWork = new Set<Promise<void>>();
+
+export async function flushDeferredSessionEndWorkForTests(): Promise<void> {
+	await Promise.allSettled([...deferredSessionEndWork]);
+}
+
 async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly agentId: string;
 	readonly harness: string;
@@ -3158,23 +3164,11 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		transcript = storedTranscript;
 	}
 
-	if (rawTranscript) {
-		try {
-			writeTranscriptAudit({
-				basePath: getAgentsDir(),
-				agentId,
-				sessionId: req.sessionId?.trim() || sessionKey || "",
-				sessionKey: sessionKey ?? null,
-				rawTranscript,
-				capturedAt: endedAt,
-			});
-		} catch (error) {
-			logger.warn("hooks", "Session end transcript audit write failed", {
-				error: error instanceof Error ? error.message : String(error),
-				sessionKey,
-			});
-		}
-	}
+	// Keep retention/indexing lossless. The summary worker receives a
+	// capped copy below, but transcript artifacts and live transcript
+	// storage must preserve the full canonical transcript.
+	const retainedTranscript = transcript;
+
 	// Derive a stable session identity for artifact paths.  When the
 	// transcript is empty and no explicit sessionId was provided,
 	// deriveSessionEndFallbackId returns a random UUID — making this call
@@ -3184,47 +3178,180 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	// (b) very short (1–499 char) transcripts do write a transcript
 	// artifact with a non-deterministic path, but the summary job is
 	// still skipped, limiting blast radius.
-	const sessionId = req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, transcript);
+	const sessionId =
+		req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, retainedTranscript);
 
-	// Lossless retention: write transcript immediately regardless of length
-	// or whether the summary worker succeeds later.
-	if (transcript && sessionKey) {
+	// Lossless retention: keep the live transcript snapshot available to
+	// subsequent hook calls before returning. The heavier canonical JSONL
+	// rewrite/indexing work is deferred below so the session-end response
+	// is not held open by large transcript rewrites.
+	if (retainedTranscript && sessionKey) {
 		try {
-			upsertSessionTranscript(sessionKey, transcript, req.harness, req.cwd ?? null, agentId);
-			await writeCanonicalTranscriptFromSnapshot({
-				agentId,
-				harness: req.harness,
-				sessionKey,
-				sessionId,
-				project: req.cwd ?? null,
-				rawTranscript,
-				transcript,
-				capturedAt: endedAt,
-				transcriptPath: req.transcriptPath,
-			});
+			upsertSessionTranscript(sessionKey, retainedTranscript, req.harness, req.cwd ?? null, agentId);
 		} catch (e) {
-			logger.warn("hooks", "Transcript write failed (non-fatal)", {
+			logger.warn("hooks", "Live transcript retention failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
+	// Safety cap against degenerate inputs (corrupt files, etc).
+	// The summary worker handles long transcripts via chunked
+	// map-reduce summarization, so this is a last-resort guard for
+	// extraction only — not for transcript retention.
+	const MAX_TRANSCRIPT_CHARS = 100_000;
+	let summaryTranscript = retainedTranscript;
+	let truncated = false;
+	if (summaryTranscript.length > MAX_TRANSCRIPT_CHARS) {
+		logger.warn("hooks", "Transcript exceeds safety cap, truncating summary input", {
+			original: summaryTranscript.length,
+			cap: MAX_TRANSCRIPT_CHARS,
+		});
+		summaryTranscript = `${summaryTranscript.slice(0, MAX_TRANSCRIPT_CHARS)}\n[truncated]`;
+		truncated = true;
+	}
+
+	const pipelineEnabled = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
+	const hasSummaryLength = summaryTranscript.length >= 500;
+	let jobId: string | undefined;
+
+	// Queue for async processing by the summary worker instead of
+	// blocking on LLM inference. The worker produces both a dated
+	// markdown summary and atomic fact rows.
+	const noiseSession = isNoiseSession({
+		project: req.cwd ?? null,
+		sessionKey: sessionKey ?? null,
+		sessionId,
+		harness: req.harness,
+	});
+
+	if (!pipelineEnabled) {
+		logger.info("hooks", "Session end extraction skipped — pipeline disabled");
+	} else if (noiseSession) {
+		logger.debug("hooks", "Session end summary skipped for noise session", {
+			harness: req.harness,
+			project: req.cwd,
+			sessionKey,
+			sessionId,
+		});
+	} else if (hasSummaryLength) {
+		jobId = enqueueSummaryJob(getDbAccessor(), {
+			harness: req.harness,
+			transcript: summaryTranscript,
+			sessionKey,
+			sessionId,
+			project: req.cwd,
+			agentId,
+			trigger: "session_end",
+			capturedAt: endedAt,
+			endedAt,
+		});
+
+		logger.info("hooks", "Session end queued for summary", {
+			jobId,
+			feedbackTelemetry: getFeedbackTelemetry(),
+		});
+		logger.info("hooks", "Session end transcript queued", {
+			harness: req.harness,
+			project: req.cwd,
+			sessionKey,
+			transcriptPath: req.transcriptPath,
+			transcriptChars: summaryTranscript.length,
+			truncated,
+			preview: summaryTranscript.slice(0, 500),
+		});
+	}
+
+	setImmediate(() => {
+		const work = deferSessionEndWork({
+			transcript: retainedTranscript,
+			rawTranscript,
+			sessionKey,
+			sessionId,
+			agentId,
+			harness: req.harness,
+			cwd: req.cwd ?? null,
+			endedAt,
+			transcriptPath: req.transcriptPath,
+			memoryCfg,
+		}).catch((error) => {
+			logger.warn("hooks", "Deferred session-end work failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
+			});
+		});
+		deferredSessionEndWork.add(work);
+		void work.finally(() => {
+			deferredSessionEndWork.delete(work);
+		});
+	});
+
+	return { memoriesSaved: 0, queued: Boolean(jobId), jobId };
+}
+
+async function deferSessionEndWork(params: {
+	transcript: string;
+	rawTranscript: string;
+	sessionKey: string | undefined;
+	sessionId: string;
+	agentId: string;
+	harness: string;
+	cwd: string | null;
+	endedAt: string;
+	transcriptPath: string | undefined;
+	memoryCfg: ReturnType<typeof loadMemoryConfig>;
+}): Promise<void> {
+	const {
+		transcript,
+		rawTranscript,
+		sessionKey,
+		sessionId,
+		agentId,
+		harness,
+		cwd,
+		endedAt,
+		transcriptPath,
+		memoryCfg,
+	} = params;
+
+	if (rawTranscript) {
+		try {
+			writeTranscriptAudit({
+				basePath: getAgentsDir(),
+				agentId,
+				sessionId,
+				sessionKey: sessionKey ?? null,
+				rawTranscript,
+				capturedAt: endedAt,
+			});
+		} catch (error) {
+			logger.warn("hooks", "Deferred transcript audit write failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
 			});
 		}
 	}
 
 	if (transcript.trim().length > 0) {
 		try {
-			if (
-				!isNoiseSession({
-					project: req.cwd ?? null,
+			if (!isNoiseSession({ project: cwd, sessionKey: sessionKey ?? null, sessionId, harness })) {
+				await writeCanonicalTranscriptFromSnapshot({
+					agentId,
+					harness,
 					sessionKey: sessionKey ?? null,
 					sessionId,
-					harness: req.harness,
-				})
-			) {
+					project: cwd,
+					rawTranscript,
+					transcript,
+					capturedAt: endedAt,
+					transcriptPath,
+				});
 				const manifest = ensureCanonicalManifest({
 					agentId,
 					sessionId,
 					sessionKey: sessionKey ?? null,
-					project: req.cwd ?? null,
-					harness: req.harness,
+					project: cwd,
+					harness,
 					capturedAt: endedAt,
 					startedAt: null,
 					endedAt,
@@ -3233,8 +3360,8 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 					agentId,
 					sessionId,
 					sessionKey: sessionKey ?? null,
-					project: req.cwd ?? null,
-					harness: req.harness,
+					project: cwd,
+					harness,
 					capturedAt: endedAt,
 					startedAt: null,
 					endedAt,
@@ -3242,38 +3369,31 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 					manifestPath: manifest.path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/"),
 				});
 				logger.debug("hooks", "Session transcript JSONL snapshot written", {
-					harness: req.harness,
-					project: req.cwd,
+					harness,
+					project: cwd,
 					sessionKey,
-					path: canonicalTranscriptRelativePath(req.harness),
+					path: canonicalTranscriptRelativePath(harness),
 				});
 			}
 		} catch (e) {
-			logger.warn("hooks", "Transcript artifact write failed (non-fatal)", {
+			logger.warn("hooks", "Deferred transcript indexing failed", {
 				error: e instanceof Error ? e.message : String(e),
 				sessionKey,
+				transcriptPath,
 			});
 		}
 	}
 
-	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
-		logger.info("hooks", "Session end extraction skipped — pipeline disabled");
-		return { memoriesSaved: 0 };
-	}
-
-	let feedbackAspectsUpdated = 0;
-	let feedbackFtsConfirmations = 0;
-	let feedbackDecayedAspects = 0;
-	let feedbackPropagatedAttributes = 0;
-	if (sessionKey && memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.feedback.enabled) {
+	const pipelineActive = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
+	if (sessionKey && pipelineActive && memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.feedback.enabled) {
+		let feedbackDecayedAspects = 0;
+		let feedbackPropagatedAttributes = 0;
 		try {
 			const feedback = applyFtsOverlapFeedback(getDbAccessor(), sessionKey, agentId, {
 				delta: memoryCfg.pipelineV2.feedback.ftsWeightDelta,
 				maxWeight: memoryCfg.pipelineV2.feedback.maxAspectWeight,
 				minWeight: memoryCfg.pipelineV2.feedback.minAspectWeight,
 			});
-			feedbackAspectsUpdated = feedback.aspectsUpdated;
-			feedbackFtsConfirmations = feedback.totalFtsConfirmations;
 
 			if (
 				memoryCfg.pipelineV2.feedback.decayEnabled &&
@@ -3294,83 +3414,20 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				feedbackDecayedAspects,
 				feedbackPropagatedAttributes,
 			});
+			logger.debug("hooks", "Deferred aspect feedback completed", {
+				sessionKey,
+				feedbackAspectsUpdated: feedback.aspectsUpdated,
+				feedbackFtsConfirmations: feedback.totalFtsConfirmations,
+				feedbackDecayedAspects,
+				feedbackPropagatedAttributes,
+			});
 		} catch (err) {
-			logger.warn("hooks", "Aspect feedback failed", {
+			logger.warn("hooks", "Deferred aspect feedback failed", {
 				error: err instanceof Error ? err.message : String(err),
 				sessionKey,
 			});
 		}
 	}
-
-	if (transcript.length < 500) {
-		return { memoriesSaved: 0 };
-	}
-
-	// Safety cap against degenerate inputs (corrupt files, etc).
-	// The summary worker handles long transcripts via chunked
-	// map-reduce summarization, so this is a last-resort guard.
-	const MAX_TRANSCRIPT_CHARS = 100_000;
-	let truncated = false;
-	if (transcript.length > MAX_TRANSCRIPT_CHARS) {
-		logger.warn("hooks", "Transcript exceeds safety cap, truncating", {
-			original: transcript.length,
-			cap: MAX_TRANSCRIPT_CHARS,
-		});
-		transcript = `${transcript.slice(0, MAX_TRANSCRIPT_CHARS)}\n[truncated]`;
-		truncated = true;
-	}
-
-	// Queue for async processing by the summary worker instead of
-	// blocking on LLM inference. The worker produces both a dated
-	// markdown summary and atomic fact rows.
-	if (
-		isNoiseSession({
-			project: req.cwd ?? null,
-			sessionKey: sessionKey ?? null,
-			sessionId,
-			harness: req.harness,
-		})
-	) {
-		logger.debug("hooks", "Session end summary skipped for noise session", {
-			harness: req.harness,
-			project: req.cwd,
-			sessionKey,
-			sessionId,
-		});
-		return { memoriesSaved: 0, queued: false };
-	}
-
-	const jobId = enqueueSummaryJob(getDbAccessor(), {
-		harness: req.harness,
-		transcript,
-		sessionKey,
-		sessionId,
-		project: req.cwd,
-		agentId,
-		trigger: "session_end",
-		capturedAt: endedAt,
-		endedAt,
-	});
-
-	logger.info("hooks", "Session end queued for summary", {
-		jobId,
-		feedbackAspectsUpdated,
-		feedbackFtsConfirmations,
-		feedbackDecayedAspects,
-		feedbackPropagatedAttributes,
-		feedbackTelemetry: getFeedbackTelemetry(),
-	});
-	logger.info("hooks", "Session end transcript queued", {
-		harness: req.harness,
-		project: req.cwd,
-		sessionKey,
-		transcriptPath: req.transcriptPath,
-		transcriptChars: transcript.length,
-		truncated,
-		preview: transcript.slice(0, 500),
-	});
-
-	return { memoriesSaved: 0, queued: true, jobId };
 }
 
 // ---------------------------------------------------------------------------

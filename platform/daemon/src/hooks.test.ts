@@ -67,6 +67,11 @@ function ensureDir(path: string): void {
 	mkdirSync(path, { recursive: true });
 }
 
+async function flushSessionEndDeferredWork(): Promise<void> {
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	await hooks.flushDeferredSessionEndWorkForTests();
+}
+
 /** Create an isolated test DB with the full schema */
 function createMemoryDb(
 	memories: Array<{
@@ -1778,6 +1783,7 @@ describe("handleSessionEnd", () => {
 		});
 
 		expect(result.queued).toBe(true);
+		await flushSessionEndDeferredWork();
 
 		const files = readdirSync(join(TEST_DIR, "memory")).sort();
 		const manifestFile = files.find((name) => name.endsWith("--manifest.md"));
@@ -1791,6 +1797,165 @@ describe("handleSessionEnd", () => {
 		expect(transcript).toContain("please update packages/daemon/src/hooks.ts");
 		expect(manifest).toContain('summary_path: "memory/');
 		expect(manifest).toContain('transcript_path: "memory/test/transcripts/transcript.jsonl"');
+	});
+
+	test.serial("defers canonical JSONL rewrite until after session-end response", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "deferred-canonical-transcript.txt");
+		writeFileSync(
+			transcriptPath,
+			"User: ensure the session-end handler returns before canonical transcript rewriting.\nAssistant: canonical JSONL should be written only by deferred work.\n".repeat(
+				8,
+			),
+		);
+		const canonicalPath = join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl");
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-deferred-canonical",
+			sessionId: "sess-deferred-canonical",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(true);
+		expect(existsSync(canonicalPath)).toBe(false);
+
+		await flushSessionEndDeferredWork();
+		expect(existsSync(canonicalPath)).toBe(true);
+	});
+
+	test.serial("writes full canonical transcript artifacts while capping summary input", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "long-transcript.txt");
+		const tailMarker = "LOSSLESS_RETENTION_TAIL_MARKER";
+		const longTranscript = `User: ${"a".repeat(101_000)} ${tailMarker}\nAssistant: retained the full canonical transcript.\n`;
+		writeFileSync(transcriptPath, longTranscript);
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-long-retention",
+			sessionId: "sess-long-retention",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(true);
+		await flushSessionEndDeferredWork();
+
+		const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
+		expect(transcript).toContain(tailMarker);
+		expect(transcript).not.toContain("[truncated]");
+
+		const db = openTestDb();
+		try {
+			const stored = db
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get("sess-long-retention", "default") as { content: string } | undefined;
+			const queued = db
+				.prepare("SELECT transcript FROM summary_jobs WHERE session_key = ?")
+				.get("sess-long-retention") as { transcript: string } | undefined;
+
+			expect(stored?.content).toContain(tailMarker);
+			expect(queued?.transcript).toContain("[truncated]");
+			expect(queued?.transcript).not.toContain(tailMarker);
+		} finally {
+			db.close();
+		}
+	});
+
+	test.serial("skips deferred graph feedback when pipeline is disabled", async () => {
+		writeAgentYaml(`
+memory:
+  pipelineV2:
+    enabled: false
+    shadowMode: false
+`);
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "pipeline-disabled-transcript.txt");
+		writeFileSync(
+			transcriptPath,
+			"User: keep transcript retention active while the memory pipeline is disabled.\nAssistant: feedback graph state must not change in disabled mode.\n".repeat(
+				8,
+			),
+		);
+
+		const db = openTestDb();
+		try {
+			const now = new Date().toISOString();
+			db.exec(`
+				CREATE TABLE IF NOT EXISTS entity_aspects (
+					id TEXT PRIMARY KEY,
+					entity_id TEXT NOT NULL,
+					agent_id TEXT NOT NULL,
+					name TEXT NOT NULL,
+					canonical_name TEXT NOT NULL,
+					weight REAL NOT NULL,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL
+				);
+				CREATE TABLE IF NOT EXISTS entity_attributes (
+					id TEXT PRIMARY KEY,
+					aspect_id TEXT NOT NULL,
+					agent_id TEXT NOT NULL,
+					memory_id TEXT NOT NULL,
+					kind TEXT NOT NULL,
+					content TEXT NOT NULL,
+					normalized_content TEXT NOT NULL,
+					confidence REAL NOT NULL,
+					importance REAL NOT NULL,
+					status TEXT NOT NULL,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL
+				);
+			`);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-disabled', 'entity-disabled', 'default', 'core', 'core', 0.5, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-disabled', 'aspect-disabled', 'default', 'memory-disabled', 'attribute',
+				  'pipeline disabled feedback target', 'pipeline disabled feedback target', 1, 0.5, 'active', ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO session_memories
+				 (id, session_key, memory_id, source, effective_score, final_score, rank,
+				  was_injected, fts_hit_count, created_at)
+				 VALUES ('sm-disabled', 'sess-pipeline-disabled', 'memory-disabled', 'ka_traversal', 0.8, 0.8, 1, 1, 2, ?)`,
+			).run(now);
+		} finally {
+			db.close();
+		}
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-pipeline-disabled",
+			sessionId: "sess-pipeline-disabled",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(false);
+		await flushSessionEndDeferredWork();
+
+		const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
+		expect(transcript).toContain("keep transcript retention active");
+
+		const verifyDb = openTestDb();
+		try {
+			const aspect = verifyDb.prepare("SELECT weight FROM entity_aspects WHERE id = 'aspect-disabled'").get() as
+				| { weight: number }
+				| undefined;
+			const summaryJobs = verifyDb.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get() as { count: number };
+			expect(aspect?.weight).toBe(0.5);
+			expect(summaryJobs.count).toBe(0);
+		} finally {
+			verifyDb.close();
+		}
 	});
 
 	test.serial("falls back to the stored live transcript when session-end input is missing", async () => {
@@ -1826,6 +1991,7 @@ describe("handleSessionEnd", () => {
 		});
 
 		expect(result.queued).toBe(true);
+		await flushSessionEndDeferredWork();
 
 		const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
 		expect(transcript).toContain("keep the live transcript if session-end falls over");
@@ -1878,6 +2044,7 @@ describe("handleSessionEnd", () => {
 		});
 
 		expect(result.queued).toBe(true);
+		await flushSessionEndDeferredWork();
 
 		const transcript = readFileSync(join(TEST_DIR, "memory", "codex", "transcripts", "transcript.jsonl"), "utf-8");
 		expect(transcript).toContain("Run diagnostics");
@@ -1966,6 +2133,7 @@ describe("handleSessionEnd", () => {
 
 			expect(first.queued).toBe(true);
 			expect(second.queued).toBe(true);
+			await flushSessionEndDeferredWork();
 
 			const files = readdirSync(join(TEST_DIR, "memory")).sort();
 			expect(files.filter((name) => name.endsWith("--manifest.md"))).toHaveLength(2);
@@ -2540,6 +2708,43 @@ describe("memory-lineage", () => {
 
 		expect(artifact).toBeNull();
 		expect(telemetry?.content).toBe("Temporal telemetry row that must survive reindex.");
+	});
+
+	test.serial("warm reindex yields while skipping unchanged cached artifacts", async () => {
+		createMemoryDb([]);
+		const base = Date.parse("2026-03-28T22:34:06.792Z");
+
+		for (let idx = 0; idx < 55; idx++) {
+			const at = new Date(base + idx * 1000).toISOString();
+			await writeSummaryArtifact({
+				agentId: "default",
+				sessionId: `sess-warm-yield-${idx}`,
+				sessionKey: `sess-warm-yield-${idx}`,
+				project: "/tmp/signetai",
+				harness: "test",
+				capturedAt: at,
+				startedAt: null,
+				endedAt: at,
+				summary:
+					"Warm reindex should keep yielding even when every cached artifact is unchanged, so large no-op scans do not monopolize the event loop.",
+			});
+		}
+
+		await reindexMemoryArtifacts("default");
+
+		const originalSetImmediate = globalThis.setImmediate;
+		let yieldCount = 0;
+		globalThis.setImmediate = ((callback: (...args: unknown[]) => void, ...args: unknown[]) => {
+			yieldCount++;
+			return originalSetImmediate(callback, ...args);
+		}) as typeof setImmediate;
+		try {
+			await reindexMemoryArtifacts("default");
+		} finally {
+			globalThis.setImmediate = originalSetImmediate;
+		}
+
+		expect(yieldCount).toBeGreaterThan(0);
 	});
 
 	test.serial(

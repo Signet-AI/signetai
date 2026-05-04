@@ -23,6 +23,7 @@ import {
 	resolveSessionStartTimeoutMs,
 } from "@signet/core";
 import type { RecallPayload, RecallRow } from "@signet/core";
+import { SignetClient } from "@signet/sdk";
 import { Type } from "@sinclair/typebox";
 import type {
 	OpenClawPluginApi,
@@ -606,21 +607,23 @@ export async function onSessionEnd(
 		reason?: string;
 	} = {},
 ): Promise<SessionEndResult | null> {
-	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/session-end", {
-		method: "POST",
-		body: {
-			harness,
-			agentId: options.agentId,
-			transcriptPath: options.transcriptPath,
-			...(options.transcript && { transcript: options.transcript }),
-			sessionKey: options.sessionKey,
-			sessionId: options.sessionId,
-			cwd: options.cwd,
-			reason: options.reason,
-			runtimePath: RUNTIME_PATH,
-		},
-		timeout: WRITE_TIMEOUT,
+	new SignetClient({
+		daemonUrl: options.daemonUrl || DEFAULT_DAEMON_URL,
+		retries: 0,
+		timeoutMs: WRITE_TIMEOUT,
+	}).sessionEndFireAndForget({
+		harness,
+		agentId: options.agentId,
+		transcriptPath: options.transcriptPath,
+		...(options.transcript && { transcript: options.transcript }),
+		sessionKey: options.sessionKey,
+		sessionId: options.sessionId,
+		cwd: options.cwd,
+		reason: options.reason,
+		runtimePath: RUNTIME_PATH,
 	});
+
+	return null;
 }
 
 // ============================================================================

@@ -286,7 +286,8 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 						}
 					}
 
-					await client.post(
+					client
+						.post(
 						"/api/hooks/session-end",
 						{
 							harness: HARNESS,
@@ -296,7 +297,10 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 							...(transcript ? { transcript } : {}),
 						},
 						WRITE_TIMEOUT,
-					);
+					)
+						.catch((e) => {
+							console.warn("[signet] session-end fire-and-forget failed:", e);
+						});
 				}
 
 				if (event.type === "session.compacted" && event.summary) {

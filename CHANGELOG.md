@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-04
+- Bug fixes: resolve session-end timeout under concurrent load.
+
 ### 2026-05-03
 - Features: add read-only Obsidian knowledge sources.
 - Performance: enable threadedExtraction by default and fix build.
@@ -31,11 +34,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Performance: reduce recall hot path latency.
 - Refactoring: reorganize monorepo layout.
 
-### 2026-04-25
-- Bug fixes: package extraction worker and test lifecycle; proxy analytics and telemetry from worker thread via IPC; reject startup promise on early worker exit and guard duplicate startPipeline; address 3 blocking review findings in extraction worker thread; bridge native harness memory artifacts; pair remote Signet MCP with lifecycle hooks.
-- Refactoring: make logger injectable in startWorker via LogSink interface.
-
 ## Release Ledger
+
+## [0.110.2] - 2026-05-04
+
+Release summary: 1 bug fix.
+Tag range: `v0.110.1..v0.110.2`.
+
+### Bug Fixes
+
+- **daemon**: resolve session-end timeout under concurrent load (#612)
 
 ## [0.110.1] - 2026-05-03
 

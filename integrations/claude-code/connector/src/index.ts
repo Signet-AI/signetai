@@ -12,6 +12,7 @@
  * ```
  */
 
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +59,54 @@ export interface SessionStartResult {
 export interface SessionEndResult {
 	success: boolean;
 	memoriesExtracted: number;
+}
+
+export interface SessionEndFireAndForgetPayload {
+	harness: "claude-code";
+	sessionId?: string;
+	transcriptPath?: string;
+}
+
+type DetachedSpawn = typeof spawn;
+
+const SESSION_END_FIRE_AND_FORGET_SCRIPT = `
+void (async () => {
+  const url = process.env.SIGNET_SESSION_END_URL;
+  const body = process.env.SIGNET_SESSION_END_BODY;
+  if (!url || !body) return;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch {}
+})();
+`;
+export function dispatchSessionEndFireAndForget(
+	daemonUrl: string,
+	payload: SessionEndFireAndForgetPayload,
+	spawnImpl: DetachedSpawn = spawn,
+): boolean {
+	try {
+		const url = `${daemonUrl.replace(/\/$/, "")}/api/hooks/session-end`;
+		const body = JSON.stringify(payload);
+		const child = spawnImpl(process.execPath, ["--eval", SESSION_END_FIRE_AND_FORGET_SCRIPT], {
+			detached: true,
+			stdio: "ignore",
+			env: {
+				...process.env,
+				SIGNET_SESSION_END_URL: url,
+				SIGNET_SESSION_END_BODY: body,
+			},
+		});
+		child.unref();
+		return true;
+	} catch (error) {
+		console.warn("[signet] session-end fire-and-forget dispatch failed:", error);
+		return false;
+	}
 }
 
 // Returns the timeout written into the Claude Code hook config. This is
@@ -247,36 +296,21 @@ export class ClaudeCodeConnector extends BaseConnector {
 		}
 	}
 
+	protected dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
+		return dispatchSessionEndFireAndForget(this.daemonUrl, payload);
+	}
+
 	/**
 	 * Called when a session ends
 	 */
 	async onSessionEnd(ctx: SessionContext): Promise<SessionEndResult> {
-		try {
-			const res = await fetch(`${this.daemonUrl}/api/hooks/session-end`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					harness: "claude-code",
-					sessionId: ctx.sessionId,
-					transcriptPath: ctx.transcriptPath,
-				}),
-				signal: AbortSignal.timeout(10000),
-			});
+		const dispatched = this.dispatchSessionEnd({
+			harness: "claude-code",
+			sessionId: ctx.sessionId,
+			transcriptPath: ctx.transcriptPath,
+		});
 
-			if (!res.ok) {
-				console.warn("[signet] Session end hook failed:", res.status);
-				return { success: false, memoriesExtracted: 0 };
-			}
-
-			const data = (await res.json()) as { memoriesExtracted?: number };
-			return {
-				success: true,
-				memoriesExtracted: data.memoriesExtracted || 0,
-			};
-		} catch (e) {
-			console.warn("[signet] Session end hook error:", e);
-			return { success: false, memoriesExtracted: 0 };
-		}
+		return { success: dispatched, memoriesExtracted: 0 };
 	}
 
 	// ============================================================================
@@ -388,7 +422,8 @@ export class ClaudeCodeConnector extends BaseConnector {
 		};
 
 		// Migration: remove stale PreCompaction key from existing installs
-		delete (settings.hooks as Record<string, unknown>).PreCompaction;
+		const { PreCompaction: _legacyPreCompaction, ...hooksWithoutLegacy } = settings.hooks as Record<string, unknown>;
+		settings.hooks = hooksWithoutLegacy;
 
 		atomicWriteJson(settingsPath, settings);
 
@@ -429,8 +464,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 				mcpArgs = [mcpJs];
 			} else {
 				console.warn(
-					`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". ` +
-						`MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
+					`[signet] Warning: could not resolve mcp-stdio.js from argv[1]="${cliEntry}". MCP server config will use "signet-mcp" which may fail on Windows without shell:true.`,
 				);
 			}
 		}
@@ -466,14 +500,16 @@ export class ClaudeCodeConnector extends BaseConnector {
 
 		if (config.mcpServers && typeof config.mcpServers === "object" && !Array.isArray(config.mcpServers)) {
 			const mcp = config.mcpServers as Record<string, unknown>;
-			delete mcp.signet;
-			if (Object.keys(mcp).length === 0) {
-				delete config.mcpServers;
+			const { signet: _signetMcp, ...restMcp } = mcp;
+			if (Object.keys(restMcp).length === 0) {
+				const { mcpServers: _mcpServers, ...restConfig } = config;
+				config = restConfig;
+			} else {
+				config.mcpServers = restMcp;
 			}
 			atomicWriteJson(claudeJsonPath, config);
 		}
 	}
-
 }
 
 // ============================================================================

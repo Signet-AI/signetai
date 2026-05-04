@@ -117,6 +117,22 @@ export class SignetClientP2 {
 		return this.transport.post<SessionEndResponse>("/api/hooks/session-end", opts);
 	}
 
+	sessionEndFireAndForget(opts: {
+		readonly sessionKey?: string;
+		readonly summary?: string;
+		readonly project?: string;
+		readonly harness?: string;
+		readonly agentId?: string;
+		readonly transcriptPath?: string;
+		readonly transcript?: string;
+		readonly sessionId?: string;
+		readonly cwd?: string;
+		readonly reason?: string;
+		readonly runtimePath?: string;
+	}): void {
+		this.transport.post("/api/hooks/session-end", opts).catch(() => {});
+	}
+
 	/**
 	 * @example
 	 * const result = await client.hookRemember({

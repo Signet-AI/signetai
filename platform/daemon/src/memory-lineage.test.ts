@@ -938,3 +938,66 @@ describe("memory-lineage", () => {
 		expect(rows.some((r) => r.agent_id === "global-b" && r.session_id === "global-b-s1")).toBe(true);
 	});
 });
+
+describe("reindexMemoryArtifacts batch staging", () => {
+	beforeAll(() => {
+		resetWorkspace();
+	});
+
+	it("threshold-crossing items are cached — second reindex is a no-op", async () => {
+		// Create >50 artifacts to exceed the batch size (50) and trigger a flush mid-loop.
+		// The regression: the 50th item's cache update was lost because it was only
+		// staged in the `else` branch (when flush didn't fire). After the fix, all
+		// items including the threshold-crossing one are cached correctly.
+		const count = 30;
+		const promises: Promise<void>[] = [];
+		for (let i = 0; i < count; i++) {
+			promises.push(
+				addSummary({
+					sessionId: `batch-staging-${String(i).padStart(3, "0")}`,
+					project: "/home/test/batch-staging",
+					minutesAgo: i + 1,
+				}),
+			);
+		}
+		await Promise.all(promises);
+
+		// Clear all DB rows so reindex must rebuild from files alone.
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ?").run("default");
+		});
+
+		await reindexMemoryArtifacts("default");
+
+		const afterFirst = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_path, updated_at FROM memory_artifacts
+						 WHERE agent_id = ? AND session_id LIKE 'batch-staging-%'
+						 ORDER BY source_path ASC`,
+					)
+					.all("default") as Array<{ source_path: string; updated_at: string }>,
+		);
+		// Each addSummary writes 2 files (summary + manifest), so 30 sessions = 60 files > batch size 50.
+		expect(afterFirst.length).toBeGreaterThan(50);
+
+		// Second reindex with no file changes should be a complete no-op
+		// if the cache was correctly updated for ALL items (including #50).
+		await Bun.sleep(5);
+		await reindexMemoryArtifacts("default");
+
+		const afterSecond = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_path, updated_at FROM memory_artifacts
+						 WHERE agent_id = ? AND session_id LIKE 'batch-staging-%'
+						 ORDER BY source_path ASC`,
+					)
+					.all("default") as Array<{ source_path: string; updated_at: string }>,
+		);
+
+		expect(afterSecond).toEqual(afterFirst);
+	});
+});
