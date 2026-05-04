@@ -132,8 +132,9 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 		const updated = {
 			...existing,
 			name: cleanName(input.name) ?? existing.name,
-			excludeGlobs: cleanExcludeGlobs(input.excludeGlobs) ??
-				existing.excludeGlobs ?? [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS],
+			excludeGlobs: input.excludeGlobs
+				? mergeDefaultObsidianExcludeGlobs(input.excludeGlobs)
+				: (existing.excludeGlobs ?? [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS]),
 			enabled: true,
 			updatedAt: now,
 		};
@@ -156,7 +157,7 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 		mode: "read-only",
 		createdAt: now,
 		updatedAt: now,
-		excludeGlobs: cleanExcludeGlobs(input.excludeGlobs) ?? [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS],
+		excludeGlobs: mergeDefaultObsidianExcludeGlobs(input.excludeGlobs),
 	};
 	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
 	return { ok: true, source, created: true };
@@ -256,6 +257,12 @@ function cleanExcludeGlobs(values: readonly string[] | undefined): readonly stri
 	if (!values) return null;
 	const cleaned = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 	return cleaned.length > 0 ? cleaned : [];
+}
+
+function mergeDefaultObsidianExcludeGlobs(values: readonly string[] | undefined): readonly string[] {
+	return [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS, ...(cleanExcludeGlobs(values) ?? [])].filter(
+		(value, index, all) => all.indexOf(value) === index,
+	);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -138,6 +138,7 @@ interface SourceStats {
 function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
 	if (source.kind !== "obsidian") return { artifacts: 0, chunks: 0, indexed: 0 };
 	const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
+	const chunkPrefix = `${source.id}:`;
 	try {
 		return getDbAccessor().withReadDb((db) => {
 			const artifacts = countRow(
@@ -150,9 +151,9 @@ function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
 			const chunks = countRow(
 				db
 					.prepare(
-						"SELECT COUNT(*) AS n FROM embeddings WHERE agent_id = ? AND source_type = 'source_obsidian_chunk' AND source_id = ?",
+						"SELECT COUNT(*) AS n FROM embeddings WHERE agent_id = ? AND source_type = 'source_obsidian_chunk' AND source_id >= ? AND source_id < ?",
 					)
-					.get(agentId, source.id),
+					.get(agentId, chunkPrefix, `${chunkPrefix}\uffff`),
 			);
 			return { artifacts, chunks, indexed: artifacts };
 		});

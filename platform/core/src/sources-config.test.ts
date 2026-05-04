@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
 	addObsidianSource,
 	getSourcesConfigPath,
 	loadSourcesConfig,
@@ -44,6 +45,18 @@ describe("sources-config", () => {
 		expect(config.sources).toHaveLength(1);
 		expect(config.sources[0]?.root).toBe(vault);
 		expect(JSON.parse(readFileSync(getSourcesConfigPath(agentsDir), "utf8")).sources[0].mode).toBe("read-only");
+	});
+
+	it("merges custom Obsidian excludes with default privacy excludes", () => {
+		const agentsDir = tmp();
+		const vault = join(agentsDir, "vault");
+		mkdirSync(vault, { recursive: true });
+
+		const result = addObsidianSource({ root: vault, excludeGlobs: ["private/**", "**/.obsidian/**"] }, agentsDir);
+
+		expect(result.ok).toBe(true);
+		if (result.ok === false) throw new Error(result.error);
+		expect(result.source.excludeGlobs).toEqual([...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS, "private/**"]);
 	});
 
 	it("updates an existing Obsidian source instead of duplicating it", () => {
