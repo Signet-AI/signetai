@@ -8,6 +8,67 @@ afterEach(() => {
 	console.log = prevLog;
 });
 
+describe("registerMemoryCommands remember", () => {
+	test("omits prospective recall hints when not provided", async () => {
+		let capturedBody: unknown;
+		const program = new Command();
+		registerMemoryCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, _path, body) => {
+				capturedBody = body;
+				return {
+					ok: true,
+					data: { id: "mem-1", embedded: true },
+				};
+			},
+		});
+
+		await program.parseAsync(["node", "test", "remember", "A memory without hints"]);
+
+		expect(capturedBody).toEqual({
+			content: "A memory without hints",
+			importance: 0.7,
+			who: "user",
+		});
+	});
+
+	test("forwards repeated prospective recall hints", async () => {
+		let capturedBody: unknown;
+		const program = new Command();
+		registerMemoryCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, _path, body) => {
+				capturedBody = body;
+				return {
+					ok: true,
+					data: { id: "mem-1", embedded: true },
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"remember",
+			"Avery said Signet recall works in the terminal",
+			"--hint",
+			"What did Avery say about Signet recall?",
+			"--hint",
+			"Can Signet recall be useful from the terminal?",
+		]);
+
+		expect(capturedBody).toEqual({
+			content: "Avery said Signet recall works in the terminal",
+			importance: 0.7,
+			who: "user",
+			hints: [
+				"What did Avery say about Signet recall?",
+				"Can Signet recall be useful from the terminal?",
+			],
+		});
+	});
+});
+
 describe("registerMemoryCommands recall", () => {
 	test("prints the full daemon response for --json", async () => {
 		const lines: string[] = [];

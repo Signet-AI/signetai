@@ -6,6 +6,18 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-03
+- Features: add read-only Obsidian knowledge sources.
+- Performance: enable threadedExtraction by default and fix build.
+- Docs: correct stale documentation claims.
+
+### 2026-05-02
+- Bug fixes: align exposed memory tools with harness guidance; sanitize generated hints; pass remember hints through; guide recall query shape.
+
+### 2026-05-01
+- Bug fixes: include Hermes plugin in signetai package; harden connector install and diagnostics.
+- Docs: correct stale documentation claims; add nyashkn contributor.
+
 ### 2026-04-30
 - Bug fixes: make prompt-submit embedding timeout configurable; apply is_deleted filter to BM25 FTS path.
 
@@ -23,18 +35,88 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: package extraction worker and test lifecycle; proxy analytics and telemetry from worker thread via IPC; reject startup promise on early worker exit and guard duplicate startPipeline; address 3 blocking review findings in extraction worker thread; bridge native harness memory artifacts; pair remote Signet MCP with lifecycle hooks.
 - Refactoring: make logger injectable in startWorker via LogSink interface.
 
-### 2026-04-24
-- Bug fixes: bundle install-graphiq.sh so graphiq install/update works; bound prompt-submit embedding latency; detect default install path; emit structured hook JSON.
-- Refactoring: replace brew/cargo install with shell script; add session auto-connect.
-
-### 2026-04-23
-- Features: add GraphIQ plugin management UI and daemon API; index native harness memories; unify LLM provider plumbing.
-
-### 2026-04-22
-- Features: add desktop source install command; add GraphIQ plugin integration.
-- Bug fixes: expose preload bridge reliably; proxy dashboard API to daemon; stage desktop AppImage replacement; bind install to configured workspace; write named-agent memory heads locally.
-
 ## Release Ledger
+
+## [0.110.1] - 2026-05-03
+
+Release summary: 1 performance improvement.
+Tag range: `v0.110.0..v0.110.1`.
+
+### Performance
+
+- **daemon**: enable threadedExtraction by default and fix build (#609)
+
+## [0.110.0] - 2026-05-03
+
+Release summary: 1 feature and 1 docs update.
+Tag range: `v0.109.22..v0.110.0`.
+
+### Features
+
+- **sources**: add read-only Obsidian knowledge sources (#623)
+
+### Docs
+
+- correct stale documentation claims (#622)
+
+## [0.109.22] - 2026-05-02
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.21..v0.109.22`.
+
+### Bug Fixes
+
+- **memory**: align exposed memory tools with harness guidance (#620)
+
+## [0.109.21] - 2026-05-02
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.20..v0.109.21`.
+
+### Bug Fixes
+
+- **memory**: sanitize generated hints (#619)
+
+## [0.109.20] - 2026-05-02
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.19..v0.109.20`.
+
+### Bug Fixes
+
+- **cli**: pass remember hints through (#618)
+
+## [0.109.19] - 2026-05-02
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.18..v0.109.19`.
+
+### Bug Fixes
+
+- **memory**: guide recall query shape (#617)
+
+## [0.109.18] - 2026-05-01
+
+Release summary: 1 bug fix.
+Tag range: `v0.109.17..v0.109.18`.
+
+### Bug Fixes
+
+- **publish**: include Hermes plugin in signetai package (#616)
+
+## [0.109.17] - 2026-05-01
+
+Release summary: 1 bug fix and 2 docs updates.
+Tag range: `v0.109.16..v0.109.17`.
+
+### Bug Fixes
+
+- **hermes-agent**: harden connector install and diagnostics (#614)
+
+### Docs
+
+- correct stale documentation claims (#610)
+- **readme**: add nyashkn contributor
 
 ## [0.109.16] - 2026-04-30
 

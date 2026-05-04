@@ -14,7 +14,7 @@ import type {
 } from "$lib/api";
 import { API_BASE, getConnectors, getContinuityLatest, getDiagnostics, getPipelineStatus } from "$lib/api";
 import AgentHeader from "$lib/components/home/AgentHeader.svelte";
-import MarketplaceSpotlights from "$lib/components/home/MarketplaceSpotlights.svelte";
+import KnowledgeBaseMap from "$lib/components/home/KnowledgeBaseMap.svelte";
 import PinnedEntityCluster from "$lib/components/home/PinnedEntityCluster.svelte";
 import PredictorSplitBar from "$lib/components/home/PredictorSplitBar.svelte";
 import SuggestedInsights from "$lib/components/home/SuggestedInsights.svelte";
@@ -73,7 +73,7 @@ onMount(async () => {
 		/>
 	</div>
 	<div class="area-spotlights">
-		<MarketplaceSpotlights />
+		<KnowledgeBaseMap />
 	</div>
 	<div class="area-insights">
 		<SuggestedInsights {memories} />

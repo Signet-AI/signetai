@@ -1,7 +1,8 @@
+import { join } from "node:path";
+import { diagnoseHermesIntegration } from "@signet/connector-hermes-agent";
 import { OpenClawConnector, type OpenClawRuntimeState } from "@signet/connector-openclaw";
 import { detectSchema, getMissingIdentityFiles, hasValidIdentity } from "@signet/core";
 import chalk from "chalk";
-import { join } from "node:path";
 import { daemonAccessLines } from "../lib/network.js";
 import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
@@ -283,7 +284,21 @@ export function getExtractionStatusNotice(
 	return null;
 }
 
-export async function showDoctor(options: { path?: string; json?: boolean }, deps: StatusDeps): Promise<void> {
+export async function showDoctor(
+	options: { path?: string; json?: boolean; target?: string },
+	deps: StatusDeps,
+): Promise<void> {
+	if (options.target === "hermes" || options.target === "hermes-agent") {
+		await showHermesDoctor(options);
+		return;
+	}
+
+	if (options.target) {
+		console.log(chalk.red(`Unknown doctor target: ${options.target}`));
+		console.log(chalk.dim("Supported targets: hermes"));
+		return;
+	}
+
 	const basePath = deps.normalizeAgentPath(deps.extractPathOption(options) ?? deps.agentsDir);
 	const report = await getStatusReport(basePath, deps);
 	const findings = getDoctorFindings(report);
@@ -318,6 +333,46 @@ export async function showDoctor(options: { path?: string; json?: boolean }, dep
 		console.log(chalk.yellow("  Signet can run, but there's a bit of duct tape showing."));
 	} else {
 		console.log(chalk.red("  Fix the errors above before trusting the CLI to behave."));
+	}
+	console.log();
+}
+
+async function showHermesDoctor(options: { json?: boolean }): Promise<void> {
+	const report = await diagnoseHermesIntegration();
+
+	if (options.json) {
+		console.log(JSON.stringify(report, null, 2));
+		return;
+	}
+
+	console.log(chalk.bold("  Hermes Doctor\n"));
+	console.log(chalk.dim(`  Hermes home: ${report.hermesHome}`));
+	console.log(chalk.dim(`  Hermes repo: ${report.hermesRepo ?? "not found"}`));
+	console.log();
+
+	for (const check of report.checks) {
+		const icon = check.ok ? chalk.green("✓") : chalk.red("✗");
+		console.log(`  ${icon} ${check.label}`);
+		console.log(chalk.dim(`    ${check.detail}`));
+		if (!check.ok && check.fix) {
+			console.log(chalk.dim(`    ${check.fix}`));
+		}
+	}
+
+	if (report.toolNames.length > 0) {
+		console.log();
+		console.log(chalk.dim(`  Tools: ${report.toolNames.join(", ")}`));
+	}
+
+	for (const warning of report.warnings) {
+		console.log(chalk.yellow(`  ⚠ ${warning}`));
+	}
+
+	console.log();
+	if (report.ok) {
+		console.log(chalk.green("  ✓ Hermes Signet integration is healthy"));
+	} else {
+		console.log(chalk.red("  Hermes Signet integration needs repair"));
 	}
 	console.log();
 }

@@ -193,7 +193,7 @@ const remainingCount = $derived(items.length - visibleCount);
 
 	.featured-kicker,
 	.featured-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
@@ -220,7 +220,7 @@ const remainingCount = $derived(items.length - visibleCount);
 		border: 1px dashed var(--sig-border);
 		border-radius: 6px;
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -238,7 +238,7 @@ const remainingCount = $derived(items.length - visibleCount);
 	.empty {
 		padding: var(--space-lg);
 		text-align: center;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 12px;
 		color: var(--sig-text-muted);
 	}

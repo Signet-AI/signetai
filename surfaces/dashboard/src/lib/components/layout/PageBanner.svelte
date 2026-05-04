@@ -89,7 +89,7 @@ let { title, children, right }: Props = $props();
 	/* Coordinate markers — tiny data labels at corners */
 	.banner-coord {
 		position: absolute;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 7px;
 		letter-spacing: 0.06em;
 		color: var(--sig-text-muted);

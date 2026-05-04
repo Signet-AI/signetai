@@ -1,0 +1,185 @@
+---
+title: "Sources"
+description: "Connect read-only knowledge bases like Obsidian vaults directly into Signet recall."
+order: 9
+section: "Core Concepts"
+---
+
+Sources
+=======
+
+Sources are external knowledge bases that Signet can read, index, and recall from without turning them into ordinary saved memories.
+
+The first Sources connector is **Obsidian**. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall.
+
+The important rule is simple: **the source stays canonical**. Signet reads from the vault. It does not edit notes, rewrite frontmatter, create files, or move anything inside the source directory.
+
+Why Sources exist
+-----------------
+
+Saved memories are durable facts that Signet owns. Sources are different: they are existing bodies of knowledge that already have their own structure and lifecycle.
+
+Use Sources when you want Signet to recall from:
+
+- an Obsidian vault;
+- a local folder of Markdown knowledge;
+- documentation or research notes that should stay under their original editor/workflow;
+- future cloud, code, or document connectors.
+
+A source hit is marked as source-backed recall, not as a native saved memory. Obsidian recall results include a canonical `source_path` so agents and tools can inspect the original file directly.
+
+Obsidian v1
+-----------
+
+Obsidian Sources v1 indexes Markdown files below a vault root:
+
+```bash
+signet sources add obsidian /path/to/ObsidianVault --name "Research Vault"
+signet sources list
+signet sources remove obsidian:...
+```
+
+The dashboard also includes a Sources browser for connecting and removing knowledge bases. In the desktop app, **Browse** opens the native folder picker. In browser/dev mode, Signet tries a daemon-backed OS picker and falls back to asking you to paste the path if no picker is available.
+
+Signet intentionally skips vault metadata and local agent scratch space:
+
+- `.obsidian/`
+- `.trash/`
+- `.hermes/`
+
+What gets indexed
+-----------------
+
+A connected Obsidian vault is represented at several layers.
+
+### 1. Source artifacts
+
+Each Markdown file is indexed as a read-only source artifact:
+
+- `harness = "obsidian"`
+- `source_kind = "source_obsidian_markdown"`
+- `source_path = /absolute/path/to/file.md`
+
+This gives Signet fast lexical recall and preserves exact file provenance.
+
+### 2. Source-native graph
+
+Signet mounts the vault's shape into the graph instead of flattening it into a bag of notes:
+
+| Obsidian structure | Signet graph representation |
+|--------------------|-----------------------------|
+| Vault root | source / knowledge-base root entity |
+| Folder | source folder entity and community/group |
+| Markdown file | source document entity |
+| Wiki link / backlink | source-owned dependency/relationship |
+| Heading | aspect |
+| Paragraph or durable block | attribute / claim |
+
+The physical vault hierarchy is the primary topology. Semantic enrichment attaches to that topology; it does not replace it.
+
+Source-owned graph rows carry provenance columns where available:
+
+- `source_id`
+- `source_kind`
+- `source_path`
+- `source_root`
+
+### 3. Source chunks and embeddings
+
+Markdown files are also chunked by heading/section for semantic recall. These chunks are retrieval views, not saved memories.
+
+Source chunk embeddings use:
+
+- `source_type = "source_obsidian_chunk"`
+- stable source-owned chunk IDs;
+- chunk text that includes provenance (`source_id`, `source_path`, vault-relative path, heading, and line range);
+- sqlite-vec mirroring when the vector extension is available, with a daemon-side cosine fallback when it is not.
+
+This means a recall can return either a whole source artifact or a tighter source chunk. Both remain clearly marked as Obsidian/source-backed hits.
+
+Recall behavior
+---------------
+
+When you recall against Signet, Obsidian source results can appear alongside native memories. Source hits are labeled so callers can tell them apart:
+
+```json
+{
+  "source": "source_obsidian",
+  "type": "source_obsidian_chunk",
+  "source_path": "/path/to/vault/permanent/Idea.md"
+}
+```
+
+For whole-file artifact hits, the content includes a visible header like:
+
+```text
+[Obsidian vault note: /path/to/vault/permanent/Idea.md]
+```
+
+Agents should treat `source_path` as the canonical inspection handle. If a task requires exact context, read the source file rather than guessing from the recall snippet.
+
+Updating in place
+-----------------
+
+Connected knowledge bases update in place. When files change, the daemon re-reads the source and refreshes Signet-owned artifacts, graph rows, and chunks.
+
+The watcher path is deliberately conservative:
+
+- source config is refreshed dynamically so newly connected/disconnected sources are picked up;
+- scans are single-flight to avoid overlapping source-wide reindex storms;
+- overlapping sync requests are coalesced into one trailing resync;
+- content fingerprints prevent unchanged files from being reprocessed;
+- removed files are soft-deleted from source artifacts and have their source-owned chunks purged;
+- disconnected sources stop participating in future configured-source scans.
+
+The v1 safety model is deliberately conservative rather than a general-purpose queue. It serializes source-wide scans with single-flight state and collapses overlapping requests into one trailing resync. It does not expose tunable queue depth or backpressure settings yet.
+
+Renames are treated as delete + add in v1. That keeps the lifecycle safe and predictable.
+
+Removing a source
+-----------------
+
+Removing a source is symmetrical with connecting it:
+
+1. remove the source config;
+2. purge Signet-owned source artifacts;
+3. purge source-owned graph rows;
+4. purge source chunk embeddings and sqlite-vec mirror rows when available;
+5. leave source files untouched.
+
+From the dashboard and daemon API, removal performs the full purge. From the CLI, `signet sources remove <sourceId>` tries the daemon first. If the daemon is unavailable, the CLI falls back to local config-only removal and prints an explicit warning that already indexed database rows were not purged.
+
+API surface
+-----------
+
+The daemon exposes the Sources lifecycle under `/api/sources`:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/sources` | List configured sources. |
+| `POST` | `/api/sources/obsidian` | Add/update an Obsidian vault source and index it. |
+| `DELETE` | `/api/sources/:sourceId` | Remove a source config and purge Signet-owned source rows. |
+| `POST` | `/api/sources/pick-directory` | Development/browser fallback for choosing a local directory. |
+
+The desktop shell uses native folder selection through IPC. The daemon picker route is best-effort and may return `501` on systems without `zenity`, `kdialog`, `osascript`, or a configured `SIGNET_DIRECTORY_PICKER`.
+
+Limitations in v1
+-----------------
+
+- Obsidian is the first supported source connector.
+- Sources are local/operator-managed. Permissions and RBAC are intentionally out of scope for v1.
+- Signet does not write back to Obsidian.
+- Rename handling is delete + add.
+- Non-Markdown Obsidian attachments are not indexed by the Obsidian v1 source path.
+
+Operational safety
+------------------
+
+Sources are designed to be easy to remove and safe to experiment with:
+
+- source files are never deleted or modified by Signet;
+- source-owned database rows carry provenance so they can be purged by source;
+- source recall is visibly distinct from saved memory recall;
+- chunk embeddings are source-owned retrieval views and can be rebuilt from the vault at any time.
+
+If in doubt, remove the source and reconnect it. The vault remains the source of truth.

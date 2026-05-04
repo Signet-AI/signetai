@@ -278,7 +278,7 @@ onDestroy(() => {
 	}
 
 	.widget-loading-text {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		text-transform: uppercase;

@@ -112,7 +112,7 @@ const idle = `${btn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var
 	}
 
 	.tab-header-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		text-transform: uppercase;
@@ -152,7 +152,7 @@ const idle = `${btn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var
 		align-items: center;
 		justify-content: center;
 		flex: 1;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-muted);
 		text-transform: uppercase;
@@ -164,7 +164,7 @@ const idle = `${btn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var
 		align-items: center;
 		justify-content: center;
 		flex: 1;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-danger);
 	}

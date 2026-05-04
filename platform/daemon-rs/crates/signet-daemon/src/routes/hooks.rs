@@ -113,8 +113,8 @@ You have persistent memory managed by Signet.\n\
 \n\
 Memory Check Loop:\n\
 - when to use: before commands, file edits, architectural choices, bug fixes, continuation work, user-preference-sensitive answers, or anything that may depend on prior decisions\n\
-- procedure: check injected context first, then run 1-3 targeted recalls with mcp__signet__memory_search; expand session lineage with mcp__signet__lcm_expand or known entities with mcp__signet__knowledge_expand and mcp__signet__knowledge_expand_session when needed\n\
-- pitfalls: do not treat a missing automatic memory match as proof no prior context exists; do not trust memory blindly when repo, files, or live system state can verify it; do not spam broad recalls for trivial self-contained prompts\n\
+- procedure: check injected context first, then run 1-3 targeted recalls with mcp__signet__memory_search; shape recall queries as natural questions with an entity, event, and timeframe when possible; expand session lineage with mcp__signet__lcm_expand or known entities with mcp__signet__knowledge_expand and mcp__signet__knowledge_expand_session when needed\n\
+- pitfalls: avoid bag-of-keywords queries; do not treat a missing automatic memory match as proof no prior context exists; do not trust memory blindly when repo, files, or live system state can verify it; do not spam broad recalls for trivial self-contained prompts; treat graph expansion as supporting context, not proof\n\
 - verification: before acting, know what context you found, what remains unknown, and whether it is safe to proceed\n\
 \n\
 Memory tools:\n\
@@ -815,7 +815,7 @@ fn build_prompt_recall_inject(metadata_header: &str, sources: &[String]) -> Stri
         String::new(),
         "## Memory Check".to_string(),
         String::new(),
-        "Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with /recall or memory_search, then expand with lcm_expand or knowledge_expand when needed."
+        "Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with /recall or memory_search. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Expand with lcm_expand or knowledge_expand only when you need deeper lineage or graph context. Treat graph expansion as supporting context, not proof."
             .to_string(),
         String::new(),
         "## Relevant Memory".to_string(),
@@ -834,7 +834,7 @@ fn build_prompt_recall_inject(metadata_header: &str, sources: &[String]) -> Stri
 
 fn build_no_strong_memory_match_inject(metadata_header: &str) -> String {
     format!(
-        "{}\n\n## Memory Check\n\nNo strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions.\n\nIf you learn something durable, save it with /remember or memory_store.\n",
+        "{}\n\n## Memory Check\n\nNo strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.\n\nIf you learn something durable, save it with /remember or memory_store.\n",
         metadata_header.trim_end()
     )
 }

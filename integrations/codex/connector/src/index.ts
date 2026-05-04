@@ -13,16 +13,6 @@ type SignetMcpConfig =
 	| { readonly command: string; readonly args: readonly string[] }
 	| { readonly url: string; readonly startupTimeoutSec: number; readonly toolTimeoutSec: number };
 
-const CODEX_DISABLED_MCP_TOOLS = [
-	"memory_search",
-	"memory_store",
-	"memory_get",
-	"memory_list",
-	"memory_modify",
-	"memory_forget",
-	"memory_feedback",
-] as const;
-
 // ---------------------------------------------------------------------------
 // Signet command resolution
 // ---------------------------------------------------------------------------
@@ -316,7 +306,6 @@ export function buildMcpBlock(mcp: SignetMcpConfig): string {
 			`url = ${tomlQuote(mcp.url)}`,
 			`startup_timeout_sec = ${mcp.startupTimeoutSec}`,
 			`tool_timeout_sec = ${mcp.toolTimeoutSec}`,
-			`disabled_tools = ${tomlInlineArray(CODEX_DISABLED_MCP_TOOLS)}`,
 			"",
 		].join("\n");
 	}
@@ -324,7 +313,6 @@ export function buildMcpBlock(mcp: SignetMcpConfig): string {
 	if (mcp.args.length > 0) {
 		block += `args = ${tomlInlineArray(mcp.args)}\n`;
 	}
-	block += `disabled_tools = ${tomlInlineArray(CODEX_DISABLED_MCP_TOOLS)}\n`;
 	return block;
 }
 

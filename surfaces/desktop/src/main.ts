@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { extname, normalize, relative, sep } from "node:path";
-import { BrowserWindow, Menu, app, ipcMain, protocol, shell } from "electron";
+import { BrowserWindow, Menu, type OpenDialogOptions, app, dialog, ipcMain, protocol, shell } from "electron";
 import { DaemonManager } from "./daemon-manager.js";
 import { dashboardRoot, preloadPath } from "./paths.js";
 import { daemonRouteTarget, isDaemonRouteUrl } from "./protocol-routes.js";
@@ -267,6 +267,16 @@ async function searchMemories(query: string, limit?: number): Promise<string> {
 	return response.text();
 }
 
+async function pickDirectory(options?: { title?: string }): Promise<string | null> {
+	const win = focusedWindow();
+	const dialogOptions: OpenDialogOptions = {
+		title: options?.title ?? "Choose folder",
+		properties: ["openDirectory"],
+	};
+	const result = win ? await dialog.showOpenDialog(win, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+	return result.canceled ? null : (result.filePaths[0] ?? null);
+}
+
 function registerIpc(): void {
 	ipcMain.handle("desktop:minimize", () => focusedWindow()?.minimize());
 	ipcMain.handle("desktop:toggleMaximize", () => {
@@ -293,6 +303,7 @@ function registerIpc(): void {
 	ipcMain.handle("desktop:openDashboard", () => showDashboard());
 	ipcMain.handle("desktop:quickCapture", (_event, content: string) => quickCapture(content));
 	ipcMain.handle("desktop:searchMemories", (_event, query: string, limit?: number) => searchMemories(query, limit));
+	ipcMain.handle("desktop:pickDirectory", (_event, options?: { title?: string }) => pickDirectory(options));
 	ipcMain.handle("desktop:checkForUpdate", () => null);
 	ipcMain.handle("desktop:quit", () => app.quit());
 }

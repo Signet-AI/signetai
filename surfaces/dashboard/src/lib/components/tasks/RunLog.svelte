@@ -111,17 +111,17 @@ $effect(() => {
 						{run.status}
 					</Badge>
 					{#if run.exit_code !== null}
-						<span class="text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+						<span class="text-[10px] font-mono text-[var(--sig-text-muted)]">
 							exit {run.exit_code}
 						</span>
 					{/if}
 				</div>
-				<span class="text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-text-muted)]">
+				<span class="text-[10px] font-mono text-[var(--sig-text-muted)]">
 					{formatDuration(run.started_at, run.completed_at)}
 				</span>
 			</div>
 
-			<div class="text-[10px] text-[var(--sig-text-muted)] font-[family-name:var(--font-mono)]">
+			<div class="text-[10px] text-[var(--sig-text-muted)] font-mono">
 				{formatDate(run.started_at)}
 			</div>
 
@@ -139,7 +139,7 @@ $effect(() => {
 						bind:this={termRef}
 						class="mt-2 bg-[var(--sig-bg)] border border-[var(--sig-border)]
 							rounded max-h-[280px] overflow-y-auto
-							font-[family-name:var(--font-mono)] text-[10px] leading-[1.55]
+							font-mono text-[10px] leading-[1.55]
 							text-[var(--sig-text)] p-2.5"
 						role="log"
 					>

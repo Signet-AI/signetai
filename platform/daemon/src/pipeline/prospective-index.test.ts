@@ -198,6 +198,28 @@ function cotNoiseProvider(): LlmProvider {
 	};
 }
 
+/** Response containing prompt scaffolding that can look query-shaped. */
+function promptResidueProvider(): LlmProvider {
+	return {
+		name: "mock-prompt-residue",
+		async generate() {
+			return [
+				"Who requested: Jake",
+				"When: Apr 27",
+				"However, the problem says: 5 diverse questions or cues",
+				"But note: the fact says Jake requested this on Apr 27",
+				"Alternatively, ask about the connection",
+				"We need to be diverse and avoid repeating the same type.",
+				"When did Jake switch the iMessage agent model from GLM 5.1 to gpt-5.5?",
+				"What model did Jake request for the iMessage agent on Apr 27?",
+			].join("\n");
+		},
+		async available() {
+			return true;
+		},
+	};
+}
+
 /** Numbered list output (common LLM format). */
 function numberedProvider(): LlmProvider {
 	return {
@@ -299,6 +321,19 @@ describe("prospective-index", () => {
 				expect(h).not.toContain("Make sure");
 				expect(h).not.toContain("Now for");
 			}
+		});
+
+		it("rejects prompt residue and generic label cues", async () => {
+			const hints = await generateHints(
+				promptResidueProvider(),
+				"Jake switched the iMessage agent model from GLM 5.1 to gpt-5.5 on Apr 27.",
+				HINTS_CFG,
+			);
+
+			expect(hints).toEqual([
+				"When did Jake switch the iMessage agent model from GLM 5.1 to gpt-5.5?",
+				"What model did Jake request for the iMessage agent on Apr 27?",
+			]);
 		});
 
 		it("strips numbering and bullet prefixes", async () => {

@@ -231,7 +231,7 @@ const ModeIcon = $derived(titlebar.mode === "macos" ? AppWindowMac : titlebar.mo
 		-webkit-user-select: none;
 		flex-shrink: 0;
 		z-index: 9999;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 	}
 
 	.titlebar__logo {

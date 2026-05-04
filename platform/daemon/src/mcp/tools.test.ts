@@ -642,6 +642,18 @@ describe("createMcpServer", () => {
 	});
 
 	describe("memory_store", () => {
+		it("requires agent-provided prospective hints", () => {
+			const schema = getRegisteredTools(server).memory_store.inputSchema as unknown as {
+				safeParse: (value: unknown) => { success: boolean };
+			};
+
+			expect(schema.safeParse({ content: "Remember this fact" }).success).toBe(false);
+			expect(schema.safeParse({ content: "Remember this fact", hints: [] }).success).toBe(false);
+			expect(schema.safeParse({ content: "Remember this fact", hints: ["What fact should be remembered?"] }).success).toBe(
+				true,
+			);
+		});
+
 		it("calls remember endpoint", async () => {
 			const cap: { body?: string } = {};
 			mockFetch(200, { id: "abc-123", deduped: false }, cap);
@@ -649,6 +661,7 @@ describe("createMcpServer", () => {
 			const result = await callTool(server, "memory_store", {
 				content: "Remember this fact",
 				importance: 0.8,
+				hints: ["What fact should be remembered?"],
 			});
 
 			const body = JSON.parse(cap.body ?? "{}");
@@ -664,6 +677,7 @@ describe("createMcpServer", () => {
 			await callTool(server, "memory_store", {
 				content: "tagged memory",
 				tags: "foo,bar",
+				hints: ["How should tagged memory be found?"],
 			});
 
 			const body = JSON.parse(cap.body ?? "{}");
@@ -678,6 +692,7 @@ describe("createMcpServer", () => {
 			await callTool(server, "memory_store", {
 				content: "critical constraint",
 				pinned: true,
+				hints: ["What critical constraint was pinned?"],
 			});
 
 			const body = JSON.parse(cap.body ?? "{}");
@@ -726,6 +741,7 @@ describe("createMcpServer", () => {
 
 			await callTool(server, "memory_store", {
 				content: "Legacy structured tuple.",
+				hints: ["What legacy structured tuple was stored?"],
 				structured: {
 					aspects: [
 						{

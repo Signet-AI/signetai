@@ -189,7 +189,7 @@ const allApps = $derived([...dockApps, ...trayApps]);
 	}
 
 	.dock-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		color: var(--sig-text-muted);
 		text-transform: uppercase;
@@ -268,7 +268,7 @@ const allApps = $derived([...dockApps, ...trayApps]);
 		background: transparent;
 		color: var(--sig-text-muted);
 		cursor: pointer;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		transition: all var(--dur) var(--ease);
 	}
@@ -280,7 +280,7 @@ const allApps = $derived([...dockApps, ...trayApps]);
 	}
 
 	.dock-add-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;

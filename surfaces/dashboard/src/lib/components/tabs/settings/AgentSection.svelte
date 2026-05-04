@@ -81,7 +81,7 @@ function handleAddCustom(): void {
 		display: flex;
 		align-items: center;
 		gap: var(--space-sm);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text);
 		cursor: pointer;
@@ -105,7 +105,7 @@ function handleAddCustom(): void {
 	}
 
 	.add-btn {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		letter-spacing: 0.04em;
 		text-transform: uppercase;

@@ -204,7 +204,7 @@ async function submitReview(): Promise<void> {
 						<Button
 							variant="outline"
 							size="sm"
-							class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
+							class="rounded-lg font-mono text-[10px] uppercase tracking-[0.08em] border-[var(--sig-danger)] text-[var(--sig-danger)] hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)]"
 							onclick={() => item.serverId && onuninstall?.(item.serverId)}
 							disabled={removeBusy}
 						>
@@ -214,7 +214,7 @@ async function submitReview(): Promise<void> {
 						<Button
 							variant="outline"
 							size="sm"
-							class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
+							class="rounded-lg font-mono text-[10px] uppercase tracking-[0.08em] border-[var(--sig-text-bright)] text-[var(--sig-text-bright)] hover:bg-[var(--sig-text-bright)] hover:text-[var(--sig-bg)]"
 							onclick={() => item.catalogEntry && oninstall?.(item.catalogEntry)}
 							disabled={installBusy}
 						>
@@ -224,7 +224,7 @@ async function submitReview(): Promise<void> {
 						<Button
 							variant="outline"
 							size="sm"
-							class="rounded-lg font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]"
+							class="rounded-lg font-mono text-[10px] uppercase tracking-[0.08em] border-[var(--sig-border-strong)] text-[var(--sig-text-muted)]"
 							disabled={true}
 							title="MCP installs are temporarily disabled"
 						>
@@ -377,7 +377,7 @@ async function submitReview(): Promise<void> {
 
 	.detail-badge,
 	.detail-rank {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -412,14 +412,14 @@ async function submitReview(): Promise<void> {
 	.review-meta,
 	.review-body {
 		margin: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		line-height: 1.45;
 		color: var(--sig-text-muted);
 	}
 
 	.detail-link {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-accent);
 		text-decoration: none;
@@ -477,7 +477,7 @@ async function submitReview(): Promise<void> {
 		border: 1px solid var(--sig-border);
 		background: var(--sig-surface-raised);
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -502,7 +502,7 @@ async function submitReview(): Promise<void> {
 
 	:global(.review-input),
 	:global(.review-textarea) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 	}
 
@@ -515,7 +515,7 @@ async function submitReview(): Promise<void> {
 	:global(.review-rating) {
 		height: 32px;
 		padding: 0 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		background: var(--sig-surface);
 		border: 1px solid var(--sig-border-strong);
@@ -529,7 +529,7 @@ async function submitReview(): Promise<void> {
 	}
 
 	:global(.review-rating-item) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 	}
 
@@ -541,7 +541,7 @@ async function submitReview(): Promise<void> {
 	}
 
 	.review-gate {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		line-height: 1.4;
 		color: var(--sig-text-muted);
@@ -553,7 +553,7 @@ async function submitReview(): Promise<void> {
 
 	:global(.review-submit) {
 		height: 30px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;

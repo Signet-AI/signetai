@@ -122,7 +122,7 @@ $effect(() => {
 	}
 
 	.tab-header-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);
@@ -143,7 +143,7 @@ $effect(() => {
 	:global(.tab-switch) {
 		height: auto;
 		padding: 4px 10px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;

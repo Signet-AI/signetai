@@ -128,7 +128,7 @@ const generating = $derived.by(() => {
 	}
 
 	.widget-title {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		font-weight: 600;
 		color: var(--sig-text-bright);
@@ -187,7 +187,7 @@ const generating = $derived.by(() => {
 	}
 
 	.widget-generating-text {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-muted);
 		text-transform: uppercase;

@@ -85,7 +85,7 @@ async function refresh(): Promise<void> {
 						<Button
 							variant="outline"
 							size="sm"
-							class="h-auto rounded-md font-[family-name:var(--font-mono)] text-[9px] uppercase tracking-[0.08em] px-2 py-0.5 border-[var(--sig-border)] text-[var(--sig-text-muted)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)]"
+							class="h-auto rounded-md font-mono text-[9px] uppercase tracking-[0.08em] px-2 py-0.5 border-[var(--sig-border)] text-[var(--sig-text-muted)] transition-all duration-150 hover:bg-[var(--sig-danger)] hover:text-[var(--sig-text-bright)] hover:border-[var(--sig-danger)]"
 							onclick={(e: MouseEvent) => {
 								e.stopPropagation();
 								void removeMarketplaceMcpServer(server.id);
@@ -125,7 +125,7 @@ async function refresh(): Promise<void> {
 	}
 
 	.apps-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		background: var(--sig-surface);
@@ -159,7 +159,7 @@ async function refresh(): Promise<void> {
 		align-items: center;
 		justify-content: center;
 		flex: 1;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -227,7 +227,7 @@ async function refresh(): Promise<void> {
 		border-radius: 8px;
 		display: grid;
 		place-items: center;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		font-weight: 700;
 		letter-spacing: 0.06em;
@@ -262,7 +262,7 @@ async function refresh(): Promise<void> {
 	}
 
 	.app-desc {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		line-height: 1.45;
 		color: var(--sig-text-muted);
@@ -279,7 +279,7 @@ async function refresh(): Promise<void> {
 	}
 
 	.app-badge {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;

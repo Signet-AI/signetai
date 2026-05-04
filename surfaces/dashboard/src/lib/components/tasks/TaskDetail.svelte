@@ -87,7 +87,7 @@ function handleDelete() {
 					<div class="text-[11px] text-[var(--sig-text)] leading-[1.6]
 						bg-[var(--sig-surface-raised)] p-3 rounded
 						border border-[var(--sig-border)]
-						font-[family-name:var(--font-mono)]
+						font-mono
 						whitespace-pre-wrap">
 						{task.prompt}
 					</div>
@@ -95,7 +95,7 @@ function handleDelete() {
 					<div
 						class="grid grid-cols-2 gap-2 text-[10px]
 							text-[var(--sig-text-muted)]
-							font-[family-name:var(--font-mono)]"
+							font-mono"
 					>
 						<div>
 							<span class="text-[var(--sig-text-muted)]">Next run:</span>
@@ -174,14 +174,14 @@ function handleDelete() {
 						<span
 							class="text-[10px] font-bold uppercase tracking-[0.1em]
 							text-[var(--sig-text-muted)]
-							font-[family-name:var(--font-display)]"
+							font-display"
 						>
 							Run History ({runs.length})
 						</span>
 						{#if liveConnected}
 							<span
 								class="text-[9px] text-[var(--sig-success)]
-									font-[family-name:var(--font-mono)]"
+									font-mono"
 							>
 								Live
 							</span>

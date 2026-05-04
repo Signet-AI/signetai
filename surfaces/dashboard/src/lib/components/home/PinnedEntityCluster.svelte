@@ -141,7 +141,7 @@ function importanceColor(imp: number): string {
 	}
 
 	.panel-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);
@@ -160,7 +160,7 @@ function importanceColor(imp: number): string {
 	}
 
 	.panel-link {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.08em;
 		color: var(--sig-accent);
@@ -186,7 +186,7 @@ function importanceColor(imp: number): string {
 		align-items: center;
 		gap: 6px;
 		padding: 3px var(--space-md);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		transition: background var(--dur) var(--ease);
 	}
@@ -235,7 +235,7 @@ function importanceColor(imp: number): string {
 		justify-content: center;
 		gap: var(--space-sm);
 		height: 100%;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.08em;
 		color: var(--sig-text-muted);

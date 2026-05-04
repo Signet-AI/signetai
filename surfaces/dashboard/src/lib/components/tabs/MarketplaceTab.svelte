@@ -1083,7 +1083,7 @@ $effect(() => {
 	}
 
 	.tab-header-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);
@@ -1106,7 +1106,7 @@ $effect(() => {
 		background: transparent;
 		border: 1px solid var(--sig-border);
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.06em;
 		cursor: pointer;
@@ -1143,7 +1143,7 @@ $effect(() => {
 	:global(.section-select) {
 		height: 28px;
 		padding: 0 10px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-bright);
 		background: var(--sig-surface);
@@ -1172,7 +1172,7 @@ $effect(() => {
 	}
 
 	:global(.section-select-item) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 	}
 
@@ -1220,7 +1220,7 @@ $effect(() => {
 
 	.module-subtitle {
 		margin-top: 2px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
@@ -1249,7 +1249,7 @@ $effect(() => {
 		height: 22px;
 		min-height: 22px;
 		padding: 0 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
@@ -1263,7 +1263,7 @@ $effect(() => {
 
 	:global(.view-tab) {
 		height: 28px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -1352,7 +1352,7 @@ $effect(() => {
 		height: 28px;
 		width: 100%;
 		padding: 0 8px;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -1380,7 +1380,7 @@ $effect(() => {
 
 	:global(.rail-btn) {
 		justify-content: flex-start;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		height: 28px;
 		transition: border-color 0.15s, outline-color 0.15s;
@@ -1396,14 +1396,14 @@ $effect(() => {
 	}
 
 	.muted {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
 
 	.toggle-row span,
 	.error {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 	}
 

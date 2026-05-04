@@ -16,6 +16,7 @@ export type SidebarFocusItem =
 	| "audit"
 	| "secrets"
 	| "skills"
+	| "sources"
 	| "settings"
 	| "theme-toggle"
 	| "github-link";
@@ -23,17 +24,29 @@ export type SidebarFocusItem =
 /**
  * Sidebar navigation order for arrow key cycling
  */
-export const SIDEBAR_ORDER: readonly SidebarFocusItem[] = [
+export const DEFAULT_SIDEBAR_ORDER: readonly SidebarFocusItem[] = [
 	"home",
 	"memory",
 	"tasks",
 	"audit",
 	"secrets",
 	"skills",
+	"sources",
 	"settings",
 	"theme-toggle",
 	"github-link",
 ] as const;
+
+export const SIDEBAR_ORDER = DEFAULT_SIDEBAR_ORDER;
+
+export const sidebarOrder = $state({
+	items: [...DEFAULT_SIDEBAR_ORDER] as SidebarFocusItem[],
+});
+
+export function setSidebarNavigationOrder(primaryItems: readonly SidebarFocusItem[]): void {
+	const footerItems = DEFAULT_SIDEBAR_ORDER.filter((item) => !primaryItems.includes(item));
+	sidebarOrder.items = [...primaryItems, ...footerItems];
+}
 
 /**
  * Map active tab to corresponding sidebar item
@@ -54,6 +67,7 @@ function tabToSidebarItem(tab: string): SidebarFocusItem {
 		case "home":
 		case "secrets":
 		case "skills":
+		case "sources":
 			return tab;
 		case "changelog":
 			return "github-link";
@@ -96,6 +110,7 @@ function sidebarItemToTab(item: SidebarFocusItem): TabId | null {
 		case "home":
 		case "secrets":
 		case "skills":
+		case "sources":
 			return item;
 	}
 }
@@ -165,16 +180,16 @@ export function focusFirstPageElement(): void {
  * Navigate to next sidebar item
  */
 export function navigateSidebarNext(): void {
-	const currentIndex = focus.sidebarItem ? SIDEBAR_ORDER.indexOf(focus.sidebarItem) : -1;
-	const nextIndex = (currentIndex + 1) % SIDEBAR_ORDER.length;
-	setSidebarItem(SIDEBAR_ORDER[nextIndex]);
+	const currentIndex = focus.sidebarItem ? sidebarOrder.items.indexOf(focus.sidebarItem) : -1;
+	const nextIndex = (currentIndex + 1) % sidebarOrder.items.length;
+	setSidebarItem(sidebarOrder.items[nextIndex]);
 }
 
 /**
  * Navigate to previous sidebar item
  */
 export function navigateSidebarPrev(): void {
-	const currentIndex = focus.sidebarItem ? SIDEBAR_ORDER.indexOf(focus.sidebarItem) : 0;
-	const prevIndex = currentIndex <= 0 ? SIDEBAR_ORDER.length - 1 : currentIndex - 1;
-	setSidebarItem(SIDEBAR_ORDER[prevIndex]);
+	const currentIndex = focus.sidebarItem ? sidebarOrder.items.indexOf(focus.sidebarItem) : 0;
+	const prevIndex = currentIndex <= 0 ? sidebarOrder.items.length - 1 : currentIndex - 1;
+	setSidebarItem(sidebarOrder.items[prevIndex]);
 }

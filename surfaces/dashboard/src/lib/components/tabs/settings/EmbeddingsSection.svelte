@@ -6,10 +6,10 @@ import * as Select from "$lib/components/ui/select/index.js";
 import { st } from "$lib/stores/settings.svelte";
 
 const selectTriggerClass =
-	"font-[family-name:var(--font-mono)] text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
+	"font-mono text-[11px] text-[var(--sig-text)] bg-[var(--sig-bg)] border-[var(--sig-border-strong)] rounded-lg w-full h-auto min-h-[30px] px-2 py-[5px] box-border focus-visible:border-[var(--sig-accent)]";
 const selectContentClass =
-	"font-[family-name:var(--font-mono)] text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-lg";
-const selectItemClass = "font-[family-name:var(--font-mono)] text-[11px] rounded-lg";
+	"font-mono text-[11px] bg-[var(--sig-bg)] text-[var(--sig-text)] border-[var(--sig-border-strong)] rounded-lg";
+const selectItemClass = "font-mono text-[11px] rounded-lg";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 const DEFAULT_LLAMACPP_BASE_URL = "http://localhost:8080";
@@ -140,7 +140,7 @@ function handleModelPresetChange(v: string | undefined): void {
 		</FormField>
 
 		{#if embeddingProvider() && embeddingProvider() !== "none"}
-			<div class="flex items-center gap-2 px-3 py-2 text-[10px] font-[family-name:var(--font-mono)] text-[var(--sig-warning,#d4a017)] bg-[color-mix(in_srgb,var(--sig-warning,#d4a017)_10%,transparent)] border border-[var(--sig-warning,#d4a017)]">
+			<div class="flex items-center gap-2 px-3 py-2 text-[10px] font-mono text-[var(--sig-warning,#d4a017)] bg-[color-mix(in_srgb,var(--sig-warning,#d4a017)_10%,transparent)] border border-[var(--sig-warning,#d4a017)]">
 				(!) Changing provider or model will re-embed your entire memory database
 			</div>
 

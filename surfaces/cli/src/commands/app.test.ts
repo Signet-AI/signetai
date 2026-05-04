@@ -24,4 +24,26 @@ describe("registerAppCommands", () => {
 
 		expect(calls).toEqual([[]]);
 	});
+
+	test("routes doctor target into doctor options", async () => {
+		const calls: unknown[] = [];
+		const program = new Command();
+
+		registerAppCommands(program, {
+			collectListOption: (value, previous) => [...previous, value],
+			configureAgent: async () => {},
+			launchDashboard: async () => {},
+			migrateSchema: async () => {},
+			setupWizard: async () => {},
+			showDoctor: async (options) => {
+				calls.push(options);
+			},
+			showStatus: async () => {},
+			syncTemplates: async () => {},
+		});
+
+		await program.parseAsync(["node", "test", "doctor", "hermes", "--json"]);
+
+		expect(calls).toEqual([{ json: true, target: "hermes" }]);
+	});
 });

@@ -99,7 +99,7 @@ function verifiedLabel(item: SkillSearchResult): string {
 
 	.clear-btn,
 	.row-remove {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
@@ -123,7 +123,7 @@ function verifiedLabel(item: SkillSearchResult): string {
 	.compare-table {
 		width: 100%;
 		border-collapse: collapse;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text);
 	}

@@ -94,7 +94,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[mcp_servers.signet]");
 		expect(content).toContain("command = 'signet-mcp'");
-		expect(content).toContain("disabled_tools = ['memory_search'");
+		expect(content).not.toContain("disabled_tools");
 		// Must not be an array — Codex's Rust parser expects Option<String>
 		expect(content).not.toContain("command = [");
 	});
@@ -126,6 +126,33 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain("enabled = true");
 		expect(content).toContain("command = 'signet-mcp'");
 		expect(content).not.toContain("command = [");
+	});
+
+	test("removes stale disabled_tools from existing signet entry on re-install", async () => {
+		writeFileSync(
+			configPath,
+			[
+				"[model]",
+				'name = "gpt-4o"',
+				"",
+				"# Signet MCP server",
+				"[mcp_servers.signet]",
+				"command = 'signet-mcp'",
+				"disabled_tools = ['memory_search', 'memory_store']",
+				"",
+				"[history]",
+				"enabled = true",
+				"",
+			].join("\n"),
+		);
+
+		await connector().install(tempHome);
+
+		const content = readFileSync(configPath, "utf-8");
+		expect(content).toContain("[model]");
+		expect(content).toContain("[history]");
+		expect(content).toContain("command = 'signet-mcp'");
+		expect(content).not.toContain("disabled_tools");
 	});
 
 	test("appends section when config exists but has no signet entry", async () => {
@@ -168,7 +195,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain("url = 'http://192.168.0.60:3850/mcp'");
 		expect(content).toContain("startup_timeout_sec = 10");
 		expect(content).toContain("tool_timeout_sec = 30");
-		expect(content).toContain("disabled_tools = ['memory_search'");
+		expect(content).not.toContain("disabled_tools");
 		expect(content).not.toContain("command = 'signet-mcp'");
 	});
 
@@ -267,11 +294,11 @@ describe("buildMcpBlock — TOML quoting", () => {
 	test("produces string command, not array", () => {
 		const block = buildMcpBlock({ command: "signet-mcp", args: [] });
 		expect(block).toContain("command = 'signet-mcp'");
-		expect(block).toContain("disabled_tools = ['memory_search'");
+		expect(block).not.toContain("disabled_tools");
 		expect(block).not.toContain("command = [");
 	});
 
-	test("preserves disabled tool parity for remote HTTP MCP", () => {
+	test("uses remote HTTP MCP without disabling memory tools", () => {
 		const block = buildMcpBlock({
 			url: "https://signet.example.com:3850/mcp",
 			startupTimeoutSec: 10,
@@ -279,7 +306,7 @@ describe("buildMcpBlock — TOML quoting", () => {
 		});
 
 		expect(block).toContain("url = 'https://signet.example.com:3850/mcp'");
-		expect(block).toContain("disabled_tools = ['memory_search'");
+		expect(block).not.toContain("disabled_tools");
 	});
 
 	test("Windows paths with backslashes are quoted correctly", () => {

@@ -72,7 +72,7 @@ const contentByKind: Record<EmptyStateKind, { title: string; description: string
 
 	.empty-desc {
 		margin: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		line-height: 1.5;
 		color: var(--sig-text-muted);
@@ -87,7 +87,7 @@ const contentByKind: Record<EmptyStateKind, { title: string; description: string
 	}
 
 	.empty-btn {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;

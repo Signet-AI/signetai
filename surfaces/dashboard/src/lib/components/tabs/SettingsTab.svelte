@@ -286,7 +286,7 @@ function formatSavedAt(raw: string | null): string {
 		align-items: center;
 		justify-content: center;
 		flex: 1;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: var(--font-size-sm);
 		color: var(--sig-text-muted);
 	}
@@ -344,7 +344,7 @@ function formatSavedAt(raw: string | null): string {
 		margin-right: auto;
 		display: flex;
 		gap: var(--space-sm);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
@@ -359,7 +359,7 @@ function formatSavedAt(raw: string | null): string {
 	}
 
 	.discard-btn {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
@@ -377,7 +377,7 @@ function formatSavedAt(raw: string | null): string {
 	}
 
 	.save-btn {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;

@@ -91,6 +91,41 @@ export interface DocumentConnector {
 	updated_at: string;
 }
 
+export interface SignetSourceEntry {
+	id: string;
+	kind: "obsidian";
+	name: string;
+	root: string;
+	enabled: boolean;
+	mode: "read-only";
+	createdAt: string;
+	updatedAt: string;
+	lastIndexedAt?: string;
+}
+
+export interface SourcesConfigResponse {
+	version: 1;
+	sources: SignetSourceEntry[];
+}
+
+export interface AddSourceResponse {
+	source: SignetSourceEntry;
+	created: boolean;
+	indexed: number;
+	error?: string;
+}
+
+export interface RemoveSourceResponse {
+	source?: SignetSourceEntry;
+	purged?: number;
+	error?: string;
+}
+
+export interface PickDirectoryResponse {
+	path?: string;
+	error?: string;
+}
+
 export interface Identity {
 	name: string;
 	creature: string;
@@ -928,6 +963,72 @@ export async function getConnectors(): Promise<DocumentConnector[]> {
 		return data.connectors ?? [];
 	} catch {
 		return [];
+	}
+}
+
+export async function getSources(): Promise<SignetSourceEntry[]> {
+	try {
+		const response = await fetch(`${API_BASE}/api/sources`);
+		if (!response.ok) return [];
+		const data = (await response.json()) as SourcesConfigResponse;
+		return data.sources ?? [];
+	} catch {
+		return [];
+	}
+}
+
+export async function pickSourceDirectory(title = "Choose folder"): Promise<PickDirectoryResponse> {
+	try {
+		const response = await fetch(`${API_BASE}/api/sources/pick-directory`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ title }),
+		});
+		const body = (await response.json().catch(() => null)) as PickDirectoryResponse | null;
+		if (!response.ok) return { error: body?.error ?? `Request failed with ${response.status}` };
+		return body ?? {};
+	} catch (err) {
+		return { error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+export async function addObsidianSource(path: string, name?: string): Promise<AddSourceResponse> {
+	const response = await fetch(`${API_BASE}/api/sources/obsidian`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ path, name }),
+	});
+	const body = (await response.json().catch(() => null)) as Partial<AddSourceResponse> | null;
+	if (!response.ok) {
+		return {
+			source: {
+				id: "",
+				kind: "obsidian",
+				name: "Obsidian Vault",
+				root: path,
+				enabled: false,
+				mode: "read-only",
+				createdAt: "",
+				updatedAt: "",
+			},
+			created: false,
+			indexed: 0,
+			error: typeof body?.error === "string" ? body.error : `Request failed with ${response.status}`,
+		};
+	}
+	return body as AddSourceResponse;
+}
+
+export async function removeSource(sourceId: string): Promise<RemoveSourceResponse> {
+	try {
+		const response = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(sourceId)}`, {
+			method: "DELETE",
+		});
+		const body = (await response.json().catch(() => null)) as RemoveSourceResponse | null;
+		if (!response.ok) return { error: body?.error ?? `Request failed with ${response.status}` };
+		return body ?? {};
+	} catch (err) {
+		return { error: err instanceof Error ? err.message : String(err) };
 	}
 }
 

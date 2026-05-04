@@ -260,7 +260,7 @@ function selectPreset(table: string): void {
 	}
 
 	.panel-title {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: 0.1em;
@@ -281,27 +281,27 @@ function selectPreset(table: string): void {
 	}
 
 	.summary-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 16px;
 		font-weight: 700;
 		color: var(--sig-text-bright);
 	}
 
 	.summary-sep {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		margin: 0 1px;
 	}
 
 	.summary-total {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-muted);
 	}
 
 	.summary-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		margin-left: 4px;
@@ -313,7 +313,7 @@ function selectPreset(table: string): void {
 	}
 
 	.section-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: 0.1em;
@@ -378,7 +378,7 @@ function selectPreset(table: string): void {
 	}
 
 	.chip-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text);
 		flex: 1;
@@ -390,7 +390,7 @@ function selectPreset(table: string): void {
 	}
 
 	.chip-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		min-width: 24px;
@@ -475,7 +475,7 @@ function selectPreset(table: string): void {
 	}
 
 	.schema-group-label {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		font-weight: 600;
 		letter-spacing: 0.06em;
@@ -486,7 +486,7 @@ function selectPreset(table: string): void {
 	}
 
 	.schema-group-count {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 8px;
 		color: var(--sig-text-muted);
 		opacity: 0.5;
@@ -500,7 +500,7 @@ function selectPreset(table: string): void {
 		background: none;
 		cursor: pointer;
 		text-align: left;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		transition: background 60ms, color 60ms;

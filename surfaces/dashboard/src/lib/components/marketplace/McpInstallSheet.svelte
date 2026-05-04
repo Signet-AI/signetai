@@ -386,7 +386,7 @@ async function installWithConfig(): Promise<void> {
 									oninput={(e) => {
 										timeoutMs = e.currentTarget.value;
 									}}
-									class="field-input font-[family-name:var(--font-mono)]"
+									class="field-input font-mono"
 								/>
 							</div>
 						</div>
@@ -400,7 +400,7 @@ async function installWithConfig(): Promise<void> {
 										command = e.currentTarget.value;
 									}}
 									placeholder="uvx"
-									class="field-input font-[family-name:var(--font-mono)]"
+									class="field-input font-mono"
 								/>
 							</div>
 							<div class="field-group">
@@ -411,7 +411,7 @@ async function installWithConfig(): Promise<void> {
 										argsText = e.currentTarget.value;
 									}}
 									rows={3}
-									class="field-textarea font-[family-name:var(--font-mono)]"
+									class="field-textarea font-mono"
 								/>
 							</div>
 							<div class="field-group">
@@ -422,7 +422,7 @@ async function installWithConfig(): Promise<void> {
 										cwd = e.currentTarget.value;
 									}}
 									placeholder="/path/to/project"
-									class="field-input font-[family-name:var(--font-mono)]"
+									class="field-input font-mono"
 								/>
 							</div>
 
@@ -440,7 +440,7 @@ async function installWithConfig(): Promise<void> {
 													row.key = e.currentTarget.value;
 												}}
 												placeholder="ENV_NAME"
-												class="field-input row-key font-[family-name:var(--font-mono)]"
+												class="field-input row-key font-mono"
 											/>
 											<Input
 												value={row.value}
@@ -448,7 +448,7 @@ async function installWithConfig(): Promise<void> {
 													updateRowValue(envRows, index, e.currentTarget.value);
 												}}
 												placeholder="value"
-												class="field-input row-value font-[family-name:var(--font-mono)]"
+												class="field-input row-value font-mono"
 												disabled={row.secretName.length > 0}
 											/>
 											<select
@@ -484,7 +484,7 @@ async function installWithConfig(): Promise<void> {
 										url = e.currentTarget.value;
 									}}
 									placeholder="https://example.com/mcp"
-									class="field-input font-[family-name:var(--font-mono)]"
+									class="field-input font-mono"
 								/>
 							</div>
 							<div class="field-group">
@@ -501,7 +501,7 @@ async function installWithConfig(): Promise<void> {
 													row.key = e.currentTarget.value;
 												}}
 												placeholder="Authorization"
-												class="field-input row-key font-[family-name:var(--font-mono)]"
+												class="field-input row-key font-mono"
 											/>
 											<Input
 												value={row.value}
@@ -509,7 +509,7 @@ async function installWithConfig(): Promise<void> {
 													updateRowValue(headerRows, index, e.currentTarget.value);
 												}}
 												placeholder="Bearer ..."
-												class="field-input row-value font-[family-name:var(--font-mono)]"
+												class="field-input row-value font-mono"
 												disabled={row.secretName.length > 0}
 											/>
 											<select
@@ -600,7 +600,7 @@ async function installWithConfig(): Promise<void> {
 
 	.sheet-subtitle {
 		margin: 4px 0 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -618,21 +618,21 @@ async function installWithConfig(): Promise<void> {
 
 	.muted {
 		margin: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		color: var(--sig-text-muted);
 	}
 
 	.server-description {
 		margin: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		line-height: 1.55;
 		color: var(--sig-text);
 	}
 
 	.source-link {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-accent);
 		text-decoration: none;
@@ -668,7 +668,7 @@ async function installWithConfig(): Promise<void> {
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
 		color: var(--sig-text-muted);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 	}
 
 	:global(.field-input),
@@ -693,7 +693,7 @@ async function installWithConfig(): Promise<void> {
 	}
 
 	:global(.field-select-item) {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 	}
 
@@ -723,7 +723,7 @@ async function installWithConfig(): Promise<void> {
 	}
 
 	.inline-hint {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}
@@ -732,7 +732,7 @@ async function installWithConfig(): Promise<void> {
 		padding: 8px 10px;
 		border: 1px solid color-mix(in srgb, var(--sig-danger) 35%, var(--sig-border));
 		background: color-mix(in srgb, var(--sig-danger) 10%, transparent);
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-danger);
 	}
@@ -755,7 +755,7 @@ async function installWithConfig(): Promise<void> {
 	}
 
 	.test-head {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
@@ -765,7 +765,7 @@ async function installWithConfig(): Promise<void> {
 	.test-message,
 	.test-tools {
 		margin: 0;
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 11px;
 		line-height: 1.45;
 		color: var(--sig-text);
@@ -781,7 +781,7 @@ async function installWithConfig(): Promise<void> {
 	}
 
 	.footer-hint {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 	}

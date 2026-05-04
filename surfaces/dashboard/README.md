@@ -1,42 +1,46 @@
-# sv
+# Signet Dashboard
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+Svelte 5 + Vite dashboard bundled with the Signet daemon. The production build
+is static and served by `@signet/daemon` at `http://localhost:3850`.
 
-## Creating a project
+## Development
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
+Install dashboard dependencies from this package directory:
 
 ```sh
-# recreate this project
-npx sv create --template minimal --types ts --no-install .
+bun install
 ```
 
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Run the Vite development server:
 
 ```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+bun run dev
 ```
 
-## Building
-
-To create a production version of your app:
+The dev server proxies `/api`, `/health`, and `/memory` requests to the local
+daemon on port 3850, so start the daemon separately when testing live data:
 
 ```sh
-npm run build
+signet daemon start
 ```
 
-You can preview the production build with `npm run preview`.
+## Build
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+```sh
+bun run build
+```
+
+The root workspace also builds the dashboard through:
+
+```sh
+bun run build:dashboard
+```
+
+## Check
+
+```sh
+bun run check
+```
+
+This runs `svelte-kit sync` and `svelte-check` with the local
+`tsconfig.json`.

@@ -283,6 +283,10 @@ function harnessSupportsNamedCrossAgentTools(harness: string): boolean {
 	return harness.trim().toLowerCase() === "codex";
 }
 
+function isPiHarness(harness: string): boolean {
+	return harness.trim().toLowerCase() === "pi";
+}
+
 function sanitizePeerPromptField(value: string | undefined): string {
 	if (!value) return "";
 	return value
@@ -297,8 +301,8 @@ You have persistent memory managed by Signet.
 
 Memory Check Loop:
 - when to use: before commands, file edits, architectural choices, bug fixes, continuation work, user-preference-sensitive answers, or anything that may depend on prior decisions
-- procedure: check injected context first, then run 1-3 targeted recalls with mcp__signet__memory_search; expand session lineage with mcp__signet__lcm_expand or known entities with mcp__signet__knowledge_expand and mcp__signet__knowledge_expand_session when needed
-- pitfalls: do not treat a missing automatic memory match as proof no prior context exists; do not trust memory blindly when repo, files, or live system state can verify it; do not spam broad recalls for trivial self-contained prompts
+- procedure: check injected context first, then run 1-3 targeted recalls with mcp__signet__memory_search; shape recall queries as natural questions with an entity, event, and timeframe when possible; expand session lineage with mcp__signet__lcm_expand or known entities with mcp__signet__knowledge_expand and mcp__signet__knowledge_expand_session when needed
+- pitfalls: avoid bag-of-keywords queries; do not treat a missing automatic memory match as proof no prior context exists; do not trust memory blindly when repo, files, or live system state can verify it; do not spam broad recalls for trivial self-contained prompts; treat graph expansion as supporting context, not proof
 - verification: before acting, know what context you found, what remains unknown, and whether it is safe to proceed
 
 Memory tools:
@@ -559,6 +563,7 @@ export function appendSynthesisIndexBlock(content: string, indexBlock: string): 
 
 function buildTranscriptFallbackResponse(
 	metadataHeader: string,
+	harness: string,
 	queryTerms: string,
 	charBudget: number,
 	hits: ReadonlyArray<{
@@ -573,7 +578,7 @@ function buildTranscriptFallbackResponse(
 		content: `- [transcript ${formatTranscriptSessionLabel(hit.sessionKey)}] ${hit.excerpt} (${formatMemoryDate(hit.updatedAt)})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = buildPromptRecallInject(metadataHeader, lines, pluginContext);
+	const inject = buildPromptRecallInject(metadataHeader, lines, harness, pluginContext);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -585,6 +590,7 @@ function buildTranscriptFallbackResponse(
 
 function buildTemporalFallbackResponse(
 	metadataHeader: string,
+	harness: string,
 	queryTerms: string,
 	charBudget: number,
 	hits: ReadonlyArray<{
@@ -600,7 +606,7 @@ function buildTemporalFallbackResponse(
 		content: `- [thread ${hit.id}] ${hit.excerpt} (${formatMemoryDate(hit.latestAt)}, ${hit.threadLabel})`,
 	}));
 	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = buildPromptRecallInject(metadataHeader, lines, pluginContext);
+	const inject = buildPromptRecallInject(metadataHeader, lines, harness, pluginContext);
 	return {
 		inject,
 		memoryCount: lines.length,
@@ -689,17 +695,34 @@ function buildPluginPromptContributionSection(target: PluginPromptTargetV1, log:
 	}
 }
 
-function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<string>, pluginContext = ""): string {
+function buildPromptRecallGuidance(harness: string): string {
+	if (isPiHarness(harness)) {
+		return "Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with signet_recall. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
+	}
+	return "Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with /recall or memory_search. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Expand with lcm_expand or knowledge_expand only when you need deeper lineage or graph context. Treat graph expansion as supporting context, not proof.";
+}
+
+function buildNoStrongMemoryMatchGuidance(harness: string): string {
+	if (isPiHarness(harness)) {
+		return "No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls with signet_recall before executing commands, editing files, or making decisions. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
+	}
+	return "No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
+}
+
+function buildDurableSaveGuidance(harness: string): string {
+	if (isPiHarness(harness)) return "If you learn something durable, save it with /remember or signet_remember.";
+	return "If you learn something durable, save it with /remember or memory_store.";
+}
+
+function buildPromptRecallInject(
+	metadataHeader: string,
+	lines: ReadonlyArray<string>,
+	harness: string,
+	pluginContext = "",
+): string {
 	// Keep formatting behavior aligned with daemon-rs
 	// `build_prompt_recall_inject()` in `platform/daemon-rs/.../routes/hooks.rs`.
-	const parts = [
-		metadataHeader.trimEnd(),
-		"",
-		"## Memory Check",
-		"",
-		"Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with /recall or memory_search, then expand with lcm_expand or knowledge_expand when needed.",
-		"",
-	];
+	const parts = [metadataHeader.trimEnd(), "", "## Memory Check", "", buildPromptRecallGuidance(harness), ""];
 	if (pluginContext.trim().length > 0) {
 		parts.push(pluginContext.trimEnd());
 		parts.push("");
@@ -708,24 +731,17 @@ function buildPromptRecallInject(metadataHeader: string, lines: ReadonlyArray<st
 	parts.push("");
 	parts.push(...lines);
 	parts.push("");
-	parts.push("If you learn something durable, save it with /remember or memory_store.");
+	parts.push(buildDurableSaveGuidance(harness));
 	return `${parts.join("\n").trimEnd()}\n`;
 }
 
-function buildNoStrongMemoryMatchInject(metadataHeader: string, pluginContext = ""): string {
-	const parts = [
-		metadataHeader.trimEnd(),
-		"",
-		"## Memory Check",
-		"",
-		"No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls before executing commands, editing files, or making decisions.",
-		"",
-	];
+function buildNoStrongMemoryMatchInject(metadataHeader: string, harness: string, pluginContext = ""): string {
+	const parts = [metadataHeader.trimEnd(), "", "## Memory Check", "", buildNoStrongMemoryMatchGuidance(harness), ""];
 	if (pluginContext.trim().length > 0) {
 		parts.push(pluginContext.trimEnd());
 		parts.push("");
 	}
-	parts.push("If you learn something durable, save it with /remember or memory_store.");
+	parts.push(buildDurableSaveGuidance(harness));
 	return `${parts.join("\n").trimEnd()}\n`;
 }
 
@@ -2737,7 +2753,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
-				inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
+				inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
 				memoryCount: 0,
 				warnings,
 			},
@@ -2752,7 +2768,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			start,
 			{
-				inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
+				inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
 				memoryCount: 0,
 				warnings,
 			},
@@ -2790,7 +2806,7 @@ export async function handleUserPromptSubmit(
 				const startEmbedding = Date.now();
 				const embedding = await fetchPromptSubmitEmbedding(deps, text, embeddingCfg, embeddingTimeoutMs);
 				const embeddingDuration = Date.now() - startEmbedding;
-				if (!embedding && embeddingDuration >= embeddingTimeoutMs) {
+				if (!embedding && embeddingDuration >= embeddingTimeoutMs - 5) {
 					embeddingTimedOut = true;
 					deps.logger.warn("hooks", "User prompt submit embedding timed out", {
 						harness: req.harness,
@@ -2836,6 +2852,7 @@ export async function handleUserPromptSubmit(
 					start,
 					buildTemporalFallbackResponse(
 						metadataHeader,
+						req.harness,
 						queryTerms,
 						injectBudget,
 						temporalHits,
@@ -2860,6 +2877,7 @@ export async function handleUserPromptSubmit(
 					start,
 					buildTranscriptFallbackResponse(
 						metadataHeader,
+						req.harness,
 						queryTerms,
 						injectBudget,
 						transcriptHits,
@@ -2875,7 +2893,7 @@ export async function handleUserPromptSubmit(
 					userMessage,
 					start,
 					{
-						inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
+						inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
 						memoryCount: 0,
 						warnings,
 					},
@@ -2890,7 +2908,7 @@ export async function handleUserPromptSubmit(
 				userMessage,
 				start,
 				{
-					inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
+					inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
 					memoryCount: 0,
 					warnings,
 				},
@@ -2942,7 +2960,7 @@ export async function handleUserPromptSubmit(
 				userMessage,
 				start,
 				{
-					inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext),
+					inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
 					memoryCount: 0,
 					warnings,
 				},
@@ -2957,14 +2975,14 @@ export async function handleUserPromptSubmit(
 				`[signet:note] ${omitted} additional ${omitted === 1 ? "match was" : "matches were"} omitted to keep this lightweight (raise memory.guardrails.contextBudgetChars to include more).`,
 			);
 		}
-		let inject = buildPromptRecallInject(metadataHeader, lines, pluginContext);
+		let inject = buildPromptRecallInject(metadataHeader, lines, req.harness, pluginContext);
 
 		// Append agent feedback request if enabled and there are injected memories
 		const selectedIds = selected.map((s) => s.id);
 		if (feedbackEnabled && selectedIds.length > 0) {
-			const isPiHarness = req.harness === "pi";
-			const toolName = isPiHarness ? "signet_memory_feedback" : "mcp__signet__memory_feedback";
-			const instruction = isPiHarness
+			const pi = isPiHarness(req.harness);
+			const toolName = pi ? "signet_memory_feedback" : "mcp__signet__memory_feedback";
+			const instruction = pi
 				? `Rate injected memories using the ${toolName} tool. Pass a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`
 				: `Rate injected memories using the ${toolName} tool. Pass session_key "${req.sessionKey}" and a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`;
 			inject += `\n<memory-feedback>\n${instruction}\nIDs: ${selectedIds.join(", ")}\n</memory-feedback>`;
@@ -2998,7 +3016,11 @@ export async function handleUserPromptSubmit(
 		);
 	} catch (e) {
 		deps.logger.error("hooks", "User prompt submit failed", e as Error);
-		return { inject: buildNoStrongMemoryMatchInject(metadataHeader, pluginContext), memoryCount: 0, warnings };
+		return {
+			inject: buildNoStrongMemoryMatchInject(metadataHeader, req.harness, pluginContext),
+			memoryCount: 0,
+			warnings,
+		};
 	}
 }
 

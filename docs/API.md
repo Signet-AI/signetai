@@ -87,9 +87,20 @@ No authentication required. Lightweight liveness check.
   "status": "healthy",
   "uptime": 3600.5,
   "pid": 12345,
-  "version": "0.109.16",
+  "version": "0.109.x",
   "port": 3850,
-  "agentsDir": "/home/user/.agents"
+  "agentsDir": "/home/user/.agents",
+  "db": true,
+  "shuttingDown": false,
+  "updateAvailable": false,
+  "pendingRestart": false,
+  "pipeline": {
+    "extractionRunning": true,
+    "extractionStalled": false,
+    "extractionPending": 0,
+    "extractionBackoffMs": 0
+  },
+  "resources": { "...": "..." }
 }
 ```
 
@@ -105,7 +116,7 @@ silent fallback or hard-blocked extraction after boot.
 ```json
 {
   "status": "running",
-  "version": "0.109.16",
+  "version": "0.109.x",
   "pid": 12345,
   "uptime": 3600.5,
   "startedAt": "2026-02-21T10:00:00.000Z",
@@ -162,22 +173,25 @@ silent fallback or hard-blocked extraction after boot.
     "logFile": "/home/user/.agents/.daemon/logs/signet-2026-04-29.log"
   },
   "activeSessions": 1,
-  "inference": {
-    "enabled": true,
-    "source": "explicit",
-    "defaultPolicy": "auto",
-    "defaultAgentId": "default",
-    "targetCount": 4,
-    "policyCount": 2,
-    "explicit": true
-  },
+  "bypassedSessions": 1,
+  "agentCreatedAt": "2026-02-21T10:00:00.000Z",
   "health": { "score": 0.97, "status": "healthy" },
+  "update": {
+    "currentVersion": "0.109.x",
+    "latestVersion": null,
+    "updateAvailable": false,
+    "pendingRestart": null,
+    "autoInstall": false,
+    "checkInterval": 21600,
+    "lastCheckAt": null,
+    "lastError": null,
+    "timerActive": true
+  },
   "embedding": {
     "provider": "ollama",
     "model": "nomic-embed-text",
     "available": true
-  },
-  "bypassedSessions": 1
+  }
 }
 ```
 
@@ -187,11 +201,7 @@ Monitor `providerResolution.extraction.status` for `degraded` or `blocked`
 states when the configured extraction provider is unavailable at startup.
 When `pipeline.extraction.overloaded` is `true`, the extraction worker is
 intentionally backing off for `overloadBackoffMs` between polls.
-The `inference` block summarizes the shared inference control plane status.
-`source` is `explicit` when a top-level `inference:` block is present in
-`agent.yaml`, `legacy-implicit` when extraction and synthesis providers are
-compiled into the router automatically, and `disabled` when no routeable
-targets exist.
+Use `GET /api/inference/status` for the shared inference control plane status.
 
 
 ### GET /api/features
@@ -2849,10 +2859,10 @@ is passed.
 
 ```json
 {
-  "currentVersion": "0.109.16",
-  "latestVersion": "0.109.17",
+  "currentVersion": "0.109.x",
+  "latestVersion": "0.110.0",
   "updateAvailable": true,
-  "releaseUrl": "https://github.com/Signet-AI/signetai/releases/tag/v0.109.17",
+  "releaseUrl": "https://github.com/Signet-AI/signetai/releases/tag/v0.110.0",
   "releaseNotes": "...",
   "publishedAt": "2026-02-20T12:00:00Z",
   "restartRequired": false,
@@ -2922,7 +2932,7 @@ update.
   "success": true,
   "message": "Update installed. Restart daemon to apply.",
   "output": "...",
-  "installedVersion": "0.109.17",
+  "installedVersion": "0.110.0",
   "restartRequired": true
 }
 ```
@@ -3686,7 +3696,7 @@ with version and timestamp metadata.
 ```json
 {
   "meta": {
-    "version": "0.109.16",
+    "version": "0.109.x",
     "exportedAt": "2026-02-21T10:00:00.000Z",
     "entityId": "uuid"
   },

@@ -156,7 +156,7 @@ $effect(() => {
 	}
 
 	.umap-title {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		font-weight: 600;
 		letter-spacing: 0.1em;
@@ -191,7 +191,7 @@ $effect(() => {
 	}
 
 	.umap-status {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 10px;
 		color: var(--sig-text-muted);
 		text-transform: uppercase;
@@ -207,7 +207,7 @@ $effect(() => {
 	}
 
 	.meta-item {
-		font-family: var(--font-mono);
+		font-family: var(--font-body);
 		font-size: 9px;
 		color: var(--sig-text-muted);
 		letter-spacing: 0.03em;

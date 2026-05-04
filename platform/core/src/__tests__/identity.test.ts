@@ -148,6 +148,15 @@ describe("detectExistingSetup", () => {
 		expect(detection.harnesses.hermesAgent).toBe(true);
 	});
 
+	test("detects Hermes Agent in the managed ~/.hermes/hermes-agent checkout", () => {
+		process.env.HOME = TMP;
+		mkdirSync(join(TMP, ".hermes", "hermes-agent", "plugins", "memory"), { recursive: true });
+
+		const detection = detectExistingSetup(TMP);
+
+		expect(detection.harnesses.hermesAgent).toBe(true);
+	});
+
 	test("detects Hermes Agent before the Signet memory plugin is installed", () => {
 		const hermesRepo = join(TMP, "hermes-agent");
 		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });

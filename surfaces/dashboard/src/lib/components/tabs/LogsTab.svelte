@@ -614,7 +614,7 @@ $effect(() => {
 		<section class="min-h-0 flex flex-col rounded-lg border border-[var(--sig-border-strong)] bg-[var(--sig-surface-raised)] overflow-hidden">
 			<div class="flex flex-wrap items-center gap-[var(--space-sm)] px-[var(--space-md)] py-[var(--space-sm)] border-b border-[var(--sig-border)] shrink-0">
 				<Select.Root type="single" value={logLevelFilter} onValueChange={(v) => { logLevelFilter = v ?? ""; fetchLogs(); }}>
-					<Select.Trigger class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[100px]">
+					<Select.Trigger class="font-mono text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[100px]">
 						{logLevelFilter || "All levels"}
 					</Select.Trigger>
 					<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg">
@@ -625,7 +625,7 @@ $effect(() => {
 					</Select.Content>
 				</Select.Root>
 				<Select.Root type="single" value={logCategoryFilter} onValueChange={(v) => { logCategoryFilter = v ?? ""; fetchLogs(); }}>
-					<Select.Trigger class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[100px]">
+					<Select.Trigger class="font-mono text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] rounded-lg h-auto py-1 px-2 min-w-[100px]">
 						{logCategoryFilter || "All categories"}
 					</Select.Trigger>
 					<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg">
@@ -636,7 +636,7 @@ $effect(() => {
 					</Select.Content>
 				</Select.Root>
 				<Select.Root type="single" value={logOrderChoice ?? ""} onValueChange={updateLogOrder}>
-					<Select.Trigger data-placeholder={logOrderChoice === null ? "" : undefined} class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] data-[placeholder]:text-[var(--sig-text-muted)] rounded-lg h-auto py-1 px-2 min-w-[124px]">
+					<Select.Trigger data-placeholder={logOrderChoice === null ? "" : undefined} class="font-mono text-[length:var(--font-size-sm)] bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] text-[var(--sig-text-bright)] data-[placeholder]:text-[var(--sig-text-muted)] rounded-lg h-auto py-1 px-2 min-w-[124px]">
 						{getLogOrderLabel()}
 					</Select.Trigger>
 					<Select.Content class="bg-[var(--sig-surface-raised)] border-[var(--sig-border-strong)] rounded-lg">
@@ -694,13 +694,13 @@ $effect(() => {
 			</div>
 
 			<ScrollArea class="min-h-0 flex-1" bind:viewportRef={logViewport}>
-				<div class="font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)] leading-relaxed">
+				<div class="font-mono text-[length:var(--font-size-sm)] leading-relaxed">
 					{#if logsLoading}
-						<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">Loading logs...</div>
+						<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-display text-[length:var(--font-size-base)]">Loading logs...</div>
 					{:else if logsError}
-						<div class="py-[var(--space-xl)] text-center text-[var(--sig-danger)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">{logsError}</div>
+						<div class="py-[var(--space-xl)] text-center text-[var(--sig-danger)] font-display text-[length:var(--font-size-base)]">{logsError}</div>
 					{:else if logs.length === 0}
-						<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-[family-name:var(--font-display)] text-[length:var(--font-size-base)]">No logs found</div>
+						<div class="py-[var(--space-xl)] text-center text-[var(--sig-text-muted)] font-display text-[length:var(--font-size-base)]">No logs found</div>
 					{:else}
 						{#each logs as log (log.key)}
 							{@const entry = log.entry}
@@ -733,7 +733,7 @@ $effect(() => {
 			</ScrollArea>
 		</section>
 
-		<section class="log-details-window min-h-0 overflow-auto rounded-lg border border-[var(--sig-border-strong)] p-[var(--space-md)] font-[family-name:var(--font-mono)] text-[length:var(--font-size-sm)]">
+		<section class="log-details-window min-h-0 overflow-auto rounded-lg border border-[var(--sig-border-strong)] p-[var(--space-md)] font-mono text-[length:var(--font-size-sm)]">
 			{#if selectedLog}
 				<div class="grid grid-cols-[80px_1fr] gap-y-1 gap-x-2 mb-[var(--space-sm)]">
 					<div class="text-[var(--sig-text-muted)]">Time</div>
