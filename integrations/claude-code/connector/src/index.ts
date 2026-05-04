@@ -70,16 +70,19 @@ export interface SessionEndFireAndForgetPayload {
 type DetachedSpawn = typeof spawn;
 
 const SESSION_END_FIRE_AND_FORGET_SCRIPT = `
-const [url, body] = process.argv.slice(1);
-try {
-  await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-    signal: AbortSignal.timeout(10000),
-  });
-} catch {
-  // Best-effort fire-and-forget hook. The parent hook process must not wait.
+const url = process.env.SIGNET_SESSION_END_URL;
+const body = process.env.SIGNET_SESSION_END_BODY;
+if (url && body) {
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch {
+    // Best-effort fire-and-forget hook. The parent hook process must not wait.
+  }
 }
 `;
 
@@ -89,19 +92,17 @@ export function dispatchSessionEndFireAndForget(
 	spawnImpl: DetachedSpawn = spawn,
 ): boolean {
 	try {
-		const child = spawnImpl(
-			process.execPath,
-			[
-				"--eval",
-				SESSION_END_FIRE_AND_FORGET_SCRIPT,
-				`${daemonUrl.replace(/\/$/, "")}/api/hooks/session-end`,
-				JSON.stringify(payload),
-			],
-			{
-				detached: true,
-				stdio: "ignore",
+		const url = `${daemonUrl.replace(/\/$/, "")}/api/hooks/session-end`;
+		const body = JSON.stringify(payload);
+		const child = spawnImpl(process.execPath, ["--eval", SESSION_END_FIRE_AND_FORGET_SCRIPT], {
+			detached: true,
+			stdio: "ignore",
+			env: {
+				...process.env,
+				SIGNET_SESSION_END_URL: url,
+				SIGNET_SESSION_END_BODY: body,
 			},
-		);
+		});
 		child.unref();
 		return true;
 	} catch (error) {
