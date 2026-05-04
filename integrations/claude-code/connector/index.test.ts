@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeCodeConnector, dispatchSessionEndFireAndForget } from "./src/index.js";
+import {
+	ClaudeCodeConnector,
+	type SessionEndFireAndForgetPayload,
+	dispatchSessionEndFireAndForget,
+} from "./src/index.js";
 
 const origHome = process.env.HOME;
 let tmpRoot = "";
@@ -101,6 +105,30 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 		} finally {
 			server?.stop(true);
 		}
+	});
+
+	it("reports session-end dispatch startup failures", async () => {
+		class TestConnector extends ClaudeCodeConnector {
+			lastPayload: SessionEndFireAndForgetPayload | undefined;
+
+			protected override dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
+				this.lastPayload = payload;
+				return false;
+			}
+		}
+
+		const connector = new TestConnector();
+		const result = await connector.onSessionEnd({
+			sessionId: "session-failed-dispatch",
+			transcriptPath: "/tmp/failed-dispatch.jsonl",
+		});
+
+		expect(result).toEqual({ success: false, memoriesExtracted: 0 });
+		expect(connector.lastPayload).toEqual({
+			harness: "claude-code",
+			sessionId: "session-failed-dispatch",
+			transcriptPath: "/tmp/failed-dispatch.jsonl",
+		});
 	});
 
 	it("strips legacy block from AGENTS.md and reports path in filesWritten", async () => {

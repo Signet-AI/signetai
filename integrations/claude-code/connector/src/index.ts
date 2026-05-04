@@ -298,17 +298,21 @@ export class ClaudeCodeConnector extends BaseConnector {
 		}
 	}
 
+	protected dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
+		return dispatchSessionEndFireAndForget(this.daemonUrl, payload);
+	}
+
 	/**
 	 * Called when a session ends
 	 */
 	async onSessionEnd(ctx: SessionContext): Promise<SessionEndResult> {
-		dispatchSessionEndFireAndForget(this.daemonUrl, {
+		const dispatched = this.dispatchSessionEnd({
 			harness: "claude-code",
 			sessionId: ctx.sessionId,
 			transcriptPath: ctx.transcriptPath,
 		});
 
-		return { success: true, memoriesExtracted: 0 };
+		return { success: dispatched, memoriesExtracted: 0 };
 	}
 
 	// ============================================================================
