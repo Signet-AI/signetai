@@ -69,6 +69,7 @@ function ensureDir(path: string): void {
 
 async function flushSessionEndDeferredWork(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
+	await hooks.flushDeferredSessionEndWorkForTests();
 }
 
 /** Create an isolated test DB with the full schema */
@@ -1798,6 +1799,32 @@ describe("handleSessionEnd", () => {
 		expect(manifest).toContain('transcript_path: "memory/test/transcripts/transcript.jsonl"');
 	});
 
+	test.serial("defers canonical JSONL rewrite until after session-end response", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "deferred-canonical-transcript.txt");
+		writeFileSync(
+			transcriptPath,
+			"User: ensure the session-end handler returns before canonical transcript rewriting.\nAssistant: canonical JSONL should be written only by deferred work.\n".repeat(
+				8,
+			),
+		);
+		const canonicalPath = join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl");
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-deferred-canonical",
+			sessionId: "sess-deferred-canonical",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(true);
+		expect(existsSync(canonicalPath)).toBe(false);
+
+		await flushSessionEndDeferredWork();
+		expect(existsSync(canonicalPath)).toBe(true);
+	});
+
 	test.serial("writes full canonical transcript artifacts while capping summary input", async () => {
 		createMemoryDb([]);
 		const transcriptPath = join(TEST_DIR, "long-transcript.txt");
@@ -1964,6 +1991,7 @@ memory:
 		});
 
 		expect(result.queued).toBe(true);
+		await flushSessionEndDeferredWork();
 
 		const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
 		expect(transcript).toContain("keep the live transcript if session-end falls over");

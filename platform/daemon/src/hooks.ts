@@ -129,6 +129,12 @@ function getMemoryDbPath(): string {
 	return join(getAgentsDir(), "memory", "memories.db");
 }
 
+const deferredSessionEndWork = new Set<Promise<void>>();
+
+export async function flushDeferredSessionEndWorkForTests(): Promise<void> {
+	await Promise.allSettled([...deferredSessionEndWork]);
+}
+
 async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly agentId: string;
 	readonly harness: string;
@@ -3153,24 +3159,15 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	const sessionId =
 		req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, retainedTranscript);
 
-	// Lossless retention: write transcript immediately regardless of length
-	// or whether the summary worker succeeds later.
+	// Lossless retention: keep the live transcript snapshot available to
+	// subsequent hook calls before returning. The heavier canonical JSONL
+	// rewrite/indexing work is deferred below so the session-end response
+	// is not held open by large transcript rewrites.
 	if (retainedTranscript && sessionKey) {
 		try {
 			upsertSessionTranscript(sessionKey, retainedTranscript, req.harness, req.cwd ?? null, agentId);
-			await writeCanonicalTranscriptFromSnapshot({
-				agentId,
-				harness: req.harness,
-				sessionKey,
-				sessionId,
-				project: req.cwd ?? null,
-				rawTranscript,
-				transcript: retainedTranscript,
-				capturedAt: endedAt,
-				transcriptPath: req.transcriptPath,
-			});
 		} catch (e) {
-			logger.warn("hooks", "Transcript write failed (non-fatal)", {
+			logger.warn("hooks", "Live transcript retention failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
@@ -3244,7 +3241,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	}
 
 	setImmediate(() => {
-		deferSessionEndWork({
+		const work = deferSessionEndWork({
 			transcript: retainedTranscript,
 			rawTranscript,
 			sessionKey,
@@ -3255,13 +3252,22 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 			endedAt,
 			transcriptPath: req.transcriptPath,
 			memoryCfg,
+		}).catch((error) => {
+			logger.warn("hooks", "Deferred session-end work failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
+			});
+		});
+		deferredSessionEndWork.add(work);
+		void work.finally(() => {
+			deferredSessionEndWork.delete(work);
 		});
 	});
 
 	return { memoriesSaved: 0, queued: Boolean(jobId), jobId };
 }
 
-function deferSessionEndWork(params: {
+async function deferSessionEndWork(params: {
 	transcript: string;
 	rawTranscript: string;
 	sessionKey: string | undefined;
@@ -3307,6 +3313,17 @@ function deferSessionEndWork(params: {
 	if (transcript.trim().length > 0) {
 		try {
 			if (!isNoiseSession({ project: cwd, sessionKey: sessionKey ?? null, sessionId, harness })) {
+				await writeCanonicalTranscriptFromSnapshot({
+					agentId,
+					harness,
+					sessionKey: sessionKey ?? null,
+					sessionId,
+					project: cwd,
+					rawTranscript,
+					transcript,
+					capturedAt: endedAt,
+					transcriptPath,
+				});
 				const manifest = ensureCanonicalManifest({
 					agentId,
 					sessionId,
