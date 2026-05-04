@@ -33,6 +33,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@signet/sdk": "workspace:*",
     "@sinclair/typebox": "0.34.47"
   },
   "devDependencies": {

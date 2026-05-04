@@ -146,6 +146,7 @@
       "name": "@signetai/signet-memory-openclaw",
       "version": "0.109.16",
       "dependencies": {
+        "@signet/sdk": "workspace:*",
         "@sinclair/typebox": "0.34.47",
       },
       "devDependencies": {
