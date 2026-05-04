@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { type SpawnSyncReturns, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	appendFileSync,
@@ -12,7 +12,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, normalize } from "node:path";
+import { basename, delimiter, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSimpleYaml } from "@signet/core";
 import chalk from "chalk";
@@ -376,6 +376,125 @@ async function downloadDaemonBinary(): Promise<void> {
 	}
 }
 
+export interface DaemonStartArgsInput {
+	readonly daemonPath: string;
+	readonly agentsDir: string;
+	readonly port: number;
+	readonly host: string;
+	readonly bind: string;
+	readonly startupLogPath: string;
+}
+
+export type SystemdDaemonStartArgsInput = DaemonStartArgsInput;
+
+export interface LaunchdDaemonPlistInput extends DaemonStartArgsInput {
+	readonly label?: string;
+}
+
+export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput): string[] {
+	return [
+		"--user",
+		"--quiet",
+		"--collect",
+		`--unit=signet-daemon-${process.pid}`,
+		`--property=WorkingDirectory=${process.cwd()}`,
+		"--property=StandardOutput=null",
+		`--property=StandardError=append:${input.startupLogPath}`,
+		`--setenv=SIGNET_PORT=${input.port}`,
+		`--setenv=SIGNET_HOST=${input.host}`,
+		`--setenv=SIGNET_BIND=${input.bind}`,
+		`--setenv=SIGNET_PATH=${input.agentsDir}`,
+		processRuntimeCommand(),
+		input.daemonPath,
+	];
+}
+
+function findExecutableOnPath(name: string, pathValue: string | undefined = process.env.PATH): string | null {
+	if (!pathValue) return null;
+	for (const dir of pathValue.split(delimiter)) {
+		if (!dir) continue;
+		const candidate = join(dir, name);
+		if (existsSync(candidate)) return candidate;
+	}
+	return null;
+}
+
+function processRuntimeCommand(): string {
+	if (basename(process.execPath).startsWith("bun")) return process.execPath;
+	return findExecutableOnPath("bun") ?? "bun";
+}
+
+function xmlEscape(value: string): string {
+	return value
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("'", "&apos;");
+}
+
+export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
+
+export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string {
+	const label = input.label ?? LAUNCHD_DAEMON_LABEL;
+	const env = {
+		SIGNET_PORT: String(input.port),
+		SIGNET_HOST: input.host,
+		SIGNET_BIND: input.bind,
+		SIGNET_PATH: input.agentsDir,
+		PATH: process.env.PATH ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+	};
+	const envEntries = Object.entries(env)
+		.map(
+			([key, value]) => `
+			<key>${xmlEscape(key)}</key>
+			<string>${xmlEscape(value)}</string>`,
+		)
+		.join("");
+
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>${xmlEscape(label)}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>${xmlEscape(processRuntimeCommand())}</string>
+		<string>${xmlEscape(input.daemonPath)}</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>${envEntries}
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>${xmlEscape(process.cwd())}</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+	<key>StandardOutPath</key>
+	<string>/dev/null</string>
+	<key>StandardErrorPath</key>
+	<string>${xmlEscape(input.startupLogPath)}</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>
+`;
+}
+
+export function buildLaunchdDaemonStartArgs(plistPath: string): string[] {
+	const uid = typeof process.getuid === "function" ? process.getuid() : null;
+	const domain = uid === null ? "user" : `gui/${uid}`;
+	return ["bootstrap", domain, plistPath];
+}
+
+export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "status" | "signal" | "error">): boolean {
+	return result.status === 0 && result.signal === null && result.error === undefined;
+}
+
+export const didLaunchdDaemonStart = didSystemdDaemonStart;
+
 export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	if (await isDaemonRunning()) {
 		return true;
@@ -433,36 +552,117 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		// Non-fatal.
 	}
 
-	const proc = spawn("bun", [daemonPath], {
-		detached: true,
-		stdio: ["ignore", "ignore", stderrTarget],
-		windowsHide: true,
-		env: {
-			...process.env,
-			SIGNET_PORT: DEFAULT_PORT.toString(),
-			SIGNET_HOST: net.host,
-			SIGNET_BIND: net.bind,
-			SIGNET_PATH: agentsDir,
-		},
-	});
+	const daemonEnv = {
+		...process.env,
+		SIGNET_PORT: DEFAULT_PORT.toString(),
+		SIGNET_HOST: net.host,
+		SIGNET_BIND: net.bind,
+		SIGNET_PATH: agentsDir,
+	};
 
-	proc.on("error", (err) => {
-		try {
-			appendFileSync(startupLogPath, `[spawn error] ${err.message}\n`);
-		} catch {
-			// Best effort.
-		}
-	});
-
-	// Track process exit so the poll loop can short-circuit on fast failures
-	// (port conflict, missing binary, bad config) rather than waiting the
-	// full deadline.
+	// `detached: true` only creates a new process group; it does not escape the
+	// caller's service manager ownership. If `signet daemon start` is run from a
+	// short-lived Linux systemd unit or macOS launchd job, that owner can reap the
+	// daemon when the caller exits. Prefer the platform service manager first so
+	// the daemon is owned independently, then fall back to detached spawn on
+	// platforms or environments where that is unavailable.
 	let procExited = false;
-	proc.on("exit", () => {
-		procExited = true;
-	});
+	let startedByServiceManager = false;
+	if (process.platform === "linux") {
+		const systemdArgs = buildSystemdDaemonStartArgs({
+			daemonPath,
+			agentsDir,
+			port: DEFAULT_PORT,
+			host: net.host,
+			bind: net.bind,
+			startupLogPath,
+		});
+		const result = spawnSync("systemd-run", systemdArgs, {
+			stdio: ["ignore", "ignore", stderrTarget],
+			windowsHide: true,
+			env: daemonEnv,
+			timeout: 5000,
+		});
+		startedByServiceManager = didSystemdDaemonStart(result);
+		if (!startedByServiceManager) {
+			try {
+				appendFileSync(
+					startupLogPath,
+					`[systemd-run fallback] status=${result.status ?? "null"} error=${result.error?.message ?? ""}\n`,
+				);
+			} catch {
+				// Best effort.
+			}
+		}
+	} else if (process.platform === "darwin") {
+		const plistPath = join(daemonDir, `${LAUNCHD_DAEMON_LABEL}.plist`);
+		writeFileSync(
+			plistPath,
+			buildLaunchdDaemonPlist({
+				daemonPath,
+				agentsDir,
+				port: DEFAULT_PORT,
+				host: net.host,
+				bind: net.bind,
+				startupLogPath,
+			}),
+		);
+		const bootstrap = spawnSync("launchctl", buildLaunchdDaemonStartArgs(plistPath), {
+			stdio: ["ignore", "ignore", stderrTarget],
+			windowsHide: true,
+			env: daemonEnv,
+			timeout: 5000,
+		});
+		startedByServiceManager = didLaunchdDaemonStart(bootstrap);
+		if (!startedByServiceManager) {
+			const uid = typeof process.getuid === "function" ? process.getuid() : null;
+			const target = `${uid === null ? "user" : `gui/${uid}`}/${LAUNCHD_DAEMON_LABEL}`;
+			const kickstart = spawnSync("launchctl", ["kickstart", "-k", target], {
+				stdio: ["ignore", "ignore", stderrTarget],
+				windowsHide: true,
+				env: daemonEnv,
+				timeout: 5000,
+			});
+			startedByServiceManager = didLaunchdDaemonStart(kickstart);
+			if (!startedByServiceManager) {
+				try {
+					appendFileSync(
+						startupLogPath,
+						`[launchd fallback] bootstrapStatus=${bootstrap.status ?? "null"} kickstartStatus=${kickstart.status ?? "null"} bootstrapError=${bootstrap.error?.message ?? ""} kickstartError=${kickstart.error?.message ?? ""}
+`,
+					);
+				} catch {
+					// Best effort.
+				}
+			}
+		}
+	}
 
-	proc.unref();
+	if (!startedByServiceManager) {
+		const proc = spawn(processRuntimeCommand(), [daemonPath], {
+			detached: true,
+			stdio: ["ignore", "ignore", stderrTarget],
+			windowsHide: true,
+			env: daemonEnv,
+		});
+
+		proc.on("error", (err) => {
+			try {
+				appendFileSync(startupLogPath, `[spawn error] ${err.message}\n`);
+			} catch {
+				// Best effort.
+			}
+		});
+
+		// Track process exit so the poll loop can short-circuit on fast failures
+		// (port conflict, missing binary, bad config) rather than waiting the
+		// full deadline.
+		proc.on("exit", () => {
+			procExited = true;
+		});
+
+		proc.unref();
+	}
 	if (stderrFd !== null) {
 		closeSync(stderrFd);
 	}

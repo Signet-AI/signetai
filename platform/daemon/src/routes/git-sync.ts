@@ -1,104 +1,13 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-	SIGNET_GIT_PROTECTED_PATHS,
-	mergeSignetGitignoreEntries,
-	parseSimpleYaml,
-	readNetworkMode,
-} from "@signet/core";
+import { SIGNET_GIT_PROTECTED_PATHS, mergeSignetGitignoreEntries } from "@signet/core";
 import { logger } from "../logger";
 import { getSecret, hasSecret } from "../secrets.js";
 import { AGENTS_DIR } from "./state";
 
-export interface GitConfig {
-	enabled: boolean;
-	autoCommit: boolean;
-	autoSync: boolean;
-	syncInterval: number;
-	remote: string;
-	branch: string;
-}
-
-function resolveAgentsDirForModuleInit(): string {
-	return process.env.SIGNET_PATH || join(homedir(), ".agents");
-}
-
-function detectGitBranch(remote: string, dir = resolveAgentsDirForModuleInit()): string {
-	try {
-		const ref = execFileSync("git", ["symbolic-ref", `refs/remotes/${remote}/HEAD`], {
-			cwd: dir,
-			encoding: "utf-8",
-			stdio: ["pipe", "pipe", "pipe"],
-			timeout: 3000,
-			windowsHide: true,
-		}).trim();
-		const prefix = `refs/remotes/${remote}/`;
-		if (ref.startsWith(prefix)) {
-			return ref.slice(prefix.length);
-		}
-	} catch {
-		// fall through
-	}
-
-	try {
-		const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-			cwd: dir,
-			encoding: "utf-8",
-			stdio: ["pipe", "pipe", "pipe"],
-			timeout: 3000,
-			windowsHide: true,
-		}).trim();
-		if (branch && branch !== "HEAD") {
-			return branch;
-		}
-	} catch {
-		// fall through
-	}
-
-	return "main";
-}
-
-export function loadGitConfig(agentsDir = resolveAgentsDirForModuleInit()): GitConfig {
-	const defaults: GitConfig = {
-		enabled: true,
-		autoCommit: true,
-		autoSync: true,
-		syncInterval: 300,
-		remote: "origin",
-		branch: "",
-	};
-
-	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
-
-	for (const p of paths) {
-		if (!existsSync(p)) continue;
-		try {
-			const yaml = parseSimpleYaml(readFileSync(p, "utf-8"));
-			const git = yaml.git as Record<string, string | boolean> | undefined;
-			if (git) {
-				if (git.enabled !== undefined) defaults.enabled = git.enabled === "true" || git.enabled === true;
-				if (git.autoCommit !== undefined) defaults.autoCommit = git.autoCommit === "true" || git.autoCommit === true;
-				if (git.autoSync !== undefined) defaults.autoSync = git.autoSync === "true" || git.autoSync === true;
-				if (git.syncInterval !== undefined) defaults.syncInterval = Number.parseInt(git.syncInterval as string, 10);
-				if (git.remote) defaults.remote = git.remote as string;
-				if (git.branch) defaults.branch = git.branch as string;
-			}
-			break;
-		} catch {
-			// ignore parse errors
-		}
-	}
-
-	if (!defaults.branch) {
-		defaults.branch = detectGitBranch(defaults.remote, agentsDir);
-	}
-
-	return defaults;
-}
-
-export const gitConfig: GitConfig = loadGitConfig();
+import { type GitConfig, gitConfig } from "./git-config";
+export { gitConfig };
 
 let gitSyncTimer: ReturnType<typeof setInterval> | null = null;
 let lastGitSync: Date | null = null;
@@ -505,6 +414,7 @@ export async function gitSync(): Promise<{
 export function startGitSyncTimer() {
 	if (gitSyncTimer) {
 		clearInterval(gitSyncTimer);
+		gitSyncTimer = null;
 	}
 
 	if (!gitConfig.autoSync || gitConfig.syncInterval <= 0) {
@@ -738,6 +648,7 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 let pendingChanges: string[] = [];
 
 export function scheduleAutoCommit(changedPath: string) {
+	if (!gitConfig.autoCommit) return;
 	pendingChanges.push(changedPath);
 
 	if (commitTimer) {
@@ -754,4 +665,8 @@ export function scheduleAutoCommit(changedPath: string) {
 		await gitAutoCommit(AGENTS_DIR, changes);
 		commitPending = false;
 	}, COMMIT_DEBOUNCE_MS);
+}
+
+export function getAutoCommitQueueStateForTests(): { pending: boolean; queued: number } {
+	return { pending: commitTimer !== null || commitPending, queued: pendingChanges.length };
 }

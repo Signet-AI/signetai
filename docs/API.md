@@ -2768,9 +2768,9 @@ Returns `404` if the session key is not found.
 Git
 ---
 
-The git API manages automatic commit and sync of the `$SIGNET_WORKSPACE/` directory.
+The git API manages optional automatic commit and sync of the `$SIGNET_WORKSPACE/` directory.
 Config is loaded from `agent.yaml` under the `git` key. Defaults: `autoCommit:
-true`, `autoSync: true`, `syncInterval: 300s`, `remote: origin`,
+false`, `autoSync: false`, `syncInterval: 300s`, `remote: origin`,
 `branch: main`.
 
 ### GET /api/git/status
@@ -2807,8 +2807,8 @@ Return the current in-memory git configuration.
 ```json
 {
   "enabled": true,
-  "autoCommit": true,
-  "autoSync": true,
+  "autoCommit": false,
+  "autoSync": false,
   "syncInterval": 300,
   "remote": "origin",
   "branch": "main"
@@ -2824,6 +2824,7 @@ timer is restarted if `autoSync` or `syncInterval` changes.
 
 ```json
 {
+  "autoCommit": true,
   "autoSync": true,
   "syncInterval": 600,
   "remote": "origin",

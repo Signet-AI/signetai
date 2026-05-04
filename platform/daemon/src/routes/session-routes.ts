@@ -24,7 +24,10 @@ function listLiveSessions(agentId: string): Array<{
 	expiresAt: string | null;
 	bypassed: boolean;
 }> {
-	const byKey = new Map<string, { key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }>(
+	const byKey = new Map<
+		string,
+		{ key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }
+	>(
 		getActiveSessions()
 			.filter((s) => s.agentId === agentId)
 			.map((session) => [session.key, session] as const),
@@ -53,6 +56,16 @@ export interface GitConfig {
 	syncInterval: number;
 	remote: string;
 	branch: string;
+}
+
+export function applyGitConfigPatch(gc: GitConfig, body: Partial<GitConfig>): void {
+	if (body.autoCommit !== undefined && typeof body.autoCommit === "boolean") gc.autoCommit = body.autoCommit;
+	if (body.autoSync !== undefined && typeof body.autoSync === "boolean") gc.autoSync = body.autoSync;
+	if (body.syncInterval !== undefined && typeof body.syncInterval === "number" && Number.isFinite(body.syncInterval)) {
+		gc.syncInterval = body.syncInterval;
+	}
+	if (typeof body.remote === "string" && body.remote.length > 0) gc.remote = body.remote;
+	if (typeof body.branch === "string" && body.branch.length > 0) gc.branch = body.branch;
 }
 
 export interface SessionRoutesDeps {
@@ -289,12 +302,12 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 	app.post("/api/git/config", async (c) => {
 		const body = (await c.req.json()) as Partial<GitConfig>;
 
-		if (body.autoSync !== undefined) gc.autoSync = body.autoSync;
-		if (body.syncInterval !== undefined) gc.syncInterval = body.syncInterval;
-		if (body.remote) gc.remote = body.remote;
-		if (body.branch) gc.branch = body.branch;
+		applyGitConfigPatch(gc, body);
 
-		if (body.autoSync !== undefined || body.syncInterval !== undefined) {
+		if (
+			typeof body.autoSync === "boolean" ||
+			(typeof body.syncInterval === "number" && Number.isFinite(body.syncInterval))
+		) {
 			stopGitSyncTimer();
 			if (gc.autoSync) {
 				startGitSyncTimer();

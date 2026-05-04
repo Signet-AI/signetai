@@ -2,12 +2,101 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getDaemonStatus, readManagedDaemonPid } from "./runtime.js";
+import {
+	buildLaunchdDaemonPlist,
+	buildLaunchdDaemonStartArgs,
+	buildSystemdDaemonStartArgs,
+	didLaunchdDaemonStart,
+	didSystemdDaemonStart,
+	getDaemonStatus,
+	readManagedDaemonPid,
+} from "./runtime.js";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
+});
+
+describe("buildSystemdDaemonStartArgs", () => {
+	it("starts daemon in a transient user service with explicit env and log routing", () => {
+		const args = buildSystemdDaemonStartArgs({
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+		});
+
+		expect(args).toContain("--user");
+		expect(args).toContain("--collect");
+		expect(args).toContain("--quiet");
+		expect(args).toContain("--setenv=SIGNET_PORT=3850");
+		expect(args).toContain("--setenv=SIGNET_HOST=127.0.0.1");
+		expect(args).toContain("--setenv=SIGNET_BIND=0.0.0.0");
+		expect(args).toContain("--setenv=SIGNET_PATH=/home/user/.agents");
+		expect(args).toContain("--property=StandardError=append:/home/user/.agents/.daemon/logs/startup.log");
+		expect(args.slice(-2)).toEqual([process.execPath, "/opt/signet/dist/daemon.js"]);
+	});
+});
+
+describe("buildLaunchdDaemonPlist", () => {
+	it("starts daemon as a macOS LaunchAgent with explicit env and log routing", () => {
+		const plist = buildLaunchdDaemonPlist({
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/Users/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/Users/user/.agents/.daemon/logs/startup.log",
+			label: "ai.signet.daemon.test",
+		});
+
+		expect(plist).toContain("<key>Label</key>");
+		expect(plist).toContain("<string>ai.signet.daemon.test</string>");
+		expect(plist).toContain("<key>ProgramArguments</key>");
+		expect(plist).toContain("<string>/opt/signet/dist/daemon.js</string>");
+		expect(plist).toContain("<key>SIGNET_PORT</key>");
+		expect(plist).toContain("<string>3850</string>");
+		expect(plist).toContain("<key>SIGNET_HOST</key>");
+		expect(plist).toContain("<string>127.0.0.1</string>");
+		expect(plist).toContain("<key>SIGNET_BIND</key>");
+		expect(plist).toContain("<string>0.0.0.0</string>");
+		expect(plist).toContain("<key>SIGNET_PATH</key>");
+		expect(plist).toContain("<string>/Users/user/.agents</string>");
+		expect(plist).toContain("<key>RunAtLoad</key>");
+		expect(plist).toContain("<true/>");
+		expect(plist).toContain("<key>KeepAlive</key>");
+		expect(plist).toContain("<false/>");
+		expect(plist).toContain("<key>StandardErrorPath</key>");
+		expect(plist).toContain("<string>/Users/user/.agents/.daemon/logs/startup.log</string>");
+	});
+
+	it("uses launchctl bootstrap against the current user launchd domain", () => {
+		const args = buildLaunchdDaemonStartArgs("/Users/user/.agents/.daemon/ai.signet.daemon.plist");
+		expect(args[0]).toBe("bootstrap");
+		expect(args[1]).toStartWith("gui/");
+		expect(args[2]).toBe("/Users/user/.agents/.daemon/ai.signet.daemon.plist");
+	});
+});
+
+describe("didLaunchdDaemonStart", () => {
+	it("only treats clean launchctl exits as successful daemon ownership", () => {
+		expect(didLaunchdDaemonStart({ status: 0, signal: null, error: undefined })).toBe(true);
+		expect(didLaunchdDaemonStart({ status: 1, signal: null, error: undefined })).toBe(false);
+		expect(didLaunchdDaemonStart({ status: null, signal: "SIGTERM", error: undefined })).toBe(false);
+		expect(didLaunchdDaemonStart({ status: null, signal: null, error: new Error("spawn timed out") })).toBe(false);
+	});
+});
+
+describe("didSystemdDaemonStart", () => {
+	it("only treats clean systemd-run exits as successful daemon ownership", () => {
+		expect(didSystemdDaemonStart({ status: 0, signal: null, error: undefined })).toBe(true);
+		expect(didSystemdDaemonStart({ status: 1, signal: null, error: undefined })).toBe(false);
+		expect(didSystemdDaemonStart({ status: null, signal: "SIGTERM", error: undefined })).toBe(false);
+		expect(didSystemdDaemonStart({ status: null, signal: null, error: new Error("spawn timed out") })).toBe(false);
+	});
 });
 
 describe("readManagedDaemonPid", () => {
