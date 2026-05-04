@@ -1,9 +1,9 @@
+import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { Database } from "bun:sqlite";
 import type { LlmProvider } from "@signet/core";
 import { Tiktoken } from "js-tiktoken/lite";
 import cl100k_base from "js-tiktoken/ranks/cl100k_base";
@@ -897,9 +897,11 @@ async function doReindex(agentId?: string): Promise<void> {
 			statKey = `${s.mtimeMs}:${s.ctimeMs}:${s.size}`;
 			mtime = s.mtimeMs;
 		} catch {
+			await yielder();
 			continue;
 		}
 		if (cache.get(path) === statKey) {
+			await yielder();
 			continue;
 		}
 

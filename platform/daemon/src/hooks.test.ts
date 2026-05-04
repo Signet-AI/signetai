@@ -2682,6 +2682,43 @@ describe("memory-lineage", () => {
 		expect(telemetry?.content).toBe("Temporal telemetry row that must survive reindex.");
 	});
 
+	test.serial("warm reindex yields while skipping unchanged cached artifacts", async () => {
+		createMemoryDb([]);
+		const base = Date.parse("2026-03-28T22:34:06.792Z");
+
+		for (let idx = 0; idx < 55; idx++) {
+			const at = new Date(base + idx * 1000).toISOString();
+			await writeSummaryArtifact({
+				agentId: "default",
+				sessionId: `sess-warm-yield-${idx}`,
+				sessionKey: `sess-warm-yield-${idx}`,
+				project: "/tmp/signetai",
+				harness: "test",
+				capturedAt: at,
+				startedAt: null,
+				endedAt: at,
+				summary:
+					"Warm reindex should keep yielding even when every cached artifact is unchanged, so large no-op scans do not monopolize the event loop.",
+			});
+		}
+
+		await reindexMemoryArtifacts("default");
+
+		const originalSetImmediate = globalThis.setImmediate;
+		let yieldCount = 0;
+		globalThis.setImmediate = ((callback: (...args: unknown[]) => void, ...args: unknown[]) => {
+			yieldCount++;
+			return originalSetImmediate(callback, ...args);
+		}) as typeof setImmediate;
+		try {
+			await reindexMemoryArtifacts("default");
+		} finally {
+			globalThis.setImmediate = originalSetImmediate;
+		}
+
+		expect(yieldCount).toBeGreaterThan(0);
+	});
+
 	test.serial(
 		"projection clips older in-window sessions once the ledger exceeds the projection budget",
 		async () => {
