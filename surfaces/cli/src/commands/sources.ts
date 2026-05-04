@@ -6,6 +6,10 @@ export interface RegisterSourcesCommandsDeps extends SourcesDeps {
 	readonly secretApiCall?: DaemonApiCall;
 }
 
+function collect(value: string, previous: string[]): string[] {
+	return [...previous, value];
+}
+
 export function registerSourcesCommands(program: Command, deps: RegisterSourcesCommandsDeps): void {
 	const sources = program.command("sources").description("Manage external read-only knowledge sources");
 
@@ -49,5 +53,13 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 		.command("obsidian <path>")
 		.description("Index an Obsidian vault as a read-only recall source")
 		.option("--name <name>", "Display name for the vault")
-		.action((path: string, options: { name?: string }) => addObsidianVaultSource(path, options, deps));
+		.option(
+			"--exclude <glob>",
+			"Exclude glob (repeatable). Defaults already ignore dot-folders and Obsidian internals.",
+			collect,
+			[],
+		)
+		.action((path: string, options: { name?: string; exclude?: string[] }) =>
+			addObsidianVaultSource(path, options, deps),
+		);
 }

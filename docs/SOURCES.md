@@ -35,9 +35,12 @@ Obsidian Sources v1 indexes Markdown files below a vault root:
 
 ```bash
 signet sources add obsidian /path/to/ObsidianVault --name "Research Vault"
+signet sources add obsidian /path/to/ObsidianVault --exclude "private/**" --exclude "*.tmp"
 signet sources list
 signet sources remove obsidian:...
 ```
+
+By default, Obsidian sources ignore Obsidian internals, trash, Hermes metadata, hidden dot-folders, and hidden files. Add more ignore globs from the dashboard connect form or repeat `--exclude` in the CLI when a vault contains tool folders or file types that should stay outside source recall.
 
 The dashboard also includes a Sources browser for connecting and removing knowledge bases. In the desktop app, **Browse** opens the native folder picker. In browser/dev mode, Signet tries a daemon-backed OS picker and falls back to asking you to paste the path if no picker is available.
 

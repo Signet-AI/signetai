@@ -99,6 +99,8 @@ let connectMode = $state(false);
 let vaultPath = $state("");
 // biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
 let vaultName = $state("Obsidian Vault");
+// biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
+let excludeGlobsText = $state("**/.obsidian/**\n**/.trash/**\n**/.hermes/**\n**/.*/**\n**/.*");
 let status = $state<string | null>(null);
 let error = $state<string | null>(null);
 let touchedPath = $state(false);
@@ -435,7 +437,9 @@ const filters: Array<{ id: ActiveFilter; label: string }> = [
 const selectedConnector = $derived(connectors.find((connector) => connector.kind === selectedKind) ?? connectors[0]);
 const obsidianSources = $derived(sources.filter((source) => source.kind === "obsidian"));
 const connectedCount = $derived(obsidianSources.length);
-const indexedCount = $derived(obsidianSources.filter((source) => source.lastIndexedAt).length);
+const indexedCount = $derived(
+	obsidianSources.filter((source) => source.lastIndexedAt || (source.stats?.indexed ?? 0) > 0).length,
+);
 const pathIsMissing = $derived(vaultPath.trim().length === 0);
 const canSubmit = $derived(!pathIsMissing && !adding && selectedKind === "obsidian");
 const filteredConnectors = $derived.by(() => {
@@ -511,7 +515,8 @@ async function submitSource(): Promise<void> {
 	status = null;
 	error = null;
 	try {
-		const result = await addObsidianSource(vaultPath.trim(), vaultName.trim() || undefined);
+		const excludeGlobs = parseExcludeGlobs(excludeGlobsText);
+		const result = await addObsidianSource(vaultPath.trim(), vaultName.trim() || undefined, excludeGlobs);
 		if (result.error) {
 			error = result.error;
 			return;
@@ -548,10 +553,28 @@ async function disconnectSource(source: SignetSourceEntry): Promise<void> {
 }
 
 function formatDate(value: string | undefined): string {
-	if (!value) return "Not scanned yet";
+	if (!value) return "Not completed yet";
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return value;
 	return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function parseExcludeGlobs(value: string): string[] {
+	return Array.from(
+		new Set(
+			value
+				.split(/[\n,]/)
+				.map((entry) => entry.trim())
+				.filter(Boolean),
+		),
+	);
+}
+
+function sourceScanLabel(source: SignetSourceEntry): string {
+	const indexed = source.stats?.indexed ?? 0;
+	const chunks = source.stats?.chunks ?? 0;
+	if (indexed > 0) return `${indexed} notes · ${chunks} chunks${source.lastIndexedAt ? "" : " · syncing"}`;
+	return source.lastIndexedAt ? "Scan completed with no indexed notes" : "Connected; waiting for first indexed note";
 }
 </script>
 
@@ -790,7 +813,9 @@ function formatDate(value: string | undefined): string {
 				<div class="connector-grid" class:has-expanded={expandedKind !== null}>
 					{#each filteredConnectors as connector (connector.kind)}
 						{@const expanded = expandedKind === connector.kind}
-						<article class="connector-card" class:expanded class:compressed={expandedKind !== null && !expanded}>
+						{@const connectedSources = connector.kind === "obsidian" ? obsidianSources : []}
+						{@const isConnected = connectedSources.length > 0}
+						<article class="connector-card" class:expanded class:connected={isConnected} class:compressed={expandedKind !== null && !expanded}>
 							<button
 								class="connector-row"
 								class:selected={expanded}
@@ -802,11 +827,13 @@ function formatDate(value: string | undefined): string {
 									{@render sourceLogo(connector.icon)}
 								</span>
 								<span class="connector-copy">
-									<strong>{connector.name}</strong>
-									<small>{connector.detail}</small>
+									<strong>{isConnected && connectedSources[0] ? connectedSources[0].name : connector.name}</strong>
+									<small>{isConnected && connectedSources[0] ? sourceScanLabel(connectedSources[0]) : connector.detail}</small>
 								</span>
-								<span class="connector-action" class:available={connector.status === "available"}>
-									{#if expanded}
+								<span class="connector-action" class:available={connector.status === "available"} class:connected={isConnected}>
+									{#if isConnected}
+										<CheckCircle2 />
+									{:else if expanded}
 										<X />
 									{:else if connector.status === "available"}
 										<Check />
@@ -820,38 +847,79 @@ function formatDate(value: string | undefined): string {
 
 							<div class="connector-expand" class:open={expanded} aria-hidden={!expanded}>
 								<p class="connector-description">{connector.description}</p>
-								{#if !connectMode || !expanded}
-									<button
-										class="connect-button"
-										type="button"
-										disabled={connector.status !== "available" || !expanded}
-										onclick={() => (connectMode = true)}
-									>
-										<Link2 /> {connector.status === "available" ? "Connect" : "Planned source"}
-									</button>
-								{/if}
 
-								{#if connectMode && expanded && connector.kind === "obsidian"}
-									<form class="connect-form" onsubmit={(event) => { event.preventDefault(); void submitSource(); }}>
-										<label>
-											<span>Display name</span>
-											<input bind:value={vaultName} placeholder="Obsidian Vault" />
-										</label>
-										<label>
-											<span>Vault folder</span>
-											<div class="path-row">
-												<input bind:value={vaultPath} placeholder="Choose your vault folder..." onblur={() => (touchedPath = true)} />
-												<button type="button" onclick={() => void chooseFolder()} disabled={pickingFolder}>
-													<FolderOpen /> {pickingFolder ? "Opening" : "Browse"}
+								{#if loading && connector.kind === "obsidian"}
+									<p class="connected-loading">Checking source registry...</p>
+								{:else if isConnected}
+									<div class="connected-list connected-list--inline">
+										{#each connectedSources as source (source.id)}
+											<article class="connected-row connected-row--inline">
+												<div class="connected-main">
+													<div class="connected-title-row">
+														<strong>{source.name}</strong>
+														<span class="status-badge status-badge--connected">Connected</span>
+													</div>
+													<code>{source.root}</code>
+												</div>
+												<ul>
+													<li><CheckCircle2 /> {source.enabled ? "Enabled" : "Disabled"}</li>
+													<li><Database /> {sourceScanLabel(source)}</li>
+													<li><Database /> Last complete scan: {formatDate(source.lastIndexedAt)}</li>
+												</ul>
+												{#if source.excludeGlobs?.length}
+													<div class="exclude-summary">
+														<span>Ignoring</span>
+														<code>{source.excludeGlobs.join(", ")}</code>
+													</div>
+												{/if}
+												<button
+													class="disconnect-button"
+													type="button"
+													disabled={removingSourceId === source.id}
+													onclick={() => void disconnectSource(source)}
+												>
+													{#if removingSourceId === source.id}<span class="spin"><RefreshCw /></span>{:else}<X />{/if}
+													{removingSourceId === source.id ? "Removing" : "Disconnect vault"}
 												</button>
-											</div>
-										</label>
-										{#if touchedPath && pathIsMissing}<p class="field-error">Vault folder is required.</p>{/if}
-										<button class="connect-button" type="submit" disabled={!canSubmit}>
-											{#if adding}<span class="spin"><RefreshCw /></span>{:else}<CirclePlus />{/if}
-											{adding ? "Indexing" : "Add source"}
+											</article>
+										{/each}
+									</div>
+								{:else if connector.status === "available"}
+									{#if !connectMode || !expanded}
+										<button class="connect-button" type="button" disabled={!expanded} onclick={() => (connectMode = true)}>
+											<Link2 /> Connect
 										</button>
-									</form>
+									{/if}
+
+									{#if connectMode && expanded && connector.kind === "obsidian"}
+										<form class="connect-form" onsubmit={(event) => { event.preventDefault(); void submitSource(); }}>
+											<label>
+												<span>Display name</span>
+												<input bind:value={vaultName} placeholder="Obsidian Vault" />
+											</label>
+											<label>
+												<span>Vault folder</span>
+												<div class="path-row">
+													<input bind:value={vaultPath} placeholder="Choose your vault folder..." onblur={() => (touchedPath = true)} />
+													<button type="button" onclick={() => void chooseFolder()} disabled={pickingFolder}>
+														<FolderOpen /> {pickingFolder ? "Opening" : "Browse"}
+													</button>
+												</div>
+											</label>
+											{#if touchedPath && pathIsMissing}<p class="field-error">Vault folder is required.</p>{/if}
+											<label>
+												<span>Ignore globs</span>
+												<textarea bind:value={excludeGlobsText} rows="5" placeholder="**/.*/**&#10;**/node_modules/**"></textarea>
+												<small class="field-hint">One glob per line or comma. Default ignores Obsidian internals, trash, Hermes metadata, hidden dot-folders, and hidden files.</small>
+											</label>
+											<button class="connect-button" type="submit" disabled={!canSubmit}>
+												{#if adding}<span class="spin"><RefreshCw /></span>{:else}<CirclePlus />{/if}
+												{adding ? "Indexing" : "Add source"}
+											</button>
+										</form>
+									{/if}
+								{:else}
+									<p class="form-status form-status--info">Planned source. Not connectable yet.</p>
 								{/if}
 
 								{#if selectedKind === connector.kind && status}<p class="form-status form-status--info">{status}</p>{/if}
@@ -863,39 +931,6 @@ function formatDate(value: string | undefined): string {
 				<footer>{connectors.filter((connector) => connector.status === "available").length} live / {connectors.filter((connector) => connector.status === "planned").length} planned sources</footer>
 			</section>
 
-			{#if loading || obsidianSources.length > 0}
-				<section class="connected-panel sig-panel">
-					<header class="section-label">Connected locally</header>
-					{#if loading}
-						<p class="connected-loading">Checking source registry...</p>
-					{:else}
-						<div class="connected-list">
-							<p class="removal-note">Remove any knowledge base here. Signet purges its indexed artifacts, graph rows, and source chunks; the original files stay untouched.</p>
-							{#each obsidianSources as source (source.id)}
-								<article class="connected-row">
-									<div>
-										<strong>{source.name}</strong>
-										<code>{source.root}</code>
-									</div>
-									<ul>
-										<li><CheckCircle2 /> {source.enabled ? "Enabled" : "Disabled"}</li>
-										<li><Database /> {formatDate(source.lastIndexedAt)}</li>
-									</ul>
-									<button
-										class="disconnect-button"
-										type="button"
-										disabled={removingSourceId === source.id}
-										onclick={() => void disconnectSource(source)}
-									>
-										{#if removingSourceId === source.id}<span class="spin"><RefreshCw /></span>{:else}<X />{/if}
-										{removingSourceId === source.id ? "Removing" : "Remove knowledge base"}
-									</button>
-								</article>
-							{/each}
-						</div>
-					{/if}
-				</section>
-			{/if}
 		</main>
 
 	</div>
@@ -1417,8 +1452,7 @@ function formatDate(value: string | undefined): string {
 		color: var(--sig-text-muted);
 	}
 
-	.featured-panel .section-label,
-	.connected-panel .section-label {
+	.featured-panel .section-label {
 		padding-left: 2px;
 	}
 
@@ -1455,9 +1489,12 @@ function formatDate(value: string | undefined): string {
 		z-index: 20;
 		background: var(--sig-surface-raised);
 		box-shadow:
-			inset 2px 0 0 var(--sig-accent),
-			0 14px 30px rgba(0, 0, 0, 0.4),
-			0 0 0 1px var(--sig-border-strong);
+			0 0 0 1px rgba(245, 158, 11, 0.26),
+			0 18px 42px rgba(0, 0, 0, 0.35);
+	}
+
+	.connector-card.connected {
+		border-color: rgba(34, 197, 94, 0.36);
 	}
 
 	.connector-row {
@@ -1582,6 +1619,12 @@ function formatDate(value: string | undefined): string {
 		color: var(--sig-success);
 	}
 
+	.connector-action.connected {
+		border-color: rgba(34, 197, 94, 0.62);
+		background: rgba(34, 197, 94, 0.1);
+		color: var(--sig-success);
+	}
+
 	.connector-action :global(svg) {
 		width: 14px;
 		height: 14px;
@@ -1656,9 +1699,9 @@ function formatDate(value: string | undefined): string {
 		color: var(--sig-text-muted);
 	}
 
-	.connect-form input {
+	.connect-form input,
+	.connect-form textarea {
 		width: 100%;
-		height: 32px;
 		border: 1px solid var(--sig-border-strong);
 		border-radius: 0;
 		background: var(--sig-surface-raised);
@@ -1666,6 +1709,21 @@ function formatDate(value: string | undefined): string {
 		font: 11px var(--font-mono);
 		color: var(--sig-text-bright);
 		outline: none;
+	}
+
+	.connect-form input {
+		height: 32px;
+	}
+
+	.connect-form textarea {
+		min-height: 86px;
+		padding: 9px 10px;
+		resize: vertical;
+	}
+
+	.field-hint {
+		font: 10px/1.4 var(--font-body);
+		color: var(--sig-text-muted);
 	}
 
 	.path-row {
@@ -1769,6 +1827,11 @@ function formatDate(value: string | undefined): string {
 		background: var(--sig-surface);
 	}
 
+	.connected-list--inline {
+		border-color: var(--sig-border-strong);
+		background: rgba(0, 0, 0, 0.12);
+	}
+
 	.connected-loading {
 		border: 1px solid var(--sig-border);
 		border-radius: 0;
@@ -1798,6 +1861,36 @@ function formatDate(value: string | undefined): string {
 		background: var(--sig-surface-raised);
 	}
 
+	.connected-row--inline {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 10px;
+	}
+
+	.connected-main {
+		min-width: 0;
+	}
+
+	.connected-title-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+	}
+
+	.status-badge {
+		border: 1px solid var(--sig-border);
+		padding: 2px 6px;
+		font: 9px var(--font-mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.status-badge--connected {
+		border-color: rgba(34, 197, 94, 0.45);
+		color: var(--sig-success);
+		background: rgba(34, 197, 94, 0.08);
+	}
+
 	.connected-row strong {
 		display: block;
 		margin-bottom: 4px;
@@ -1825,7 +1918,7 @@ function formatDate(value: string | undefined): string {
 	.connected-row li {
 		display: flex;
 		align-items: center;
-		justify-content: flex-end;
+		justify-content: flex-start;
 		gap: 6px;
 		font-size: 10px;
 		color: var(--sig-text-muted);
@@ -1834,6 +1927,26 @@ function formatDate(value: string | undefined): string {
 	.connected-row li :global(svg) {
 		width: 13px;
 		height: 13px;
+	}
+
+	.exclude-summary {
+		display: grid;
+		gap: 4px;
+		border: 1px dashed var(--sig-border);
+		padding: 8px;
+		background: rgba(255, 255, 255, 0.02);
+	}
+
+	.exclude-summary span {
+		font: 9px var(--font-mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sig-text-muted);
+	}
+
+	.exclude-summary code {
+		white-space: normal;
+		word-break: break-word;
 	}
 
 	.disconnect-button {

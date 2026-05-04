@@ -1,9 +1,16 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
-import { addObsidianSource, loadSourcesConfig, markSourceIndexed, removeSource } from "@signet/core";
+import {
+	type SignetSourceEntry,
+	addObsidianSource,
+	loadSourcesConfig,
+	markSourceIndexed,
+	removeSource,
+} from "@signet/core";
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
+import { getDbAccessor } from "../db-accessor";
 import { fetchEmbedding as defaultFetchEmbedding } from "../embedding-fetch";
 import { type ResolvedMemoryConfig, loadMemoryConfig as defaultLoadMemoryConfig } from "../memory-config";
 import {
@@ -19,6 +26,7 @@ interface AddObsidianSourceBody {
 	readonly path?: string;
 	readonly root?: string;
 	readonly name?: string;
+	readonly excludeGlobs?: readonly string[];
 }
 
 interface PickDirectoryBody {
@@ -40,7 +48,12 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
 	app.get("/api/sources", (c) => {
-		return c.json(loadSourcesConfig(agentsDir));
+		const config = loadSourcesConfig(agentsDir);
+		const agentId = resolveDaemonAgentId();
+		return c.json({
+			version: config.version,
+			sources: config.sources.map((source) => ({ ...source, stats: sourceStats(source, agentId) })),
+		});
 	});
 
 	app.post("/api/sources/pick-directory", async (c) => {
@@ -65,15 +78,29 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		}
 
 		const root = body.root ?? body.path ?? "";
-		const result = addObsidianSource({ root, name: body.name }, agentsDir);
+		const excludeGlobs = Array.isArray(body.excludeGlobs)
+			? body.excludeGlobs.filter((entry) => typeof entry === "string")
+			: undefined;
+		const result = addObsidianSource({ root, name: body.name, excludeGlobs }, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 400);
 
 		const memoryConfig = loadMemoryConfig(agentsDir);
-		const bridge = startBridge([obsidianNativeMemorySource(result.source.root, result.source.name, result.source.id)], {
-			pollIntervalMs: 0,
-			embeddingConfig: memoryConfig.embedding,
-			fetchEmbedding,
-		});
+		const bridge = startBridge(
+			[
+				obsidianNativeMemorySource(
+					result.source.root,
+					result.source.name,
+					result.source.id,
+					result.source.excludeGlobs,
+				),
+			],
+			{
+				pollIntervalMs: 0,
+				embeddingConfig: memoryConfig.embedding,
+				fetchEmbedding,
+				agentsDir,
+			},
+		);
 		let indexed = 0;
 		try {
 			indexed = await bridge.syncExisting();
@@ -100,6 +127,44 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				: 0;
 		return c.json({ source: result.source, purged });
 	});
+}
+
+interface SourceStats {
+	readonly artifacts: number;
+	readonly chunks: number;
+	readonly indexed: number;
+}
+
+function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
+	if (source.kind !== "obsidian") return { artifacts: 0, chunks: 0, indexed: 0 };
+	const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const artifacts = countRow(
+				db
+					.prepare(
+						"SELECT COUNT(*) AS n FROM memory_artifacts WHERE agent_id = ? AND harness = 'obsidian' AND source_path >= ? AND source_path < ? AND COALESCE(is_deleted, 0) = 0",
+					)
+					.get(agentId, rootPrefix, `${rootPrefix}\uffff`),
+			);
+			const chunks = countRow(
+				db
+					.prepare(
+						"SELECT COUNT(*) AS n FROM embeddings WHERE agent_id = ? AND source_type = 'source_obsidian_chunk' AND source_id = ?",
+					)
+					.get(agentId, source.id),
+			);
+			return { artifacts, chunks, indexed: artifacts };
+		});
+	} catch {
+		return { artifacts: 0, chunks: 0, indexed: 0 };
+	}
+}
+
+function countRow(row: unknown): number {
+	return typeof row === "object" && row !== null && "n" in row && typeof (row as { n?: unknown }).n === "number"
+		? (row as { n: number }).n
+		: 0;
 }
 
 async function pickDirectory(title: string): Promise<{ ok: true; path: string } | { ok: false; error: string }> {

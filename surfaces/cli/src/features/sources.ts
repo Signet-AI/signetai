@@ -16,6 +16,7 @@ export type DaemonRemoveSourceResult =
 
 export interface AddObsidianSourceOptions {
 	readonly name?: string;
+	readonly exclude?: readonly string[];
 }
 
 export async function addObsidianVaultSource(
@@ -23,7 +24,8 @@ export async function addObsidianVaultSource(
 	options: AddObsidianSourceOptions,
 	deps: SourcesDeps,
 ): Promise<void> {
-	const result = addObsidianSource({ root: path, name: options.name }, deps.agentsDir);
+	const excludeGlobs = Array.isArray(options.exclude) ? options.exclude : undefined;
+	const result = addObsidianSource({ root: path, name: options.name, excludeGlobs }, deps.agentsDir);
 	if (result.ok === false) {
 		console.error(chalk.red(`✗ ${result.error}`));
 		process.exitCode = 1;
@@ -51,6 +53,7 @@ export async function listSources(deps: SourcesDeps): Promise<void> {
 		console.log(`${source.name} ${chalk.dim(`(${source.kind}, ${source.mode}, ${status})`)}`);
 		console.log(chalk.dim(`  id: ${source.id}`));
 		console.log(chalk.dim(`  root: ${source.root}`));
+		if (source.excludeGlobs?.length) console.log(chalk.dim(`  excludes: ${source.excludeGlobs.join(", ")}`));
 		if (source.lastIndexedAt) console.log(chalk.dim(`  last indexed: ${source.lastIndexedAt}`));
 	}
 }

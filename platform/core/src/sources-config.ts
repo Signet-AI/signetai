@@ -16,7 +16,16 @@ export interface SignetSourceEntry {
 	readonly createdAt: string;
 	readonly updatedAt: string;
 	readonly lastIndexedAt?: string;
+	readonly excludeGlobs?: readonly string[];
 }
+
+export const DEFAULT_OBSIDIAN_EXCLUDE_GLOBS = [
+	"**/.obsidian/**",
+	"**/.trash/**",
+	"**/.hermes/**",
+	"**/.*/**",
+	"**/.*",
+] as const;
 
 export interface SignetSourcesConfig {
 	readonly version: 1;
@@ -26,6 +35,7 @@ export interface SignetSourcesConfig {
 export interface AddObsidianSourceInput {
 	readonly root: string;
 	readonly name?: string;
+	readonly excludeGlobs?: readonly string[];
 	readonly now?: string;
 }
 
@@ -119,7 +129,14 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 	const cfg = loadSourcesConfigForWrite(agentsDir);
 	const existing = cfg.sources.find((source) => source.kind === "obsidian" && source.root === root);
 	if (existing) {
-		const updated = { ...existing, name: cleanName(input.name) ?? existing.name, enabled: true, updatedAt: now };
+		const updated = {
+			...existing,
+			name: cleanName(input.name) ?? existing.name,
+			excludeGlobs: cleanExcludeGlobs(input.excludeGlobs) ??
+				existing.excludeGlobs ?? [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS],
+			enabled: true,
+			updatedAt: now,
+		};
 		saveSourcesConfig(
 			{
 				version: SOURCES_CONFIG_VERSION,
@@ -139,6 +156,7 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 		mode: "read-only",
 		createdAt: now,
 		updatedAt: now,
+		excludeGlobs: cleanExcludeGlobs(input.excludeGlobs) ?? [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS],
 	};
 	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
 	return { ok: true, source, created: true };
@@ -234,6 +252,12 @@ function cleanName(value: string | undefined): string | null {
 	return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
+function cleanExcludeGlobs(values: readonly string[] | undefined): readonly string[] | null {
+	if (!values) return null;
+	const cleaned = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+	return cleaned.length > 0 ? cleaned : [];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -249,6 +273,8 @@ function isSourceEntry(value: unknown): value is SignetSourceEntry {
 		value.mode === "read-only" &&
 		typeof value.createdAt === "string" &&
 		typeof value.updatedAt === "string" &&
-		(value.lastIndexedAt === undefined || typeof value.lastIndexedAt === "string")
+		(value.lastIndexedAt === undefined || typeof value.lastIndexedAt === "string") &&
+		(value.excludeGlobs === undefined ||
+			(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string")))
 	);
 }

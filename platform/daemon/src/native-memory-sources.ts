@@ -3,7 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { loadSourcesConfig } from "@signet/core";
+import { DEFAULT_OBSIDIAN_EXCLUDE_GLOBS, loadSourcesConfig, markSourceIndexed } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
@@ -103,6 +103,7 @@ export function obsidianNativeMemorySource(
 	root: string,
 	displayName = "Obsidian",
 	sourceId = sourceIdForObsidianRoot(root),
+	excludeGlobs: readonly string[] = DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
 ): NativeMemorySource {
 	return {
 		harness: "obsidian",
@@ -113,8 +114,7 @@ export function obsidianNativeMemorySource(
 			{
 				glob: "**/*.md",
 				kind: "source_obsidian_markdown",
-				include: (_path, rel) =>
-					!rel.split("/").some((part) => part === ".obsidian" || part === ".trash" || part === ".hermes"),
+				include: (_path, rel) => !isExcludedByGlobs(rel, excludeGlobs),
 			},
 		],
 	};
@@ -123,7 +123,7 @@ export function obsidianNativeMemorySource(
 export function configuredNativeMemorySources(agentsDir?: string): NativeMemorySource[] {
 	const configured = loadSourcesConfig(agentsDir)
 		.sources.filter((source) => source.enabled && source.kind === "obsidian")
-		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id));
+		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs));
 	return [codexNativeMemorySource(), claudeCodeNativeMemorySource(), ...configured];
 }
 
@@ -153,6 +153,11 @@ function matchesPattern(source: NativeMemorySource, filePath: string): NativeMem
 
 function matchesGlob(glob: string, rel: string): boolean {
 	return matchGlobParts(glob.split("/"), rel.split("/"));
+}
+
+function isExcludedByGlobs(rel: string, excludeGlobs: readonly string[]): boolean {
+	const normalized = rel.replace(/\\/g, "/").replace(/^\.\//, "");
+	return excludeGlobs.some((glob) => matchesGlob(glob.replace(/\\/g, "/"), normalized));
 }
 
 function matchGlobParts(globParts: readonly string[], relParts: readonly string[]): boolean {
@@ -185,7 +190,7 @@ function activeBridgeSources(
 	if (!options.includeConfiguredSources) return [...baseSources];
 	const configured = loadSourcesConfig(options.agentsDir)
 		.sources.filter((source) => source.enabled && source.kind === "obsidian")
-		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id));
+		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs));
 	const byKey = new Map<string, NativeMemorySource>();
 	for (const source of [...baseSources, ...configured]) {
 		byKey.set(source.sourceId ?? `${source.harness}:${source.root}`, source);
@@ -414,6 +419,7 @@ export function startNativeMemoryBridge(
 				}
 			}
 			known.set(key, current);
+			if (source.sourceId) markSourceIndexed(source.sourceId, undefined, options.agentsDir);
 		}
 		return count;
 	};

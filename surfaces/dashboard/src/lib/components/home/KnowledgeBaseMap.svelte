@@ -33,11 +33,11 @@ const SIGNET_MEMORY_BASE: KnowledgeBase = {
 };
 
 const NODE_SLOTS = [
-	{ x: 33, y: 68 },
-	{ x: 54, y: 24 },
-	{ x: 74, y: 62 },
-	{ x: 86, y: 32 },
-	{ x: 18, y: 76 },
+	{ x: 18, y: 72 },
+	{ x: 73, y: 24 },
+	{ x: 80, y: 72 },
+	{ x: 22, y: 24 },
+	{ x: 88, y: 48 },
 ] as const;
 
 let loaded = $state(false);
@@ -52,27 +52,35 @@ onMount(async () => {
 });
 
 const externalKnowledgeBases = $derived.by((): KnowledgeBase[] => {
-	const sourceBases = sources.map((source, index): KnowledgeBase => ({
-		id: `source:${source.id}`,
-		name: source.name || basename(source.root),
-		kind: "source",
-		provider: source.kind,
-		detail: source.root,
-		status: source.enabled ? (source.lastIndexedAt ? "online" : "syncing") : "offline",
-		updatedAt: source.lastIndexedAt ?? source.updatedAt ?? null,
-		...NODE_SLOTS[index % NODE_SLOTS.length],
-	}));
+	const sourceBases = sources.map(
+		(source, index): KnowledgeBase => ({
+			id: `source:${source.id}`,
+			name: source.name || basename(source.root),
+			kind: "source",
+			provider: source.kind,
+			detail: source.root,
+			status: source.enabled
+				? source.lastIndexedAt || (source.stats?.indexed ?? 0) > 0
+					? "online"
+					: "syncing"
+				: "offline",
+			updatedAt: source.lastIndexedAt ?? source.updatedAt ?? null,
+			...NODE_SLOTS[index % NODE_SLOTS.length],
+		}),
+	);
 
-	const connectorBases = connectors.map((connector, index): KnowledgeBase => ({
-		id: `connector:${connector.id}`,
-		name: connector.display_name || connector.provider,
-		kind: "connector",
-		provider: connector.provider,
-		detail: connector.last_error ?? `${connector.provider} document connector`,
-		status: connectorStatus(connector),
-		updatedAt: connector.last_sync_at ?? connector.updated_at ?? null,
-		...NODE_SLOTS[(sourceBases.length + index) % NODE_SLOTS.length],
-	}));
+	const connectorBases = connectors.map(
+		(connector, index): KnowledgeBase => ({
+			id: `connector:${connector.id}`,
+			name: connector.display_name || connector.provider,
+			kind: "connector",
+			provider: connector.provider,
+			detail: connector.last_error ?? `${connector.provider} document connector`,
+			status: connectorStatus(connector),
+			updatedAt: connector.last_sync_at ?? connector.updated_at ?? null,
+			...NODE_SLOTS[(sourceBases.length + index) % NODE_SLOTS.length],
+		}),
+	);
 
 	return [...sourceBases, ...connectorBases].slice(0, NODE_SLOTS.length);
 });

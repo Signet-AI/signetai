@@ -428,11 +428,11 @@ describe("native memory sources", () => {
 
 	it("indexes Obsidian markdown as read-only source artifacts", async () => {
 		const root = join(dir, "vault");
-		const file = join(root, "permanent", "Signet.md");
 		mkdirSync(join(root, "permanent"), { recursive: true });
-		writeFileSync(file, "# Signet\n\nSignet Sources preserves native Obsidian graph context.\n");
+		const file = join(root, "permanent", "Signet.md");
+		writeFileSync(file, "# Signet\n\nObsidian source knowledge base note.\n");
 
-		expect(await indexNativeMemoryFile(obsidianNativeMemorySource(root, "Research Vault"), file)).toBe(true);
+		expect(await indexNativeMemoryFile(obsidianNativeMemorySource(root), file, "agent-obsidian")).toBe(true);
 
 		const row = getDbAccessor().withReadDb(
 			(db) =>
@@ -446,7 +446,26 @@ describe("native memory sources", () => {
 		expect(row.source_path).toBe(file);
 		expect(row.source_kind).toBe("source_obsidian_markdown");
 		expect(row.harness).toBe("obsidian");
-		expect(row.content).toContain("native Obsidian graph context");
+		expect(row.content).toContain("Obsidian source knowledge base note");
+	});
+
+	it("skips hidden Obsidian vault directories by default", async () => {
+		const root = join(dir, "vault");
+		mkdirSync(join(root, ".claude"), { recursive: true });
+		const file = join(root, ".claude", "CLAUDE.md");
+		writeFileSync(file, "# Hidden agent prompt\n\nThis should stay out of source recall by default.\n");
+
+		expect(await indexNativeMemoryFile(obsidianNativeMemorySource(root), file, "agent-obsidian")).toBe(false);
+	});
+
+	it("honors custom Obsidian exclude globs", async () => {
+		const root = join(dir, "vault");
+		mkdirSync(join(root, "private"), { recursive: true });
+		const file = join(root, "private", "Secret.md");
+		writeFileSync(file, "# Private\n\nThis folder is excluded by user glob.\n");
+
+		const source = obsidianNativeMemorySource(root, "Vault", "obsidian:test", ["private/**"]);
+		expect(await indexNativeMemoryFile(source, file, "agent-obsidian")).toBe(false);
 	});
 
 	it("removes Obsidian graph rows when a source markdown file disappears", async () => {

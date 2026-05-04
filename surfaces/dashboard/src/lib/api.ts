@@ -91,6 +91,12 @@ export interface DocumentConnector {
 	updated_at: string;
 }
 
+export interface SignetSourceStats {
+	artifacts: number;
+	chunks: number;
+	indexed: number;
+}
+
 export interface SignetSourceEntry {
 	id: string;
 	kind: "obsidian";
@@ -101,6 +107,8 @@ export interface SignetSourceEntry {
 	createdAt: string;
 	updatedAt: string;
 	lastIndexedAt?: string;
+	excludeGlobs?: string[];
+	stats?: SignetSourceStats;
 }
 
 export interface SourcesConfigResponse {
@@ -992,11 +1000,15 @@ export async function pickSourceDirectory(title = "Choose folder"): Promise<Pick
 	}
 }
 
-export async function addObsidianSource(path: string, name?: string): Promise<AddSourceResponse> {
+export async function addObsidianSource(
+	path: string,
+	name?: string,
+	excludeGlobs?: string[],
+): Promise<AddSourceResponse> {
 	const response = await fetch(`${API_BASE}/api/sources/obsidian`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ path, name }),
+		body: JSON.stringify({ path, name, excludeGlobs }),
 	});
 	const body = (await response.json().catch(() => null)) as Partial<AddSourceResponse> | null;
 	if (!response.ok) {

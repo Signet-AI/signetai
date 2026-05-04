@@ -203,6 +203,7 @@ export type {
 } from "./workspace-source-repo";
 export {
 	addObsidianSource,
+	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
 	getAgentsDir,
 	getSourcesConfigPath,
 	loadSourcesConfig,
