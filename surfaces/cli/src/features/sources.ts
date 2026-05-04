@@ -24,7 +24,7 @@ export async function addObsidianVaultSource(
 	options: AddObsidianSourceOptions,
 	deps: SourcesDeps,
 ): Promise<void> {
-	const excludeGlobs = Array.isArray(options.exclude) ? options.exclude : undefined;
+	const excludeGlobs = options.exclude && options.exclude.length > 0 ? options.exclude : undefined;
 	const result = addObsidianSource({ root: path, name: options.name, excludeGlobs }, deps.agentsDir);
 	if (result.ok === false) {
 		console.error(chalk.red(`✗ ${result.error}`));

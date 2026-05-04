@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
-import { removeConfiguredSource } from "./sources";
+import { addObsidianVaultSource, removeConfiguredSource } from "./sources";
 
 describe("sources CLI features", () => {
 	let dir = "";
@@ -79,6 +79,20 @@ describe("sources CLI features", () => {
 		expect(logs.join("\n")).toContain("Purged 12 Signet-owned source rows");
 		expect(logs.join("\n")).toContain("Source files were not modified");
 		expect(warnings).toHaveLength(0);
+		expect(process.exitCode).not.toBe(1);
+	});
+
+	it("preserves existing custom excludes when re-adding an Obsidian source without --exclude", async () => {
+		const added = addObsidianSource({ root: vault, name: "CLI Vault", excludeGlobs: ["private/**"] }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		await addObsidianVaultSource(vault, { name: "Renamed CLI Vault", exclude: [] }, { agentsDir: dir });
+
+		const [source] = loadSourcesConfig(dir).sources;
+		expect(source?.name).toBe("Renamed CLI Vault");
+		expect(source?.excludeGlobs).toContain("private/**");
+		expect(logs.join("\n")).toContain("Updated Obsidian source: Renamed CLI Vault");
 		expect(process.exitCode).not.toBe(1);
 	});
 
