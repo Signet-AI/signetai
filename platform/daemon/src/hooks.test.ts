@@ -1837,6 +1837,100 @@ describe("handleSessionEnd", () => {
 		}
 	});
 
+	test.serial("skips deferred graph feedback when pipeline is disabled", async () => {
+		writeAgentYaml(`
+memory:
+  pipelineV2:
+    enabled: false
+    shadowMode: false
+`);
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "pipeline-disabled-transcript.txt");
+		writeFileSync(
+			transcriptPath,
+			"User: keep transcript retention active while the memory pipeline is disabled.\nAssistant: feedback graph state must not change in disabled mode.\n".repeat(
+				8,
+			),
+		);
+
+		const db = openTestDb();
+		try {
+			const now = new Date().toISOString();
+			db.exec(`
+				CREATE TABLE IF NOT EXISTS entity_aspects (
+					id TEXT PRIMARY KEY,
+					entity_id TEXT NOT NULL,
+					agent_id TEXT NOT NULL,
+					name TEXT NOT NULL,
+					canonical_name TEXT NOT NULL,
+					weight REAL NOT NULL,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL
+				);
+				CREATE TABLE IF NOT EXISTS entity_attributes (
+					id TEXT PRIMARY KEY,
+					aspect_id TEXT NOT NULL,
+					agent_id TEXT NOT NULL,
+					memory_id TEXT NOT NULL,
+					kind TEXT NOT NULL,
+					content TEXT NOT NULL,
+					normalized_content TEXT NOT NULL,
+					confidence REAL NOT NULL,
+					importance REAL NOT NULL,
+					status TEXT NOT NULL,
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL
+				);
+			`);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('aspect-disabled', 'entity-disabled', 'default', 'core', 'core', 0.5, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
+				  confidence, importance, status, created_at, updated_at)
+				 VALUES ('attr-disabled', 'aspect-disabled', 'default', 'memory-disabled', 'attribute',
+				  'pipeline disabled feedback target', 'pipeline disabled feedback target', 1, 0.5, 'active', ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO session_memories
+				 (id, session_key, memory_id, source, effective_score, final_score, rank,
+				  was_injected, fts_hit_count, created_at)
+				 VALUES ('sm-disabled', 'sess-pipeline-disabled', 'memory-disabled', 'ka_traversal', 0.8, 0.8, 1, 1, 2, ?)`,
+			).run(now);
+		} finally {
+			db.close();
+		}
+
+		const result = await handleSessionEnd({
+			harness: "test",
+			transcriptPath,
+			sessionKey: "sess-pipeline-disabled",
+			sessionId: "sess-pipeline-disabled",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(false);
+		await flushSessionEndDeferredWork();
+
+		const transcript = readFileSync(join(TEST_DIR, "memory", "test", "transcripts", "transcript.jsonl"), "utf-8");
+		expect(transcript).toContain("keep transcript retention active");
+
+		const verifyDb = openTestDb();
+		try {
+			const aspect = verifyDb.prepare("SELECT weight FROM entity_aspects WHERE id = 'aspect-disabled'").get() as
+				| { weight: number }
+				| undefined;
+			const summaryJobs = verifyDb.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get() as { count: number };
+			expect(aspect?.weight).toBe(0.5);
+			expect(summaryJobs.count).toBe(0);
+		} finally {
+			verifyDb.close();
+		}
+	});
+
 	test.serial("falls back to the stored live transcript when session-end input is missing", async () => {
 		createMemoryDb([]);
 		const db = openTestDb();

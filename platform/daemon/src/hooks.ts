@@ -3345,7 +3345,8 @@ function deferSessionEndWork(params: {
 		}
 	}
 
-	if (sessionKey && memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.feedback.enabled) {
+	const pipelineActive = memoryCfg.pipelineV2.enabled || memoryCfg.pipelineV2.shadowMode;
+	if (sessionKey && pipelineActive && memoryCfg.pipelineV2.graph.enabled && memoryCfg.pipelineV2.feedback.enabled) {
 		let feedbackDecayedAspects = 0;
 		let feedbackPropagatedAttributes = 0;
 		try {
