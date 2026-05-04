@@ -404,7 +404,8 @@ export function startNativeMemoryBridge(
 		for (const source of activeBridgeSources(sources, options)) {
 			const key = sourceStateKey(source, agentId);
 			const current = new Set<string>();
-			if (existsSync(source.root)) {
+			const rootExists = existsSync(source.root);
+			if (rootExists) {
 				for await (const file of walkMarkdownFiles(source.root)) {
 					if (!matchesPattern(source, file)) continue;
 					current.add(file);
@@ -419,7 +420,7 @@ export function startNativeMemoryBridge(
 				}
 			}
 			known.set(key, current);
-			if (source.sourceId) markSourceIndexed(source.sourceId, undefined, options.agentsDir);
+			if (rootExists && source.sourceId) markSourceIndexed(source.sourceId, undefined, options.agentsDir);
 		}
 		return count;
 	};

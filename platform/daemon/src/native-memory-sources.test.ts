@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addObsidianSource } from "@signet/core";
+import { addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	claudeCodeNativeMemorySource,
@@ -633,6 +633,28 @@ describe("native memory sources", () => {
 					.get(`${root.replace(/\\/g, "/")}/%`) as { count: number },
 		);
 		expect(remaining.count).toBe(0);
+	});
+
+	it("does not mark a configured Obsidian source indexed when the root is missing", async () => {
+		const root = join(dir, "missing-vault");
+		mkdirSync(root, { recursive: true });
+		const added = addObsidianSource({ root, name: "Missing Vault" }, dir);
+		expect(added.ok).toBe(true);
+		rmSync(root, { recursive: true, force: true });
+
+		const handle = startNativeMemoryBridge([codexNativeMemorySource(join(dir, ".codex"))], {
+			agentId: "agent-native",
+			agentsDir: dir,
+			includeConfiguredSources: true,
+			pollIntervalMs: 0,
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(0);
+			const stored = loadSourcesConfig(dir).sources.find((source) => source.root === root);
+			expect(stored?.lastIndexedAt).toBeUndefined();
+		} finally {
+			await handle.close();
+		}
 	});
 
 	it("reloads configured Obsidian sources on each sync and updates them in place", async () => {
