@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-06
-- Bug fixes: classify body-read timeouts correctly in daemon clients.
+- Bug fixes: respect active harnesses during sync; classify body-read timeouts correctly in daemon clients.
 - Docs: correct stale documentation claims.
 
 ### 2026-05-04
@@ -35,6 +35,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: force horizontal contributor avatars; render contributors inline; clean up contributors rendering; add LeuciRemi to contributors; correct stale documentation claims; fix documentation drift.
 
 ## Release Ledger
+
+## [0.111.5] - 2026-05-06
+
+Release summary: 1 bug fix.
+Tag range: `v0.111.4..v0.111.5`.
+
+### Bug Fixes
+
+- **cli**: respect active harnesses during sync (#630)
 
 ## [0.111.4] - 2026-05-06
 
