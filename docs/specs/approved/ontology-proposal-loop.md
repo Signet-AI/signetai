@@ -127,6 +127,7 @@ GET  /api/ontology/proposals/conflicts
 GET  /api/ontology/proposals/:id
 GET  /api/ontology/proposals/:id/evidence
 GET  /api/ontology/claims/evidence
+GET  /api/ontology/links/:id/evidence
 POST /api/ontology/proposals
 POST /api/ontology/proposals/batch
 POST /api/ontology/proposals/repair/duplicates
@@ -156,6 +157,7 @@ signet ontology claims <entity> <aspect> <group>
 signet ontology conflicts
 signet ontology evidence <id>
 signet ontology claim-evidence <entity> <aspect> <group> <claim>
+signet ontology link-evidence <link-id>
 signet ontology propose --operation add_claim_value --payload-file proposal.json
 signet ontology import-proposals --file extraction-output.json
 signet ontology repair --duplicates --dry-run
@@ -244,6 +246,8 @@ router rather than binding directly to a vendor or harness.
   and indexed memory artifacts.
 - Support applied claim evidence lookup so accepted claim values remain
   traceable after proposal application.
+- Support applied link evidence lookup so accepted semantic edges remain
+  traceable after proposal application.
 - Support pending proposal conflict inspection for claim slots with competing
   values before any proposal is applied.
 - Support deterministic duplicate-entity repair candidates that can be previewed
@@ -280,6 +284,8 @@ router rather than binding directly to a vendor or harness.
   reading arbitrary filesystem paths.
 - Applied claim evidence lookup resolves stored attribute provenance and memory
   references without reading arbitrary filesystem paths.
+- Applied link evidence lookup resolves stored dependency provenance without
+  reading arbitrary filesystem paths.
 - Conflict lookup groups pending `add_claim_value` proposals by
   entity/aspect/group/claim slot and reports only slots with competing values.
 - Duplicate repair lookup detects same-agent duplicate canonical entity names

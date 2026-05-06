@@ -443,13 +443,13 @@ function printOntologyLinks(data: unknown): void {
 	console.log();
 }
 
-function printEvidence(data: unknown): void {
+function printEvidence(data: unknown, title = "Proposal Evidence"): void {
 	const items = ((asRecord(data) as EvidenceResponse).items ?? []) as readonly EvidenceItem[];
 	if (items.length === 0) {
 		console.log(chalk.dim("  No evidence references found"));
 		return;
 	}
-	console.log(chalk.bold("\n  Proposal Evidence\n"));
+	console.log(chalk.bold(`\n  ${title}\n`));
 	for (const item of items) {
 		const marker = item.found === false ? chalk.red("missing") : chalk.green("found");
 		console.log(`  ${marker} ${chalk.yellow(item.kind ?? "unknown")} ${chalk.cyan(item.label ?? "")}`);
@@ -569,6 +569,20 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		const data = await apiGet(deps, `/api/ontology/proposals/${encodeURIComponent(id)}/evidence`, params);
 		if (options.json) console.log(JSON.stringify(data, null, 2));
 		else printEvidence(data);
+	});
+
+	addCommonOptions(
+		ontology
+			.command("link-evidence")
+			.description("Show evidence for one applied ontology link")
+			.argument("<id>", "Link id"),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const data = await apiGet(deps, `/api/ontology/links/${encodeURIComponent(id)}/evidence`, params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printEvidence(data, "Link Evidence");
 	});
 
 	addCommonOptions(

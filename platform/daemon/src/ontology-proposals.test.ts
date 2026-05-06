@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { getOntologyClaimEvidence } from "./ontology-claim-evidence";
+import { getOntologyLinkEvidence } from "./ontology-link-evidence";
 import {
 	OntologyProposalError,
 	applyOntologyProposal,
@@ -473,6 +474,70 @@ describe("ontology proposals", () => {
 		expect(row?.source_kind).toBe("transcript");
 		expect(row?.source_type).toBe("artifact");
 		expect(row?.target_type).toBe("concept");
+	});
+
+	it("resolves applied link evidence from stored dependency provenance", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"transcript:link",
+				"User: Transcript Artifact supports the Signet proposal loop claim.",
+				"codex",
+				"/tmp/signet",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:01:00.000Z",
+			);
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, session_id,
+				  session_key, session_token, harness, captured_at, content, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"ant",
+				"memory/codex/transcripts/link.jsonl",
+				"sha-link",
+				"transcript",
+				"session-link",
+				"transcript:link",
+				"token-link",
+				"codex",
+				"2026-05-06T00:01:00.000Z",
+				"Artifact source truth says this transcript supports the proposal-loop claim.",
+				"2026-05-06T00:01:00.000Z",
+			);
+		});
+		const proposal = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "create_link",
+			payload: {
+				source_entity: "Transcript Artifact",
+				source_type: "artifact",
+				link_type: "supports_claim",
+				target_entity: "Signet proposal loop",
+				target_type: "concept",
+				reason: "Transcript supports the claim.",
+			},
+			sourceKind: "transcript",
+			sourceId: "transcript:link",
+			sourcePath: "memory/codex/transcripts/link.jsonl",
+		});
+		const applied = applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "test" });
+		const dependencyId = applied.result?.dependencyId;
+		expect(typeof dependencyId).toBe("string");
+
+		const evidence = getOntologyLinkEvidence(getDbAccessor(), {
+			agentId: "ant",
+			id: dependencyId as string,
+		});
+
+		expect(evidence.dependency.sourceKind).toBe("transcript");
+		expect(evidence.items.map((item) => item.kind)).toEqual(["session_transcript", "memory_artifact"]);
+		expect(evidence.items[0]?.excerpt).toContain("supports the Signet proposal loop");
+		expect(evidence.items[1]?.excerpt).toContain("supports the proposal-loop claim");
 	});
 
 	it("groups pending add_claim_value conflicts by claim slot", () => {

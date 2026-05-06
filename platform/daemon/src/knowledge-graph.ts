@@ -102,6 +102,10 @@ function rowToDependency(r: Record<string, unknown>): EntityDependency {
 		strength: r.strength as number,
 		confidence: typeof r.confidence === "number" ? r.confidence : 0.7,
 		reason: typeof r.reason === "string" ? r.reason : null,
+		sourceKind: (r.source_kind as string) ?? null,
+		sourceId: (r.source_id as string) ?? null,
+		sourcePath: (r.source_path as string) ?? null,
+		sourceRoot: (r.source_root as string) ?? null,
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
@@ -401,9 +405,25 @@ export function upsertDependency(accessor: DbAccessor, params: UpsertDependencyP
 			strength: params.strength ?? 0.5,
 			confidence: conf,
 			reason,
+			sourceKind: null,
+			sourceId: null,
+			sourcePath: null,
+			sourceRoot: null,
 			createdAt: ts,
 			updatedAt: ts,
 		};
+	});
+}
+
+export function getEntityDependencyById(
+	accessor: DbAccessor,
+	params: { readonly id: string; readonly agentId: string },
+): EntityDependency | null {
+	return accessor.withReadDb((db) => {
+		const row = db
+			.prepare("SELECT * FROM entity_dependencies WHERE id = ? AND agent_id = ?")
+			.get(params.id, params.agentId) as Record<string, unknown> | undefined;
+		return row === undefined ? null : rowToDependency(row);
 	});
 }
 

@@ -185,6 +185,34 @@ describe("registerOntologyCommands", () => {
 		expect(lines.join("\n")).toContain("Applied claims retain evidence.");
 	});
 
+	test("link-evidence calls the applied link evidence endpoint", async () => {
+		let capturedPath = "";
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, path) => {
+				capturedPath = path;
+				return {
+					ok: true,
+					data: {
+						items: [{ kind: "session_transcript", found: true, label: "transcript:link" }],
+					},
+				};
+			},
+		});
+
+		await program.parseAsync(["node", "test", "ontology", "link-evidence", "link-1", "--agent", "ant"]);
+
+		expect(capturedPath).toBe("/api/ontology/links/link-1/evidence?agent_id=ant");
+		expect(lines.join("\n")).toContain("Link Evidence");
+		expect(lines.join("\n")).toContain("transcript:link");
+	});
+
 	test("repair duplicates posts a dry-run request by default", async () => {
 		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
 		const lines: string[] = [];

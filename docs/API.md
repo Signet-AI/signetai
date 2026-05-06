@@ -3437,6 +3437,11 @@ provenance. Query parameters: `entity`, `aspect`, `group`, `claim`, `status`,
 /api/ontology/claims/evidence?entity=Signet&aspect=architecture&group=ontology&claim=proposal_loop
 ```
 
+### GET /api/ontology/links/:id/evidence
+
+Resolve evidence for an already-applied ontology link from stored dependency
+provenance.
+
 ### POST /api/ontology/proposals
 
 Create one pending ontology proposal.

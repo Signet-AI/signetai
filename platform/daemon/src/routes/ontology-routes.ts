@@ -7,6 +7,7 @@ import {
 	parseOntologyClaimAttributeKind,
 	parseOntologyClaimAttributeStatus,
 } from "../ontology-claim-evidence";
+import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
 import {
 	OntologyProposalError,
 	applyOntologyProposal,
@@ -67,6 +68,7 @@ async function readJsonRecord(c: Context): Promise<Record<string, unknown>> {
 function statusForError(err: unknown): 400 | 404 | 409 | 500 {
 	if (err instanceof OntologyProposalError) return err.status;
 	if (err instanceof OntologyClaimEvidenceError) return err.status;
+	if (err instanceof OntologyLinkEvidenceError) return err.status;
 	return 500;
 }
 
@@ -92,6 +94,10 @@ export function registerOntologyRoutes(app: Hono): void {
 		return requirePermission(permission, authConfig)(c, next);
 	});
 	app.use("/api/ontology/claims/*", async (c, next) => {
+		const permission = c.req.method === "GET" ? "recall" : "modify";
+		return requirePermission(permission, authConfig)(c, next);
+	});
+	app.use("/api/ontology/links/*", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
 	});
@@ -181,6 +187,16 @@ export function registerOntologyRoutes(app: Hono): void {
 					offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
 				}),
 			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.get("/api/ontology/links/:id/evidence", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		try {
+			return c.json(getOntologyLinkEvidence(getDbAccessor(), { agentId: scoped.agentId, id: c.req.param("id") }));
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}
