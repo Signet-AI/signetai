@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { getOntologyClaimEvidence } from "./ontology-claim-evidence";
 import {
 	OntologyProposalError,
 	applyOntologyProposal,
@@ -258,6 +259,74 @@ describe("ontology proposals", () => {
 		expect(evidence.items[0]?.excerpt).toContain("mutates after review");
 		expect(evidence.items[1]?.kind).toBe("memory_artifact");
 		expect(evidence.items[1]?.excerpt).toContain("preserve lineage");
+	});
+
+	it("resolves applied claim evidence from stored attribute provenance", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"transcript:claim",
+				"User: Signet claims need evidence after proposal application.",
+				"codex",
+				"/tmp/signet",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:01:00.000Z",
+			);
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, session_id,
+				  session_key, session_token, harness, captured_at, content, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"ant",
+				"memory/codex/transcripts/claim.jsonl",
+				"sha-claim",
+				"transcript",
+				"session-claim",
+				"transcript:claim",
+				"token-claim",
+				"codex",
+				"2026-05-06T00:01:00.000Z",
+				"Artifact source truth says applied claims still need auditable lineage.",
+				"2026-05-06T00:01:00.000Z",
+			);
+		});
+		const proposal = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Signet",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "claim_evidence",
+				value: "Applied ontology claims retain source-backed evidence.",
+			},
+			confidence: 0.88,
+			sourceKind: "transcript",
+			sourceId: "transcript:claim",
+			sourcePath: "memory/codex/transcripts/claim.jsonl",
+		});
+		applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: proposal.id, actor: "ant" });
+
+		const evidence = getOntologyClaimEvidence(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "claim_evidence",
+		});
+
+		expect(evidence.count).toBe(1);
+		expect(evidence.items[0]?.attribute.sourceKind).toBe("transcript");
+		expect(evidence.items[0]?.attribute.sourcePath).toBe("memory/codex/transcripts/claim.jsonl");
+		expect(evidence.items[0]?.evidence.map((item) => item.kind)).toEqual(["session_transcript", "memory_artifact"]);
+		expect(evidence.items[0]?.evidence[0]?.excerpt).toContain("evidence after proposal application");
+		expect(evidence.items[0]?.evidence[1]?.excerpt).toContain("auditable lineage");
 	});
 
 	it("falls back to embedded quotes when source rows are not present", () => {

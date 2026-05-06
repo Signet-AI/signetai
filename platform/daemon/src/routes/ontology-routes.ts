@@ -2,6 +2,12 @@ import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
 import {
+	OntologyClaimEvidenceError,
+	getOntologyClaimEvidence,
+	parseOntologyClaimAttributeKind,
+	parseOntologyClaimAttributeStatus,
+} from "../ontology-claim-evidence";
+import {
 	OntologyProposalError,
 	applyOntologyProposal,
 	createOntologyProposal,
@@ -60,6 +66,7 @@ async function readJsonRecord(c: Context): Promise<Record<string, unknown>> {
 
 function statusForError(err: unknown): 400 | 404 | 409 | 500 {
 	if (err instanceof OntologyProposalError) return err.status;
+	if (err instanceof OntologyClaimEvidenceError) return err.status;
 	return 500;
 }
 
@@ -81,6 +88,10 @@ export function registerOntologyRoutes(app: Hono): void {
 		return requirePermission(permission, authConfig)(c, next);
 	});
 	app.use("/api/ontology/proposals/*", async (c, next) => {
+		const permission = c.req.method === "GET" ? "recall" : "modify";
+		return requirePermission(permission, authConfig)(c, next);
+	});
+	app.use("/api/ontology/claims/*", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
 	});
@@ -136,6 +147,40 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (scoped.response) return scoped.response;
 		try {
 			return c.json(getOntologyProposalEvidence(getDbAccessor(), c.req.param("id"), scoped.agentId));
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.get("/api/ontology/claims/evidence", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		const claim = c.req.query("claim")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		if (!claim) return c.json({ error: "claim is required" }, 400);
+		const kind = parseOntologyClaimAttributeKind(c.req.query("kind"));
+		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
+		const status = parseOntologyClaimAttributeStatus(c.req.query("status"));
+		if (c.req.query("status") && !status) return c.json({ error: "status is invalid" }, 400);
+		try {
+			return c.json(
+				getOntologyClaimEvidence(getDbAccessor(), {
+					agentId: scoped.agentId,
+					entity,
+					aspect,
+					group,
+					claim,
+					kind,
+					status,
+					limit: parseBoundedInt(c.req.query("limit"), 20, 1, 200),
+					offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
+				}),
+			);
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}

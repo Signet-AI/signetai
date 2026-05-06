@@ -849,6 +849,10 @@ export interface EntityAttribute {
 	readonly importance: number;
 	readonly status: AttributeStatus;
 	readonly supersededBy: string | null;
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
+	readonly sourcePath: string | null;
+	readonly sourceRoot: string | null;
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }

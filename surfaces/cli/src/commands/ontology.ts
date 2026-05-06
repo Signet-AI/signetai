@@ -82,6 +82,24 @@ interface EvidenceResponse {
 	readonly items?: readonly EvidenceItem[];
 }
 
+interface ClaimEvidenceAttribute {
+	readonly content?: string;
+	readonly status?: string;
+	readonly confidence?: number;
+	readonly sourceKind?: string | null;
+	readonly sourceId?: string | null;
+	readonly sourcePath?: string | null;
+}
+
+interface ClaimEvidenceValue {
+	readonly attribute?: ClaimEvidenceAttribute;
+	readonly evidence?: readonly EvidenceItem[];
+}
+
+interface ClaimEvidenceResponse {
+	readonly items?: readonly ClaimEvidenceValue[];
+}
+
 interface ConflictValue {
 	readonly proposalId?: string;
 	readonly value?: string;
@@ -440,6 +458,29 @@ function printEvidence(data: unknown): void {
 	console.log();
 }
 
+function printClaimEvidence(data: unknown): void {
+	const items = ((asRecord(data) as ClaimEvidenceResponse).items ?? []) as readonly ClaimEvidenceValue[];
+	if (items.length === 0) {
+		console.log(chalk.dim("  No claim values found"));
+		return;
+	}
+	console.log(chalk.bold("\n  Claim Evidence\n"));
+	for (const item of items) {
+		const attr = item.attribute;
+		const confidence = typeof attr?.confidence === "number" ? ` · ${attr.confidence.toFixed(2)}` : "";
+		console.log(`  ${chalk.cyan(attr?.status ?? "unknown")}${confidence}`);
+		if (attr?.content) console.log(chalk.dim(`    ${attr.content}`));
+		const source = attr?.sourcePath ?? attr?.sourceId ?? attr?.sourceKind;
+		if (source) console.log(chalk.dim(`    source ${source}`));
+		for (const evidence of item.evidence ?? []) {
+			const marker = evidence.found === false ? chalk.red("missing") : chalk.green("found");
+			console.log(`    ${marker} ${chalk.yellow(evidence.kind ?? "unknown")} ${chalk.cyan(evidence.label ?? "")}`);
+			if (evidence.excerpt) console.log(chalk.dim(`      ${evidence.excerpt}`));
+		}
+	}
+	console.log();
+}
+
 function printConflicts(data: unknown): void {
 	const items = ((asRecord(data) as ConflictsResponse).items ?? []) as readonly ConflictItem[];
 	if (items.length === 0) {
@@ -528,6 +569,31 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		const data = await apiGet(deps, `/api/ontology/proposals/${encodeURIComponent(id)}/evidence`, params);
 		if (options.json) console.log(JSON.stringify(data, null, 2));
 		else printEvidence(data);
+	});
+
+	addCommonOptions(
+		ontology
+			.command("claim-evidence")
+			.description("Show evidence for applied ontology claim values")
+			.argument("<entity>", "Entity/object name")
+			.argument("<aspect>", "Aspect name")
+			.argument("<group>", "Group key")
+			.argument("<claim>", "Claim key")
+			.option("--kind <kind>", "attribute or constraint")
+			.option("--status <status>", "active, superseded, deleted, or all")
+			.option("-l, --limit <n>", "Max claim values to return", Number.parseInt)
+			.option("--offset <n>", "Pagination offset", Number.parseInt),
+	).action(async (entity: string, aspect: string, group: string, claim: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams({ entity, aspect, group, claim });
+		appendAgent(params, options.agent);
+		if (options.kind) params.set("kind", options.kind);
+		if (options.status) params.set("status", options.status);
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		if (options.offset !== undefined) params.set("offset", String(options.offset));
+		const data = await apiGet(deps, "/api/ontology/claims/evidence", params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printClaimEvidence(data);
 	});
 
 	addCommonOptions(

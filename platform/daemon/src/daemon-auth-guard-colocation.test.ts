@@ -182,6 +182,13 @@ describe("auth guard co-location", () => {
 			expect(await status(app, "GET", "/api/ontology/proposals/conflicts")).toBe(403);
 		});
 
+		it("GET /api/ontology/claims/evidence returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "GET", "/api/ontology/claims/evidence")).toBe(403);
+		});
+
 		it("POST /api/ontology/proposals/repair/duplicates returns 403 without auth", async () => {
 			const app = await makeApp();
 			const { registerOntologyRoutes } = await import("./routes/ontology-routes");

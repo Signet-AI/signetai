@@ -82,6 +82,10 @@ function rowToAttribute(r: Record<string, unknown>): EntityAttribute {
 		importance: r.importance as number,
 		status: r.status as AttributeStatus,
 		supersededBy: (r.superseded_by as string) ?? null,
+		sourceKind: (r.source_kind as string) ?? null,
+		sourceId: (r.source_id as string) ?? null,
+		sourcePath: (r.source_path as string) ?? null,
+		sourceRoot: (r.source_root as string) ?? null,
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};

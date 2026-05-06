@@ -130,6 +130,61 @@ describe("registerOntologyCommands", () => {
 		);
 	});
 
+	test("claim-evidence calls the applied claim evidence endpoint", async () => {
+		let capturedPath = "";
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, path) => {
+				capturedPath = path;
+				return {
+					ok: true,
+					data: {
+						items: [
+							{
+								attribute: {
+									content: "Applied claims retain evidence.",
+									status: "active",
+									confidence: 0.9,
+									sourcePath: "memory/codex/transcript.jsonl",
+								},
+								evidence: [{ kind: "memory_artifact", found: true, label: "memory/codex/transcript.jsonl" }],
+							},
+						],
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"claim-evidence",
+			"Signet",
+			"architecture",
+			"ontology",
+			"proposal_loop",
+			"--status",
+			"all",
+			"--limit",
+			"3",
+			"--agent",
+			"ant",
+		]);
+
+		expect(capturedPath).toBe(
+			"/api/ontology/claims/evidence?entity=Signet&aspect=architecture&group=ontology&claim=proposal_loop&agent_id=ant&status=all&limit=3",
+		);
+		expect(lines.join("\n")).toContain("Claim Evidence");
+		expect(lines.join("\n")).toContain("Applied claims retain evidence.");
+	});
+
 	test("repair duplicates posts a dry-run request by default", async () => {
 		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
 		const lines: string[] = [];

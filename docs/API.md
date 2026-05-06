@@ -3410,6 +3410,54 @@ in a memory that is not yet linked. This endpoint does not mutate graph data.
 MCP exposes the same report as `knowledge_hygiene_report`.
 
 
+Ontology proposal loop
+----------------------
+
+Ontology maintenance writes reviewable proposals before mutating semantic graph
+state. Read routes require `recall`; mutation routes require `modify`. All
+routes accept optional `agent_id`.
+
+### GET /api/ontology/proposals
+
+List proposal records. Query parameters: `status`, `operation`, `limit`,
+`offset`.
+
+### GET /api/ontology/proposals/:id/evidence
+
+Resolve a proposal's evidence references against session transcripts and
+indexed memory artifacts. The endpoint never reads arbitrary filesystem paths.
+
+### GET /api/ontology/claims/evidence
+
+Resolve evidence for already-applied claim values from stored attribute
+provenance. Query parameters: `entity`, `aspect`, `group`, `claim`, `status`,
+`kind`, `limit`, `offset`.
+
+```text
+/api/ontology/claims/evidence?entity=Signet&aspect=architecture&group=ontology&claim=proposal_loop
+```
+
+### POST /api/ontology/proposals
+
+Create one pending ontology proposal.
+
+### POST /api/ontology/proposals/batch
+
+Create multiple pending proposals atomically.
+
+### POST /api/ontology/proposals/:id/apply
+
+Apply one pending proposal through its explicit operation handler.
+
+### POST /api/ontology/proposals/:id/reject
+
+Reject one pending proposal without mutating graph state.
+
+### POST /api/ontology/proposals/repair/duplicates
+
+Detect duplicate same-agent entities and optionally write merge proposals.
+
+
 Dreaming
 --------
 
