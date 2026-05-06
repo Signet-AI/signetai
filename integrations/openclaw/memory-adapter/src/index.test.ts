@@ -2163,7 +2163,10 @@ describe("daemonFetchResult body-read resilience", () => {
 					const body = new ReadableStream({
 						start(controller) {
 							controller.enqueue(new TextEncoder().encode('{"ok":'));
-							setTimeout(() => controller.error(Object.assign(new DOMException("signal timed out", "TimeoutError"))), 5);
+							setTimeout(
+								() => controller.error(Object.assign(new DOMException("signal timed out", "TimeoutError"))),
+								5,
+							);
 						},
 					});
 					return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
@@ -2180,6 +2183,35 @@ describe("daemonFetchResult body-read resilience", () => {
 		});
 
 		expect(result?.inject).toContain("session-start timed out");
+	});
+
+	it("does not use timeout fallback when body read fails for a non-timeout reason", async () => {
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL) => {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+				const path = new URL(url).pathname;
+				if (path === "/api/hooks/session-start") {
+					const body = new ReadableStream({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode('{"ok":'));
+							setTimeout(() => controller.error(new Error("stream reset")), 5);
+						},
+					});
+					return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+				}
+				return new Response("{}", { status: 200 });
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		const result = await signet.onSessionStart("openclaw", {
+			daemonUrl: "http://daemon.test",
+			agentId: "agent-body-read-failure",
+			sessionKey: "session-body-read-failure",
+		});
+
+		expect(result?.inject).toBeDefined();
+		expect(result?.inject).not.toContain("session-start timed out");
 	});
 
 	it("returns offline fallback when daemon sends empty body on session-start", async () => {

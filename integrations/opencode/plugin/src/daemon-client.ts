@@ -8,7 +8,7 @@
 
 import { READ_TIMEOUT, RUNTIME_PATH, WRITE_TIMEOUT } from "./types.js";
 
-export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
+export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
 export type DaemonFetchResult<T> =
 	| { readonly ok: true; readonly data: T }
@@ -95,7 +95,7 @@ async function daemonFetchResult<T>(
 				return { ok: false, reason: "timeout" };
 			}
 			console.warn(`[signet] ${method} ${path} body read failed:`, errorName(e) || e);
-			return { ok: false, reason: "timeout" };
+			return { ok: false, reason: "body-read" };
 		}
 	} catch (e) {
 		if (isTimeoutError(e)) {

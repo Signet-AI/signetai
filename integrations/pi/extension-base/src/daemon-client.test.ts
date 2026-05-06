@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createDaemonClient, type DaemonClientConfig } from "./daemon-client.js";
+import { type DaemonClientConfig, createDaemonClient } from "./daemon-client.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -38,6 +38,29 @@ describe("createDaemonClient (extension-base)", () => {
 		}
 	});
 
+	test("postResult classifies non-timeout body read failures separately from timeout", async () => {
+		globalThis.fetch = Object.assign(
+			async () => {
+				const body = new ReadableStream({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode('{"inje'));
+						setTimeout(() => controller.error(new Error("stream reset")), 5);
+					},
+				});
+				return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		const client = createDaemonClient("http://daemon.test", testConfig);
+		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.reason).toBe("body-read");
+		}
+	});
+
 	test("postResult returns invalid-json with diagnostic info for empty body", async () => {
 		const warnings: string[] = [];
 		const originalWarn = console.warn;
@@ -60,13 +83,15 @@ describe("createDaemonClient (extension-base)", () => {
 	});
 
 	test("postResult parses valid JSON through text-first path", async () => {
-		globalThis.fetch = Object.assign(
-			async () => Response.json({ inject: "memory-context", memoryCount: 3 }),
-			{ preconnect: originalFetch.preconnect },
-		);
+		globalThis.fetch = Object.assign(async () => Response.json({ inject: "memory-context", memoryCount: 3 }), {
+			preconnect: originalFetch.preconnect,
+		});
 
 		const client = createDaemonClient("http://daemon.test", testConfig);
-		const result = await client.postResult<{ inject: string; memoryCount: number }>("/api/hooks/user-prompt-submit", {});
+		const result = await client.postResult<{ inject: string; memoryCount: number }>(
+			"/api/hooks/user-prompt-submit",
+			{},
+		);
 
 		expect(result).toEqual({ ok: true, data: { inject: "memory-context", memoryCount: 3 } });
 	});

@@ -45,7 +45,7 @@ const SESSION_START_TIMEOUT = resolveSessionStartTimeoutMs(
 	process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT,
 );
 
-type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
+type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
 type DaemonFetchResult<T> =
 	| { readonly ok: true; readonly data: T }
@@ -431,7 +431,7 @@ async function daemonFetchResult<T>(
 				return { ok: false, reason: "timeout" };
 			}
 			console.warn(`[signet] ${method} ${path} body read failed:`, errorName(e) || e);
-			return { ok: false, reason: "timeout" };
+			return { ok: false, reason: "body-read" };
 		}
 	} catch (e) {
 		if (isTimeoutError(e)) {

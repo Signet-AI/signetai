@@ -1,4 +1,4 @@
-export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
+export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
 export type DaemonFetchResult<T> =
 	| { readonly ok: true; readonly data: T }
@@ -84,7 +84,7 @@ async function daemonFetchResult<T>(
 				return { ok: false, reason: "timeout" };
 			}
 			console.warn(`[${config.logPrefix}] ${method} ${path} body read failed:`, errorName(e) || e);
-			return { ok: false, reason: "timeout" };
+			return { ok: false, reason: "body-read" };
 		}
 	} catch (error) {
 		if (isTimeoutError(error)) {
