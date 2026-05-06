@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-06
+- Bug fixes: classify body-read timeouts correctly in daemon clients.
+- Docs: correct stale documentation claims.
+
 ### 2026-05-04
 - Features: dual-mode daemon — attach if running, bundled fallback.
 - Bug fixes: harden startup ownership and background git defaults; keep bundled sdk out of publish deps; surface Obsidian indexing status; resolve session-end timeout under concurrent load.
@@ -30,13 +34,20 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: stop native memory fd leak; validate embedding model availability during install and daemon startup; prevent false install failure from cleanup trap; resolve event-loop starvation from synchronous I/O on large memory directories; streaming rewrite for live-only transcript sessions during backfill; repair Codex provider and test timeouts; preserve prompt content in provider requests; harden desktop release builds; make transcript backfill idempotent; prevent OOM crash-loop in transcript backfill.
 - Docs: force horizontal contributor avatars; render contributors inline; clean up contributors rendering; add LeuciRemi to contributors; correct stale documentation claims; fix documentation drift.
 
-### 2026-04-26
-- Features: store transcripts as canonical jsonl.
-- Bug fixes: report skipped desktop refresh reasons; require managed desktop launcher marker; refresh desktop app after Signet update; resolve bundled GraphIQ install script; preserve native response globals; make live transcript append idempotent; serialize transcript jsonl backfill writes; show own-agent presence in readout; soft-delete native memory artifacts; keep web manifests out of version sync; stabilize repo-layout test suite; harden layout test checks.
-- Performance: reduce recall hot path latency.
-- Refactoring: reorganize monorepo layout.
-
 ## Release Ledger
+
+## [0.111.4] - 2026-05-06
+
+Release summary: 1 bug fix and 1 docs update.
+Tag range: `v0.111.3..v0.111.4`.
+
+### Bug Fixes
+
+- **connectors**: classify body-read timeouts correctly in daemon clients (#628)
+
+### Docs
+
+- correct stale documentation claims (#629)
 
 ## [0.111.3] - 2026-05-04
 
