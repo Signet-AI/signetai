@@ -158,6 +158,7 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"entity_attributes",
 	"knowledge_expand_session",
 	"lcm_expand",
+	"session_search",
 	"agent_peers",
 	"agent_message_send",
 	"agent_message_inbox",
@@ -862,7 +863,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				hints: z
 					.array(z.string().trim().min(1))
 					.min(1)
-					.describe("Required agent-provided prospective recall hints and alternate phrasings for retrieving this memory later"),
+					.describe(
+						"Required agent-provided prospective recall hints and alternate phrasings for retrieving this memory later",
+					),
 				createdAt: z
 					.string()
 					.optional()
@@ -2105,6 +2108,45 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 
 			if (!result.ok) {
 				return errorResult(`Temporal expansion failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
+
+	server.registerTool(
+		"session_search",
+		{
+			title: "Search Session Transcripts",
+			description:
+				"Search active or completed session transcripts. " +
+				"Pass current_session_key from a sub-agent to default to its parent when the session key encodes lineage.",
+			inputSchema: z.object({
+				query: z.string().describe("Natural language or keyword query"),
+				session_key: z.string().optional().describe("Specific transcript session key to search"),
+				current_session_key: z
+					.string()
+					.optional()
+					.describe("Current session key; sub-agent lineage may resolve this to the parent session"),
+				agent_id: z.string().optional().describe("Agent scope, default default"),
+				project: z.string().optional().describe("Optional project path filter"),
+				limit: z.number().optional().describe("Max results to return (default 10, max 20)"),
+			}),
+		},
+		async ({ query, session_key, current_session_key, agent_id, project, limit }) => {
+			const result = await daemonFetch<unknown>(baseUrl, "/api/sessions/search", {
+				method: "POST",
+				body: {
+					query,
+					sessionKey: session_key,
+					currentSessionKey: current_session_key,
+					agentId: agent_id,
+					project,
+					limit,
+				},
+			});
+
+			if (!result.ok) {
+				return errorResult(`Session search failed: ${result.error}`);
 			}
 			return textResult(result.data);
 		},

@@ -51,6 +51,7 @@ When to Use MCP vs Hooks
 | Session start/end lifecycle | Hooks |
 | Automatic memory extraction after each prompt | Hooks |
 | Agent wants to search memories mid-conversation | MCP (`memory_search`) |
+| Sub-agent needs to inspect its parent session | MCP (`session_search`) |
 | Agent wants to store a specific fact | MCP (`memory_store`) |
 | Agent needs to run a command with secrets | MCP (`secret_exec`) |
 | Compaction boundary handling | Hooks |
@@ -301,6 +302,40 @@ whose memory IDs were actually recorded for the given session and agent.
 **Note:** Prefer this tool over embedding feedback as raw JSON text. Both
 are supported for backward compatibility, but the MCP tool is recorded
 immediately on the current turn.
+
+### session_search
+
+Search active or completed session transcripts. This is the pull side of
+sub-agent context continuity: session-start injects a compact parent context
+block when Signet can infer the parent, while `session_search` lets the child
+query the parent transcript on demand.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | yes | Transcript search query |
+| `session_key` | string | no | Specific transcript session key to search |
+| `current_session_key` | string | no | Current session key; OpenClaw lineage can resolve this to the parent |
+| `agent_id` | string | no | Agent scope (default `default`) |
+| `project` | string | no | Optional project path filter |
+| `limit` | number | no | Max hits to return (default 10, max 20) |
+
+**Returns:** Object with `query`, `hits`, and `count`. Each hit includes
+`sessionKey`, `project`, `updatedAt`, `excerpt`, and `rank`.
+
+**Example:**
+
+```json
+{
+  "query": "trunk ports",
+  "current_session_key": "agent:nicholai:subagent:abc123",
+  "agent_id": "nicholai",
+  "limit": 5
+}
+```
+
+**Daemon endpoint:** `POST /api/sessions/search`
 
 ### agent_peers
 

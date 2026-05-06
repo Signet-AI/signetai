@@ -135,8 +135,6 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--codex-json", "Output Codex hook JSON")
 		.action(async (options) => {
 			const input = await readJson();
-			const sessionKey = pickSessionKey(input);
-			const stdinProject = pickString(input?.cwd);
 			const res = await deps.fetchDaemonResult<{
 				identity?: { name: string; description?: string };
 				memories?: Array<{ content: string }>;
@@ -145,14 +143,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			}>("/api/hooks/session-start", {
 				method: "POST",
 				headers: legacyHookHeaders(),
-				body: JSON.stringify({
-					harness: options.harness,
-					project: options.project || stdinProject,
-					agentId: options.agentId,
-					context: options.context,
-					sessionKey,
-					runtimePath: LEGACY_RUNTIME_PATH,
-				}),
+				body: JSON.stringify(buildSessionStartBody(input, options)),
 				timeout: SESSION_START_TIMEOUT_MS,
 			});
 			if (!res.ok) {
@@ -432,6 +423,40 @@ export function pickSessionKey(input: Record<string, unknown> | null): string {
 	return pickString(input.session_key, input.sessionKey, input.session_id, input.sessionId);
 }
 
+export function buildSessionStartBody(
+	input: Record<string, unknown> | null,
+	options: {
+		readonly harness: string;
+		readonly project?: string;
+		readonly agentId?: string;
+		readonly context?: string;
+	},
+): {
+	harness: string;
+	project: string;
+	agentId?: string;
+	harnessAgentId?: string;
+	parentSessionKey?: string;
+	context?: string;
+	sessionKey: string;
+	runtimePath: typeof LEGACY_RUNTIME_PATH;
+} {
+	const body = input;
+	const signetAgentId = pickString(options.agentId, body?.signet_agent_id, body?.signetAgentId);
+	const harnessAgentId = pickString(body?.agent_id, body?.agentId);
+	const parentSessionKey = pickString(body?.parent_session_key, body?.parentSessionKey, body?.parentID, body?.parentId);
+	return {
+		harness: options.harness,
+		project: pickString(options.project, body?.cwd),
+		...(signetAgentId ? { agentId: signetAgentId } : {}),
+		...(harnessAgentId ? { harnessAgentId } : {}),
+		...(parentSessionKey ? { parentSessionKey } : {}),
+		...(options.context ? { context: options.context } : {}),
+		sessionKey: pickSessionKey(body),
+		runtimePath: LEGACY_RUNTIME_PATH,
+	};
+}
+
 export function buildUserPromptSubmitBody(
 	input: Record<string, unknown> | null,
 	harness: string,
@@ -444,6 +469,8 @@ export function buildUserPromptSubmitBody(
 	sessionKey: string;
 	transcriptPath: string;
 	transcript: string;
+	agentId?: string;
+	harnessAgentId?: string;
 	lastAssistantMessage?: string;
 	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
@@ -451,6 +478,8 @@ export function buildUserPromptSubmitBody(
 	const userPrompt = pickString(body?.prompt, body?.user_prompt, body?.userPrompt);
 	const userMessage = pickString(body?.user_message, body?.userMessage, userPrompt);
 	const lastAssistantMessage = readLastAssistantMessage(body);
+	const agentId = pickString(body?.signet_agent_id, body?.signetAgentId);
+	const harnessAgentId = pickString(body?.agent_id, body?.agentId);
 	return {
 		harness,
 		project,
@@ -459,6 +488,8 @@ export function buildUserPromptSubmitBody(
 		sessionKey: pickSessionKey(body),
 		transcriptPath: pickString(body?.transcript_path, body?.transcriptPath),
 		transcript: pickString(body?.transcript),
+		...(agentId ? { agentId } : {}),
+		...(harnessAgentId ? { harnessAgentId } : {}),
 		runtimePath: LEGACY_RUNTIME_PATH,
 		...(lastAssistantMessage ? { lastAssistantMessage } : {}),
 	};
@@ -482,7 +513,7 @@ export function buildCompactionCompleteBody(
 	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
 	const body = input;
-	const agentId = pickString(overrides.agentId, body?.agent_id, body?.agentId);
+	const agentId = pickString(overrides.agentId, body?.signet_agent_id, body?.signetAgentId);
 	const sessionKey = pickString(overrides.sessionKey, pickSessionKey(body));
 	const project = pickString(overrides.project, body?.project, body?.cwd);
 	return {
@@ -504,6 +535,7 @@ export function buildSessionEndBody(
 	transcript: string;
 	sessionId: string;
 	sessionKey: string;
+	agentId?: string;
 	cwd: string;
 	reason: string;
 	runtimePath: typeof LEGACY_RUNTIME_PATH;
@@ -511,12 +543,14 @@ export function buildSessionEndBody(
 	const body = input ?? {};
 	const sessionKey = pickSessionKey(body);
 	const sessionId = pickString(body.session_id, body.sessionId, sessionKey);
+	const agentId = pickString(body.signet_agent_id, body.signetAgentId);
 	return {
 		harness,
 		transcriptPath: pickString(body.transcript_path, body.transcriptPath),
 		transcript: pickString(body.transcript),
 		sessionId,
 		sessionKey,
+		...(agentId ? { agentId } : {}),
 		cwd: pickString(body.cwd),
 		reason: pickString(body.reason),
 		runtimePath: LEGACY_RUNTIME_PATH,

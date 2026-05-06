@@ -96,6 +96,7 @@ import {
 	upsertSessionTranscript,
 } from "./session-transcripts";
 import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { assembleInheritedContextBlock, resolveParentSession } from "./subagent-context";
 import { isObject, isRenderError, isRenderResult } from "./synthesis-worker-protocol";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
@@ -396,6 +397,12 @@ export interface SessionStartRequest {
 	harness: string;
 	project?: string;
 	agentId?: string;
+	/** Harness-native agent/sub-agent identifier. Not used for Signet data scoping. */
+	harnessAgentId?: string;
+	parentSessionKey?: string;
+	parentKey?: string;
+	parentId?: string;
+	parentID?: string;
 	context?: string;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
@@ -1475,6 +1482,33 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
 	const traversalAgentId = resolveAgentId(req);
 	const agentScope = getAgentScope(traversalAgentId);
+	let inheritedSection = "";
+	if (req.sessionKey && existsSync(getMemoryDbPath())) {
+		try {
+			const subagentCfg = memoryCfg.pipelineV2.subagents ?? { inheritContext: true, tailChars: 3000 };
+			const block = getDbAccessor().withReadDb((db) => {
+				const parent = resolveParentSession(db, {
+					harness: req.harness,
+					project: req.project,
+					sessionKey: req.sessionKey,
+					agentId: traversalAgentId,
+					harnessAgentId: req.harnessAgentId,
+					parentSessionKey: req.parentSessionKey,
+					parentKey: req.parentKey,
+					parentId: req.parentId,
+					parentID: req.parentID,
+				});
+				return parent ? assembleInheritedContextBlock(db, parent, subagentCfg) : null;
+			});
+			inheritedSection = block ?? "";
+		} catch (error) {
+			logger.warn("hooks", "Sub-agent inherited context lookup failed (non-fatal)", {
+				error: error instanceof Error ? error.message : String(error),
+				harness: req.harness,
+				sessionKey: req.sessionKey,
+			});
+		}
+	}
 	const traversalRuntimeCfg = {
 		maxAspectsPerEntity: traversalCfg?.maxAspectsPerEntity ?? 10,
 		maxAttributesPerAspect: traversalCfg?.maxAttributesPerAspect ?? 20,
@@ -2016,8 +2050,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	const duration = Date.now() - start;
 	const maxTokens = config.maxInjectTokens ?? (config.maxInjectChars ? Math.round(config.maxInjectChars / 4) : 20000);
-	// Pre-reserve space for constraints + recovery so they are never truncated
-	const reservedTokens = countTokens(recoverySection) + countTokens(constraintsSection);
+	// Pre-reserve space for deterministic continuity sections so they are never truncated.
+	const reservedTokens = countTokens(recoverySection) + countTokens(constraintsSection) + countTokens(inheritedSection);
 	const mainBudget = Math.max(0, maxTokens - reservedTokens);
 	let inject = injectParts.join("\n");
 	if (mainBudget === 0) {
@@ -2029,6 +2063,9 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	inject = applyTokenBudget(inject, mainBudget);
 	if (constraintsSection) {
 		inject += constraintsSection;
+	}
+	if (inheritedSection) {
+		inject += inheritedSection;
 	}
 	if (recoverySection) {
 		inject += recoverySection;

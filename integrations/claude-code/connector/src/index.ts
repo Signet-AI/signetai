@@ -278,8 +278,8 @@ export class ClaudeCodeConnector extends BaseConnector {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					harness: "claude-code",
-					projectPath: ctx.projectPath,
-					sessionId: ctx.sessionId,
+					project: ctx.projectPath,
+					sessionKey: ctx.sessionId,
 				}),
 				signal: AbortSignal.timeout(5000),
 			});

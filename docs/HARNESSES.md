@@ -227,8 +227,9 @@ Claude Code also gets native MCP tool access to Signet memory via the
 }
 ```
 
-This gives Claude Code direct access to `memory_search`, `memory_store`,
-`memory_get`, `memory_list`, `memory_modify`, and `memory_forget` tools.
+This gives Claude Code direct access to `memory_search`, `session_search`,
+`memory_store`, `memory_get`, `memory_list`, `memory_modify`, and
+`memory_forget` tools.
 
 ### Prerequisites
 
@@ -269,7 +270,7 @@ lineage.
 2. On session start, Codex fires `SessionStart` → calls `signet hook session-start -H codex --codex-json` → Signet returns identity + memories as `hookSpecificOutput.additionalContext` with `suppressOutput: true`, injected into the model's context window without printing the hook payload to the user transcript.
 3. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex --codex-json` → Signet returns per-prompt recalled memories as `hookSpecificOutput.additionalContext` with `suppressOutput: true` so the context is model-visible but not printed into the user transcript. This is blocking — Codex waits for the hook before sending to the model.
 4. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
-5. The MCP server exposes `memory_store`, `memory_search`, and other memory tools that Codex can invoke directly during sessions.
+5. The MCP server exposes `memory_store`, `memory_search`, `session_search`, and other tools that Codex can invoke directly during sessions.
 
 Codex `SessionStart` hook timeout defaults to 20 seconds: the Signet CLI
 waits up to `SIGNET_SESSION_START_TIMEOUT` (`15000` ms by default) for
@@ -313,6 +314,7 @@ tools (namespaced as `mcp__signet__*`):
 
 - `memory_store` — save a memory
 - `memory_search` — hybrid recall (vector + keyword)
+- `session_search` — search active or completed session transcripts
 - `memory_list` — list recent memories
 - `memory_modify` — update existing memory
 - `memory_forget` — delete a memory
@@ -738,6 +740,7 @@ Hermes lifecycle.
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
+| `session_search` | Search active or completed session transcripts |
 | `memory_store` | Store a fact/preference/decision with auto entity extraction |
 | `memory_get` | Retrieve a memory by ID |
 | `memory_list` | List memories with optional filters |

@@ -1,7 +1,7 @@
 ---
 title: "Sub-Agent Context Continuity"
 description: "Incremental session transcript persistence and automatic context inheritance for sub-agent sessions."
-status: planning
+status: approved
 informed_by:
   - docs/research/technical/RESEARCH-LCM-ACP.md
   - docs/research/technical/HARNESS-HOOKS-RESEARCH.md
@@ -45,39 +45,43 @@ context inheritance on top of it.
 
 ## Phase 1: Live Transcript Persistence
 
+**Status:** complete.
+
 ### The Problem
 
-`session_transcripts` (migration 040) stores the complete transcript,
-but only at session end, written via `INSERT OR IGNORE` in
-`handleSessionEnd`. If a session is interrupted, crashes, or is still
-running when a sub-agent spawns, its transcript is unavailable.
+`session_transcripts` (migration 040, hardened by migration 047) stores
+the complete transcript and keeps it agent-scoped. Prompt-time upserts
+already keep active sessions visible before session end. If a session
+is interrupted or still running when a sub-agent spawns, the latest
+prompt-time snapshot remains queryable.
 
 ### The Fix
 
-Write to `session_transcripts` on every `UserPromptSubmit` hook call,
-not only at session end. Replace `INSERT OR IGNORE` with
-`INSERT OR REPLACE` and call the upsert in `handleUserPromptSubmit`
-after reading the transcript file at `transcript_path`.
+Keep writing to `session_transcripts` on every `UserPromptSubmit` hook
+call and at `SessionEnd`. The shared `upsertSessionTranscript` helper
+preserves `created_at`, refreshes `updated_at`, and updates the FTS
+surface through the table triggers.
 
-The existing schema supports this without migration:
+The active schema supports this:
 
 ```sql
--- already exists, no changes needed
 CREATE TABLE session_transcripts (
-    session_key TEXT PRIMARY KEY,
+    session_key TEXT NOT NULL,
     content     TEXT NOT NULL,
     harness     TEXT,
     project     TEXT,
     agent_id    TEXT NOT NULL DEFAULT 'default',
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT,
+    PRIMARY KEY (agent_id, session_key)
 );
 ```
 
 The upsert on each `UserPromptSubmit` keeps `content` current as the
 session grows. The `created_at` column preserves the original write
-time. `session_end` retains its own write as a final snapshot to ensure
-the terminal state is captured even if the last few turns missed a
-hook.
+time and `updated_at` records the latest active snapshot. `session_end`
+retains its own write as a final snapshot to ensure the terminal state
+is captured even if the last few turns missed a hook.
 
 ### What This Enables Immediately
 
@@ -90,16 +94,13 @@ which currently can only process completed sessions.
 
 ### Implementation
 
-- `platform/daemon/src/hooks.ts`: in `handleUserPromptSubmit`, after
-  transcript is read from `transcript_path`, upsert into
-  `session_transcripts`. Reuse the existing `normalizeSessionTranscript`
-  call and write path. Guard with `if (transcript && sessionKey)`.
-- `platform/daemon/src/daemon.ts`: add `GET /api/sessions/{key}/transcript`
-  endpoint reading from `session_transcripts`.
-- `platform/daemon/src/hooks.ts` `handleSessionEnd`: change
-  `INSERT OR IGNORE` to `INSERT OR REPLACE` for the terminal write.
-  The per-prompt upsert handles the common case; session-end handles
-  the final state.
+- `platform/daemon/src/hooks.ts`: `handleUserPromptSubmit` reads the
+  transcript path or inline transcript, normalizes it, and calls
+  `upsertSessionTranscript`.
+- `platform/daemon/src/hooks.ts`: `handleSessionEnd` calls the same
+  helper for the terminal write.
+- `platform/daemon/src/session-transcripts.ts`: owns the scoped upsert,
+  read, and FTS-backed search helpers.
 
 ---
 
@@ -126,12 +127,12 @@ sub-agent session (added CC v2.1.69, March 5 2026). No `SubagentStart`
 hook needed. Detection:
 - Sub-agent's `SessionStart` arrives with `agent_id` present.
 - Daemon queries `session_transcripts` for the most recently updated
-  row matching the same `project` and `harness` where
+  row matching the same `project`, `harness`, and Signet `agent_id` where
   `session_key != current`:
-  `SELECT * FROM session_transcripts WHERE project = ? ORDER BY created_at DESC LIMIT 1`
-- That row is the parent. No TTL, no pending-spawn slot, no race
-  condition. If two parent sessions exist for the same project, the
-  most recently active one is the correct choice.
+  `SELECT * FROM session_transcripts WHERE agent_id = ? AND project = ? AND harness = ? ORDER BY updated_at DESC LIMIT 1`
+- That row is the parent. No TTL, no pending-spawn slot, no extra agent
+  action. If two parent sessions exist for the same project, the most
+  recently active one is the least surprising choice.
 
 **OpenClaw** — session keys self-describe lineage:
 `agent:{id}:subagent:{uuid}` vs `agent:{id}:main`. The `resolveAgentId`
@@ -142,7 +143,8 @@ function already parses this format (Multi-Agent Phase 8). Detection:
 
 **OpenCode** — `session.created` SSE event includes `parentID` on
 child sessions. Detection:
-- Pass `parentId` through the session-start hook body when present.
+- The plugin records the child session's `parentID` and passes it
+  through the next session-start hook body as `parentSessionKey`.
   Daemon uses it for direct lookup.
 
 **Codex** — sub-agent sessions are indistinguishable from external
@@ -238,9 +240,9 @@ this with no special-casing.
 - `platform/daemon/src/hooks.ts`: add parent-lookup logic to
   `handleSessionStart()`. For CC: if `agent_id` is present in the
   payload, query `session_transcripts WHERE project = ? AND session_key != ?
-  ORDER BY created_at DESC LIMIT 1`. For OpenClaw: if
+  ORDER BY updated_at DESC LIMIT 1`. For OpenClaw: if
   `isSubagentSessionKey(sessionKey)`, extract parent key from session key
-  format and query directly. For OpenCode: if `parentKey` is present in
+  format and query directly. For OpenCode: if `parentSessionKey` is present in
   the hook body, use it directly. If parent found, call
   `assembleInheritBlock()`.
 - `platform/daemon/src/hooks.ts`: add `assembleInheritBlock(parentKey,
@@ -291,14 +293,19 @@ SQLite — a targeted query is cheaper and faster than a spawned agent.
 
 2. **CC parent detection** — project-keyed recency query on
    `session_transcripts`, no `SubagentStart` hook and no pending-spawn
-   slot. `ORDER BY created_at DESC LIMIT 1` where project matches and
-   session key differs. Simpler, no race condition, handles the
-   concurrent-sessions edge case correctly by defaulting to most recent.
+   slot. `ORDER BY updated_at DESC LIMIT 1` where project, harness, and
+   Signet agent scope match and session key differs. Simpler, no extra
+   prepare step, and it follows the most recently active parent.
 
 3. **Visibility scoping** — sub-agents inherit parent's `agent_id`
    automatically. Not configurable. The existing agent scoping
    invariant (cross-cutting invariant 1) handles this with no
    special-casing.
+
+4. **Harness sub-agent IDs are not Signet agent IDs** — Claude Code's
+   `agent_id` hook field is treated as harness lineage metadata only.
+   It must not be used as Signet's persistence `agent_id` or sub-agent
+   sessions would silently fork user memory scope.
 
 ---
 

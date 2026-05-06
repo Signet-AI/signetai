@@ -916,6 +916,29 @@ Checkpoints are triggered by five events: `periodic`, `pre_compaction`,
 storage.
 
 
+### Sub-agents (`subagents`)
+
+Controls deterministic parent-session context inherited by sub-agent sessions
+at `session-start`. This uses stored active transcripts and checkpoints; it
+does not make an LLM call.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `inheritContext` | `true` | — | Inject a compact parent context block when parent lineage is available |
+| `tailChars` | `3000` | 0-20000 | Max transcript tail characters included from the parent session |
+
+```yaml
+memory:
+  pipelineV2:
+    subagents:
+      inheritContext: true
+      tailChars: 3000
+```
+
+Set `inheritContext: false` to disable automatic inherited context while
+leaving the explicit `session_search` MCP/API surface available.
+
+
 ### Telemetry (`telemetry`)
 
 Anonymous usage telemetry. Only active when `telemetryEnabled: true`.
