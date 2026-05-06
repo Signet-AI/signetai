@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
+import { getInferenceProviderOrNull } from "../llm";
 import {
 	OntologyClaimEvidenceError,
 	getOntologyClaimEvidence,
@@ -160,14 +161,19 @@ export function registerOntologyRoutes(app: Hono): void {
 		if (scoped.response) return scoped.response;
 		const from = readString(body, "from");
 		if (!from) return c.json({ error: "from is required" }, 400);
+		const useProvider = readBoolean(body, "use_provider") ?? false;
 		try {
 			return c.json(
-				extractOntologyProposals(getDbAccessor(), {
+				await extractOntologyProposals(getDbAccessor(), {
 					agentId: scoped.agentId,
 					from,
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
 					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-extract",
 					limit: readNumber(body, "limit"),
+					useProvider,
+					provider: useProvider ? getInferenceProviderOrNull("memoryExtraction") : null,
+					providerTimeoutMs: readNumber(body, "provider_timeout_ms"),
+					providerMaxTokens: readNumber(body, "provider_max_tokens"),
 				}),
 			);
 		} catch (err) {

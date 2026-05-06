@@ -3446,9 +3446,12 @@ provenance.
 
 Extract candidate ontology proposals from an agent-scoped transcript or memory
 artifact. Body parameters: `from`, `agent_id`, `write_proposals`, `created_by`,
-and `limit`. `from` accepts refs such as `transcript:<id>`,
-`artifact:<source_path>`, or `source:<source_path>`. The route dry-runs by
-default and writes pending proposals only when `write_proposals` is true.
+`limit`, `use_provider`, `provider_timeout_ms`, and `provider_max_tokens`.
+`from` accepts refs such as `transcript:<id>`, `artifact:<source_path>`, or
+`source:<source_path>`. The route dry-runs by default and writes pending
+proposals only when `write_proposals` is true. When `use_provider` is true, the
+route uses the configured `memory_extraction` inference workload and falls back
+to deterministic extraction if no valid provider proposals are returned.
 
 ### POST /api/ontology/proposals
 

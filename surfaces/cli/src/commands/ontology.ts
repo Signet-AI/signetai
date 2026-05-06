@@ -151,6 +151,9 @@ interface ExtractionResponse {
 	readonly count?: number;
 	readonly writtenCount?: number;
 	readonly dryRun?: boolean;
+	readonly extractionMode?: string;
+	readonly providerName?: string | null;
+	readonly warnings?: readonly string[];
 	readonly source?: {
 		readonly kind?: string;
 		readonly id?: string;
@@ -540,7 +543,12 @@ function printExtraction(data: unknown): void {
 	const source = result.source?.sourcePath ?? result.source?.id ?? "unknown source";
 	console.log(chalk.bold("\n  Ontology Extraction\n"));
 	console.log(chalk.dim(`  source ${source}`));
+	console.log(chalk.dim(`  mode ${result.extractionMode ?? "unknown"}`));
+	if (result.providerName) console.log(chalk.dim(`  provider ${result.providerName}`));
 	console.log(chalk.dim(`  ${result.writtenCount ?? 0} written · ${result.count ?? proposals.length} candidate(s)`));
+	for (const warning of result.warnings ?? []) {
+		console.log(chalk.yellow(`  warning ${warning}`));
+	}
 	for (const proposal of proposals.slice(0, 20)) {
 		const confidence = typeof proposal.confidence === "number" ? ` · ${proposal.confidence.toFixed(2)}` : "";
 		console.log(`  ${chalk.yellow(proposal.operation)}${confidence}`);
@@ -662,6 +670,9 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		.requiredOption("--from <source>", "Source ref, e.g. transcript:<id>, artifact:<path>, or source:<path>")
 		.option("--write-proposals", "Persist extracted candidates as pending proposals")
 		.option("--dry-run", "Preview candidates without writing", true)
+		.option("--use-provider", "Use the configured memory extraction inference workload")
+		.option("--provider-timeout-ms <n>", "Provider extraction timeout in milliseconds", Number.parseInt)
+		.option("--provider-max-tokens <n>", "Provider extraction response token budget", Number.parseInt)
 		.option("-l, --limit <n>", "Max candidates to return", Number.parseInt)
 		.option("--agent <name>", "Agent scope, default default")
 		.option("--created-by <name>", "Audit creator", "ontology-extract")
@@ -672,6 +683,9 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 				agent_id: options.agent,
 				from: options.from,
 				write_proposals: options.writeProposals === true,
+				use_provider: options.useProvider === true,
+				provider_timeout_ms: options.providerTimeoutMs,
+				provider_max_tokens: options.providerMaxTokens,
 				created_by: options.createdBy,
 				limit: options.limit,
 			});

@@ -200,7 +200,7 @@ describe("ontology proposals", () => {
 		expect(listed.items[0]?.sourceKind).toBe("transcript");
 	});
 
-	it("extracts candidate proposals from explicit transcript extraction JSON", () => {
+	it("extracts candidate proposals from explicit transcript extraction JSON", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO session_transcripts
@@ -237,7 +237,7 @@ describe("ontology proposals", () => {
 			);
 		});
 
-		const dryRun = extractOntologyProposals(getDbAccessor(), {
+		const dryRun = await extractOntologyProposals(getDbAccessor(), {
 			agentId: "ant",
 			from: "transcript:extract",
 		});
@@ -247,7 +247,7 @@ describe("ontology proposals", () => {
 		expect(dryRun.writtenCount).toBe(0);
 		expect(dryRun.proposals.map((proposal) => proposal.operation)).toEqual(["add_claim_value", "create_link"]);
 
-		const written = extractOntologyProposals(getDbAccessor(), {
+		const written = await extractOntologyProposals(getDbAccessor(), {
 			agentId: "ant",
 			from: "transcript:extract",
 			writeProposals: true,
@@ -260,7 +260,7 @@ describe("ontology proposals", () => {
 		expect(written.items.every((item) => item.sourceKind === "transcript")).toBe(true);
 	});
 
-	it("mechanically extracts conservative proposals from plain transcript text", () => {
+	it("mechanically extracts conservative proposals from plain transcript text", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO session_transcripts
@@ -277,7 +277,7 @@ describe("ontology proposals", () => {
 			);
 		});
 
-		const result = extractOntologyProposals(getDbAccessor(), {
+		const result = await extractOntologyProposals(getDbAccessor(), {
 			agentId: "ant",
 			from: "transcript:plain-extract",
 		});
@@ -286,6 +286,67 @@ describe("ontology proposals", () => {
 		expect(result.proposals.some((proposal) => proposal.operation === "add_claim_value")).toBe(true);
 		expect(result.proposals.some((proposal) => proposal.operation === "create_link")).toBe(true);
 		expect(result.proposals.every((proposal) => proposal.evidence && proposal.evidence.length > 0)).toBe(true);
+	});
+
+	it("uses an inference provider for ontology extraction when requested", async () => {
+		const prompts: string[] = [];
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"provider-extract",
+				"User: Signet ontology extraction should route through the inference registry when explicitly requested.",
+				"codex",
+				"/tmp/signet",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:01:00.000Z",
+			);
+		});
+
+		const result = await extractOntologyProposals(getDbAccessor(), {
+			agentId: "ant",
+			from: "transcript:provider-extract",
+			useProvider: true,
+			provider: {
+				name: "test-provider",
+				async available() {
+					return true;
+				},
+				async generate(prompt) {
+					prompts.push(prompt);
+					return JSON.stringify({
+						claim_values: [
+							{
+								entity: "Signet",
+								aspect: "architecture",
+								group_key: "ontology",
+								claim_key: "provider_extraction",
+								value: "Ontology extraction can use the configured inference workload.",
+								confidence: 0.88,
+								evidence: [
+									{
+										source_kind: "transcript",
+										source_id: "provider-extract",
+										quote: "route through the inference registry",
+									},
+								],
+							},
+						],
+					});
+				},
+			},
+		});
+
+		expect(prompts).toHaveLength(1);
+		expect(prompts[0]).toContain("Return ONLY JSON");
+		expect(result.extractionMode).toBe("provider");
+		expect(result.providerName).toBe("test-provider");
+		expect(result.warnings).toHaveLength(0);
+		expect(result.proposals).toHaveLength(1);
+		expect(result.proposals[0]?.payload.claim_key).toBe("provider_extraction");
 	});
 
 	it("resolves proposal evidence from transcripts and indexed artifacts", () => {

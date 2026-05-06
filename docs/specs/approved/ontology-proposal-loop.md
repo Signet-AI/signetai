@@ -160,6 +160,7 @@ signet ontology evidence <id>
 signet ontology claim-evidence <entity> <aspect> <group> <claim>
 signet ontology link-evidence <link-id>
 signet ontology extract --from transcript:<id> --dry-run
+signet ontology extract --from transcript:<id> --use-provider --dry-run
 signet ontology extract --from transcript:<id> --write-proposals
 signet ontology propose --operation add_claim_value --payload-file proposal.json
 signet ontology import-proposals --file extraction-output.json
@@ -247,6 +248,9 @@ router rather than binding directly to a vendor or harness.
   durable pending proposals without direct ontology mutation.
 - Support transcript and artifact extraction into candidate proposals, with
   dry-run as the default and explicit `write_proposals` for persistence.
+- Support opt-in provider-backed extraction through the configured
+  `memory_extraction` inference workload, with deterministic extraction as the
+  safe fallback when no provider proposals parse.
 - Support proposal evidence lookup for embedded quotes, session transcripts,
   and indexed memory artifacts.
 - Support applied claim evidence lookup so accepted claim values remain
@@ -290,6 +294,9 @@ router rather than binding directly to a vendor or harness.
 - Extraction loads agent-scoped transcript/artifact rows, emits candidates by
   parsing explicit extraction JSON and conservative mechanical transcript
   signals, and writes pending proposals only when explicitly requested.
+- Provider-backed extraction is opt-in from the CLI/API, returns provider mode
+  and warnings in the response, and does not mutate ontology state unless
+  `write_proposals` is set.
 - Applied claim evidence lookup resolves stored attribute provenance and memory
   references without reading arbitrary filesystem paths.
 - Applied link evidence lookup resolves stored dependency provenance without

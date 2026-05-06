@@ -1,6 +1,7 @@
-import type { OntologyProposal } from "@signet/core";
+import type { LlmProvider, OntologyProposal } from "@signet/core";
 import type { DbAccessor, ReadDb } from "./db-accessor";
 import { createOntologyProposals } from "./ontology-proposals";
+import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";
 
 type ProposalDraft = {
 	readonly operation: string;
@@ -38,6 +39,10 @@ export interface ExtractOntologyParams {
 	readonly writeProposals?: boolean;
 	readonly createdBy?: string;
 	readonly limit?: number;
+	readonly useProvider?: boolean;
+	readonly provider?: LlmProvider | null;
+	readonly providerTimeoutMs?: number;
+	readonly providerMaxTokens?: number;
 }
 
 export interface OntologyExtractionResult {
@@ -47,6 +52,9 @@ export interface OntologyExtractionResult {
 	readonly count: number;
 	readonly writtenCount: number;
 	readonly dryRun: boolean;
+	readonly extractionMode: "mechanical" | "provider" | "mixed";
+	readonly providerName: string | null;
+	readonly warnings: readonly string[];
 }
 
 export class OntologyExtractionError extends Error {
@@ -224,6 +232,21 @@ function normalizeProposalJson(raw: unknown): ProposalDraft[] {
 	];
 }
 
+function parseOntologyJsonOutput(raw: string): ProposalDraft[] {
+	const candidates: unknown[] = [];
+	const whole = parseJsonContent(raw);
+	if (whole !== null) candidates.push(whole);
+	const stripped = stripFences(raw);
+	const strippedParsed = tryParseJson(stripped);
+	if (strippedParsed !== null) candidates.push(strippedParsed);
+	const object = extractBalancedJsonObject(raw);
+	if (object) {
+		const parsed = tryParseJson(object);
+		if (parsed !== null) candidates.push(parsed);
+	}
+	return candidates.flatMap(normalizeProposalJson);
+}
+
 function parseJsonContent(content: string): unknown | null {
 	try {
 		return JSON.parse(content);
@@ -380,8 +403,12 @@ function extractProposals(source: SourceRecord, limit: number): ProposalDraft[] 
 		...mechanicalClaimProposals(source),
 		...mechanicalLinkProposals(source),
 	];
+	return dedupeProposals([...jsonProposals, ...mechanical], limit);
+}
+
+function dedupeProposals(proposals: readonly ProposalDraft[], limit: number): ProposalDraft[] {
 	const seen = new Set<string>();
-	return [...jsonProposals, ...mechanical]
+	return proposals
 		.filter((proposal) => {
 			const key = JSON.stringify([proposal.operation, proposal.payload]);
 			if (seen.has(key)) return false;
@@ -389,6 +416,114 @@ function extractProposals(source: SourceRecord, limit: number): ProposalDraft[] 
 			return true;
 		})
 		.slice(0, limit);
+}
+
+const MAX_PROVIDER_INPUT_CHARS = 20_000;
+const DEFAULT_PROVIDER_TIMEOUT_MS = 90_000;
+const MAX_PROVIDER_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_PROVIDER_MAX_TOKENS = 4096;
+const MAX_PROVIDER_MAX_TOKENS = 16_000;
+
+function boundedInt(value: number | undefined, fallback: number, min: number, max: number): number {
+	if (value === undefined || !Number.isFinite(value)) return fallback;
+	return Math.min(Math.max(Math.floor(value), min), max);
+}
+
+function buildProviderPrompt(source: SourceRecord): string {
+	const content =
+		source.content.length > MAX_PROVIDER_INPUT_CHARS
+			? `${source.content.slice(0, MAX_PROVIDER_INPUT_CHARS)}\n[truncated]`
+			: source.content;
+	return `You are extracting candidate ontology updates from source evidence.
+
+Source of truth:
+- kind: ${source.kind}
+- source_kind: ${source.sourceKind}
+- source_id: ${source.sourceId}
+- source_path: ${source.sourcePath ?? ""}
+- project: ${source.project ?? ""}
+- harness: ${source.harness ?? ""}
+
+Task:
+Identify durable semantic structure that may belong in Signet's ontology.
+Do not write to memory. Do not invent missing facts.
+Mentions, backlinks, keyword overlap, and embeddings are evidence of contact, not proof of a stable relationship.
+Extract only candidates supported by explicit source evidence.
+Prefer compact atomic claims and typed links.
+Preserve provenance for every candidate using short quotes.
+
+Return ONLY JSON with this shape:
+{
+  "entities": [
+    {
+      "name": "string",
+      "type": "person|project|system|tool|source|artifact|concept|task|unknown",
+      "confidence": 0.0,
+      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+    }
+  ],
+  "claim_values": [
+    {
+      "entity": "string",
+      "aspect": "string",
+      "group_key": "string|null",
+      "claim_key": "string",
+      "value": "string",
+      "confidence": 0.0,
+      "visibility": "private|project|public|unknown",
+      "reducer_hint": "explicit_user_statement_wins|most_recent|highest_confidence|null",
+      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+    }
+  ],
+  "links": [
+    {
+      "source_entity": "string",
+      "link_type": "contains|uses|requires|supports_claim|authored_by|maintains|blocks|informs|may_execute|custom",
+      "target_entity": "string",
+      "properties": {},
+      "confidence": 0.0,
+      "reason": "string",
+      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+    }
+  ],
+  "actions_or_policies": [
+    {
+      "target_entity": "string",
+      "kind": "permitted_action|forbidden_action|approval_required|disclosure_policy",
+      "content": "string",
+      "confidence": 0.0,
+      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+    }
+  ],
+  "questions": ["uncertainties that need review"]
+}
+
+Source content:
+${content}`;
+}
+
+async function extractProviderProposals(
+	source: SourceRecord,
+	provider: LlmProvider,
+	params: Pick<ExtractOntologyParams, "providerTimeoutMs" | "providerMaxTokens">,
+): Promise<{ readonly proposals: readonly ProposalDraft[]; readonly warnings: readonly string[] }> {
+	try {
+		const raw = await provider.generate(buildProviderPrompt(source), {
+			timeoutMs: boundedInt(params.providerTimeoutMs, DEFAULT_PROVIDER_TIMEOUT_MS, 1_000, MAX_PROVIDER_TIMEOUT_MS),
+			maxTokens: boundedInt(params.providerMaxTokens, DEFAULT_PROVIDER_MAX_TOKENS, 1, MAX_PROVIDER_MAX_TOKENS),
+			temperature: 0,
+		});
+		const proposals = parseOntologyJsonOutput(raw);
+		return {
+			proposals,
+			warnings: proposals.length > 0 ? [] : [`Provider ${provider.name} returned no valid ontology proposals.`],
+		};
+	} catch (err) {
+		return {
+			proposals: [],
+			warnings: [`Provider ${provider.name} extraction failed: ${err instanceof Error ? err.message : String(err)}`],
+		};
+	}
 }
 
 function sourceInfo(source: SourceRecord): OntologyExtractionSourceInfo {
@@ -504,16 +639,39 @@ function readSource(accessor: DbAccessor, params: Pick<ExtractOntologyParams, "a
 	});
 }
 
-export function extractOntologyProposals(
+export async function extractOntologyProposals(
 	accessor: DbAccessor,
 	params: ExtractOntologyParams,
-): OntologyExtractionResult {
+): Promise<OntologyExtractionResult> {
 	const limit = Math.min(Math.max(params.limit ?? 100, 1), 500);
 	const source = readSource(accessor, params);
-	const proposals = extractProposals(source, limit).map((proposal) => ({
+	const explicit = extractJsonBlocks(source.content).flatMap(normalizeProposalJson);
+	const mechanical = extractProposals(source, limit);
+	const warnings: string[] = [];
+	let providerProposals: readonly ProposalDraft[] = [];
+	if (params.useProvider) {
+		if (params.provider) {
+			const provider = await extractProviderProposals(source, params.provider, params);
+			providerProposals = provider.proposals;
+			warnings.push(...provider.warnings);
+		} else {
+			warnings.push("Provider extraction requested but no inference provider is configured.");
+		}
+	}
+	const raw =
+		params.useProvider && providerProposals.length > 0
+			? dedupeProposals([...explicit, ...providerProposals], limit)
+			: mechanical;
+	const proposals = raw.map((proposal) => ({
 		...proposal,
 		evidence: proposal.evidence && proposal.evidence.length > 0 ? proposal.evidence : evidence(source, source.id),
 	}));
+	const extractionMode =
+		params.useProvider && providerProposals.length > 0 && explicit.length > 0
+			? "mixed"
+			: params.useProvider && providerProposals.length > 0
+				? "provider"
+				: "mechanical";
 	if (!params.writeProposals || proposals.length === 0) {
 		return {
 			source: sourceInfo(source),
@@ -522,6 +680,9 @@ export function extractOntologyProposals(
 			count: proposals.length,
 			writtenCount: 0,
 			dryRun: true,
+			extractionMode,
+			providerName: params.useProvider ? (params.provider?.name ?? null) : null,
+			warnings,
 		};
 	}
 
@@ -549,5 +710,8 @@ export function extractOntologyProposals(
 		count: proposals.length,
 		writtenCount: written.count,
 		dryRun: false,
+		extractionMode,
+		providerName: params.useProvider ? (params.provider?.name ?? null) : null,
+		warnings,
 	};
 }

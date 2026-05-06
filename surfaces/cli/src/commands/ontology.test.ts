@@ -231,6 +231,8 @@ describe("registerOntologyCommands", () => {
 						source: { kind: "transcript", id: "transcript:extract" },
 						count: 1,
 						writtenCount: 1,
+						extractionMode: "provider",
+						providerName: "routing:memory_extraction",
 						proposals: [
 							{
 								operation: "add_claim_value",
@@ -252,6 +254,11 @@ describe("registerOntologyCommands", () => {
 			"--from",
 			"transcript:extract",
 			"--write-proposals",
+			"--use-provider",
+			"--provider-timeout-ms",
+			"120000",
+			"--provider-max-tokens",
+			"2048",
 			"--agent",
 			"ant",
 			"--limit",
@@ -266,12 +273,17 @@ describe("registerOntologyCommands", () => {
 					agent_id: "ant",
 					from: "transcript:extract",
 					write_proposals: true,
+					use_provider: true,
+					provider_timeout_ms: 120000,
+					provider_max_tokens: 2048,
 					created_by: "ontology-extract",
 					limit: 5,
 				},
 			},
 		]);
 		expect(lines.join("\n")).toContain("Ontology Extraction");
+		expect(lines.join("\n")).toContain("mode provider");
+		expect(lines.join("\n")).toContain("routing:memory_extraction");
 		expect(lines.join("\n")).toContain("1 written");
 	});
 
