@@ -82,8 +82,9 @@ function generateLaunchdPlist(port: number = 3850): string {
     
     <key>ProgramArguments</key>
     <array>
-        <string>${resolveRuntimePath()}</string>
-        <string>${daemonPath}</string>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec ${resolveRuntimePath()} ${daemonPath}</string>
     </array>
     
     <key>EnvironmentVariables</key>

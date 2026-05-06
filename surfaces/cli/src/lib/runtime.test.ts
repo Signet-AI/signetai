@@ -56,7 +56,9 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<key>Label</key>");
 		expect(plist).toContain("<string>ai.signet.daemon.test</string>");
 		expect(plist).toContain("<key>ProgramArguments</key>");
-		expect(plist).toContain("<string>/opt/signet/dist/daemon.js</string>");
+		expect(plist).toContain("<string>/bin/bash</string>");
+		expect(plist).toContain("<string>-c</string>");
+		expect(plist).toContain(`exec ${process.execPath} /opt/signet/dist/daemon.js`);
 		expect(plist).toContain("<key>SIGNET_PORT</key>");
 		expect(plist).toContain("<string>3850</string>");
 		expect(plist).toContain("<key>SIGNET_HOST</key>");
@@ -71,6 +73,27 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<false/>");
 		expect(plist).toContain("<key>StandardErrorPath</key>");
 		expect(plist).toContain("<string>/Users/user/.agents/.daemon/logs/startup.log</string>");
+	});
+
+	it("wraps runtime in /bin/bash -c to avoid macOS AMFI launchd exec failure", () => {
+		const plist = buildLaunchdDaemonPlist({
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/Users/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/Users/user/.agents/.daemon/logs/startup.log",
+		});
+
+		const programArgsMatch = plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+		expect(programArgsMatch).not.toBeNull();
+
+		const inner = programArgsMatch?.[1] ?? "";
+		const strings = [...inner.matchAll(/<string>(.*?)<\/string>/g)].map((m) => m[1]);
+		expect(strings[0]).toBe("/bin/bash");
+		expect(strings[1]).toBe("-c");
+		expect(strings[2]).toContain("exec ");
+		expect(strings[2]).toContain("/opt/signet/dist/daemon.js");
 	});
 
 	it("uses launchctl bootstrap against the current user launchd domain", () => {
