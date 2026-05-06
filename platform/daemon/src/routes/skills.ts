@@ -8,6 +8,7 @@
 import { spawn } from "node:child_process";
 import {
 	cpSync,
+	createWriteStream,
 	existsSync,
 	lstatSync,
 	mkdirSync,
@@ -18,9 +19,12 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
 import type { Hono } from "hono";
+import type { Entry, ZipFile } from "yauzl";
+import * as yauzl from "yauzl";
 import type { AuthMode } from "../auth/index.js";
 import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
 import { getLlmProvider } from "../llm.js";
@@ -400,12 +404,45 @@ export function buildSkillInstallPlan(name: string, source?: string): SkillInsta
 	return { kind: "skills-cli", pkg, args };
 }
 
-function isSafeZipEntry(entry: string): boolean {
+type ClawhubZipEntryKind = "file" | "directory";
+
+type ClawhubZipEntryMetadata = {
+	fileName: string;
+	externalFileAttributes: number;
+	versionMadeBy: number;
+	encrypted?: boolean;
+};
+
+const ZIP_UNIX_HOST = 3;
+const ZIP_MODE_TYPE_MASK = 0o170000;
+const ZIP_MODE_DIRECTORY = 0o040000;
+const ZIP_MODE_REGULAR_FILE = 0o100000;
+
+function normalizeZipEntryPath(entry: string): string | null {
 	const normalized = entry.replaceAll("\\", "/");
 	if (!normalized || normalized.includes("\0") || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
-		return false;
+		return null;
 	}
-	return normalized.split("/").every((part) => part && part !== "." && part !== "..");
+	const path = normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+	if (!path) return null;
+	return path.split("/").every((part) => part && part !== "." && part !== "..") ? path : null;
+}
+
+export function validateClawhubZipEntryMetadata(
+	entry: ClawhubZipEntryMetadata,
+): { ok: true; path: string; kind: ClawhubZipEntryKind } | { ok: false; error: string } {
+	const path = normalizeZipEntryPath(entry.fileName);
+	if (!path) return { ok: false, error: "ClawHub zip contains unsafe paths" };
+	if (entry.encrypted) return { ok: false, error: "ClawHub zip contains encrypted entries" };
+
+	const unixMode = entry.versionMadeBy >> 8 === ZIP_UNIX_HOST ? entry.externalFileAttributes >>> 16 : 0;
+	const impliedDirectory = entry.fileName.replaceAll("\\", "/").endsWith("/");
+	if (unixMode === 0) return { ok: true, path, kind: impliedDirectory ? "directory" : "file" };
+
+	const kind = unixMode & ZIP_MODE_TYPE_MASK;
+	if (kind === ZIP_MODE_DIRECTORY) return { ok: true, path, kind: "directory" };
+	if (kind === ZIP_MODE_REGULAR_FILE && !impliedDirectory) return { ok: true, path, kind: "file" };
+	return { ok: false, error: "ClawHub zip contains unsupported entry types" };
 }
 
 export function validateExtractedSkillTree(root: string): { ok: true } | { ok: false; error: string } {
@@ -439,24 +476,101 @@ export function validateExtractedSkillTree(root: string): { ok: true } | { ok: f
 	return { ok: true };
 }
 
-function runProcess(command: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-	return new Promise((resolveProcess, reject) => {
-		const proc = spawn(command, args, {
-			env: { ...process.env },
-			timeout: 60000,
-			windowsHide: true,
-		});
+function openZip(path: string): Promise<ZipFile> {
+	return new Promise((resolveZip, reject) => {
+		yauzl.open(
+			path,
+			{
+				autoClose: true,
+				lazyEntries: true,
+				strictFileNames: true,
+				validateEntrySizes: true,
+			},
+			(err, zip) => {
+				if (err) {
+					reject(err);
+					return;
+				}
+				if (!zip) {
+					reject(new Error("Unable to open ClawHub zip"));
+					return;
+				}
+				resolveZip(zip);
+			},
+		);
+	});
+}
 
-		let stdout = "";
-		let stderr = "";
-		proc.stdout.on("data", (d: Buffer) => {
-			stdout += d.toString();
+function openZipEntryStream(zip: ZipFile, entry: Entry): Promise<NodeJS.ReadableStream> {
+	return new Promise((resolveStream, reject) => {
+		zip.openReadStream(entry, (err, stream) => {
+			if (err) {
+				reject(err);
+				return;
+			}
+			resolveStream(stream);
 		});
-		proc.stderr.on("data", (d: Buffer) => {
-			stderr += d.toString();
+	});
+}
+
+function resolveExtractPath(root: string, entryPath: string): string | null {
+	const target = resolve(root, entryPath);
+	const rel = relative(resolve(root), target);
+	return !rel || rel.startsWith("..") || isAbsolute(rel) ? null : target;
+}
+
+async function extractClawhubZip(
+	zipPath: string,
+	extractDir: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	const zip = await openZip(zipPath);
+	return new Promise((resolveExtract) => {
+		let done = false;
+		const fail = (error: string): void => {
+			if (done) return;
+			done = true;
+			zip.close();
+			resolveExtract({ ok: false, error });
+		};
+		const pass = (): void => {
+			if (done) return;
+			done = true;
+			resolveExtract({ ok: true });
+		};
+
+		zip.on("error", (err) => fail(err.message));
+		zip.on("end", pass);
+		zip.on("entry", (entry: Entry) => {
+			const validation = validateClawhubZipEntryMetadata({
+				fileName: entry.fileName,
+				externalFileAttributes: entry.externalFileAttributes,
+				versionMadeBy: entry.versionMadeBy,
+				encrypted: entry.isEncrypted(),
+			});
+			if (!validation.ok) {
+				fail(validation.error);
+				return;
+			}
+
+			const target = resolveExtractPath(extractDir, validation.path);
+			if (!target) {
+				fail("ClawHub zip contains unsafe paths");
+				return;
+			}
+
+			if (validation.kind === "directory") {
+				mkdirSync(target, { recursive: true });
+				zip.readEntry();
+				return;
+			}
+
+			mkdirSync(dirname(target), { recursive: true });
+			openZipEntryStream(zip, entry)
+				.then((stream) => pipeline(stream, createWriteStream(target)))
+				.then(() => zip.readEntry())
+				.catch((err: unknown) => fail(err instanceof Error ? err.message : String(err)));
 		});
-		proc.on("close", (code) => resolveProcess({ code, stdout, stderr }));
-		proc.on("error", reject);
+		zip.readEntry();
 	});
 }
 
@@ -482,20 +596,10 @@ async function installClawhubSkill(
 
 		writeFileSync(zipPath, Buffer.from(await res.arrayBuffer()));
 
-		const listing = await runProcess("unzip", ["-Z1", zipPath]);
-		if (listing.code !== 0) {
-			return { success: false, error: listing.stderr || listing.stdout || "Unable to inspect ClawHub zip" };
-		}
-
-		const entries = listing.stdout.split(/\r?\n/).filter(Boolean);
-		if (entries.length === 0 || !entries.every(isSafeZipEntry)) {
-			return { success: false, error: "ClawHub zip contains unsafe paths" };
-		}
-
 		mkdirSync(extractDir, { recursive: true });
-		const extracted = await runProcess("unzip", ["-q", zipPath, "-d", extractDir]);
-		if (extracted.code !== 0) {
-			return { success: false, error: extracted.stderr || extracted.stdout || "Unable to extract ClawHub zip" };
+		const extracted = await extractClawhubZip(zipPath, extractDir);
+		if (!extracted.ok) {
+			return { success: false, error: extracted.error };
 		}
 
 		const validation = validateExtractedSkillTree(extractDir);

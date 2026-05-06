@@ -314,10 +314,12 @@
         "sharp": "^0.34.1",
         "umap-js": "^1.4.0",
         "yaml": "^2.8.2",
+        "yauzl": "2.10.0",
         "zod": "^4.3.6",
       },
       "devDependencies": {
         "@types/libsodium-wrappers": "^0.8.2",
+        "@types/yauzl": "^2.10.3",
       },
       "optionalDependencies": {
         "@signet/native": "workspace:*",

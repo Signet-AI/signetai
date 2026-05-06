@@ -9,6 +9,7 @@ import {
 	listInstalledSkills,
 	mountSkillsRoutes,
 	parseSkillFrontmatter,
+	validateClawhubZipEntryMetadata,
 	validateExtractedSkillTree,
 } from "./skills";
 
@@ -565,6 +566,46 @@ describe("ClawHub skill archive validation", () => {
 		writeFileSync(join(root, "references", "README.md"), "# Reference\n");
 
 		expect(validateExtractedSkillTree(root)).toEqual({ ok: true });
+	});
+
+	it("accepts regular file metadata before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "references/README.md",
+				externalFileAttributes: 0o100644 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: true, path: "references/README.md", kind: "file" });
+	});
+
+	it("accepts directory metadata before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "references/",
+				externalFileAttributes: 0o40755 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: true, path: "references", kind: "directory" });
+	});
+
+	it("rejects symlink metadata before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "SKILL.md",
+				externalFileAttributes: 0o120777 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: false, error: "ClawHub zip contains unsupported entry types" });
+	});
+
+	it("rejects traversal paths before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "refs/../../SKILL.md",
+				externalFileAttributes: 0o100644 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: false, error: "ClawHub zip contains unsafe paths" });
 	});
 
 	it("rejects symbolic links before copying into the skills directory", () => {
