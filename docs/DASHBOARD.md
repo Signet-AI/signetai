@@ -41,7 +41,7 @@ The dashboard is a single-page app with a collapsible left navigation rail and
 a main workspace.
 
 - **Left navigation rail** — Overview, Ontology, Tasks, Audit, Secrets,
-  Skills, Settings, theme toggle, and project/release access.
+  Skills, Sources, Settings, theme toggle, and project/release access.
 - **Main workspace** — lazy-loaded dashboard surfaces for the selected area.
 
 The sidebar footer shows the daemon version and pending restart state when

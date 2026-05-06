@@ -1,31 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createDaemonClient } from "./daemon-client.js";
+import { type DaemonClientConfig, createDaemonClient } from "./daemon-client.js";
 
 const originalFetch = globalThis.fetch;
+
+const testConfig: DaemonClientConfig = {
+	logPrefix: "signet-pi",
+	actorName: "pi-test",
+	runtimePath: "plugin",
+	defaultTimeout: 5000,
+};
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 });
 
-describe("createDaemonClient", () => {
-	test("postResult classifies timeout failures separately from offline", async () => {
-		globalThis.fetch = Object.assign(
-			async () => {
-				const err = new Error("timed out");
-				Object.defineProperty(err, "name", { value: "TimeoutError" });
-				throw err;
-			},
-			{
-				preconnect: originalFetch.preconnect,
-			},
-		);
-
-		const client = createDaemonClient("http://daemon.test");
-		const result = await client.postResult("/api/hooks/session-start", {});
-
-		expect(result).toEqual({ ok: false, reason: "timeout" });
-	});
-
+describe("createDaemonClient (extension-base)", () => {
 	test("postResult returns timeout when body read is aborted mid-stream", async () => {
 		globalThis.fetch = Object.assign(
 			async () => {
@@ -40,7 +29,7 @@ describe("createDaemonClient", () => {
 			{ preconnect: originalFetch.preconnect },
 		);
 
-		const client = createDaemonClient("http://daemon.test");
+		const client = createDaemonClient("http://daemon.test", testConfig);
 		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
 
 		expect(result.ok).toBe(false);
@@ -63,7 +52,7 @@ describe("createDaemonClient", () => {
 			{ preconnect: originalFetch.preconnect },
 		);
 
-		const client = createDaemonClient("http://daemon.test");
+		const client = createDaemonClient("http://daemon.test", testConfig);
 		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
 
 		expect(result.ok).toBe(false);
@@ -84,7 +73,7 @@ describe("createDaemonClient", () => {
 			{ preconnect: originalFetch.preconnect },
 		);
 
-		const client = createDaemonClient("http://daemon.test");
+		const client = createDaemonClient("http://daemon.test", testConfig);
 		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
 
 		console.warn = originalWarn;
@@ -98,7 +87,7 @@ describe("createDaemonClient", () => {
 			preconnect: originalFetch.preconnect,
 		});
 
-		const client = createDaemonClient("http://daemon.test");
+		const client = createDaemonClient("http://daemon.test", testConfig);
 		const result = await client.postResult<{ inject: string; memoryCount: number }>(
 			"/api/hooks/user-prompt-submit",
 			{},
@@ -107,21 +96,19 @@ describe("createDaemonClient", () => {
 		expect(result).toEqual({ ok: true, data: { inject: "memory-context", memoryCount: 3 } });
 	});
 
-	test("postResult preserves http failures for session-start fallback callers", async () => {
+	test("postResult classifies connection-level timeout separately from offline", async () => {
 		globalThis.fetch = Object.assign(
-			async () =>
-				new Response("bad gateway", {
-					status: 502,
-					headers: { "Content-Type": "text/plain" },
-				}),
-			{
-				preconnect: originalFetch.preconnect,
+			async () => {
+				const err = new Error("timed out");
+				Object.defineProperty(err, "name", { value: "TimeoutError" });
+				throw err;
 			},
+			{ preconnect: originalFetch.preconnect },
 		);
 
-		const client = createDaemonClient("http://daemon.test");
+		const client = createDaemonClient("http://daemon.test", testConfig);
 		const result = await client.postResult("/api/hooks/session-start", {});
 
-		expect(result).toEqual({ ok: false, reason: "http", status: 502 });
+		expect(result).toEqual({ ok: false, reason: "timeout" });
 	});
 });

@@ -45,7 +45,7 @@ const SESSION_START_TIMEOUT = resolveSessionStartTimeoutMs(
 	process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT,
 );
 
-type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
+type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
 type DaemonFetchResult<T> =
 	| { readonly ok: true; readonly data: T }
@@ -414,11 +414,24 @@ async function daemonFetchResult<T>(
 		}
 
 		try {
-			const data = (await res.json()) as T;
-			return { ok: true, data };
-		} catch {
-			console.warn(`[signet] ${method} ${path} returned invalid JSON`);
-			return { ok: false, reason: "invalid-json", status: res.status };
+			const text = await res.text();
+			try {
+				const data = JSON.parse(text) as T;
+				return { ok: true, data };
+			} catch {
+				console.warn(
+					`[signet] ${method} ${path} returned invalid JSON (${text.length} chars${text.length === 0 ? ", empty body" : ""})`,
+				);
+				return { ok: false, reason: "invalid-json", status: res.status };
+			}
+		} catch (e) {
+			// Body read failed — typically a timeout firing after headers arrived
+			if (isTimeoutError(e)) {
+				console.warn(`[signet] ${method} ${path} body read timed out after ${timeout}ms`);
+				return { ok: false, reason: "timeout" };
+			}
+			console.warn(`[signet] ${method} ${path} body read failed:`, errorName(e) || e);
+			return { ok: false, reason: "body-read" };
 		}
 	} catch (e) {
 		if (isTimeoutError(e)) {

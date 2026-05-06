@@ -1,4 +1,4 @@
-export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json";
+export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 
 export type DaemonFetchResult<T> =
 	| { readonly ok: true; readonly data: T }
@@ -24,8 +24,17 @@ function buildHeaders(config: DaemonClientConfig): Record<string, string> {
 	};
 }
 
-function isTimeoutError(error: unknown): error is DOMException {
-	return error instanceof DOMException && error.name === "TimeoutError";
+function errorName(err: unknown): string {
+	if (typeof err !== "object" || err === null) return "";
+	const name = Reflect.get(err, "name");
+	return typeof name === "string" ? name : "";
+}
+
+function isTimeoutError(err: unknown): boolean {
+	const name = errorName(err);
+	if (name === "AbortError" || name === "TimeoutError") return true;
+	const code = typeof err === "object" && err !== null ? Reflect.get(err, "code") : undefined;
+	return code === "ABORT_ERR";
 }
 
 async function daemonFetchResult<T>(
@@ -58,11 +67,24 @@ async function daemonFetchResult<T>(
 		}
 
 		try {
-			const data = (await response.json()) as T;
-			return { ok: true, data };
-		} catch {
-			console.warn(`[${config.logPrefix}] ${method} ${path} returned invalid JSON`);
-			return { ok: false, reason: "invalid-json", status: response.status };
+			const text = await response.text();
+			try {
+				const data = JSON.parse(text) as T;
+				return { ok: true, data };
+			} catch {
+				console.warn(
+					`[${config.logPrefix}] ${method} ${path} returned invalid JSON (${text.length} chars${text.length === 0 ? ", empty body" : ""})`,
+				);
+				return { ok: false, reason: "invalid-json", status: response.status };
+			}
+		} catch (e) {
+			// Body read failed — typically a timeout firing after headers arrived
+			if (isTimeoutError(e)) {
+				console.warn(`[${config.logPrefix}] ${method} ${path} body read timed out after ${timeout}ms`);
+				return { ok: false, reason: "timeout" };
+			}
+			console.warn(`[${config.logPrefix}] ${method} ${path} body read failed:`, errorName(e) || e);
+			return { ok: false, reason: "body-read" };
 		}
 	} catch (error) {
 		if (isTimeoutError(error)) {

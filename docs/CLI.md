@@ -701,10 +701,12 @@ Options:
 ---
 
 Sync hooks, extensions, built-in template files, and skills to your `$SIGNET_WORKSPACE/` directory,
-and re-register hooks for any detected harnesses. Run this after an
+and re-register hooks for the active harnesses listed in `agent.yaml`. Run this after an
 upgrade if built-in skills appear stale or hooks need updating. If OpenClaw is still configured on
 the legacy Signet hook path, `signet sync` now migrates it to the plugin
 runtime path automatically so full lifecycle capture resumes.
+The command may report installed harnesses it detects on disk, but inactive
+harnesses are not modified.
 
 ```bash
 signet sync

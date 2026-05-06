@@ -17,6 +17,7 @@ import {
 	type AgentDefinition,
 	type PipelineSynthesisConfig,
 	buildArchitectureDoc,
+	loadConfiguredHarnesses,
 	normalizeAgentRosterEntry,
 	parseSimpleYaml,
 	stripSignetBlock,
@@ -248,6 +249,7 @@ const SYNC_DEBOUNCE_MS = 2000;
 async function syncHarnessConfigs() {
 	const agentsMdPath = join(AGENTS_DIR, "AGENTS.md");
 	if (!existsSync(agentsMdPath)) return;
+	const activeHarnesses = new Set(loadConfiguredHarnesses(AGENTS_DIR));
 
 	const rawContent = await Bun.file(agentsMdPath).text();
 	const content = stripSignetBlock(rawContent);
@@ -309,7 +311,7 @@ ${fileList}
 	const composed = content + identityExtras;
 
 	const opencodeDir = join(homedir(), ".config", "opencode");
-	if (existsSync(opencodeDir)) {
+	if (activeHarnesses.has("opencode") && existsSync(opencodeDir)) {
 		try {
 			const opencodeAgentsPath = join(opencodeDir, "AGENTS.md");
 			if (await writeFileIfChangedAsync(opencodeAgentsPath, buildHeader("AGENTS.md") + composed)) {
@@ -673,6 +675,8 @@ function startFileWatcher() {
 	watcher = watch(
 		[
 			join(AGENTS_DIR, "agent.yaml"),
+			join(AGENTS_DIR, "AGENT.yaml"),
+			join(AGENTS_DIR, "config.yaml"),
 			join(AGENTS_DIR, "AGENTS.md"),
 			join(AGENTS_DIR, "SOUL.md"),
 			join(AGENTS_DIR, "MEMORY.md"),
@@ -693,7 +697,7 @@ function startFileWatcher() {
 		scheduleAutoCommit(path);
 
 		const base = basename(path);
-		if (base === "agent.yaml" || base === "AGENT.yaml") {
+		if (base === "agent.yaml" || base === "AGENT.yaml" || base === "config.yaml") {
 			try {
 				reloadAuthState(AGENTS_DIR);
 				logger.info("config", "Auth config reloaded from disk");
@@ -702,7 +706,16 @@ function startFileWatcher() {
 			}
 		}
 
-		const SYNC_TRIGGER_FILES = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"];
+		const SYNC_TRIGGER_FILES = [
+			"agent.yaml",
+			"AGENT.yaml",
+			"config.yaml",
+			"AGENTS.md",
+			"SOUL.md",
+			"IDENTITY.md",
+			"USER.md",
+			"MEMORY.md",
+		];
 		const normalizedForSync = path.replace(/\\/g, "/");
 		const isAgentSubdir = normalizedForSync.includes(`${AGENTS_DIR.replace(/\\/g, "/")}/agents/`);
 		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f)) || isAgentSubdir) {
