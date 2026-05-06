@@ -610,6 +610,17 @@ describe("ClawHub skill archive validation", () => {
 		).toEqual({ ok: false, error: "ClawHub zip contains unsafe paths" });
 	});
 
+	it("rejects oversized entries before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "large.bin",
+				externalFileAttributes: 0o100644 << 16,
+				uncompressedSize: 26 * 1024 * 1024,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: false, error: "ClawHub zip entry is too large" });
+	});
+
 	it("rejects symbolic links before copying into the skills directory", () => {
 		const root = join(tmpRoot, "symlink");
 		mkdirSync(root, { recursive: true });

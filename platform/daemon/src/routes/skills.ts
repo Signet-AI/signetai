@@ -119,6 +119,10 @@ let clawhubCache: ClawhubItem[] = [];
 let clawhubFetchedAt = 0;
 const CATALOG_TTL = 10 * 60 * 1000;
 const CLAWHUB_DOWNLOAD_BASE = process.env.CLAWHUB_DOWNLOAD_BASE ?? "https://clawhub.ai/api/v1/download";
+const MAX_CLAWHUB_ZIP_BYTES = 50 * 1024 * 1024;
+const MAX_CLAWHUB_ZIP_ENTRIES = 500;
+const MAX_CLAWHUB_ENTRY_BYTES = 25 * 1024 * 1024;
+const MAX_CLAWHUB_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -410,6 +414,7 @@ type ClawhubZipEntryKind = "file" | "directory";
 type ClawhubZipEntryMetadata = {
 	fileName: string;
 	externalFileAttributes: number;
+	uncompressedSize?: number;
 	versionMadeBy: number;
 	encrypted?: boolean;
 };
@@ -435,6 +440,9 @@ export function validateClawhubZipEntryMetadata(
 	const path = normalizeZipEntryPath(entry.fileName);
 	if (!path) return { ok: false, error: "ClawHub zip contains unsafe paths" };
 	if (entry.encrypted) return { ok: false, error: "ClawHub zip contains encrypted entries" };
+	if (entry.uncompressedSize !== undefined && entry.uncompressedSize > MAX_CLAWHUB_ENTRY_BYTES) {
+		return { ok: false, error: "ClawHub zip entry is too large" };
+	}
 
 	const unixMode = entry.versionMadeBy >> 8 === ZIP_UNIX_HOST ? entry.externalFileAttributes >>> 16 : 0;
 	const impliedDirectory = entry.fileName.replaceAll("\\", "/").endsWith("/");
@@ -527,6 +535,8 @@ async function extractClawhubZip(
 	const zip = await openZip(zipPath);
 	return new Promise((resolveExtract) => {
 		let done = false;
+		let entries = 0;
+		let totalUncompressedBytes = 0;
 		const fail = (error: string): void => {
 			if (done) return;
 			done = true;
@@ -542,9 +552,21 @@ async function extractClawhubZip(
 		zip.on("error", (err) => fail(err.message));
 		zip.on("end", pass);
 		zip.on("entry", (entry: Entry) => {
+			entries += 1;
+			totalUncompressedBytes += entry.uncompressedSize;
+			if (entries > MAX_CLAWHUB_ZIP_ENTRIES) {
+				fail("ClawHub zip contains too many entries");
+				return;
+			}
+			if (totalUncompressedBytes > MAX_CLAWHUB_UNCOMPRESSED_BYTES) {
+				fail("ClawHub zip uncompressed content is too large");
+				return;
+			}
+
 			const validation = validateClawhubZipEntryMetadata({
 				fileName: entry.fileName,
 				externalFileAttributes: entry.externalFileAttributes,
+				uncompressedSize: entry.uncompressedSize,
 				versionMadeBy: entry.versionMadeBy,
 				encrypted: entry.isEncrypted(),
 			});
@@ -573,6 +595,46 @@ async function extractClawhubZip(
 		});
 		zip.readEntry();
 	});
+}
+
+async function writeResponseBodyToFileWithLimit(
+	res: Response,
+	path: string,
+	limit: number,
+): Promise<{ ok: true; bytes: number } | { ok: false; error: string }> {
+	const header = res.headers.get("content-length");
+	if (header) {
+		const bytes = Number(header);
+		if (Number.isFinite(bytes) && bytes > limit) {
+			return { ok: false, error: "ClawHub download is too large" };
+		}
+	}
+	if (!res.body) return { ok: false, error: "ClawHub download did not include a response body" };
+
+	const reader = res.body.getReader();
+	const output = createWriteStream(path);
+	let bytes = 0;
+	try {
+		while (true) {
+			const chunk = await reader.read();
+			if (chunk.done) break;
+			bytes += chunk.value.byteLength;
+			if (bytes > limit) {
+				output.destroy();
+				return { ok: false, error: "ClawHub download is too large" };
+			}
+			await new Promise<void>((resolveWrite, rejectWrite) => {
+				output.write(chunk.value, (err) => {
+					if (err) rejectWrite(err);
+					else resolveWrite();
+				});
+			});
+		}
+		await new Promise<void>((resolveEnd) => output.end(resolveEnd));
+		return { ok: true, bytes };
+	} finally {
+		reader.releaseLock();
+	}
 }
 
 const clawhubInstallLocks = new Map<string, Promise<unknown>>();
@@ -638,7 +700,10 @@ async function installClawhubSkill(
 			return { success: false, error: `ClawHub download failed with HTTP ${res.status}` };
 		}
 
-		writeFileSync(zipPath, Buffer.from(await res.arrayBuffer()));
+		const download = await writeResponseBodyToFileWithLimit(res, zipPath, MAX_CLAWHUB_ZIP_BYTES);
+		if (!download.ok) {
+			return { success: false, error: download.error };
+		}
 
 		mkdirSync(extractDir, { recursive: true });
 		const extracted = await extractClawhubZip(zipPath, extractDir);
