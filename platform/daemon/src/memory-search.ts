@@ -1,9 +1,15 @@
 /**
  * Hybrid recall search orchestration.
  *
- * Extracted from daemon.ts — this module contains the pure search logic
- * between "parse request" and "format response". The route handler in
- * daemon.ts is now a thin HTTP wrapper that delegates here.
+ * This module turns a user query into a bounded, authorized recall response.
+ * The route handler in daemon.ts owns HTTP parsing and permissions; this file
+ * owns retrieval mechanics, score shaping, fallback sources, and response
+ * assembly.
+ *
+ * The critical invariant is ordering: broad candidate IDs may come from vector
+ * search, graph traversal, or source rescue paths, but memory content must not
+ * be loaded for reranking, dampening, summaries, expansion, or access tracking
+ * until the shared scope/project/agent filter has authorized those IDs.
  */
 
 import { createHash } from "node:crypto";
@@ -253,13 +259,18 @@ function buildFilterClause(params: RecallParams): FilterClause {
 		args,
 	};
 
-	// Agent visibility filtering — only applied when both agentId and readPolicy are provided.
-	if (params.agentId && params.readPolicy) {
-		const scope = buildAgentScopeClause(params.agentId, params.readPolicy, params.policyGroup ?? null);
+	// Agent visibility filtering defaults to isolated when an agent is known.
+	if (params.agentId) {
+		const scope = buildAgentScopeClause(params.agentId, params.readPolicy ?? "isolated", params.policyGroup ?? null);
 		return { sql: base.sql + scope.sql, args: [...base.args, ...scope.args] };
 	}
 
 	return base;
+}
+
+function normalizeRecallLimit(raw: number | undefined): number {
+	if (typeof raw !== "number" || !Number.isFinite(raw)) return 10;
+	return Math.max(1, Math.min(50, Math.floor(raw)));
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +472,30 @@ function mergeCandidate(
 	}
 }
 
+function authorizeScoredCandidates(
+	scored: ReadonlyArray<{ id: string; score: number; source: string }>,
+	filter: FilterClause,
+): Array<{ id: string; score: number; source: string }> {
+	// Candidate collectors intentionally cast a wide net. This is the single
+	// pre-content gate for database-backed memories: after this point the IDs
+	// are safe to use in stages that read content or mutate access metadata.
+	const ids = [...new Set(scored.map((row) => row.id))];
+	if (ids.length === 0) return [];
+	const placeholders = ids.map(() => "?").join(", ");
+	const allowed = getDbAccessor().withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT m.id
+				 FROM memories m
+				 WHERE m.id IN (${placeholders})
+				   AND m.is_deleted = 0${filter.sql}`,
+			)
+			.all(...ids, ...filter.args) as Array<{ id: string }>;
+		return new Set(rows.map((row) => row.id));
+	});
+	return scored.filter((row) => allowed.has(row.id));
+}
+
 interface CurrentnessInfo {
 	readonly active: readonly string[];
 	readonly superseded: ReadonlyArray<{
@@ -588,6 +623,7 @@ interface SourceChunkVectorHit {
 	readonly chunkText: string;
 	readonly score: number;
 	readonly createdAt: string;
+	readonly project: string | null;
 }
 
 function nativeIdSegment(value: string | null | undefined): string {
@@ -631,19 +667,26 @@ function buildSourceChunkVectorHits(
 	queryVec: Float32Array | null,
 	existingSourceIds: ReadonlySet<string>,
 	limit: number,
-	agentId?: string,
+	agentId: string,
+	project?: string,
 ): SourceChunkVectorHit[] {
-	if (!queryVec || limit <= 0 || !agentId) return [];
+	if (!queryVec || limit <= 0) return [];
+	// Source chunk embeddings only carry agent_id plus an embedding source_id.
+	// The live artifact table carries project, but not the source root/id needed
+	// to bind an embedding to that project without filename spoofing. Skip this
+	// rescue path for project-scoped recall until the index has that strong key.
+	if (project) return [];
 	try {
 		return getDbAccessor().withReadDb((db) => {
-			const agentWhere = agentId ? " AND agent_id = ?" : "";
 			const rows = db
 				.prepare(
 					`SELECT id, source_id, vector, chunk_text, created_at
 					 FROM embeddings
-					 WHERE source_type = 'source_obsidian_chunk' AND vector IS NOT NULL${agentWhere}`,
+					 WHERE source_type = 'source_obsidian_chunk'
+					   AND vector IS NOT NULL
+					   AND agent_id = ?`,
 				)
-				.all(...(agentId ? [agentId] : [])) as Array<{
+				.all(agentId) as Array<{
 				id: string;
 				source_id: string;
 				vector: Buffer;
@@ -651,17 +694,23 @@ function buildSourceChunkVectorHits(
 				created_at: string;
 			}>;
 			return rows
-				.map((row) => ({
-					embeddingId: row.id,
-					sourceId: row.source_id,
-					sourcePath: sourcePathFromChunkText(row.chunk_text),
-					chunkText: row.chunk_text,
-					score: cosineSimilarity(
-						queryVec,
-						new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4),
-					),
-					createdAt: row.created_at,
-				}))
+				.flatMap((row) => {
+					const sourcePath = sourcePathFromChunkText(row.chunk_text);
+					return [
+						{
+							embeddingId: row.id,
+							sourceId: row.source_id,
+							sourcePath,
+							chunkText: row.chunk_text,
+							score: cosineSimilarity(
+								queryVec,
+								new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4),
+							),
+							createdAt: row.created_at,
+							project: null,
+						},
+					];
+				})
 				.filter((row) => row.score > 0 && !existingSourceIds.has(row.sourceId))
 				.sort((a, b) => b.score - a.score)
 				.slice(0, limit);
@@ -921,20 +970,24 @@ function loadStructuredSummariesBySourceId(params: RecallParams, sourceIds: read
 	try {
 		return getDbAccessor().withReadDb((db) => {
 			const placeholders = unique.map(() => "?").join(", ");
+			const scope = buildAgentScopeClause(
+				params.agentId ?? "default",
+				params.readPolicy ?? "isolated",
+				params.policyGroup ?? null,
+			);
+			const projectSql = params.project ? "AND m.project = ?" : "";
+			const projectArgs: unknown[] = params.project ? [params.project] : [];
 			const parts = [
-				"SELECT source_id, content",
-				"FROM memories",
-				`WHERE source_id IN (${placeholders})`,
-				"AND agent_id = ?",
-				"AND COALESCE(is_deleted, 0) = 0",
-				"AND TRIM(content) != ''",
+				"SELECT m.source_id, m.content",
+				"FROM memories m",
+				`WHERE m.source_id IN (${placeholders})`,
+				"AND COALESCE(m.is_deleted, 0) = 0",
+				"AND TRIM(m.content) != ''",
+				projectSql,
+				scope.sql,
 			];
-			const args: unknown[] = [...unique, params.agentId ?? "default"];
-			if (params.project) {
-				parts.push("AND project = ?");
-				args.push(params.project);
-			}
-			parts.push("ORDER BY importance DESC, updated_at DESC, created_at DESC");
+			const args: unknown[] = [...unique, ...projectArgs, ...scope.args];
+			parts.push("ORDER BY m.importance DESC, m.updated_at DESC, m.created_at DESC");
 
 			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
 				source_id: string | null;
@@ -998,6 +1051,21 @@ function cosineSimilarity(query: Float32Array, memory: Float32Array): number {
 // supported by direct evidence can keep its score; only hint-only rows are capped.
 const HINT_ONLY_SCORE_CAP = 0.75;
 
+/**
+ * Run the recall pipeline.
+ *
+ * The stages are deliberately split into two halves:
+ *
+ * 1. Candidate collection: FTS, hints, vector, structured path search, and
+ *    graph traversal collect IDs and scores. These stages may over-fetch.
+ * 2. Authorized content handling: after `authorize_candidates`, later stages
+ *    may read content, call rerankers, apply dampening/currentness, hydrate
+ *    results, expand transcripts, and update access counts.
+ *
+ * Keep that boundary intact. It is what prevents high-recall channels such as
+ * vector search and traversal from leaking out-of-scope content into model or
+ * summary paths.
+ */
 export async function hybridRecall(
 	params: RecallParams,
 	cfg: ResolvedMemoryConfig,
@@ -1006,7 +1074,7 @@ export async function hybridRecall(
 	const query = params.query;
 	const expandedQuery = expandRecallKeywordQuery(params.query);
 	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? expandedQuery).trim());
-	const limit = params.limit ?? 10;
+	const limit = normalizeRecallLimit(params.limit);
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
 	const timings = createRecallTimingCollector();
@@ -1031,7 +1099,7 @@ export async function hybridRecall(
 	};
 
 	const filter = buildFilterClause(params);
-	const scoped = params.scope !== undefined;
+	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
 	const queryVecPromise = (() => {
 		const embeddingStart = performance.now();
 		let promise: Promise<number[] | null>;
@@ -1072,6 +1140,7 @@ export async function hybridRecall(
 	const traversalEvidenceMap = new Map<string, number>();
 	try {
 		timings.time("memory_fts", () => {
+			if (keywordQuery.length === 0) return;
 			getDbAccessor().withReadDb((db) => {
 				// CROSS JOIN keeps SQLite from scanning memories first via
 				// low-selectivity filters before applying the FTS rowid match.
@@ -1112,6 +1181,7 @@ export async function hybridRecall(
 	if (cfg.pipelineV2.hints?.enabled) {
 		try {
 			timings.time("hints_fts", () => {
+				if (keywordQuery.length === 0) return;
 				getDbAccessor().withReadDb((db) => {
 					// Keep memory_hints_fts first; the agent/scope indexes are much
 					// less selective than the FTS match on large workspaces.
@@ -1164,17 +1234,18 @@ export async function hybridRecall(
 	}
 
 	// --- Vector search via sqlite-vec ---
-	// sqlite-vec cannot pre-filter by scope, so scoped queries over-fetch
-	// (2x top_k) and rely on hydration-time scope filtering (line ~685).
-	// This ensures scoped queries still benefit from vector similarity
-	// when graph traversal yields no focal entities.
+	// sqlite-vec cannot pre-filter by recall scope/project/agent policy, so
+	// constrained queries over-fetch and rely on candidate authorization.
+	// This keeps constrained queries eligible for vector similarity when graph
+	// traversal yields no focal entities.
 	const vectorMap = new Map<string, number>();
 	if (queryVecF32) {
-		const vecLimit = scoped ? cfg.search.top_k * 2 : cfg.search.top_k;
+		const queryVector = queryVecF32;
+		const vecLimit = needsPostFilter ? cfg.search.top_k * 2 : cfg.search.top_k;
 		try {
 			timings.time("vector_search", () => {
 				getDbAccessor().withReadDb((db) => {
-					const vecResults = vectorSearch(db as any, queryVecF32!, {
+					const vecResults = vectorSearch(db as any, queryVector, {
 						limit: vecLimit,
 						type: params.type as "fact" | "preference" | "decision" | undefined,
 					});
@@ -1358,24 +1429,28 @@ export async function hybridRecall(
 				}
 			}
 
-			// Channel merge: ensure flat candidates are eligible to compete in the
-			// final sorted pool. Flat gets at least 40% of pre-sort slots so hub
-			// entities (high-mention traversal walks) can't exclude keyword/vector
-			// matches entirely. After the sort, final top-N is score-ordered.
-			const traversalIds = new Set(traversalScored.map((s) => s.id));
-			const flatOnly = flatScored.filter((s) => !traversalIds.has(s.id));
+			// Channel merge: max-fuse overlapping flat/traversal candidates so a
+			// weak graph score never discards stronger lexical/vector evidence.
+			traversalScored.sort((a, b) => b.score - a.score);
 			const candidateBudget = Math.max(limit, Math.min(cfg.search.top_k, limit * 4));
+			const flatIds = new Set(flatScored.map((row) => row.id));
 			const minFlat = Math.ceil(candidateBudget * 0.4);
-			const maxTraversal = candidateBudget - Math.min(minFlat, flatOnly.length);
-			scored = [
-				...traversalScored.slice(0, maxTraversal),
-				// When traversal underperforms its cap, flat absorbs the surplus
-				// slots — this is intentional, not a bug. Keep the pre-SEC pool
-				// wider than the final limit so structured evidence can rescue
-				// lower raw-rank but better path-matched candidates.
-				...flatOnly.slice(0, candidateBudget - Math.min(maxTraversal, traversalScored.length)),
-			];
-			scored.sort((a, b) => b.score - a.score);
+			const byId = new Map<string, { id: string; score: number; source: string }>();
+			for (const row of flatScored) mergeCandidate(byId, row);
+			for (const row of traversalScored) mergeCandidate(byId, row);
+			const fused = [...byId.values()].sort((a, b) => b.score - a.score);
+			const selected: Array<{ id: string; score: number; source: string }> = [];
+			let flatCount = 0;
+			for (const row of fused) {
+				if (selected.length >= candidateBudget) break;
+				const isFlat = flatIds.has(row.id);
+				const remaining = candidateBudget - selected.length;
+				const neededFlat = Math.max(0, Math.min(minFlat, flatScored.length) - flatCount);
+				if (!isFlat && neededFlat >= remaining) continue;
+				selected.push(row);
+				if (isFlat) flatCount++;
+			}
+			scored = selected;
 		});
 	} else {
 		scored = flatScored;
@@ -1512,6 +1587,12 @@ export async function hybridRecall(
 		scored = [...byId.values()].sort((a, b) => b.score - a.score);
 	}
 
+	if (scored.length > 0) {
+		scored = timings.time("authorize_candidates", () => authorizeScoredCandidates(scored, filter));
+	}
+
+	// Everything below this point may assume `scored` only contains memory IDs
+	// visible to the caller. Keep new content-bearing stages below this line.
 	const structuredEvidenceMap = new Map(structuredCandidateMap);
 
 	// --- Structured Evidence Convolution (SEC-lite) ---
@@ -1598,7 +1679,7 @@ export async function hybridRecall(
 	// Remaining timeout budget to use for LLM summary after reranking.
 	// Set inside the reranker block; consumed after final results are assembled.
 	let summarizeLeft = 0;
-	if (cfg.pipelineV2.reranker.enabled) {
+	if (cfg.pipelineV2.reranker.enabled && scored.length > 0) {
 		const rerankerStageStart = performance.now();
 		try {
 			const rerankStart = Date.now();
@@ -1814,16 +1895,16 @@ export async function hybridRecall(
 		scored.sort((a, b) => b.score - a.score);
 	});
 
-	// Over-fetch before hydration when scoped. Vector search can't
-	// pre-filter by scope, so out-of-scope IDs get dropped at
-	// hydration. 3x compensates for the expected discard rate.
-	const preHydrate = scoped ? limit * 3 : limit;
+	// Over-fetch before hydration for constrained searches. Broad candidate
+	// channels can include IDs that candidate authorization or hydration drops.
+	// 3x compensates for the expected discard rate.
+	const preHydrate = needsPostFilter ? limit * 3 : limit;
 	const topIds = scored.slice(0, preHydrate).map((s) => s.id);
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 
 	if (topIds.length === 0) {
 		const sourceChunkHits = timings.time("source_chunk_vector_fallback", () =>
-			buildSourceChunkVectorHits(queryVecF32, new Set(), limit, params.agentId),
+			buildSourceChunkVectorHits(queryVecF32, new Set(), limit, params.agentId ?? "default", params.project),
 		);
 		if (sourceChunkHits.length > 0) {
 			const results = sourceChunkHits.slice(0, limit).map((hit): RecallResult => {
@@ -1843,7 +1924,7 @@ export async function hybridRecall(
 					pinned: false,
 					importance: 0.6,
 					who: "obsidian",
-					project: null,
+					project: hit.project,
 					created_at: hit.createdAt,
 					source_path: hit.sourcePath,
 					supplementary: true,
@@ -1957,23 +2038,8 @@ export async function hybridRecall(
 	}
 
 	// --- Fetch full memory rows ---
-	// Scope filter on hydration catches any results that bypassed
-	// the FTS filter clause (e.g. unscoped graph boost results).
-	// Agent scope filter also applied here to catch vector/traversal
-	// results that bypass FTS-level agent filtering.
-	const scopeClause =
-		params.scope !== undefined
-			? params.scope === null
-				? " AND m.scope IS NULL"
-				: " AND m.scope = ?"
-			: " AND m.scope IS NULL";
-	const scopeArgs: unknown[] = params.scope !== undefined && params.scope !== null ? [params.scope] : [];
-	const projectClause = params.project ? " AND m.project = ?" : "";
-	const projectArgs: unknown[] = params.project ? [params.project] : [];
-	const agentScope =
-		params.agentId && params.readPolicy
-			? buildAgentScopeClause(params.agentId, params.readPolicy, params.policyGroup ?? null)
-			: { sql: "", args: [] };
+	// Hydration uses the same auth/scope/project filter as candidate
+	// authorization so no alternate path can widen access.
 	const placeholders = topIds.map(() => "?").join(", ");
 
 	const rows = timings.time("hydrate_memory_rows", () =>
@@ -1983,9 +2049,9 @@ export async function hybridRecall(
 					.prepare(
 						`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at
         FROM memories m
-        WHERE m.id IN (${placeholders}) AND m.is_deleted = 0${scopeClause}${projectClause}${agentScope.sql}`,
+        WHERE m.id IN (${placeholders}) AND m.is_deleted = 0${filter.sql}`,
 					)
-					.all(...topIds, ...scopeArgs, ...projectArgs, ...agentScope.args) as Array<{
+					.all(...topIds, ...filter.args) as Array<{
 					id: string;
 					content: string;
 					source_id: string | null;
@@ -2000,58 +2066,74 @@ export async function hybridRecall(
 		),
 	);
 
-	// Update access tracking (don't fail if this fails).
-	// Uses topIds (real DB memory IDs from scored), not the final results
-	// array — so the synthetic llm_summary card injected later is never
-	// included here and never touches the memories table.
-	try {
-		timings.time("access_tracking_update", () => {
-			getDbAccessor().withWriteTx((db) => {
-				db.prepare(
-					`UPDATE memories
-          SET last_accessed = datetime('now'), access_count = access_count + 1
-          WHERE id IN (${placeholders}) AND is_deleted = 0`,
-				).run(...topIds);
-			});
-		});
-	} catch (e) {
-		logger.warn("memory", "Failed to update access tracking", e as Error);
-	}
-
 	const rowMap = new Map(rows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
 	// injected after assembly and the array is capped to `limit` at that point.
 	const results: RecallResult[] = timings.time("assemble_results", () =>
 		scored
-			.slice(0, limit)
+			.slice(0, preHydrate)
 			.filter((s) => rowMap.has(s.id))
-			.map((s) => {
-				const r = rowMap.get(s.id)!;
+			.slice(0, limit)
+			.flatMap((s) => {
+				const r = rowMap.get(s.id);
+				if (!r) return [];
 				const content = annotateCurrentness(r.content, currentness.get(r.id));
 				const isTruncated = content.length > recallTruncate;
-				return {
-					id: r.id,
-					content: isTruncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-					content_length: content.length,
-					truncated: isTruncated,
-					score: Math.round(s.score * 100) / 100,
-					source: s.source,
-					...(r.source_id ? { source_id: r.source_id, session_id: sessionIdFromSourceId(r.source_id) } : {}),
-					type: r.type,
-					tags: r.tags,
-					pinned: !!r.pinned,
-					importance: r.importance,
-					who: r.who,
-					project: r.project,
-					created_at: r.created_at,
-				};
+				return [
+					{
+						id: r.id,
+						content: isTruncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+						content_length: content.length,
+						truncated: isTruncated,
+						score: Math.round(s.score * 100) / 100,
+						source: s.source,
+						...(r.source_id ? { source_id: r.source_id, session_id: sessionIdFromSourceId(r.source_id) } : {}),
+						type: r.type,
+						tags: r.tags,
+						pinned: !!r.pinned,
+						importance: r.importance,
+						who: r.who,
+						project: r.project,
+						created_at: r.created_at,
+					},
+				];
 			}),
 	);
+
+	// Update access tracking only for authorized memories actually returned.
+	try {
+		const trackedIds = results.map((row) => row.id).filter((id) => rowMap.has(id));
+		if (trackedIds.length > 0) {
+			timings.time("access_tracking_update", () => {
+				const trackedPlaceholders = trackedIds.map(() => "?").join(", ");
+				getDbAccessor().withWriteTx((db) => {
+					db.prepare(
+						`UPDATE memories
+						 SET last_accessed = datetime('now'), access_count = access_count + 1
+						 WHERE id IN (
+						   SELECT m.id
+						   FROM memories m
+						   WHERE m.id IN (${trackedPlaceholders})
+						     AND m.is_deleted = 0${filter.sql}
+						 )`,
+					).run(...trackedIds, ...filter.args);
+				});
+			});
+		}
+	} catch (e) {
+		logger.warn("memory", "Failed to update access tracking", e as Error);
+	}
 
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
 		const sourceChunkHits = timings.time("source_chunk_vector_supplement", () =>
-			buildSourceChunkVectorHits(queryVecF32, existingSourceIds, limit - results.length, params.agentId),
+			buildSourceChunkVectorHits(
+				queryVecF32,
+				existingSourceIds,
+				limit - results.length,
+				params.agentId ?? "default",
+				params.project,
+			),
 		);
 		for (const hit of sourceChunkHits) {
 			if (results.length >= limit) break;
@@ -2071,7 +2153,7 @@ export async function hybridRecall(
 				pinned: false,
 				importance: 0.6,
 				who: "obsidian",
-				project: null,
+				project: hit.project,
 				created_at: hit.createdAt,
 				source_path: hit.sourcePath,
 				supplementary: true,
@@ -2185,10 +2267,10 @@ export async function hybridRecall(
 							 WHERE mem.entity_id IN (${ePlaceholders})
 							   AND m.type = 'rationale'
 							   AND m.is_deleted = 0
-							   ${scopeClause}${agentScope.sql}
+							   ${filter.sql}
 							 LIMIT 10`,
 					)
-					.all(...eIds, ...scopeArgs, ...agentScope.args) as Array<{
+					.all(...eIds, ...filter.args) as Array<{
 					id: string;
 					content: string;
 					type: string;
@@ -2202,6 +2284,7 @@ export async function hybridRecall(
 			});
 
 			for (const r of supplementary) {
+				if (results.length >= limit) break;
 				if (existingIds.has(r.id)) continue;
 				existingIds.add(r.id);
 				const isTrunc = r.content.length > recallTruncate;
@@ -2245,23 +2328,20 @@ export async function hybridRecall(
 				const ctx = getDbAccessor().withReadDb((db) => {
 					if (focal.entityIds.length === 0) return null;
 
-					// Scope-filter: only include entities mentioned in
-					// in-scope memories so unscoped entities (codebase
-					// concepts etc.) don't pollute scoped searches.
+					// Project/scope-constrained recall should not let broad focal
+					// entities pull in structural context from outside that slice.
 					let eids = focal.entityIds;
-					if (params.scope !== undefined) {
+					if (params.scope !== undefined || params.project) {
 						const ph = eids.map(() => "?").join(", ");
-						const sc = params.scope === null ? "m.scope IS NULL" : "m.scope = ?";
-						const sa: unknown[] = params.scope === null ? [] : [params.scope];
 						const sr = db
 							.prepare(
 								`SELECT DISTINCT mem.entity_id
 								 FROM memory_entity_mentions mem
 								 JOIN memories m ON m.id = mem.memory_id
 								 WHERE mem.entity_id IN (${ph})
-								   AND ${sc} AND m.is_deleted = 0`,
+								   AND m.is_deleted = 0${filter.sql}`,
 							)
-							.all(...eids, ...sa) as Array<{ entity_id: string }>;
+							.all(...eids, ...filter.args) as Array<{ entity_id: string }>;
 						eids = sr.map((r) => r.entity_id);
 						if (eids.length === 0) return null;
 					}
@@ -2344,7 +2424,7 @@ export async function hybridRecall(
 			const maxConstructed = Math.max(0.01, minReal - 0.01);
 			let added = 0;
 			for (const block of blocks) {
-				if (added >= cap) break;
+				if (added >= cap || results.length >= limit) break;
 				const syntheticId = `constructed:${block.provenance.entityName}`;
 				if (existingIds.has(syntheticId)) continue;
 				existingIds.add(syntheticId);
@@ -2441,14 +2521,16 @@ export async function hybridRecall(
 			if (keys.length > 0) {
 				const ph = keys.map(() => "?").join(", ");
 				const agentId = params.agentId ?? "default";
+				const projectSql = params.project ? " AND project = ?" : "";
+				const projectArgs: unknown[] = params.project ? [params.project] : [];
 				const transcripts = getDbAccessor().withReadDb(
 					(db) =>
 						db
 							.prepare(
 								`SELECT session_key, content FROM session_transcripts
-								 WHERE agent_id = ? AND session_key IN (${ph})`,
+								 WHERE agent_id = ? AND session_key IN (${ph})${projectSql}`,
 							)
-							.all(agentId, ...keys) as Array<{ session_key: string; content: string }>,
+							.all(agentId, ...keys, ...projectArgs) as Array<{ session_key: string; content: string }>,
 				);
 				if (transcripts.length > 0) {
 					sources = {};
@@ -2478,6 +2560,8 @@ export async function hybridRecall(
 		}
 		timings.record("source_excerpt_merge", sourceExcerptStart);
 	}
+
+	if (results.length > limit) results.length = limit;
 
 	return finish({
 		results,
