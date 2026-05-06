@@ -3,7 +3,13 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { formatInstalls, listInstalledSkills, mountSkillsRoutes, parseSkillFrontmatter } from "./skills";
+import {
+	buildSkillInstallPlan,
+	formatInstalls,
+	listInstalledSkills,
+	mountSkillsRoutes,
+	parseSkillFrontmatter,
+} from "./skills";
 
 // ---------------------------------------------------------------------------
 // Repo skills frontmatter validation (regression guard)
@@ -512,59 +518,34 @@ This is a test skill.`,
 // ---------------------------------------------------------------------------
 
 describe("install command args", () => {
-	// Test the regex pattern used to detect multi-skill repo sources
-	const repoPattern = /^[\w-]+\/[\w.-]+$/;
-
-	it("matches owner/repo format", () => {
-		expect(repoPattern.test("Signet-AI/signetai")).toBe(true);
-		expect(repoPattern.test("vercel-labs/agent-skills")).toBe(true);
-		expect(repoPattern.test("anthropic-ai/browser-use")).toBe(true);
-	});
-
-	it("does not match clawhub@ prefixed sources", () => {
-		expect(repoPattern.test("clawhub@some-skill")).toBe(false);
-	});
-
-	it("does not match bare skill names", () => {
-		// bare names don't contain a slash
-		expect(repoPattern.test("browser-use")).toBe(false);
-		expect(repoPattern.test("web-search")).toBe(false);
-	});
-
-	it("does not match owner/repo@ref format", () => {
-		// The @ makes it fail the pattern — these are handled by skills CLI directly
-		expect(repoPattern.test("vercel-labs/skills@browser-use")).toBe(false);
-	});
-
 	it("constructs --skill flag for repo sources", () => {
-		const source = "Signet-AI/signetai";
-		const name = "web-search";
-		const args = ["add", source, "--global", "--yes"];
-		// @ts-ignore
-		if (source && source !== name && repoPattern.test(source)) {
-			args.push("--skill", name);
-		}
-		expect(args).toEqual(["add", "Signet-AI/signetai", "--global", "--yes", "--skill", "web-search"]);
+		expect(buildSkillInstallPlan("web-search", "Signet-AI/signetai")).toEqual({
+			kind: "skills-cli",
+			pkg: "Signet-AI/signetai",
+			args: ["add", "Signet-AI/signetai", "--global", "--yes", "--skill", "web-search"],
+		});
 	});
 
 	it("does not add --skill when source equals name", () => {
-		const source = "browser-use";
-		const name = "browser-use";
-		const args = ["add", source, "--global", "--yes"];
-		if (source && source !== name && repoPattern.test(source)) {
-			args.push("--skill", name);
-		}
-		expect(args).toEqual(["add", "browser-use", "--global", "--yes"]);
+		expect(buildSkillInstallPlan("browser-use", "browser-use")).toEqual({
+			kind: "skills-cli",
+			pkg: "browser-use",
+			args: ["add", "browser-use", "--global", "--yes"],
+		});
 	});
 
-	it("does not add --skill for clawhub sources", () => {
-		const source = "clawhub@some-skill";
-		const name = "some-skill";
-		const args = ["add", source, "--global", "--yes"];
-		// @ts-ignore
-		if (source && source !== name && repoPattern.test(source)) {
-			args.push("--skill", name);
-		}
-		expect(args).toEqual(["add", "clawhub@some-skill", "--global", "--yes"]);
+	it("routes ClawHub sources through the ClawHub installer", () => {
+		expect(buildSkillInstallPlan("some-skill", "clawhub@some-skill")).toEqual({
+			kind: "clawhub",
+			slug: "some-skill",
+		});
+	});
+
+	it("keeps skills.sh owner/repo@skill sources on the skills CLI path", () => {
+		expect(buildSkillInstallPlan("web-search", "inference-skills/skills@web-search")).toEqual({
+			kind: "skills-cli",
+			pkg: "inference-skills/skills@web-search",
+			args: ["add", "inference-skills/skills@web-search", "--global", "--yes"],
+		});
 	});
 });

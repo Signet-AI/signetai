@@ -6,19 +6,19 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
 import type { Hono } from "hono";
+import type { AuthMode } from "../auth/index.js";
+import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
+import { getLlmProvider } from "../llm.js";
 import { logger } from "../logger.js";
+import { type EmbeddingConfig, type PipelineV2Config, loadMemoryConfig } from "../memory-config.js";
+import type { LlmProvider } from "../pipeline/provider.js";
 import { parseSkillFile, patchSkillFrontmatter } from "../pipeline/skill-frontmatter.js";
 import { installSkillNode, uninstallSkillNode } from "../pipeline/skill-graph.js";
-import { getDbAccessor, type DbAccessor } from "../db-accessor.js";
-import type { AuthMode } from "../auth/index.js";
-import { loadMemoryConfig, type EmbeddingConfig, type PipelineV2Config } from "../memory-config.js";
-import { getLlmProvider } from "../llm.js";
-import type { LlmProvider } from "../pipeline/provider.js";
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -103,6 +103,7 @@ let catalogFetchedAt = 0;
 let clawhubCache: ClawhubItem[] = [];
 let clawhubFetchedAt = 0;
 const CATALOG_TTL = 10 * 60 * 1000;
+const CLAWHUB_DOWNLOAD_BASE = process.env.CLAWHUB_DOWNLOAD_BASE ?? "https://clawhub.ai/api/v1/download";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -361,6 +362,120 @@ function getProviderSafe(): LlmProvider | null {
 		return getLlmProvider();
 	} catch {
 		return null;
+	}
+}
+
+type SkillInstallPlan =
+	| {
+			kind: "skills-cli";
+			pkg: string;
+			args: string[];
+	  }
+	| {
+			kind: "clawhub";
+			slug: string;
+	  };
+
+export function buildSkillInstallPlan(name: string, source?: string): SkillInstallPlan {
+	if (source?.startsWith("clawhub@")) {
+		const slug = source.slice("clawhub@".length);
+		return { kind: "clawhub", slug: slug || name };
+	}
+
+	const pkg = source || name;
+	const args = ["add", pkg, "--global", "--yes"];
+	if (source && source !== name && /^[\w-]+\/[\w.-]+$/.test(source)) {
+		args.push("--skill", name);
+	}
+	return { kind: "skills-cli", pkg, args };
+}
+
+function isSafeZipEntry(entry: string): boolean {
+	const normalized = entry.replaceAll("\\", "/");
+	if (!normalized || normalized.includes("\0") || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+		return false;
+	}
+	return normalized.split("/").every((part) => part && part !== "." && part !== "..");
+}
+
+function runProcess(command: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+	return new Promise((resolveProcess, reject) => {
+		const proc = spawn(command, args, {
+			env: { ...process.env },
+			timeout: 60000,
+			windowsHide: true,
+		});
+
+		let stdout = "";
+		let stderr = "";
+		proc.stdout.on("data", (d: Buffer) => {
+			stdout += d.toString();
+		});
+		proc.stderr.on("data", (d: Buffer) => {
+			stderr += d.toString();
+		});
+		proc.on("close", (code) => resolveProcess({ code, stdout, stderr }));
+		proc.on("error", reject);
+	});
+}
+
+async function installClawhubSkill(
+	slug: string,
+): Promise<{ success: true; output: string } | { success: false; error: string }> {
+	if (!/^[\w.-]+$/.test(slug)) {
+		return { success: false, error: "Invalid ClawHub skill slug" };
+	}
+
+	const tempRoot = mkdtempSync(join(tmpdir(), "signet-clawhub-skill-"));
+	const zipPath = join(tempRoot, `${slug}.zip`);
+	const extractDir = join(tempRoot, "extract");
+	const targetDir = join(getSkillsDir(), slug);
+
+	try {
+		const url = new URL(CLAWHUB_DOWNLOAD_BASE);
+		url.searchParams.set("slug", slug);
+		const res = await fetch(url, { headers: { "User-Agent": "signet-daemon" } });
+		if (!res.ok) {
+			return { success: false, error: `ClawHub download failed with HTTP ${res.status}` };
+		}
+
+		writeFileSync(zipPath, Buffer.from(await res.arrayBuffer()));
+
+		const listing = await runProcess("unzip", ["-Z1", zipPath]);
+		if (listing.code !== 0) {
+			return { success: false, error: listing.stderr || listing.stdout || "Unable to inspect ClawHub zip" };
+		}
+
+		const entries = listing.stdout.split(/\r?\n/).filter(Boolean);
+		if (entries.length === 0 || !entries.every(isSafeZipEntry)) {
+			return { success: false, error: "ClawHub zip contains unsafe paths" };
+		}
+
+		mkdirSync(extractDir, { recursive: true });
+		const extracted = await runProcess("unzip", ["-q", zipPath, "-d", extractDir]);
+		if (extracted.code !== 0) {
+			return { success: false, error: extracted.stderr || extracted.stdout || "Unable to extract ClawHub zip" };
+		}
+
+		if (!existsSync(join(extractDir, "SKILL.md"))) {
+			return { success: false, error: "ClawHub package did not contain a root SKILL.md" };
+		}
+
+		mkdirSync(getSkillsDir(), { recursive: true });
+		const resolvedTarget = resolve(targetDir);
+		const resolvedSkillsDir = resolve(getSkillsDir());
+		const targetRelative = relative(resolvedSkillsDir, resolvedTarget);
+		if (!targetRelative || targetRelative.startsWith("..") || isAbsolute(targetRelative)) {
+			return { success: false, error: "Invalid ClawHub install target" };
+		}
+
+		rmSync(targetDir, { recursive: true, force: true });
+		cpSync(extractDir, targetDir, { recursive: true });
+		return { success: true, output: `Installed ClawHub skill ${slug}` };
+	} catch (err) {
+		return { success: false, error: err instanceof Error ? err.message : String(err) };
+	} finally {
+		rmSync(tempRoot, { recursive: true, force: true });
 	}
 }
 
@@ -764,20 +879,31 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 			return c.json({ error: "Invalid skill name" }, 400);
 		}
 
-		const pkg = source || name;
-		logger.info("skills", "Installing skill", { name, pkg });
+		const plan = buildSkillInstallPlan(name, source);
+		logger.info("skills", "Installing skill", { name, source, plan });
+
+		if (plan.kind === "clawhub") {
+			const result = await installClawhubSkill(plan.slug);
+			if (!result.success) {
+				logger.error("skills", "ClawHub skill install failed", undefined, {
+					slug: plan.slug,
+					error: result.error,
+				});
+				return c.json({ success: false, error: result.error }, 500);
+			}
+
+			logger.info("skills", "ClawHub skill installed", { name, slug: plan.slug });
+			onSkillInstalled(plan.slug).catch((e) => {
+				logger.error("skills", "Post-install graph hook failed", e as Error);
+			});
+			return c.json({ success: true, name: plan.slug, output: result.output });
+		}
+
 		const packageManager = resolvePrimaryPackageManager({
 			agentsDir: getAgentsDir(),
 			env: process.env,
 		});
-		// For multi-skill repo sources (owner/repo format), pass --skill to
-		// target a specific skill. This handles Signet-AI/signetai and any
-		// other GitHub repo that bundles multiple skills.
-		const args = ["add", pkg, "--global", "--yes"];
-		if (source && source !== name && /^[\w-]+\/[\w.-]+$/.test(source)) {
-			args.push("--skill", name);
-		}
-		const skillsCommand = getSkillsRunnerCommand(packageManager.family, args);
+		const skillsCommand = getSkillsRunnerCommand(packageManager.family, plan.args);
 
 		logger.info("skills", "Using package manager", {
 			command: `${skillsCommand.command} ${skillsCommand.args.join(" ")}`,
