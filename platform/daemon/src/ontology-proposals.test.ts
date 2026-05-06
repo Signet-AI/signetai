@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { getOntologyClaimEvidence } from "./ontology-claim-evidence";
+import { extractOntologyProposals } from "./ontology-extraction";
 import { getOntologyLinkEvidence } from "./ontology-link-evidence";
 import {
 	OntologyProposalError,
@@ -197,6 +198,94 @@ describe("ontology proposals", () => {
 		expect(listed.items).toHaveLength(1);
 		expect(listed.items[0]?.createdBy).toBe("importer");
 		expect(listed.items[0]?.sourceKind).toBe("transcript");
+	});
+
+	it("extracts candidate proposals from explicit transcript extraction JSON", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"transcript:extract",
+				JSON.stringify({
+					claim_values: [
+						{
+							entity: "Signet",
+							aspect: "architecture",
+							group_key: "ontology",
+							claim_key: "proposal_loop",
+							value: "Extraction emits pending proposals.",
+							confidence: 0.91,
+							evidence: [{ transcript_id: "transcript:extract", quote: "Extraction emits pending proposals." }],
+						},
+					],
+					links: [
+						{
+							source_entity: "Transcript artifact",
+							link_type: "supports_claim",
+							target_entity: "Signet",
+							reason: "The transcript explicitly supports the claim.",
+						},
+					],
+				}),
+				"codex",
+				"/tmp/signet",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:01:00.000Z",
+			);
+		});
+
+		const dryRun = extractOntologyProposals(getDbAccessor(), {
+			agentId: "ant",
+			from: "transcript:extract",
+		});
+
+		expect(dryRun.dryRun).toBe(true);
+		expect(dryRun.count).toBe(2);
+		expect(dryRun.writtenCount).toBe(0);
+		expect(dryRun.proposals.map((proposal) => proposal.operation)).toEqual(["add_claim_value", "create_link"]);
+
+		const written = extractOntologyProposals(getDbAccessor(), {
+			agentId: "ant",
+			from: "transcript:extract",
+			writeProposals: true,
+			createdBy: "test-extractor",
+		});
+
+		expect(written.dryRun).toBe(false);
+		expect(written.writtenCount).toBe(2);
+		expect(written.items.map((item) => item.createdBy)).toEqual(["test-extractor", "test-extractor"]);
+		expect(written.items.every((item) => item.sourceKind === "transcript")).toBe(true);
+	});
+
+	it("mechanically extracts conservative proposals from plain transcript text", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"plain-extract",
+				"Signet should become an agent-first ontology. [[Hermes Agent]] is relevant. Hermes Agent supports Signet proposal loop.",
+				"codex",
+				"/tmp/signet",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:01:00.000Z",
+			);
+		});
+
+		const result = extractOntologyProposals(getDbAccessor(), {
+			agentId: "ant",
+			from: "transcript:plain-extract",
+		});
+
+		expect(result.proposals.some((proposal) => proposal.operation === "create_entity")).toBe(true);
+		expect(result.proposals.some((proposal) => proposal.operation === "add_claim_value")).toBe(true);
+		expect(result.proposals.some((proposal) => proposal.operation === "create_link")).toBe(true);
+		expect(result.proposals.every((proposal) => proposal.evidence && proposal.evidence.length > 0)).toBe(true);
 	});
 
 	it("resolves proposal evidence from transcripts and indexed artifacts", () => {

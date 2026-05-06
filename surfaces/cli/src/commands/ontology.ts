@@ -146,6 +146,18 @@ interface ProposalImportInput {
 	readonly risk?: string;
 }
 
+interface ExtractionResponse {
+	readonly proposals?: readonly ProposalImportInput[];
+	readonly count?: number;
+	readonly writtenCount?: number;
+	readonly dryRun?: boolean;
+	readonly source?: {
+		readonly kind?: string;
+		readonly id?: string;
+		readonly sourcePath?: string | null;
+	};
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 }
@@ -522,6 +534,25 @@ function printDuplicateRepairs(data: unknown): void {
 	console.log();
 }
 
+function printExtraction(data: unknown): void {
+	const result = asRecord(data) as ExtractionResponse;
+	const proposals = result.proposals ?? [];
+	const source = result.source?.sourcePath ?? result.source?.id ?? "unknown source";
+	console.log(chalk.bold("\n  Ontology Extraction\n"));
+	console.log(chalk.dim(`  source ${source}`));
+	console.log(chalk.dim(`  ${result.writtenCount ?? 0} written · ${result.count ?? proposals.length} candidate(s)`));
+	for (const proposal of proposals.slice(0, 20)) {
+		const confidence = typeof proposal.confidence === "number" ? ` · ${proposal.confidence.toFixed(2)}` : "";
+		console.log(`  ${chalk.yellow(proposal.operation)}${confidence}`);
+		if (proposal.rationale) console.log(chalk.dim(`    ${proposal.rationale}`));
+		const payload = asRecord(proposal.payload);
+		const label = payload.name ?? payload.entity ?? payload.source_entity ?? payload.target_entity;
+		if (typeof label === "string") console.log(chalk.dim(`    ${label}`));
+	}
+	if (proposals.length > 20) console.log(chalk.dim(`  ... ${proposals.length - 20} more`));
+	console.log();
+}
+
 function addCommonOptions(cmd: Command): Command {
 	return cmd.option("--agent <name>", "Agent scope, default default").option("--json", "Output as JSON");
 }
@@ -624,6 +655,29 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		if (options.json) console.log(JSON.stringify(data, null, 2));
 		else printConflicts(data);
 	});
+
+	ontology
+		.command("extract")
+		.description("Extract candidate ontology proposals from a transcript or artifact")
+		.requiredOption("--from <source>", "Source ref, e.g. transcript:<id>, artifact:<path>, or source:<path>")
+		.option("--write-proposals", "Persist extracted candidates as pending proposals")
+		.option("--dry-run", "Preview candidates without writing", true)
+		.option("-l, --limit <n>", "Max candidates to return", Number.parseInt)
+		.option("--agent <name>", "Agent scope, default default")
+		.option("--created-by <name>", "Audit creator", "ontology-extract")
+		.option("--json", "Output as JSON")
+		.action(async (options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const data = await apiPost(deps, "/api/ontology/extract", {
+				agent_id: options.agent,
+				from: options.from,
+				write_proposals: options.writeProposals === true,
+				created_by: options.createdBy,
+				limit: options.limit,
+			});
+			if (options.json) console.log(JSON.stringify(data, null, 2));
+			else printExtraction(data);
+		});
 
 	addCommonOptions(
 		ontology

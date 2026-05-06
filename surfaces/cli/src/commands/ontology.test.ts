@@ -213,6 +213,68 @@ describe("registerOntologyCommands", () => {
 		expect(lines.join("\n")).toContain("transcript:link");
 	});
 
+	test("extract posts source refs to the ontology extraction endpoint", async () => {
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (method, path, body) => {
+				calls.push({ method, path, body });
+				return {
+					ok: true,
+					data: {
+						source: { kind: "transcript", id: "transcript:extract" },
+						count: 1,
+						writtenCount: 1,
+						proposals: [
+							{
+								operation: "add_claim_value",
+								payload: { entity: "Signet" },
+								confidence: 0.9,
+								rationale: "Extracted claim value candidate from source evidence.",
+							},
+						],
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"extract",
+			"--from",
+			"transcript:extract",
+			"--write-proposals",
+			"--agent",
+			"ant",
+			"--limit",
+			"5",
+		]);
+
+		expect(calls).toEqual([
+			{
+				method: "POST",
+				path: "/api/ontology/extract",
+				body: {
+					agent_id: "ant",
+					from: "transcript:extract",
+					write_proposals: true,
+					created_by: "ontology-extract",
+					limit: 5,
+				},
+			},
+		]);
+		expect(lines.join("\n")).toContain("Ontology Extraction");
+		expect(lines.join("\n")).toContain("1 written");
+	});
+
 	test("repair duplicates posts a dry-run request by default", async () => {
 		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
 		const lines: string[] = [];

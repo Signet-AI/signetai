@@ -128,6 +128,7 @@ GET  /api/ontology/proposals/:id
 GET  /api/ontology/proposals/:id/evidence
 GET  /api/ontology/claims/evidence
 GET  /api/ontology/links/:id/evidence
+POST /api/ontology/extract
 POST /api/ontology/proposals
 POST /api/ontology/proposals/batch
 POST /api/ontology/proposals/repair/duplicates
@@ -158,6 +159,8 @@ signet ontology conflicts
 signet ontology evidence <id>
 signet ontology claim-evidence <entity> <aspect> <group> <claim>
 signet ontology link-evidence <link-id>
+signet ontology extract --from transcript:<id> --dry-run
+signet ontology extract --from transcript:<id> --write-proposals
 signet ontology propose --operation add_claim_value --payload-file proposal.json
 signet ontology import-proposals --file extraction-output.json
 signet ontology repair --duplicates --dry-run
@@ -242,6 +245,8 @@ router rather than binding directly to a vendor or harness.
   claim values without deleting their provenance.
 - Support batch proposal creation so extractor/consolidator JSON can become
   durable pending proposals without direct ontology mutation.
+- Support transcript and artifact extraction into candidate proposals, with
+  dry-run as the default and explicit `write_proposals` for persistence.
 - Support proposal evidence lookup for embedded quotes, session transcripts,
   and indexed memory artifacts.
 - Support applied claim evidence lookup so accepted claim values remain
@@ -282,6 +287,9 @@ router rather than binding directly to a vendor or harness.
 - Auth guard tests cover new ontology proposal routes.
 - Evidence lookup resolves transcript and source artifact references without
   reading arbitrary filesystem paths.
+- Extraction loads agent-scoped transcript/artifact rows, emits candidates by
+  parsing explicit extraction JSON and conservative mechanical transcript
+  signals, and writes pending proposals only when explicitly requested.
 - Applied claim evidence lookup resolves stored attribute provenance and memory
   references without reading arbitrary filesystem paths.
 - Applied link evidence lookup resolves stored dependency provenance without

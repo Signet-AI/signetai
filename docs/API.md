@@ -3442,6 +3442,14 @@ provenance. Query parameters: `entity`, `aspect`, `group`, `claim`, `status`,
 Resolve evidence for an already-applied ontology link from stored dependency
 provenance.
 
+### POST /api/ontology/extract
+
+Extract candidate ontology proposals from an agent-scoped transcript or memory
+artifact. Body parameters: `from`, `agent_id`, `write_proposals`, `created_by`,
+and `limit`. `from` accepts refs such as `transcript:<id>`,
+`artifact:<source_path>`, or `source:<source_path>`. The route dry-runs by
+default and writes pending proposals only when `write_proposals` is true.
+
 ### POST /api/ontology/proposals
 
 Create one pending ontology proposal.

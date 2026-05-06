@@ -7,6 +7,7 @@ import {
 	parseOntologyClaimAttributeKind,
 	parseOntologyClaimAttributeStatus,
 } from "../ontology-claim-evidence";
+import { OntologyExtractionError, extractOntologyProposals } from "../ontology-extraction";
 import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
 import {
 	OntologyProposalError,
@@ -69,6 +70,7 @@ function statusForError(err: unknown): 400 | 404 | 409 | 500 {
 	if (err instanceof OntologyProposalError) return err.status;
 	if (err instanceof OntologyClaimEvidenceError) return err.status;
 	if (err instanceof OntologyLinkEvidenceError) return err.status;
+	if (err instanceof OntologyExtractionError) return err.status;
 	return 500;
 }
 
@@ -90,6 +92,10 @@ export function registerOntologyRoutes(app: Hono): void {
 		return requirePermission(permission, authConfig)(c, next);
 	});
 	app.use("/api/ontology/proposals/*", async (c, next) => {
+		const permission = c.req.method === "GET" ? "recall" : "modify";
+		return requirePermission(permission, authConfig)(c, next);
+	});
+	app.use("/api/ontology/extract", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
 	});
@@ -141,6 +147,27 @@ export function registerOntologyRoutes(app: Hono): void {
 					limit: readNumber(body, "limit"),
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
 					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
+				}),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/extract", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		const from = readString(body, "from");
+		if (!from) return c.json({ error: "from is required" }, 400);
+		try {
+			return c.json(
+				extractOntologyProposals(getDbAccessor(), {
+					agentId: scoped.agentId,
+					from,
+					writeProposals: readBoolean(body, "write_proposals") ?? false,
+					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-extract",
+					limit: readNumber(body, "limit"),
 				}),
 			);
 		} catch (err) {
