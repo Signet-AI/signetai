@@ -6,7 +6,17 @@
  */
 
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+	cpSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
@@ -398,6 +408,37 @@ function isSafeZipEntry(entry: string): boolean {
 	return normalized.split("/").every((part) => part && part !== "." && part !== "..");
 }
 
+export function validateExtractedSkillTree(root: string): { ok: true } | { ok: false; error: string } {
+	const skillMd = join(root, "SKILL.md");
+	if (!existsSync(skillMd)) {
+		return { ok: false, error: "ClawHub package did not contain a root SKILL.md" };
+	}
+	if (!lstatSync(skillMd).isFile()) {
+		return { ok: false, error: "ClawHub package root SKILL.md must be a regular file" };
+	}
+
+	const stack = [root];
+	while (stack.length > 0) {
+		const dir = stack.pop();
+		if (!dir) continue;
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const path = join(dir, entry.name);
+			if (entry.isSymbolicLink()) {
+				return { ok: false, error: "ClawHub package contains symbolic links" };
+			}
+			if (entry.isDirectory()) {
+				stack.push(path);
+				continue;
+			}
+			if (!entry.isFile()) {
+				return { ok: false, error: "ClawHub package contains non-regular files" };
+			}
+		}
+	}
+
+	return { ok: true };
+}
+
 function runProcess(command: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
 	return new Promise((resolveProcess, reject) => {
 		const proc = spawn(command, args, {
@@ -457,8 +498,9 @@ async function installClawhubSkill(
 			return { success: false, error: extracted.stderr || extracted.stdout || "Unable to extract ClawHub zip" };
 		}
 
-		if (!existsSync(join(extractDir, "SKILL.md"))) {
-			return { success: false, error: "ClawHub package did not contain a root SKILL.md" };
+		const validation = validateExtractedSkillTree(extractDir);
+		if (!validation.ok) {
+			return { success: false, error: validation.error };
 		}
 
 		mkdirSync(getSkillsDir(), { recursive: true });

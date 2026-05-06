@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -9,6 +9,7 @@ import {
 	listInstalledSkills,
 	mountSkillsRoutes,
 	parseSkillFrontmatter,
+	validateExtractedSkillTree,
 } from "./skills";
 
 // ---------------------------------------------------------------------------
@@ -546,6 +547,35 @@ describe("install command args", () => {
 			kind: "skills-cli",
 			pkg: "inference-skills/skills@web-search",
 			args: ["add", "inference-skills/skills@web-search", "--global", "--yes"],
+		});
+	});
+});
+
+describe("ClawHub skill archive validation", () => {
+	const tmpRoot = join(tmpdir(), `signet-clawhub-validate-${process.pid}`);
+
+	afterEach(() => {
+		rmSync(tmpRoot, { recursive: true, force: true });
+	});
+
+	it("accepts regular files and directories", () => {
+		const root = join(tmpRoot, "valid");
+		mkdirSync(join(root, "references"), { recursive: true });
+		writeFileSync(join(root, "SKILL.md"), "# Valid\n");
+		writeFileSync(join(root, "references", "README.md"), "# Reference\n");
+
+		expect(validateExtractedSkillTree(root)).toEqual({ ok: true });
+	});
+
+	it("rejects symbolic links before copying into the skills directory", () => {
+		const root = join(tmpRoot, "symlink");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(root, "target.md"), "# Target\n");
+		symlinkSync("target.md", join(root, "SKILL.md"));
+
+		expect(validateExtractedSkillTree(root)).toEqual({
+			ok: false,
+			error: "ClawHub package root SKILL.md must be a regular file",
 		});
 	});
 });
