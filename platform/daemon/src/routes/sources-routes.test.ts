@@ -6,7 +6,7 @@ import { addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { loadMemoryConfig } from "../memory-config";
-import type { NativeMemoryBridgeHandle, NativeMemorySource } from "../native-memory-sources";
+import type { NativeMemoryBridgeHandle, NativeMemoryBridgeOptions, NativeMemorySource } from "../native-memory-sources";
 import { registerSourcesRoutes } from "./sources-routes";
 
 describe("Sources routes", () => {
@@ -37,26 +37,49 @@ describe("Sources routes", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	function makeApp(options: { indexed?: number; purged?: number } = {}): Hono {
+	function makeApp(
+		options: { indexed?: number; purged?: number; syncGate?: Promise<void>; onPurge?: () => void } = {},
+	): Hono {
 		const app = new Hono();
 		registerSourcesRoutes(app, {
 			agentsDir: dir,
 			loadMemoryConfig,
-			startBridge: (sources: readonly NativeMemorySource[]) => {
+			startBridge: (sources: readonly NativeMemorySource[], bridgeOptions: NativeMemoryBridgeOptions) => {
 				expect(sources).toHaveLength(1);
 				expect(sources[0]?.sourceId).toStartWith("obsidian:");
+				expect(bridgeOptions.yieldEveryFiles).toBe(1);
 				return {
-					syncExisting: async () => options.indexed ?? 1,
+					syncExisting: async () => {
+						if (options.syncGate) await options.syncGate;
+						bridgeOptions.onFileIndexed?.({
+							source: sources[0] as NativeMemorySource,
+							filePath: join(vault, "permanent", "Note.md"),
+							indexed: true,
+							scanned: 1,
+							total: 1,
+							changed: options.indexed ?? 1,
+						});
+						return options.indexed ?? 1;
+					},
 					close: async () => {},
 				} satisfies NativeMemoryBridgeHandle;
 			},
 			purgeNativeSource: (source, agentId) => {
 				expect(source.sourceId).toStartWith("obsidian:");
 				expect(agentId).toBe(process.env.SIGNET_AGENT_ID?.trim() || "default");
+				options.onPurge?.();
 				return options.purged ?? 7;
 			},
 		});
 		return app;
+	}
+
+	async function waitFor(predicate: () => boolean): Promise<void> {
+		for (let attempt = 0; attempt < 50; attempt++) {
+			if (predicate()) return;
+			await Bun.sleep(10);
+		}
+		throw new Error("Timed out waiting for condition");
 	}
 
 	it("lists no configured sources by default", async () => {
@@ -65,22 +88,69 @@ describe("Sources routes", () => {
 		expect(await res.json()).toEqual({ version: 1, sources: [] });
 	});
 
-	it("connects an Obsidian source, indexes it, and records lastIndexedAt", async () => {
+	it("connects an Obsidian source, queues indexing, and records lastIndexedAt after the job finishes", async () => {
 		const res = await makeApp({ indexed: 3 }).request("/api/sources/obsidian", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ path: vault, name: "Route Vault" }),
 		});
 
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as { created: boolean; indexed: number; source: { id: string; root: string } };
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as {
+			created: boolean;
+			indexed: number;
+			queued: boolean;
+			source: { id: string; root: string };
+		};
 		expect(body.created).toBe(true);
-		expect(body.indexed).toBe(3);
+		expect(body.indexed).toBe(0);
+		expect(body.queued).toBe(true);
 		expect(body.source.root).toBe(vault);
 
-		const stored = loadSourcesConfig(dir).sources[0];
-		expect(stored?.id).toBe(body.source.id);
-		expect(stored?.lastIndexedAt).toBeTruthy();
+		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
+		expect(loadSourcesConfig(dir).sources[0]?.id).toBe(body.source.id);
+	});
+
+	it("does not block the connect response on a slow Obsidian source scan", async () => {
+		let releaseScan = () => {};
+		const syncGate = new Promise<void>((resolve) => {
+			releaseScan = resolve;
+		});
+		const res = await makeApp({ indexed: 3, syncGate }).request("/api/sources/obsidian", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ path: vault, name: "Slow Vault" }),
+		});
+
+		expect(res.status).toBe(202);
+		expect(loadSourcesConfig(dir).sources[0]?.lastIndexedAt).toBeUndefined();
+
+		releaseScan();
+		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
+	});
+
+	it("purges again when a disconnected source still has an in-flight index job", async () => {
+		let releaseScan = () => {};
+		let purges = 0;
+		const syncGate = new Promise<void>((resolve) => {
+			releaseScan = resolve;
+		});
+		const app = makeApp({ syncGate, onPurge: () => purges++ });
+		const added = (await (
+			await app.request("/api/sources/obsidian", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ path: vault, name: "Disconnecting Vault" }),
+			})
+		).json()) as { source: { id: string } };
+
+		const res = await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, { method: "DELETE" });
+		expect(res.status).toBe(200);
+		expect(purges).toBe(1);
+
+		releaseScan();
+		await waitFor(() => purges === 2);
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
 	});
 
 	it("reports source chunk stats using source-owned chunk id prefixes", async () => {
