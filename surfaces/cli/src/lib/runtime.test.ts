@@ -58,7 +58,9 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<key>ProgramArguments</key>");
 		expect(plist).toContain("<string>/bin/bash</string>");
 		expect(plist).toContain("<string>-c</string>");
-		expect(plist).toContain(`exec ${process.execPath} /opt/signet/dist/daemon.js`);
+		expect(plist).toContain('<string>exec &quot;$0&quot; &quot;$1&quot;</string>');
+		expect(plist).toContain(`<string>${process.execPath}</string>`);
+		expect(plist).toContain("<string>/opt/signet/dist/daemon.js</string>");
 		expect(plist).toContain("<key>SIGNET_PORT</key>");
 		expect(plist).toContain("<string>3850</string>");
 		expect(plist).toContain("<key>SIGNET_HOST</key>");
@@ -92,8 +94,9 @@ describe("buildLaunchdDaemonPlist", () => {
 		const strings = [...inner.matchAll(/<string>(.*?)<\/string>/g)].map((m) => m[1]);
 		expect(strings[0]).toBe("/bin/bash");
 		expect(strings[1]).toBe("-c");
-		expect(strings[2]).toContain("exec ");
-		expect(strings[2]).toContain("/opt/signet/dist/daemon.js");
+		expect(strings[2]).toBe('exec &quot;$0&quot; &quot;$1&quot;');
+		expect(strings[3]).toBe(process.execPath);
+		expect(strings[4]).toBe("/opt/signet/dist/daemon.js");
 	});
 
 	it("uses launchctl bootstrap against the current user launchd domain", () => {

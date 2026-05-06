@@ -462,7 +462,9 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 	<array>
 		<string>/bin/bash</string>
 		<string>-c</string>
-		<string>exec ${xmlEscape(processRuntimeCommand())} ${xmlEscape(input.daemonPath)}</string>
+		<string>exec &quot;$0&quot; &quot;$1&quot;</string>
+		<string>${xmlEscape(processRuntimeCommand())}</string>
+		<string>${xmlEscape(input.daemonPath)}</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>${envEntries}
