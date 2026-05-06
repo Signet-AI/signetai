@@ -1606,6 +1606,101 @@ the document are soft-deleted one at a time with audit history.
 ```
 
 
+Sources
+-------
+
+Sources connect read-only external knowledge bases to Signet recall without
+turning them into ordinary saved memories. Obsidian is the currently supported
+source kind.
+
+### GET /api/sources
+
+List configured sources and lightweight index stats for the current daemon
+agent.
+
+**Response**
+
+```json
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "obsidian:abc123",
+      "kind": "obsidian",
+      "name": "Research Vault",
+      "root": "/home/user/ObsidianVault",
+      "enabled": true,
+      "mode": "read-only",
+      "createdAt": "2026-05-06T09:00:00.000Z",
+      "updatedAt": "2026-05-06T09:00:00.000Z",
+      "lastIndexedAt": "2026-05-06T09:01:00.000Z",
+      "excludeGlobs": ["**/.obsidian/**", "**/.trash/**", "**/.hermes/**"],
+      "stats": { "artifacts": 42, "chunks": 108, "indexed": 42 }
+    }
+  ]
+}
+```
+
+### POST /api/sources/obsidian
+
+Add or update an Obsidian vault source and index it immediately. The vault
+stays read-only; Signet writes only derived source artifacts, graph rows, and
+chunk embeddings to its own database.
+
+**Request body**
+
+```json
+{
+  "path": "/home/user/ObsidianVault",
+  "name": "Research Vault",
+  "excludeGlobs": ["private/**"]
+}
+```
+
+`root` is also accepted as an alias for `path`.
+
+**Response**
+
+```json
+{
+  "source": { "id": "obsidian:abc123", "kind": "obsidian" },
+  "created": true,
+  "indexed": 42
+}
+```
+
+### DELETE /api/sources/:sourceId
+
+Remove a source config and purge Signet-owned source artifacts, graph rows,
+and source chunk embeddings. Source files are not modified.
+
+**Response**
+
+```json
+{
+  "source": { "id": "obsidian:abc123", "kind": "obsidian" },
+  "purged": 150
+}
+```
+
+### POST /api/sources/pick-directory
+
+Best-effort local directory picker used by dashboard/browser flows. It returns
+`501` when no OS picker command is available.
+
+**Request body**
+
+```json
+{ "title": "Choose Obsidian vault" }
+```
+
+**Response**
+
+```json
+{ "path": "/home/user/ObsidianVault" }
+```
+
+
 Connectors
 ----------
 
@@ -3904,6 +3999,10 @@ silently disappear from the API reference.
 | GET | `/api/cross-agent/stream` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/synthesis/trigger` | platform/daemon/src/routes/hooks-routes.ts |
 | GET | `/api/synthesis/status` | platform/daemon/src/routes/hooks-routes.ts |
+| GET | `/api/sources` | platform/daemon/src/routes/sources-routes.ts |
+| POST | `/api/sources/pick-directory` | platform/daemon/src/routes/sources-routes.ts |
+| POST | `/api/sources/obsidian` | platform/daemon/src/routes/sources-routes.ts |
+| DELETE | `/api/sources/:sourceId` | platform/daemon/src/routes/sources-routes.ts |
 | GET | `/api/knowledge/entities` | platform/daemon/src/routes/knowledge-routes.ts |
 | POST | `/api/knowledge/entities/:id/pin` | platform/daemon/src/routes/knowledge-routes.ts |
 | DELETE | `/api/knowledge/entities/:id/pin` | platform/daemon/src/routes/knowledge-routes.ts |
