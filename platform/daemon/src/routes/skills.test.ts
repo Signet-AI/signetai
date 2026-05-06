@@ -9,8 +9,10 @@ import {
 	listInstalledSkills,
 	mountSkillsRoutes,
 	parseSkillFrontmatter,
+	replaceSkillDirectoryAtomically,
 	validateClawhubZipEntryMetadata,
 	validateExtractedSkillTree,
+	withClawhubInstallLock,
 } from "./skills";
 
 // ---------------------------------------------------------------------------
@@ -618,5 +620,48 @@ describe("ClawHub skill archive validation", () => {
 			ok: false,
 			error: "ClawHub package root SKILL.md must be a regular file",
 		});
+	});
+
+	it("replaces target skill directories through a staging directory", () => {
+		const source = join(tmpRoot, "source");
+		const target = join(tmpRoot, "skills", "demo");
+		mkdirSync(source, { recursive: true });
+		mkdirSync(target, { recursive: true });
+		writeFileSync(join(source, "SKILL.md"), "# New\n");
+		writeFileSync(join(target, "SKILL.md"), "# Old\n");
+
+		replaceSkillDirectoryAtomically(source, target);
+
+		expect(readFileSync(join(target, "SKILL.md"), "utf-8")).toBe("# New\n");
+		expect(readdirSync(join(tmpRoot, "skills")).filter((name) => name.includes(".demo."))).toEqual([]);
+	});
+
+	it("serializes concurrent installs for the same ClawHub slug", async () => {
+		const order: string[] = [];
+		let releaseFirst: (() => void) | undefined;
+		let markFirstStarted: (() => void) | undefined;
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const firstCanFinish = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+
+		const first = withClawhubInstallLock("demo", async () => {
+			order.push("first:start");
+			markFirstStarted?.();
+			await firstCanFinish;
+			order.push("first:end");
+		});
+		const second = withClawhubInstallLock("demo", async () => {
+			order.push("second:start");
+			order.push("second:end");
+		});
+
+		await firstStarted;
+		expect(order).toEqual(["first:start"]);
+		releaseFirst?.();
+		await Promise.all([first, second]);
+		expect(order).toEqual(["first:start", "first:end", "second:start", "second:end"]);
 	});
 });

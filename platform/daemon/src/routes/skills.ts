@@ -15,6 +15,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
+	renameSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -574,6 +575,49 @@ async function extractClawhubZip(
 	});
 }
 
+const clawhubInstallLocks = new Map<string, Promise<unknown>>();
+
+export async function withClawhubInstallLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
+	const prev = clawhubInstallLocks.get(slug) ?? Promise.resolve();
+	const next = prev.catch(() => undefined).then(fn);
+	clawhubInstallLocks.set(slug, next);
+	try {
+		return await next;
+	} finally {
+		if (clawhubInstallLocks.get(slug) === next) {
+			clawhubInstallLocks.delete(slug);
+		}
+	}
+}
+
+export function replaceSkillDirectoryAtomically(sourceDir: string, targetDir: string): void {
+	const skillsDir = dirname(targetDir);
+	const targetName = targetDir.split(/[\\/]/).pop() ?? "skill";
+	const suffix = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+	const stagingDir = join(skillsDir, `.${targetName}.${suffix}.tmp`);
+	const backupDir = join(skillsDir, `.${targetName}.${suffix}.bak`);
+	let movedTarget = false;
+
+	try {
+		rmSync(stagingDir, { recursive: true, force: true });
+		rmSync(backupDir, { recursive: true, force: true });
+		cpSync(sourceDir, stagingDir, { recursive: true });
+		if (existsSync(targetDir)) {
+			renameSync(targetDir, backupDir);
+			movedTarget = true;
+		}
+		renameSync(stagingDir, targetDir);
+		rmSync(backupDir, { recursive: true, force: true });
+	} catch (err) {
+		rmSync(stagingDir, { recursive: true, force: true });
+		if (movedTarget && existsSync(backupDir) && !existsSync(targetDir)) {
+			renameSync(backupDir, targetDir);
+		}
+		rmSync(backupDir, { recursive: true, force: true });
+		throw err;
+	}
+}
+
 async function installClawhubSkill(
 	slug: string,
 ): Promise<{ success: true; output: string } | { success: false; error: string }> {
@@ -615,8 +659,7 @@ async function installClawhubSkill(
 			return { success: false, error: "Invalid ClawHub install target" };
 		}
 
-		rmSync(targetDir, { recursive: true, force: true });
-		cpSync(extractDir, targetDir, { recursive: true });
+		await withClawhubInstallLock(slug, async () => replaceSkillDirectoryAtomically(extractDir, targetDir));
 		return { success: true, output: `Installed ClawHub skill ${slug}` };
 	} catch (err) {
 		return { success: false, error: err instanceof Error ? err.message : String(err) };
