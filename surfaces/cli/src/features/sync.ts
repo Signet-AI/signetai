@@ -1,12 +1,14 @@
 import { copyFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { GeminiConnector } from "@signet/connector-gemini";
-import { HermesAgentConnector } from "@signet/connector-hermes-agent";
-import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { PiConnector } from "@signet/connector-pi";
-import type { WorkspaceSourceRepoSyncResult } from "@signet/core";
+import {
+	type WorkspaceSourceRepoSyncResult,
+	getOhMyPiConfigPath,
+	getPiConfigPath,
+	loadConfiguredHarnesses,
+	resolveHermesRepoPath,
+} from "@signet/core";
 import chalk from "chalk";
 
 interface SkillSync {
@@ -149,7 +151,23 @@ async function syncNative(basePath: string, deps: Deps): Promise<number> {
 
 async function syncHarnessHooks(basePath: string, deps: Deps): Promise<number> {
 	let synced = 0;
-	for (const harness of detectHarnesses()) {
+	const harnesses = [...loadConfiguredHarnesses(basePath)];
+	const detected = detectInstalledHarnesses();
+	if (detected.length > 0) {
+		console.log(chalk.dim(`  Installed harnesses detected: ${detected.join(", ")}`));
+	}
+
+	if (harnesses.length === 0) {
+		console.log(chalk.dim("  No active harnesses configured; skipping hook re-registration"));
+		return 0;
+	}
+
+	const inactive = detected.filter((harness) => !harnesses.includes(harness));
+	if (inactive.length > 0) {
+		console.log(chalk.dim(`  Installed but inactive: ${inactive.join(", ")}`));
+	}
+
+	for (const harness of harnesses) {
 		try {
 			let runtimePath: "plugin" | "legacy" | undefined;
 			if (harness === "openclaw") {
@@ -180,34 +198,32 @@ async function syncHarnessHooks(basePath: string, deps: Deps): Promise<number> {
 	return synced;
 }
 
-function detectHarnesses(): string[] {
+function detectInstalledHarnesses(): string[] {
 	const found: string[] = [];
+	const home = process.env.HOME ?? homedir();
 
-	if (existsSync(join(homedir(), ".claude", "settings.json"))) {
+	if (existsSync(join(home, ".claude", "settings.json"))) {
 		found.push("claude-code");
 	}
-	if (
-		existsSync(join(homedir(), ".config", "signet", "bin", "codex")) ||
-		existsSync(join(homedir(), ".codex", "config.toml"))
-	) {
+	if (existsSync(join(home, ".config", "signet", "bin", "codex")) || existsSync(join(home, ".codex", "config.toml"))) {
 		found.push("codex");
 	}
-	if (existsSync(join(homedir(), ".config", "opencode"))) {
+	if (existsSync(join(home, ".config", "opencode"))) {
 		found.push("opencode");
 	}
 	if (new OpenClawConnector().isInstalled()) {
 		found.push("openclaw");
 	}
-	if (new OhMyPiConnector().isInstalled()) {
+	if (existsSync(getOhMyPiConfigPath())) {
 		found.push("oh-my-pi");
 	}
-	if (new HermesAgentConnector().isInstalled()) {
+	if (resolveHermesRepoPath() !== null || existsSync(join(home, ".hermes"))) {
 		found.push("hermes-agent");
 	}
-	if (new GeminiConnector().isInstalled()) {
+	if (existsSync(join(home, ".gemini", "settings.json"))) {
 		found.push("gemini");
 	}
-	if (new PiConnector().isInstalled()) {
+	if (existsSync(getPiConfigPath())) {
 		found.push("pi");
 	}
 
