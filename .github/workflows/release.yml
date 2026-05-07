@@ -73,7 +73,7 @@ jobs:
         run: |
           # Rebase onto the latest remote main before bumping so the version
           # commit and tag land on top of the final tree — not a stale snapshot
-          # that would get rewritten later, leaving build-predictor and publish
+          # that would get rewritten later, leaving asset build and publish jobs
           # checking out the wrong commit.
           git reset --hard HEAD
           git clean -fd
@@ -144,8 +144,9 @@ jobs:
             echo "::error::Missing CHANGELOG.md section for v$NEW_VERSION"
             exit 1
           fi
-          # Create as draft — predictor assets are uploaded by build-predictor
-          # before the publish job promotes this to non-draft and publishes npm.
+          # Create as draft — daemon assets are uploaded by build-daemon before
+          # the publish job verifies asset completeness, undrafts the release,
+          # and publishes npm packages.
           gh release create "v$NEW_VERSION" --draft --title "v$NEW_VERSION" --notes "$NOTES"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         env:
@@ -155,76 +156,6 @@ jobs:
       version: ${{ steps.create_release.outputs.version }}
       skip: ${{ steps.changes.outputs.skip }}
       bump_level: ${{ steps.bump_version.outputs.bump_level }}
-
-  build-predictor:
-    needs: release
-    if: needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            asset: signet-predictor-linux-x64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            asset: signet-predictor-darwin-arm64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            asset: signet-predictor-darwin-x64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            asset: signet-predictor-win32-x64.exe
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            asset: signet-predictor-win32-arm64.exe
-    runs-on: ${{ matrix.os }}
-    env:
-      RELEASE_VERSION: ${{ needs.release.outputs.version }}
-      RELEASE_TARGET: ${{ matrix.target }}
-      RELEASE_ASSET: ${{ matrix.asset }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: v${{ needs.release.outputs.version }}
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install MSVC ARM64 toolchain
-        if: matrix.target == 'aarch64-pc-windows-msvc'
-        shell: pwsh
-        run: |
-          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe" `
-            modify --installPath "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise" `
-            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --quiet --norestart | Out-Null
-          if ($LASTEXITCODE -notin @(0, 3010)) { exit $LASTEXITCODE }
-
-      - name: Build predictor
-        shell: bash
-        run: cargo build --release --target "$RELEASE_TARGET"
-        working-directory: platform/predictor
-
-      - name: Upload to release
-        shell: bash
-        run: |
-          EXT=""
-          [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
-          BINARY="platform/predictor/target/${RELEASE_TARGET}/release/signet-predictor${EXT}"
-          # Copy binary with the platform-specific asset name into a temp
-          # directory so gh uploads it under the correct name (not just as a
-          # label) and we don't leave artifacts in the repo root.
-          STAGING="${RUNNER_TEMP}/upload"
-          mkdir -p "${STAGING}"
-          cp "${BINARY}" "${STAGING}/${RELEASE_ASSET}"
-          openssl dgst -sha256 -hex "${STAGING}/${RELEASE_ASSET}" | awk '{print $NF}' > "${STAGING}/${RELEASE_ASSET}.sha256"
-          gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}" --clobber
-          gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}.sha256" --clobber
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 
   build-daemon:
@@ -296,12 +227,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
-    needs: [release, build-predictor, build-daemon]
+    needs: [release, build-daemon]
     runs-on: ubuntu-latest
-    # Run even if some build-predictor matrix legs fail — partial binary
-    # coverage is better than blocking the entire release. Release job must
-    # have succeeded for there to be anything to publish.
-    if: always() && needs.release.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    # The npm package postinstall path downloads native daemon assets from the
+    # GitHub release. Do not undraft or publish npm unless every daemon matrix
+    # leg completed and uploaded its binary/checksum pair.
+    if: always() && needs.release.result == 'success' && needs.build-daemon.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
     permissions:
       contents: write
     env:
@@ -324,6 +255,32 @@ jobs:
 
       - name: Validate publish manifests
         run: bun scripts/check-publish-manifests.ts
+
+      - name: Verify daemon release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t ASSETS < <(gh release view "v${NEW_VERSION}" --json assets --jq '.assets[].name')
+          expected=(
+            signet-daemon-linux-x64
+            signet-daemon-linux-x64.sha256
+            signet-daemon-darwin-arm64
+            signet-daemon-darwin-arm64.sha256
+            signet-daemon-darwin-x64
+            signet-daemon-darwin-x64.sha256
+            signet-daemon-win32-x64.exe
+            signet-daemon-win32-x64.exe.sha256
+            signet-daemon-win32-arm64.exe
+            signet-daemon-win32-arm64.exe.sha256
+          )
+          for asset in "${expected[@]}"; do
+            if ! printf '%s\n' "${ASSETS[@]}" | grep -Fxq "$asset"; then
+              echo "::error::Missing release asset: $asset"
+              exit 1
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish release
         # Undraft only after publish manifests pass, so a broken npm package

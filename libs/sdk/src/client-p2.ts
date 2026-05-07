@@ -42,8 +42,6 @@ import type {
 	MemorySafetyResponse,
 	PinEntityResponse,
 	PreCompactionResponse,
-	// Predictor
-	PredictorStatusResponse,
 	// Repair
 	RepairActionResponse,
 	SessionEndResponse,

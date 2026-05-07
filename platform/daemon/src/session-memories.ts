@@ -3,7 +3,7 @@
  *
  * Records which memories were considered and injected at session start,
  * and tracks FTS hits during user prompt handling. This data feeds
- * the continuity scorer and (eventually) the predictive memory scorer.
+ * the continuity scorer and tracks session continuity signals.
  */
 
 import { existsSync } from "node:fs";
@@ -25,8 +25,6 @@ export interface SessionMemoryCandidate {
 	readonly id: string;
 	readonly effScore: number;
 	readonly source: "effective" | "fts_only" | "ka_traversal" | "ka_traversal_pinned" | "exploration";
-	readonly predictorScore?: number | null;
-	readonly predictorRank?: number | null;
 	readonly finalScore?: number;
 	readonly entitySlot?: number;
 	readonly aspectSlot?: number;
@@ -60,13 +58,13 @@ export function recordSessionCandidates(
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
 			const CHUNK_SIZE = 50;
-			const ROW = "(?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)";
+			const ROW = "(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)";
 			const BASE_SQL = `INSERT OR IGNORE INTO session_memories
 					 (id, session_key, agent_id, memory_id, source, effective_score,
-					  predictor_score, final_score, rank, was_injected,
+					  final_score, rank, was_injected,
 					  fts_hit_count, created_at,
 					  entity_slot, aspect_slot, is_constraint, structural_density,
-					  predictor_rank, path_json)
+					  path_json)
 					 VALUES `;
 
 			// Pre-compile the full-chunk statement once to avoid recompiling
@@ -98,7 +96,6 @@ export function recordSessionCandidates(
 						c.id,
 						c.source,
 						c.effScore,
-						c.predictorScore ?? null,
 						finalScore,
 						rank++,
 						wasInjected,
@@ -107,7 +104,6 @@ export function recordSessionCandidates(
 						c.aspectSlot ?? null,
 						c.isConstraint ?? 0,
 						c.structuralDensity ?? null,
-						c.predictorRank ?? null,
 						c.pathJson ?? null,
 					);
 				}

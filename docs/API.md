@@ -3756,9 +3756,12 @@ by most recent.
 Telemetry
 ---------
 
-Telemetry endpoints expose local-only event data collected by the daemon.
-No data is sent externally. If telemetry is disabled, endpoints return
-`enabled: false`.
+Telemetry endpoints expose local event data collected by the daemon. The
+standard event stream excludes prompt text, memory content, credentials, and
+session references. Recall QA telemetry is a separate local-only ledger that
+intentionally stores query text and result snapshots for manual review, so it
+requires `analytics` permission and is never forwarded to external telemetry
+sinks.
 
 ### GET /api/telemetry/events
 
@@ -3850,6 +3853,62 @@ Export raw telemetry events as newline-delimited JSON (NDJSON).
 
 **Response** — `Content-Type: application/x-ndjson`. Each line is a
 JSON-serialized telemetry event. Returns `404` if telemetry is not enabled.
+
+### GET /api/telemetry/memory-search
+
+Query local recall QA telemetry captured when
+`telemetry.memorySearchQaEnabled: true`.
+
+**Query parameters**
+
+| Parameter     | Type    | Description                                      |
+|---------------|---------|--------------------------------------------------|
+| `agent_id`    | string  | Filter by agent id                               |
+| `session_key` | string  | Filter by session key                            |
+| `route`       | string  | Filter by recall route                           |
+| `since`       | string  | ISO timestamp lower bound                        |
+| `until`       | string  | ISO timestamp upper bound                        |
+| `no_hits`     | boolean | Filter to no-hit or hit-producing searches       |
+| `limit`       | integer | Max rows, clamped to 1-500, default 100          |
+| `offset`      | integer | Pagination offset, default 0                     |
+
+**Response**
+
+```json
+{
+  "items": [
+    {
+      "id": "search-event-id",
+      "created_at": "2026-05-06T21:22:00.000Z",
+      "route": "POST /api/memory/recall",
+      "agent_id": "ant",
+      "session_key": "session-1",
+      "query": "what did we decide about recall qa",
+      "filters": { "limit": 10, "readPolicy": "isolated" },
+      "result_count": 1,
+      "top_score": 0.91,
+      "no_hits": false,
+      "duration_ms": 12.34,
+      "results": [
+        {
+          "rank": 1,
+          "id": "memory-id",
+          "score": 0.91,
+          "source": "memory",
+          "content": "Captured recall result content..."
+        }
+      ]
+    }
+  ],
+  "count": 1
+}
+```
+
+### GET /api/telemetry/memory-search/export
+
+Export local recall QA telemetry as newline-delimited JSON. Supports the
+same filters as `GET /api/telemetry/memory-search`; `limit` is clamped to
+1-10000.
 
 
 Timeline
@@ -4142,7 +4201,6 @@ silently disappear from the API reference.
 | GET | `/api/pipeline/models` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/pipeline/models/by-provider` | platform/daemon/src/routes/pipeline-routes.ts |
 | POST | `/api/pipeline/models/refresh` | platform/daemon/src/routes/pipeline-routes.ts |
-| GET | `/api/predictor/status` | platform/daemon/src/routes/pipeline-routes.ts |
 | POST | `/api/repair/resync-vec` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/backfill-skipped` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/reclassify-entities` | platform/daemon/src/routes/repair-routes.ts |
@@ -4159,13 +4217,8 @@ silently disappear from the API reference.
 | POST | `/api/troubleshoot/exec` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/sessions/:key/renew` | platform/daemon/src/routes/session-routes.ts |
 | GET | `/api/skills/browse` | platform/daemon/src/routes/skills.ts |
-| GET | `/api/predictor/comparisons/by-project` | platform/daemon/src/routes/telemetry-routes.ts |
-| GET | `/api/predictor/comparisons/by-entity` | platform/daemon/src/routes/telemetry-routes.ts |
-| GET | `/api/predictor/comparisons` | platform/daemon/src/routes/telemetry-routes.ts |
-| GET | `/api/predictor/training` | platform/daemon/src/routes/telemetry-routes.ts |
-| GET | `/api/predictor/training-pairs-count` | platform/daemon/src/routes/telemetry-routes.ts |
-| POST | `/api/predictor/train` | platform/daemon/src/routes/telemetry-routes.ts |
-| GET | `/api/telemetry/training-export` | platform/daemon/src/routes/telemetry-routes.ts |
+| GET | `/api/telemetry/memory-search` | platform/daemon/src/routes/telemetry-routes.ts |
+| GET | `/api/telemetry/memory-search/export` | platform/daemon/src/routes/telemetry-routes.ts |
 | POST | `/api/os/widget/generate` | platform/daemon/src/routes/widget.ts |
 | GET | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
 | DELETE | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |

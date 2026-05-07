@@ -29,7 +29,6 @@ import {
 	shouldCheckpoint,
 } from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
-import { getPredictorClient, recordPredictorLatency } from "./daemon";
 import { getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { fetchEmbedding } from "./embedding-fetch";
 import { propagateMemoryStatus } from "./knowledge-graph";
@@ -63,17 +62,6 @@ import { enqueueSummaryJob } from "./pipeline/summary-worker";
 import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 import { getDefaultPluginHost } from "./plugins/index";
 import type { PluginPromptTargetV1 } from "./plugins/types";
-import {
-	type CandidateInput,
-	type CandidateSource,
-	type RankedCandidate,
-	type ScoringResult,
-	buildPredictorStatusLine,
-	evaluateColdStartExit,
-	maybeExplore,
-	runPredictorScoring,
-} from "./predictor-scoring";
-import { getPredictorState, updatePredictorState } from "./predictor-state";
 import { listSecrets } from "./secrets";
 import {
 	flushPendingCheckpoints,
@@ -86,7 +74,7 @@ import {
 	queueCheckpointWrite,
 	writeCheckpoint,
 } from "./session-checkpoints";
-import { parseFeedback, recordAgentFeedback, recordSessionCandidates, trackFtsHits } from "./session-memories";
+import { parseFeedback, recordAgentFeedback, recordSessionCandidates, trackFtsHits, type SessionMemoryCandidate } from "./session-memories";
 import { isNoiseSession } from "./session-noise";
 import { getExpiryWarning } from "./session-tracker";
 import {
@@ -95,7 +83,7 @@ import {
 	searchTranscriptFallback,
 	upsertSessionTranscript,
 } from "./session-transcripts";
-import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { type StructuralFeatures, getStructuralFeatures } from "./structural-features";
 import { isObject, isRenderError, isRenderResult } from "./synthesis-worker-protocol";
 import { searchTemporalFallback } from "./temporal-fallback";
 import { writeTranscriptAudit } from "./transcript-audit";
@@ -1507,7 +1495,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		agentScope.policyGroup,
 	);
 	const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]));
-	const candidateSourceById = new Map<string, CandidateSource>(
+	const candidateSourceById = new Map<string, SessionMemoryCandidate["source"]>(
 		allCandidates.map((candidate) => [candidate.id, "effective" as const]),
 	);
 
@@ -1609,115 +1597,28 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	const mergedCandidates = allCandidates.slice(0, candidatePoolLimit);
 
 	// ---------------------------------------------------------------
-	// Predictor scoring integration (Sprint 2)
+	// Baseline ranking
 	// ---------------------------------------------------------------
-	const predictorClient = getPredictorClient();
-	const predictorConfig = memoryCfg.pipelineV2.predictor;
 	const agentId = traversalAgentId;
-	const predictorState = getPredictorState(agentId);
 	const dbAcc = loadDbAccessor();
-
-	// Build CandidateInput array from merged candidates
-	const candidateInputs: ReadonlyArray<CandidateInput> = mergedCandidates.map((c) => ({
-		id: c.id,
-		effScore: c.effScore,
-		source: candidateSourceById.get(c.id) ?? ("effective" as const),
-	}));
-
-	// Get structural features for candidate feature vectors
 	const candidateIdsForFeatures = mergedCandidates.map((c) => c.id);
 	const structuralById = dbAcc
 		? getStructuralFeatures(dbAcc, candidateIdsForFeatures, agentId, candidateSourceById)
 		: new Map<string, StructuralFeatures>();
-
-	// Build candidate feature vectors using the canonical 17-element FeatureVector shape
-	// (same contract as buildCandidateFeatures / structural-features.ts).
-	// The inline 10-element version was wrong — the Rust sidecar expects 17D.
-	const featureNow = new Date();
-	const sessionGapDays = (() => {
-		try {
-			const row = getDbAccessor().withReadDb(
-				(db) =>
-					db
-						.prepare(
-							`SELECT MAX(created_at) AS last_end
-						 FROM session_checkpoints
-						 WHERE trigger = 'session_end'`,
-						)
-						.get() as { last_end: string | null } | undefined,
-			);
-			return row?.last_end ? Math.max(0, (Date.now() - new Date(row.last_end).getTime()) / 86_400_000) : 0;
-		} catch {
-			return 0;
-		}
-	})();
-	const candidateFeatures: ReadonlyArray<ReadonlyArray<number>> | null =
-		predictorConfig?.enabled && dbAcc
-			? buildCandidateFeatures(
-					dbAcc,
-					mergedCandidates.map((c) => ({
-						id: c.id,
-						importance: c.importance,
-						createdAt: c.created_at,
-						accessCount: c.access_count,
-						lastAccessed: null,
-						pinned: c.pinned === 1,
-						isSuperseded: false,
-						source: candidateSourceById.get(c.id),
-					})),
-					agentId,
-					{
-						projectSlot: 0,
-						timeOfDay: featureNow.getHours() + featureNow.getMinutes() / 60,
-						dayOfWeek: featureNow.getDay(),
-						monthOfYear: featureNow.getMonth(),
-						sessionGapDays,
-					},
-				)
-			: null;
-
-	// Run predictor scoring (async — calls sidecar if available)
-	const predictorScoreStart = Date.now();
-	const scoringResult: ScoringResult = dbAcc
-		? await runPredictorScoring({
-				candidates: candidateInputs,
-				accessor: dbAcc,
-				agentId,
-				predictorClient,
-				config: predictorConfig,
-				state: predictorState,
-				candidateFeatures,
-				nativeEmbeddingDimensions: memoryCfg.embedding.dimensions,
-				project: req.project,
-			})
-		: {
-				candidates: candidateInputs.map((candidate, index) => ({
-					id: candidate.id,
-					baselineRank: index + 1,
-					baselineScore: candidate.effScore,
-					predictorRank: null,
-					predictorScore: null,
-					fusedScore: candidate.effScore,
-					source: candidate.source,
-					embedding: null,
-				})),
-				predictorUsed: false,
-				alpha: 1,
-				exploredId: null,
-				predictorStatus: null,
-			};
-	const predictorScoreMs = Date.now() - predictorScoreStart;
-	recordPredictorLatency("predictor_score", predictorScoreMs);
-
-	// Build ranked-candidate lookup for fused scores
-	const rankedById = new Map<string, RankedCandidate>(scoringResult.candidates.map((rc) => [rc.id, rc]));
-
-	// Re-sort merged candidates by fused score from predictor pipeline
 	const sortedCandidates = [...mergedCandidates].sort((a, b) => {
-		const aFused = rankedById.get(a.id)?.fusedScore ?? 0;
-		const bFused = rankedById.get(b.id)?.fusedScore ?? 0;
-		return bFused - aFused;
+		if (req.project) {
+			const aMatch = a.project === req.project ? 1 : 0;
+			const bMatch = b.project === req.project ? 1 : 0;
+			if (aMatch !== bMatch) return bMatch - aMatch;
+		}
+		return b.effScore - a.effScore;
 	});
+	const rankedById = new Map(
+		mergedCandidates.map((candidate) => [
+			candidate.id,
+			{ predictorScore: null as number | null, predictorRank: null as number | null, fusedScore: candidate.effScore },
+		]),
+	);
 
 	// Apply budget to select what we actually inject (on re-ranked order)
 	if (config.maxInjectChars !== undefined && config.maxInjectTokens === undefined) {
@@ -1753,58 +1654,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		memories.push(...predictedMemories);
 	}
 
-	// Exploration: if predictor was used and cold start exited, try exploration
 	let exploredId: string | null = null;
-	if (scoringResult.predictorUsed && predictorState.coldStartExited) {
-		const injectedIds = new Set(memories.map((m) => m.id));
-		const exploration = maybeExplore(scoringResult.candidates, injectedIds, predictorConfig?.explorationRate ?? 0.05);
-		exploredId = exploration.exploredId;
-		if (exploredId !== null) {
-			// Remove the displaced memory from the array to maintain budget
-			if (exploration.displacedId !== null) {
-				const displacedIdx = memories.findIndex((m) => m.id === exploration.displacedId);
-				if (displacedIdx !== -1) {
-					memories.splice(displacedIdx, 1);
-				}
-			}
-			// Find the explored memory in our candidate pool and add it
-			const exploredCandidate = mergedCandidates.find((c) => c.id === exploredId);
-			if (exploredCandidate && !memories.some((m) => m.id === exploredId)) {
-				memories.push(exploredCandidate);
-			}
-		}
-	}
 
 	// Update access tracking for served memories
 	const servedIds = memories.map((m) => m.id);
 	updateAccessTracking(servedIds);
-
-	// Cold start evaluation — reuse status from scoring pipeline (no second RPC)
-	let predictorStatusLine = "";
-	if (predictorConfig?.enabled) {
-		const predictorStatus = scoringResult.predictorStatus;
-		if (predictorStatus !== null) {
-			const exited = evaluateColdStartExit(predictorStatus, predictorConfig.minTrainingSessions, predictorState, dbAcc);
-			if (exited && !predictorState.coldStartExited) {
-				updatePredictorState(agentId, { coldStartExited: true });
-			}
-			// Increment sessionsAfterColdStart if cold start exited
-			if (exited || predictorState.coldStartExited) {
-				updatePredictorState(agentId, {
-					sessionsAfterColdStart: predictorState.sessionsAfterColdStart + 1,
-				});
-			}
-			// Build status line using the cached status
-			predictorStatusLine = buildPredictorStatusLine(
-				predictorStatus,
-				getPredictorState(agentId), // re-read after possible update
-				predictorConfig,
-				dbAcc,
-			);
-		} else {
-			predictorStatusLine = buildPredictorStatusLine(null, predictorState, predictorConfig, null);
-		}
-	}
 
 	// Record all candidates + which were injected for predictive scorer
 	const injectedSet = new Set(memories.map((m) => m.id));
@@ -1828,8 +1682,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 				id: c.id,
 				effScore: c.effScore,
 				source,
-				predictorScore: ranked?.predictorScore ?? null,
-				predictorRank: ranked?.predictorRank ?? null,
 				finalScore: ranked?.fusedScore ?? c.effScore,
 				entitySlot: sf?.entitySlot ?? 0,
 				aspectSlot: sf?.aspectSlot ?? 0,
@@ -1846,8 +1698,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					id: m.id,
 					effScore: m.effScore,
 					source: "effective" as const,
-					predictorScore: null,
-					predictorRank: null,
 					finalScore: m.effScore,
 					entitySlot: sf?.entitySlot ?? 0,
 					aspectSlot: sf?.aspectSlot ?? 0,
@@ -1869,9 +1719,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		injectParts.push(systemPluginContext);
 	}
 	injectParts.push("[memory active | /remember | /recall]");
-	if (predictorStatusLine) {
-		injectParts.push(predictorStatusLine);
-	}
 
 	// Inject session gap summary for temporal awareness
 	const gapSummary = getSessionGapSummary();
@@ -2616,7 +2463,7 @@ export async function handleUserPromptSubmit(
 
 	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
 	const memoryCfg = deps.loadMemoryConfig(getAgentsDir());
-	const feedbackEnabled = memoryCfg.pipelineV2.predictorPipeline.agentFeedback;
+	const feedbackEnabled = memoryCfg.pipelineV2.feedback.enabled;
 	if (feedbackEnabled && req.memory_feedback !== undefined && req.sessionKey) {
 		try {
 			const parsed = deps.parseFeedback(req.memory_feedback);

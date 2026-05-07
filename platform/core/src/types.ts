@@ -310,6 +310,7 @@ export interface PipelineTelemetryConfig {
 	readonly flushIntervalMs: number;
 	readonly flushBatchSize: number;
 	readonly retentionDays: number;
+	readonly memorySearchQaEnabled: boolean;
 }
 
 export interface PipelineContinuityConfig {
@@ -358,8 +359,6 @@ export interface PipelineV2Config {
 	readonly feedback: PipelineFeedbackConfig;
 	readonly significance?: PipelineSignificanceConfig;
 	readonly writeGate?: PipelineWriteGateConfig;
-	readonly predictor?: PredictorConfig;
-	readonly predictorPipeline: PipelinePredictorConfig;
 	readonly modelRegistry: PipelineModelRegistryConfig;
 	readonly hints?: PipelineHintsConfig;
 }
@@ -375,26 +374,6 @@ export interface ModelRegistryEntry {
 export interface PipelineModelRegistryConfig {
 	readonly enabled: boolean;
 	readonly refreshIntervalMs: number;
-}
-
-export interface PipelinePredictorConfig {
-	readonly agentFeedback: boolean;
-	readonly trainingTelemetry: boolean;
-}
-
-export interface PredictorConfig {
-	readonly enabled: boolean;
-	readonly trainIntervalSessions: number;
-	readonly minTrainingSessions: number;
-	readonly scoreTimeoutMs: number;
-	readonly trainTimeoutMs: number;
-	readonly crashDisableThreshold: number;
-	readonly rrfK: number;
-	readonly explorationRate: number;
-	readonly driftResetWindow: number;
-	readonly binaryPath?: string;
-	readonly binaryArgs?: ReadonlyArray<string>;
-	readonly checkpointPath?: string;
 }
 
 export interface PipelineEmbeddingTrackerConfig {

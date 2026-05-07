@@ -12,7 +12,7 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 }
 
 /**
- * Migration 066: Ontology proposal loop.
+ * Migration 067: Ontology proposal loop.
  *
  * Stores reviewable ontology maintenance operations before they mutate graph
  * state. This is the first durable proposal-before-mutation surface for

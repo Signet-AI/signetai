@@ -34,7 +34,6 @@ interface Deps {
 	readonly signetLogo: () => string;
 	readonly syncBuiltinSkills: (skillsSourceDir: string, basePath: string) => SkillSync;
 	readonly syncNativeEmbeddingModel: (basePath: string) => Promise<SyncState>;
-	readonly syncPredictorBinary: (basePath: string) => Promise<SyncState>;
 	readonly syncWorkspaceSourceRepo: (basePath: string) => Promise<WorkspaceSourceRepoSyncResult>;
 }
 
@@ -54,7 +53,6 @@ export async function syncTemplates(deps: Deps): Promise<void> {
 	synced += syncGitignore(basePath, templatesDir);
 	synced += await syncSourceRepo(basePath, deps);
 	synced += syncSkills(basePath, deps);
-	synced += await syncPredictor(basePath, deps);
 	synced += await syncNative(basePath, deps);
 	synced += await syncHarnessHooks(basePath, deps);
 
@@ -111,24 +109,6 @@ async function syncSourceRepo(basePath: string, deps: Deps): Promise<number> {
 	return 0;
 }
 
-async function syncPredictor(basePath: string, deps: Deps): Promise<number> {
-	const predictor = await deps.syncPredictorBinary(basePath);
-	if (predictor.status === "updated") {
-		console.log(chalk.green(`  ✓ predictor sidecar (${predictor.message})`));
-		return 1;
-	}
-	if (predictor.status === "current") {
-		console.log(chalk.dim("  predictor sidecar is up to date"));
-		return 0;
-	}
-	if (predictor.status === "skipped") {
-		console.log(chalk.dim(`  predictor sidecar skipped: ${predictor.message}`));
-		return 0;
-	}
-
-	console.log(chalk.yellow(`  ⚠ predictor sidecar sync failed: ${predictor.message}`));
-	return 0;
-}
 
 async function syncNative(basePath: string, deps: Deps): Promise<number> {
 	const native = await deps.syncNativeEmbeddingModel(basePath);

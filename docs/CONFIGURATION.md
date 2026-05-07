@@ -928,6 +928,12 @@ Events are batched and flushed periodically.
 | `flushIntervalMs` | `60000` | 5s-10min | Time between event flushes |
 | `flushBatchSize` | `50` | 1-500 | Max events per flush batch |
 | `retentionDays` | `90` | 1-365 | Days before local telemetry data is purged |
+| `memorySearchQaEnabled` | `false` | boolean | Capture local-only recall QA rows with query text and result snapshots |
+
+`memorySearchQaEnabled` is separate from anonymous telemetry. It writes a
+local review ledger to SQLite and intentionally includes recall query text
+and recalled result content, so it is exposed only through analytics-gated
+endpoints and is never sent to PostHog.
 
 
 ### Embedding tracker (`embeddingTracker`)
