@@ -8,18 +8,15 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
-	closeSync,
 	copyFileSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
-	openSync,
 	readFileSync,
 	readdirSync,
 	readlinkSync,
 	renameSync,
 	rmSync,
-	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -51,7 +48,6 @@ import {
 	hasValidIdentity,
 	importMemoryLogs,
 	loadSqliteVec,
-	parseSimpleYaml,
 	readStaticIdentity,
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
@@ -116,6 +112,13 @@ import {
 	startDaemon,
 	stopDaemon,
 } from "./lib/runtime.js";
+import {
+	acquireNativeSyncLock,
+	embeddingProvider,
+	hasNativeModelCache,
+	isRecord,
+	releaseNativeSyncLock,
+} from "./lib/native-sync.js";
 import "./sqlite.js";
 
 // Template directory location (relative to built CLI)
@@ -371,7 +374,6 @@ const OPENCLAW_PLUGIN_PACKAGE = "@signetai/signet-memory-openclaw";
 const OPENCLAW_PLUGIN_SYNC_FILENAME = "openclaw-plugin-version";
 const OPENCLAW_PLUGIN_RETRY_FILENAME = "openclaw-plugin-retry-at";
 const OPENCLAW_PLUGIN_RETRY_DELAY_MS = 10 * 60_000;
-const NATIVE_SYNC_LOCK_FILENAME = "sync-native.lock";
 const PREDICTOR_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 function getVersionFromPackageJson(packageJsonPath: string): string | null {
