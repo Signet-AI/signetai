@@ -97,6 +97,20 @@ export interface SignetSourceStats {
 	indexed: number;
 }
 
+export interface SignetSourceIndexJob {
+	id: string;
+	sourceId: string;
+	status: "queued" | "running" | "complete" | "error";
+	queuedAt: string;
+	startedAt?: string;
+	finishedAt?: string;
+	scanned?: number;
+	total?: number;
+	indexed?: number;
+	currentPath?: string;
+	error?: string;
+}
+
 export interface SignetSourceEntry {
 	id: string;
 	kind: "obsidian";
@@ -109,6 +123,7 @@ export interface SignetSourceEntry {
 	lastIndexedAt?: string;
 	excludeGlobs?: string[];
 	stats?: SignetSourceStats;
+	indexJob?: SignetSourceIndexJob;
 }
 
 export interface SourcesConfigResponse {
@@ -120,6 +135,8 @@ export interface AddSourceResponse {
 	source: SignetSourceEntry;
 	created: boolean;
 	indexed: number;
+	queued?: boolean;
+	job?: SignetSourceIndexJob;
 	error?: string;
 }
 

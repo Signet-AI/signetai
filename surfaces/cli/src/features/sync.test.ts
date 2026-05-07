@@ -101,6 +101,55 @@ describe("syncTemplates workspace detection", () => {
 			console.log = origLog;
 		}
 	});
+
+	it("only re-registers hooks for harnesses configured in agent.yaml", async () => {
+		const root = mkdtempSync(join(tmpdir(), "sync-active-harnesses-"));
+		const basePath = join(root, "agents");
+		const origLog = console.log;
+
+		try {
+			process.env.HOME = root;
+			mkdirSync(basePath, { recursive: true });
+			mkdirSync(join(root, ".codex"), { recursive: true });
+			mkdirSync(join(root, ".config", "opencode"), { recursive: true });
+			writeFileSync(join(root, ".codex", "config.toml"), "[model]\n");
+			writeFileSync(join(basePath, "agent.yaml"), "harnesses:\n  - pi\n");
+
+			const logs: string[] = [];
+			console.log = (...args: unknown[]) => logs.push(args.join(" "));
+			const configureHarnessHooks = mock(async () => {});
+
+			await syncTemplates({
+				agentsDir: basePath,
+				configureHarnessHooks,
+				getSkillsSourceDir: () => join(root, "skills-src"),
+				getTemplatesDir: () => join(root, "templates"),
+				signetLogo: () => "signet",
+				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
+				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
+				syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
+				syncWorkspaceSourceRepo: async () => ({
+					status: "current",
+					path: join(basePath, "signetai"),
+					message: "current",
+					branch: "main",
+					defaultBranch: "main",
+				}),
+			});
+
+			expect(configureHarnessHooks.mock.calls.map((call) => call[0])).toEqual(["pi"]);
+			const output = logs.join("\n");
+			expect(output).toContain("Installed harnesses detected:");
+			expect(output).toContain("codex");
+			expect(output).toContain("opencode");
+			expect(output).toContain("Installed but inactive:");
+			expect(output).not.toContain("hooks re-registered for codex");
+			expect(output).not.toContain("hooks re-registered for opencode");
+		} finally {
+			console.log = origLog;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("syncTemplates openclaw migration", () => {
@@ -113,6 +162,7 @@ describe("syncTemplates openclaw migration", () => {
 			process.env.HOME = root;
 			process.env.OPENCLAW_CONFIG_PATH = configPath;
 			mkdirSync(basePath, { recursive: true });
+			writeFileSync(join(basePath, "agent.yaml"), "harnesses:\n  - openclaw\n");
 
 			writeFileSync(
 				configPath,
@@ -194,6 +244,7 @@ describe("syncTemplates openclaw migration", () => {
 			process.env.OPENCLAW_CONFIG_PATH = openClawConfigPath;
 			process.env.CLAWDBOT_CONFIG_PATH = clawdbotConfigPath;
 			mkdirSync(basePath, { recursive: true });
+			writeFileSync(join(basePath, "agent.yaml"), "harnesses:\n  - openclaw\n");
 
 			writeFileSync(
 				openClawConfigPath,

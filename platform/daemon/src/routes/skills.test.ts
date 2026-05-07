@@ -1,9 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { formatInstalls, listInstalledSkills, mountSkillsRoutes, parseSkillFrontmatter } from "./skills";
+import {
+	buildSkillInstallPlan,
+	formatInstalls,
+	listInstalledSkills,
+	mountSkillsRoutes,
+	parseSkillFrontmatter,
+	replaceSkillDirectoryAtomically,
+	validateClawhubZipEntryMetadata,
+	validateExtractedSkillTree,
+	withClawhubInstallLock,
+} from "./skills";
 
 // ---------------------------------------------------------------------------
 // Repo skills frontmatter validation (regression guard)
@@ -512,59 +522,157 @@ This is a test skill.`,
 // ---------------------------------------------------------------------------
 
 describe("install command args", () => {
-	// Test the regex pattern used to detect multi-skill repo sources
-	const repoPattern = /^[\w-]+\/[\w.-]+$/;
-
-	it("matches owner/repo format", () => {
-		expect(repoPattern.test("Signet-AI/signetai")).toBe(true);
-		expect(repoPattern.test("vercel-labs/agent-skills")).toBe(true);
-		expect(repoPattern.test("anthropic-ai/browser-use")).toBe(true);
-	});
-
-	it("does not match clawhub@ prefixed sources", () => {
-		expect(repoPattern.test("clawhub@some-skill")).toBe(false);
-	});
-
-	it("does not match bare skill names", () => {
-		// bare names don't contain a slash
-		expect(repoPattern.test("browser-use")).toBe(false);
-		expect(repoPattern.test("web-search")).toBe(false);
-	});
-
-	it("does not match owner/repo@ref format", () => {
-		// The @ makes it fail the pattern — these are handled by skills CLI directly
-		expect(repoPattern.test("vercel-labs/skills@browser-use")).toBe(false);
-	});
-
 	it("constructs --skill flag for repo sources", () => {
-		const source = "Signet-AI/signetai";
-		const name = "web-search";
-		const args = ["add", source, "--global", "--yes"];
-		// @ts-ignore
-		if (source && source !== name && repoPattern.test(source)) {
-			args.push("--skill", name);
-		}
-		expect(args).toEqual(["add", "Signet-AI/signetai", "--global", "--yes", "--skill", "web-search"]);
+		expect(buildSkillInstallPlan("web-search", "Signet-AI/signetai")).toEqual({
+			kind: "skills-cli",
+			pkg: "Signet-AI/signetai",
+			args: ["add", "Signet-AI/signetai", "--global", "--yes", "--skill", "web-search"],
+		});
 	});
 
 	it("does not add --skill when source equals name", () => {
-		const source = "browser-use";
-		const name = "browser-use";
-		const args = ["add", source, "--global", "--yes"];
-		if (source && source !== name && repoPattern.test(source)) {
-			args.push("--skill", name);
-		}
-		expect(args).toEqual(["add", "browser-use", "--global", "--yes"]);
+		expect(buildSkillInstallPlan("browser-use", "browser-use")).toEqual({
+			kind: "skills-cli",
+			pkg: "browser-use",
+			args: ["add", "browser-use", "--global", "--yes"],
+		});
 	});
 
-	it("does not add --skill for clawhub sources", () => {
-		const source = "clawhub@some-skill";
-		const name = "some-skill";
-		const args = ["add", source, "--global", "--yes"];
-		// @ts-ignore
-		if (source && source !== name && repoPattern.test(source)) {
-			args.push("--skill", name);
-		}
-		expect(args).toEqual(["add", "clawhub@some-skill", "--global", "--yes"]);
+	it("routes ClawHub sources through the ClawHub installer", () => {
+		expect(buildSkillInstallPlan("some-skill", "clawhub@some-skill")).toEqual({
+			kind: "clawhub",
+			slug: "some-skill",
+		});
+	});
+
+	it("keeps skills.sh owner/repo@skill sources on the skills CLI path", () => {
+		expect(buildSkillInstallPlan("web-search", "inference-skills/skills@web-search")).toEqual({
+			kind: "skills-cli",
+			pkg: "inference-skills/skills@web-search",
+			args: ["add", "inference-skills/skills@web-search", "--global", "--yes"],
+		});
+	});
+});
+
+describe("ClawHub skill archive validation", () => {
+	const tmpRoot = join(tmpdir(), `signet-clawhub-validate-${process.pid}`);
+
+	afterEach(() => {
+		rmSync(tmpRoot, { recursive: true, force: true });
+	});
+
+	it("accepts regular files and directories", () => {
+		const root = join(tmpRoot, "valid");
+		mkdirSync(join(root, "references"), { recursive: true });
+		writeFileSync(join(root, "SKILL.md"), "# Valid\n");
+		writeFileSync(join(root, "references", "README.md"), "# Reference\n");
+
+		expect(validateExtractedSkillTree(root)).toEqual({ ok: true });
+	});
+
+	it("accepts regular file metadata before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "references/README.md",
+				externalFileAttributes: 0o100644 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: true, path: "references/README.md", kind: "file" });
+	});
+
+	it("accepts directory metadata before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "references/",
+				externalFileAttributes: 0o40755 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: true, path: "references", kind: "directory" });
+	});
+
+	it("rejects symlink metadata before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "SKILL.md",
+				externalFileAttributes: 0o120777 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: false, error: "ClawHub zip contains unsupported entry types" });
+	});
+
+	it("rejects traversal paths before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "refs/../../SKILL.md",
+				externalFileAttributes: 0o100644 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: false, error: "ClawHub zip contains unsafe paths" });
+	});
+
+	it("rejects oversized entries before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "large.bin",
+				externalFileAttributes: 0o100644 << 16,
+				uncompressedSize: 26 * 1024 * 1024,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: false, error: "ClawHub zip entry is too large" });
+	});
+
+	it("rejects symbolic links before copying into the skills directory", () => {
+		const root = join(tmpRoot, "symlink");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(root, "target.md"), "# Target\n");
+		symlinkSync("target.md", join(root, "SKILL.md"));
+
+		expect(validateExtractedSkillTree(root)).toEqual({
+			ok: false,
+			error: "ClawHub package root SKILL.md must be a regular file",
+		});
+	});
+
+	it("replaces target skill directories through a staging directory", () => {
+		const source = join(tmpRoot, "source");
+		const target = join(tmpRoot, "skills", "demo");
+		mkdirSync(source, { recursive: true });
+		mkdirSync(target, { recursive: true });
+		writeFileSync(join(source, "SKILL.md"), "# New\n");
+		writeFileSync(join(target, "SKILL.md"), "# Old\n");
+
+		replaceSkillDirectoryAtomically(source, target);
+
+		expect(readFileSync(join(target, "SKILL.md"), "utf-8")).toBe("# New\n");
+		expect(readdirSync(join(tmpRoot, "skills")).filter((name) => name.includes(".demo."))).toEqual([]);
+	});
+
+	it("serializes concurrent installs for the same ClawHub slug", async () => {
+		const order: string[] = [];
+		let releaseFirst: (() => void) | undefined;
+		let markFirstStarted: (() => void) | undefined;
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const firstCanFinish = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+
+		const first = withClawhubInstallLock("demo", async () => {
+			order.push("first:start");
+			markFirstStarted?.();
+			await firstCanFinish;
+			order.push("first:end");
+		});
+		const second = withClawhubInstallLock("demo", async () => {
+			order.push("second:start");
+			order.push("second:end");
+		});
+
+		await firstStarted;
+		expect(order).toEqual(["first:start"]);
+		releaseFirst?.();
+		await Promise.all([first, second]);
+		expect(order).toEqual(["first:start", "first:end", "second:start", "second:end"]);
 	});
 });

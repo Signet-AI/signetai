@@ -110,6 +110,7 @@ export {
 	resolveNetworkBinding,
 } from "./network";
 export type { NetworkMode } from "./network";
+export { loadConfiguredHarnesses, parseHarnessList } from "./harness-config";
 export { resolveSignetDaemonUrl } from "./daemon-url";
 export type { SignetDaemonUrlOptions } from "./daemon-url";
 export {

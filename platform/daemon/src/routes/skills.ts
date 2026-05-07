@@ -6,19 +6,34 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import {
+	cpSync,
+	createWriteStream,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { getSkillsRunnerCommand, resolvePrimaryPackageManager } from "@signet/core";
 import type { Hono } from "hono";
+import type { Entry, ZipFile } from "yauzl";
+import * as yauzl from "yauzl";
+import type { AuthMode } from "../auth/index.js";
+import { type DbAccessor, getDbAccessor } from "../db-accessor.js";
+import { getLlmProvider } from "../llm.js";
 import { logger } from "../logger.js";
+import { type EmbeddingConfig, type PipelineV2Config, loadMemoryConfig } from "../memory-config.js";
+import type { LlmProvider } from "../pipeline/provider.js";
 import { parseSkillFile, patchSkillFrontmatter } from "../pipeline/skill-frontmatter.js";
 import { installSkillNode, uninstallSkillNode } from "../pipeline/skill-graph.js";
-import { getDbAccessor, type DbAccessor } from "../db-accessor.js";
-import type { AuthMode } from "../auth/index.js";
-import { loadMemoryConfig, type EmbeddingConfig, type PipelineV2Config } from "../memory-config.js";
-import { getLlmProvider } from "../llm.js";
-import type { LlmProvider } from "../pipeline/provider.js";
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -103,6 +118,11 @@ let catalogFetchedAt = 0;
 let clawhubCache: ClawhubItem[] = [];
 let clawhubFetchedAt = 0;
 const CATALOG_TTL = 10 * 60 * 1000;
+const CLAWHUB_DOWNLOAD_BASE = process.env.CLAWHUB_DOWNLOAD_BASE ?? "https://clawhub.ai/api/v1/download";
+const MAX_CLAWHUB_ZIP_BYTES = 50 * 1024 * 1024;
+const MAX_CLAWHUB_ZIP_ENTRIES = 500;
+const MAX_CLAWHUB_ENTRY_BYTES = 25 * 1024 * 1024;
+const MAX_CLAWHUB_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -361,6 +381,355 @@ function getProviderSafe(): LlmProvider | null {
 		return getLlmProvider();
 	} catch {
 		return null;
+	}
+}
+
+type SkillInstallPlan =
+	| {
+			kind: "skills-cli";
+			pkg: string;
+			args: string[];
+	  }
+	| {
+			kind: "clawhub";
+			slug: string;
+	  };
+
+export function buildSkillInstallPlan(name: string, source?: string): SkillInstallPlan {
+	if (source?.startsWith("clawhub@")) {
+		const slug = source.slice("clawhub@".length);
+		return { kind: "clawhub", slug: slug || name };
+	}
+
+	const pkg = source || name;
+	const args = ["add", pkg, "--global", "--yes"];
+	if (source && source !== name && /^[\w-]+\/[\w.-]+$/.test(source)) {
+		args.push("--skill", name);
+	}
+	return { kind: "skills-cli", pkg, args };
+}
+
+type ClawhubZipEntryKind = "file" | "directory";
+
+type ClawhubZipEntryMetadata = {
+	fileName: string;
+	externalFileAttributes: number;
+	uncompressedSize?: number;
+	versionMadeBy: number;
+	encrypted?: boolean;
+};
+
+const ZIP_UNIX_HOST = 3;
+const ZIP_MODE_TYPE_MASK = 0o170000;
+const ZIP_MODE_DIRECTORY = 0o040000;
+const ZIP_MODE_REGULAR_FILE = 0o100000;
+
+function normalizeZipEntryPath(entry: string): string | null {
+	const normalized = entry.replaceAll("\\", "/");
+	if (!normalized || normalized.includes("\0") || normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+		return null;
+	}
+	const path = normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+	if (!path) return null;
+	return path.split("/").every((part) => part && part !== "." && part !== "..") ? path : null;
+}
+
+export function validateClawhubZipEntryMetadata(
+	entry: ClawhubZipEntryMetadata,
+): { ok: true; path: string; kind: ClawhubZipEntryKind } | { ok: false; error: string } {
+	const path = normalizeZipEntryPath(entry.fileName);
+	if (!path) return { ok: false, error: "ClawHub zip contains unsafe paths" };
+	if (entry.encrypted) return { ok: false, error: "ClawHub zip contains encrypted entries" };
+	if (entry.uncompressedSize !== undefined && entry.uncompressedSize > MAX_CLAWHUB_ENTRY_BYTES) {
+		return { ok: false, error: "ClawHub zip entry is too large" };
+	}
+
+	const unixMode = entry.versionMadeBy >> 8 === ZIP_UNIX_HOST ? entry.externalFileAttributes >>> 16 : 0;
+	const impliedDirectory = entry.fileName.replaceAll("\\", "/").endsWith("/");
+	if (unixMode === 0) return { ok: true, path, kind: impliedDirectory ? "directory" : "file" };
+
+	const kind = unixMode & ZIP_MODE_TYPE_MASK;
+	if (kind === ZIP_MODE_DIRECTORY) return { ok: true, path, kind: "directory" };
+	if (kind === ZIP_MODE_REGULAR_FILE && !impliedDirectory) return { ok: true, path, kind: "file" };
+	return { ok: false, error: "ClawHub zip contains unsupported entry types" };
+}
+
+export function validateExtractedSkillTree(root: string): { ok: true } | { ok: false; error: string } {
+	const skillMd = join(root, "SKILL.md");
+	if (!existsSync(skillMd)) {
+		return { ok: false, error: "ClawHub package did not contain a root SKILL.md" };
+	}
+	if (!lstatSync(skillMd).isFile()) {
+		return { ok: false, error: "ClawHub package root SKILL.md must be a regular file" };
+	}
+
+	const stack = [root];
+	while (stack.length > 0) {
+		const dir = stack.pop();
+		if (!dir) continue;
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const path = join(dir, entry.name);
+			if (entry.isSymbolicLink()) {
+				return { ok: false, error: "ClawHub package contains symbolic links" };
+			}
+			if (entry.isDirectory()) {
+				stack.push(path);
+				continue;
+			}
+			if (!entry.isFile()) {
+				return { ok: false, error: "ClawHub package contains non-regular files" };
+			}
+		}
+	}
+
+	return { ok: true };
+}
+
+function openZip(path: string): Promise<ZipFile> {
+	return new Promise((resolveZip, reject) => {
+		yauzl.open(
+			path,
+			{
+				autoClose: true,
+				lazyEntries: true,
+				strictFileNames: true,
+				validateEntrySizes: true,
+			},
+			(err, zip) => {
+				if (err) {
+					reject(err);
+					return;
+				}
+				if (!zip) {
+					reject(new Error("Unable to open ClawHub zip"));
+					return;
+				}
+				resolveZip(zip);
+			},
+		);
+	});
+}
+
+function openZipEntryStream(zip: ZipFile, entry: Entry): Promise<NodeJS.ReadableStream> {
+	return new Promise((resolveStream, reject) => {
+		zip.openReadStream(entry, (err, stream) => {
+			if (err) {
+				reject(err);
+				return;
+			}
+			resolveStream(stream);
+		});
+	});
+}
+
+function resolveExtractPath(root: string, entryPath: string): string | null {
+	const target = resolve(root, entryPath);
+	const rel = relative(resolve(root), target);
+	return !rel || rel.startsWith("..") || isAbsolute(rel) ? null : target;
+}
+
+async function extractClawhubZip(
+	zipPath: string,
+	extractDir: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	const zip = await openZip(zipPath);
+	return new Promise((resolveExtract) => {
+		let done = false;
+		let entries = 0;
+		let totalUncompressedBytes = 0;
+		const fail = (error: string): void => {
+			if (done) return;
+			done = true;
+			zip.close();
+			resolveExtract({ ok: false, error });
+		};
+		const pass = (): void => {
+			if (done) return;
+			done = true;
+			resolveExtract({ ok: true });
+		};
+
+		zip.on("error", (err) => fail(err.message));
+		zip.on("end", pass);
+		zip.on("entry", (entry: Entry) => {
+			entries += 1;
+			totalUncompressedBytes += entry.uncompressedSize;
+			if (entries > MAX_CLAWHUB_ZIP_ENTRIES) {
+				fail("ClawHub zip contains too many entries");
+				return;
+			}
+			if (totalUncompressedBytes > MAX_CLAWHUB_UNCOMPRESSED_BYTES) {
+				fail("ClawHub zip uncompressed content is too large");
+				return;
+			}
+
+			const validation = validateClawhubZipEntryMetadata({
+				fileName: entry.fileName,
+				externalFileAttributes: entry.externalFileAttributes,
+				uncompressedSize: entry.uncompressedSize,
+				versionMadeBy: entry.versionMadeBy,
+				encrypted: entry.isEncrypted(),
+			});
+			if (!validation.ok) {
+				fail(validation.error);
+				return;
+			}
+
+			const target = resolveExtractPath(extractDir, validation.path);
+			if (!target) {
+				fail("ClawHub zip contains unsafe paths");
+				return;
+			}
+
+			if (validation.kind === "directory") {
+				mkdirSync(target, { recursive: true });
+				zip.readEntry();
+				return;
+			}
+
+			mkdirSync(dirname(target), { recursive: true });
+			openZipEntryStream(zip, entry)
+				.then((stream) => pipeline(stream, createWriteStream(target)))
+				.then(() => zip.readEntry())
+				.catch((err: unknown) => fail(err instanceof Error ? err.message : String(err)));
+		});
+		zip.readEntry();
+	});
+}
+
+async function writeResponseBodyToFileWithLimit(
+	res: Response,
+	path: string,
+	limit: number,
+): Promise<{ ok: true; bytes: number } | { ok: false; error: string }> {
+	const header = res.headers.get("content-length");
+	if (header) {
+		const bytes = Number(header);
+		if (Number.isFinite(bytes) && bytes > limit) {
+			return { ok: false, error: "ClawHub download is too large" };
+		}
+	}
+	if (!res.body) return { ok: false, error: "ClawHub download did not include a response body" };
+
+	const reader = res.body.getReader();
+	const output = createWriteStream(path);
+	let bytes = 0;
+	try {
+		while (true) {
+			const chunk = await reader.read();
+			if (chunk.done) break;
+			bytes += chunk.value.byteLength;
+			if (bytes > limit) {
+				output.destroy();
+				return { ok: false, error: "ClawHub download is too large" };
+			}
+			await new Promise<void>((resolveWrite, rejectWrite) => {
+				output.write(chunk.value, (err) => {
+					if (err) rejectWrite(err);
+					else resolveWrite();
+				});
+			});
+		}
+		await new Promise<void>((resolveEnd) => output.end(resolveEnd));
+		return { ok: true, bytes };
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+const clawhubInstallLocks = new Map<string, Promise<unknown>>();
+
+export async function withClawhubInstallLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
+	const prev = clawhubInstallLocks.get(slug) ?? Promise.resolve();
+	const next = prev.catch(() => undefined).then(fn);
+	clawhubInstallLocks.set(slug, next);
+	try {
+		return await next;
+	} finally {
+		if (clawhubInstallLocks.get(slug) === next) {
+			clawhubInstallLocks.delete(slug);
+		}
+	}
+}
+
+export function replaceSkillDirectoryAtomically(sourceDir: string, targetDir: string): void {
+	const skillsDir = dirname(targetDir);
+	const targetName = targetDir.split(/[\\/]/).pop() ?? "skill";
+	const suffix = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+	const stagingDir = join(skillsDir, `.${targetName}.${suffix}.tmp`);
+	const backupDir = join(skillsDir, `.${targetName}.${suffix}.bak`);
+	let movedTarget = false;
+
+	try {
+		rmSync(stagingDir, { recursive: true, force: true });
+		rmSync(backupDir, { recursive: true, force: true });
+		cpSync(sourceDir, stagingDir, { recursive: true });
+		if (existsSync(targetDir)) {
+			renameSync(targetDir, backupDir);
+			movedTarget = true;
+		}
+		renameSync(stagingDir, targetDir);
+		rmSync(backupDir, { recursive: true, force: true });
+	} catch (err) {
+		rmSync(stagingDir, { recursive: true, force: true });
+		if (movedTarget && existsSync(backupDir) && !existsSync(targetDir)) {
+			renameSync(backupDir, targetDir);
+		}
+		rmSync(backupDir, { recursive: true, force: true });
+		throw err;
+	}
+}
+
+async function installClawhubSkill(
+	slug: string,
+): Promise<{ success: true; output: string } | { success: false; error: string }> {
+	if (!/^[\w.-]+$/.test(slug)) {
+		return { success: false, error: "Invalid ClawHub skill slug" };
+	}
+
+	const tempRoot = mkdtempSync(join(tmpdir(), "signet-clawhub-skill-"));
+	const zipPath = join(tempRoot, `${slug}.zip`);
+	const extractDir = join(tempRoot, "extract");
+	const targetDir = join(getSkillsDir(), slug);
+
+	try {
+		const url = new URL(CLAWHUB_DOWNLOAD_BASE);
+		url.searchParams.set("slug", slug);
+		const res = await fetch(url, { headers: { "User-Agent": "signet-daemon" } });
+		if (!res.ok) {
+			return { success: false, error: `ClawHub download failed with HTTP ${res.status}` };
+		}
+
+		const download = await writeResponseBodyToFileWithLimit(res, zipPath, MAX_CLAWHUB_ZIP_BYTES);
+		if (!download.ok) {
+			return { success: false, error: download.error };
+		}
+
+		mkdirSync(extractDir, { recursive: true });
+		const extracted = await extractClawhubZip(zipPath, extractDir);
+		if (!extracted.ok) {
+			return { success: false, error: extracted.error };
+		}
+
+		const validation = validateExtractedSkillTree(extractDir);
+		if (!validation.ok) {
+			return { success: false, error: validation.error };
+		}
+
+		mkdirSync(getSkillsDir(), { recursive: true });
+		const resolvedTarget = resolve(targetDir);
+		const resolvedSkillsDir = resolve(getSkillsDir());
+		const targetRelative = relative(resolvedSkillsDir, resolvedTarget);
+		if (!targetRelative || targetRelative.startsWith("..") || isAbsolute(targetRelative)) {
+			return { success: false, error: "Invalid ClawHub install target" };
+		}
+
+		await withClawhubInstallLock(slug, async () => replaceSkillDirectoryAtomically(extractDir, targetDir));
+		return { success: true, output: `Installed ClawHub skill ${slug}` };
+	} catch (err) {
+		return { success: false, error: err instanceof Error ? err.message : String(err) };
+	} finally {
+		rmSync(tempRoot, { recursive: true, force: true });
 	}
 }
 
@@ -764,20 +1133,31 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 			return c.json({ error: "Invalid skill name" }, 400);
 		}
 
-		const pkg = source || name;
-		logger.info("skills", "Installing skill", { name, pkg });
+		const plan = buildSkillInstallPlan(name, source);
+		logger.info("skills", "Installing skill", { name, source, plan });
+
+		if (plan.kind === "clawhub") {
+			const result = await installClawhubSkill(plan.slug);
+			if (!result.success) {
+				logger.error("skills", "ClawHub skill install failed", undefined, {
+					slug: plan.slug,
+					error: result.error,
+				});
+				return c.json({ success: false, error: result.error }, 500);
+			}
+
+			logger.info("skills", "ClawHub skill installed", { name, slug: plan.slug });
+			onSkillInstalled(plan.slug).catch((e) => {
+				logger.error("skills", "Post-install graph hook failed", e as Error);
+			});
+			return c.json({ success: true, name: plan.slug, output: result.output });
+		}
+
 		const packageManager = resolvePrimaryPackageManager({
 			agentsDir: getAgentsDir(),
 			env: process.env,
 		});
-		// For multi-skill repo sources (owner/repo format), pass --skill to
-		// target a specific skill. This handles Signet-AI/signetai and any
-		// other GitHub repo that bundles multiple skills.
-		const args = ["add", pkg, "--global", "--yes"];
-		if (source && source !== name && /^[\w-]+\/[\w.-]+$/.test(source)) {
-			args.push("--skill", name);
-		}
-		const skillsCommand = getSkillsRunnerCommand(packageManager.family, args);
+		const skillsCommand = getSkillsRunnerCommand(packageManager.family, plan.args);
 
 		logger.info("skills", "Using package manager", {
 			command: `${skillsCommand.command} ${skillsCommand.args.join(" ")}`,

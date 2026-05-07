@@ -104,6 +104,46 @@ describe("Obsidian source embeddings", () => {
 		expect(rows.every((row) => /lines: \d+-\d+/.test(row.chunk_text))).toBe(true);
 	});
 
+	it("does not re-embed unchanged source chunks after the in-memory cache is cold", async () => {
+		const filePath = join(vault, "literature", "source-memory.md");
+		const content =
+			"# Source Memory\n\nThis section explains that Obsidian vault files remain canonical source truth while Signet indexes addressable chunks for retrieval.\n\n## Chunk Strategy\n\nHeading aware chunks should preserve source_path, vault relative path, heading, and line range so an agent can read back through the canonical note.\n";
+		let fetches = 0;
+
+		const first = await indexObsidianSourceEmbeddings({
+			agentId: "obsidian-embedding-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath,
+			content,
+			embeddingConfig,
+			fetchEmbedding: async () => {
+				fetches++;
+				return testVector(fetches);
+			},
+		});
+		expect(first.embedded).toBe(first.chunks);
+		expect(fetches).toBe(first.chunks);
+
+		const second = await indexObsidianSourceEmbeddings({
+			agentId: "obsidian-embedding-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath,
+			content,
+			embeddingConfig,
+			fetchEmbedding: async () => {
+				fetches++;
+				return testVector(fetches);
+			},
+		});
+
+		expect(second.chunks).toBe(first.chunks);
+		expect(second.embedded).toBe(0);
+		expect(second.skipped).toBe(first.chunks);
+		expect(fetches).toBe(first.chunks);
+	});
+
 	it("keeps chunk IDs distinct for repeated heading paths", () => {
 		const filePath = join(vault, "literature", "repeated-headings.md");
 		const chunks = buildObsidianSourceChunks({

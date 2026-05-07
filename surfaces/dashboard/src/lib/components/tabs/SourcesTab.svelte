@@ -13,7 +13,7 @@ import Plus from "@lucide/svelte/icons/plus";
 import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 import Search from "@lucide/svelte/icons/search";
 import X from "@lucide/svelte/icons/x";
-import { onMount } from "svelte";
+import { onDestroy, onMount } from "svelte";
 
 type SourceKind =
 	| "obsidian"
@@ -105,6 +105,7 @@ let status = $state<string | null>(null);
 let error = $state<string | null>(null);
 let touchedPath = $state(false);
 let expandedKind = $state<SourceKind | null>(null);
+let sourceRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 const connectors: SourceConnector[] = [
 	{
@@ -440,6 +441,9 @@ const connectedCount = $derived(obsidianSources.length);
 const indexedCount = $derived(
 	obsidianSources.filter((source) => source.lastIndexedAt || (source.stats?.indexed ?? 0) > 0).length,
 );
+const hasActiveIndexJob = $derived(
+	obsidianSources.some((source) => source.indexJob?.status === "queued" || source.indexJob?.status === "running"),
+);
 const pathIsMissing = $derived(vaultPath.trim().length === 0);
 const canSubmit = $derived(!pathIsMissing && !adding && selectedKind === "obsidian");
 const filteredConnectors = $derived.by(() => {
@@ -457,15 +461,22 @@ const filteredConnectors = $derived.by(() => {
 
 onMount(() => {
 	void refreshSources();
+	sourceRefreshTimer = setInterval(() => {
+		if (hasActiveIndexJob) void refreshSources({ quiet: true });
+	}, 1000);
 });
 
-async function refreshSources(): Promise<void> {
-	loading = true;
+onDestroy(() => {
+	if (sourceRefreshTimer) clearInterval(sourceRefreshTimer);
+});
+
+async function refreshSources(options: { quiet?: boolean } = {}): Promise<void> {
+	if (!options.quiet) loading = true;
 	error = null;
 	try {
 		sources = await getSources();
 	} finally {
-		loading = false;
+		if (!options.quiet) loading = false;
 	}
 }
 
@@ -521,7 +532,9 @@ async function submitSource(): Promise<void> {
 			error = result.error;
 			return;
 		}
-		status = `${result.created ? "Connected" : "Updated"} ${result.source.name}. Indexed ${result.indexed} changed notes.`;
+		status = result.queued
+			? `${result.created ? "Connected" : "Updated"} ${result.source.name}. Indexing is running in the background.`
+			: `${result.created ? "Connected" : "Updated"} ${result.source.name}. Indexed ${result.indexed} changed notes.`;
 		vaultPath = "";
 		touchedPath = false;
 		connectMode = false;
@@ -571,10 +584,32 @@ function parseExcludeGlobs(value: string): string[] {
 }
 
 function sourceScanLabel(source: SignetSourceEntry): string {
+	if (source.indexJob?.status === "queued") return "Index queued";
+	if (source.indexJob?.status === "running") {
+		const scanned = source.indexJob.scanned ?? 0;
+		const indexed = source.indexJob.indexed ?? 0;
+		const total = source.indexJob.total ?? 0;
+		if (scanned > 0 && total > 0) return `Indexing · ${scanned}/${total} scanned · ${indexed} changed`;
+		return scanned > 0 ? `Indexing · ${scanned} scanned · ${indexed} changed` : "Indexing in background";
+	}
+	if (source.indexJob?.status === "error") return `Index failed: ${source.indexJob.error ?? "unknown error"}`;
 	const indexed = source.stats?.indexed ?? 0;
 	const chunks = source.stats?.chunks ?? 0;
 	if (indexed > 0) return `${indexed} notes · ${chunks} chunks${source.lastIndexedAt ? "" : " · syncing"}`;
 	return source.lastIndexedAt ? "Scan completed with no indexed notes" : "Connected; waiting for first indexed note";
+}
+
+function sourceIndexPercent(source: SignetSourceEntry): number {
+	const scanned = source.indexJob?.scanned ?? 0;
+	const total = source.indexJob?.total ?? 0;
+	if (total <= 0) return source.indexJob?.status === "complete" ? 100 : 0;
+	return Math.min(100, Math.max(0, Math.round((scanned / total) * 100)));
+}
+
+function sourceIndexCurrentPath(source: SignetSourceEntry): string {
+	const currentPath = source.indexJob?.currentPath;
+	if (!currentPath) return "";
+	return currentPath.startsWith(`${source.root}/`) ? currentPath.slice(source.root.length + 1) : currentPath;
 }
 </script>
 
@@ -861,13 +896,34 @@ function sourceScanLabel(source: SignetSourceEntry): string {
 													</div>
 													<code>{source.root}</code>
 												</div>
-												<ul>
-													<li><CheckCircle2 /> {source.enabled ? "Enabled" : "Disabled"}</li>
-													<li><Database /> {sourceScanLabel(source)}</li>
-													<li><Database /> Last complete scan: {formatDate(source.lastIndexedAt)}</li>
-												</ul>
-												{#if source.excludeGlobs?.length}
-													<div class="exclude-summary">
+													<ul>
+														<li><CheckCircle2 /> {source.enabled ? "Enabled" : "Disabled"}</li>
+														<li><Database /> {sourceScanLabel(source)}</li>
+														<li><Database /> Last complete scan: {formatDate(source.lastIndexedAt)}</li>
+													</ul>
+													{#if source.indexJob?.status === "queued" || source.indexJob?.status === "running"}
+														<div class="source-index-progress">
+															<div class="source-index-progress__head">
+																<span>{source.indexJob.status === "queued" ? "Queued" : "Indexing"}</span>
+																<strong>{sourceIndexPercent(source)}%</strong>
+															</div>
+															<div
+																class="source-index-progress__bar"
+																role="progressbar"
+																aria-valuemin="0"
+																aria-valuemax="100"
+																aria-valuenow={sourceIndexPercent(source)}
+																aria-label={`Indexing ${source.name}`}
+															>
+																<span style={`width: ${sourceIndexPercent(source)}%`}></span>
+															</div>
+															{#if sourceIndexCurrentPath(source)}
+																<code class="source-index-progress__path">{sourceIndexCurrentPath(source)}</code>
+															{/if}
+														</div>
+													{/if}
+													{#if source.excludeGlobs?.length}
+														<div class="exclude-summary">
 														<span>Ignoring</span>
 														<code>{source.excludeGlobs.join(", ")}</code>
 													</div>
@@ -1924,14 +1980,63 @@ function sourceScanLabel(source: SignetSourceEntry): string {
 		color: var(--sig-text-muted);
 	}
 
-	.connected-row li :global(svg) {
-		width: 13px;
-		height: 13px;
-	}
+		.connected-row li :global(svg) {
+			width: 13px;
+			height: 13px;
+		}
 
-	.exclude-summary {
-		display: grid;
-		gap: 4px;
+		.source-index-progress {
+			display: grid;
+			gap: 6px;
+			border: 1px solid var(--sig-border);
+			border-radius: 0;
+			padding: 8px;
+			background: var(--sig-surface);
+		}
+
+		.source-index-progress__head {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 10px;
+			font: 9px var(--font-mono);
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+			color: var(--sig-text-muted);
+		}
+
+		.source-index-progress__head strong {
+			margin: 0;
+			font: inherit;
+			color: var(--sig-text-bright);
+		}
+
+		.source-index-progress__bar {
+			position: relative;
+			width: 100%;
+			height: 7px;
+			border: 1px solid var(--sig-border-strong);
+			border-radius: 0;
+			overflow: hidden;
+			background: var(--sig-surface-raised);
+		}
+
+		.source-index-progress__bar span {
+			position: absolute;
+			inset: 0 auto 0 0;
+			min-width: 2px;
+			background: var(--sig-accent);
+			box-shadow: inset 0 1px 0 var(--sig-highlight-dim);
+			transition: width 0.2s var(--ease);
+		}
+
+		.source-index-progress__path {
+			color: var(--sig-text-muted);
+		}
+
+		.exclude-summary {
+			display: grid;
+			gap: 4px;
 		border: 1px dashed var(--sig-border);
 		padding: 8px;
 		background: rgba(255, 255, 255, 0.02);
@@ -2083,4 +2188,3 @@ function sourceScanLabel(source: SignetSourceEntry): string {
 		}
 	}
 </style>
-

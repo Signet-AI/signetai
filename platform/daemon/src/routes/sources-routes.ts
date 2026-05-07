@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { promisify } from "node:util";
 import {
 	type SignetSourceEntry,
@@ -11,14 +14,41 @@ import {
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
-import { fetchEmbedding as defaultFetchEmbedding } from "../embedding-fetch";
-import { type ResolvedMemoryConfig, loadMemoryConfig as defaultLoadMemoryConfig } from "../memory-config";
 import {
+	type NativeMemoryBridgeHandle,
 	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
-import type { SourceEmbeddingFetch } from "../obsidian-source-embeddings";
+import {
+	type SourceIndexJob,
+	beginSourceIndexJob,
+	cancelSourceIndexJob,
+	clearSourceIndexInFlight,
+	completeSourceIndexJob,
+	consumeCanceledSourceIndexJob,
+	failSourceIndexJob,
+	getSourceIndexJob,
+	isCurrentSourceIndexJob,
+	isSourceIndexInFlight,
+	markSourceIndexInFlight,
+	markSourceIndexJobRunning,
+	updateSourceIndexJobProgress,
+} from "../source-index-progress";
+
+interface SourceIndexJobInput {
+	readonly source: SignetSourceEntry;
+	readonly agentsDir: string;
+	readonly startBridge: typeof startNativeMemoryBridge;
+	readonly purgeNativeSource: typeof purgeNativeMemorySourceArtifacts;
+}
+
+interface SourceDeletionTombstone {
+	readonly id: string;
+	readonly source: SignetSourceEntry;
+	readonly agentId: string;
+	readonly deletedAt: string;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -35,24 +65,25 @@ interface PickDirectoryBody {
 
 export interface RegisterSourcesRoutesDeps {
 	readonly agentsDir?: string;
-	readonly loadMemoryConfig?: (agentsDir: string) => ResolvedMemoryConfig;
-	readonly fetchEmbedding?: SourceEmbeddingFetch;
 	readonly startBridge?: typeof startNativeMemoryBridge;
 	readonly purgeNativeSource?: typeof purgeNativeMemorySourceArtifacts;
 }
 
 export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps = {}): void {
 	const agentsDir = deps.agentsDir ?? process.env.SIGNET_PATH ?? `${homedir()}/.agents`;
-	const loadMemoryConfig = deps.loadMemoryConfig ?? defaultLoadMemoryConfig;
-	const fetchEmbedding = deps.fetchEmbedding ?? defaultFetchEmbedding;
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
+	cleanupSourceDeletionTombstones(agentsDir, purgeNativeSource);
 	app.get("/api/sources", (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();
 		return c.json({
 			version: config.version,
-			sources: config.sources.map((source) => ({ ...source, stats: sourceStats(source, agentId) })),
+			sources: config.sources.map((source) => ({
+				...source,
+				stats: sourceStats(source, agentId),
+				indexJob: getSourceIndexJob(source.id),
+			})),
 		});
 	});
 
@@ -84,40 +115,24 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const result = addObsidianSource({ root, name: body.name, excludeGlobs }, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 400);
 
-		const memoryConfig = loadMemoryConfig(agentsDir);
-		const bridge = startBridge(
-			[
-				obsidianNativeMemorySource(
-					result.source.root,
-					result.source.name,
-					result.source.id,
-					result.source.excludeGlobs,
-				),
-			],
-			{
-				pollIntervalMs: 0,
-				embeddingConfig: memoryConfig.embedding,
-				fetchEmbedding,
-				agentsDir,
-			},
-		);
-		let indexed = 0;
-		try {
-			indexed = await bridge.syncExisting();
-			markSourceIndexed(result.source.id, undefined, agentsDir);
-		} finally {
-			await bridge.close();
-		}
+		const job = enqueueSourceIndexJob({
+			source: result.source,
+			agentsDir,
+			startBridge,
+			purgeNativeSource,
+		});
 
-		return c.json({ source: result.source, created: result.created, indexed });
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 	});
 
 	app.delete("/api/sources/:sourceId", (c) => {
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 404);
+		cancelSourceIndexJob(result.source.id);
 
 		const sourceAgentId = resolveDaemonAgentId();
+		recordSourceDeletionTombstone(result.source, sourceAgentId, agentsDir);
 		const purged =
 			result.source.kind === "obsidian"
 				? purgeNativeSource(
@@ -125,8 +140,159 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 						sourceAgentId,
 					)
 				: 0;
+		if (!isSourceIndexInFlight(result.source.id))
+			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
 	});
+}
+
+function enqueueSourceIndexJob(input: SourceIndexJobInput): SourceIndexJob {
+	const job = beginSourceIndexJob(input.source.id);
+	scheduleSourceIndexJob(input, job, 0);
+	return job;
+}
+
+async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob): Promise<void> {
+	if (isSourceIndexInFlight(input.source.id)) {
+		scheduleSourceIndexJob(input, job, 50);
+		return;
+	}
+	markSourceIndexInFlight(input.source.id);
+	markSourceIndexJobRunning(input.source.id, job.id);
+
+	let bridge: NativeMemoryBridgeHandle | null = null;
+
+	try {
+		bridge = input.startBridge(
+			[obsidianNativeMemorySource(input.source.root, input.source.name, input.source.id, input.source.excludeGlobs)],
+			{
+				pollIntervalMs: 0,
+				agentsDir: input.agentsDir,
+				yieldEveryFiles: 1,
+				sourceCleanupEnabled: false,
+				sourceGraphEnabled: false,
+				onFileIndexed: (event) => {
+					if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+					updateSourceIndexJobProgress(input.source.id, job.id, {
+						scanned: event.scanned,
+						total: event.total,
+						indexed: event.changed,
+						currentPath: event.filePath,
+					});
+				},
+			},
+		);
+		const indexed = await bridge.syncExisting();
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+		markSourceIndexed(input.source.id, undefined, input.agentsDir);
+		completeSourceIndexJob(input.source.id, job.id, indexed);
+	} catch (err) {
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+		failSourceIndexJob(input.source.id, job.id, err);
+	} finally {
+		await bridge?.close().catch(() => undefined);
+		if (consumeCanceledSourceIndexJob(job.id)) {
+			input.purgeNativeSource(
+				obsidianNativeMemorySource(input.source.root, input.source.name, input.source.id, input.source.excludeGlobs),
+				resolveDaemonAgentId(),
+			);
+			clearSourceDeletionTombstone(input.source.id, resolveDaemonAgentId(), input.agentsDir);
+		}
+		clearSourceIndexInFlight(input.source.id);
+	}
+}
+
+function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob, delayMs: number): void {
+	setTimeout(() => {
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+		void runSourceIndexJob(input, job);
+	}, delayMs).unref?.();
+}
+
+function cleanupSourceDeletionTombstones(
+	agentsDir: string,
+	purgeNativeSource: typeof purgeNativeMemorySourceArtifacts,
+): void {
+	const tombstones = loadSourceDeletionTombstones(agentsDir);
+	if (tombstones.length === 0) return;
+	const configuredIds = new Set(loadSourcesConfig(agentsDir).sources.map((source) => source.id));
+	const remaining: SourceDeletionTombstone[] = [];
+	for (const tombstone of tombstones) {
+		if (configuredIds.has(tombstone.source.id)) continue;
+		if (tombstone.source.kind === "obsidian") {
+			purgeNativeSource(
+				obsidianNativeMemorySource(
+					tombstone.source.root,
+					tombstone.source.name,
+					tombstone.source.id,
+					tombstone.source.excludeGlobs,
+				),
+				tombstone.agentId,
+			);
+		}
+	}
+	saveSourceDeletionTombstones(remaining, agentsDir);
+}
+
+function recordSourceDeletionTombstone(source: SignetSourceEntry, agentId: string, agentsDir: string): void {
+	const tombstones = loadSourceDeletionTombstones(agentsDir);
+	const next = tombstones.filter((entry) => entry.source.id !== source.id || entry.agentId !== agentId);
+	saveSourceDeletionTombstones(
+		[
+			...next,
+			{
+				id: randomUUID(),
+				source,
+				agentId,
+				deletedAt: new Date().toISOString(),
+			},
+		],
+		agentsDir,
+	);
+}
+
+function clearSourceDeletionTombstone(sourceId: string, agentId: string, agentsDir: string): void {
+	const tombstones = loadSourceDeletionTombstones(agentsDir);
+	const next = tombstones.filter((entry) => entry.source.id !== sourceId || entry.agentId !== agentId);
+	if (next.length !== tombstones.length) saveSourceDeletionTombstones(next, agentsDir);
+}
+
+function loadSourceDeletionTombstones(agentsDir: string): readonly SourceDeletionTombstone[] {
+	const path = sourceDeletionTombstonesPath(agentsDir);
+	if (!existsSync(path)) return [];
+	try {
+		const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter(isSourceDeletionTombstone);
+	} catch {
+		return [];
+	}
+}
+
+function saveSourceDeletionTombstones(tombstones: readonly SourceDeletionTombstone[], agentsDir: string): void {
+	const path = sourceDeletionTombstonesPath(agentsDir);
+	mkdirSync(dirname(path), { recursive: true });
+	const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+	writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\n`, "utf8");
+	renameSync(tmp, path);
+}
+
+function sourceDeletionTombstonesPath(agentsDir: string): string {
+	return `${agentsDir.replace(/\/$/, "")}/.daemon/source-deletion-tombstones.json`;
+}
+
+function isSourceDeletionTombstone(value: unknown): value is SourceDeletionTombstone {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value as Partial<SourceDeletionTombstone>;
+	return (
+		typeof candidate.id === "string" &&
+		typeof candidate.agentId === "string" &&
+		typeof candidate.deletedAt === "string" &&
+		!!candidate.source &&
+		typeof candidate.source === "object" &&
+		typeof candidate.source.id === "string" &&
+		candidate.source.kind === "obsidian"
+	);
 }
 
 interface SourceStats {

@@ -17,6 +17,8 @@ import {
 	type AgentDefinition,
 	type PipelineSynthesisConfig,
 	buildArchitectureDoc,
+	loadConfiguredHarnesses,
+	loadSourcesConfig,
 	normalizeAgentRosterEntry,
 	parseSimpleYaml,
 	stripSignetBlock,
@@ -42,12 +44,7 @@ import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProv
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
-import {
-	type NativeMemoryBridgeHandle,
-	claudeCodeNativeMemorySource,
-	codexNativeMemorySource,
-	startNativeMemoryBridge,
-} from "./native-memory-sources";
+import { type NativeMemoryBridgeHandle, startNativeMemoryBridge } from "./native-memory-sources";
 import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import type { WorkerInit } from "./pipeline/extraction-thread-protocol";
@@ -92,6 +89,15 @@ import { getSecret } from "./secrets.js";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpoints } from "./session-checkpoints";
 import { releaseAllSessions, startSessionCleanup, stopSessionCleanup } from "./session-tracker";
 import { createSingleFlightRunner } from "./single-flight-runner";
+import {
+	beginSourceIndexJob,
+	clearSourceIndexInFlight,
+	completeSourceIndexJobFromProgress,
+	failSourceIndexJob,
+	markSourceIndexInFlight,
+	markSourceIndexJobRunning,
+	updateSourceIndexJobProgress,
+} from "./source-index-progress";
 import { type TelemetryCollector, createTelemetryCollector } from "./telemetry";
 
 import {
@@ -241,6 +247,7 @@ let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
 // Track ingested files to avoid re-processing (path -> content hash)
 const ingestedMemoryFiles = new Map<string, string>();
 const MEMORY_IMPORT_POLL_MS = 30_000;
+const MEMORY_IMPORT_FILE_DELAY_MS = 50;
 let memoryImportTimer: ReturnType<typeof setInterval> | null = null;
 let memoryImportInFlight = false;
 
@@ -250,6 +257,7 @@ const SYNC_DEBOUNCE_MS = 2000;
 async function syncHarnessConfigs() {
 	const agentsMdPath = join(AGENTS_DIR, "AGENTS.md");
 	if (!existsSync(agentsMdPath)) return;
+	const activeHarnesses = new Set(loadConfiguredHarnesses(AGENTS_DIR));
 
 	const rawContent = await Bun.file(agentsMdPath).text();
 	const content = stripSignetBlock(rawContent);
@@ -311,7 +319,7 @@ ${fileList}
 	const composed = content + identityExtras;
 
 	const opencodeDir = join(homedir(), ".config", "opencode");
-	if (existsSync(opencodeDir)) {
+	if (activeHarnesses.has("opencode") && existsSync(opencodeDir)) {
 		try {
 			const opencodeAgentsPath = join(opencodeDir, "AGENTS.md");
 			if (await writeFileIfChangedAsync(opencodeAgentsPath, buildHeader("AGENTS.md") + composed)) {
@@ -537,6 +545,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 
 	const chunks = chunkMarkdownHierarchically(content, 512);
 	let inserted = 0;
+	const yielder = yieldEvery(1);
 
 	for (let i = 0; i < chunks.length; i++) {
 		const chunk = chunks[i];
@@ -545,7 +554,10 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 			chunk.header && chunk.text.startsWith(chunk.header)
 				? chunk.text.slice(chunk.header.length).trim()
 				: chunk.text.trim();
-		if (body.length < 80) continue;
+		if (body.length < 80) {
+			await yielder();
+			continue;
+		}
 
 		const chunkKey = `openclaw:${filename}:${createHash("sha256").update(chunk.text).digest("hex").slice(0, 16)}`;
 		try {
@@ -558,6 +570,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 					importance: chunk.level === "section" ? 0.65 : 0.55,
 					sourceType: "openclaw-memory-log",
 					sourceId: chunkKey,
+					idempotencyKey: chunkKey,
 					tags: [
 						"openclaw",
 						"memory-log",
@@ -587,6 +600,7 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 				...errDetails,
 			});
 		}
+		await yielder();
 	}
 
 	if (inserted > 0) {
@@ -629,6 +643,7 @@ async function importExistingMemoryFiles(): Promise<number> {
 		const count = await ingestMemoryMarkdown(join(memoryDir, file));
 		totalChunks += count;
 		await yielder();
+		await sleep(MEMORY_IMPORT_FILE_DELAY_MS);
 	}
 
 	if (totalChunks > 0) {
@@ -638,6 +653,10 @@ async function importExistingMemoryFiles(): Promise<number> {
 		});
 	}
 	return totalChunks;
+}
+
+function sleep(ms: number): Promise<void> {
+	return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
 function startMemoryImportPoller(): void {
@@ -675,6 +694,8 @@ function startFileWatcher() {
 	watcher = watch(
 		[
 			join(AGENTS_DIR, "agent.yaml"),
+			join(AGENTS_DIR, "AGENT.yaml"),
+			join(AGENTS_DIR, "config.yaml"),
 			join(AGENTS_DIR, "AGENTS.md"),
 			join(AGENTS_DIR, "SOUL.md"),
 			join(AGENTS_DIR, "MEMORY.md"),
@@ -695,7 +716,7 @@ function startFileWatcher() {
 		scheduleAutoCommit(path);
 
 		const base = basename(path);
-		if (base === "agent.yaml" || base === "AGENT.yaml") {
+		if (base === "agent.yaml" || base === "AGENT.yaml" || base === "config.yaml") {
 			try {
 				reloadAuthState(AGENTS_DIR);
 				logger.info("config", "Auth config reloaded from disk");
@@ -704,7 +725,16 @@ function startFileWatcher() {
 			}
 		}
 
-		const SYNC_TRIGGER_FILES = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"];
+		const SYNC_TRIGGER_FILES = [
+			"agent.yaml",
+			"AGENT.yaml",
+			"config.yaml",
+			"AGENTS.md",
+			"SOUL.md",
+			"IDENTITY.md",
+			"USER.md",
+			"MEMORY.md",
+		];
 		const normalizedForSync = path.replace(/\\/g, "/");
 		const isAgentSubdir = normalizedForSync.includes(`${AGENTS_DIR.replace(/\\/g, "/")}/agents/`);
 		if (SYNC_TRIGGER_FILES.some((f) => path.endsWith(f)) || isAgentSubdir) {
@@ -1555,17 +1585,49 @@ async function main() {
 		startMemoryImportPoller();
 
 		if (!nativeMemoryBridge) {
-			nativeMemoryBridge = startNativeMemoryBridge([codexNativeMemorySource(), claudeCodeNativeMemorySource()], {
+			const startupSourceJobs = new Map<string, string>();
+			for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
+				if (!source.enabled || source.kind !== "obsidian") continue;
+				const job = beginSourceIndexJob(source.id, "source-startup");
+				startupSourceJobs.set(source.id, job.id);
+				markSourceIndexInFlight(source.id);
+				markSourceIndexJobRunning(source.id, job.id);
+			}
+			nativeMemoryBridge = startNativeMemoryBridge([], {
 				agentsDir: AGENTS_DIR,
 				includeConfiguredSources: true,
-				embeddingConfig: memoryCfg.embedding,
-				fetchEmbedding,
+				pollIntervalMs: 0,
+				sourceCleanupEnabled: false,
+				sourceGraphEnabled: false,
+				onFileIndexed: (event) => {
+					const sourceId = event.source.sourceId;
+					if (!sourceId) return;
+					const jobId = startupSourceJobs.get(sourceId);
+					if (!jobId) return;
+					updateSourceIndexJobProgress(sourceId, jobId, {
+						scanned: event.scanned,
+						total: event.total,
+						indexed: event.changed,
+						currentPath: event.filePath,
+					});
+				},
 			});
+			nativeMemoryBridge
+				.syncExisting()
+				.then(() => {
+					for (const [sourceId, jobId] of startupSourceJobs) {
+						completeSourceIndexJobFromProgress(sourceId, jobId);
+					}
+				})
+				.catch((e) => {
+					for (const [sourceId, jobId] of startupSourceJobs) failSourceIndexJob(sourceId, jobId, e);
+					const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
+					logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
+				})
+				.finally(() => {
+					for (const sourceId of startupSourceJobs.keys()) clearSourceIndexInFlight(sourceId);
+				});
 		}
-		nativeMemoryBridge.syncExisting().catch((e) => {
-			const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
-			logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
-		});
 
 		const startupCfg = loadMemoryConfig(AGENTS_DIR);
 		if (startupCfg.embedding.provider !== "none") {
