@@ -358,8 +358,6 @@ export interface PipelineV2Config {
 	readonly feedback: PipelineFeedbackConfig;
 	readonly significance?: PipelineSignificanceConfig;
 	readonly writeGate?: PipelineWriteGateConfig;
-	readonly predictor?: PredictorConfig;
-	readonly predictorPipeline: PipelinePredictorConfig;
 	readonly modelRegistry: PipelineModelRegistryConfig;
 	readonly hints?: PipelineHintsConfig;
 }
@@ -377,25 +375,6 @@ export interface PipelineModelRegistryConfig {
 	readonly refreshIntervalMs: number;
 }
 
-export interface PipelinePredictorConfig {
-	readonly agentFeedback: boolean;
-	readonly trainingTelemetry: boolean;
-}
-
-export interface PredictorConfig {
-	readonly enabled: boolean;
-	readonly trainIntervalSessions: number;
-	readonly minTrainingSessions: number;
-	readonly scoreTimeoutMs: number;
-	readonly trainTimeoutMs: number;
-	readonly crashDisableThreshold: number;
-	readonly rrfK: number;
-	readonly explorationRate: number;
-	readonly driftResetWindow: number;
-	readonly binaryPath?: string;
-	readonly binaryArgs?: ReadonlyArray<string>;
-	readonly checkpointPath?: string;
-}
 
 export interface PipelineEmbeddingTrackerConfig {
 	readonly enabled: boolean;

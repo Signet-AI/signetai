@@ -967,9 +967,6 @@ export type {
 	AgentMessage,
 	AgentMessageListResponse,
 	AgentMessageSendResponse,
-	// Predictor
-	PredictorStatusResponse,
-	PredictorComparison,
 	ComparisonsByProjectResponse,
 	ComparisonsByEntityResponse,
 	ComparisonsListResponse,

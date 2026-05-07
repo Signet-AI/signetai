@@ -8,17 +8,14 @@ import { type AuthConfig, AuthRateLimiter, loadOrCreateSecret, parseAuthConfig }
 import { getDbAccessor } from "../db-accessor";
 import {
 	type DiagnosticsReport,
-	type PredictorHealthParams,
 	createProviderTracker,
 	getDiagnostics,
-	getPredictorHealth,
 } from "../diagnostics";
 import type { EmbeddingTrackerHandle } from "../embedding-tracker";
 import { logger } from "../logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import { enqueueExtractionJob as enqueueExtractionJobBase } from "../pipeline";
 import { deadLetterExtractionJob } from "../pipeline/extraction-fallback";
-import type { PredictorClient } from "../predictor-client";
 import { createRateLimiter } from "../repair-actions";
 import type { TelemetryCollector } from "../telemetry";
 import { getUpdateState } from "../update-system";
@@ -270,7 +267,6 @@ export const providerRuntimeResolution: ProviderRuntimeResolution = {
 
 export let telemetryRef: TelemetryCollector | undefined;
 export let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
-export let predictorClientRef: PredictorClient | null = null;
 export let pipelineTransition = false;
 export const harnessLastSeen = new Map<string, string>();
 export let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -397,7 +393,7 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	}
 
 	const report = getDbAccessor().withReadDb((db) =>
-		getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams(), buildOpenClawHealth()),
+		getDiagnostics(db, providerTracker, getUpdateState(), buildOpenClawHealth()),
 	);
 	diagnosticsCache = {
 		report,
@@ -406,20 +402,6 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	return report;
 }
 
-export function buildPredictorHealthParams(): PredictorHealthParams {
-	return {
-		enabled: false,
-		sidecarAlive: false,
-		crashCount: 0,
-		crashDisabled: false,
-		modelVersion: 0,
-		trainingSessions: 0,
-		successRate: 0,
-		alpha: 1.0,
-		coldStartExited: false,
-		lastTrainedAt: null,
-	};
-}
 
 export function setPipelineTransition(value: boolean): void {
 	pipelineTransition = value;
@@ -429,9 +411,6 @@ export function setTelemetryRef(value: TelemetryCollector | undefined): void {
 	telemetryRef = value;
 }
 
-export function setPredictorClientRef(value: PredictorClient | null): void {
-	predictorClientRef = value;
-}
 
 export function setHeartbeatTimer(value: ReturnType<typeof setInterval> | undefined): void {
 	heartbeatTimer = value;

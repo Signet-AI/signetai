@@ -671,63 +671,6 @@ async function processJob(
 		});
 	}
 
-	try {
-		if (memoryCfg.pipelineV2.predictor?.enabled && job.session_key) {
-			const { runSessionComparison, saveComparison, updateSuccessRate, shouldTriggerTraining, detectDrift } =
-				await import("../predictor-comparison");
-			const comparison = runSessionComparison(job.session_key, job.agent_id, accessor);
-			if (comparison !== null) {
-				saveComparison(comparison, job.agent_id, accessor);
-				if (comparison.hasPredictorScores) {
-					updateSuccessRate(job.agent_id, comparison.predictorWon, comparison.scorerConfidence);
-				}
-				const driftResult = detectDrift(job.agent_id, accessor, memoryCfg.pipelineV2.predictor.driftResetWindow ?? 20);
-				if (driftResult.drifting) {
-					logger.warn("predictor", "Drift detected — resetting predictor state", {
-						recentWinRate: driftResult.recentWinRate,
-						windowSize: driftResult.windowSize,
-						agentId: job.agent_id,
-					});
-					const { updatePredictorState: resetState } = await import("../predictor-state");
-					resetState(job.agent_id, { alpha: 1.0, successRate: 0.5 });
-				}
-				if (shouldTriggerTraining(job.agent_id, memoryCfg.pipelineV2.predictor, accessor)) {
-					try {
-						const { getPredictorClient } = await import("../daemon");
-						const predictorClient = getPredictorClient();
-						if (predictorClient) {
-							await predictorClient.trainFromDb({ db_path: join(AGENTS_DIR, "memory", "memories.db") });
-							const { updatePredictorState } = await import("../predictor-state");
-							updatePredictorState(job.agent_id, { lastTrainingAt: new Date().toISOString() });
-							logger.info("predictor", "Training triggered after session comparison");
-						}
-					} catch (trainErr) {
-						logger.warn("predictor", "Training trigger failed (non-fatal)", {
-							error: trainErr instanceof Error ? trainErr.message : String(trainErr),
-						});
-					}
-				}
-			}
-		}
-	} catch (err) {
-		logger.warn("predictor", "Session comparison failed (non-fatal)", {
-			error: err instanceof Error ? err.message : String(err),
-		});
-	}
-
-	if (job.session_key) {
-		try {
-			if (memoryCfg.pipelineV2.predictorPipeline.trainingTelemetry) {
-				const { collectTrainingPairs, saveTrainingPairs } = await import("../predictor-training-pairs");
-				const pairs = collectTrainingPairs(accessor, job.session_key, job.agent_id);
-				if (pairs.length > 0) saveTrainingPairs(accessor, job.agent_id, job.session_key, pairs);
-			}
-		} catch (e) {
-			logger.warn("summary-worker", "Training pair collection failed (non-fatal)", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		}
-	}
 
 	try {
 		const { getSynthesisWorker } = await import("./index");

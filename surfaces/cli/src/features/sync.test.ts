@@ -52,7 +52,6 @@ describe("syncTemplates workspace detection", () => {
 				signetLogo: () => "signet",
 				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
 				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
-				syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
 				syncWorkspaceSourceRepo: async () => ({
 					status: "current",
 					path: join(basePath, "signetai"),
@@ -85,7 +84,6 @@ describe("syncTemplates workspace detection", () => {
 				signetLogo: () => "signet",
 				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
 				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
-				syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
 				syncWorkspaceSourceRepo: async () => ({
 					status: "current",
 					path: "/tmp",
@@ -127,7 +125,6 @@ describe("syncTemplates workspace detection", () => {
 				signetLogo: () => "signet",
 				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
 				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
-				syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
 				syncWorkspaceSourceRepo: async () => ({
 					status: "current",
 					path: join(basePath, "signetai"),
@@ -204,7 +201,6 @@ describe("syncTemplates openclaw migration", () => {
 				signetLogo: () => "signet",
 				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
 				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
-				syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
 				syncWorkspaceSourceRepo: async () => ({
 					status: "current",
 					path: join(basePath, "signetai"),
@@ -280,7 +276,6 @@ describe("syncTemplates openclaw migration", () => {
 				signetLogo: () => "signet",
 				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
 				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
-				syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
 				syncWorkspaceSourceRepo: async () => ({
 					status: "current",
 					path: join(basePath, "signetai"),
@@ -313,7 +308,6 @@ describe("syncTemplates openclaw migration", () => {
 				signetLogo: () => "signet",
 				syncBuiltinSkills: () => ({ installed: [], updated: [], skipped: [] }),
 				syncNativeEmbeddingModel: async () => ({ status: "current", message: "ready" }),
-				syncPredictorBinary: async () => ({ status: "current", message: "ready" }),
 				syncWorkspaceSourceRepo: async (path) => {
 					calls.push(path);
 					return {

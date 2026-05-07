@@ -1,7 +1,5 @@
 import { basename, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { resolveWorkspaceSourceRepoPath } from "@signet/core";
-import { loadMemoryConfig } from "./memory-config";
-import { resolvePredictorCheckpointPath } from "./predictor-client";
 
 // Canonical artifact filename patterns (keep in sync with daemon.ts)
 const ARTIFACT_FILENAME_RE = /--(?:summary|transcript|compaction|manifest)\.md$/;
@@ -23,11 +21,6 @@ function relativePathWithin(root: string, target: string): string | null {
 }
 
 export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: string) => boolean {
-	const defaultPredictorCheckpoint = normalizePath(join(agentsDir, "memory", "predictor", "model.bin"));
-	const predictorCfg = loadMemoryConfig(agentsDir).pipelineV2.predictor;
-	const configuredPredictorCheckpoint = predictorCfg
-		? resolveForComparison(resolvePredictorCheckpointPath(predictorCfg))
-		: defaultPredictorCheckpoint;
 	const agentRoot = resolveForComparison(join(agentsDir, "agents"));
 	const memoriesDb = resolveForComparison(join(agentsDir, "memory", "memories.db"));
 	const memoriesDbWal = resolveForComparison(join(agentsDir, "memory", "memories.db-wal"));
@@ -36,8 +29,6 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 	const sourceRepoRoot = resolveForComparison(resolveWorkspaceSourceRepoPath(agentsDir));
 	const memoryDir = resolveForComparison(join(agentsDir, "memory"));
 	const ignoredPaths = new Set([
-		defaultPredictorCheckpoint,
-		configuredPredictorCheckpoint,
 		memoriesDb,
 		memoriesDbWal,
 		memoriesDbShm,

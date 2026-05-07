@@ -230,21 +230,6 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		threshold: 0.4,
 		continuityDiscount: 0.15,
 	},
-	predictor: {
-		enabled: true,
-		trainIntervalSessions: 10,
-		minTrainingSessions: 10,
-		scoreTimeoutMs: 120,
-		trainTimeoutMs: 30000,
-		crashDisableThreshold: 3,
-		rrfK: 12,
-		explorationRate: 0.05,
-		driftResetWindow: 10,
-	},
-	predictorPipeline: {
-		agentFeedback: true,
-		trainingTelemetry: false,
-	},
 	modelRegistry: {
 		enabled: true,
 		refreshIntervalMs: 3600_000,
@@ -426,8 +411,6 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 	const feedbackRaw = raw.feedback as Record<string, unknown> | undefined;
 	const significanceRaw = raw.significance as Record<string, unknown> | undefined;
 	const writeGateRaw = raw.writeGate as Record<string, unknown> | undefined;
-	const predictorRaw = raw.predictor as Record<string, unknown> | undefined;
-	const predictorPipelineRaw = raw.predictorPipeline as Record<string, unknown> | undefined;
 	const modelRegistryRaw = raw.modelRegistry as Record<string, unknown> | undefined;
 	const hintsRaw = raw.hints as Record<string, unknown> | undefined;
 
@@ -975,44 +958,6 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			),
 		},
 
-		predictor: {
-			enabled: resolveBool(predictorRaw?.enabled, undefined, d.predictor?.enabled ?? true),
-			trainIntervalSessions: clampPositive(
-				predictorRaw?.trainIntervalSessions,
-				1,
-				1000,
-				d.predictor?.trainIntervalSessions ?? 10,
-			),
-			minTrainingSessions: clampPositive(
-				predictorRaw?.minTrainingSessions,
-				1,
-				1000,
-				d.predictor?.minTrainingSessions ?? 10,
-			),
-			scoreTimeoutMs: clampPositive(predictorRaw?.scoreTimeoutMs, 10, 10000, d.predictor?.scoreTimeoutMs ?? 120),
-			trainTimeoutMs: clampPositive(predictorRaw?.trainTimeoutMs, 1000, 120000, d.predictor?.trainTimeoutMs ?? 30000),
-			crashDisableThreshold: clampPositive(
-				predictorRaw?.crashDisableThreshold,
-				1,
-				20,
-				d.predictor?.crashDisableThreshold ?? 3,
-			),
-			rrfK: clampPositive(predictorRaw?.rrfK, 1, 100, d.predictor?.rrfK ?? 12),
-			explorationRate: clampFraction(predictorRaw?.explorationRate, d.predictor?.explorationRate ?? 0.05),
-			driftResetWindow: clampPositive(predictorRaw?.driftResetWindow, 1, 100, d.predictor?.driftResetWindow ?? 10),
-			binaryPath: typeof predictorRaw?.binaryPath === "string" ? predictorRaw.binaryPath : d.predictor?.binaryPath,
-			checkpointPath:
-				typeof predictorRaw?.checkpointPath === "string" ? predictorRaw.checkpointPath : d.predictor?.checkpointPath,
-		},
-
-		predictorPipeline: {
-			agentFeedback: resolveBool(predictorPipelineRaw?.agentFeedback, undefined, d.predictorPipeline.agentFeedback),
-			trainingTelemetry: resolveBool(
-				predictorPipelineRaw?.trainingTelemetry,
-				undefined,
-				d.predictorPipeline.trainingTelemetry,
-			),
-		},
 
 		modelRegistry: {
 			enabled: resolveBool(modelRegistryRaw?.enabled, undefined, d.modelRegistry.enabled),

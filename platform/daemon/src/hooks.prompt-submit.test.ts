@@ -74,9 +74,9 @@ function makeDeps(opts: { readonly agentFeedback?: boolean } = {}): PromptDeps {
 				...cfg,
 				pipelineV2: {
 					...cfg.pipelineV2,
-					predictorPipeline: {
-						...cfg.pipelineV2.predictorPipeline,
-						agentFeedback: opts.agentFeedback ?? false,
+					feedback: {
+						...cfg.pipelineV2.feedback,
+						enabled: opts.agentFeedback ?? false,
 					},
 					continuity: {
 						...cfg.pipelineV2.continuity,

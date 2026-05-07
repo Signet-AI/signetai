@@ -174,7 +174,6 @@ bun test platform/daemon/src/pipeline/worker.test.ts
 | `@signet/daemon` | `platform/daemon` | HTTP API, hooks, file watching, memory pipeline | bun |
 | `platform/daemon-rs` | `platform/daemon-rs` | Rust shadow runtime and parity logging | rust |
 | `@signet/native` | `platform/native` | Native accelerators | node |
-| `predictor` | `platform/predictor` | Rust predictive memory scorer | rust |
 | `@signet/cli` | `surfaces/cli` | Setup, config, daemon management, dashboard | node |
 | `signet-dashboard` | `surfaces/dashboard` | Svelte dashboard served by the daemon | browser |
 | `@signet/desktop` | `surfaces/desktop` | Electron desktop shell / packaging | node |

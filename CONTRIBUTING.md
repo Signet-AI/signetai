@@ -69,7 +69,6 @@ Key packages:
 platform/core/                         # @signet/core — types, database, search, identity
 platform/daemon/                       # @signet/daemon — HTTP API, file watcher, pipeline
 platform/daemon-rs/                    # Rust shadow daemon/parity runtime
-platform/predictor/                    # Rust predictive memory scorer sidecar
 surfaces/cli/                          # @signet/cli — setup wizard and daemon management
 surfaces/dashboard/                    # signet-dashboard — Svelte dashboard
 surfaces/desktop/                      # @signet/desktop — Electron desktop application

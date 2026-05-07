@@ -1,17 +1,1 @@
--- Migration 024: Additional columns on predictor_comparisons
---
--- Adds columns needed by Sprint 3 session-end comparison logic:
--- - scorer_confidence: continuity scorer confidence for gating EMA updates
--- - success_rate: snapshot of success rate at time of comparison
--- - predictor_top_ids: JSON array of top-10 predictor-ranked memory IDs
--- - baseline_top_ids: JSON array of top-10 baseline-ranked memory IDs
--- - relevance_scores: JSON map of memory_id -> relevance score
--- - fts_overlap_score: fraction of injected memories with FTS hits
-
--- Columns added programmatically in migrations.rs:
---   predictor_comparisons.scorer_confidence REAL NOT NULL DEFAULT 0
---   predictor_comparisons.success_rate REAL NOT NULL DEFAULT 0.5
---   predictor_comparisons.predictor_top_ids TEXT NOT NULL DEFAULT '[]'
---   predictor_comparisons.baseline_top_ids TEXT NOT NULL DEFAULT '[]'
---   predictor_comparisons.relevance_scores TEXT NOT NULL DEFAULT '{}'
---   predictor_comparisons.fts_overlap_score REAL
+-- Retired scorer/predictor migration slot. Intentionally empty.

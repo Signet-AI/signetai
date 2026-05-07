@@ -43,7 +43,6 @@ interface MemoryRow {
 import { countChanges, syncVecDeleteByEmbeddingIds } from "../db-helpers";
 import { txDecrementEntityMentions } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
-import { purgeOldTrainingPairs } from "../predictor-training-pairs";
 import { logger } from "../logger";
 
 export interface RetentionConfig {
@@ -85,7 +84,6 @@ export interface RetentionSweepResult {
 	historyPurged: number;
 	completedJobsPurged: number;
 	deadJobsPurged: number;
-	trainingPairsPurged: number;
 }
 
 function purgeGraphLinks(
@@ -332,9 +330,6 @@ function runSweep(accessor: DbAccessor, cfg: RetentionConfig): RetentionSweepRes
 	// Step 6: dead-letter jobs
 	const deadJobsPurged = accessor.withWriteTx((db) => purgeDeadJobs(db, deadJobCutoff, cfg.batchLimit));
 
-	// Step 7: old predictor training pairs (90-day retention)
-	const trainingPairsPurged = purgeOldTrainingPairs(accessor, 90);
-
 	return {
 		graphLinksPurged,
 		entitiesOrphaned,
@@ -343,7 +338,6 @@ function runSweep(accessor: DbAccessor, cfg: RetentionConfig): RetentionSweepRes
 		historyPurged,
 		completedJobsPurged,
 		deadJobsPurged,
-		trainingPairsPurged,
 	};
 }
 
@@ -360,8 +354,7 @@ export function startRetentionWorker(accessor: DbAccessor, cfg: RetentionConfig 
 			result.tombstonesPurged +
 			result.historyPurged +
 			result.completedJobsPurged +
-			result.deadJobsPurged +
-			result.trainingPairsPurged;
+			result.deadJobsPurged;
 
 		if (total > 0) {
 			logger.info("retention", "Sweep completed", { ...result });
