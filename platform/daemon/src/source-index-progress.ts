@@ -83,6 +83,10 @@ export function completeSourceIndexJob(sourceId: string, jobId: string, indexed:
 	});
 }
 
+export function completeSourceIndexJobFromProgress(sourceId: string, jobId: string): void {
+	completeSourceIndexJob(sourceId, jobId, sourceIndexJobs.get(sourceId)?.indexed ?? 0);
+}
+
 export function failSourceIndexJob(sourceId: string, jobId: string, error: unknown): void {
 	if (!isCurrentSourceIndexJob(sourceId, jobId)) return;
 	const current = sourceIndexJobs.get(sourceId);

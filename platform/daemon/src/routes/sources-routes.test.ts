@@ -10,6 +10,8 @@ import {
 	beginSourceIndexJob,
 	clearSourceIndexProgressForTests,
 	completeSourceIndexJob,
+	completeSourceIndexJobFromProgress,
+	getSourceIndexJob,
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "../source-index-progress";
@@ -356,6 +358,25 @@ describe("Sources routes", () => {
 			sources: Array<{ indexJob?: { status?: string; scanned?: number; indexed?: number } }>;
 		};
 		expect(completed.sources[0]?.indexJob).toMatchObject({ status: "complete", scanned: 3, indexed: 2 });
+	});
+
+	it("completes startup source jobs from their own progress, not aggregate bridge counts", () => {
+		const active = beginSourceIndexJob("obsidian:active", "source-startup");
+		const empty = beginSourceIndexJob("obsidian:empty", "source-startup");
+		markSourceIndexJobRunning("obsidian:active", active.id);
+		markSourceIndexJobRunning("obsidian:empty", empty.id);
+		updateSourceIndexJobProgress("obsidian:active", active.id, {
+			scanned: 2,
+			total: 2,
+			indexed: 2,
+			currentPath: join(vault, "permanent", "Note.md"),
+		});
+
+		completeSourceIndexJobFromProgress("obsidian:active", active.id);
+		completeSourceIndexJobFromProgress("obsidian:empty", empty.id);
+
+		expect(getSourceIndexJob("obsidian:active")?.indexed).toBe(2);
+		expect(getSourceIndexJob("obsidian:empty")?.indexed).toBe(0);
 	});
 
 	it("disconnects a source, removes config, and returns purge count", async () => {

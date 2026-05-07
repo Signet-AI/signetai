@@ -92,9 +92,8 @@ import { createSingleFlightRunner } from "./single-flight-runner";
 import {
 	beginSourceIndexJob,
 	clearSourceIndexInFlight,
-	completeSourceIndexJob,
+	completeSourceIndexJobFromProgress,
 	failSourceIndexJob,
-	getSourceIndexJob,
 	markSourceIndexInFlight,
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
@@ -1613,9 +1612,9 @@ async function main() {
 			});
 			nativeMemoryBridge
 				.syncExisting()
-				.then((indexed) => {
+				.then(() => {
 					for (const [sourceId, jobId] of startupSourceJobs) {
-						completeSourceIndexJob(sourceId, jobId, getSourceIndexJob(sourceId)?.indexed ?? indexed);
+						completeSourceIndexJobFromProgress(sourceId, jobId);
 					}
 				})
 				.catch((e) => {
