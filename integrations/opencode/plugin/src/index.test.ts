@@ -22,6 +22,10 @@ interface OpenCodeHooks {
 		input: { readonly sessionID: string },
 		output: { readonly system: string[] },
 	) => Promise<void>;
+	readonly "experimental.session.compacting": (
+		input: { readonly sessionID: string },
+		output: { readonly context: string[] },
+	) => Promise<void>;
 }
 
 function installFetch(): RequestRecord[] {
@@ -185,6 +189,25 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 				runtimePath: "plugin",
 				reason: "session.idle",
 				sessionKey: "finished-session",
+			},
+		});
+	});
+
+	test("threads configured Signet agent scope through pre-compaction", async () => {
+		process.env.SIGNET_AGENT_ID = "named-agent";
+		const records = installFetch();
+		const hooks = await createHooks();
+		const output = { context: [] };
+
+		await hooks["experimental.session.compacting"]({ sessionID: "compact-session" }, output);
+
+		expect(records).toContainEqual({
+			path: "/api/hooks/pre-compaction",
+			body: {
+				harness: "opencode",
+				agentId: "named-agent",
+				sessionKey: "compact-session",
+				runtimePath: "plugin",
 			},
 		});
 	});

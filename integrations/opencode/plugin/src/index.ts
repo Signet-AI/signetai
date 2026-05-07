@@ -302,6 +302,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 					"/api/hooks/pre-compaction",
 					{
 						harness: HARNESS,
+						agentId,
 						sessionKey: input.sessionID,
 						runtimePath: RUNTIME_PATH,
 					},
