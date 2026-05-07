@@ -172,7 +172,7 @@ describe("buildSessionEndBody", () => {
 		});
 	});
 
-	test("preserves existing agentId and agent_id inputs as Signet scope", () => {
+	test("preserves existing agentId and non-Claude agent_id inputs as Signet scope", () => {
 		expect(buildSessionEndBody({ agentId: "research-agent", sessionKey: "sess-1" }, "claude-code").agentId).toBe(
 			"research-agent",
 		);
@@ -185,6 +185,18 @@ describe("buildSessionEndBody", () => {
 				"claude-code",
 			).agentId,
 		).toBe("explicit-agent");
+	});
+
+	test("keeps Claude Code session-end agent_id out of Signet scope", () => {
+		expect(buildSessionEndBody({ agent_id: "claude-subagent", sessionKey: "sess-4" }, "claude-code").agentId).toBe(
+			undefined,
+		);
+		expect(
+			buildSessionEndBody(
+				{ agent_id: "claude-subagent", signet_agent_id: "research-agent", sessionKey: "sess-5" },
+				"claude-code",
+			).agentId,
+		).toBe("research-agent");
 	});
 });
 
