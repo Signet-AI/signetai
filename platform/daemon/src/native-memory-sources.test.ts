@@ -783,6 +783,45 @@ describe("native memory sources", () => {
 		}
 	});
 
+	it("reports per-source file progress when a bridge scans multiple sources", async () => {
+		const vaultA = join(dir, "vault-a");
+		const vaultB = join(dir, "vault-b");
+		mkdirSync(join(vaultA, "notes"), { recursive: true });
+		mkdirSync(join(vaultB, "notes"), { recursive: true });
+		writeFileSync(join(vaultA, "notes", "A1.md"), "# A1\n\nFirst vault note.");
+		writeFileSync(join(vaultA, "notes", "A2.md"), "# A2\n\nSecond vault note.");
+		writeFileSync(join(vaultB, "notes", "B1.md"), "# B1\n\nThird vault note.");
+		const events: Array<{ sourceId?: string; scanned: number; total: number; changed: number }> = [];
+		const handle = startNativeMemoryBridge(
+			[
+				obsidianNativeMemorySource(vaultA, "Vault A", "obsidian:vault-a"),
+				obsidianNativeMemorySource(vaultB, "Vault B", "obsidian:vault-b"),
+			],
+			{
+				agentId: "agent-native",
+				pollIntervalMs: 0,
+				onFileIndexed: (event) => {
+					events.push({
+						sourceId: event.source.sourceId,
+						scanned: event.scanned,
+						total: event.total,
+						changed: event.changed,
+					});
+				},
+			},
+		);
+		try {
+			expect(await handle.syncExisting()).toBe(3);
+			expect(events).toEqual([
+				{ sourceId: "obsidian:vault-a", scanned: 1, total: 2, changed: 1 },
+				{ sourceId: "obsidian:vault-a", scanned: 2, total: 2, changed: 2 },
+				{ sourceId: "obsidian:vault-b", scanned: 1, total: 1, changed: 1 },
+			]);
+		} finally {
+			await handle.close();
+		}
+	});
+
 	it("coalesces overlapping source sync requests and runs one trailing resync", async () => {
 		const root = join(dir, "vault");
 		const file = join(root, "permanent", "Burst.md");

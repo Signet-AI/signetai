@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { promisify } from "node:util";
 import {
 	type SignetSourceEntry,
@@ -46,6 +49,13 @@ interface SourceIndexJobInput {
 	readonly purgeNativeSource: typeof purgeNativeMemorySourceArtifacts;
 }
 
+interface SourceDeletionTombstone {
+	readonly id: string;
+	readonly source: SignetSourceEntry;
+	readonly agentId: string;
+	readonly deletedAt: string;
+}
+
 const execFileAsync = promisify(execFile);
 
 interface AddObsidianSourceBody {
@@ -77,6 +87,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const fetchEmbedding = deps.fetchEmbedding ?? defaultFetchEmbedding;
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
+	cleanupSourceDeletionTombstones(agentsDir, purgeNativeSource);
 	app.get("/api/sources", (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();
@@ -139,6 +150,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		sourceIndexJobs.delete(result.source.id);
 
 		const sourceAgentId = resolveDaemonAgentId();
+		recordSourceDeletionTombstone(result.source, sourceAgentId, agentsDir);
 		const purged =
 			result.source.kind === "obsidian"
 				? purgeNativeSource(
@@ -146,6 +158,8 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 						sourceAgentId,
 					)
 				: 0;
+		if (!sourceIndexInFlight.has(result.source.id))
+			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
 	});
 }
@@ -161,14 +175,15 @@ function enqueueSourceIndexJob(input: SourceIndexJobInput): SourceIndexJob {
 		queuedAt: new Date().toISOString(),
 	};
 	sourceIndexJobs.set(input.source.id, job);
-	setTimeout(() => {
-		void runSourceIndexJob(input, job);
-	}, 0).unref?.();
+	scheduleSourceIndexJob(input, job, 0);
 	return job;
 }
 
 async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob): Promise<void> {
-	if (sourceIndexInFlight.has(input.source.id)) return;
+	if (sourceIndexInFlight.has(input.source.id)) {
+		scheduleSourceIndexJob(input, job, 50);
+		return;
+	}
 	sourceIndexInFlight.add(input.source.id);
 	const started: SourceIndexJob = {
 		...job,
@@ -190,6 +205,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 				agentsDir: input.agentsDir,
 				yieldEveryFiles: 1,
 				onFileIndexed: (event) => {
+					if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 					sourceIndexJobs.set(input.source.id, {
 						...started,
 						status: "running",
@@ -202,6 +218,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 			},
 		);
 		const indexed = await bridge.syncExisting();
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		markSourceIndexed(input.source.id, undefined, input.agentsDir);
 		const current = sourceIndexJobs.get(input.source.id) ?? started;
 		sourceIndexJobs.set(input.source.id, {
@@ -211,6 +228,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 			indexed,
 		});
 	} catch (err) {
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		const current = sourceIndexJobs.get(input.source.id) ?? started;
 		sourceIndexJobs.set(input.source.id, {
 			...current,
@@ -225,9 +243,107 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 				obsidianNativeMemorySource(input.source.root, input.source.name, input.source.id, input.source.excludeGlobs),
 				resolveDaemonAgentId(),
 			);
+			clearSourceDeletionTombstone(input.source.id, resolveDaemonAgentId(), input.agentsDir);
 		}
 		sourceIndexInFlight.delete(input.source.id);
 	}
+}
+
+function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob, delayMs: number): void {
+	setTimeout(() => {
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+		void runSourceIndexJob(input, job);
+	}, delayMs).unref?.();
+}
+
+function isCurrentSourceIndexJob(sourceId: string, jobId: string): boolean {
+	return sourceIndexJobs.get(sourceId)?.id === jobId;
+}
+
+function cleanupSourceDeletionTombstones(
+	agentsDir: string,
+	purgeNativeSource: typeof purgeNativeMemorySourceArtifacts,
+): void {
+	const tombstones = loadSourceDeletionTombstones(agentsDir);
+	if (tombstones.length === 0) return;
+	const configuredIds = new Set(loadSourcesConfig(agentsDir).sources.map((source) => source.id));
+	const remaining: SourceDeletionTombstone[] = [];
+	for (const tombstone of tombstones) {
+		if (configuredIds.has(tombstone.source.id)) continue;
+		if (tombstone.source.kind === "obsidian") {
+			purgeNativeSource(
+				obsidianNativeMemorySource(
+					tombstone.source.root,
+					tombstone.source.name,
+					tombstone.source.id,
+					tombstone.source.excludeGlobs,
+				),
+				tombstone.agentId,
+			);
+		}
+	}
+	saveSourceDeletionTombstones(remaining, agentsDir);
+}
+
+function recordSourceDeletionTombstone(source: SignetSourceEntry, agentId: string, agentsDir: string): void {
+	const tombstones = loadSourceDeletionTombstones(agentsDir);
+	const next = tombstones.filter((entry) => entry.source.id !== source.id || entry.agentId !== agentId);
+	saveSourceDeletionTombstones(
+		[
+			...next,
+			{
+				id: randomUUID(),
+				source,
+				agentId,
+				deletedAt: new Date().toISOString(),
+			},
+		],
+		agentsDir,
+	);
+}
+
+function clearSourceDeletionTombstone(sourceId: string, agentId: string, agentsDir: string): void {
+	const tombstones = loadSourceDeletionTombstones(agentsDir);
+	const next = tombstones.filter((entry) => entry.source.id !== sourceId || entry.agentId !== agentId);
+	if (next.length !== tombstones.length) saveSourceDeletionTombstones(next, agentsDir);
+}
+
+function loadSourceDeletionTombstones(agentsDir: string): readonly SourceDeletionTombstone[] {
+	const path = sourceDeletionTombstonesPath(agentsDir);
+	if (!existsSync(path)) return [];
+	try {
+		const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter(isSourceDeletionTombstone);
+	} catch {
+		return [];
+	}
+}
+
+function saveSourceDeletionTombstones(tombstones: readonly SourceDeletionTombstone[], agentsDir: string): void {
+	const path = sourceDeletionTombstonesPath(agentsDir);
+	mkdirSync(dirname(path), { recursive: true });
+	const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
+	writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\n`, "utf8");
+	renameSync(tmp, path);
+}
+
+function sourceDeletionTombstonesPath(agentsDir: string): string {
+	return `${agentsDir.replace(/\/$/, "")}/.daemon/source-deletion-tombstones.json`;
+}
+
+function isSourceDeletionTombstone(value: unknown): value is SourceDeletionTombstone {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value as Partial<SourceDeletionTombstone>;
+	return (
+		typeof candidate.id === "string" &&
+		typeof candidate.agentId === "string" &&
+		typeof candidate.deletedAt === "string" &&
+		!!candidate.source &&
+		typeof candidate.source === "object" &&
+		typeof candidate.source.id === "string" &&
+		candidate.source.kind === "obsidian"
+	);
 }
 
 interface SourceStats {

@@ -451,9 +451,10 @@ export function startNativeMemoryBridge(
 
 	const runScan = async (): Promise<number> => {
 		let count = 0;
-		let scanned = 0;
 		const yielder = yieldEvery(options.yieldEveryFiles ?? 20);
 		for (const source of activeBridgeSources(sources, options)) {
+			let changedCount = 0;
+			let scanned = 0;
 			const key = sourceStateKey(source, agentId);
 			const current = new Set<string>();
 			const rootExists = existsSync(source.root);
@@ -468,9 +469,12 @@ export function startNativeMemoryBridge(
 				for (const file of files) {
 					scanned++;
 					const changed = await indexNativeMemoryFile(source, file, agentId, options);
-					if (changed) count++;
+					if (changed) {
+						count++;
+						changedCount++;
+					}
 					current.add(file);
-					options.onFileIndexed?.({ source, filePath: file, indexed: changed, scanned, total, changed: count });
+					options.onFileIndexed?.({ source, filePath: file, indexed: changed, scanned, total, changed: changedCount });
 					await yielder();
 				}
 				const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
