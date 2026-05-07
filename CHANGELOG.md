@@ -36,6 +36,13 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ## Release Ledger
 
+## [0.111.14] - 2026-05-07
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.111.13..v0.111.14`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
 ## [0.111.13] - 2026-05-07
 
 Release summary: internal maintenance release with no conventional commit entries captured.

@@ -421,7 +421,9 @@ function findExecutableOnPath(name: string, pathValue: string | undefined = proc
 
 function processRuntimeCommand(): string {
 	if (basename(process.execPath).startsWith("bun")) return process.execPath;
-	return findExecutableOnPath("bun") ?? "bun";
+	const found = findExecutableOnPath("bun");
+	if (found) return found;
+	throw new Error("bun executable not found on PATH. Reinstall bun or run signet with bun.");
 }
 
 function xmlEscape(value: string): string {
@@ -460,9 +462,6 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 	<string>${xmlEscape(label)}</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/bin/bash</string>
-		<string>-c</string>
-		<string>exec &quot;$0&quot; &quot;$1&quot;</string>
 		<string>${xmlEscape(processRuntimeCommand())}</string>
 		<string>${xmlEscape(input.daemonPath)}</string>
 	</array>
