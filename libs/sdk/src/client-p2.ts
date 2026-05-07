@@ -750,49 +750,25 @@ export class SignetClientP2 {
 	 * @example
 	 * const status = await client.getPredictorStatus();
 	 */
-	async getPredictorStatus(): Promise<PredictorStatusResponse> {
-		return this.transport.get<PredictorStatusResponse>("/api/predictor/status");
+// PREDICTOR_DEPRECATED: predictor was archived in 0.112.0
+	async getPredictorStatus(): Promise<never> {
+		throw new Error("Predictor is hard-deprecated.");
 	}
 
-	/**
-	 * @example
-	 * const { comparisons, count } = await client.getComparisonsByProject('my-project');
-	 */
-	async getComparisonsByProject(project: string): Promise<ComparisonsByProjectResponse> {
-		return this.transport.get<ComparisonsByProjectResponse>("/api/predictor/comparisons/by-project", { project });
+	async getComparisonsByProject(_project: string): Promise<never> {
+		throw new Error("Predictor is hard-deprecated.");
 	}
 
-	/**
-	 * @example
-	 * const { comparisons, count } = await client.getComparisonsByEntity('entity-123');
-	 */
-	async getComparisonsByEntity(entityId: string): Promise<ComparisonsByEntityResponse> {
-		return this.transport.get<ComparisonsByEntityResponse>("/api/predictor/comparisons/by-entity", {
-			entity_id: entityId,
-		});
+	async getComparisonsByEntity(_entityId: string): Promise<never> {
+		throw new Error("Predictor is hard-deprecated.");
 	}
 
-	/**
-	 * @example
-	 * const { comparisons, total } = await client.listComparisons({ limit: 50, offset: 0 });
-	 */
-	async listComparisons(opts?: {
-		readonly limit?: number;
-		readonly offset?: number;
-		readonly agentId?: string;
-	}): Promise<ComparisonsListResponse> {
-		return this.transport.get<ComparisonsListResponse>("/api/predictor/comparisons", opts);
+	async listComparisons(_opts?: any): Promise<never> {
+		throw new Error("Predictor is hard-deprecated.");
 	}
 
-	/**
-	 * @example
-	 * const { runs, count } = await client.listTrainingRuns();
-	 */
-	async listTrainingRuns(opts?: {
-		readonly agentId?: string;
-		readonly limit?: number;
-	}): Promise<TrainingRunsResponse> {
-		return this.transport.get<TrainingRunsResponse>("/api/predictor/training", opts);
+	async listTrainingRuns(_opts?: any): Promise<never> {
+		throw new Error("Predictor is hard-deprecated.");
 	}
 
 	/**

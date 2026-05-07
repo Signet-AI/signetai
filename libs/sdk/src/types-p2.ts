@@ -412,20 +412,4 @@ export interface AgentMessageSendResponse {
 }
 
 // ============================================================================
-// Predictor types
-// ============================================================================
-
-
-
-
-
-
-export interface TrainingRun {
-	readonly id: string;
-	readonly agentId: string;
-	readonly modelVersion: number;
-	readonly samplesUsed: number;
-	readonly accuracyBefore: number | null;
-	readonly accuracyAfter: number | null;
-	readonly trainedAt: string;
-}
+// Predictor types — deprecated
