@@ -87,6 +87,12 @@ ontology_proposals
 `payload`, `evidence`, and `result` are JSON strings at the database layer.
 The API returns parsed objects.
 
+When an operation promotes a claim value or link into the existing graph, the
+applied `entity_attributes` or `entity_dependencies` row stores the applying
+`proposal_id` plus copied `proposal_evidence`. Applied evidence reads resolve
+that proposal lineage first, then fall back to the broader source provenance
+columns. This keeps proposal review auditable after semantic promotion.
+
 Allowed status values:
 
 ```text
@@ -202,6 +208,10 @@ or the extraction-output shape from this spec's prompt examples
 (`entities`, `claim_values`, `links`, and `actions_or_policies`). Importing
 only creates pending proposals. It does not apply them.
 
+Provider extraction may also return `questions`. This slice surfaces those
+questions in the extraction result for operator or later stronger-model review;
+it does not yet create durable `Question` ontology objects.
+
 ## Integration contracts
 
 ### Knowledge architecture
@@ -215,6 +225,12 @@ Proposal application uses existing graph tables:
 
 Every operation handler must preserve `agent_id` scoping and must not hardcode
 `default` below the route boundary.
+
+This slice intentionally stops at the proposal layer. `Observation` is still
+represented by proposal drafts and evidence refs, and reducer policy is still
+implicit in proposal status plus supersession handlers. A future claim-slot
+lifecycle should make `Observation`, `ClaimSlot`, `ClaimValue`, `Reducer`, and
+`Question` first-class without changing the review-before-mutation rule here.
 
 ### Transcript and source artifacts
 

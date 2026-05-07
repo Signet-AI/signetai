@@ -98,10 +98,11 @@ describe("ontology proposals", () => {
 				db
 					.prepare(
 						`SELECT e.agent_id, e.entity_type, asp.name AS aspect, attr.group_key,
-						        attr.claim_key, attr.content, attr.confidence, attr.source_kind
-						 FROM entity_attributes attr
-						 JOIN entity_aspects asp ON asp.id = attr.aspect_id
-						 JOIN entities e ON e.id = asp.entity_id
+							        attr.claim_key, attr.content, attr.confidence, attr.source_kind,
+							        attr.proposal_id, attr.proposal_evidence
+							 FROM entity_attributes attr
+							 JOIN entity_aspects asp ON asp.id = attr.aspect_id
+							 JOIN entities e ON e.id = asp.entity_id
 						 WHERE e.name = ? AND e.agent_id = ?`,
 					)
 					.get("Signet", "ant") as
@@ -114,6 +115,8 @@ describe("ontology proposals", () => {
 							content: string;
 							confidence: number;
 							source_kind: string;
+							proposal_id: string;
+							proposal_evidence: string;
 					  }
 					| undefined,
 		);
@@ -126,6 +129,8 @@ describe("ontology proposals", () => {
 		expect(row?.content).toContain("writes proposals");
 		expect(row?.confidence).toBeCloseTo(0.92);
 		expect(row?.source_kind).toBe("transcript");
+		expect(row?.proposal_id).toBe(proposal.id);
+		expect(JSON.parse(row?.proposal_evidence ?? "[]")).toEqual([{ source: "transcript:test", message_ids: ["m1"] }]);
 	});
 
 	it("rejects a pending proposal without mutating graph state", () => {
@@ -336,6 +341,7 @@ describe("ontology proposals", () => {
 								],
 							},
 						],
+						questions: ["Should provider extraction become the default for strong-model maintenance?"],
 					});
 				},
 			},
@@ -346,6 +352,7 @@ describe("ontology proposals", () => {
 		expect(result.extractionMode).toBe("provider");
 		expect(result.providerName).toBe("test-provider");
 		expect(result.warnings).toHaveLength(0);
+		expect(result.questions).toEqual(["Should provider extraction become the default for strong-model maintenance?"]);
 		expect(result.proposals).toHaveLength(1);
 		expect(result.proposals[0]?.payload.claim_key).toBe("provider_extraction");
 	});
@@ -578,9 +585,15 @@ describe("ontology proposals", () => {
 		expect(evidence.count).toBe(1);
 		expect(evidence.items[0]?.attribute.sourceKind).toBe("transcript");
 		expect(evidence.items[0]?.attribute.sourcePath).toBe("memory/codex/transcripts/claim.jsonl");
-		expect(evidence.items[0]?.evidence.map((item) => item.kind)).toEqual(["session_transcript", "memory_artifact"]);
-		expect(evidence.items[0]?.evidence[0]?.excerpt).toContain("evidence after proposal application");
-		expect(evidence.items[0]?.evidence[1]?.excerpt).toContain("auditable lineage");
+		expect(evidence.items[0]?.attribute.proposalId).toBe(proposal.id);
+		expect(evidence.items[0]?.evidence.map((item) => item.kind)).toEqual([
+			"ontology_proposal",
+			"session_transcript",
+			"memory_artifact",
+		]);
+		expect(evidence.items[0]?.evidence[0]?.label).toBe(`proposal:${proposal.id}`);
+		expect(evidence.items[0]?.evidence[1]?.excerpt).toContain("evidence after proposal application");
+		expect(evidence.items[0]?.evidence[2]?.excerpt).toContain("auditable lineage");
 	});
 
 	it("falls back to embedded quotes when source rows are not present", () => {
@@ -706,9 +719,10 @@ describe("ontology proposals", () => {
 				db
 					.prepare(
 						`SELECT dep.dependency_type, dep.confidence, dep.source_kind,
-						        src.entity_type AS source_type, dst.entity_type AS target_type
-						 FROM entity_dependencies dep
-						 JOIN entities src ON src.id = dep.source_entity_id
+							        dep.proposal_id, dep.proposal_evidence,
+							        src.entity_type AS source_type, dst.entity_type AS target_type
+							 FROM entity_dependencies dep
+							 JOIN entities src ON src.id = dep.source_entity_id
 						 JOIN entities dst ON dst.id = dep.target_entity_id
 						 WHERE dep.id = ?`,
 					)
@@ -717,6 +731,8 @@ describe("ontology proposals", () => {
 							dependency_type: string;
 							confidence: number;
 							source_kind: string | null;
+							proposal_id: string | null;
+							proposal_evidence: string;
 							source_type: string;
 							target_type: string;
 					  }
@@ -725,6 +741,8 @@ describe("ontology proposals", () => {
 		expect(row?.dependency_type).toBe("supports_claim");
 		expect(row?.confidence).toBeCloseTo(0.86);
 		expect(row?.source_kind).toBe("transcript");
+		expect(row?.proposal_id).toBe(proposal.id);
+		expect(JSON.parse(row?.proposal_evidence ?? "[]")).toEqual([]);
 		expect(row?.source_type).toBe("artifact");
 		expect(row?.target_type).toBe("concept");
 	});
@@ -788,9 +806,15 @@ describe("ontology proposals", () => {
 		});
 
 		expect(evidence.dependency.sourceKind).toBe("transcript");
-		expect(evidence.items.map((item) => item.kind)).toEqual(["session_transcript", "memory_artifact"]);
-		expect(evidence.items[0]?.excerpt).toContain("supports the Signet proposal loop");
-		expect(evidence.items[1]?.excerpt).toContain("supports the proposal-loop claim");
+		expect(evidence.dependency.proposalId).toBe(proposal.id);
+		expect(evidence.items.map((item) => item.kind)).toEqual([
+			"ontology_proposal",
+			"session_transcript",
+			"memory_artifact",
+		]);
+		expect(evidence.items[0]?.label).toBe(`proposal:${proposal.id}`);
+		expect(evidence.items[1]?.excerpt).toContain("supports the Signet proposal loop");
+		expect(evidence.items[2]?.excerpt).toContain("supports the proposal-loop claim");
 	});
 
 	it("groups pending add_claim_value conflicts by claim slot", () => {

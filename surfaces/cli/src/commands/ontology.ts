@@ -153,6 +153,7 @@ interface ExtractionResponse {
 	readonly dryRun?: boolean;
 	readonly extractionMode?: string;
 	readonly providerName?: string | null;
+	readonly questions?: readonly string[];
 	readonly warnings?: readonly string[];
 	readonly source?: {
 		readonly kind?: string;
@@ -573,6 +574,11 @@ function printExtraction(data: unknown): void {
 		if (typeof label === "string") console.log(chalk.dim(`    ${label}`));
 	}
 	if (proposals.length > 20) console.log(chalk.dim(`  ... ${proposals.length - 20} more`));
+	if (result.questions && result.questions.length > 0) {
+		console.log(chalk.bold("\n  Questions"));
+		for (const question of result.questions.slice(0, 10)) console.log(chalk.dim(`  - ${question}`));
+		if (result.questions.length > 10) console.log(chalk.dim(`  ... ${result.questions.length - 10} more`));
+	}
 	console.log();
 }
 

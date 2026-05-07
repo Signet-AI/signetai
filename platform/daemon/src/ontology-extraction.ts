@@ -12,6 +12,11 @@ type ProposalDraft = {
 	readonly risk?: string | null;
 };
 
+type ParsedProposalJson = {
+	readonly proposals: readonly ProposalDraft[];
+	readonly questions: readonly string[];
+};
+
 type SourceRecord = {
 	readonly kind: "transcript" | "artifact";
 	readonly id: string;
@@ -54,6 +59,7 @@ export interface OntologyExtractionResult {
 	readonly dryRun: boolean;
 	readonly extractionMode: "mechanical" | "provider" | "mixed";
 	readonly providerName: string | null;
+	readonly questions: readonly string[];
 	readonly warnings: readonly string[];
 }
 
@@ -86,6 +92,12 @@ function readNumber(record: Readonly<Record<string, unknown>>, key: string): num
 function readArray(record: Readonly<Record<string, unknown>>, key: string): readonly unknown[] {
 	const value = record[key];
 	return Array.isArray(value) ? value : [];
+}
+
+function readStringArray(record: Readonly<Record<string, unknown>>, key: string): readonly string[] {
+	return readArray(record, key)
+		.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+		.map((item) => item.trim());
 }
 
 function payloadRecord(entries: readonly (readonly [string, unknown])[]): Record<string, unknown> {
@@ -216,23 +228,41 @@ function normalizeExtractionPolicies(root: Readonly<Record<string, unknown>>): P
 		.filter((proposal): proposal is ProposalDraft => proposal !== null);
 }
 
-function normalizeProposalJson(raw: unknown): ProposalDraft[] {
+function normalizeProposalJson(raw: unknown): ParsedProposalJson {
 	if (Array.isArray(raw))
-		return raw.map(normalizeExplicitProposal).filter((proposal): proposal is ProposalDraft => proposal !== null);
-	if (!isRecord(raw)) return [];
+		return {
+			proposals: raw.map(normalizeExplicitProposal).filter((proposal): proposal is ProposalDraft => proposal !== null),
+			questions: [],
+		};
+	if (!isRecord(raw)) return { proposals: [], questions: [] };
 	const explicit = readArray(raw, "proposals");
 	if (explicit.length > 0) {
-		return explicit.map(normalizeExplicitProposal).filter((proposal): proposal is ProposalDraft => proposal !== null);
+		return {
+			proposals: explicit
+				.map(normalizeExplicitProposal)
+				.filter((proposal): proposal is ProposalDraft => proposal !== null),
+			questions: readStringArray(raw, "questions"),
+		};
 	}
-	return [
-		...normalizeExtractionEntities(raw),
-		...normalizeExtractionClaims(raw),
-		...normalizeExtractionLinks(raw),
-		...normalizeExtractionPolicies(raw),
-	];
+	return {
+		proposals: [
+			...normalizeExtractionEntities(raw),
+			...normalizeExtractionClaims(raw),
+			...normalizeExtractionLinks(raw),
+			...normalizeExtractionPolicies(raw),
+		],
+		questions: readStringArray(raw, "questions"),
+	};
 }
 
-function parseOntologyJsonOutput(raw: string): ProposalDraft[] {
+function mergeParsedProposalJson(items: readonly ParsedProposalJson[]): ParsedProposalJson {
+	return {
+		proposals: items.flatMap((item) => item.proposals),
+		questions: [...new Set(items.flatMap((item) => item.questions))],
+	};
+}
+
+function parseOntologyJsonOutput(raw: string): ParsedProposalJson {
 	const candidates: unknown[] = [];
 	const whole = parseJsonContent(raw);
 	if (whole !== null) candidates.push(whole);
@@ -244,7 +274,7 @@ function parseOntologyJsonOutput(raw: string): ProposalDraft[] {
 		const parsed = tryParseJson(object);
 		if (parsed !== null) candidates.push(parsed);
 	}
-	return candidates.flatMap(normalizeProposalJson);
+	return mergeParsedProposalJson(candidates.map(normalizeProposalJson));
 }
 
 function parseJsonContent(content: string): unknown | null {
@@ -397,7 +427,7 @@ function mechanicalLinkProposals(source: SourceRecord): ProposalDraft[] {
 }
 
 function extractProposals(source: SourceRecord, limit: number): ProposalDraft[] {
-	const jsonProposals = extractJsonBlocks(source.content).flatMap(normalizeProposalJson);
+	const jsonProposals = mergeParsedProposalJson(extractJsonBlocks(source.content).map(normalizeProposalJson)).proposals;
 	const mechanical = [
 		...mechanicalEntityProposals(source),
 		...mechanicalClaimProposals(source),
@@ -506,21 +536,27 @@ async function extractProviderProposals(
 	source: SourceRecord,
 	provider: LlmProvider,
 	params: Pick<ExtractOntologyParams, "providerTimeoutMs" | "providerMaxTokens">,
-): Promise<{ readonly proposals: readonly ProposalDraft[]; readonly warnings: readonly string[] }> {
+): Promise<{
+	readonly proposals: readonly ProposalDraft[];
+	readonly questions: readonly string[];
+	readonly warnings: readonly string[];
+}> {
 	try {
 		const raw = await provider.generate(buildProviderPrompt(source), {
 			timeoutMs: boundedInt(params.providerTimeoutMs, DEFAULT_PROVIDER_TIMEOUT_MS, 1_000, MAX_PROVIDER_TIMEOUT_MS),
 			maxTokens: boundedInt(params.providerMaxTokens, DEFAULT_PROVIDER_MAX_TOKENS, 1, MAX_PROVIDER_MAX_TOKENS),
 			temperature: 0,
 		});
-		const proposals = parseOntologyJsonOutput(raw);
+		const parsed = parseOntologyJsonOutput(raw);
 		return {
-			proposals,
-			warnings: proposals.length > 0 ? [] : [`Provider ${provider.name} returned no valid ontology proposals.`],
+			proposals: parsed.proposals,
+			questions: parsed.questions,
+			warnings: parsed.proposals.length > 0 ? [] : [`Provider ${provider.name} returned no valid ontology proposals.`],
 		};
 	} catch (err) {
 		return {
 			proposals: [],
+			questions: [],
 			warnings: [`Provider ${provider.name} extraction failed: ${err instanceof Error ? err.message : String(err)}`],
 		};
 	}
@@ -645,14 +681,17 @@ export async function extractOntologyProposals(
 ): Promise<OntologyExtractionResult> {
 	const limit = Math.min(Math.max(params.limit ?? 100, 1), 500);
 	const source = readSource(accessor, params);
-	const explicit = extractJsonBlocks(source.content).flatMap(normalizeProposalJson);
+	const explicitParsed = mergeParsedProposalJson(extractJsonBlocks(source.content).map(normalizeProposalJson));
+	const explicit = explicitParsed.proposals;
 	const mechanical = extractProposals(source, limit);
 	const warnings: string[] = [];
 	let providerProposals: readonly ProposalDraft[] = [];
+	let providerQuestions: readonly string[] = [];
 	if (params.useProvider) {
 		if (params.provider) {
 			const provider = await extractProviderProposals(source, params.provider, params);
 			providerProposals = provider.proposals;
+			providerQuestions = provider.questions;
 			warnings.push(...provider.warnings);
 		} else {
 			warnings.push("Provider extraction requested but no inference provider is configured.");
@@ -672,6 +711,7 @@ export async function extractOntologyProposals(
 			: params.useProvider && providerProposals.length > 0
 				? "provider"
 				: "mechanical";
+	const questions = [...new Set([...explicitParsed.questions, ...providerQuestions])];
 	if (!params.writeProposals || proposals.length === 0) {
 		return {
 			source: sourceInfo(source),
@@ -682,6 +722,7 @@ export async function extractOntologyProposals(
 			dryRun: true,
 			extractionMode,
 			providerName: params.useProvider ? (params.provider?.name ?? null) : null,
+			questions,
 			warnings,
 		};
 	}
@@ -712,6 +753,7 @@ export async function extractOntologyProposals(
 		dryRun: false,
 		extractionMode,
 		providerName: params.useProvider ? (params.provider?.name ?? null) : null,
+		questions,
 		warnings,
 	};
 }

@@ -853,6 +853,8 @@ export interface EntityAttribute {
 	readonly sourceId: string | null;
 	readonly sourcePath: string | null;
 	readonly sourceRoot: string | null;
+	readonly proposalId: string | null;
+	readonly proposalEvidence: readonly unknown[];
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }
@@ -871,6 +873,8 @@ export interface EntityDependency {
 	readonly sourceId: string | null;
 	readonly sourcePath: string | null;
 	readonly sourceRoot: string | null;
+	readonly proposalId: string | null;
+	readonly proposalEvidence: readonly unknown[];
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }

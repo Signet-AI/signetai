@@ -347,6 +347,10 @@ function proposalEvidenceRefs(proposal: OntologyProposal): OntologyEvidenceRef[]
 	return uniqueOntologyEvidenceRefs(refs);
 }
 
+function proposalAuditEvidence(proposal: ProposalRow): readonly unknown[] {
+	return parseJsonArray(proposal.evidence);
+}
+
 function resolveEntity(db: WriteDb, agentId: string, name: string): string | null {
 	const key = canonical(name);
 	const row = db
@@ -449,19 +453,26 @@ function applyAddClaimValue(
 		)
 		.get(aspectId, agentId, kind, normalized, groupKey, claimKey) as { id: string } | undefined;
 	if (existing) {
+		db.prepare(
+			`UPDATE entity_attributes
+			 SET proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
+			 WHERE id = ? AND agent_id = ?`,
+		).run(proposal.id, JSON.stringify(proposalAuditEvidence(proposal)), existing.id, agentId);
 		return { entityId, aspectId, attributeId: existing.id, deduped: true };
 	}
 
 	const id = crypto.randomUUID();
 	const confidence = clamp01(readNumber(payload, "confidence") ?? proposal.confidence);
 	const importance = clamp01(readNumber(payload, "importance") ?? confidence);
+	const proposalEvidence = proposalAuditEvidence(proposal);
 	db.prepare(
 		`INSERT INTO entity_attributes
 		 (id, aspect_id, agent_id, kind, content, normalized_content,
 		  confidence, importance, status, group_key, claim_key,
-		  created_at, updated_at, source_id, source_kind, source_path, source_root)
+		  created_at, updated_at, source_id, source_kind, source_path, source_root,
+		  proposal_id, proposal_evidence)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?,
-		         datetime('now'), datetime('now'), ?, ?, ?, ?)`,
+		         datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		aspectId,
@@ -477,6 +488,8 @@ function applyAddClaimValue(
 		proposal.source_kind,
 		proposal.source_path,
 		proposal.source_root,
+		proposal.id,
+		JSON.stringify(proposalEvidence),
 	);
 	return { entityId, aspectId, attributeId: id, deduped: false };
 }
@@ -676,7 +689,8 @@ function applyCreateLink(
 		db.prepare(
 			`UPDATE entity_dependencies
 			 SET strength = ?, confidence = ?, reason = ?, updated_at = datetime('now'),
-			     source_id = ?, source_kind = ?, source_path = ?, source_root = ?
+			     source_id = ?, source_kind = ?, source_path = ?, source_root = ?,
+			     proposal_id = ?, proposal_evidence = ?
 			 WHERE id = ? AND agent_id = ?`,
 		).run(
 			strength,
@@ -686,6 +700,8 @@ function applyCreateLink(
 			proposal.source_kind,
 			proposal.source_path,
 			proposal.source_root,
+			proposal.id,
+			JSON.stringify(proposalAuditEvidence(proposal)),
 			existing.id,
 			agentId,
 		);
@@ -697,8 +713,8 @@ function applyCreateLink(
 		`INSERT INTO entity_dependencies
 		 (id, source_entity_id, target_entity_id, agent_id, dependency_type,
 		  strength, confidence, reason, created_at, updated_at,
-		  source_id, source_kind, source_path, source_root)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, ?, ?)`,
+		  source_id, source_kind, source_path, source_root, proposal_id, proposal_evidence)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		sourceId,
@@ -712,6 +728,8 @@ function applyCreateLink(
 		proposal.source_kind,
 		proposal.source_path,
 		proposal.source_root,
+		proposal.id,
+		JSON.stringify(proposalAuditEvidence(proposal)),
 	);
 	return { dependencyId: id, sourceId, targetId, updated: false };
 }

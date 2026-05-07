@@ -34,6 +34,16 @@ function now(): string {
 	return new Date().toISOString();
 }
 
+function parseJsonArray(value: unknown): readonly unknown[] {
+	if (typeof value !== "string") return [];
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
+	}
+}
+
 function rowToEntity(r: Record<string, unknown>): Entity {
 	return {
 		id: r.id as string,
@@ -68,6 +78,7 @@ function rowToAspect(r: Record<string, unknown>): EntityAspect {
 }
 
 function rowToAttribute(r: Record<string, unknown>): EntityAttribute {
+	const proposalEvidence = parseJsonArray(r.proposal_evidence);
 	return {
 		id: r.id as string,
 		aspectId: r.aspect_id as string,
@@ -86,12 +97,15 @@ function rowToAttribute(r: Record<string, unknown>): EntityAttribute {
 		sourceId: (r.source_id as string) ?? null,
 		sourcePath: (r.source_path as string) ?? null,
 		sourceRoot: (r.source_root as string) ?? null,
+		proposalId: (r.proposal_id as string) ?? null,
+		proposalEvidence,
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
 }
 
 function rowToDependency(r: Record<string, unknown>): EntityDependency {
+	const proposalEvidence = parseJsonArray(r.proposal_evidence);
 	return {
 		id: r.id as string,
 		sourceEntityId: r.source_entity_id as string,
@@ -106,6 +120,8 @@ function rowToDependency(r: Record<string, unknown>): EntityDependency {
 		sourceId: (r.source_id as string) ?? null,
 		sourcePath: (r.source_path as string) ?? null,
 		sourceRoot: (r.source_root as string) ?? null,
+		proposalId: (r.proposal_id as string) ?? null,
+		proposalEvidence,
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
@@ -235,6 +251,12 @@ export function createAttribute(accessor: DbAccessor, params: CreateAttributePar
 			importance: params.importance ?? 0.5,
 			status: "active" as const,
 			supersededBy: null,
+			sourceKind: null,
+			sourceId: null,
+			sourcePath: null,
+			sourceRoot: null,
+			proposalId: null,
+			proposalEvidence: [],
 			createdAt: ts,
 			updatedAt: ts,
 		};
@@ -409,6 +431,8 @@ export function upsertDependency(accessor: DbAccessor, params: UpsertDependencyP
 			sourceId: null,
 			sourcePath: null,
 			sourceRoot: null,
+			proposalId: null,
+			proposalEvidence: [],
 			createdAt: ts,
 			updatedAt: ts,
 		};

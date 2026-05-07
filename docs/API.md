@@ -3433,8 +3433,11 @@ indexed memory artifacts. The endpoint never reads arbitrary filesystem paths.
 ### GET /api/ontology/claims/evidence
 
 Resolve evidence for already-applied claim values from stored attribute
-provenance. Query parameters: `entity`, `aspect`, `group`, `claim`, `status`,
-`kind`, `limit`, `offset`.
+provenance. Applied rows include the applying proposal id and copied proposal
+evidence when the value was promoted through the proposal loop, so this endpoint
+returns exact proposal lineage before broader source fallback evidence. Query
+parameters: `entity`, `aspect`, `group`, `claim`, `status`, `kind`, `limit`,
+`offset`.
 
 ```text
 /api/ontology/claims/evidence?entity=Signet&aspect=architecture&group=ontology&claim=proposal_loop
@@ -3443,7 +3446,8 @@ provenance. Query parameters: `entity`, `aspect`, `group`, `claim`, `status`,
 ### GET /api/ontology/links/:id/evidence
 
 Resolve evidence for an already-applied ontology link from stored dependency
-provenance.
+provenance. Links applied through proposals include the applying proposal id and
+copied proposal evidence before broader source fallback evidence.
 
 ### POST /api/ontology/extract
 
@@ -3455,6 +3459,8 @@ artifact. Body parameters: `from`, `agent_id`, `write_proposals`, `created_by`,
 proposals only when `write_proposals` is true. When `use_provider` is true, the
 route uses the configured `memory_extraction` inference workload and falls back
 to deterministic extraction if no valid provider proposals are returned.
+Provider-returned `questions` are surfaced in the response for review; this
+route does not persist first-class question objects yet.
 
 ### POST /api/ontology/consolidate
 

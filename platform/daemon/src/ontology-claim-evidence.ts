@@ -12,6 +12,7 @@ import { listEntityAttributesByPath } from "./knowledge-graph";
 import {
 	type OntologyEvidenceItem,
 	type OntologyEvidenceRef,
+	readOntologyEvidenceRef,
 	resolveOntologyEvidenceRef,
 	uniqueOntologyEvidenceRefs,
 } from "./ontology-evidence";
@@ -65,6 +66,24 @@ export function parseOntologyClaimAttributeStatus(value: string | undefined): At
 
 function attributeEvidenceRefs(attribute: EntityAttribute): OntologyEvidenceRef[] {
 	const refs: OntologyEvidenceRef[] = [];
+	if (attribute.proposalId !== null) {
+		refs.push({
+			sourceKind: "ontology_proposal",
+			sourceId: attribute.proposalId,
+			sourcePath: null,
+			memoryId: null,
+			quote: null,
+			reference: {
+				attribute_id: attribute.id,
+				proposal_id: attribute.proposalId,
+			},
+		});
+	}
+	refs.push(
+		...attribute.proposalEvidence
+			.map(readOntologyEvidenceRef)
+			.filter((ref): ref is OntologyEvidenceRef => ref !== null),
+	);
 	if (attribute.sourceKind !== null || attribute.sourceId !== null) {
 		refs.push({
 			sourceKind: attribute.sourceKind,

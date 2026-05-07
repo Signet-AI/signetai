@@ -627,6 +627,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: ontologyProposals,
 		artifacts: {
 			tables: ["ontology_proposals"],
+			columns: [
+				{ table: "entity_attributes", column: "proposal_id" },
+				{ table: "entity_attributes", column: "proposal_evidence" },
+				{ table: "entity_dependencies", column: "proposal_id" },
+				{ table: "entity_dependencies", column: "proposal_evidence" },
+			],
 		},
 	},
 ];

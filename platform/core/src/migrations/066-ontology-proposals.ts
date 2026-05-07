@@ -1,5 +1,16 @@
 import type { MigrationDb } from "./index";
 
+function hasColumn(db: MigrationDb, table: string, column: string): boolean {
+	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>;
+	return rows.some((row) => row.name === column);
+}
+
+function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
+	if (!hasColumn(db, table, column)) {
+		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+	}
+}
+
 /**
  * Migration 066: Ontology proposal loop.
  *
@@ -44,4 +55,10 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_ontology_proposals_source
 			ON ontology_proposals(agent_id, source_kind, source_id);
 	`);
+
+	for (const table of ["entity_attributes", "entity_dependencies"] as const) {
+		addColumnIfMissing(db, table, "proposal_id", "TEXT");
+		addColumnIfMissing(db, table, "proposal_evidence", "TEXT NOT NULL DEFAULT '[]'");
+		db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_proposal ON ${table}(agent_id, proposal_id)`);
+	}
 }

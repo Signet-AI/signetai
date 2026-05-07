@@ -4,6 +4,7 @@ import { getEntityDependencyById } from "./knowledge-graph";
 import {
 	type OntologyEvidenceItem,
 	type OntologyEvidenceRef,
+	readOntologyEvidenceRef,
 	resolveOntologyEvidenceRef,
 	uniqueOntologyEvidenceRefs,
 } from "./ontology-evidence";
@@ -31,6 +32,24 @@ export class OntologyLinkEvidenceError extends Error {
 
 function linkEvidenceRefs(dependency: EntityDependency): OntologyEvidenceRef[] {
 	const refs: OntologyEvidenceRef[] = [];
+	if (dependency.proposalId !== null) {
+		refs.push({
+			sourceKind: "ontology_proposal",
+			sourceId: dependency.proposalId,
+			sourcePath: null,
+			memoryId: null,
+			quote: null,
+			reference: {
+				dependency_id: dependency.id,
+				proposal_id: dependency.proposalId,
+			},
+		});
+	}
+	refs.push(
+		...dependency.proposalEvidence
+			.map(readOntologyEvidenceRef)
+			.filter((ref): ref is OntologyEvidenceRef => ref !== null),
+	);
 	if (dependency.sourceKind !== null || dependency.sourceId !== null) {
 		refs.push({
 			sourceKind: dependency.sourceKind,

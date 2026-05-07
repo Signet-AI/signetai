@@ -10,7 +10,13 @@ export interface OntologyEvidenceRef {
 }
 
 export interface OntologyEvidenceItem {
-	readonly kind: "provided_quote" | "session_transcript" | "memory_artifact" | "memory" | "unresolved";
+	readonly kind:
+		| "provided_quote"
+		| "session_transcript"
+		| "memory_artifact"
+		| "memory"
+		| "ontology_proposal"
+		| "unresolved";
 	readonly found: boolean;
 	readonly sourceKind: string | null;
 	readonly sourceId: string | null;
@@ -33,6 +39,14 @@ interface MemoryArtifactEvidenceRow {
 	readonly session_key: string | null;
 	readonly session_token: string;
 	readonly content: string;
+}
+
+interface OntologyProposalEvidenceRow {
+	readonly id: string;
+	readonly operation: string;
+	readonly rationale: string;
+	readonly evidence: string;
+	readonly created_at: string;
 }
 
 interface MemoryEvidenceRow {
@@ -107,10 +121,14 @@ export function readOntologyEvidenceRef(value: unknown): OntologyEvidenceRef | n
 	if (!isRecord(value)) return null;
 	const transcriptId = readString(value, "transcript_id");
 	const sessionKey = readString(value, "session_key");
+	const proposalId = readString(value, "proposal_id");
 	return {
-		sourceKind: readString(value, "source_kind") ?? (transcriptId || sessionKey ? "transcript" : null),
+		sourceKind:
+			readString(value, "source_kind") ??
+			(proposalId ? "ontology_proposal" : transcriptId || sessionKey ? "transcript" : null),
 		sourceId:
 			readString(value, "source_id") ??
+			proposalId ??
 			transcriptId ??
 			sessionKey ??
 			readString(value, "session_id") ??
@@ -158,6 +176,25 @@ function readSessionTranscriptEvidence(
 			 LIMIT 1`,
 		)
 		.get(agentId, ...ids) as SessionTranscriptEvidenceRow | undefined;
+	return row ?? null;
+}
+
+function readOntologyProposalEvidence(
+	db: ReadDb,
+	agentId: string,
+	ref: OntologyEvidenceRef,
+): OntologyProposalEvidenceRow | null {
+	if (!tableExists(db, "ontology_proposals")) return null;
+	const proposalId = ref.sourceKind === "ontology_proposal" ? ref.sourceId : null;
+	if (proposalId === null) return null;
+	const row = db
+		.prepare(
+			`SELECT id, operation, rationale, evidence, created_at
+			 FROM ontology_proposals
+			 WHERE id = ? AND agent_id = ?
+			 LIMIT 1`,
+		)
+		.get(proposalId, agentId) as OntologyProposalEvidenceRow | undefined;
 	return row ?? null;
 }
 
@@ -225,6 +262,20 @@ export function resolveOntologyEvidenceRef(
 	agentId: string,
 	ref: OntologyEvidenceRef,
 ): OntologyEvidenceItem {
+	const proposal = readOntologyProposalEvidence(db, agentId, ref);
+	if (proposal !== null) {
+		return {
+			kind: "ontology_proposal",
+			found: true,
+			sourceKind: "ontology_proposal",
+			sourceId: proposal.id,
+			sourcePath: ref.sourcePath,
+			label: `proposal:${proposal.id}`,
+			excerpt: compactExcerpt((ref.quote ?? proposal.rationale) || proposal.evidence, null),
+			reference: ref.reference,
+		};
+	}
+
 	const sourcePathArtifact = ref.sourcePath !== null ? readMemoryArtifactEvidence(db, agentId, ref) : null;
 	if (sourcePathArtifact !== null) {
 		return {
