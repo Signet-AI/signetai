@@ -565,7 +565,7 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `provider` | `"llama-cpp"` | — | `"none"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, or `"command"` |
+| `provider` | `"llama-cpp"` | — | `"none"`, `"acpx"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, or `"command"` |
 | `model` | `"qwen3.5:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
@@ -594,7 +594,7 @@ that billing behavior.
 `rateLimit` is opt-in. If the stanza is omitted, Signet preserves the
 provider's existing behavior with no throughput throttling. When
 configured, it applies only to remote or paid providers
-(`claude-code`, `anthropic`, `openrouter`, `codex`, `opencode`).
+(`acpx`, `claude-code`, `anthropic`, `openrouter`, `codex`, `opencode`).
 Ollama and `command` providers are always exempt. If you set `rateLimit`
 on an exempt provider, Signet logs a warning and passes calls through
 unthrottled.
@@ -628,6 +628,13 @@ When using `ollama`, the model must be available locally. When using
 Codex CLI as the extraction provider. Lower `minConfidence` to capture
 more facts at the cost of noise; raise it to write only high-confidence
 facts.
+
+`acpx` is available as a setup compatibility value for installations that also
+have a top-level `inference:` block. ACPX needs harness/session config, so
+legacy `memory.pipelineV2.extraction.provider: acpx` by itself is not compiled
+into an implicit `legacy-extraction` target; keep the generated
+`inference.targets.*.executor: acpx` block or configure ACPX through top-level
+inference routing.
 
 There are two command paths with different contracts. Top-level
 `inference.targets.*.executor: command` is a normal inference provider: the

@@ -242,8 +242,8 @@ describe("inference config + decision engine", () => {
 		expect(parsed.value.targets.background?.acpx?.terminal).toBe("disabled");
 	});
 
-	it("keeps legacy command extraction as side-effect compatibility instead of router LLM extraction", () => {
-		const legacy = compileLegacyRoutingConfig({
+	it("keeps legacy command and ACPX extraction as side-effect compatibility instead of router LLM extraction", () => {
+		const commandLegacy = compileLegacyRoutingConfig({
 			extraction: {
 				provider: "command",
 				model: "custom-command",
@@ -258,9 +258,30 @@ describe("inference config + decision engine", () => {
 			},
 		});
 
-		expect(legacy.targets["legacy-extraction"]).toBeUndefined();
-		expect(legacy.workloads?.memoryExtraction).toBeUndefined();
-		expect(legacy.targets["legacy-synthesis"]?.executor).toBe("ollama");
+		expect(commandLegacy.targets["legacy-extraction"]).toBeUndefined();
+		expect(commandLegacy.workloads?.memoryExtraction).toBeUndefined();
+		expect(commandLegacy.targets["legacy-synthesis"]?.executor).toBe("ollama");
+
+		const acpxLegacy = compileLegacyRoutingConfig({
+			extraction: {
+				provider: "acpx",
+				model: "gpt-5-codex-mini",
+				endpoint: undefined,
+				command: undefined,
+			},
+			synthesis: {
+				enabled: true,
+				provider: "acpx",
+				model: "gpt-5-codex-mini",
+				endpoint: undefined,
+			},
+		});
+
+		expect(acpxLegacy.targets["legacy-extraction"]).toBeUndefined();
+		expect(acpxLegacy.targets["legacy-synthesis"]).toBeUndefined();
+		expect(acpxLegacy.workloads?.memoryExtraction).toBeUndefined();
+		expect(acpxLegacy.workloads?.sessionSynthesis).toBeUndefined();
+		expect(acpxLegacy.enabled).toBe(false);
 	});
 
 	it("does not allow explicit target overrides outside the agent roster", () => {

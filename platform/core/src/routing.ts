@@ -634,7 +634,11 @@ export function compileLegacyRoutingConfig(opts: {
 	} = {};
 	let defaultTargets: readonly string[] = [];
 
-	if (opts.extraction.provider !== "none" && opts.extraction.provider !== "command") {
+	if (
+		opts.extraction.provider !== "none" &&
+		opts.extraction.provider !== "command" &&
+		opts.extraction.provider !== "acpx"
+	) {
 		targets["legacy-extraction"] = {
 			kind: inferTargetKind(opts.extraction.provider),
 			executor: opts.extraction.provider,
@@ -657,7 +661,7 @@ export function compileLegacyRoutingConfig(opts: {
 		defaultTargets = [...defaultTargets, ref];
 	}
 
-	if (opts.synthesis.enabled && opts.synthesis.provider !== "none") {
+	if (opts.synthesis.enabled && opts.synthesis.provider !== "none" && opts.synthesis.provider !== "acpx") {
 		targets["legacy-synthesis"] = {
 			kind: inferTargetKind(opts.synthesis.provider),
 			executor: opts.synthesis.provider,
