@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { indexExternalMemoryArtifact } from "./memory-lineage";
 import {
 	claudeCodeNativeMemorySource,
 	codexNativeMemorySource,
@@ -259,6 +260,28 @@ describe("native memory sources", () => {
 		expect(count).toBe(1);
 	});
 
+	it("skips unchanged native files when the artifact row already exists after a cold cache start", async () => {
+		const root = join(dir, ".codex");
+		mkdirSync(join(root, "memories"), { recursive: true });
+		const file = join(root, "memories", "memory_summary.md");
+		const content = "Codex remembered a persisted artifact row.\n";
+		writeFileSync(file, content);
+		indexExternalMemoryArtifact({
+			agentId: "agent-native",
+			sourcePath: file,
+			sourceKind: "native_memory_summary",
+			harness: "codex",
+			content,
+			sourceMtimeMs: Date.now(),
+		});
+
+		expect(await indexNativeMemoryFile(codexNativeMemorySource(root), file, "agent-native")).toBe(false);
+		const count = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts").get() as { count: number },
+		).count;
+		expect(count).toBe(1);
+	});
+
 	it("reindexes same-size native files when content changes", async () => {
 		const root = join(dir, ".codex");
 		mkdirSync(join(root, "memories"), { recursive: true });
@@ -336,6 +359,37 @@ describe("native memory sources", () => {
 			);
 			expect(row.is_deleted).toBe(1);
 			expect(row.deleted_at).toBeTruthy();
+		} finally {
+			await handle.close();
+		}
+	});
+
+	it("can defer stale source cleanup during bridge sync", async () => {
+		const root = join(dir, "vault");
+		const file = join(root, "permanent", "Old.md");
+		mkdirSync(join(root, "permanent"), { recursive: true });
+		writeFileSync(file, "# Old\n\nThis source file will be removed after initial indexing.\n");
+		const source = obsidianNativeMemorySource(root, "Cleanup Vault", "obsidian:cleanup-test");
+
+		const handle = startNativeMemoryBridge([source], {
+			agentId: "agent-native",
+			pollIntervalMs: 0,
+			sourceCleanupEnabled: false,
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(1);
+			rmSync(file);
+			expect(await handle.syncExisting()).toBe(0);
+
+			const row = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT is_deleted FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND harness = 'obsidian'",
+						)
+						.get("agent-native", file) as { is_deleted: number | null },
+			);
+			expect(row.is_deleted ?? 0).toBe(0);
 		} finally {
 			await handle.close();
 		}
@@ -447,6 +501,71 @@ describe("native memory sources", () => {
 		expect(row.source_kind).toBe("source_obsidian_markdown");
 		expect(row.harness).toBe("obsidian");
 		expect(row.content).toContain("Obsidian source knowledge base note");
+	});
+
+	it("can defer Obsidian graph projection while still indexing source artifacts", async () => {
+		const root = join(dir, "vault");
+		const file = join(root, "permanent", "Signet.md");
+		mkdirSync(join(root, "permanent"), { recursive: true });
+		writeFileSync(file, "# Signet\n\nSource-backed memory can defer graph expansion out of the daemon sync path.\n");
+
+		expect(
+			await indexNativeMemoryFile(obsidianNativeMemorySource(root, "Vault", "obsidian:vault"), file, "agent-native", {
+				sourceGraphEnabled: false,
+			}),
+		).toBe(true);
+
+		const rows = getDbAccessor().withReadDb((db) => ({
+			artifacts: (
+				db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE source_path = ?").get(file) as {
+					count: number;
+				}
+			).count,
+			entities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_id = ?")
+					.get("agent-native", "obsidian:vault") as { count: number }
+			).count,
+		}));
+		expect(rows).toEqual({ artifacts: 1, entities: 0 });
+	});
+
+	it("can expand unchanged Obsidian artifacts after a lightweight source scan", async () => {
+		const root = join(dir, "vault");
+		const source = obsidianNativeMemorySource(root, "Vault", "obsidian:vault");
+		const file = join(root, "permanent", "Signet.md");
+		mkdirSync(join(root, "permanent"), { recursive: true });
+		writeFileSync(
+			file,
+			"# Signet Sources\n\nSource-backed memory can first index the file artifact, then later add graph rows and embeddings without changing the note.\n",
+		);
+
+		expect(
+			await indexNativeMemoryFile(source, file, "agent-native", {
+				sourceGraphEnabled: false,
+			}),
+		).toBe(true);
+		expect(
+			await indexNativeMemoryFile(source, file, "agent-native", {
+				embeddingConfig: { provider: "native", model: "test", dimensions: 3, base_url: "" },
+				fetchEmbedding: async () => [1, 2, 3],
+			}),
+		).toBe(true);
+
+		const rows = getDbAccessor().withReadDb((db) => ({
+			entities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_id = ?")
+					.get("agent-native", "obsidian:vault") as { count: number }
+			).count,
+			embeddings: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM embeddings WHERE agent_id = ? AND source_type = ?")
+					.get("agent-native", "source_obsidian_chunk") as { count: number }
+			).count,
+		}));
+		expect(rows.entities).toBeGreaterThan(0);
+		expect(rows.embeddings).toBeGreaterThan(0);
 	});
 
 	it("skips hidden Obsidian vault directories by default", async () => {
@@ -783,6 +902,39 @@ describe("native memory sources", () => {
 		}
 	});
 
+	it("can sync configured Obsidian sources without scanning harness memory roots", async () => {
+		const codexRoot = join(dir, ".codex");
+		const codexFile = join(codexRoot, "memories", "memory_summary.md");
+		mkdirSync(join(codexRoot, "memories"), { recursive: true });
+		writeFileSync(codexFile, "Codex memory should not be pulled into source-only startup scans.\n");
+		const vault = join(dir, "vault");
+		const vaultFile = join(vault, "literature", "Source Note.md");
+		mkdirSync(join(vault, "literature"), { recursive: true });
+		writeFileSync(vaultFile, "# Source Note\n\nSource-only bridge scans should still index configured vault files.\n");
+		const added = addObsidianSource({ root: vault, name: "Source Vault" }, dir);
+		expect(added.ok).toBe(true);
+
+		const handle = startNativeMemoryBridge([], {
+			agentId: "agent-native",
+			agentsDir: dir,
+			includeConfiguredSources: true,
+			pollIntervalMs: 0,
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(1);
+			const rows = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT harness, source_path FROM memory_artifacts ORDER BY source_path").all() as Array<{
+						harness: string;
+						source_path: string;
+					}>,
+			);
+			expect(rows).toEqual([{ harness: "obsidian", source_path: vaultFile }]);
+		} finally {
+			await handle.close();
+		}
+	});
+
 	it("reports per-source file progress when a bridge scans multiple sources", async () => {
 		const vaultA = join(dir, "vault-a");
 		const vaultB = join(dir, "vault-b");
@@ -856,6 +1008,35 @@ describe("native memory sources", () => {
 						.get("agent-native", file) as { content: string },
 			);
 			expect(row.content).toContain("Second version after overlapping change");
+		} finally {
+			await handle.close();
+		}
+	});
+
+	it("does not let polling ticks queue trailing full rescans while a source sync is already running", async () => {
+		const root = join(dir, "vault");
+		const file = join(root, "permanent", "Slow.md");
+		mkdirSync(join(root, "permanent"), { recursive: true });
+		writeFileSync(
+			file,
+			"# Slow\n\nA slow source embedding request gives the polling timer enough time to fire while the first scan is still in flight.\n",
+		);
+		const events: Array<{ scanned: number; total: number }> = [];
+		const handle = startNativeMemoryBridge([obsidianNativeMemorySource(root, "Slow Vault", "obsidian:slow-vault")], {
+			agentId: "agent-native",
+			pollIntervalMs: 1,
+			embeddingConfig: { provider: "native", model: "test", dimensions: 3, base_url: "" },
+			fetchEmbedding: async () => {
+				await Bun.sleep(20);
+				return [1, 2, 3];
+			},
+			onFileIndexed: (event) => {
+				events.push({ scanned: event.scanned, total: event.total });
+			},
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(1);
+			expect(events).toEqual([{ scanned: 1, total: 1 }]);
 		} finally {
 			await handle.close();
 		}

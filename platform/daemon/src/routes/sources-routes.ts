@@ -14,37 +14,31 @@ import {
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
-import { fetchEmbedding as defaultFetchEmbedding } from "../embedding-fetch";
-import { type ResolvedMemoryConfig, loadMemoryConfig as defaultLoadMemoryConfig } from "../memory-config";
 import {
 	type NativeMemoryBridgeHandle,
 	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
-import type { SourceEmbeddingFetch } from "../obsidian-source-embeddings";
-
-type SourceIndexJobStatus = "queued" | "running" | "complete" | "error";
-
-interface SourceIndexJob {
-	readonly id: string;
-	readonly sourceId: string;
-	readonly status: SourceIndexJobStatus;
-	readonly queuedAt: string;
-	readonly startedAt?: string;
-	readonly finishedAt?: string;
-	readonly scanned?: number;
-	readonly total?: number;
-	readonly indexed?: number;
-	readonly currentPath?: string;
-	readonly error?: string;
-}
+import {
+	type SourceIndexJob,
+	beginSourceIndexJob,
+	cancelSourceIndexJob,
+	clearSourceIndexInFlight,
+	completeSourceIndexJob,
+	consumeCanceledSourceIndexJob,
+	failSourceIndexJob,
+	getSourceIndexJob,
+	isCurrentSourceIndexJob,
+	isSourceIndexInFlight,
+	markSourceIndexInFlight,
+	markSourceIndexJobRunning,
+	updateSourceIndexJobProgress,
+} from "../source-index-progress";
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;
 	readonly agentsDir: string;
-	readonly loadMemoryConfig: (agentsDir: string) => ResolvedMemoryConfig;
-	readonly fetchEmbedding: SourceEmbeddingFetch;
 	readonly startBridge: typeof startNativeMemoryBridge;
 	readonly purgeNativeSource: typeof purgeNativeMemorySourceArtifacts;
 }
@@ -71,20 +65,12 @@ interface PickDirectoryBody {
 
 export interface RegisterSourcesRoutesDeps {
 	readonly agentsDir?: string;
-	readonly loadMemoryConfig?: (agentsDir: string) => ResolvedMemoryConfig;
-	readonly fetchEmbedding?: SourceEmbeddingFetch;
 	readonly startBridge?: typeof startNativeMemoryBridge;
 	readonly purgeNativeSource?: typeof purgeNativeMemorySourceArtifacts;
 }
 
-const sourceIndexJobs = new Map<string, SourceIndexJob>();
-const sourceIndexInFlight = new Set<string>();
-const canceledSourceIndexJobs = new Set<string>();
-
 export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps = {}): void {
 	const agentsDir = deps.agentsDir ?? process.env.SIGNET_PATH ?? `${homedir()}/.agents`;
-	const loadMemoryConfig = deps.loadMemoryConfig ?? defaultLoadMemoryConfig;
-	const fetchEmbedding = deps.fetchEmbedding ?? defaultFetchEmbedding;
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
 	cleanupSourceDeletionTombstones(agentsDir, purgeNativeSource);
@@ -96,7 +82,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			sources: config.sources.map((source) => ({
 				...source,
 				stats: sourceStats(source, agentId),
-				indexJob: sourceIndexJobs.get(source.id),
+				indexJob: getSourceIndexJob(source.id),
 			})),
 		});
 	});
@@ -132,8 +118,6 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const job = enqueueSourceIndexJob({
 			source: result.source,
 			agentsDir,
-			loadMemoryConfig,
-			fetchEmbedding,
 			startBridge,
 			purgeNativeSource,
 		});
@@ -145,9 +129,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 404);
-		const job = sourceIndexJobs.get(result.source.id);
-		if (job && (job.status === "queued" || job.status === "running")) canceledSourceIndexJobs.add(job.id);
-		sourceIndexJobs.delete(result.source.id);
+		cancelSourceIndexJob(result.source.id);
 
 		const sourceAgentId = resolveDaemonAgentId();
 		recordSourceDeletionTombstone(result.source, sourceAgentId, agentsDir);
@@ -158,57 +140,40 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 						sourceAgentId,
 					)
 				: 0;
-		if (!sourceIndexInFlight.has(result.source.id))
+		if (!isSourceIndexInFlight(result.source.id))
 			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
 	});
 }
 
 function enqueueSourceIndexJob(input: SourceIndexJobInput): SourceIndexJob {
-	const existing = sourceIndexJobs.get(input.source.id);
-	if (existing && (existing.status === "queued" || existing.status === "running")) return existing;
-
-	const job: SourceIndexJob = {
-		id: `source-index:${input.source.id}:${Date.now()}`,
-		sourceId: input.source.id,
-		status: "queued",
-		queuedAt: new Date().toISOString(),
-	};
-	sourceIndexJobs.set(input.source.id, job);
+	const job = beginSourceIndexJob(input.source.id);
 	scheduleSourceIndexJob(input, job, 0);
 	return job;
 }
 
 async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob): Promise<void> {
-	if (sourceIndexInFlight.has(input.source.id)) {
+	if (isSourceIndexInFlight(input.source.id)) {
 		scheduleSourceIndexJob(input, job, 50);
 		return;
 	}
-	sourceIndexInFlight.add(input.source.id);
-	const started: SourceIndexJob = {
-		...job,
-		status: "running",
-		startedAt: new Date().toISOString(),
-	};
-	sourceIndexJobs.set(input.source.id, started);
+	markSourceIndexInFlight(input.source.id);
+	markSourceIndexJobRunning(input.source.id, job.id);
 
 	let bridge: NativeMemoryBridgeHandle | null = null;
 
 	try {
-		const memoryConfig = input.loadMemoryConfig(input.agentsDir);
 		bridge = input.startBridge(
 			[obsidianNativeMemorySource(input.source.root, input.source.name, input.source.id, input.source.excludeGlobs)],
 			{
 				pollIntervalMs: 0,
-				embeddingConfig: memoryConfig.embedding,
-				fetchEmbedding: input.fetchEmbedding,
 				agentsDir: input.agentsDir,
 				yieldEveryFiles: 1,
+				sourceCleanupEnabled: false,
+				sourceGraphEnabled: false,
 				onFileIndexed: (event) => {
 					if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
-					sourceIndexJobs.set(input.source.id, {
-						...started,
-						status: "running",
+					updateSourceIndexJobProgress(input.source.id, job.id, {
 						scanned: event.scanned,
 						total: event.total,
 						indexed: event.changed,
@@ -220,32 +185,20 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		const indexed = await bridge.syncExisting();
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		markSourceIndexed(input.source.id, undefined, input.agentsDir);
-		const current = sourceIndexJobs.get(input.source.id) ?? started;
-		sourceIndexJobs.set(input.source.id, {
-			...current,
-			status: "complete",
-			finishedAt: new Date().toISOString(),
-			indexed,
-		});
+		completeSourceIndexJob(input.source.id, job.id, indexed);
 	} catch (err) {
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
-		const current = sourceIndexJobs.get(input.source.id) ?? started;
-		sourceIndexJobs.set(input.source.id, {
-			...current,
-			status: "error",
-			finishedAt: new Date().toISOString(),
-			error: err instanceof Error ? err.message : String(err),
-		});
+		failSourceIndexJob(input.source.id, job.id, err);
 	} finally {
 		await bridge?.close().catch(() => undefined);
-		if (canceledSourceIndexJobs.delete(job.id)) {
+		if (consumeCanceledSourceIndexJob(job.id)) {
 			input.purgeNativeSource(
 				obsidianNativeMemorySource(input.source.root, input.source.name, input.source.id, input.source.excludeGlobs),
 				resolveDaemonAgentId(),
 			);
 			clearSourceDeletionTombstone(input.source.id, resolveDaemonAgentId(), input.agentsDir);
 		}
-		sourceIndexInFlight.delete(input.source.id);
+		clearSourceIndexInFlight(input.source.id);
 	}
 }
 
@@ -254,10 +207,6 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		void runSourceIndexJob(input, job);
 	}, delayMs).unref?.();
-}
-
-function isCurrentSourceIndexJob(sourceId: string, jobId: string): boolean {
-	return sourceIndexJobs.get(sourceId)?.id === jobId;
 }
 
 function cleanupSourceDeletionTombstones(
