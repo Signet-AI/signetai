@@ -376,7 +376,6 @@ export interface PipelineModelRegistryConfig {
 	readonly refreshIntervalMs: number;
 }
 
-
 export interface PipelineEmbeddingTrackerConfig {
 	readonly enabled: boolean;
 	readonly pollMs: number;
