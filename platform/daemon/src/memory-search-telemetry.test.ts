@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import type { RecallResponse } from "./memory-search";
 import { listMemorySearchTelemetry, recordMemorySearchTelemetry } from "./memory-search-telemetry";
+import { resolveMemorySearchTelemetryProject } from "./memory-search-telemetry-project";
 
 describe("memory search telemetry", () => {
 	let dir = "";
@@ -96,6 +97,13 @@ describe("memory search telemetry", () => {
 		expect(items[0]?.duration_ms).toBe(12.34);
 		expect(items[0]?.results[0]?.rank).toBe(1);
 		expect(items[0]?.results[0]?.content).toContain("manual review");
+	});
+
+	it("resolves telemetry project from effective recall params", () => {
+		expect(resolveMemorySearchTelemetryProject({ project: "/repo" })).toBe("/repo");
+		expect(resolveMemorySearchTelemetryProject({ project: "  /repo  " })).toBe("/repo");
+		expect(resolveMemorySearchTelemetryProject({ project: "" })).toBeNull();
+		expect(resolveMemorySearchTelemetryProject({})).toBeNull();
 	});
 
 	it("filters no-hit rows", () => {

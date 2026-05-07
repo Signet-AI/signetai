@@ -12,6 +12,7 @@ import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { type RecallParams, hybridRecall } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
+import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
 import { recordPathFeedback } from "../path-feedback";
 import { enqueueDocumentIngestJob } from "../pipeline";
@@ -1984,7 +1985,7 @@ export function registerMemoryRoutes(app: Hono): void {
 				route: "POST /api/memory/recall",
 				agentId,
 				sessionKey,
-				project: scopeProject ?? null,
+				project: resolveMemorySearchTelemetryProject(params),
 				params,
 				result,
 				cfg,
@@ -2011,6 +2012,7 @@ export function registerMemoryRoutes(app: Hono): void {
 		const importanceMin = c.req.query("importance_min");
 		const since = c.req.query("since");
 		const expand = c.req.query("expand");
+		const project = c.req.query("project");
 
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
@@ -2032,6 +2034,7 @@ export function registerMemoryRoutes(app: Hono): void {
 				importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
 				since,
 				expand: expand === "1" || expand === "true",
+				project,
 				agentId,
 				readPolicy: agentScope.readPolicy,
 				policyGroup: agentScope.policyGroup,
@@ -2042,7 +2045,7 @@ export function registerMemoryRoutes(app: Hono): void {
 				route: "GET /api/memory/search",
 				agentId,
 				sessionKey,
-				project: scopeProject ?? null,
+				project: resolveMemorySearchTelemetryProject(params),
 				params,
 				result,
 				cfg,
