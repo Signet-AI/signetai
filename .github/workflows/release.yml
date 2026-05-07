@@ -73,7 +73,8 @@ jobs:
         run: |
           # Rebase onto the latest remote main before bumping so the version
           # commit and tag land on top of the final tree — not a stale snapshot
-          # that would get rewritten later, leaving publish checking out the wrong commit.
+          # that would get rewritten later, leaving asset build and publish jobs
+          # checking out the wrong commit.
           git reset --hard HEAD
           git clean -fd
           git pull --rebase origin main
@@ -143,7 +144,9 @@ jobs:
             echo "::error::Missing CHANGELOG.md section for v$NEW_VERSION"
             exit 1
           fi
-          # Create as draft; publish promotes this to non-draft after package validation.
+          # Create as draft — daemon assets are uploaded by build-daemon before
+          # the publish job verifies asset completeness, undrafts the release,
+          # and publishes npm packages.
           gh release create "v$NEW_VERSION" --draft --title "v$NEW_VERSION" --notes "$NOTES"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         env:
@@ -226,8 +229,10 @@ jobs:
   publish:
     needs: [release, build-daemon]
     runs-on: ubuntu-latest
-    # Release job must have succeeded for there to be anything to publish.
-    if: always() && needs.release.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    # The npm package postinstall path downloads native daemon assets from the
+    # GitHub release. Do not undraft or publish npm unless every daemon matrix
+    # leg completed and uploaded its binary/checksum pair.
+    if: always() && needs.release.result == 'success' && needs.build-daemon.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
     permissions:
       contents: write
     env:
@@ -250,6 +255,32 @@ jobs:
 
       - name: Validate publish manifests
         run: bun scripts/check-publish-manifests.ts
+
+      - name: Verify daemon release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t ASSETS < <(gh release view "v${NEW_VERSION}" --json assets --jq '.assets[].name')
+          expected=(
+            signet-daemon-linux-x64
+            signet-daemon-linux-x64.sha256
+            signet-daemon-darwin-arm64
+            signet-daemon-darwin-arm64.sha256
+            signet-daemon-darwin-x64
+            signet-daemon-darwin-x64.sha256
+            signet-daemon-win32-x64.exe
+            signet-daemon-win32-x64.exe.sha256
+            signet-daemon-win32-arm64.exe
+            signet-daemon-win32-arm64.exe.sha256
+          )
+          for asset in "${expected[@]}"; do
+            if ! printf '%s\n' "${ASSETS[@]}" | grep -Fxq "$asset"; then
+              echo "::error::Missing release asset: $asset"
+              exit 1
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish release
         # Undraft only after publish manifests pass, so a broken npm package
