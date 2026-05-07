@@ -566,7 +566,7 @@ Database Schema
 SQLite with WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`. Each migration is idempotent — safe
 to re-run against an existing database. Schema version is tracked in
-`schema_migrations`. The latest migration is `063-content-only-memories-fts-update.ts`.
+`schema_migrations`. The latest migration is `066-memory-search-telemetry.ts`.
 
 **schema_migrations**
 
@@ -710,6 +710,21 @@ conversation turns for memory use. Raw tool traces may be retained in
 daemon logs for audit. The recall endpoint supports `expand: true` to
 join transcript content back into results via `source_id`, preserving
 facts that extraction may drop. Indexed on `project` and `created_at`.
+
+**memory_search_telemetry** (migration 066)
+
+Local-only recall QA ledger created only when
+`memory.pipelineV2.telemetry.memorySearchQaEnabled` is enabled. Fields:
+`id`, `created_at`, `route`, `agent_id`, `session_key`, `project`,
+`query`, `keyword_query`, `filters_json`, `method`, `result_count`,
+`top_score`, `no_hits`, `duration_ms`, `timings_json`, `results_json`,
+and `sources_json`. This table intentionally stores recall query text
+and recalled result snapshots, so it is treated as sensitive memory
+content: list/export routes require `analytics` permission and enforce
+the authenticated token's agent/project scope before serialization.
+Rows stay local and are retained until explicitly pruned or the local
+SQLite database is removed; they are never sent through anonymous
+telemetry event sinks.
 
 **umap_cache**
 
