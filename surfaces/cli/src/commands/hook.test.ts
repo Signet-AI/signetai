@@ -198,6 +198,44 @@ describe("buildSessionStartBody", () => {
 		});
 	});
 
+	test("preserves legacy agentId input as Signet scope", () => {
+		expect(
+			buildSessionStartBody(
+				{
+					agentId: "research-agent",
+					sessionKey: "sess-1",
+					cwd: "/tmp/project",
+				},
+				{ harness: "custom-harness" },
+			),
+		).toEqual({
+			harness: "custom-harness",
+			project: "/tmp/project",
+			agentId: "research-agent",
+			sessionKey: "sess-1",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("preserves legacy agent_id input as Signet scope when it is not a native sub-agent payload", () => {
+		expect(
+			buildSessionStartBody(
+				{
+					agent_id: "research-agent",
+					sessionKey: "sess-1",
+					cwd: "/tmp/project",
+				},
+				{ harness: "custom-harness" },
+			),
+		).toEqual({
+			harness: "custom-harness",
+			project: "/tmp/project",
+			agentId: "research-agent",
+			sessionKey: "sess-1",
+			runtimePath: "legacy",
+		});
+	});
+
 	test("prefers explicit CLI agent id for Signet scope", () => {
 		expect(
 			buildSessionStartBody(
@@ -212,7 +250,6 @@ describe("buildSessionStartBody", () => {
 			harness: "claude-code",
 			project: "/tmp/explicit",
 			agentId: "cli-signet-agent",
-			harnessAgentId: "claude-subagent",
 			sessionKey: "sess-1",
 			runtimePath: "legacy",
 		});
@@ -252,7 +289,7 @@ describe("buildUserPromptSubmitBody", () => {
 				{
 					userMessage: "inspect this",
 					sessionKey: "child-session",
-					agent_id: "claude-subagent",
+					harness_agent_id: "claude-subagent",
 					signet_agent_id: "research-agent",
 				},
 				"claude-code",
@@ -268,6 +305,54 @@ describe("buildUserPromptSubmitBody", () => {
 			transcript: "",
 			agentId: "research-agent",
 			harnessAgentId: "claude-subagent",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("preserves existing agentId prompt-submit input as Signet scope", () => {
+		expect(
+			buildUserPromptSubmitBody(
+				{
+					userMessage: "inspect this",
+					sessionKey: "child-session",
+					agentId: "research-agent",
+				},
+				"custom-harness",
+				"/tmp/project",
+			),
+		).toEqual({
+			harness: "custom-harness",
+			project: "/tmp/project",
+			userMessage: "inspect this",
+			userPrompt: "",
+			sessionKey: "child-session",
+			transcriptPath: "",
+			transcript: "",
+			agentId: "research-agent",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("preserves existing agent_id prompt-submit input as Signet scope", () => {
+		expect(
+			buildUserPromptSubmitBody(
+				{
+					userMessage: "inspect this",
+					sessionKey: "child-session",
+					agent_id: "research-agent",
+				},
+				"custom-harness",
+				"/tmp/project",
+			),
+		).toEqual({
+			harness: "custom-harness",
+			project: "/tmp/project",
+			userMessage: "inspect this",
+			userPrompt: "",
+			sessionKey: "child-session",
+			transcriptPath: "",
+			transcript: "",
+			agentId: "research-agent",
 			runtimePath: "legacy",
 		});
 	});
@@ -383,6 +468,26 @@ describe("buildCompactionCompleteBody", () => {
 		});
 	});
 
+	test("preserves existing agentId and agent_id compaction input as Signet scope", () => {
+		expect(
+			buildCompactionCompleteBody(
+				{
+					agentId: "agent-9",
+					agent_id: "agent-snake",
+					sessionKey: "sess-5",
+				},
+				"custom-harness",
+				"summary text",
+			),
+		).toEqual({
+			agentId: "agent-9",
+			harness: "custom-harness",
+			sessionKey: "sess-5",
+			summary: "summary text",
+			runtimePath: "legacy",
+		});
+	});
+
 	test("omits unset optional lineage fields instead of serializing blank strings", () => {
 		expect(buildCompactionCompleteBody(null, "claude-code", "summary text")).toEqual({
 			harness: "claude-code",
@@ -391,11 +496,11 @@ describe("buildCompactionCompleteBody", () => {
 		});
 	});
 
-	test("ignores raw harness agent ids for compaction Signet scope", () => {
+	test("uses legacy agent_id values for compaction Signet scope", () => {
 		expect(
 			buildCompactionCompleteBody(
 				{
-					agent_id: "claude-subagent",
+					agent_id: "research-agent",
 					sessionKey: "sess-4",
 				},
 				"claude-code",
@@ -404,6 +509,7 @@ describe("buildCompactionCompleteBody", () => {
 		).toEqual({
 			harness: "claude-code",
 			summary: "summary text",
+			agentId: "research-agent",
 			sessionKey: "sess-4",
 			runtimePath: "legacy",
 		});

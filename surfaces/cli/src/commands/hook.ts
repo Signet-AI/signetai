@@ -418,6 +418,21 @@ function pickString(...values: unknown[]): string {
 	return "";
 }
 
+function hasParentReference(input: Record<string, unknown> | null): boolean {
+	if (!input) return false;
+	return Boolean(
+		pickString(
+			input.parent_session_key,
+			input.parentSessionKey,
+			input.parent_key,
+			input.parentKey,
+			input.parent_id,
+			input.parentId,
+			input.parentID,
+		),
+	);
+}
+
 export function pickSessionKey(input: Record<string, unknown> | null): string {
 	if (!input) return "";
 	return pickString(input.session_key, input.sessionKey, input.session_id, input.sessionId);
@@ -442,8 +457,15 @@ export function buildSessionStartBody(
 	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
 	const body = input;
-	const signetAgentId = pickString(options.agentId, body?.signet_agent_id, body?.signetAgentId);
-	const harnessAgentId = pickString(body?.agent_id, body?.agentId);
+	const nativeAgentId = hasParentReference(body) ? pickString(body?.agent_id) : "";
+	const signetAgentId = pickString(
+		options.agentId,
+		body?.signet_agent_id,
+		body?.signetAgentId,
+		body?.agentId,
+		nativeAgentId ? "" : body?.agent_id,
+	);
+	const harnessAgentId = pickString(body?.harness_agent_id, body?.harnessAgentId, nativeAgentId);
 	const parentSessionKey = pickString(body?.parent_session_key, body?.parentSessionKey, body?.parentID, body?.parentId);
 	return {
 		harness: options.harness,
@@ -478,8 +500,8 @@ export function buildUserPromptSubmitBody(
 	const userPrompt = pickString(body?.prompt, body?.user_prompt, body?.userPrompt);
 	const userMessage = pickString(body?.user_message, body?.userMessage, userPrompt);
 	const lastAssistantMessage = readLastAssistantMessage(body);
-	const agentId = pickString(body?.signet_agent_id, body?.signetAgentId);
-	const harnessAgentId = pickString(body?.agent_id, body?.agentId);
+	const agentId = pickString(body?.signet_agent_id, body?.signetAgentId, body?.agentId, body?.agent_id);
+	const harnessAgentId = pickString(body?.harness_agent_id, body?.harnessAgentId);
 	return {
 		harness,
 		project,
@@ -513,7 +535,13 @@ export function buildCompactionCompleteBody(
 	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
 	const body = input;
-	const agentId = pickString(overrides.agentId, body?.signet_agent_id, body?.signetAgentId);
+	const agentId = pickString(
+		overrides.agentId,
+		body?.signet_agent_id,
+		body?.signetAgentId,
+		body?.agentId,
+		body?.agent_id,
+	);
 	const sessionKey = pickString(overrides.sessionKey, pickSessionKey(body));
 	const project = pickString(overrides.project, body?.project, body?.cwd);
 	return {
