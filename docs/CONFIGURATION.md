@@ -396,13 +396,42 @@ subscription-backed CLI session, or gateway.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `executor` | string | `claude-code`, `codex`, `opencode`, `anthropic`, `openrouter`, `ollama`, `llama-cpp`, `openai-compatible`, or `command` |
+| `executor` | string | `acpx`, `claude-code`, `codex`, `opencode`, `anthropic`, `openrouter`, `ollama`, `llama-cpp`, `openai-compatible`, or `command` |
 | `kind` | string | Optional explicit target kind. Inferred when omitted |
 | `account` | string | Account id from `inference.accounts` |
 | `endpoint` | string | Optional base URL override |
 | `command` | object | Command executor config with `bin`, optional `args`, `cwd`, and `env` |
+| `agent` | string | For `executor: acpx`, the harness adapter to run, for example `codex`, `claude-code`, or `opencode` |
+| `acpxVersion` / `version` | string | Optional ACPX package version. Defaults to Signet's pinned ACPX version |
+| `mode` | string | Optional ACPX execution mode. Defaults to one-shot exec |
+| `cwd` | string | Optional working directory for harness execution |
+| `session` | string | Optional ACPX session identifier when a persistent session is desired |
+| `permissions` | string | Optional ACPX permission policy passed through to the harness |
+| `hooks` | string | Set to `disabled` for sterile/background execution (`SIGNET_NO_HOOKS=1`) |
+| `terminal` | boolean | For ACPX, set `false` to pass `--no-terminal` |
+| `allowedTools` | array | Optional ACPX allowed-tool list |
+| `timeoutMs` | number | Per-call ACPX subprocess deadline |
+| `extraArgs` | array | Additional ACPX CLI args appended after Signet-managed args |
 | `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |
 | `models` | map | Named model entries for this target |
+
+Example ACPX background target:
+
+```yaml
+inference:
+  targets:
+    background-codex:
+      executor: acpx
+      agent: codex
+      hooks: disabled
+      terminal: false
+      timeoutMs: 120000
+      models:
+        mini:
+          model: gpt-5-codex-mini
+          reasoning: medium
+          toolUse: true
+```
 
 Model fields:
 

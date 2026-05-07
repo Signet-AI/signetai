@@ -217,6 +217,7 @@ export class TokenBucketRateLimiter {
 type RemoteProvider = Exclude<PipelineExtractionConfig["provider"], "none" | "llama-cpp" | "ollama" | "command">;
 
 const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
+	"acpx",
 	"claude-code",
 	"anthropic",
 	"openrouter",
@@ -227,6 +228,7 @@ const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 // Compile-time check: if a new remote provider is added to the union but
 // omitted from the set above, this produces a type error.
 const _exhaustiveCheck: Record<RemoteProvider, true> = {
+	acpx: true,
 	"claude-code": true,
 	anthropic: true,
 	openrouter: true,
@@ -947,6 +949,136 @@ export interface CommandLineProviderConfig {
 
 function replacePromptTokens(value: string, prompt: string): string {
 	return value.split("$PROMPT").join(prompt).split("{{prompt}}").join(prompt);
+}
+
+
+export type AcpxPermissionMode = "inherit" | "deny-all" | "approve-reads" | "approve-all";
+export type AcpxHooksMode = "inherit" | "disabled" | "enabled";
+export type AcpxTerminalMode = "inherit" | "disabled" | "enabled";
+export type AcpxSessionMode = "exec" | "session";
+
+export interface AcpxProviderConfig {
+	readonly agent: string;
+	readonly model?: string;
+	readonly version?: string;
+	readonly bin?: string;
+	readonly cwd?: string;
+	readonly session?: string;
+	readonly mode?: AcpxSessionMode;
+	readonly permissions?: AcpxPermissionMode;
+	readonly hooks?: AcpxHooksMode;
+	readonly terminal?: AcpxTerminalMode;
+	readonly allowedTools?: readonly string[];
+	readonly timeoutMs?: number;
+	readonly extraArgs?: readonly string[];
+}
+
+const DEFAULT_ACPX_VERSION = "0.7.0";
+
+function acpxPermissionArgs(mode: AcpxPermissionMode | undefined): string[] {
+	switch (mode) {
+		case "deny-all":
+			return ["--deny-all"];
+		case "approve-reads":
+			return ["--approve-reads"];
+		case "approve-all":
+			return ["--approve-all"];
+		default:
+			return [];
+	}
+}
+
+function acpxEnv(hooks: AcpxHooksMode | undefined): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	if (hooks === "disabled") {
+		env.SIGNET_NO_HOOKS = "1";
+	} else if (hooks === "enabled") {
+		delete env.SIGNET_NO_HOOKS;
+	}
+	return env;
+}
+
+function buildAcpxCommand(config: AcpxProviderConfig, timeoutMs: number): { bin: string; args: string[] } {
+	const bin = config.bin ?? "npx";
+	const args: string[] = [];
+	if (!config.bin) {
+		args.push("-y", `acpx@${config.version ?? DEFAULT_ACPX_VERSION}`);
+	}
+	args.push("--format", "quiet");
+	args.push("--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))));
+	if (config.cwd) args.push("--cwd", config.cwd);
+	if (config.model) args.push("--model", config.model);
+	args.push(...acpxPermissionArgs(config.permissions));
+	if (config.terminal === "disabled") args.push("--no-terminal");
+	if (config.allowedTools) args.push("--allowed-tools", config.allowedTools.join(","));
+	args.push(...(config.extraArgs ?? []));
+	args.push(config.agent);
+	if ((config.mode ?? "exec") === "session") {
+		if (config.session) args.push("-s", config.session);
+		args.push("--file", "-");
+	} else {
+		args.push("exec", "--file", "-");
+	}
+	return { bin, args };
+}
+
+export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
+	return {
+		name: `acpx:${config.agent}${config.model ? `:${config.model}` : ""}`,
+		async generate(prompt, opts): Promise<string> {
+			const timeoutMs = opts?.timeoutMs ?? config.timeoutMs ?? 60_000;
+			const { bin, args } = buildAcpxCommand(config, timeoutMs);
+			return new Promise<string>((resolve, reject) => {
+				let stdout = "";
+				let stderr = "";
+				let settled = false;
+				const child = nodeSpawn(bin, args, {
+					cwd: config.cwd,
+					env: acpxEnv(config.hooks),
+					stdio: ["pipe", "pipe", "pipe"],
+					windowsHide: true,
+				});
+				const finish = (fn: () => void): void => {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					fn();
+				};
+				const timer = setTimeout(() => {
+					child.kill("SIGTERM");
+					finish(() => reject(new Error(`${config.agent} via ACPX timeout after ${timeoutMs}ms`)));
+				}, timeoutMs);
+				child.stdout?.setEncoding("utf8");
+				child.stderr?.setEncoding("utf8");
+				child.stdout?.on("data", (chunk) => {
+					stdout += String(chunk);
+				});
+				child.stderr?.on("data", (chunk) => {
+					stderr += String(chunk);
+				});
+				child.on("error", (error) => finish(() => reject(error)));
+				child.on("close", (code) =>
+					finish(() => {
+						if (code !== 0) {
+							reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
+							return;
+						}
+						const text = stdout.trim();
+						if (!text) {
+							reject(new Error(`${config.agent} via ACPX returned empty response`));
+							return;
+						}
+						resolve(text);
+					}),
+				);
+				child.stdin?.end(prompt);
+			});
+		},
+		async available(): Promise<boolean> {
+			const bin = config.bin ?? "npx";
+			return bin.includes("/") || Bun.which(bin) !== null;
+		},
+	};
 }
 
 export function createCommandLineProvider(config: CommandLineProviderConfig): LlmProvider {

@@ -210,6 +210,7 @@ export const DEFAULT_PROVIDER_RATE_LIMIT: Required<ProviderRateLimitConfig> = {
 export interface PipelineExtractionConfig {
 	readonly provider:
 		| "none"
+		| "acpx"
 		| "llama-cpp"
 		| "ollama"
 		| "claude-code"
@@ -387,6 +388,7 @@ export interface PipelineSynthesisConfig {
 	readonly enabled: boolean;
 	readonly provider:
 		| "none"
+		| "acpx"
 		| "llama-cpp"
 		| "ollama"
 		| "claude-code"

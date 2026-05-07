@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline";
+import { buildSetupInference, buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline";
 
 describe("defaultExtractionModel", () => {
 	it("prefers the cheap codex mini model", () => {
@@ -58,6 +58,26 @@ describe("buildSetupPipeline", () => {
 			provider: "ollama",
 			model: "qwen3.5:4b",
 			timeout: 120000,
+		});
+	});
+});
+
+describe("buildSetupInference", () => {
+	it("writes ACPX as explicit inference routing with the selected harness agent", () => {
+		const inference = buildSetupInference("acpx", "gpt-5-codex-mini", ["opencode", "codex"]);
+		expect(inference?.targets["background-acpx"]).toMatchObject({
+			executor: "acpx",
+			acpx: {
+				agent: "opencode",
+				version: "0.7.0",
+				hooks: "disabled",
+				permissions: "deny-all",
+				terminal: "inherit",
+			},
+		});
+		expect(inference?.workloads.memoryExtraction).toEqual({
+			target: "background-acpx/default",
+			taskClass: "memory_extraction",
 		});
 	});
 });

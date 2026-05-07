@@ -3,6 +3,7 @@ import type { PipelineCommandConfig, PipelineExtractionConfig, PipelineSynthesis
 export const ROUTING_ACCOUNT_KINDS = ["subscription_session", "api"] as const;
 export const ROUTING_TARGET_KINDS = ["subscription_session", "api", "local", "gateway"] as const;
 export const ROUTING_EXECUTOR_KINDS = [
+	"acpx",
 	"claude-code",
 	"codex",
 	"opencode",
@@ -79,12 +80,33 @@ export interface RoutingModelConfig {
 	readonly averageLatencyMs?: number;
 }
 
+export type RoutingAcpxPermissionMode = "inherit" | "deny-all" | "approve-reads" | "approve-all";
+export type RoutingAcpxHooksMode = "inherit" | "disabled" | "enabled";
+export type RoutingAcpxTerminalMode = "inherit" | "disabled" | "enabled";
+export type RoutingAcpxSessionMode = "exec" | "session";
+
+export interface RoutingAcpxConfig {
+	readonly agent: string;
+	readonly version?: string;
+	readonly bin?: string;
+	readonly cwd?: string;
+	readonly session?: string;
+	readonly mode?: RoutingAcpxSessionMode;
+	readonly permissions?: RoutingAcpxPermissionMode;
+	readonly hooks?: RoutingAcpxHooksMode;
+	readonly terminal?: RoutingAcpxTerminalMode;
+	readonly allowedTools?: readonly string[];
+	readonly timeoutMs?: number;
+	readonly extraArgs?: readonly string[];
+}
+
 export interface RoutingTargetConfig {
 	readonly kind: RoutingTargetKind;
 	readonly executor: RoutingExecutorKind;
 	readonly account?: string;
 	readonly endpoint?: string;
 	readonly command?: PipelineCommandConfig;
+	readonly acpx?: RoutingAcpxConfig;
 	readonly privacy?: RoutingPrivacyTier;
 	readonly models: Readonly<Record<string, RoutingModelConfig>>;
 }
@@ -317,7 +339,7 @@ function inferTargetKind(executor: string): RoutingTargetKind {
 
 function inferTargetPrivacy(executor: string): RoutingPrivacyTier {
 	if (executor === "ollama" || executor === "llama-cpp") return "local_only";
-	if (executor === "claude-code" || executor === "codex" || executor === "opencode") return "restricted_remote";
+	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode") return "restricted_remote";
 	return "remote_ok";
 }
 
@@ -446,6 +468,51 @@ function parseCommandConfig(raw: unknown): PipelineCommandConfig | undefined {
 	};
 }
 
+function asAcpxPermissionMode(value: unknown): RoutingAcpxPermissionMode | undefined {
+	return typeof value === "string" && ["inherit", "deny-all", "approve-reads", "approve-all"].includes(value)
+		? (value as RoutingAcpxPermissionMode)
+		: undefined;
+}
+
+function asAcpxHooksMode(value: unknown): RoutingAcpxHooksMode | undefined {
+	return typeof value === "string" && ["inherit", "disabled", "enabled"].includes(value)
+		? (value as RoutingAcpxHooksMode)
+		: undefined;
+}
+
+function asAcpxTerminalMode(value: unknown): RoutingAcpxTerminalMode | undefined {
+	return typeof value === "string" && ["inherit", "disabled", "enabled"].includes(value)
+		? (value as RoutingAcpxTerminalMode)
+		: undefined;
+}
+
+function asAcpxSessionMode(value: unknown): RoutingAcpxSessionMode | undefined {
+	return typeof value === "string" && ["exec", "session"].includes(value) ? (value as RoutingAcpxSessionMode) : undefined;
+}
+
+function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
+	if (!isRecord(raw)) return undefined;
+	const nested = isRecord(raw.acpx) ? raw.acpx : raw;
+	const agent = asString(nested.agent ?? nested.harness);
+	if (!agent) return undefined;
+	const allowedTools = asStringArray(nested.allowedTools ?? nested.allowed_tools);
+	const extraArgs = asStringArray(nested.extraArgs ?? nested.extra_args);
+	return {
+		agent,
+		version: asString(nested.version ?? nested.acpxVersion ?? nested.acpx_version),
+		bin: asString(nested.bin ?? nested.command),
+		cwd: asString(nested.cwd ?? nested.workspace),
+		session: asString(nested.session ?? nested.sessionName ?? nested.session_name),
+		mode: asAcpxSessionMode(nested.mode),
+		permissions: asAcpxPermissionMode(nested.permissions ?? nested.permissionMode ?? nested.permission_mode),
+		hooks: asAcpxHooksMode(nested.hooks ?? nested.hooksMode ?? nested.hooks_mode),
+		terminal: asAcpxTerminalMode(nested.terminal ?? nested.terminalMode ?? nested.terminal_mode),
+		allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
+		timeoutMs: asPositiveInt(nested.timeoutMs ?? nested.timeout_ms),
+		extraArgs: extraArgs.length > 0 ? extraArgs : undefined,
+	};
+}
+
 function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 	if (!isRecord(raw)) return null;
 	const executor = asString(raw.executor);
@@ -458,6 +525,8 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 		if (parsed) models[modelId] = parsed;
 	}
 	if (Object.keys(models).length === 0) return null;
+	const acpx = executor === "acpx" ? parseAcpxConfig(raw) : undefined;
+	if (executor === "acpx" && !acpx) return null;
 	return {
 		kind: (() => {
 			const parsed = asString(raw.kind);
@@ -470,6 +539,7 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 		account: asString(raw.account),
 		endpoint: asString(raw.endpoint ?? raw.baseUrl ?? raw.base_url),
 		command: parseCommandConfig(raw.command),
+		acpx,
 		privacy: asRoutingPrivacyTier(raw.privacy, inferTargetPrivacy(executor)),
 		models,
 	};

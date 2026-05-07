@@ -49,7 +49,7 @@ import {
 	readString,
 	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
-import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
+import type { FreshSetupConfig, SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
 	console.log(deps.signetLogo());
@@ -125,6 +125,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const hasOpenCodeCommand = hasCommand("opencode");
 	const llamaCppServerAvailable = await hasLlamaCppServer();
 	const availableToolExtractionProviders: ExtractionProviderChoice[] = [];
+	if (hasClaudeCommand || hasCodexCommand || hasOpenCodeCommand) availableToolExtractionProviders.push("acpx");
 	if (llamaCppServerAvailable) availableToolExtractionProviders.push("llama-cpp");
 	if (hasClaudeCommand) availableToolExtractionProviders.push("claude-code");
 	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
@@ -699,7 +700,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		console.log();
 		console.log(chalk.yellow(`  Warning: ${EXTRACTION_SAFETY_WARNING}`));
 		console.log();
-		const choices = [
+		const choices: Array<{ value: ExtractionProviderChoice; name: string }> = [
+			{
+				value: "acpx",
+				name: `ACPX (recommended default, uses your selected Codex/Claude/OpenCode harness with pinned acpx@0.7.0)${detectedProvider === "acpx" ? " — detected" : ""}`,
+			},
 			{
 				value: "llama-cpp",
 				name: `llama.cpp (local, recommended — qwen3.5:4b minimum)${detectedProvider === "llama-cpp" ? " — detected" : ""}`,
@@ -739,7 +744,25 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 
 	let extractionModel = "haiku";
-	if (extractionProvider === "claude-code") {
+	if (extractionProvider === "acpx") {
+		if (nonInteractive) {
+			extractionModel =
+				deps.normalizeStringValue(options.extractionModel) ||
+				deps.normalizeStringValue(existingPipeline.extractionModel) ||
+				deps.normalizeStringValue(existingExtraction.model) ||
+				defaultExtractionModel("acpx");
+		} else {
+			console.log();
+			extractionModel = await select({
+				message: "Which model should ACPX ask the selected harness to use for background inference?",
+				choices: [
+					{ value: "gpt-5-codex-mini", name: "gpt-5-codex-mini (recommended default)" },
+					{ value: "haiku", name: "haiku (Claude Code lightweight)" },
+					{ value: "anthropic/claude-haiku-4-5-20251001", name: "anthropic/claude-haiku-4-5 (OpenCode provider/model)" },
+				],
+			});
+		}
+	} else if (extractionProvider === "claude-code") {
 		if (nonInteractive) {
 			extractionModel =
 				deps.normalizeStringValue(options.extractionModel) ||

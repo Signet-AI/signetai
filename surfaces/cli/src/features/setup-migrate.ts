@@ -24,7 +24,7 @@ import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline.js";
+import { buildSetupInference, buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import {
@@ -221,6 +221,12 @@ export async function runExistingSetupWizard(
 				options.extractionModel || defaultExtractionModel(options.extractionProvider),
 			);
 			config.memory = memory;
+			const inference = buildSetupInference(
+				options.extractionProvider,
+				options.extractionModel || defaultExtractionModel(options.extractionProvider),
+				detectedHarnesses,
+			);
+			if (inference) config.inference = inference;
 		}
 
 		if (!existsSync(join(basePath, "agent.yaml"))) {

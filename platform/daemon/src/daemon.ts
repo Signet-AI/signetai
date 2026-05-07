@@ -70,6 +70,8 @@ import {
 	bindAbort,
 	invalidateDiagnosticsCache,
 	providerRuntimeResolution,
+	type RuntimeProviderName,
+	type RuntimeSynthesisProviderName,
 	providerTracker,
 	readEnvTrimmed,
 	reloadAuthState,
@@ -966,10 +968,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	const routerStatus = await router.status(false);
 	const statusValue = routerStatus.ok ? routerStatus.value : null;
 	const explicitInference = statusValue?.source === "explicit";
-	const executorForBinding = (binding: string | undefined): string | null => {
+	const executorForBinding = (binding: string | undefined): RuntimeProviderName | null => {
 		if (!binding?.includes("/")) return null;
 		const targetId = binding.split("/", 1)[0];
-		return targetId ? (statusValue?.targets[targetId]?.executor ?? null) : null;
+		return targetId ? ((statusValue?.targets[targetId]?.executor as RuntimeProviderName | undefined) ?? null) : null;
 	};
 	const commandExtractionMode = memoryCfg.pipelineV2.extraction.provider === "command";
 	const extractionAvailable =
@@ -980,7 +982,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		: (executorForBinding(statusValue?.workloadBindings.memoryExtraction) ??
 			(extractionAvailable ? "inference" : "none"));
 	const synthesisEffective =
-		executorForBinding(statusValue?.workloadBindings.sessionSynthesis) ?? (synthesisAvailable ? "inference" : null);
+		(executorForBinding(statusValue?.workloadBindings.sessionSynthesis) as RuntimeSynthesisProviderName | null) ??
+		(synthesisAvailable ? "inference" : null);
 	providerRuntimeResolution.extraction = {
 		configured: memoryCfg.pipelineV2.extraction.provider,
 		resolved: commandExtractionMode
@@ -1002,7 +1005,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	};
 	providerRuntimeResolution.synthesis = {
 		configured: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,
-		resolved: synthesisAvailable ? (explicitInference ? "inference" : memoryCfg.pipelineV2.synthesis.provider) : null,
+		resolved: synthesisAvailable
+			? ((explicitInference ? "inference" : memoryCfg.pipelineV2.synthesis.provider) as RuntimeSynthesisProviderName)
+			: null,
 		effective: synthesisEffective,
 	};
 

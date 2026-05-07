@@ -180,6 +180,50 @@ describe("inference config + decision engine", () => {
 		expect(parsed.value.defaultPolicy).toBe("legacy-default");
 	});
 
+	it("parses ACPX as a first-class restricted harness-backed target", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				defaultPolicy: "background",
+				targets: {
+					background: {
+						executor: "acpx",
+						acpx: {
+							agent: "codex",
+							version: "0.7.0",
+							permissions: "deny-all",
+							hooks: "disabled",
+							terminal: "inherit",
+						},
+						models: {
+							default: {
+								model: "gpt-5-codex-mini",
+								toolUse: true,
+							},
+						},
+					},
+				},
+				policies: {
+					background: {
+						mode: "automatic",
+						defaultTargets: [makeRoutingTargetRef("background", "default")],
+					},
+				},
+				workloads: {
+					memoryExtraction: { target: makeRoutingTargetRef("background", "default") },
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		const target = parsed.value.targets.background;
+		expect(target?.executor).toBe("acpx");
+		expect(target?.kind).toBe("subscription_session");
+		expect(target?.privacy).toBe("restricted_remote");
+		expect(target?.acpx?.agent).toBe("codex");
+		expect(target?.acpx?.hooks).toBe("disabled");
+		expect(parsed.value.workloads?.memoryExtraction?.target).toBe(makeRoutingTargetRef("background", "default"));
+	});
+
 	it("keeps legacy command extraction as side-effect compatibility instead of router LLM extraction", () => {
 		const legacy = compileLegacyRoutingConfig({
 			extraction: {
