@@ -52,7 +52,6 @@ import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
 import { stopOpenCodeServer } from "./pipeline/provider";
 import { startReconciler } from "./pipeline/skill-reconciler";
-import { type PredictorClient, createPredictorClient } from "./predictor-client";
 import { type RepairContext, structuralBackfill } from "./repair-actions";
 import { logFdSnapshot, startEventLoopMonitor, startFdPollMonitor, stopResourceMonitors } from "./resource-monitor";
 import {
@@ -78,7 +77,6 @@ import {
 	setCheckpointPruneTimer,
 	setEmbeddingTrackerHandle,
 	setHeartbeatTimer,
-	setPredictorClientRef,
 	setRestartPipelineRuntime,
 	setShuttingDown,
 	setTelemetryRef,
@@ -151,14 +149,12 @@ import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
 let httpServer: import("node:net").Server | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let shadowProcess: ChildProcess | null = null;
-let predictorClientRef: PredictorClient | null = null;
 let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let schedulerHandle: { stop(): Promise<void> } | null = null;
 let structuralBackfillTimer: ReturnType<typeof setTimeout> | null = null;
 // These are mirrored into state.ts via setters for read access by
 // route modules. Only daemon.ts should assign or clear them.
-// predictorClientRef follows the same pattern (see getPredictorClient).
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
@@ -170,13 +166,6 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 	return connectors.filter((cn) => cn.status !== "error").length;
 }
 
-export function getPredictorClient(): PredictorClient | null {
-	return predictorClientRef;
-}
-
-export function recordPredictorLatency(operation: "predictor_score" | "predictor_train", durationMs: number): void {
-	analyticsCollector.recordLatency(operation, durationMs);
-}
 
 // ============================================================================
 // Hono App
@@ -865,13 +854,6 @@ async function stopPipelineRuntime(): Promise<void> {
 		shadowProcess = null;
 	}
 
-	if (predictorClientRef) {
-		try {
-			await predictorClientRef.stop();
-		} catch {}
-		predictorClientRef = null;
-		setPredictorClientRef(null);
-	}
 
 	if (embeddingTrackerHandle) {
 		try {
@@ -1112,21 +1094,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				});
 			}
 		}, 10_000);
-	}
-
-	if (memoryCfg.pipelineV2.predictor?.enabled && !pipelinePaused) {
-		const predictorCfg = memoryCfg.pipelineV2.predictor;
-		try {
-			const client = createPredictorClient(predictorCfg, "default", memoryCfg.embedding.dimensions);
-			await client.start();
-			predictorClientRef = client;
-			setPredictorClientRef(client);
-			logger.info("predictor", "Predictor sidecar started");
-		} catch (err) {
-			logger.warn("predictor", "Failed to start predictor sidecar (non-fatal)", {
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
 	}
 
 	if (memoryCfg.pipelineV2.nativeShadowEnabled) {

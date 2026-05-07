@@ -6,26 +6,14 @@ import type { ErrorStage } from "../analytics.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { getDiagnostics } from "../diagnostics.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
-import { loadMemoryConfig } from "../memory-config.js";
-import { resolvePredictorCheckpointPath } from "../predictor-client.js";
-import {
-	getComparisonsByEntity,
-	getComparisonsByProject,
-	listComparisons,
-	listTrainingRuns,
-} from "../predictor-comparisons.js";
 import { getCheckpointsByProject, getCheckpointsBySession, redactCheckpointRow } from "../session-checkpoints.js";
 import type { TelemetryEventType } from "../telemetry.js";
 import { type TimelineSources, buildTimeline } from "../timeline.js";
 import {
-	AGENTS_DIR,
 	CURRENT_VERSION,
 	analyticsCollector,
 	authConfig,
-	buildPredictorHealthParams,
 	getUpdateState,
-	invalidateDiagnosticsCache,
-	predictorClientRef,
 	providerTracker,
 	telemetryRef,
 } from "./state.js";
@@ -72,7 +60,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 
 	app.get("/api/analytics/memory-safety", (c) => {
 		const mutationHealth = getDbAccessor().withReadDb((db) =>
-			getDiagnostics(db, providerTracker, getUpdateState(), buildPredictorHealthParams()),
+			getDiagnostics(db, providerTracker, getUpdateState()),
 		);
 		const recentMutationErrors = analyticsCollector.getErrors({
 			stage: "mutation",
@@ -155,120 +143,6 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({ scores });
 	});
 
-	app.get("/api/predictor/comparisons/by-project", (c) => {
-		const agentId = c.req.query("agent_id") ?? "default";
-		const since = c.req.query("since") ?? undefined;
-		return c.json({
-			items: getComparisonsByProject(getDbAccessor(), agentId, since),
-		});
-	});
-
-	app.get("/api/predictor/comparisons/by-entity", (c) => {
-		const agentId = c.req.query("agent_id") ?? "default";
-		const since = c.req.query("since") ?? undefined;
-		return c.json({
-			items: getComparisonsByEntity(getDbAccessor(), agentId, since),
-		});
-	});
-
-	app.get("/api/predictor/comparisons", (c) => {
-		const agentId = c.req.query("agent_id") ?? "default";
-		const limitParam = Number.parseInt(c.req.query("limit") ?? "50", 10);
-		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
-		const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
-		const offset = Number.isFinite(offsetParam) ? Math.max(offsetParam, 0) : 0;
-
-		const result = listComparisons(getDbAccessor(), {
-			agentId,
-			project: c.req.query("project") ?? undefined,
-			entityId: c.req.query("entity_id") ?? undefined,
-			since: c.req.query("since") ?? undefined,
-			until: c.req.query("until") ?? undefined,
-			limit,
-			offset,
-		});
-
-		return c.json({
-			total: result.total,
-			limit,
-			offset,
-			items: result.rows,
-		});
-	});
-
-	app.get("/api/predictor/training", (c) => {
-		const agentId = c.req.query("agent_id") ?? "default";
-		const limitParam = Number.parseInt(c.req.query("limit") ?? "20", 10);
-		const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 100) : 20;
-
-		return c.json({
-			items: listTrainingRuns(getDbAccessor(), agentId, limit),
-		});
-	});
-
-	app.get("/api/predictor/training-pairs-count", (c) => {
-		const count = getDbAccessor().withReadDb(
-			(db) => (db.prepare("SELECT COUNT(*) as c FROM predictor_training_pairs").get() as { c: number }).c,
-		);
-		return c.json({ count });
-	});
-
-	app.post("/api/predictor/train", async (c) => {
-		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const predictorCfg = cfg.pipelineV2.predictor;
-		if (!predictorCfg?.enabled) {
-			return c.json({ error: "Predictor is not enabled" }, 400);
-		}
-
-		const client = predictorClientRef;
-		if (!client || !client.isAlive()) {
-			return c.json({ error: "Predictor sidecar is not running" }, 503);
-		}
-
-		let body: Record<string, unknown> = {};
-		try {
-			body = await c.req.json();
-		} catch {
-			/* no body */
-		}
-		const limit = typeof body.limit === "number" ? body.limit : 5000;
-		const epochs = typeof body.epochs === "number" ? body.epochs : 3;
-
-		const dbPath = join(AGENTS_DIR, "memory", "memories.db");
-		const checkpointPath = resolvePredictorCheckpointPath(predictorCfg);
-		const result = await client.trainFromDb({
-			db_path: dbPath,
-			checkpoint_path: checkpointPath,
-			limit,
-			epochs,
-		});
-		if (!result) {
-			return c.json({ error: "Training did not return a result" }, 500);
-		}
-
-		const checkpointSaved = result.checkpoint_saved || (await client.saveCheckpoint(checkpointPath));
-
-		const agentId = "default";
-		const { recordTrainingRun } = await import("../predictor-comparisons.js");
-		const { updatePredictorState } = await import("../predictor-state.js");
-		recordTrainingRun(getDbAccessor(), {
-			agentId,
-			modelVersion: result.step,
-			loss: result.loss,
-			sampleCount: result.samples_used,
-			durationMs: result.duration_ms,
-			canaryScoreVariance: result.canary_score_variance,
-			canaryTopkChurn: result.canary_topk_stability,
-		});
-		updatePredictorState(agentId, { lastTrainingAt: new Date().toISOString() });
-		invalidateDiagnosticsCache();
-
-		return c.json({
-			...result,
-			checkpoint_path: checkpointPath,
-			checkpoint_saved: checkpointSaved,
-		});
-	});
 
 	app.get("/api/telemetry/events", (c) => {
 		if (!telemetryRef) {
@@ -331,123 +205,6 @@ export function registerTelemetryRoutes(app: Hono): void {
 
 		const lines = events.map((e) => JSON.stringify(e)).join("\n");
 		return c.text(lines, 200, { "Content-Type": "application/x-ndjson" });
-	});
-
-	app.get("/api/telemetry/training-export", async (c) => {
-		const { exportTrainingPairs } = await import("../predictor-training-pairs.js");
-		const agentId = c.req.query("agent_id") ?? "default";
-		const since = c.req.query("since");
-		const rawLimit = Number.parseInt(c.req.query("limit") ?? "1000", 10);
-		const limit = Math.min(Math.max(1, rawLimit), 10000);
-		const format = c.req.query("format") ?? "ndjson";
-
-		const pairs = exportTrainingPairs(getDbAccessor(), agentId, { since, limit });
-
-		if (format === "csv") {
-			const header = [
-				"id",
-				"agent_id",
-				"session_key",
-				"memory_id",
-				"recency_days",
-				"access_count",
-				"importance",
-				"decay_factor",
-				"embedding_similarity",
-				"entity_slot",
-				"aspect_slot",
-				"is_constraint",
-				"structural_density",
-				"fts_hit_count",
-				"agent_relevance_score",
-				"continuity_score",
-				"fts_overlap_score",
-				"combined_label",
-				"was_injected",
-				"predictor_rank",
-				"baseline_rank",
-				"created_at",
-			].join(",");
-
-			function csvEscape(value: unknown): string {
-				const str = value === null || value === undefined ? "" : String(value);
-				if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
-					return `"${str.replace(/"/g, '""')}"`;
-				}
-				return str;
-			}
-
-			const rows = pairs.map((p) =>
-				[
-					p.id,
-					p.agentId,
-					p.sessionKey,
-					p.memoryId,
-					p.features.recencyDays,
-					p.features.accessCount,
-					p.features.importance,
-					p.features.decayFactor,
-					p.features.embeddingSimilarity ?? "",
-					p.features.entitySlot ?? "",
-					p.features.aspectSlot ?? "",
-					p.features.isConstraint ? 1 : 0,
-					p.features.structuralDensity ?? "",
-					p.features.ftsHitCount,
-					p.label.agentRelevanceScore ?? "",
-					p.label.continuityScore ?? "",
-					p.label.ftsOverlapScore ?? "",
-					p.label.combined,
-					p.wasInjected ? 1 : 0,
-					p.predictorRank ?? "",
-					p.baselineRank ?? "",
-					p.createdAt,
-				]
-					.map(csvEscape)
-					.join(","),
-			);
-
-			return c.text([header, ...rows].join("\n"), 200, {
-				"Content-Type": "text/csv",
-			});
-		}
-
-		const ndjsonLines = pairs.map((p) => JSON.stringify(p)).join("\n");
-		return c.text(ndjsonLines, 200, { "Content-Type": "application/x-ndjson" });
-	});
-
-	app.get("/api/timeline/:id", (c) => {
-		const entityId = c.req.param("id");
-		const timeline = getDbAccessor().withReadDb((db) =>
-			buildTimeline(
-				{
-					db,
-					getRecentLogs: (opts) => logger.getRecent({ limit: opts.limit }),
-					getRecentErrors: (opts) => analyticsCollector.getErrors({ limit: opts?.limit }),
-				},
-				entityId,
-			),
-		);
-		return c.json(timeline);
-	});
-
-	app.get("/api/timeline/:id/export", (c) => {
-		const entityId = c.req.param("id");
-		const timeline = getDbAccessor().withReadDb((db) => {
-			const sources: TimelineSources = {
-				db,
-				getRecentLogs: (opts) => logger.getRecent({ limit: opts.limit }),
-				getRecentErrors: (opts) => analyticsCollector.getErrors({ limit: opts?.limit }),
-			};
-			return buildTimeline(sources, entityId);
-		});
-		return c.json({
-			meta: {
-				version: CURRENT_VERSION,
-				exportedAt: new Date().toISOString(),
-				entityId,
-			},
-			timeline,
-		});
 	});
 
 	app.get("/api/checkpoints", (c) => {

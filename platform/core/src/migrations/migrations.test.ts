@@ -161,9 +161,6 @@ describe("migration framework", () => {
 		expect(attributeColumns.map((col) => col.name)).toContain("claim_key");
 		expect(attributeColumns.map((col) => col.name)).toContain("group_key");
 
-		// v20 tables (predictor reporting)
-		expect(tableNames).toContain("predictor_comparisons");
-		expect(tableNames).toContain("predictor_training_log");
 
 		// v50 tables (dependency audit)
 		expect(tableNames).toContain("entity_dependency_history");

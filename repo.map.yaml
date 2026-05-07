@@ -18,8 +18,6 @@ areas:
         name: "@signet/native"
       - path: platform/daemon-rs
         name: "daemon-rs"
-      - path: platform/predictor
-        name: "predictor"
 
   surfaces:
     purpose: "Human-facing ways to operate Signet."

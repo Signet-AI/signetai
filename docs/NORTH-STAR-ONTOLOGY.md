@@ -1,27 +1,28 @@
 ---
 title: "North Star Ontology"
-description: "How Signet should turn sources, memories, and transcripts into an operational world model."
+description: "How Signet should turn artifacts and derived memory into an operational world model."
 section: "Core Concepts"
 ---
 
 North Star Ontology
 ===================
 
-Signet should treat source truth as the spine of memory.
+Signet should treat artifacts as the spine of memory.
 
-A source can be an Obsidian note, a Git repository, a transcript, an email
-thread, a CSV file, a browser history item, or a memory saved by an agent. The
-source is the thing that happened or the document that exists. The ontology is
-Signet's working interpretation of that source.
+An artifact is the raw thing Signet saw: a saved memory, transcript, Obsidian
+note, email thread, GitHub issue, browser history item, source file, CSV row
+set, or any other document-like unit. Different sources may need different
+adapters, parsers, permissions, and metadata, but once they enter Signet they
+should share the same artifact lifecycle.
 
 That distinction is the whole design.
 
 A memory should not disappear into the graph as one more anonymous fact. A long
 saved memory often contains many details: a preference, a decision, a project
 state, a warning, a date, a relationship, and a reason. The memory itself should
-remain as a document-like artifact. Then Signet should extract observations from
-it, update claim slots, supersede older values when appropriate, and keep a
-lineage back to the original saved memory.
+remain as an artifact. Then Signet should extract observations from it, update
+claim slots, supersede older values when appropriate, and keep a lineage back to
+the original saved memory.
 
 The graph should become smarter because memories were saved. The saved memories
 should not be mistaken for the graph itself.
@@ -29,51 +30,56 @@ should not be mistaken for the graph itself.
 The plain model
 ---------------
 
-Signet has two layers.
+Signet has three layers.
 
-The first layer is source truth. This is the raw material: files, notes,
-transcripts, messages, memories, documents, rows, commits, issues, emails, and
-other artifacts. These objects should be preserved with provenance. Where did it
-come from? Who wrote it? When was it seen? What path, URL, session, line range,
-or source system produced it? What permissions apply?
+The first layer is the evidence layer. This is the raw material: artifacts. A
+transcript, saved memory, Obsidian note, email thread, GitHub issue, browser
+history item, source file, and CSV row set are all artifacts. They differ by
+kind and metadata, but not by ontology machinery. Each artifact should preserve
+where it came from, who wrote it, when it was seen, what path, URL, session,
+line range, or source system produced it, and what permissions apply.
 
-The second layer is the operational ontology. This is the compact surface agents
-use to work: people, projects, sources, tasks, policies, actions, claims,
-current values, conflicts, evidence, and reviewable proposals. Agents should be
-able to ask what is true enough to act on, what evidence supports it, what is
-uncertain, and what actions are allowed.
+The second layer is the interpretation layer. This is what Signet thinks it
+noticed in the artifacts: observations, derived memories, attributes, claim
+values, links, policies, and proposals. This layer is where raw text becomes
+queryable structure.
 
-The source layer is allowed to be messy. The ontology layer should be useful.
+The third layer is the operating layer. This is the compact surface agents use
+to work: current values, task context, recall results, conflicts, permitted
+actions, and evidence expansion tools. Agents should be able to ask what is true
+enough to act on, what evidence supports it, what is uncertain, and what actions
+are allowed.
+
+The evidence layer is allowed to be messy. The interpretation layer should be
+structured. The operating layer should be useful.
 
 A simple flow looks like this:
 
 ```text
-Source
-  -> SourceArtifact
-  -> Observation
+Artifact
+  -> Observation or Proposal
   -> ClaimSlot
   -> ClaimValue
   -> Reducer
   -> CurrentView
-  -> Proposal or Question
+  -> Question when needed
   -> User or agent review
   -> Audited update
 ```
 
-This flow should apply whether the source is an Obsidian document, a transcript,
-a GitHub PR, or an agent-saved memory.
+This flow should apply whether the artifact came from Obsidian, a transcript,
+GitHub, email, browser history, source code, or `remember(...)`.
 
-Why documents matter
+Why artifacts matter
 --------------------
 
 The important lesson from Supermemory is not that Signet should copy their
-product. It is that document-shaped source truth gives the system a strong
-spine.
+product. It is that artifacts give the system a strong spine.
 
-A document is easy to reason about. It has a boundary. It has authorship. It has
-time. It can be reprocessed. It can be cited. It can supersede another document.
-It can contain many facts without forcing the system to decide all of them at
-write time.
+An artifact is easy to reason about. It has a boundary. It has authorship. It
+has time. It can be reprocessed. It can be cited. It can supersede another
+artifact. It can contain many facts without forcing the system to decide all of
+them at write time.
 
 That is valuable for Signet because agents often save rich memories. For
 example, an agent may save:
@@ -84,8 +90,8 @@ direct, product-forward, lightly narrative, and not first-person from Ant's
 perspective.
 ```
 
-That saved memory is a source artifact. It should remain retrievable as the
-thing the agent wrote. But it should also update the ontology:
+That saved memory is an artifact. It should remain retrievable as the thing the
+agent wrote. But it should also update the ontology:
 
 ```text
 Entity: Nicholai
@@ -105,6 +111,38 @@ between them, and choose the current value through a reducer.
 The user should be able to inspect the evidence and see why Signet believes the
 newer preference applies.
 
+Artifacts are the primary source object
+---------------------------------------
+
+Signet should not create separate ontology machinery for every raw source kind.
+An Obsidian note, transcript, saved memory, email thread, GitHub issue, source
+file, browser history item, and CSV row set should all enter the system as
+artifacts.
+
+Source-specific code belongs at the ingestion boundary. The Obsidian adapter can
+read frontmatter, wikilinks, folders, headings, and line ranges. A transcript
+adapter can read speakers, turns, harness, project, and session ids. An email
+adapter can read sender, recipients, subject, thread, and timestamps. But after
+that boundary, the shared ontology pipeline should operate on artifacts.
+
+That gives Signet one simple rule:
+
+```text
+Adapters produce artifacts.
+Ontology logic interprets artifacts.
+Recall returns useful interpretations.
+Evidence tools expand back to artifacts.
+```
+
+This avoids duplicating extraction, proposal, evidence, recall, and reducer
+logic for every new source kind. New sources should add new artifact kinds and
+metadata, not a new ontology.
+
+The word "memory" needs to stay precise here. A saved memory is first an
+artifact: the raw note an agent or user saved. It may also produce derived
+memories, attributes, claim values, links, policies, or questions. Those derived
+objects are interpretations of the artifact, not replacements for it.
+
 What Signet already has
 -----------------------
 
@@ -113,18 +151,18 @@ Signet is not starting from zero.
 It already has entities, aspects, attributes, constraints, dependencies,
 claim keys, group keys, source-aware recall, source chunks, provenance columns,
 and structured remember behavior. Obsidian Sources already project a vault into
-a graph: vaults become source objects, folders contain documents, documents
-link to other documents, headings become aspects, and body content becomes
-source-derived claims.
+a graph: vaults become source objects, folders contain artifact-like document
+objects, documents link to other documents, headings become aspects, and body
+content becomes source-derived claims.
 
 That is the right direction.
 
 The current seam is that source-derived claims and memory-derived structured
 claims still behave like different worlds. Source-derived attributes can exist
 without a `memory_id`, while structured recall and currentness paths often
-expect memory-backed attributes. The result is that a source document can
-produce useful graph rows, but those rows do not always participate in the same
-claim lifecycle as facts saved through ordinary memory.
+expect memory-backed attributes. The result is that an artifact can produce
+useful graph rows, but those rows do not always participate in the same claim
+lifecycle as facts saved through ordinary memory.
 
 The north star is to make those one lifecycle.
 
@@ -140,10 +178,10 @@ The upper ontology
 The first stable ontology should stay small. It should name the objects agents
 need in order to work safely.
 
-- `Source`: a connected origin of truth, such as a vault, repo, mailbox,
-  transcript store, or memory store.
-- `SourceArtifact`: one document-like unit from a source, such as a note,
-  transcript, saved memory, email thread, issue, file, or row set.
+- `Source`: a connected origin of artifacts, such as a vault, repo, mailbox,
+  transcript store, memory store, browser history, or API.
+- `Artifact`: one raw unit from a source, such as a saved memory, note,
+  transcript, email thread, issue, source file, browser item, or row set.
 - `Observation`: something Signet noticed in an artifact before deciding whether
   it should become durable operational knowledge.
 - `ClaimSlot`: the named place where an updateable fact lives, such as a current
@@ -184,7 +222,7 @@ Reducers can be simple at first:
 - explicit user statement beats inferred extraction;
 - reviewed value beats unreviewed value;
 - newer value beats older value when they clearly touch the same claim slot;
-- source-of-truth document beats summary;
+- original artifact beats summary;
 - higher-confidence extraction beats lower-confidence extraction;
 - visible value must be allowed under the current permission context.
 
@@ -224,11 +262,11 @@ Why: two claim values conflict
 Evidence: memory A from March, memory B from May
 Possible answer: prefer May style for product announcements, keep March style
 for security notices
-Result: user answer becomes a new source artifact and updates the reducer
+Result: user answer becomes a new artifact and updates the reducer
 ```
 
-The user's answer is also source truth. It should be saved as an artifact,
-linked to the question, and used to update the relevant claim slot.
+The user's answer is also an artifact. It should be saved, linked to the
+question, and used to update the relevant claim slot.
 
 Proposals before mutation
 -------------------------
@@ -269,7 +307,7 @@ This direction should fit inside Signet as it already exists.
 
 The current `memories` table can keep storing user and agent memory artifacts.
 Long memories do not need to become perfect atomic facts at save time. They can
-be source artifacts first, then feed extraction.
+be artifacts first, then feed extraction.
 
 The current entity, aspect, group, claim key, and attribute model can remain the
 first claim-slot implementation. A claim slot maps naturally to:
@@ -294,7 +332,7 @@ slot. If an agent writes a long unstructured memory, Signet can save it as an
 artifact, then extract observations and propose updates.
 
 Dreaming should become consolidation over evidence, not hidden direct mutation.
-It should reason over source artifacts, observations, old claim values, current
+It should reason over artifacts, observations, old claim values, current
 reducers, conflicts, and user answers. Its output should be proposals and
 questions first.
 
@@ -326,31 +364,31 @@ What this unlocks
 
 This gives Signet a cleaner product shape.
 
-A user connects sources. Signet indexes them as source truth. The ontology shows
-people, projects, documents, tasks, policies, and claims. Agents operate through
-current views, not raw chunks. When evidence changes, Signet proposes updates.
-When evidence conflicts, Signet asks targeted questions. When the user answers,
-that answer becomes a new source artifact with lineage.
+A user connects sources. Signet indexes their artifacts as evidence. The
+ontology shows people, projects, artifacts, tasks, policies, and claims. Agents
+operate through current views, not raw chunks. When evidence changes, Signet
+proposes updates. When evidence conflicts, Signet asks targeted questions. When
+the user answers, that answer becomes a new artifact with lineage.
 
 This also gives Signet a cleaner engineering path.
 
 The first implementation does not need every ontology primitive. It can start by
-making saved memories, transcripts, and source documents participate in the same
-claim lifecycle:
+making saved memories, transcripts, and documents participate in the same
+artifact-derived claim lifecycle:
 
-1. Treat each saved memory as a source artifact.
-2. Extract observations from memory artifacts without discarding the original.
+1. Treat each saved memory as an artifact.
+2. Extract observations from artifacts without discarding the original.
 3. Map observations to existing entity/aspect/group/claim slots.
 4. Store multiple claim values per slot with provenance.
 5. Use reducers to choose current values.
 6. Emit proposals when a new value should supersede or conflict with an old one.
 7. Emit questions when the system needs user judgment.
-8. Show evidence lineage from current value back to source artifact.
+8. Show evidence lineage from current value back to the original artifact.
 
-That is the north star: Signet as a source-backed operational ontology.
+That is the north star: Signet as an artifact-backed operational ontology.
 
 Not a memory pile. Not a decorative graph. Not a filesystem trend with better
 marketing.
 
-A world model agents can act through, with source truth underneath and reviewable
+A world model agents can act through, with artifacts underneath and reviewable
 change on top.

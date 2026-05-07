@@ -30,6 +30,15 @@ interface IndexRow {
 const ROOT = process.cwd();
 const DEPS_PATH = resolve(ROOT, "docs/specs/dependencies.yaml");
 const INDEX_PATH = resolve(ROOT, "docs/specs/INDEX.md");
+const ARCHIVED_PATH_PREFIXES = ["docs/research/", "docs/specs/planning/"];
+const RETIRED_SPEC_PATHS = new Set([
+	"docs/specs/approved/predictive-memory-scorer.md",
+	"docs/specs/approved/predictor-agent-feedback.md",
+]);
+
+function isArchivedOrRetiredPath(path: string): boolean {
+	return ARCHIVED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) || RETIRED_SPEC_PATHS.has(path);
+}
 
 function stripQuotes(value: string): string {
 	const trimmed = value.trim();
@@ -294,7 +303,7 @@ function main(): void {
 
 		if (!spec.path) {
 			failures.push(`missing path for ${spec.id}`);
-		} else if (!existsSync(resolve(ROOT, spec.path))) {
+		} else if (!existsSync(resolve(ROOT, spec.path)) && !isArchivedOrRetiredPath(spec.path)) {
 			failures.push(`path does not exist for ${spec.id}: ${spec.path}`);
 		}
 	}
@@ -314,7 +323,7 @@ function main(): void {
 
 		for (const ref of spec.informedBy) {
 			if (/^(arxiv:|https?:|doi:)/.test(ref)) continue;
-			if (!existsSync(resolve(ROOT, ref))) {
+			if (!existsSync(resolve(ROOT, ref)) && !isArchivedOrRetiredPath(ref)) {
 				failures.push(`informed_by path does not exist for ${spec.id}: ${ref}`);
 			}
 		}

@@ -415,48 +415,10 @@ export interface AgentMessageSendResponse {
 // Predictor types
 // ============================================================================
 
-export interface PredictorStatusResponse {
-	readonly enabled: boolean;
-	readonly alive: boolean;
-	readonly crashCount: number;
-	readonly crashDisabled: boolean;
-	readonly status: {
-		readonly modelVersion: number;
-		readonly trainingSessions: number;
-		readonly lastTrainedAt: string | null;
-		readonly coldStartExited: boolean;
-		readonly successRate: number;
-	} | null;
-}
 
-export interface PredictorComparison {
-	readonly id: string;
-	readonly memoryId: string;
-	readonly agentId: string;
-	readonly predictedScore: number;
-	readonly actualScore: number | null;
-	readonly feedbackType: string | null;
-	readonly createdAt: string;
-}
 
-export interface ComparisonsByProjectResponse {
-	readonly project: string;
-	readonly comparisons: readonly PredictorComparison[];
-	readonly count: number;
-}
 
-export interface ComparisonsByEntityResponse {
-	readonly entityId: string;
-	readonly comparisons: readonly PredictorComparison[];
-	readonly count: number;
-}
 
-export interface ComparisonsListResponse {
-	readonly comparisons: readonly PredictorComparison[];
-	readonly total: number;
-	readonly limit: number;
-	readonly offset: number;
-}
 
 export interface TrainingRun {
 	readonly id: string;
@@ -466,18 +428,4 @@ export interface TrainingRun {
 	readonly accuracyBefore: number | null;
 	readonly accuracyAfter: number | null;
 	readonly trainedAt: string;
-}
-
-export interface TrainingRunsResponse {
-	readonly runs: readonly TrainingRun[];
-	readonly count: number;
-}
-
-export interface TrainingPairsCountResponse {
-	readonly count: number;
-}
-
-export interface TrainPredictorResponse {
-	readonly message: string;
-	readonly triggered: boolean;
 }

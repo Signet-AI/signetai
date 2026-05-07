@@ -4,7 +4,6 @@ pub mod embedding;
 pub mod extraction;
 pub mod maintenance;
 pub mod memory_lineage;
-pub mod predictor;
 pub mod provider;
 pub mod retention;
 pub mod structural;
