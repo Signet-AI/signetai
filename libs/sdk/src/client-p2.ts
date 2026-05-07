@@ -745,22 +745,21 @@ export class SignetClientP2 {
 	}
 
 	// --- Predictor (retired) ---
-
-	/**
-	 * @deprecated Signet predictor APIs were removed in 0.112. Use memory search telemetry and pipeline diagnostics instead.
-	 */
-	async getPredictorStatus(): Promise<PredictorStatusResponse> {
-		predictorDeprecated();
+	
+	private predictorDeprecated(): never {
+		throw new Error(
+			"Signet predictor APIs were removed in v0.112. Use memory search telemetry and pipeline diagnostics instead.",
+		);
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async getComparisonsByProject(_project: string): Promise<ComparisonsByProjectResponse> {
-		predictorDeprecated();
+		this.predictorDeprecated();
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async getComparisonsByEntity(_entityId: string): Promise<ComparisonsByEntityResponse> {
-		predictorDeprecated();
+		this.predictorDeprecated();
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
@@ -769,7 +768,7 @@ export class SignetClientP2 {
 		readonly offset?: number;
 		readonly agentId?: string;
 	}): Promise<ComparisonsListResponse> {
-		predictorDeprecated();
+		this.predictorDeprecated();
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
@@ -777,18 +776,18 @@ export class SignetClientP2 {
 		readonly agentId?: string;
 		readonly limit?: number;
 	}): Promise<TrainingRunsResponse> {
-		predictorDeprecated();
+		this.predictorDeprecated();
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async getTrainingPairsCount(): Promise<TrainingPairsCountResponse> {
-		predictorDeprecated();
+		this.predictorDeprecated();
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async trainPredictor(_opts?: {
 		readonly force?: boolean;
 	}): Promise<TrainPredictorResponse> {
-		predictorDeprecated();
+		this.predictorDeprecated();
 	}
 }
