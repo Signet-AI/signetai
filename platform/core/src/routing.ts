@@ -339,7 +339,8 @@ function inferTargetKind(executor: string): RoutingTargetKind {
 
 function inferTargetPrivacy(executor: string): RoutingPrivacyTier {
 	if (executor === "ollama" || executor === "llama-cpp") return "local_only";
-	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode") return "restricted_remote";
+	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode")
+		return "restricted_remote";
 	return "remote_ok";
 }
 
@@ -481,13 +482,17 @@ function asAcpxHooksMode(value: unknown): RoutingAcpxHooksMode | undefined {
 }
 
 function asAcpxTerminalMode(value: unknown): RoutingAcpxTerminalMode | undefined {
+	if (value === false) return "disabled";
+	if (value === true) return "enabled";
 	return typeof value === "string" && ["inherit", "disabled", "enabled"].includes(value)
 		? (value as RoutingAcpxTerminalMode)
 		: undefined;
 }
 
 function asAcpxSessionMode(value: unknown): RoutingAcpxSessionMode | undefined {
-	return typeof value === "string" && ["exec", "session"].includes(value) ? (value as RoutingAcpxSessionMode) : undefined;
+	return typeof value === "string" && ["exec", "session"].includes(value)
+		? (value as RoutingAcpxSessionMode)
+		: undefined;
 }
 
 function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {

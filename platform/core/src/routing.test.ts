@@ -221,7 +221,25 @@ describe("inference config + decision engine", () => {
 		expect(target?.privacy).toBe("restricted_remote");
 		expect(target?.acpx?.agent).toBe("codex");
 		expect(target?.acpx?.hooks).toBe("disabled");
+		expect(target?.acpx?.terminal).toBe("inherit");
 		expect(parsed.value.workloads?.memoryExtraction?.target).toBe(makeRoutingTargetRef("background", "default"));
+	});
+
+	it("parses documented ACPX terminal booleans into terminal modes", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					background: {
+						executor: "acpx",
+						acpx: { agent: "codex", terminal: false },
+						models: { default: { model: "gpt-5-codex-mini" } },
+					},
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.background?.acpx?.terminal).toBe("disabled");
 	});
 
 	it("keeps legacy command extraction as side-effect compatibility instead of router LLM extraction", () => {
