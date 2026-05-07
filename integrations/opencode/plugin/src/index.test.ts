@@ -3,6 +3,7 @@ import { SignetPlugin } from "./index.js";
 
 const originalFetch = globalThis.fetch;
 const originalDaemonUrl = process.env.SIGNET_DAEMON_URL;
+const originalAgentId = process.env.SIGNET_AGENT_ID;
 
 interface RequestRecord {
 	readonly path: string;
@@ -67,10 +68,16 @@ afterEach(() => {
 	} else {
 		process.env.SIGNET_DAEMON_URL = originalDaemonUrl;
 	}
+	if (originalAgentId === undefined) {
+		process.env.SIGNET_AGENT_ID = undefined;
+	} else {
+		process.env.SIGNET_AGENT_ID = originalAgentId;
+	}
 });
 
 describe("SignetPlugin OpenCode lifecycle", () => {
 	test("injects per-session start context when system transform runs before chat.message", async () => {
+		process.env.SIGNET_AGENT_ID = undefined;
 		const records = installFetch();
 		const hooks = await createHooks();
 		await hooks.event({
@@ -94,6 +101,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("keeps session-start context available for the same prompt when chat.message runs first", async () => {
+		process.env.SIGNET_AGENT_ID = undefined;
 		installFetch();
 		const hooks = await createHooks();
 		await hooks.event({
@@ -109,5 +117,50 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 
 		expect(output.system.join("\n")).toContain("session-start:child-chat-first");
 		expect(output.system.join("\n")).toContain("prompt-submit-context");
+	});
+
+	test("does not fail closed when per-session start context is unavailable", async () => {
+		process.env.SIGNET_AGENT_ID = undefined;
+		let sessionStartCount = 0;
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL): Promise<Response> => {
+				const url = new URL(String(input));
+				if (url.pathname === "/api/hooks/session-start") {
+					sessionStartCount += 1;
+					if (sessionStartCount > 1) return new Response("daemon unavailable", { status: 503 });
+					return Response.json({ inject: "workspace-start" });
+				}
+				return Response.json({});
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+		const hooks = await createHooks();
+		const output = { system: [] };
+
+		await expect(
+			hooks["experimental.chat.system.transform"]({ sessionID: "daemon-down-child" }, output),
+		).resolves.toBeUndefined();
+	});
+
+	test("threads configured Signet agent scope through session-end", async () => {
+		process.env.SIGNET_AGENT_ID = "named-agent";
+		const records = installFetch();
+		const hooks = await createHooks();
+
+		await hooks.event({
+			event: { type: "session.idle", properties: { sessionID: "finished-session" } },
+		});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+
+		expect(records).toContainEqual({
+			path: "/api/hooks/session-end",
+			body: {
+				harness: "opencode",
+				agentId: "named-agent",
+				runtimePath: "plugin",
+				reason: "session.idle",
+				sessionKey: "finished-session",
+			},
+		});
 	});
 });

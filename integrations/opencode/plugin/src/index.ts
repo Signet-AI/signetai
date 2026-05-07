@@ -271,7 +271,12 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		// ------------------------------------------------------------------
 		"experimental.chat.system.transform": async (input, output): Promise<void> => {
 			if (!input.sessionID) return;
-			const startInject = await ensureSessionStarted(input.sessionID);
+			let startInject = "";
+			try {
+				startInject = await ensureSessionStarted(input.sessionID);
+			} catch {
+				// Signet context is optional; never break OpenCode prompt rendering.
+			}
 			const inject = pendingInject.get(input.sessionID);
 			const parts = [startInject, inject].filter((part) => part?.trim());
 			if (parts.length > 0) {
@@ -343,6 +348,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 							"/api/hooks/session-end",
 							{
 								harness: HARNESS,
+								agentId,
 								runtimePath: RUNTIME_PATH,
 								reason: event.type,
 								sessionKey: sid,
