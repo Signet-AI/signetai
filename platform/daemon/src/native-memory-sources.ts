@@ -16,6 +16,8 @@ import {
 	purgeObsidianSourceFileEmbeddings,
 } from "./obsidian-source-embeddings";
 import {
+	type ObsidianMarkdownPathIndex,
+	buildObsidianMarkdownPathIndex,
 	indexObsidianSourceStructure,
 	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
@@ -299,7 +301,9 @@ export async function indexNativeMemoryFile(
 	source: NativeMemorySource,
 	filePath: string,
 	agentId = resolveDaemonAgentId(),
-	options: Pick<NativeMemoryBridgeOptions, "embeddingConfig" | "fetchEmbedding" | "sourceGraphEnabled"> = {},
+	options: Pick<NativeMemoryBridgeOptions, "embeddingConfig" | "fetchEmbedding" | "sourceGraphEnabled"> & {
+		readonly markdownPathIndex?: ObsidianMarkdownPathIndex;
+	} = {},
 ): Promise<boolean> {
 	const pattern = matchesPattern(source, filePath);
 	if (!pattern) return false;
@@ -353,6 +357,7 @@ export async function indexNativeMemoryFile(
 					root: source.root,
 					filePath,
 					content,
+					markdownPathIndex: options.markdownPathIndex,
 				});
 			}
 			if (options.embeddingConfig && options.fetchEmbedding) {
@@ -492,9 +497,16 @@ export function startNativeMemoryBridge(
 				}
 				const total = files.length;
 				const fileDelayMs = sourceFileDelayMs(source, options);
+				const markdownPathIndex =
+					source.harness === "obsidian" && (options.sourceGraphEnabled ?? true)
+						? buildObsidianMarkdownPathIndex(source.root, files)
+						: undefined;
 				for (const file of files) {
 					scanned++;
-					const changed = await indexNativeMemoryFile(source, file, agentId, options);
+					const changed = await indexNativeMemoryFile(source, file, agentId, {
+						...options,
+						markdownPathIndex,
+					});
 					if (changed) {
 						count++;
 						changedCount++;

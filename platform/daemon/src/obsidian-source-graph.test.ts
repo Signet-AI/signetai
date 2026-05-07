@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
+	buildObsidianMarkdownPathIndex,
 	indexObsidianSourceStructure,
 	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
@@ -167,12 +168,13 @@ describe("Obsidian source graph structure", () => {
 		expect(remaining).toEqual({ entities: 0, attrs: 0, deps: 0, communities: 0 });
 	});
 
-	it("does not walk the full vault to resolve every wikilink while indexing one note", () => {
+	it("resolves cross-folder wikilinks from a per-scan markdown path index", () => {
 		const doc = join(vault, "literature", "Arch-Linux", "hyprland.md");
 		const nestedTarget = join(vault, "literature", "Other", "Deep Target.md");
 		mkdirSync(join(vault, "literature", "Other"), { recursive: true });
 		writeFileSync(doc, "# Hyprland\n\nLinks to [[Deep Target]].\n");
 		writeFileSync(nestedTarget, "# Deep Target\n\nThis file exists elsewhere in the vault.\n");
+		const markdownPathIndex = buildObsidianMarkdownPathIndex(vault, [doc, nestedTarget]);
 
 		indexObsidianSourceStructure({
 			agentId: "obsidian-graph-agent",
@@ -181,6 +183,7 @@ describe("Obsidian source graph structure", () => {
 			root: vault,
 			filePath: doc,
 			content: readFileSync(doc, "utf-8"),
+			markdownPathIndex,
 		});
 
 		const row = getDbAccessor().withReadDb(
@@ -192,13 +195,13 @@ describe("Obsidian source graph structure", () => {
 						 WHERE agent_id = ?
 						   AND canonical_name = ?`,
 					)
-					.get("obsidian-graph-agent", "obsidian:obsidian:test-vault:document:Deep Target.md") as
+					.get("obsidian-graph-agent", "obsidian:obsidian:test-vault:document:literature/Other/Deep Target.md") as
 					| { entity_type: string; source_path: string }
 					| undefined,
 		);
 		expect(row).toEqual({
-			entity_type: "source_document_reference",
-			source_path: join(vault, "Deep Target.md"),
+			entity_type: "source_document",
+			source_path: nestedTarget,
 		});
 	});
 

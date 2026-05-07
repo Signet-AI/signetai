@@ -14,6 +14,7 @@ export interface IndexObsidianSourceStructureInput {
 	readonly root: string;
 	readonly filePath: string;
 	readonly content: string;
+	readonly markdownPathIndex?: ObsidianMarkdownPathIndex;
 }
 
 export interface IndexObsidianSourceStructureResult {
@@ -50,6 +51,11 @@ interface HeadingSection {
 	readonly heading: string;
 	readonly level: number;
 	readonly body: string;
+}
+
+export interface ObsidianMarkdownPathIndex {
+	readonly byStem: ReadonlyMap<string, string>;
+	readonly byRel: ReadonlyMap<string, string>;
 }
 
 function normalizedRoot(root: string): string {
@@ -313,17 +319,39 @@ function existingMarkdownPath(path: string): string | null {
 	}
 }
 
+function markdownTarget(target: string): string {
+	return target.endsWith(".md") ? target : `${target}.md`;
+}
+
+export function buildObsidianMarkdownPathIndex(root: string, files: readonly string[]): ObsidianMarkdownPathIndex {
+	const normalized = normalizedRoot(root);
+	const byStem = new Map<string, string>();
+	const byRel = new Map<string, string>();
+	for (const file of files) {
+		const path = normalizedPath(file);
+		const rel = relPath(normalized, path);
+		if (!rel.endsWith(".md")) continue;
+		byRel.set(rel, path);
+		if (!byStem.has(displayNameForFile(path))) byStem.set(displayNameForFile(path), path);
+	}
+	return { byStem, byRel };
+}
+
 function resolveWikiLinkPath(
 	root: string,
 	filePath: string,
 	target: string,
+	index?: ObsidianMarkdownPathIndex,
 ): { path: string; rel: string; found: boolean } {
-	const candidates = [join(dirname(filePath), `${target}.md`), join(root, `${target}.md`)];
+	const targetPath = markdownTarget(target);
+	const candidates = [join(dirname(filePath), targetPath), join(root, targetPath)];
 	for (const candidate of candidates) {
 		const found = existingMarkdownPath(candidate);
 		if (found) return { path: found, rel: relPath(root, found), found: true };
 	}
-	const rel = `${target}.md`;
+	const indexed = index?.byRel.get(targetPath) ?? (target.includes("/") ? undefined : index?.byStem.get(target));
+	if (indexed) return { path: indexed, rel: relPath(root, indexed), found: true };
+	const rel = targetPath;
 	return { path: normalizedPath(join(root, rel)), rel, found: false };
 }
 
@@ -512,7 +540,7 @@ export function indexObsidianSourceStructure(
 			dependenciesTouched++;
 
 		for (const link of wikiLinks(content)) {
-			const targetPath = resolveWikiLinkPath(root, filePath, link);
+			const targetPath = resolveWikiLinkPath(root, filePath, link, input.markdownPathIndex);
 			const target = upsertSourceEntity(db, {
 				id: idFor(input.agentId, input.sourceId, "document", targetPath.rel),
 				name: displayNameForFile(targetPath.path),
