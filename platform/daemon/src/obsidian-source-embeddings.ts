@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { relative } from "node:path";
+import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "./db-helpers";
 import type { EmbeddingConfig } from "./memory-config";
 
 export const OBSIDIAN_CHUNK_SOURCE_TYPE = "source_obsidian_chunk";
+const OBSIDIAN_SOURCE_CHUNK_DELAY_MS = 100;
 
 export type SourceEmbeddingFetch = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
 
@@ -224,6 +226,7 @@ export async function indexObsidianSourceEmbeddings(
 	if (input.embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0 };
 	const chunks = buildObsidianSourceChunks(input);
 	const currentHashes = new Set<string>();
+	const yielder = yieldEvery(1);
 	let embedded = 0;
 	let skipped = 0;
 	const now = new Date().toISOString();
@@ -231,9 +234,17 @@ export async function indexObsidianSourceEmbeddings(
 	for (const chunk of chunks) {
 		const contentHash = hash(`${input.agentId}\n${chunk.id}\n${chunk.chunkText}`);
 		currentHashes.add(contentHash);
+		if (existingChunkEmbeddingContentHash(input.agentId, chunk.id) === contentHash) {
+			skipped++;
+			await yielder();
+			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
+			continue;
+		}
 		const vector = await input.fetchEmbedding(chunk.chunkText, input.embeddingConfig);
 		if (!vector || vector.length === 0) {
 			skipped++;
+			await yielder();
+			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
 			continue;
 		}
 		getDbAccessor().withWriteTx((db) => {
@@ -274,6 +285,8 @@ export async function indexObsidianSourceEmbeddings(
 			syncVecInsert(db, stored?.id ?? embId, vector);
 		});
 		embedded++;
+		await yielder();
+		await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
 	}
 
 	getDbAccessor().withWriteTx((db) => {
@@ -295,6 +308,19 @@ export async function indexObsidianSourceEmbeddings(
 	});
 
 	return { chunks: chunks.length, embedded, skipped };
+}
+
+function sleep(ms: number): Promise<void> {
+	return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+function existingChunkEmbeddingContentHash(agentId: string, chunkId: string): string | null {
+	const row = getDbAccessor().withReadDb((db) =>
+		db
+			.prepare("SELECT content_hash FROM embeddings WHERE source_type = ? AND source_id = ? AND agent_id = ? LIMIT 1")
+			.get(OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
+	) as { content_hash: string } | undefined;
+	return row?.content_hash ?? null;
 }
 
 export function purgeObsidianSourceFileEmbeddings(input: PurgeObsidianSourceFileEmbeddingsInput): number {

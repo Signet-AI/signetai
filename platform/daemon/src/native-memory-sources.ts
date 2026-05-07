@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -9,7 +8,7 @@ import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
-import { indexExternalMemoryArtifact, softDeleteArtifactRowsForPath } from "./memory-lineage";
+import { hashNormalizedBody, indexExternalMemoryArtifact, softDeleteArtifactRowsForPath } from "./memory-lineage";
 import {
 	type SourceEmbeddingFetch,
 	indexObsidianSourceEmbeddings,
@@ -38,8 +37,12 @@ export interface NativeMemoryFilePattern {
 }
 
 export interface NativeMemoryBridgeHandle {
-	readonly syncExisting: () => Promise<number>;
+	readonly syncExisting: (options?: NativeMemoryBridgeSyncOptions) => Promise<number>;
 	readonly close: () => Promise<void>;
+}
+
+export interface NativeMemoryBridgeSyncOptions {
+	readonly requestResyncIfBusy?: boolean;
 }
 
 export interface NativeMemoryBridgeOptions {
@@ -50,6 +53,9 @@ export interface NativeMemoryBridgeOptions {
 	readonly agentsDir?: string;
 	readonly includeConfiguredSources?: boolean;
 	readonly yieldEveryFiles?: number;
+	readonly sourceFileDelayMs?: number;
+	readonly sourceCleanupEnabled?: boolean;
+	readonly sourceGraphEnabled?: boolean;
 	readonly onFileIndexed?: (event: NativeMemoryFileIndexEvent) => void;
 }
 
@@ -67,6 +73,7 @@ interface IndexedNativeMemory {
 }
 
 const indexed = new Map<string, IndexedNativeMemory>();
+const DEFAULT_OBSIDIAN_SOURCE_FILE_DELAY_MS = 250;
 
 function codexRoot(): string {
 	return join(homedir(), ".codex");
@@ -222,22 +229,33 @@ function sourceStateKey(source: NativeMemorySource, agentId: string): string {
 }
 
 function contentFingerprint(content: string): string {
-	return createHash("sha256").update(content).digest("hex");
+	return hashNormalizedBody(content);
 }
 
-function nativeArtifactRowExists(filePath: string, agentId: string): boolean {
+function sourceFileDelayMs(source: NativeMemorySource, options: NativeMemoryBridgeOptions): number {
+	if (options.sourceFileDelayMs !== undefined) {
+		return Math.max(0, Math.floor(options.sourceFileDelayMs));
+	}
+	return source.harness === "obsidian" ? DEFAULT_OBSIDIAN_SOURCE_FILE_DELAY_MS : 0;
+}
+
+function sleep(ms: number): Promise<void> {
+	return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+function nativeArtifactContentHash(filePath: string, agentId: string): string | null {
 	const sourcePath = filePath.replace(/\\/g, "/");
 	try {
 		return getDbAccessor().withReadDb((db) => {
 			const row = db
 				.prepare(
-					"SELECT 1 FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
+					"SELECT source_sha256 FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
 				)
-				.get(agentId, sourcePath);
-			return !!row;
+				.get(agentId, sourcePath) as { source_sha256: string } | undefined;
+			return row?.source_sha256 ?? null;
 		});
 	} catch {
-		return false;
+		return null;
 	}
 }
 
@@ -281,7 +299,7 @@ export async function indexNativeMemoryFile(
 	source: NativeMemorySource,
 	filePath: string,
 	agentId = resolveDaemonAgentId(),
-	options: Pick<NativeMemoryBridgeOptions, "embeddingConfig" | "fetchEmbedding"> = {},
+	options: Pick<NativeMemoryBridgeOptions, "embeddingConfig" | "fetchEmbedding" | "sourceGraphEnabled"> = {},
 ): Promise<boolean> {
 	const pattern = matchesPattern(source, filePath);
 	if (!pattern) return false;
@@ -305,10 +323,15 @@ export async function indexNativeMemoryFile(
 
 	const key = fingerprintKey(source, filePath, agentId);
 	const hash = contentFingerprint(content);
+	const persistedHash = nativeArtifactContentHash(filePath, agentId);
 	const cached = indexed.get(key);
 	if (cached?.contentHash === hash) {
-		if (nativeArtifactRowExists(filePath, agentId)) return false;
+		if (persistedHash === hash) return false;
 		indexed.delete(key);
+	}
+	if (persistedHash === hash) {
+		indexed.set(key, { contentHash: hash });
+		return false;
 	}
 
 	try {
@@ -322,14 +345,16 @@ export async function indexNativeMemoryFile(
 		});
 		if (source.harness === "obsidian" && pattern.kind === "source_obsidian_markdown") {
 			const sourceId = source.sourceId ?? sourceIdForObsidianRoot(source.root);
-			indexObsidianSourceStructure({
-				agentId,
-				sourceId,
-				sourceName: source.displayName,
-				root: source.root,
-				filePath,
-				content,
-			});
+			if (options.sourceGraphEnabled ?? true) {
+				indexObsidianSourceStructure({
+					agentId,
+					sourceId,
+					sourceName: source.displayName,
+					root: source.root,
+					filePath,
+					content,
+				});
+			}
 			if (options.embeddingConfig && options.fetchEmbedding) {
 				const embeddingResult = await indexObsidianSourceEmbeddings({
 					agentId,
@@ -466,6 +491,7 @@ export function startNativeMemoryBridge(
 					await yielder();
 				}
 				const total = files.length;
+				const fileDelayMs = sourceFileDelayMs(source, options);
 				for (const file of files) {
 					scanned++;
 					const changed = await indexNativeMemoryFile(source, file, agentId, options);
@@ -476,14 +502,17 @@ export function startNativeMemoryBridge(
 					current.add(file);
 					options.onFileIndexed?.({ source, filePath: file, indexed: changed, scanned, total, changed: changedCount });
 					await yielder();
+					await sleep(fileDelayMs);
 				}
-				const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
-				for (const file of activeNativeArtifactPaths(source, agentId)) {
-					if (!currentPaths.has(file.replace(/\\/g, "/"))) removeNativeMemoryFile(source, file, agentId);
+				if (options.sourceCleanupEnabled ?? true) {
+					const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
+					for (const file of activeNativeArtifactPaths(source, agentId)) {
+						if (!currentPaths.has(file.replace(/\\/g, "/"))) removeNativeMemoryFile(source, file, agentId);
+					}
 				}
 			}
 			const previous = known.get(key);
-			if (previous) {
+			if (previous && (options.sourceCleanupEnabled ?? true)) {
 				for (const file of previous) {
 					if (!current.has(file)) removeNativeMemoryFile(source, file, agentId);
 				}
@@ -496,9 +525,9 @@ export function startNativeMemoryBridge(
 
 	let syncInFlight: Promise<number> | null = null;
 	let resyncRequested = false;
-	const syncExisting = async (): Promise<number> => {
+	const syncExisting = async (syncOptions: NativeMemoryBridgeSyncOptions = {}): Promise<number> => {
 		if (syncInFlight) {
-			resyncRequested = true;
+			if (syncOptions.requestResyncIfBusy ?? true) resyncRequested = true;
 			return syncInFlight;
 		}
 		syncInFlight = Promise.resolve()
@@ -519,7 +548,7 @@ export function startNativeMemoryBridge(
 	const pollTimer =
 		pollIntervalMs > 0
 			? setInterval(() => {
-					syncExisting().catch((err) => {
+					syncExisting({ requestResyncIfBusy: false }).catch((err) => {
 						logger.warn("watcher", "Failed polling native memory sources", {
 							error: err instanceof Error ? err.message : String(err),
 						});
