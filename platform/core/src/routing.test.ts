@@ -225,6 +225,55 @@ describe("inference config + decision engine", () => {
 		expect(parsed.value.workloads?.memoryExtraction?.target).toBe(makeRoutingTargetRef("background", "default"));
 	});
 
+	it("preserves generated ACPX launcher package metadata when parsing setup routing", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				defaultPolicy: "background-acpx",
+				targets: {
+					"background-acpx": {
+						executor: "acpx",
+						acpx: {
+							agent: "codex",
+							bin: "/usr/local/bin/bunx",
+							package: "acpx@0.7.0",
+						},
+						models: {
+							default: {
+								model: "gpt-5-codex-mini",
+								toolUse: true,
+							},
+						},
+					},
+				},
+				policies: {
+					"background-acpx": {
+						mode: "automatic",
+						defaultTargets: [makeRoutingTargetRef("background-acpx", "default")],
+					},
+				},
+				taskClasses: {
+					memory_extraction: {
+						preferredTargets: [makeRoutingTargetRef("background-acpx", "default")],
+					},
+				},
+				workloads: {
+					memoryExtraction: { target: makeRoutingTargetRef("background-acpx", "default") },
+				},
+			},
+		});
+
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets["background-acpx"]?.acpx).toMatchObject({
+			agent: "codex",
+			bin: "/usr/local/bin/bunx",
+			package: "acpx@0.7.0",
+		});
+		expect(parsed.value.taskClasses.memory_extraction?.preferredTargets).toEqual([
+			makeRoutingTargetRef("background-acpx", "default"),
+		]);
+	});
+
 	it("parses documented ACPX terminal booleans into terminal modes", () => {
 		const parsed = parseRoutingConfig({
 			inference: {
