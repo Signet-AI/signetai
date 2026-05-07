@@ -398,6 +398,55 @@ export interface TelemetryStatsEnabledResponse {
 
 export type TelemetryStatsResponse = TelemetryStatsDisabledResponse | TelemetryStatsEnabledResponse;
 
+export interface MemorySearchTelemetryResult {
+	readonly rank: number;
+	readonly id: string;
+	readonly content: string;
+	readonly content_length: number;
+	readonly truncated: boolean;
+	readonly score: number;
+	readonly source: string;
+	readonly source_id?: string;
+	readonly session_id?: string;
+	readonly source_path?: string;
+	readonly type: string;
+	readonly tags: string | null;
+	readonly pinned: boolean;
+	readonly importance: number;
+	readonly who: string;
+	readonly project: string | null;
+	readonly created_at: string;
+	readonly supplementary?: boolean;
+}
+
+export interface MemorySearchTelemetryItem {
+	readonly id: string;
+	readonly created_at: string;
+	readonly route: string;
+	readonly agent_id: string;
+	readonly session_key: string | null;
+	readonly project: string | null;
+	readonly query: string;
+	readonly keyword_query: string | null;
+	readonly filters: Readonly<Record<string, unknown>>;
+	readonly method: "hybrid" | "keyword";
+	readonly result_count: number;
+	readonly top_score: number | null;
+	readonly no_hits: boolean;
+	readonly duration_ms: number;
+	readonly timings: {
+		readonly totalMs: number;
+		readonly stages: readonly { readonly name: string; readonly durationMs: number }[];
+	};
+	readonly results: readonly MemorySearchTelemetryResult[];
+	readonly sources: Readonly<Record<string, string>> | null;
+}
+
+export interface MemorySearchTelemetryResponse {
+	readonly items: readonly MemorySearchTelemetryItem[];
+	readonly count: number;
+}
+
 // Config types
 
 export interface ConfigFile {

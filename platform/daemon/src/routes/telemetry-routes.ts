@@ -1,11 +1,12 @@
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { requirePermission } from "../auth";
 import type { ErrorStage } from "../analytics.js";
+import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { getDiagnostics } from "../diagnostics.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
+import { listMemorySearchTelemetry } from "../memory-search-telemetry.js";
 import { getCheckpointsByProject, getCheckpointsBySession, redactCheckpointRow } from "../session-checkpoints.js";
 import type { TelemetryEventType } from "../telemetry.js";
 import { type TimelineSources, buildTimeline } from "../timeline.js";
@@ -17,12 +18,16 @@ import {
 	providerTracker,
 	telemetryRef,
 } from "./state.js";
+import { resolveScopedAgentId, resolveScopedProject } from "./utils.js";
 
 export function registerTelemetryRoutes(app: Hono): void {
 	app.use("/api/analytics", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
 	});
 	app.use("/api/analytics/*", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+	app.use("/api/telemetry/*", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
 	});
 	app.use("/api/timeline/*", async (c, next) => {
@@ -59,9 +64,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 
 	app.get("/api/analytics/memory-safety", (c) => {
-		const mutationHealth = getDbAccessor().withReadDb((db) =>
-			getDiagnostics(db, providerTracker, getUpdateState()),
-		);
+		const mutationHealth = getDbAccessor().withReadDb((db) => getDiagnostics(db, providerTracker, getUpdateState()));
 		const recentMutationErrors = analyticsCollector.getErrors({
 			stage: "mutation",
 			limit: 50,
@@ -143,7 +146,6 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({ scores });
 	});
 
-
 	app.get("/api/telemetry/events", (c) => {
 		if (!telemetryRef) {
 			return c.json({ events: [], enabled: false });
@@ -154,6 +156,34 @@ export function registerTelemetryRoutes(app: Hono): void {
 		const limit = Number.parseInt(c.req.query("limit") ?? "100", 10);
 		const events = telemetryRef.query({ event, since, until, limit });
 		return c.json({ events, enabled: true });
+	});
+
+	app.get("/api/telemetry/memory-search", (c) => {
+		const agent = resolveScopedAgentId(c, c.req.query("agent_id") ?? c.req.query("agentId"));
+		if (agent.error) return c.json({ error: agent.error }, 403);
+		const project = resolveScopedProject(c, c.req.query("project"));
+		if (project.error) return c.json({ error: project.error }, 403);
+
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "100", 10);
+		const offsetRaw = Number.parseInt(c.req.query("offset") ?? "0", 10);
+		const noHitsRaw = c.req.query("no_hits");
+		const items = listMemorySearchTelemetry(getDbAccessor(), {
+			agentId: agent.agentId,
+			project: project.project,
+			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
+			route: c.req.query("route"),
+			since: c.req.query("since"),
+			until: c.req.query("until"),
+			noHits:
+				noHitsRaw === "1" || noHitsRaw === "true"
+					? true
+					: noHitsRaw === "0" || noHitsRaw === "false"
+						? false
+						: undefined,
+			limit: Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 100,
+			offset: Number.isFinite(offsetRaw) ? Math.max(offsetRaw, 0) : 0,
+		});
+		return c.json({ items, count: items.length });
 	});
 
 	app.get("/api/telemetry/stats", (c) => {
@@ -205,6 +235,35 @@ export function registerTelemetryRoutes(app: Hono): void {
 
 		const lines = events.map((e) => JSON.stringify(e)).join("\n");
 		return c.text(lines, 200, { "Content-Type": "application/x-ndjson" });
+	});
+
+	app.get("/api/telemetry/memory-search/export", (c) => {
+		const agent = resolveScopedAgentId(c, c.req.query("agent_id") ?? c.req.query("agentId"));
+		if (agent.error) return c.json({ error: agent.error }, 403);
+		const project = resolveScopedProject(c, c.req.query("project"));
+		if (project.error) return c.json({ error: project.error }, 403);
+
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "10000", 10);
+		const noHitsRaw = c.req.query("no_hits");
+		const items = listMemorySearchTelemetry(getDbAccessor(), {
+			agentId: agent.agentId,
+			project: project.project,
+			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
+			route: c.req.query("route"),
+			since: c.req.query("since"),
+			until: c.req.query("until"),
+			noHits:
+				noHitsRaw === "1" || noHitsRaw === "true"
+					? true
+					: noHitsRaw === "0" || noHitsRaw === "false"
+						? false
+						: undefined,
+			limit: Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 10000) : 10000,
+			offset: 0,
+		});
+		return c.text(items.map((item) => JSON.stringify(item)).join("\n"), 200, {
+			"Content-Type": "application/x-ndjson",
+		});
 	});
 
 	app.get("/api/checkpoints", (c) => {

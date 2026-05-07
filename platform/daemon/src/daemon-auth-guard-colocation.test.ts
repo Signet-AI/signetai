@@ -61,6 +61,8 @@ describe("auth guard co-location", () => {
 		// Import daemon to warm the full module graph and break the
 		// circular dependency chain (state → pipeline → hooks → daemon → git-sync → state).
 		await import("./daemon");
+		const { initDbAccessor } = await import("./db-accessor");
+		initDbAccessor(join(tmpDir, "memory", "memories.db"));
 
 		// Switch to team mode.  The initial parseAuthConfig(undefined, ...)
 		// always defaults to local.  reloadAuthState reads agent.yaml from
@@ -168,6 +170,88 @@ describe("auth guard co-location", () => {
 			const { registerRepairRoutes } = await import("./routes/repair-routes");
 			registerRepairRoutes(app);
 			expect(await status(app, "POST", "/api/repair/requeue-dead")).toBe(403);
+		});
+	});
+
+	describe("telemetry routes need analytics guards", () => {
+		it("GET /api/telemetry/memory-search returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerTelemetryRoutes } = await import("./routes/telemetry-routes");
+			registerTelemetryRoutes(app);
+			expect(await status(app, "GET", "/api/telemetry/memory-search")).toBe(403);
+		});
+
+		it("scopes memory search telemetry list and export to the authenticated token", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { getDbAccessor } = await import("./db-accessor");
+			const { recordMemorySearchTelemetry } = await import("./memory-search-telemetry");
+			const { registerTelemetryRoutes } = await import("./routes/telemetry-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode telemetry test");
+
+			const response = {
+				query: "recall scoped telemetry",
+				method: "hybrid" as const,
+				results: [],
+				meta: {
+					totalReturned: 0,
+					hasSupplementary: false,
+					noHits: true,
+					timings: { totalMs: 1, stages: [] },
+				},
+			};
+			recordMemorySearchTelemetry(getDbAccessor(), {
+				route: "GET /api/memory/search",
+				agentId: "telemetry-agent-a",
+				sessionKey: "telemetry-session-a",
+				project: "/allowed-telemetry-project",
+				params: {
+					query: "recall scoped telemetry",
+					agentId: "telemetry-agent-a",
+					project: "/allowed-telemetry-project",
+				},
+				response,
+				retentionDays: 90,
+			});
+			recordMemorySearchTelemetry(getDbAccessor(), {
+				route: "GET /api/memory/search",
+				agentId: "telemetry-agent-b",
+				sessionKey: "telemetry-session-b",
+				project: "/other-telemetry-project",
+				params: { query: "recall scoped telemetry", agentId: "telemetry-agent-b", project: "/other-telemetry-project" },
+				response,
+				retentionDays: 90,
+			});
+
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerTelemetryRoutes(app);
+			const token = createToken(
+				secret,
+				{
+					sub: "telemetry-operator",
+					role: "operator",
+					scope: { agent: "telemetry-agent-a", project: "/allowed-telemetry-project" },
+				},
+				60,
+			);
+			const headers = { authorization: `Bearer ${token}` };
+
+			const list = await app.request("/api/telemetry/memory-search", { headers });
+			expect(list.status).toBe(200);
+			const body = (await list.json()) as { items: Array<{ agent_id: string; project: string | null }> };
+			expect(body.items.map((item) => item.agent_id)).toEqual(["telemetry-agent-a"]);
+			expect(body.items[0]?.project).toBe("/allowed-telemetry-project");
+
+			const wrongAgent = await app.request("/api/telemetry/memory-search/export?agent_id=telemetry-agent-b", {
+				headers,
+			});
+			expect(wrongAgent.status).toBe(403);
+			const wrongProject = await app.request("/api/telemetry/memory-search/export?project=/other-telemetry-project", {
+				headers,
+			});
+			expect(wrongProject.status).toBe(403);
 		});
 	});
 

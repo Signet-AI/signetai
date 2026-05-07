@@ -71,6 +71,7 @@ import { up as memoryArtifactSoftDelete } from "./062-memory-artifact-soft-delet
 import { up as contentOnlyMemoriesFtsUpdate } from "./063-content-only-memories-fts-update";
 import { up as sourceGraphProvenance } from "./064-source-graph-provenance";
 import { up as sourceEmbeddingAgentScope } from "./065-source-embedding-agent-scope";
+import { up as memorySearchTelemetry } from "./066-memory-search-telemetry";
 
 // -- Public interface consumed by Database.init() --
 
@@ -603,6 +604,14 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: sourceEmbeddingAgentScope,
 		artifacts: {
 			columns: [{ table: "embeddings", column: "agent_id", optional: true }],
+		},
+	},
+	{
+		version: 66,
+		name: "memory-search-telemetry",
+		up: memorySearchTelemetry,
+		artifacts: {
+			tables: ["memory_search_telemetry"],
 		},
 	},
 ];

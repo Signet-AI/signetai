@@ -576,6 +576,14 @@ export class GeneratedClient {
 		return this.transport.get<unknown>("/api/telemetry/export", query);
 	}
 
+	async getApiTelemetryMemorySearch(query?: Record<string, unknown>): Promise<unknown> {
+		return this.transport.get<unknown>("/api/telemetry/memory-search", query);
+	}
+
+	async getApiTelemetryMemorySearchExport(query?: Record<string, unknown>): Promise<unknown> {
+		return this.transport.get<unknown>("/api/telemetry/memory-search/export", query);
+	}
+
 	async getApiTelemetryTrainingExport(query?: Record<string, unknown>): Promise<unknown> {
 		return this.transport.get<unknown>("/api/telemetry/training-export", query);
 	}
