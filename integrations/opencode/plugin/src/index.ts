@@ -190,6 +190,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 
 	let sessionContext = "";
 	const startedSessions = new Set<string>();
+	const startingSessions = new Map<string, Promise<string>>();
 	const parentBySession = new Map<string, string>();
 	const start = await client.postResult<SessionStartResult>(
 		"/api/hooks/session-start",
@@ -212,20 +213,35 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 
 	async function ensureSessionStarted(sessionID: string): Promise<string> {
 		if (startedSessions.has(sessionID)) return "";
-		const result = await client.post<SessionStartResult>(
-			"/api/hooks/session-start",
-			{
-				harness: HARNESS,
-				project: directory,
-				agentId,
-				sessionKey: sessionID,
-				parentSessionKey: parentBySession.get(sessionID),
-				runtimePath: RUNTIME_PATH,
-			},
-			sessionStartTimeout(),
-		);
-		startedSessions.add(sessionID);
-		return result?.inject ?? "";
+		const existing = startingSessions.get(sessionID);
+		if (existing) {
+			await existing;
+			return "";
+		}
+
+		const startSession = client
+			.post<SessionStartResult>(
+				"/api/hooks/session-start",
+				{
+					harness: HARNESS,
+					project: directory,
+					agentId,
+					sessionKey: sessionID,
+					parentSessionKey: parentBySession.get(sessionID),
+					runtimePath: RUNTIME_PATH,
+				},
+				sessionStartTimeout(),
+			)
+			.then((result) => {
+				startedSessions.add(sessionID);
+				return result?.inject ?? "";
+			});
+		startingSessions.set(sessionID, startSession);
+		try {
+			return await startSession;
+		} finally {
+			startingSessions.delete(sessionID);
+		}
 	}
 
 	return {

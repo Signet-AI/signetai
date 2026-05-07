@@ -123,6 +123,52 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 		expect(output.system.join("\n")).toContain("prompt-submit-context");
 	});
 
+	test("single-flights concurrent per-session start hooks", async () => {
+		process.env.SIGNET_AGENT_ID = undefined;
+		const records: RequestRecord[] = [];
+		let releaseSessionStart: (() => void) | undefined;
+		const sessionStartGate = new Promise<void>((resolve) => {
+			releaseSessionStart = resolve;
+		});
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+				const url = new URL(String(input));
+				const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+				records.push({ path: url.pathname, body });
+
+				if (url.pathname === "/api/hooks/session-start") {
+					const sessionKey = typeof body.sessionKey === "string" ? body.sessionKey : "";
+					if (sessionKey) await sessionStartGate;
+					return Response.json({ inject: sessionKey ? `session-start:${sessionKey}` : "workspace-start" });
+				}
+
+				if (url.pathname === "/api/hooks/user-prompt-submit") {
+					return Response.json({ inject: "prompt-submit-context" });
+				}
+
+				return Response.json({});
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+		const hooks = await createHooks();
+		const output = { system: [] };
+
+		const chat = hooks["chat.message"](
+			{ sessionID: "concurrent-child" },
+			{ parts: [{ type: "text", text: "start concurrent child" }] },
+		);
+		const transform = hooks["experimental.chat.system.transform"]({ sessionID: "concurrent-child" }, output);
+		await Promise.resolve();
+		releaseSessionStart?.();
+		await Promise.all([chat, transform]);
+
+		const sessionStarts = records.filter(
+			(record) => record.path === "/api/hooks/session-start" && record.body.sessionKey === "concurrent-child",
+		);
+		expect(sessionStarts).toHaveLength(1);
+		expect(output.system.join("\n").match(/session-start:concurrent-child/g)).toHaveLength(1);
+	});
+
 	test("does not fail closed when per-session start context is unavailable", async () => {
 		process.env.SIGNET_AGENT_ID = undefined;
 		let sessionStartCount = 0;
