@@ -577,7 +577,7 @@ export function buildSessionEndBody(
 	const body = input ?? {};
 	const sessionKey = pickSessionKey(body);
 	const sessionId = pickString(body.session_id, body.sessionId, sessionKey);
-	const agentId = pickString(body.signet_agent_id, body.signetAgentId);
+	const agentId = pickString(body.signet_agent_id, body.signetAgentId, body.agentId, body.agent_id);
 	return {
 		harness,
 		transcriptPath: pickString(body.transcript_path, body.transcriptPath),

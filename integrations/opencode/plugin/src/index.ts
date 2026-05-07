@@ -244,8 +244,14 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			pendingInject.delete(input.sessionID);
 
 			try {
-				const startInject = await ensureSessionStarted(input.sessionID);
-				if (startInject) pendingInjectSet(input.sessionID, startInject);
+				try {
+					const startInject = await ensureSessionStarted(input.sessionID);
+					if (startInject) pendingInjectSet(input.sessionID, startInject);
+				} catch {
+					// Session-start context is optional; still run prompt-submit so
+					// recall and transcript capture stay fail-open independently.
+				}
+
 				const result = await client.post<UserPromptSubmitResult>(
 					"/api/hooks/user-prompt-submit",
 					{

@@ -142,6 +142,31 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 		).resolves.toBeUndefined();
 	});
 
+	test("does not skip prompt-submit when per-session start context is unavailable", async () => {
+		process.env.SIGNET_AGENT_ID = undefined;
+		const records: RequestRecord[] = [];
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+				const url = new URL(String(input));
+				const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+				records.push({ path: url.pathname, body });
+				if (url.pathname === "/api/hooks/session-start") {
+					return new Response("daemon unavailable", { status: 503 });
+				}
+				if (url.pathname === "/api/hooks/user-prompt-submit") {
+					return Response.json({ inject: "prompt-submit-context" });
+				}
+				return Response.json({});
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+		const hooks = await createHooks();
+
+		await hooks["chat.message"]({ sessionID: "daemon-down-child" }, { parts: [{ type: "text", text: "keep recall" }] });
+
+		expect(records.map((record) => record.path)).toContain("/api/hooks/user-prompt-submit");
+	});
+
 	test("threads configured Signet agent scope through session-end", async () => {
 		process.env.SIGNET_AGENT_ID = "named-agent";
 		const records = installFetch();

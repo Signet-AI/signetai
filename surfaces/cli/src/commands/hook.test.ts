@@ -171,6 +171,21 @@ describe("buildSessionEndBody", () => {
 			runtimePath: "legacy",
 		});
 	});
+
+	test("preserves existing agentId and agent_id inputs as Signet scope", () => {
+		expect(buildSessionEndBody({ agentId: "research-agent", sessionKey: "sess-1" }, "claude-code").agentId).toBe(
+			"research-agent",
+		);
+		expect(buildSessionEndBody({ agent_id: "legacy-agent", sessionKey: "sess-2" }, "custom-harness").agentId).toBe(
+			"legacy-agent",
+		);
+		expect(
+			buildSessionEndBody(
+				{ agentId: "legacy-agent", signetAgentId: "explicit-agent", sessionKey: "sess-3" },
+				"claude-code",
+			).agentId,
+		).toBe("explicit-agent");
+	});
 });
 
 describe("buildSessionStartBody", () => {
