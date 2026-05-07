@@ -1,12 +1,13 @@
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { requirePermission } from "../auth";
 import type { ErrorStage } from "../analytics.js";
+import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { getDiagnostics } from "../diagnostics.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { loadMemoryConfig } from "../memory-config.js";
+import { listMemorySearchTelemetry } from "../memory-search-telemetry.js";
 import { resolvePredictorCheckpointPath } from "../predictor-client.js";
 import {
 	getComparisonsByEntity,
@@ -35,6 +36,9 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return requirePermission("analytics", authConfig)(c, next);
 	});
 	app.use("/api/analytics/*", async (c, next) => {
+		return requirePermission("analytics", authConfig)(c, next);
+	});
+	app.use("/api/telemetry/*", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
 	});
 	app.use("/api/timeline/*", async (c, next) => {
@@ -282,6 +286,28 @@ export function registerTelemetryRoutes(app: Hono): void {
 		return c.json({ events, enabled: true });
 	});
 
+	app.get("/api/telemetry/memory-search", (c) => {
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "100", 10);
+		const offsetRaw = Number.parseInt(c.req.query("offset") ?? "0", 10);
+		const noHitsRaw = c.req.query("no_hits");
+		const items = listMemorySearchTelemetry(getDbAccessor(), {
+			agentId: c.req.query("agent_id") ?? c.req.query("agentId"),
+			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
+			route: c.req.query("route"),
+			since: c.req.query("since"),
+			until: c.req.query("until"),
+			noHits:
+				noHitsRaw === "1" || noHitsRaw === "true"
+					? true
+					: noHitsRaw === "0" || noHitsRaw === "false"
+						? false
+						: undefined,
+			limit: Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 100,
+			offset: Number.isFinite(offsetRaw) ? Math.max(offsetRaw, 0) : 0,
+		});
+		return c.json({ items, count: items.length });
+	});
+
 	app.get("/api/telemetry/stats", (c) => {
 		if (!telemetryRef) {
 			return c.json({ enabled: false });
@@ -331,6 +357,29 @@ export function registerTelemetryRoutes(app: Hono): void {
 
 		const lines = events.map((e) => JSON.stringify(e)).join("\n");
 		return c.text(lines, 200, { "Content-Type": "application/x-ndjson" });
+	});
+
+	app.get("/api/telemetry/memory-search/export", (c) => {
+		const limitRaw = Number.parseInt(c.req.query("limit") ?? "10000", 10);
+		const noHitsRaw = c.req.query("no_hits");
+		const items = listMemorySearchTelemetry(getDbAccessor(), {
+			agentId: c.req.query("agent_id") ?? c.req.query("agentId"),
+			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
+			route: c.req.query("route"),
+			since: c.req.query("since"),
+			until: c.req.query("until"),
+			noHits:
+				noHitsRaw === "1" || noHitsRaw === "true"
+					? true
+					: noHitsRaw === "0" || noHitsRaw === "false"
+						? false
+						: undefined,
+			limit: Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 10000) : 10000,
+			offset: 0,
+		});
+		return c.text(items.map((item) => JSON.stringify(item)).join("\n"), 200, {
+			"Content-Type": "application/x-ndjson",
+		});
 	});
 
 	app.get("/api/telemetry/training-export", async (c) => {

@@ -170,6 +170,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		flushIntervalMs: 60000,
 		flushBatchSize: 50,
 		retentionDays: 90,
+		memorySearchQaEnabled: false,
 	},
 	embeddingTracker: {
 		enabled: true,
@@ -855,6 +856,11 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			flushIntervalMs: clampPositive(telemetryRaw?.flushIntervalMs, 5000, 600000, d.telemetry.flushIntervalMs),
 			flushBatchSize: clampPositive(telemetryRaw?.flushBatchSize, 1, 500, d.telemetry.flushBatchSize),
 			retentionDays: clampPositive(telemetryRaw?.retentionDays, 1, 365, d.telemetry.retentionDays),
+			memorySearchQaEnabled: resolveBool(
+				telemetryRaw?.memorySearchQaEnabled,
+				undefined,
+				d.telemetry.memorySearchQaEnabled,
+			),
 		},
 
 		embeddingTracker: {

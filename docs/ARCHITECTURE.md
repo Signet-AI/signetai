@@ -908,9 +908,11 @@ $SIGNET_WORKSPACE/
 
 By default the daemon binds to loopback. It can also bind for a configured
 network mode such as Tailscale, with auth and CORS controls governing remote
-access. All data stays local by design. The daemon collects local-only operational telemetry (latency
-histograms, usage counters, error ring buffer) accessible at
-`/api/telemetry/*`. No data is sent externally.
+access. All data stays local by design. The daemon collects local operational
+telemetry (latency histograms, usage counters, error ring buffer) accessible
+at `/api/telemetry/*`. Anonymous telemetry events never include prompts or
+memory content. Optional recall QA capture writes a separate local-only search
+ledger with query text and result snapshots for manual review.
 
 ---
 
@@ -992,6 +994,8 @@ All endpoints are served by the Hono server on port 3850.
 | `/api/telemetry/events` | GET | analytics | Query telemetry events |
 | `/api/telemetry/stats` | GET | analytics | Aggregated telemetry stats |
 | `/api/telemetry/export` | GET | analytics | Export telemetry as NDJSON |
+| `/api/telemetry/memory-search` | GET | analytics | Query local recall QA telemetry |
+| `/api/telemetry/memory-search/export` | GET | analytics | Export recall QA telemetry as NDJSON |
 | `/api/timeline/:id` | GET | analytics | Entity event timeline |
 | `/api/timeline/:id/export` | GET | analytics | Export timeline with metadata |
 | `/api/git/status` | GET | local | Git sync status |

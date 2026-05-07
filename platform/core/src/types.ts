@@ -310,6 +310,7 @@ export interface PipelineTelemetryConfig {
 	readonly flushIntervalMs: number;
 	readonly flushBatchSize: number;
 	readonly retentionDays: number;
+	readonly memorySearchQaEnabled: boolean;
 }
 
 export interface PipelineContinuityConfig {
