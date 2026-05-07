@@ -173,6 +173,38 @@ printf '  acpx answer  \\n'
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("normalizes relative ACPX cwd before spawning and forwarding --cwd", async () => {
+		const root = join(tmpdir(), `signet-acpx-cwd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(join(root, "workspace"), { recursive: true });
+		const bin = join(root, "fake-acpx.sh");
+		const argsPath = join(root, "args.json");
+		const pwdPath = join(root, "pwd.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+pwd > ${JSON.stringify(pwdPath)}
+printf 'ok\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(root);
+			const provider = createAcpxProvider({ agent: "codex", bin, cwd: "workspace", hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			const cwdIndex = args.indexOf("--cwd");
+			expect(cwdIndex).toBeGreaterThanOrEqual(0);
+			expect(args[cwdIndex + 1]).toBe(join(root, "workspace"));
+			expect(readFileSync(pwdPath, "utf-8").trim()).toBe(join(root, "workspace"));
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 });
 
 describe("createOllamaProvider", () => {

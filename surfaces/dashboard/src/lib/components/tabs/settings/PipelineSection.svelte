@@ -565,18 +565,6 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 			<Switch checked={st.aBool(["memory", "pipelineV2", "modelRegistry", "enabled"])} onCheckedChange={setBool(["memory", "pipelineV2", "modelRegistry", "enabled"])} />
 		</FormField>
 
-		<div class="font-mono text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
-			Predictor
-		</div>
-		<FormField label="enabled" description="Enable the predictive memory scorer. Learns which memories are most useful based on agent feedback.">
-			<Switch checked={st.aBool(["memory", "pipelineV2", "predictor", "enabled"])} onCheckedChange={setBool(["memory", "pipelineV2", "predictor", "enabled"])} />
-		</FormField>
-		<FormField label="agentFeedback" description="Allow the agent to provide relevance feedback on recalled memories.">
-			<Switch checked={st.aBool(["memory", "pipelineV2", "predictorPipeline", "agentFeedback"])} onCheckedChange={setBool(["memory", "pipelineV2", "predictorPipeline", "agentFeedback"])} />
-		</FormField>
-		<FormField label="trainingTelemetry" description="Contribute anonymized training signals to improve the shared base model.">
-			<Switch checked={st.aBool(["memory", "pipelineV2", "predictorPipeline", "trainingTelemetry"])} onCheckedChange={setBool(["memory", "pipelineV2", "predictorPipeline", "trainingTelemetry"])} />
-		</FormField>
 
 		<AdvancedSection>
 			<FormField label={PIPELINE_CORE_BOOLS[1].key} description={PIPELINE_CORE_BOOLS[1].desc}>

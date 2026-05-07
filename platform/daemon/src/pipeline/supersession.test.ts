@@ -163,7 +163,6 @@ function testConfig(overrides?: Partial<PipelineV2Config>): PipelineV2Config {
 			staleDays: 14,
 			decayIntervalSessions: 10,
 		},
-		predictorPipeline: { enabled: false, sidecarUrl: "", trainIntervalMs: 300000, trainingMinSessions: 20 },
 		modelRegistry: { models: {} },
 		...overrides,
 	} as PipelineV2Config;

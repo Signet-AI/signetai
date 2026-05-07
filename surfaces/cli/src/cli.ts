@@ -374,7 +374,6 @@ const OPENCLAW_PLUGIN_PACKAGE = "@signetai/signet-memory-openclaw";
 const OPENCLAW_PLUGIN_SYNC_FILENAME = "openclaw-plugin-version";
 const OPENCLAW_PLUGIN_RETRY_FILENAME = "openclaw-plugin-retry-at";
 const OPENCLAW_PLUGIN_RETRY_DELAY_MS = 10 * 60_000;
-const PREDICTOR_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 function getVersionFromPackageJson(packageJsonPath: string): string | null {
 	if (!existsSync(packageJsonPath)) {

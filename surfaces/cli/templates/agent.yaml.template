@@ -151,15 +151,6 @@ memory:
     # Semantic contradiction detection — flags conflicting memory updates
     semanticContradictionEnabled: true
 
-    # Predictor — ML-based memory relevance scoring
-    predictor:
-      enabled: true
-
-    # Agent feedback loop for memory relevance
-    predictorPipeline:
-      agentFeedback: true
-      # Opt-in: contribute anonymized training data
-      trainingTelemetry: false
 
 # ============================================================================
 # Hooks Configuration

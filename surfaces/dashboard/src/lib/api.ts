@@ -2713,41 +2713,16 @@ export async function getKnowledgeEntityHealth(
 	}
 }
 
-export async function getPredictorEntitySlices(since?: string): Promise<PredictorEntitySlice[]> {
-	try {
-		const params = new URLSearchParams();
-		if (since) params.set("since", since);
-		const res = await fetch(`${API_BASE}/api/predictor/comparisons/by-entity?${params.toString()}`);
-		if (!res.ok) throw new Error("Failed to fetch predictor entity slices");
-		const data = (await res.json()) as { items?: PredictorEntitySlice[] };
-		return data.items ?? [];
-	} catch {
-		return [];
-	}
+export async function getPredictorEntitySlices(_since?: string): Promise<PredictorEntitySlice[]> {
+	return [];
 }
 
-export async function getPredictorProjectSlices(since?: string): Promise<PredictorProjectSlice[]> {
-	try {
-		const params = new URLSearchParams();
-		if (since) params.set("since", since);
-		const res = await fetch(`${API_BASE}/api/predictor/comparisons/by-project?${params.toString()}`);
-		if (!res.ok) throw new Error("Failed to fetch predictor project slices");
-		const data = (await res.json()) as { items?: PredictorProjectSlice[] };
-		return data.items ?? [];
-	} catch {
-		return [];
-	}
+export async function getPredictorProjectSlices(_since?: string): Promise<PredictorProjectSlice[]> {
+	return [];
 }
 
-export async function getPredictorTrainingRuns(limit = 20): Promise<PredictorTrainingRun[]> {
-	try {
-		const res = await fetch(`${API_BASE}/api/predictor/training?limit=${limit}`);
-		if (!res.ok) throw new Error("Failed to fetch predictor training runs");
-		const data = (await res.json()) as { items?: PredictorTrainingRun[] };
-		return data.items ?? [];
-	} catch {
-		return [];
-	}
+export async function getPredictorTrainingRuns(_limit = 20): Promise<PredictorTrainingRun[]> {
+	return [];
 }
 
 // ---------------------------------------------------------------------------

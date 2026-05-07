@@ -1344,8 +1344,11 @@ impl Default for PipelineV2Config {
             structural: StructuralConfig::default(),
             feedback: FeedbackConfig::default(),
             significance: Some(SignificanceConfig::default()),
-            predictor: Some(PredictorConfig::default()),
-            predictor_pipeline: PredictorPipelineConfig::default(),
+            predictor: None,
+            predictor_pipeline: PredictorPipelineConfig {
+                agent_feedback: false,
+                training_telemetry: false,
+            },
             model_registry: ModelRegistryConfig::default(),
         }
     }

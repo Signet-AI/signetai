@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { buildSetupInference, buildSetupPipeline, defaultExtractionModel } from "./setup-pipeline";
+import {
+	applySetupInferenceRoute,
+	buildSetupInference,
+	buildSetupPipeline,
+	defaultExtractionModel,
+} from "./setup-pipeline";
 
 describe("defaultExtractionModel", () => {
 	it("prefers the cheap codex mini model", () => {
@@ -64,7 +69,7 @@ describe("buildSetupPipeline", () => {
 
 describe("buildSetupInference", () => {
 	it("writes ACPX as explicit inference routing with the selected harness agent", () => {
-		const inference = buildSetupInference("acpx", "gpt-5-codex-mini", ["opencode", "codex"]);
+		const inference = buildSetupInference("acpx", "gpt-5-codex-mini", ["opencode", "codex"], [], "/usr/local/bin/bunx");
 		expect(inference?.targets["background-acpx"]).toMatchObject({
 			executor: "acpx",
 			acpx: {
@@ -82,10 +87,39 @@ describe("buildSetupInference", () => {
 	});
 
 	it("selects ACPX agent from detected providers when no harness was selected", () => {
-		const inference = buildSetupInference("acpx", "haiku", [], ["acpx", "claude-code"]);
+		const inference = buildSetupInference("acpx", "haiku", [], ["acpx", "claude-code"], "/usr/local/bin/bunx");
 		expect(inference?.targets["background-acpx"]).toMatchObject({
 			executor: "acpx",
 			acpx: { agent: "claude-code" },
+		});
+	});
+	it("does not emit ACPX routing without a resolved launcher", () => {
+		expect(buildSetupInference("acpx", "haiku", ["codex"], ["acpx"])).toBeUndefined();
+	});
+
+	it("removes generated ACPX routing when setup switches to another provider", () => {
+		const config: Record<string, unknown> = {
+			inference: buildSetupInference("acpx", "haiku", ["codex"], ["acpx"], "/usr/local/bin/bunx"),
+		};
+
+		applySetupInferenceRoute(config, undefined);
+
+		expect(config).not.toHaveProperty("inference");
+	});
+
+	it("preserves custom inference routing when removing generated ACPX setup routing", () => {
+		const config: Record<string, unknown> = {
+			inference: {
+				defaultPolicy: "custom",
+				targets: { custom: { executor: "local" } },
+			},
+		};
+
+		applySetupInferenceRoute(config, undefined);
+
+		expect(config.inference).toEqual({
+			defaultPolicy: "custom",
+			targets: { custom: { executor: "local" } },
 		});
 	});
 });
