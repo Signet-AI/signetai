@@ -190,6 +190,13 @@ async function appendCanonicalLiveTranscriptTurns(params: {
 
 /** Tracks which sessions have already received a full session-start inject. */
 const sessionStartSeen = new Map<string, number>();
+const SESSION_START_SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function pruneSessionStartSeen(now = Date.now()): void {
+	for (const [sessionKey, seenAt] of sessionStartSeen.entries()) {
+		if (now - seenAt > SESSION_START_SEEN_TTL_MS) sessionStartSeen.delete(sessionKey);
+	}
+}
 
 const DEFAULT_SESSION_START_MAX_INJECT_TOKENS = 12_000;
 const PREDICTED_CONTEXT_TERM_LIMIT = 6;
@@ -1434,6 +1441,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// Dedup guard: if we already sent a full inject for this session, return
 	// a minimal stub. Identity files / MEMORY.md are already in the context.
 	// Must fire BEFORE initContinuity to avoid resetting accumulated state.
+	pruneSessionStartSeen();
 	if (req.sessionKey && sessionStartSeen.has(req.sessionKey)) {
 		logger.info("hooks", "Session start dedup — returning minimal stub", {
 			harness: req.harness,
@@ -3069,9 +3077,11 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
 	const endedAt = new Date().toISOString();
 
-	// Clear hook dedup state for this session
+	// Keep session-start dedup across normal Stop/session-end hooks. Codex can
+	// emit Stop between turns and then emit SessionStart again when an idle
+	// conversation is resumed with the same session key; clearing here would
+	// re-inject the full identity/memory block mid-conversation.
 	if (sessionKey) {
-		sessionStartSeen.delete(sessionKey);
 		promptDedupRecent.delete(sessionKey);
 	}
 
@@ -3086,6 +3096,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 
 	if (req.reason === "clear") {
 		// Caller intends to discard session context — skip checkpoint, just clean up
+		if (sessionKey) sessionStartSeen.delete(sessionKey);
 		clearContinuity(sessionKey);
 		return { memoriesSaved: 0 };
 	}
