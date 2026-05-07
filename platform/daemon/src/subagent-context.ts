@@ -41,7 +41,7 @@ function cleanString(value: unknown): string | undefined {
 
 function tableExists(db: ReadDb, name: string): boolean {
 	const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
-	return row !== undefined;
+	return row !== undefined && row !== null;
 }
 
 function columnExists(db: ReadDb, table: string, column: string): boolean {
@@ -329,28 +329,28 @@ export function searchSessionTranscripts(params: {
 	if (words.length === 0) return [];
 	const score = words.map(() => "CASE WHEN LOWER(st.content) LIKE ? THEN 1 ELSE 0 END").join(" + ");
 	const any = words.map(() => "LOWER(st.content) LIKE ?").join(" OR ");
+	const patterns = words.map((word) => `%${word}%`);
 	const parts = [
 		`SELECT st.session_key, st.project, ${seen} AS updated_at, st.content, ${score} AS rank`,
 		"FROM session_transcripts st",
 		"WHERE st.agent_id = ?",
 	];
-	const args: unknown[] = words.map((word) => `%${word}%`);
-	args.push(params.agentId);
+	const scoreArgs: unknown[] = patterns;
+	const whereArgs: unknown[] = [params.agentId];
 	if (targetSessionKey) {
 		parts.push("AND st.session_key = ?");
-		args.push(targetSessionKey);
+		whereArgs.push(targetSessionKey);
 	} else if (params.currentSessionKey) {
 		parts.push("AND st.session_key != ?");
-		args.push(params.currentSessionKey);
+		whereArgs.push(params.currentSessionKey);
 	}
 	if (params.project) {
 		parts.push("AND st.project = ?");
-		args.push(params.project);
+		whereArgs.push(params.project);
 	}
 	parts.push(`AND (${any})`);
-	args.push(...words.map((word) => `%${word}%`));
 	parts.push(`ORDER BY rank DESC, ${seen} DESC LIMIT ?`);
-	args.push(limit);
+	const args = [...scoreArgs, ...whereArgs, ...patterns, limit];
 
 	return (
 		params.db.prepare(parts.join("\n")).all(...args) as Array<{

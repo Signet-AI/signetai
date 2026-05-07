@@ -210,8 +210,8 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		sessionContext = staticFallback();
 	}
 
-	async function ensureSessionStarted(sessionID: string): Promise<void> {
-		if (startedSessions.has(sessionID)) return;
+	async function ensureSessionStarted(sessionID: string): Promise<string> {
+		if (startedSessions.has(sessionID)) return "";
 		const result = await client.post<SessionStartResult>(
 			"/api/hooks/session-start",
 			{
@@ -225,7 +225,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			sessionStartTimeout(),
 		);
 		startedSessions.add(sessionID);
-		if (result?.inject) pendingInjectSet(sessionID, result.inject);
+		return result?.inject ?? "";
 	}
 
 	return {
@@ -244,7 +244,8 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			pendingInject.delete(input.sessionID);
 
 			try {
-				await ensureSessionStarted(input.sessionID);
+				const startInject = await ensureSessionStarted(input.sessionID);
+				if (startInject) pendingInjectSet(input.sessionID, startInject);
 				const result = await client.post<UserPromptSubmitResult>(
 					"/api/hooks/user-prompt-submit",
 					{
@@ -270,10 +271,14 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		// ------------------------------------------------------------------
 		"experimental.chat.system.transform": async (input, output): Promise<void> => {
 			if (!input.sessionID) return;
+			const startInject = await ensureSessionStarted(input.sessionID);
 			const inject = pendingInject.get(input.sessionID);
+			const parts = [startInject, inject].filter((part) => part?.trim());
+			if (parts.length > 0) {
+				output.system.push(parts.join("\n"));
+			}
 			if (inject) {
 				pendingInject.delete(input.sessionID);
-				output.system.push(inject);
 			}
 		},
 
