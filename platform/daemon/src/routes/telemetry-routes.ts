@@ -30,6 +30,7 @@ import {
 	providerTracker,
 	telemetryRef,
 } from "./state.js";
+import { resolveScopedAgentId, resolveScopedProject } from "./utils.js";
 
 export function registerTelemetryRoutes(app: Hono): void {
 	app.use("/api/analytics", async (c, next) => {
@@ -287,11 +288,17 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 
 	app.get("/api/telemetry/memory-search", (c) => {
+		const agent = resolveScopedAgentId(c, c.req.query("agent_id") ?? c.req.query("agentId"));
+		if (agent.error) return c.json({ error: agent.error }, 403);
+		const project = resolveScopedProject(c, c.req.query("project"));
+		if (project.error) return c.json({ error: project.error }, 403);
+
 		const limitRaw = Number.parseInt(c.req.query("limit") ?? "100", 10);
 		const offsetRaw = Number.parseInt(c.req.query("offset") ?? "0", 10);
 		const noHitsRaw = c.req.query("no_hits");
 		const items = listMemorySearchTelemetry(getDbAccessor(), {
-			agentId: c.req.query("agent_id") ?? c.req.query("agentId"),
+			agentId: agent.agentId,
+			project: project.project,
 			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
 			route: c.req.query("route"),
 			since: c.req.query("since"),
@@ -360,10 +367,16 @@ export function registerTelemetryRoutes(app: Hono): void {
 	});
 
 	app.get("/api/telemetry/memory-search/export", (c) => {
+		const agent = resolveScopedAgentId(c, c.req.query("agent_id") ?? c.req.query("agentId"));
+		if (agent.error) return c.json({ error: agent.error }, 403);
+		const project = resolveScopedProject(c, c.req.query("project"));
+		if (project.error) return c.json({ error: project.error }, 403);
+
 		const limitRaw = Number.parseInt(c.req.query("limit") ?? "10000", 10);
 		const noHitsRaw = c.req.query("no_hits");
 		const items = listMemorySearchTelemetry(getDbAccessor(), {
-			agentId: c.req.query("agent_id") ?? c.req.query("agentId"),
+			agentId: agent.agentId,
+			project: project.project,
 			sessionKey: c.req.query("session_key") ?? c.req.query("sessionKey"),
 			route: c.req.query("route"),
 			since: c.req.query("since"),

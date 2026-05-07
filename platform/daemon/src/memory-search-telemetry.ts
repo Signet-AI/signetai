@@ -16,6 +16,7 @@ export interface MemorySearchTelemetryRecordInput {
 export interface MemorySearchTelemetryQuery {
 	readonly agentId?: string;
 	readonly sessionKey?: string;
+	readonly project?: string;
 	readonly route?: string;
 	readonly since?: string;
 	readonly until?: string;
@@ -282,6 +283,10 @@ export function listMemorySearchTelemetry(
 	if (query.sessionKey) {
 		conditions.push("session_key = ?");
 		args.push(query.sessionKey);
+	}
+	if (query.project) {
+		conditions.push("project = ?");
+		args.push(query.project);
 	}
 	if (query.route) {
 		conditions.push("route = ?");
