@@ -191,14 +191,6 @@ const {
 	{:catch error}
 		{@render skeletonError(error)}
 	{/await}
-{:else if activeTab === "predictor"}
-	{#await import("$lib/components/predictor/PredictorTab.svelte")}
-		{@render skeletonCards()}
-	{:then module}
-		<module.default />
-	{:catch error}
-		{@render skeletonError(error)}
-	{/await}
 {:else if activeTab === "connectors"}
 	{#await import("$lib/components/tabs/ConnectorsTab.svelte")}
 		{@render skeletonList()}

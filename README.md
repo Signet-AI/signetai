@@ -387,7 +387,6 @@ Connectors
 | [`@signet/desktop`](./surfaces/desktop) | Electron desktop application |
 | [`@signet/tray`](./surfaces/tray) | Shared tray/menu bar utilities |
 | [`@signet/native`](./platform/native) | Native accelerators |
-| [`predictor`](./platform/predictor) | Experimental Rust sidecar for learned relevance ranking |
 | [`signetai`](./dist/signetai) | Meta-package (`signet` binary) |
 | [`@signet/web`](./web/marketing) | Astro marketing site deployed to Cloudflare Pages |
 | [`reviews-worker`](./web/workers/reviews) | Cloudflare Worker for review automation |

@@ -22,31 +22,6 @@ function makeTempAgentsDir(): string {
 }
 
 describe("createAgentsWatcherIgnoreMatcher", () => {
-	it("ignores the default predictor checkpoint", () => {
-		const agentsDir = makeTempAgentsDir();
-		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
-
-		expect(shouldIgnore(join(agentsDir, "memory", "predictor", "model.bin"))).toBe(true);
-		expect(shouldIgnore(join(agentsDir, "memory", "notes.md"))).toBe(false);
-	});
-
-	it("ignores a configured predictor checkpoint path", () => {
-		const agentsDir = makeTempAgentsDir();
-		const customCheckpoint = join(agentsDir, "custom", "predictor.bin");
-		writeFileSync(
-			join(agentsDir, "agent.yaml"),
-			`memory:
-  pipelineV2:
-    predictor:
-      checkpointPath: ${customCheckpoint}
-`,
-		);
-
-		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);
-		expect(shouldIgnore(customCheckpoint)).toBe(true);
-		expect(shouldIgnore(join(agentsDir, "memory", "predictor", "model.bin"))).toBe(true);
-	});
-
 	it("ignores the daemon memories.db and its journal files", () => {
 		const agentsDir = makeTempAgentsDir();
 		const shouldIgnore = createAgentsWatcherIgnoreMatcher(agentsDir);

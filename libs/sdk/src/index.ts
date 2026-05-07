@@ -37,6 +37,7 @@ import type {
 	JobStatus,
 	MemoryListResponse,
 	MemoryRecord,
+	MemorySearchTelemetryResponse,
 	ModifyResult,
 	OnePasswordConnectResult,
 	OnePasswordImportResult,
@@ -453,6 +454,57 @@ export class SignetClient extends SignetClientHelpers {
 	}): Promise<string> {
 		return this.transport.get<string>("/api/telemetry/export", {
 			since: opts?.since,
+			limit: opts?.limit,
+		});
+	}
+
+	/**
+	 * Query local memory-search QA telemetry.
+	 *
+	 * This includes captured query text and result snapshots, so the daemon
+	 * protects it with the analytics permission.
+	 */
+	async getMemorySearchTelemetry(opts?: {
+		readonly agentId?: string;
+		readonly sessionKey?: string;
+		readonly route?: string;
+		readonly since?: string;
+		readonly until?: string;
+		readonly noHits?: boolean;
+		readonly limit?: number;
+		readonly offset?: number;
+	}): Promise<MemorySearchTelemetryResponse> {
+		return this.transport.get<MemorySearchTelemetryResponse>("/api/telemetry/memory-search", {
+			agent_id: opts?.agentId,
+			session_key: opts?.sessionKey,
+			route: opts?.route,
+			since: opts?.since,
+			until: opts?.until,
+			no_hits: opts?.noHits,
+			limit: opts?.limit,
+			offset: opts?.offset,
+		});
+	}
+
+	/**
+	 * Export local memory-search QA telemetry as NDJSON text.
+	 */
+	async exportMemorySearchTelemetry(opts?: {
+		readonly agentId?: string;
+		readonly sessionKey?: string;
+		readonly route?: string;
+		readonly since?: string;
+		readonly until?: string;
+		readonly noHits?: boolean;
+		readonly limit?: number;
+	}): Promise<string> {
+		return this.transport.get<string>("/api/telemetry/memory-search/export", {
+			agent_id: opts?.agentId,
+			session_key: opts?.sessionKey,
+			route: opts?.route,
+			since: opts?.since,
+			until: opts?.until,
+			no_hits: opts?.noHits,
 			limit: opts?.limit,
 		});
 	}
@@ -1205,6 +1257,9 @@ export type {
 	JobStatus,
 	MemoryListResponse,
 	MemoryRecord,
+	MemorySearchTelemetryItem,
+	MemorySearchTelemetryResponse,
+	MemorySearchTelemetryResult,
 	ModifyResult,
 	OnePasswordConnectResult,
 	OnePasswordImportResult,

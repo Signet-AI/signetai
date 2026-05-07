@@ -229,6 +229,7 @@ function testPipelineCfg(): PipelineV2Config {
 			flushIntervalMs: 60000,
 			flushBatchSize: 50,
 			retentionDays: 90,
+			memorySearchQaEnabled: false,
 		},
 		embeddingTracker: { enabled: false, pollMs: 5000, batchSize: 8 },
 		synthesis: {

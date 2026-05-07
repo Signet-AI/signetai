@@ -11,6 +11,8 @@ import { linkMemoryToEntities } from "../inline-entity-linker";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { type RecallParams, hybridRecall } from "../memory-search";
+import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
+import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
 import { recordPathFeedback } from "../path-feedback";
 import { enqueueDocumentIngestJob } from "../pipeline";
@@ -89,6 +91,27 @@ function hasMemoriesSessionIdColumn(db: any): boolean {
 		}>
 	).some((column) => column.name === "session_id");
 	return result;
+}
+
+function recordRecallQaTelemetry(input: {
+	readonly route: string;
+	readonly agentId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly params: RecallParams;
+	readonly result: Awaited<ReturnType<typeof hybridRecall>>;
+	readonly cfg: ReturnType<typeof loadMemoryConfig>;
+}): void {
+	if (!input.cfg.pipelineV2.telemetry.memorySearchQaEnabled) return;
+	recordMemorySearchTelemetry(getDbAccessor(), {
+		route: input.route,
+		agentId: input.agentId,
+		sessionKey: input.sessionKey,
+		project: input.project,
+		params: input.params,
+		response: input.result,
+		retentionDays: input.cfg.pipelineV2.telemetry.retentionDays,
+	});
 }
 
 export function registerMemoryRoutes(app: Hono): void {
@@ -1944,21 +1967,29 @@ export function registerMemoryRoutes(app: Hono): void {
 			authRecallLlmLimiter.record(actor);
 		}
 		try {
-			const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
+			const sessionKeyRaw = c.req.header("x-signet-session-key");
+			const sessionKey = sessionKeyRaw ?? null;
+			const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: sessionKeyRaw });
 			const agentScope = getAgentScope(agentId);
 			const scopeProject = c.get("auth")?.claims?.scope?.project;
-			const result = await hybridRecall(
-				{
-					...body,
-					query,
-					agentId,
-					readPolicy: agentScope.readPolicy,
-					policyGroup: agentScope.policyGroup,
-					...(scopeProject ? { project: scopeProject } : {}),
-				},
+			const params = {
+				...body,
+				query,
+				agentId,
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup,
+				...(scopeProject ? { project: scopeProject } : {}),
+			};
+			const result = await hybridRecall(params, cfg, fetchEmbedding);
+			recordRecallQaTelemetry({
+				route: "POST /api/memory/recall",
+				agentId,
+				sessionKey,
+				project: resolveMemorySearchTelemetryProject(params),
+				params,
+				result,
 				cfg,
-				fetchEmbedding,
-			);
+			});
 			return c.json(result);
 		} catch (e) {
 			logger.error("memory", "Recall failed", e as Error);
@@ -1981,34 +2012,44 @@ export function registerMemoryRoutes(app: Hono): void {
 		const importanceMin = c.req.query("importance_min");
 		const since = c.req.query("since");
 		const expand = c.req.query("expand");
+		const project = c.req.query("project");
 
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		try {
+			const sessionKeyRaw = c.req.header("x-signet-session-key");
+			const sessionKey = sessionKeyRaw ?? null;
 			const agentId = resolveAgentId({
 				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: c.req.header("x-signet-session-key"),
+				sessionKey: sessionKeyRaw,
 			});
 			const agentScope = getAgentScope(agentId);
-			const result = await hybridRecall(
-				{
-					query: q,
-					limit,
-					type,
-					tags,
-					who,
-					pinned: pinned === "1" || pinned === "true",
-					importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
-					since,
-					expand: expand === "1" || expand === "true",
-					agentId,
-					readPolicy: agentScope.readPolicy,
-					policyGroup: agentScope.policyGroup,
-					...(scopeProject ? { project: scopeProject } : {}),
-				},
+			const params = {
+				query: q,
+				limit,
+				type,
+				tags,
+				who,
+				pinned: pinned === "1" || pinned === "true",
+				importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
+				since,
+				expand: expand === "1" || expand === "true",
+				project,
+				agentId,
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup,
+				...(scopeProject ? { project: scopeProject } : {}),
+			};
+			const result = await hybridRecall(params, cfg, fetchEmbedding);
+			recordRecallQaTelemetry({
+				route: "GET /api/memory/search",
+				agentId,
+				sessionKey,
+				project: resolveMemorySearchTelemetryProject(params),
+				params,
+				result,
 				cfg,
-				fetchEmbedding,
-			);
+			});
 			return c.json(result);
 		} catch (e) {
 			logger.error("memory", "Search (recall alias) failed", e as Error);

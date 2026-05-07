@@ -25,13 +25,13 @@ import { up as sessionCheckpoints } from "./016-session-checkpoints";
 import { up as taskSkills } from "./017-task-skills";
 import { up as skillMeta } from "./018-skill-meta";
 import { up as knowledgeStructure } from "./019-knowledge-structure";
-import { up as predictorComparisons } from "./020-predictor-comparisons";
+import { up as sessionStructuralColumns } from "./020-predictor-comparisons";
 import { up as checkpointStructural } from "./021-checkpoint-structural";
 import { up as entityPinning } from "./022-entity-pinning";
-import { up as predictorColumns } from "./023-predictor-columns";
-import { up as predictorComparisonColumns } from "./024-predictor-comparison-columns";
+import { up as retiredScorerGap23 } from "./023-predictor-columns";
+import { up as retiredScorerGap24 } from "./024-predictor-comparison-columns";
 import { up as agentFeedback } from "./025-agent-feedback";
-import { up as predictorTrainingPairs } from "./026-predictor-training-pairs";
+import { up as retiredScorerGap26 } from "./026-predictor-training-pairs";
 import { up as backfillCanonicalNames } from "./027-backfill-canonical-names";
 import { up as losslessRetention } from "./028-lossless-retention";
 import { up as sessionSummaryDag } from "./029-session-summary-dag";
@@ -71,7 +71,8 @@ import { up as memoryArtifactSoftDelete } from "./062-memory-artifact-soft-delet
 import { up as contentOnlyMemoriesFtsUpdate } from "./063-content-only-memories-fts-update";
 import { up as sourceGraphProvenance } from "./064-source-graph-provenance";
 import { up as sourceEmbeddingAgentScope } from "./065-source-embedding-agent-scope";
-import { up as ontologyProposals } from "./066-ontology-proposals";
+import { up as memorySearchTelemetry } from "./066-memory-search-telemetry";
+import { up as ontologyProposals } from "./067-ontology-proposals";
 
 // -- Public interface consumed by Database.init() --
 
@@ -245,10 +246,9 @@ export const MIGRATIONS: readonly Migration[] = [
 	},
 	{
 		version: 20,
-		name: "predictor-comparisons",
-		up: predictorComparisons,
+		name: "session-structural-columns",
+		up: sessionStructuralColumns,
 		artifacts: {
-			tables: ["predictor_comparisons", "predictor_training_log"],
 			columns: [
 				{ table: "session_memories", column: "entity_slot" },
 				{ table: "session_memories", column: "aspect_slot" },
@@ -278,26 +278,13 @@ export const MIGRATIONS: readonly Migration[] = [
 	},
 	{
 		version: 23,
-		name: "predictor-columns",
-		up: predictorColumns,
-		artifacts: {
-			columns: [{ table: "session_memories", column: "predictor_rank" }],
-		},
+		name: "retired-scorer-gap",
+		up: retiredScorerGap23,
 	},
 	{
 		version: 24,
-		name: "predictor-comparison-columns",
-		up: predictorComparisonColumns,
-		artifacts: {
-			columns: [
-				{ table: "predictor_comparisons", column: "scorer_confidence" },
-				{ table: "predictor_comparisons", column: "success_rate" },
-				{ table: "predictor_comparisons", column: "predictor_top_ids" },
-				{ table: "predictor_comparisons", column: "baseline_top_ids" },
-				{ table: "predictor_comparisons", column: "relevance_scores" },
-				{ table: "predictor_comparisons", column: "fts_overlap_score" },
-			],
-		},
+		name: "retired-scorer-gap",
+		up: retiredScorerGap24,
 	},
 	{
 		version: 25,
@@ -309,9 +296,8 @@ export const MIGRATIONS: readonly Migration[] = [
 	},
 	{
 		version: 26,
-		name: "predictor-training-pairs",
-		up: predictorTrainingPairs,
-		artifacts: { tables: ["predictor_training_pairs"] },
+		name: "retired-scorer-gap",
+		up: retiredScorerGap26,
 	},
 	{
 		version: 27,
@@ -623,6 +609,14 @@ export const MIGRATIONS: readonly Migration[] = [
 	},
 	{
 		version: 66,
+		name: "memory-search-telemetry",
+		up: memorySearchTelemetry,
+		artifacts: {
+			tables: ["memory_search_telemetry"],
+		},
+	},
+	{
+		version: 67,
 		name: "ontology-proposals",
 		up: ontologyProposals,
 		artifacts: {

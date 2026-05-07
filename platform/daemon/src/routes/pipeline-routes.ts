@@ -43,7 +43,6 @@ import {
 	invalidateDiagnosticsCache,
 	openClawHeartbeat,
 	pipelineTransition,
-	predictorClientRef,
 	providerRuntimeResolution,
 	readEnvTrimmed,
 	readPipelineMode,
@@ -109,10 +108,6 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.use("/api/diagnostics/*", async (c, next) => {
 		return requirePermission("diagnostics", authConfig)(c, next);
 	});
-	app.use("/api/predictor/*", async (c, next) => {
-		return requirePermission("analytics", authConfig)(c, next);
-	});
-
 	app.get("/api/status", (c) => {
 		const config = loadMemoryConfig(AGENTS_DIR);
 		const workerStatus = getPipelineWorkerStatus();
@@ -345,14 +340,6 @@ export function registerPipelineRoutes(app: Hono): void {
 		const pipelineV2 = cfg.pipelineV2;
 		const mode = readPipelineMode(pipelineV2);
 
-		const predictorHealth = diagnostics.predictor;
-		const predictorSnapshot = {
-			running: predictorHealth.status !== "disabled" && predictorHealth.sidecarAlive,
-			modelReady: predictorHealth.coldStartExited,
-			coldStartExited: predictorHealth.coldStartExited,
-			successRate: predictorHealth.successRate,
-			alpha: predictorHealth.alpha,
-		};
 
 		return c.json({
 			workers: getPipelineWorkerStatus(),
@@ -366,7 +353,6 @@ export function registerPipelineRoutes(app: Hono): void {
 				enabled: pipelineV2.graph.enabled && (pipelineV2.traversal?.enabled ?? true),
 				lastRun: getTraversalStatus(),
 			},
-			predictor: predictorSnapshot,
 		});
 	});
 
@@ -513,32 +499,4 @@ export function registerPipelineRoutes(app: Hono): void {
 		return c.json({ accepted: true, passId, status: "running", mode }, 202);
 	});
 
-	app.get("/api/predictor/status", async (c) => {
-		const cfg = loadMemoryConfig(AGENTS_DIR);
-		const predictorCfg = cfg.pipelineV2.predictor;
-
-		if (!predictorCfg?.enabled) {
-			return c.json({ enabled: false, status: null });
-		}
-
-		const client = predictorClientRef;
-		if (client == null) {
-			return c.json({
-				enabled: true,
-				alive: false,
-				crashCount: 0,
-				crashDisabled: false,
-				status: null,
-			});
-		}
-
-		const status = await client.status();
-		return c.json({
-			enabled: true,
-			alive: client.isAlive(),
-			crashCount: client.crashCount,
-			crashDisabled: client.crashDisabled,
-			status,
-		});
-	});
 }
