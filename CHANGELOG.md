@@ -7,7 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-07
-- Bug fixes: stabilize Obsidian source sync; index Obsidian sources asynchronously; harden recall authorization.
+- Bug fixes: gate npm publish on daemon release assets; dedupe resumed session-start hooks; stabilize Obsidian source sync; index Obsidian sources asynchronously; harden recall authorization.
+- Docs: add north star ontology.
 
 ### 2026-05-06
 - Bug fixes: wrap launchd plist runtime in /bin/bash to avoid macOS AMFI exec failure; install ClawHub skills from dashboard; respect active harnesses during sync; classify body-read timeouts correctly in daemon clients.
@@ -34,6 +35,20 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: make prompt-submit embedding timeout configurable; apply is_deleted filter to BM25 FTS path.
 
 ## Release Ledger
+
+## [0.111.11] - 2026-05-07
+
+Release summary: 2 bug fixes and 1 docs update.
+Tag range: `v0.111.10..v0.111.11`.
+
+### Bug Fixes
+
+- gate npm publish on daemon release assets
+- **codex**: dedupe resumed session-start hooks (#640)
+
+### Docs
+
+- add north star ontology
 
 ## [0.111.10] - 2026-05-07
 

@@ -49,11 +49,6 @@ describe("buildSetupPipeline", () => {
 				allowUpdateDelete: true,
 				maintenanceMode: "execute",
 			},
-			predictor: { enabled: true },
-			predictorPipeline: {
-				agentFeedback: true,
-				trainingTelemetry: false,
-			},
 		});
 	});
 

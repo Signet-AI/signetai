@@ -60,7 +60,6 @@ export type {
 	PipelineSynthesisConfig,
 	ProviderRateLimitConfig,
 	PipelineProceduralConfig,
-	PredictorConfig,
 	ExtractedFact,
 	ExtractedEntity,
 	ExtractionResult,

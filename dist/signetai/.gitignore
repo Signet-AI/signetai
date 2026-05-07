@@ -1,5 +1,4 @@
 # Build artifacts copied or generated at package build time.
-/bin/signet-predictor-*
 /dashboard/
 /skills/
 

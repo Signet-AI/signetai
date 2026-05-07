@@ -690,6 +690,34 @@ describe("handleSessionStart", () => {
 		expect(result.inject).toContain("[memory active");
 	});
 
+	test.serial("deduplicates resumed Codex session-start after normal session-end", async () => {
+		createMemoryDb([{ content: "Large startup memory", importance: 0.9 }]);
+		const sessionKey = "codex-resume-dedup-session";
+
+		const first = await handleSessionStart({ harness: "codex", sessionKey });
+		expect(first.memories.length).toBe(1);
+		expect(first.inject).toContain("Large startup memory");
+
+		await handleSessionEnd({ harness: "codex", sessionKey, reason: "shutdown" });
+		const resumed = await handleSessionStart({ harness: "codex", sessionKey });
+
+		expect(resumed.memories).toEqual([]);
+		expect(resumed.inject).toContain("[memory active");
+		expect(resumed.inject).not.toContain("Large startup memory");
+	});
+
+	test.serial("clear session-end allows a future session-start full inject for same key", async () => {
+		createMemoryDb([{ content: "Fresh startup memory", importance: 0.9 }]);
+		const sessionKey = "codex-clear-redo-session";
+
+		await handleSessionStart({ harness: "codex", sessionKey });
+		await handleSessionEnd({ harness: "codex", sessionKey, reason: "clear" });
+		const restarted = await handleSessionStart({ harness: "codex", sessionKey });
+
+		expect(restarted.memories.length).toBe(1);
+		expect(restarted.inject).toContain("Fresh startup memory");
+	});
+
 	test.serial("loads identity from agent.yaml", async () => {
 		writeAgentYaml(`
 agent:

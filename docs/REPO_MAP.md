@@ -37,7 +37,6 @@ setup and `plugin/` for the runtime plugin loaded by OpenCode.
 | `@signet/daemon` | `platform/daemon/` |
 | `platform/daemon-rs` | `platform/daemon-rs/` |
 | `@signet/native` | `platform/native/` |
-| `predictor` | `platform/predictor/` |
 | `@signet/cli` | `surfaces/cli/` |
 | `signet-dashboard` | `surfaces/dashboard/` |
 | `@signet/desktop` | `surfaces/desktop/` |

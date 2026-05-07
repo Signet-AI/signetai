@@ -375,29 +375,6 @@ async fn main() -> anyhow::Result<()> {
             "/api/pipeline/models/refresh",
             axum::routing::post(routes::pipeline::models_refresh),
         )
-        // Predictor routes
-        .route("/api/predictor/status", get(routes::predictor::status))
-        .route(
-            "/api/predictor/comparisons",
-            get(routes::predictor::comparisons),
-        )
-        .route(
-            "/api/predictor/comparisons/by-project",
-            get(routes::predictor::comparisons_by_project),
-        )
-        .route(
-            "/api/predictor/comparisons/by-entity",
-            get(routes::predictor::comparisons_by_entity),
-        )
-        .route("/api/predictor/training", get(routes::predictor::training))
-        .route(
-            "/api/predictor/training-pairs-count",
-            get(routes::predictor::training_pairs_count),
-        )
-        .route(
-            "/api/predictor/train",
-            axum::routing::post(routes::predictor::train),
-        )
         // Timeline routes
         .route("/api/memory/timeline", get(routes::timeline::activity))
         .route("/api/timeline/{id}", get(routes::timeline::incident))

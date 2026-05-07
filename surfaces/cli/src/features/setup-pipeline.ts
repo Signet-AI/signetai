@@ -28,13 +28,6 @@ export interface SetupPipelineConfig {
 		readonly allowUpdateDelete: boolean;
 		readonly maintenanceMode: "execute";
 	};
-	readonly predictor?: {
-		readonly enabled: boolean;
-	};
-	readonly predictorPipeline?: {
-		readonly agentFeedback: boolean;
-		readonly trainingTelemetry: boolean;
-	};
 }
 
 export function defaultExtractionModel(provider: ExtractionProviderChoice): string {
@@ -78,11 +71,6 @@ export function buildSetupPipeline(provider: ExtractionProviderChoice, model?: s
 			enabled: true,
 			allowUpdateDelete: true,
 			maintenanceMode: "execute",
-		},
-		predictor: { enabled: true },
-		predictorPipeline: {
-			agentFeedback: true,
-			trainingTelemetry: false,
 		},
 	};
 }

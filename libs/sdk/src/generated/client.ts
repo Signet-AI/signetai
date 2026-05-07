@@ -413,9 +413,6 @@ export class GeneratedClient {
 		return this.transport.get<unknown>("/api/pipeline/status", query);
 	}
 
-	async getApiPredictorStatus(query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>("/api/predictor/status", query);
-	}
 
 	async postApiRepairRequeueDead(opts?: Record<string, unknown>): Promise<unknown> {
 		return this.transport.post<unknown>("/api/repair/requeue-dead", opts);
@@ -561,29 +558,11 @@ export class GeneratedClient {
 		return this.transport.get<unknown>("/api/analytics/continuity/latest", query);
 	}
 
-	async getApiPredictorComparisonsByProject(query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>("/api/predictor/comparisons/by-project", query);
-	}
 
-	async getApiPredictorComparisonsByEntity(query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>("/api/predictor/comparisons/by-entity", query);
-	}
 
-	async getApiPredictorComparisons(query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>("/api/predictor/comparisons", query);
-	}
 
-	async getApiPredictorTraining(query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>("/api/predictor/training", query);
-	}
 
-	async getApiPredictorTrainingPairsCount(query?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.get<unknown>("/api/predictor/training-pairs-count", query);
-	}
 
-	async postApiPredictorTrain(opts?: Record<string, unknown>): Promise<unknown> {
-		return this.transport.post<unknown>("/api/predictor/train", opts);
-	}
 
 	async getApiTelemetryEvents(query?: Record<string, unknown>): Promise<unknown> {
 		return this.transport.get<unknown>("/api/telemetry/events", query);

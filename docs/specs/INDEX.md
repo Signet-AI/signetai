@@ -12,8 +12,9 @@ a spec, this file defines how it connects to everything else.
 Source of truth for dependency metadata:
 - `docs/specs/dependencies.yaml`
 
-Conceptual north star:
+Conceptual north stars:
 - `docs/KNOWLEDGE-ARCHITECTURE.md`
+- `docs/NORTH-STAR-ONTOLOGY.md`
 
 ---
 
