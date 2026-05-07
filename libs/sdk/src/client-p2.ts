@@ -745,11 +745,16 @@ export class SignetClientP2 {
 	}
 
 	// --- Predictor (retired) ---
-	
+
 	private predictorDeprecated(): never {
 		throw new Error(
 			"Signet predictor APIs were removed in v0.112. Use memory search telemetry and pipeline diagnostics instead.",
 		);
+	}
+
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async getPredictorStatus(): Promise<never> {
+		this.predictorDeprecated();
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */

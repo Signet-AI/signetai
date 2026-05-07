@@ -250,6 +250,14 @@ describe("SignetClient", () => {
 		expect(result.results[0]?.project).toBe("proj-a");
 	});
 
+	test("retired predictor SDK methods fail locally with a clear deprecation error", async () => {
+		const { client } = mockDaemon();
+
+		expect(typeof client.getPredictorStatus).toBe("function");
+		await expect(client.getPredictorStatus()).rejects.toThrow("Signet predictor APIs were removed in v0.112");
+		expect(recorded).toHaveLength(0);
+	});
+
 	test("deprecated rememberHook()/recallHook() aliases still work", async () => {
 		const { client } = mockDaemon((req) => {
 			if (req.path === "/api/hooks/remember") {
