@@ -89,6 +89,7 @@ export interface RoutingAcpxConfig {
 	readonly agent: string;
 	readonly version?: string;
 	readonly bin?: string;
+	readonly package?: string;
 	readonly cwd?: string;
 	readonly session?: string;
 	readonly mode?: RoutingAcpxSessionMode;

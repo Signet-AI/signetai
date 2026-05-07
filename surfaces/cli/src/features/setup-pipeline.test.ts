@@ -74,6 +74,7 @@ describe("buildSetupInference", () => {
 			executor: "acpx",
 			acpx: {
 				agent: "opencode",
+				package: "acpx@0.7.0",
 				version: "0.7.0",
 				hooks: "disabled",
 				permissions: "deny-all",
@@ -120,6 +121,27 @@ describe("buildSetupInference", () => {
 		expect(config.inference).toEqual({
 			defaultPolicy: "custom",
 			targets: { custom: { executor: "local" } },
+		});
+	});
+
+	it("preserves custom inference task classes when removing generated ACPX setup routing", () => {
+		const config: Record<string, unknown> = {
+			inference: {
+				...buildSetupInference("acpx", "haiku", ["codex"], ["acpx"], "/usr/local/bin/bunx"),
+				taskClasses: {
+					memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+					session_synthesis: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+					custom_review: { reasoning: "high", toolsRequired: true, privacy: "local" },
+				},
+			},
+		};
+
+		applySetupInferenceRoute(config, undefined);
+
+		expect(config.inference).toEqual({
+			taskClasses: {
+				custom_review: { reasoning: "high", toolsRequired: true, privacy: "local" },
+			},
 		});
 	});
 });

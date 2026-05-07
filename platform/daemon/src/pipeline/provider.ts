@@ -961,6 +961,7 @@ export interface AcpxProviderConfig {
 	readonly model?: string;
 	readonly version?: string;
 	readonly bin?: string;
+	readonly package?: string;
 	readonly cwd?: string;
 	readonly session?: string;
 	readonly mode?: AcpxSessionMode;
@@ -1008,9 +1009,11 @@ function buildAcpxCommand(
 ): { bin: string; args: string[]; cwd?: string } {
 	const bin = config.bin ?? "npx";
 	const cwd = resolveAcpxCwd(config.cwd);
+	const packageRef = config.package ?? (!config.bin ? `acpx@${config.version ?? DEFAULT_ACPX_VERSION}` : undefined);
 	const args: string[] = [];
-	if (!config.bin) {
-		args.push("-y", `acpx@${config.version ?? DEFAULT_ACPX_VERSION}`);
+	if (packageRef) {
+		if (bin.endsWith("npx") || bin.endsWith("npx.cmd")) args.push("-y");
+		args.push(packageRef);
 	}
 	args.push("--format", "quiet");
 	args.push("--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))));

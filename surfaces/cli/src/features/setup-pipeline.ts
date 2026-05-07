@@ -114,6 +114,7 @@ export function buildSetupInference(
 				acpx: {
 					agent: selectAcpxAgent(harnesses, availableProviders),
 					bin: acpxBin,
+					package: "acpx@0.7.0",
 					version: "0.7.0",
 					mode: "exec",
 					permissions: "deny-all",
@@ -167,20 +168,40 @@ export function applySetupInferenceRoute(
 		taskClasses?: Record<string, unknown>;
 	};
 	if (route.defaultPolicy !== "background-acpx") return;
+	const generatedTaskClasses = new Set<string>();
 	if (route.targets) Reflect.deleteProperty(route.targets, "background-acpx");
 	if (route.policies) Reflect.deleteProperty(route.policies, "background-acpx");
 	if (route.workloads?.memoryExtraction && isGeneratedAcpxWorkload(route.workloads.memoryExtraction)) {
+		generatedTaskClasses.add(getAcpxWorkloadTaskClass(route.workloads.memoryExtraction));
 		Reflect.deleteProperty(route.workloads, "memoryExtraction");
 	}
 	if (route.workloads?.sessionSynthesis && isGeneratedAcpxWorkload(route.workloads.sessionSynthesis)) {
+		generatedTaskClasses.add(getAcpxWorkloadTaskClass(route.workloads.sessionSynthesis));
 		Reflect.deleteProperty(route.workloads, "sessionSynthesis");
 	}
-	Reflect.deleteProperty(route, "taskClasses");
+	for (const taskClass of generatedTaskClasses) {
+		if (isGeneratedAcpxTaskClass(taskClass, route.taskClasses?.[taskClass])) {
+			Reflect.deleteProperty(route.taskClasses, taskClass);
+		}
+	}
 	if (route.targets && Object.keys(route.targets).length === 0) Reflect.deleteProperty(route, "targets");
 	if (route.policies && Object.keys(route.policies).length === 0) Reflect.deleteProperty(route, "policies");
+	if (route.taskClasses && Object.keys(route.taskClasses).length === 0) Reflect.deleteProperty(route, "taskClasses");
 	if (route.workloads && Object.keys(route.workloads).length === 0) Reflect.deleteProperty(route, "workloads");
 	Reflect.deleteProperty(route, "defaultPolicy");
 	if (Object.keys(route).length === 0) Reflect.deleteProperty(config, "inference");
+}
+
+function getAcpxWorkloadTaskClass(value: unknown): string {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return "";
+	return String((value as { taskClass?: unknown }).taskClass ?? "");
+}
+
+function isGeneratedAcpxTaskClass(taskClass: string, value: unknown): boolean {
+	if (taskClass !== "memory_extraction" && taskClass !== "session_synthesis") return false;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const record = value as { reasoning?: unknown; toolsRequired?: unknown; privacy?: unknown };
+	return record.reasoning === "medium" && record.toolsRequired === true && record.privacy === "restricted_remote";
 }
 
 function isGeneratedAcpxWorkload(value: unknown): boolean {

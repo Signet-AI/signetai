@@ -174,6 +174,31 @@ printf '  acpx answer  \\n'
 		}
 	});
 
+
+	it("passes configured ACPX package to an absolute launcher", async () => {
+		const root = join(tmpdir(), `signet-acpx-package-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-bunx.sh");
+		const argsPath = join(root, "args.json");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+printf 'ok\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, package: "acpx@0.7.0", hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args.slice(0, 3)).toEqual(["acpx@0.7.0", "--format", "quiet"]);
+			expect(args).toContain("codex");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("normalizes relative ACPX cwd before spawning and forwarding --cwd", async () => {
 		const root = join(tmpdir(), `signet-acpx-cwd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(join(root, "workspace"), { recursive: true });
