@@ -1196,10 +1196,11 @@ with an `error` field. The batch continues — partial success is possible.
 
 ### POST /api/memory/recall
 
-Hybrid search combining BM25 keyword (FTS5) and vector similarity. Results
-are fused using a configurable alpha weight (`cfg.search.alpha`). Optional
-graph boost and reranker pass are applied if enabled in pipeline config.
-Requires `recall` permission.
+Hybrid recall combining FTS5, prospective hints, vector similarity,
+structured path evidence, graph traversal, and optional reranking. The daemon
+authorizes candidate IDs before any content-bearing rerank, summary,
+dampening, expansion, or access-tracking stage runs. Requires `recall`
+permission. For the full execution model, see [Hybrid Recall](./MEMORY.md#hybrid-recall).
 
 **Request body**
 
@@ -1249,7 +1250,9 @@ Only `query` is required.
 }
 ```
 
-`source` per result is one of `hybrid`, `vector`, `keyword`, or `llm_summary`.
+Common `source` values include `hybrid`, `vector`, `keyword`, `hint`, `sec`,
+`structured`, `traversal`, `ka_traversal`, `source_obsidian`,
+`native_memory`, `transcript`, `constructed`, `graph`, and `llm_summary`.
 `method` on the response reflects whether vector search was available for
 this call.
 

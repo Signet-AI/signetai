@@ -6,8 +6,11 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-07
+- Bug fixes: harden recall authorization.
+
 ### 2026-05-06
-- Bug fixes: respect active harnesses during sync; classify body-read timeouts correctly in daemon clients.
+- Bug fixes: wrap launchd plist runtime in /bin/bash to avoid macOS AMFI exec failure; install ClawHub skills from dashboard; respect active harnesses during sync; classify body-read timeouts correctly in daemon clients.
 - Docs: correct stale documentation claims.
 
 ### 2026-05-04
@@ -30,11 +33,26 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-04-30
 - Bug fixes: make prompt-submit embedding timeout configurable; apply is_deleted filter to BM25 FTS path.
 
-### 2026-04-29
-- Bug fixes: stop native memory fd leak; validate embedding model availability during install and daemon startup; prevent false install failure from cleanup trap; resolve event-loop starvation from synchronous I/O on large memory directories; streaming rewrite for live-only transcript sessions during backfill; repair Codex provider and test timeouts; preserve prompt content in provider requests; harden desktop release builds; make transcript backfill idempotent; prevent OOM crash-loop in transcript backfill.
-- Docs: force horizontal contributor avatars; render contributors inline; clean up contributors rendering; add LeuciRemi to contributors; correct stale documentation claims; fix documentation drift.
-
 ## Release Ledger
+
+## [0.111.8] - 2026-05-07
+
+Release summary: 1 bug fix.
+Tag range: `v0.111.7..v0.111.8`.
+
+### Bug Fixes
+
+- **memory**: harden recall authorization (#636)
+
+## [0.111.7] - 2026-05-06
+
+Release summary: 2 bug fixes.
+Tag range: `v0.111.6..v0.111.7`.
+
+### Bug Fixes
+
+- **cli**: wrap launchd plist runtime in /bin/bash to avoid macOS AMFI exec failure (#635)
+- **daemon**: install ClawHub skills from dashboard (#633)
 
 ## [0.111.6] - 2026-05-06
 

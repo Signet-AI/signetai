@@ -64,6 +64,14 @@ describe("hybridRecall", () => {
 		};
 	}
 
+	function vectorBlob(values: readonly number[]): Buffer {
+		return Buffer.from(new Float32Array(values).buffer);
+	}
+
+	function unitVector(): number[] {
+		return Array.from({ length: 768 }, (_, index) => (index === 0 ? 1 : 0));
+	}
+
 	it("keeps expanded transcript sources scoped to the requesting agent", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
@@ -143,6 +151,145 @@ describe("hybridRecall", () => {
 		for (const stage of result.meta.timings.stages) {
 			expect(stage.durationMs).toBeGreaterThanOrEqual(0);
 		}
+	});
+
+	it("skips source chunk vector fallback for project-scoped recall", async () => {
+		const now = new Date().toISOString();
+		const vec = unitVector();
+		getDbAccessor().withWriteTx((db) => {
+			const artifact = db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id,
+					session_token, project, harness, captured_at, content, updated_at
+				) VALUES (
+					'default', ?, ?, 'source_obsidian_markdown', ?, ?, ?, 'obsidian', ?, ?, ?
+				)`,
+			);
+			artifact.run(
+				"/workspace/project-a/source-a.md",
+				createHash("sha256").update("project-a").digest("hex"),
+				"source-a",
+				"token-a",
+				"/workspace/project-a",
+				now,
+				"project-a source artifact",
+				now,
+			);
+			artifact.run(
+				"/workspace/project-b/source-b.md",
+				createHash("sha256").update("project-b").digest("hex"),
+				"source-b",
+				"token-b",
+				"/workspace/project-b",
+				now,
+				"project-b source artifact",
+				now,
+			);
+
+			const embedding = db.prepare(
+				`INSERT INTO embeddings (
+					id, content_hash, vector, dimensions, source_type, source_id,
+					chunk_text, created_at, agent_id
+				) VALUES (?, ?, ?, 768, 'source_obsidian_chunk', ?, ?, ?, 'default')`,
+			);
+			embedding.run(
+				"emb-source-a",
+				"hash-source-a",
+				vectorBlob(vec),
+				"obsidian:vault-a:source-a.md#overview:1-1:0",
+				"source_path: /workspace/project-a/source-a.md\nproject-a private source chunk",
+				now,
+			);
+			embedding.run(
+				"emb-source-b",
+				"hash-source-b",
+				vectorBlob(vec),
+				"obsidian:vault-b:source-b.md#overview:1-1:0",
+				"source_path: /workspace/project-a/source-a.md\nproject-b spoofed source chunk",
+				now,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "private source chunk",
+				keywordQuery: "private source chunk",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				project: "/workspace/project-a",
+			},
+			testCfg(),
+			async () => vec,
+		);
+
+		expect(result.results).toEqual([]);
+		expect(result.meta.noHits).toBe(true);
+	});
+
+	it("drops ambiguous source chunk vector matches for project-scoped recall", async () => {
+		const now = new Date().toISOString();
+		const vec = unitVector();
+		getDbAccessor().withWriteTx((db) => {
+			const artifact = db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id,
+					session_token, project, harness, captured_at, content, updated_at
+				) VALUES (
+					'default', ?, ?, 'source_obsidian_markdown', ?, ?, ?, 'obsidian', ?, ?, ?
+				)`,
+			);
+			artifact.run(
+				"/workspace/project-a/shared.md",
+				createHash("sha256").update("shared-a").digest("hex"),
+				"shared-a",
+				"shared-token-a",
+				"/workspace/project-a",
+				now,
+				"project-a shared artifact",
+				now,
+			);
+			artifact.run(
+				"/workspace/project-b/shared.md",
+				createHash("sha256").update("shared-b").digest("hex"),
+				"shared-b",
+				"shared-token-b",
+				"/workspace/project-b",
+				now,
+				"project-b shared artifact",
+				now,
+			);
+
+			db.prepare(
+				`INSERT INTO embeddings (
+					id, content_hash, vector, dimensions, source_type, source_id,
+					chunk_text, created_at, agent_id
+				) VALUES (?, ?, ?, 768, 'source_obsidian_chunk', ?, ?, ?, 'default')`,
+			).run(
+				"emb-shared-b",
+				"hash-shared-b",
+				vectorBlob(vec),
+				"obsidian:vault-b:shared.md#overview:1-1:0",
+				"source_path: /workspace/project-a/shared.md\nambiguous project-b spoofed chunk marker",
+				now,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "ambiguous project-b spoofed chunk marker",
+				keywordQuery: "ambiguous project-b spoofed chunk marker",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				project: "/workspace/project-a",
+			},
+			testCfg(),
+			async () => vec,
+		);
+
+		expect(result.results).toEqual([]);
+		expect(result.meta.noHits).toBe(true);
 	});
 
 	it("falls back to keyword recall when embedding throws synchronously", async () => {
@@ -280,6 +427,45 @@ describe("hybridRecall", () => {
 		);
 
 		expect(result.results.map((row) => row.id)).toEqual(["mem-hint-live"]);
+	});
+
+	it("defaults agent searches without readPolicy to isolated access", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, ?, ?, 'test')`,
+			).run("mem-agent-a", "agent-isolation-marker recall content", "agent-a", now, now);
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, ?, ?, 'test')`,
+			).run("mem-agent-b", "agent-isolation-marker recall content", "agent-b", now, now);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "agent-isolation-marker",
+				keywordQuery: "agent-isolation-marker",
+				limit: 5,
+				agentId: "agent-a",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toEqual(["mem-agent-a"]);
+		const counts = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT id, access_count FROM memories WHERE id IN ('mem-agent-a', 'mem-agent-b') ORDER BY id")
+					.all() as Array<{ id: string; access_count: number }>,
+		);
+		expect(counts).toEqual([
+			{ id: "mem-agent-a", access_count: 1 },
+			{ id: "mem-agent-b", access_count: 0 },
+		]);
 	});
 
 	it("recalls indexed native harness memory artifacts without materializing memories", async () => {
@@ -1079,6 +1265,54 @@ assistant: Considering your weightlifting background, power yoga might be useful
 		expect(hit?.content).toContain("exercise classes and calendar planning");
 	});
 
+	it("defaults transcript summary hydration to the default agent when agentId is omitted", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const memory = db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, project, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, ?, NULL, ?, ?, 'test')`,
+			);
+			memory.run(
+				"mem-default-summary",
+				"Default agent summary says the user maintains a fermented dough culture in the fridge.",
+				"shared-session-42",
+				"default",
+				now,
+				now,
+			);
+			memory.run(
+				"mem-other-agent-summary",
+				"Other agent summary says the user keeps backup API keys in a notebook.",
+				"shared-session-42",
+				"agent-b",
+				now,
+				now,
+			);
+
+			db.prepare(
+				`INSERT INTO session_transcripts (
+					session_key, content, harness, project, agent_id, created_at, updated_at
+				) VALUES (?, ?, 'codex', NULL, 'default', ?, ?)`,
+			).run("shared-session-42", "user: We discussed sourdough starter storage and feeding cadence.", now, now);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "sourdough starter feeding cadence",
+				limit: 5,
+				expand: true,
+			},
+			testCfg({ reranker: false }),
+			async () => null,
+		);
+
+		const hit = result.results.find((row) => row.id === "transcript:shared-session-42");
+		expect(hit?.content).toContain("Default agent summary");
+		expect(hit?.content).not.toContain("Other agent summary");
+		expect(hit?.content).not.toContain("backup API keys");
+	});
+
 	it("dampens stale structured memories and annotates current replacements", async () => {
 		const oldDate = "2023-05-01T12:00:00.000Z";
 		const newDate = "2023-06-01T12:00:00.000Z";
@@ -1233,6 +1467,76 @@ assistant: Considering your weightlifting background, power yoga might be useful
 
 		expect(result.results.map((row) => row.id)).toContain("mem-project");
 		expect(result.results.map((row) => row.id)).not.toContain("mem-null-project");
+	});
+
+	it("assembles scoped over-fetch results after unauthorized candidates are removed", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, project, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, ?, 'test')`,
+			).run("mem-authorized-project", "Signet authorized project recall marker", "/home/nicholai", now, now);
+
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, project, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', NULL, ?, ?, 'test')`,
+			).run("mem-unauthorized-project", "Signet unauthorized traversal recall marker", now, now);
+
+			db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at
+				) VALUES (?, ?, ?, 'project', 'default', 5, ?, ?)`,
+			).run("ent-overfetch", "Signet", "signet", now, now);
+
+			db.prepare(
+				`INSERT INTO entity_aspects (
+					id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
+				) VALUES (?, ?, 'default', 'context', 'context', 0.9, ?, ?)`,
+			).run("asp-overfetch", "ent-overfetch", now, now);
+
+			const attr = db.prepare(
+				`INSERT INTO entity_attributes (
+					id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at
+				) VALUES (?, 'asp-overfetch', 'default', ?, 'attribute', ?, ?, 1, ?, 'active', ?, ?)`,
+			);
+			attr.run(
+				"attr-unauthorized-overfetch",
+				"mem-unauthorized-project",
+				"Signet unauthorized traversal recall marker",
+				"signet unauthorized traversal recall marker",
+				1,
+				now,
+				now,
+			);
+			attr.run(
+				"attr-authorized-overfetch",
+				"mem-authorized-project",
+				"Signet authorized project recall marker",
+				"signet authorized project recall marker",
+				0.5,
+				now,
+				now,
+			);
+		});
+
+		const cfg = testCfg({ graph: true, traversal: true, traversalPrimary: true });
+
+		const result = await hybridRecall(
+			{
+				query: "Signet",
+				keywordQuery: "Signet",
+				limit: 1,
+				agentId: "default",
+				readPolicy: "isolated",
+				project: "/home/nicholai",
+			},
+			cfg,
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toEqual(["mem-authorized-project"]);
 	});
 
 	it("does not use pinned entities as implicit traversal ballast for recall queries", async () => {

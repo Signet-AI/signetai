@@ -123,89 +123,170 @@ with a relationship label. Memory-entity associations are tracked in
 `memory_entity_mentions`.
 
 
-Hybrid Search
+Hybrid Recall
 -------------
 
-Search (`platform/core/src/search.ts`) blends two independent signals:
-BM25 keyword relevance and cosine vector similarity. These signals are
-useful because they help build a bounded candidate pool for later
-ranking and context selection.
+Recall is implemented in `platform/daemon/src/memory-search.ts` by
+`hybridRecall`. Its job is not to find one perfect row. Its job is to
+collect a broad candidate set, filter it to the caller's allowed view,
+shape the evidence, and return a bounded list of useful context.
 
-### BM25 Keyword Search
+The route layer checks the caller has `recall` permission. The search
+layer then enforces the data boundary again with one shared filter:
 
-FTS5 BM25 scores are negative (lower = better match). The
-implementation normalizes them to [0, 1] using `1 / (1 + |score|)`.
-This makes them comparable with cosine similarity scores.
+- `agentId` and `readPolicy` control agent visibility. If `agentId` is
+  present and `readPolicy` is omitted, recall defaults to isolated access.
+- `project` restricts results to that project.
+- `scope` restricts results to that explicit scope. When `scope` is
+  omitted, normal recall excludes scoped memories.
+- `type`, `tags`, `who`, `pinned`, `importance_min`, `since`, and `until`
+  narrow the memory rows inside that visibility boundary.
 
-```sql
-SELECT m.id, bm25(memories_fts) AS raw_score
-FROM memories_fts
-JOIN memories m ON memories_fts.rowid = m.rowid
-WHERE memories_fts MATCH ?
-ORDER BY raw_score
-LIMIT ?
-```
+The important safety rule is:
 
-### Vector Search
+> Candidate IDs may be broad, but memory content is not loaded, reranked,
+> summarized, dampened, expanded, or access-tracked until the shared filter
+> has authorized those IDs.
 
-Vector search uses `sqlite-vec` with a `vec_embeddings` virtual table.
-Queries use the KNN MATCH syntax. The distance metric is cosine, which
-`sqlite-vec` returns as `(1 - similarity)`, so the implementation
-converts: `similarity = 1 - distance`.
+That rule matters because vector search and graph traversal are intentionally
+high-recall channels. They can produce IDs that did not pass through the FTS
+SQL filter. `hybridRecall` therefore runs an explicit `authorize_candidates`
+stage before any content-bearing stage.
 
-```sql
-SELECT e.source_id, v.distance
-FROM vec_embeddings v
-JOIN embeddings e ON v.id = e.id
-JOIN memories m ON e.source_id = m.id
-WHERE v.embedding MATCH ? AND k = ?
-ORDER BY v.distance
-```
+### Phase 1: Prepare the Query
 
-### Alpha Blending
+Recall starts with the original `query`, an optional `keywordQuery`, and a
+normalized `limit`. `limit` is clamped to a bounded range so callers cannot
+force unbounded recall work.
 
-Scores from both sources are merged using a configurable alpha weight:
+The keyword side uses `sanitizeFtsQuery` to produce a safe FTS5 `MATCH`
+expression. If sanitization leaves no searchable tokens, the FTS and hint
+paths are skipped instead of issuing an empty `MATCH`.
 
-```
-score = alpha × vector_score + (1 - alpha) × bm25_score
-```
+`expandRecallKeywordQuery` adds a small mechanical expansion set for known
+class-to-instance gaps. The expansion affects keyword and hint search only.
+Vector search and model summaries still use the user's original query.
 
-If only one source returns a result for a given memory ID, its score
-is used directly without blending. Results below `min_score` are
-dropped. The default alpha is 0.7 (70% semantic, 30% keyword).
+### Phase 2: Collect Candidate IDs
 
-Configure in `agent.yaml`:
+Candidate collection uses several independent channels:
 
-```yaml
-search:
-  alpha: 0.7       # vector weight; 1 - alpha goes to BM25
-  min_score: 0.1   # drop results below this threshold
-```
+- **Memory FTS** queries `memories_fts`, joins to `memories`, applies the
+  shared filter, and normalizes BM25 scores within the batch.
+- **Prospective hints** query `memory_hints_fts`. Hints are write-time
+  alternate phrasings. They can rescue a memory whose content does not use
+  the same words as the current query.
+- **Vector search** embeds the original query and searches `vec_embeddings`
+  through `sqlite-vec`. Vector search cannot pre-filter every recall scope,
+  so constrained searches over-fetch and rely on authorization after merge.
+- **Structured path candidates** search entity/aspect/group/claim paths so
+  structured knowledge can surface even when its prose is sparse.
+- **Graph traversal** resolves focal entities and walks the knowledge graph.
+  In traversal-primary mode, graph results are treated as a first-class
+  retrieval channel rather than a small boost.
 
-### Graph-Augmented Search
+Flat lexical, hint, vector, and structured scores are merged by memory ID.
+When a memory appears in multiple channels, the strongest calibrated evidence
+wins unless there is an explicit blend. Pure hint-only hits are capped so
+generated hints can rescue recall but do not outrank directly grounded
+keyword, vector, or structured evidence.
 
-When `graphEnabled = true`, the recall endpoint runs an additional
-graph lookup before returning results
-(`platform/daemon/src/pipeline/graph-search.ts`).
+Traversal-primary mode sorts traversal candidates before selection and
+max-merges traversal overlap with flat candidates. This prevents a weak graph
+score from discarding stronger direct evidence for the same memory.
 
-The query is tokenized and matched against entity `canonical_name`
-values (top 20 by `mentions` count). From those seed entities, the
-graph expands one hop in both directions through the `relations` table
-(up to 50 neighbors). The resulting expanded entity set is joined to
-`memory_entity_mentions` to produce a set of linked memory IDs.
+### Phase 3: Authorize Candidates
 
-Memories in this set receive a configurable boost to their combined
-score. The graph lookup runs synchronously with a deadline to prevent
-slow queries from blocking recall. On timeout or error, the boost
-set is empty and search degrades gracefully. In other words, graph
-structure improves candidate quality when available but does not become
-a hard dependency for recall.
+After candidate collection and coarse score fusion, `authorize_candidates`
+requeries `memories` with the shared filter and removes anything outside the
+caller's allowed view. This is the boundary between "IDs only" and "content
+can now be read."
 
-### Optional Reranking
+New recall stages should follow this rule:
 
-If `search.reranking = true` is set, results above the minimum score
-threshold can be passed to a reranker model before final ordering.
-This is optional and provider-dependent.
+- Stages that only produce IDs and scores may run before authorization.
+- Stages that read memory content, send text to a model, build summaries,
+  inspect entity coverage, expand transcripts, or update metadata must run
+  after authorization.
+
+### Phase 4: Shape Authorized Evidence
+
+Once candidates are authorized, recall can safely use content-bearing
+post-processing:
+
+- **Structured Evidence Convolution (SEC-lite)** compares lexical, semantic,
+  hint, traversal, and structured signals so graph-only results do not blindly
+  dominate direct evidence.
+- **Facet coverage** can read candidate content and prefer rows that cover
+  more of the query's facets.
+- **Rehearsal boost** applies a small access-frequency and recency signal
+  when enabled.
+- **Reranking** can use an embedding reranker or an LLM reranker on the
+  authorized top-N candidates. If the reranker fails or times out, recall
+  keeps the existing ordering.
+- **Dampening** penalizes low-overlap semantic hits, hub-like entity
+  dominance, and other noisy retrieval shapes.
+- **Currentness** annotates superseded memories and boosts current
+  replacements.
+
+All of these stages are non-fatal. Recall should degrade toward simpler
+keyword/vector results rather than fail the whole response.
+
+### Phase 5: Hydrate and Assemble Results
+
+Hydration fetches full memory rows with the same shared filter used by
+authorization. Constrained searches use a larger pre-hydration window so
+valid later candidates can still return after broad vector or traversal IDs
+are removed.
+
+Assembly walks the pre-hydrated scored list, keeps only hydrated rows, and
+then applies the caller's `limit`. Access tracking updates only the memory
+IDs that actually appear in the returned primary result set. Synthetic cards
+and unauthorized candidates never update `access_count`.
+
+Supplementary results may include:
+
+- source-backed Obsidian chunks,
+- native memory artifacts,
+- transcript fallback cards when `expand` is enabled,
+- an LLM summary card when the LLM reranker path has remaining timeout
+  budget,
+- linked rationale memories for decision results,
+- constructed graph context cards.
+
+The final response is capped to `limit`. Supplementary rows are marked with
+`supplementary: true` so callers can distinguish them from ordinary memory
+rows.
+
+### Source and Transcript Rescue Paths
+
+If normal memory candidates produce no hits, recall can fall back to source
+chunks, native memory artifacts, and transcript FTS. These paths return
+synthetic recall rows rather than materializing new `memories` records, but
+each fallback is only enabled when its backing rows can satisfy the caller's
+scope boundary.
+
+Source chunk vector fallback is disabled for project-scoped recall until chunk
+embeddings carry a strong source root/project binding. Project-scoped searches
+still use authorized memory rows, native source artifacts, and transcript
+fallbacks; they do not guess source ownership from chunk text metadata.
+
+When `expand` is enabled and ordinary memory rows reference session source
+IDs, recall may fetch raw transcript excerpts and same-session structured
+summaries. This is a lossless backing-source path: extracted memories remain
+the primary row, but the transcript can restore details that extraction
+compressed away.
+
+### Timing and Failure Behavior
+
+Every major stage records timing data in `meta.timings`. Slow recalls log a
+stage breakdown so latency regressions can be localized without guessing.
+
+Secondary channels are deliberately best-effort. Embedding, vector search,
+graph traversal, structured evidence, reranking, dampening, currentness,
+source fallback, transcript expansion, and LLM summary failures are logged
+and skipped. The caller should receive the best safe recall response the
+daemon can produce from the remaining channels.
 
 ### Recall API
 
@@ -221,7 +302,8 @@ curl -X POST http://localhost:3850/api/memory/recall \
 ```
 
 Optional filters: `type`, `tags`, `who`, `pinned`, `importance_min`,
-`since` (ISO timestamp).
+`since`, `until`, `agentId`, `readPolicy`, `policyGroup`, `project`,
+`scope`, and `expand`.
 
 
 Content Normalization
