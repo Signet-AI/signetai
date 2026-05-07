@@ -61,7 +61,7 @@ Project Structure
 This is a Bun workspace monorepo organized by intent:
 
 ```
-platform/               # engine/runtime: core, daemon, daemon-rs, predictor, native
+platform/               # engine/runtime: core, daemon, daemon-rs, native
 surfaces/               # human-facing surfaces: CLI, dashboard, desktop, tray, browser extension
 integrations/           # external harness integrations grouped by tool
 libs/                   # reusable developer libraries: SDK, connector-base
