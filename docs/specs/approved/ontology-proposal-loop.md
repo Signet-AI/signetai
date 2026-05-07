@@ -129,6 +129,7 @@ GET  /api/ontology/proposals/:id/evidence
 GET  /api/ontology/claims/evidence
 GET  /api/ontology/links/:id/evidence
 POST /api/ontology/extract
+POST /api/ontology/consolidate
 POST /api/ontology/proposals
 POST /api/ontology/proposals/batch
 POST /api/ontology/proposals/repair/duplicates
@@ -162,6 +163,8 @@ signet ontology link-evidence <link-id>
 signet ontology extract --from transcript:<id> --dry-run
 signet ontology extract --from transcript:<id> --use-provider --dry-run
 signet ontology extract --from transcript:<id> --write-proposals
+signet ontology consolidate --proposals pending --use-provider --dry-run
+signet ontology consolidate --proposals pending --use-provider --write-proposals
 signet ontology propose --operation add_claim_value --payload-file proposal.json
 signet ontology import-proposals --file extraction-output.json
 signet ontology repair --duplicates --dry-run
@@ -251,6 +254,8 @@ router rather than binding directly to a vendor or harness.
 - Support opt-in provider-backed extraction through the configured
   `memory_extraction` inference workload, with deterministic extraction as the
   safe fallback when no provider proposals parse.
+- Support provider-backed consolidation over pending proposals, producing new
+  pending proposals rather than directly mutating the ontology.
 - Support proposal evidence lookup for embedded quotes, session transcripts,
   and indexed memory artifacts.
 - Support applied claim evidence lookup so accepted claim values remain
@@ -297,6 +302,9 @@ router rather than binding directly to a vendor or harness.
 - Provider-backed extraction is opt-in from the CLI/API, returns provider mode
   and warnings in the response, and does not mutate ontology state unless
   `write_proposals` is set.
+- Provider-backed consolidation reads pending proposal batches and conflicts,
+  returns summary/rejection/conflict/maintenance notes, and writes only pending
+  proposals when explicitly requested.
 - Applied claim evidence lookup resolves stored attribute provenance and memory
   references without reading arbitrary filesystem paths.
 - Applied link evidence lookup resolves stored dependency provenance without

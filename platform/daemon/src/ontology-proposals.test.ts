@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { getOntologyClaimEvidence } from "./ontology-claim-evidence";
+import { consolidateOntologyProposals } from "./ontology-consolidation";
 import { extractOntologyProposals } from "./ontology-extraction";
 import { getOntologyLinkEvidence } from "./ontology-link-evidence";
 import {
@@ -347,6 +348,108 @@ describe("ontology proposals", () => {
 		expect(result.warnings).toHaveLength(0);
 		expect(result.proposals).toHaveLength(1);
 		expect(result.proposals[0]?.payload.claim_key).toBe("provider_extraction");
+	});
+
+	it("consolidates pending proposals through an inference provider without direct mutation", async () => {
+		createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Signet",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "proposal_loop",
+				value: "Extraction should emit proposals first.",
+			},
+			confidence: 0.72,
+			rationale: "Raw extraction candidate.",
+		});
+		createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Signet",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "proposal_loop",
+				value: "Ontology maintenance should review proposals before mutation.",
+			},
+			confidence: 0.8,
+			rationale: "Second raw extraction candidate.",
+		});
+
+		const dryRun = await consolidateOntologyProposals(getDbAccessor(), {
+			agentId: "ant",
+			useProvider: true,
+			provider: {
+				name: "test-consolidator",
+				async available() {
+					return true;
+				},
+				async generate(prompt) {
+					expect(prompt).toContain("Pending proposals");
+					return JSON.stringify({
+						summary: "Combined two noisy proposal-loop candidates.",
+						proposals: [
+							{
+								operation: "add_claim_value",
+								payload: {
+									entity: "Signet",
+									aspect: "architecture",
+									group_key: "ontology",
+									claim_key: "proposal_loop",
+									value: "Signet ontology maintenance uses proposals before mutation.",
+								},
+								confidence: 0.9,
+								rationale: "The pending proposals agree on proposal-before-mutation semantics.",
+								evidence: [{ source_kind: "ontology_proposal", source_id: "candidate", quote: "proposals first" }],
+							},
+						],
+						rejections: [{ candidate_id: "duplicate", reason: "duplicate" }],
+					});
+				},
+			},
+		});
+
+		expect(dryRun.dryRun).toBe(true);
+		expect(dryRun.consolidationMode).toBe("provider");
+		expect(dryRun.writtenCount).toBe(0);
+		expect(dryRun.proposals).toHaveLength(1);
+		expect(dryRun.rejections).toHaveLength(1);
+
+		const written = await consolidateOntologyProposals(getDbAccessor(), {
+			agentId: "ant",
+			useProvider: true,
+			writeProposals: true,
+			createdBy: "test-consolidator",
+			provider: {
+				name: "test-consolidator",
+				async available() {
+					return true;
+				},
+				async generate() {
+					return JSON.stringify({
+						proposals: [
+							{
+								operation: "add_claim_value",
+								payload: {
+									entity: "Signet",
+									aspect: "architecture",
+									group_key: "ontology",
+									claim_key: "proposal_loop",
+									value: "Signet ontology maintenance uses proposals before mutation.",
+								},
+							},
+						],
+					});
+				},
+			},
+		});
+
+		expect(written.dryRun).toBe(false);
+		expect(written.writtenCount).toBe(1);
+		expect(written.items[0]?.createdBy).toBe("test-consolidator");
+		expect(written.items[0]?.sourceKind).toBe("ontology_consolidation");
 	});
 
 	it("resolves proposal evidence from transcripts and indexed artifacts", () => {

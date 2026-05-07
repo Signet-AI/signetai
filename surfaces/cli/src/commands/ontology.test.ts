@@ -287,6 +287,83 @@ describe("registerOntologyCommands", () => {
 		expect(lines.join("\n")).toContain("1 written");
 	});
 
+	test("consolidate posts pending proposal consolidation requests", async () => {
+		const calls: Array<{
+			readonly method: string;
+			readonly path: string;
+			readonly body: unknown;
+			readonly timeout?: number;
+		}> = [];
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (method, path, body, timeout) => {
+				calls.push({ method, path, body, timeout });
+				return {
+					ok: true,
+					data: {
+						sourceProposalCount: 2,
+						count: 1,
+						writtenCount: 0,
+						consolidationMode: "provider",
+						providerName: "routing:memory_extraction",
+						summary: "Consolidated proposal-loop candidates.",
+						proposals: [
+							{
+								operation: "add_claim_value",
+								payload: { entity: "Signet" },
+								confidence: 0.9,
+								rationale: "Stable consolidated claim.",
+							},
+						],
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"consolidate",
+			"--proposals",
+			"pending",
+			"--use-provider",
+			"--provider-timeout-ms",
+			"120000",
+			"--agent",
+			"ant",
+			"--limit",
+			"5",
+		]);
+
+		expect(calls).toEqual([
+			{
+				method: "POST",
+				path: "/api/ontology/consolidate",
+				timeout: 125000,
+				body: {
+					agent_id: "ant",
+					status: "pending",
+					write_proposals: false,
+					use_provider: true,
+					provider_timeout_ms: 120000,
+					provider_max_tokens: undefined,
+					created_by: "ontology-consolidate",
+					limit: 5,
+				},
+			},
+		]);
+		expect(lines.join("\n")).toContain("Ontology Consolidation");
+		expect(lines.join("\n")).toContain("mode provider");
+		expect(lines.join("\n")).toContain("Stable consolidated claim");
+	});
+
 	test("repair duplicates posts a dry-run request by default", async () => {
 		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
 		const lines: string[] = [];

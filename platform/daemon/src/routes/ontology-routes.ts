@@ -8,6 +8,7 @@ import {
 	parseOntologyClaimAttributeKind,
 	parseOntologyClaimAttributeStatus,
 } from "../ontology-claim-evidence";
+import { OntologyConsolidationError, consolidateOntologyProposals } from "../ontology-consolidation";
 import { OntologyExtractionError, extractOntologyProposals } from "../ontology-extraction";
 import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
 import {
@@ -72,6 +73,7 @@ function statusForError(err: unknown): 400 | 404 | 409 | 500 {
 	if (err instanceof OntologyClaimEvidenceError) return err.status;
 	if (err instanceof OntologyLinkEvidenceError) return err.status;
 	if (err instanceof OntologyExtractionError) return err.status;
+	if (err instanceof OntologyConsolidationError) return err.status;
 	return 500;
 }
 
@@ -97,6 +99,10 @@ export function registerOntologyRoutes(app: Hono): void {
 		return requirePermission(permission, authConfig)(c, next);
 	});
 	app.use("/api/ontology/extract", async (c, next) => {
+		const permission = c.req.method === "GET" ? "recall" : "modify";
+		return requirePermission(permission, authConfig)(c, next);
+	});
+	app.use("/api/ontology/consolidate", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
 	});
@@ -170,6 +176,32 @@ export function registerOntologyRoutes(app: Hono): void {
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
 					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-extract",
 					limit: readNumber(body, "limit"),
+					useProvider,
+					provider: useProvider ? getInferenceProviderOrNull("memoryExtraction") : null,
+					providerTimeoutMs: readNumber(body, "provider_timeout_ms"),
+					providerMaxTokens: readNumber(body, "provider_max_tokens"),
+				}),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/consolidate", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		const status = parseOntologyProposalStatus(readString(body, "status"));
+		if (readString(body, "status") && !status) return c.json({ error: "status is invalid" }, 400);
+		const useProvider = readBoolean(body, "use_provider") ?? false;
+		try {
+			return c.json(
+				await consolidateOntologyProposals(getDbAccessor(), {
+					agentId: scoped.agentId,
+					status,
+					limit: readNumber(body, "limit"),
+					writeProposals: readBoolean(body, "write_proposals") ?? false,
+					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-consolidate",
 					useProvider,
 					provider: useProvider ? getInferenceProviderOrNull("memoryExtraction") : null,
 					providerTimeoutMs: readNumber(body, "provider_timeout_ms"),

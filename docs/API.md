@@ -3453,6 +3453,15 @@ proposals only when `write_proposals` is true. When `use_provider` is true, the
 route uses the configured `memory_extraction` inference workload and falls back
 to deterministic extraction if no valid provider proposals are returned.
 
+### POST /api/ontology/consolidate
+
+Consolidate pending ontology proposals into higher-confidence pending proposals.
+Body parameters: `agent_id`, `status`, `limit`, `write_proposals`, `created_by`,
+`use_provider`, `provider_timeout_ms`, and `provider_max_tokens`. The route
+dry-runs by default. Provider-backed consolidation uses the configured
+`memory_extraction` inference workload and never mutates ontology state directly;
+it writes only pending proposals when `write_proposals` is true.
+
 ### POST /api/ontology/proposals
 
 Create one pending ontology proposal.

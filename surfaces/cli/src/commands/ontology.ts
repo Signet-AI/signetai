@@ -161,6 +161,21 @@ interface ExtractionResponse {
 	};
 }
 
+interface ConsolidationResponse {
+	readonly proposals?: readonly ProposalImportInput[];
+	readonly sourceProposalCount?: number;
+	readonly count?: number;
+	readonly writtenCount?: number;
+	readonly dryRun?: boolean;
+	readonly consolidationMode?: string;
+	readonly providerName?: string | null;
+	readonly summary?: string | null;
+	readonly warnings?: readonly string[];
+	readonly rejections?: readonly unknown[];
+	readonly conflicts?: readonly unknown[];
+	readonly maintenance?: readonly unknown[];
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 }
@@ -366,8 +381,8 @@ async function apiGet(deps: OntologyDeps, path: string, params: URLSearchParams)
 	return data;
 }
 
-async function apiPost(deps: OntologyDeps, path: string, body: unknown): Promise<unknown> {
-	const { ok, data } = await deps.secretApiCall("POST", path, body, 15_000);
+async function apiPost(deps: OntologyDeps, path: string, body: unknown, timeoutMs = 15_000): Promise<unknown> {
+	const { ok, data } = await deps.secretApiCall("POST", path, body, timeoutMs);
 	if (!ok || typeof asRecord(data).error === "string") {
 		console.error(chalk.red(errorMessage(data, "Ontology request failed")));
 		process.exit(1);
@@ -561,6 +576,36 @@ function printExtraction(data: unknown): void {
 	console.log();
 }
 
+function printConsolidation(data: unknown): void {
+	const result = asRecord(data) as ConsolidationResponse;
+	const proposals = result.proposals ?? [];
+	console.log(chalk.bold("\n  Ontology Consolidation\n"));
+	console.log(chalk.dim(`  mode ${result.consolidationMode ?? "unknown"}`));
+	if (result.providerName) console.log(chalk.dim(`  provider ${result.providerName}`));
+	console.log(
+		chalk.dim(
+			`  ${result.sourceProposalCount ?? 0} source proposal(s) · ${result.writtenCount ?? 0} written · ${
+				result.count ?? proposals.length
+			} candidate(s)`,
+		),
+	);
+	if (result.summary) console.log(chalk.dim(`  ${result.summary}`));
+	for (const warning of result.warnings ?? []) {
+		console.log(chalk.yellow(`  warning ${warning}`));
+	}
+	for (const proposal of proposals.slice(0, 20)) {
+		const confidence = typeof proposal.confidence === "number" ? ` · ${proposal.confidence.toFixed(2)}` : "";
+		console.log(`  ${chalk.yellow(proposal.operation)}${confidence}`);
+		if (proposal.rationale) console.log(chalk.dim(`    ${proposal.rationale}`));
+	}
+	if ((result.rejections ?? []).length > 0) console.log(chalk.dim(`  ${result.rejections?.length ?? 0} rejection(s)`));
+	if ((result.conflicts ?? []).length > 0)
+		console.log(chalk.dim(`  ${result.conflicts?.length ?? 0} conflict note(s)`));
+	if ((result.maintenance ?? []).length > 0)
+		console.log(chalk.dim(`  ${result.maintenance?.length ?? 0} maintenance note(s)`));
+	console.log();
+}
+
 function addCommonOptions(cmd: Command): Command {
 	return cmd.option("--agent <name>", "Agent scope, default default").option("--json", "Output as JSON");
 }
@@ -679,18 +724,57 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
-			const data = await apiPost(deps, "/api/ontology/extract", {
-				agent_id: options.agent,
-				from: options.from,
-				write_proposals: options.writeProposals === true,
-				use_provider: options.useProvider === true,
-				provider_timeout_ms: options.providerTimeoutMs,
-				provider_max_tokens: options.providerMaxTokens,
-				created_by: options.createdBy,
-				limit: options.limit,
-			});
+			const data = await apiPost(
+				deps,
+				"/api/ontology/extract",
+				{
+					agent_id: options.agent,
+					from: options.from,
+					write_proposals: options.writeProposals === true,
+					use_provider: options.useProvider === true,
+					provider_timeout_ms: options.providerTimeoutMs,
+					provider_max_tokens: options.providerMaxTokens,
+					created_by: options.createdBy,
+					limit: options.limit,
+				},
+				options.useProvider === true ? Math.max(options.providerTimeoutMs ?? 90_000, 15_000) + 5_000 : 15_000,
+			);
 			if (options.json) console.log(JSON.stringify(data, null, 2));
 			else printExtraction(data);
+		});
+
+	ontology
+		.command("consolidate")
+		.description("Consolidate pending ontology proposals into higher-confidence proposals")
+		.option("--proposals <status>", "Proposal status to consolidate", "pending")
+		.option("--write-proposals", "Persist consolidated candidates as pending proposals")
+		.option("--dry-run", "Preview consolidated candidates without writing", true)
+		.option("--use-provider", "Use the configured memory extraction inference workload")
+		.option("--provider-timeout-ms <n>", "Provider consolidation timeout in milliseconds", Number.parseInt)
+		.option("--provider-max-tokens <n>", "Provider consolidation response token budget", Number.parseInt)
+		.option("-l, --limit <n>", "Max source proposals to consolidate", Number.parseInt)
+		.option("--agent <name>", "Agent scope, default default")
+		.option("--created-by <name>", "Audit creator", "ontology-consolidate")
+		.option("--json", "Output as JSON")
+		.action(async (options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const data = await apiPost(
+				deps,
+				"/api/ontology/consolidate",
+				{
+					agent_id: options.agent,
+					status: options.proposals,
+					write_proposals: options.writeProposals === true,
+					use_provider: options.useProvider === true,
+					provider_timeout_ms: options.providerTimeoutMs,
+					provider_max_tokens: options.providerMaxTokens,
+					created_by: options.createdBy,
+					limit: options.limit,
+				},
+				options.useProvider === true ? Math.max(options.providerTimeoutMs ?? 120_000, 15_000) + 5_000 : 15_000,
+			);
+			if (options.json) console.log(JSON.stringify(data, null, 2));
+			else printConsolidation(data);
 		});
 
 	addCommonOptions(
