@@ -147,6 +147,8 @@ printf '  acpx answer  \\n'
 				permissions: "deny-all",
 				hooks: "disabled",
 				terminal: "disabled",
+				mode: "session",
+				session: "background",
 				allowedTools: ["read_file"],
 			});
 			await expect(provider.generate("hello acpx", { timeoutMs: 1000 })).resolves.toBe("acpx answer");
@@ -156,7 +158,15 @@ printf '  acpx answer  \\n'
 			expect(args).toContain("--deny-all");
 			expect(args).toContain("--no-terminal");
 			expect(args).toContain("codex");
-			expect(args).toContain("exec");
+			const agentIndex = args.indexOf("codex");
+			expect(args.slice(agentIndex)).toEqual([
+				"codex",
+				"-s",
+				"background",
+				"exec",
+				"--file",
+				"-",
+			]);
 			expect(readFileSync(promptPath, "utf-8")).toBe("hello acpx");
 			expect(readFileSync(hooksPath, "utf-8")).toBe("1");
 		} finally {

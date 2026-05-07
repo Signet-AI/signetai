@@ -1013,12 +1013,10 @@ function buildAcpxCommand(config: AcpxProviderConfig, timeoutMs: number): { bin:
 	if (config.allowedTools) args.push("--allowed-tools", config.allowedTools.join(","));
 	args.push(...(config.extraArgs ?? []));
 	args.push(config.agent);
-	if ((config.mode ?? "exec") === "session") {
-		if (config.session) args.push("-s", config.session);
-		args.push("--file", "-");
-	} else {
-		args.push("exec", "--file", "-");
+	if ((config.mode ?? "exec") === "session" && config.session) {
+		args.push("-s", config.session);
 	}
+	args.push("exec", "--file", "-");
 	return { bin, args };
 }
 
