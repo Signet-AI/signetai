@@ -5,8 +5,16 @@ import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
-import { loadMemoryConfig } from "../memory-config";
 import type { NativeMemoryBridgeHandle, NativeMemoryBridgeOptions, NativeMemorySource } from "../native-memory-sources";
+import {
+	beginSourceIndexJob,
+	clearSourceIndexProgressForTests,
+	completeSourceIndexJob,
+	completeSourceIndexJobFromProgress,
+	getSourceIndexJob,
+	markSourceIndexJobRunning,
+	updateSourceIndexJobProgress,
+} from "../source-index-progress";
 import { registerSourcesRoutes } from "./sources-routes";
 
 describe("Sources routes", () => {
@@ -16,6 +24,7 @@ describe("Sources routes", () => {
 	let previousSignetAgentId: string | undefined;
 
 	beforeEach(() => {
+		clearSourceIndexProgressForTests();
 		dir = mkdtempSync(join(tmpdir(), "signet-sources-routes-"));
 		vault = join(dir, "vault");
 		mkdirSync(join(vault, "permanent"), { recursive: true });
@@ -29,6 +38,7 @@ describe("Sources routes", () => {
 	});
 
 	afterEach(() => {
+		clearSourceIndexProgressForTests();
 		closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
@@ -49,11 +59,14 @@ describe("Sources routes", () => {
 		const app = new Hono();
 		registerSourcesRoutes(app, {
 			agentsDir: dir,
-			loadMemoryConfig,
 			startBridge: (sources: readonly NativeMemorySource[], bridgeOptions: NativeMemoryBridgeOptions) => {
 				expect(sources).toHaveLength(1);
 				expect(sources[0]?.sourceId).toStartWith("obsidian:");
 				expect(bridgeOptions.yieldEveryFiles).toBe(1);
+				expect(bridgeOptions.embeddingConfig).toBeUndefined();
+				expect(bridgeOptions.fetchEmbedding).toBeUndefined();
+				expect(bridgeOptions.sourceCleanupEnabled).toBe(false);
+				expect(bridgeOptions.sourceGraphEnabled).toBe(false);
 				return {
 					syncExisting: async () => {
 						options.onSyncStart?.();
@@ -172,7 +185,6 @@ describe("Sources routes", () => {
 		const app = new Hono();
 		registerSourcesRoutes(app, {
 			agentsDir: dir,
-			loadMemoryConfig,
 			startBridge: (sources: readonly NativeMemorySource[], bridgeOptions: NativeMemoryBridgeOptions) => {
 				syncCalls++;
 				const call = syncCalls;
@@ -256,7 +268,6 @@ describe("Sources routes", () => {
 		const restarted = new Hono();
 		registerSourcesRoutes(restarted, {
 			agentsDir: dir,
-			loadMemoryConfig,
 			purgeNativeSource: () => {
 				startupPurges++;
 				return 1;
@@ -313,6 +324,59 @@ describe("Sources routes", () => {
 			sources: Array<{ stats?: { artifacts: number; chunks: number; indexed: number } }>;
 		};
 		expect(body.sources[0]?.stats).toEqual({ artifacts: 1, chunks: 1, indexed: 1 });
+	});
+
+	it("surfaces background source sync progress in the sources response", async () => {
+		const added = addObsidianSource({ root: vault, name: "Background Vault" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const job = beginSourceIndexJob(added.source.id, "source-startup");
+		markSourceIndexJobRunning(added.source.id, job.id);
+		updateSourceIndexJobProgress(added.source.id, job.id, {
+			scanned: 3,
+			total: 10,
+			indexed: 2,
+			currentPath: join(vault, "permanent", "Note.md"),
+		});
+
+		const res = await makeApp().request("/api/sources");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			sources: Array<{ indexJob?: { status?: string; scanned?: number; total?: number; indexed?: number } }>;
+		};
+		expect(body.sources[0]?.indexJob).toMatchObject({ status: "running", scanned: 3, total: 10, indexed: 2 });
+
+		completeSourceIndexJob(added.source.id, job.id, 2);
+		updateSourceIndexJobProgress(added.source.id, job.id, {
+			scanned: 4,
+			total: 10,
+			indexed: 3,
+			currentPath: join(vault, "permanent", "Note.md"),
+		});
+		const completed = (await (await makeApp().request("/api/sources")).json()) as {
+			sources: Array<{ indexJob?: { status?: string; scanned?: number; indexed?: number } }>;
+		};
+		expect(completed.sources[0]?.indexJob).toMatchObject({ status: "complete", scanned: 3, indexed: 2 });
+	});
+
+	it("completes startup source jobs from their own progress, not aggregate bridge counts", () => {
+		const active = beginSourceIndexJob("obsidian:active", "source-startup");
+		const empty = beginSourceIndexJob("obsidian:empty", "source-startup");
+		markSourceIndexJobRunning("obsidian:active", active.id);
+		markSourceIndexJobRunning("obsidian:empty", empty.id);
+		updateSourceIndexJobProgress("obsidian:active", active.id, {
+			scanned: 2,
+			total: 2,
+			indexed: 2,
+			currentPath: join(vault, "permanent", "Note.md"),
+		});
+
+		completeSourceIndexJobFromProgress("obsidian:active", active.id);
+		completeSourceIndexJobFromProgress("obsidian:empty", empty.id);
+
+		expect(getSourceIndexJob("obsidian:active")?.indexed).toBe(2);
+		expect(getSourceIndexJob("obsidian:empty")?.indexed).toBe(0);
 	});
 
 	it("disconnects a source, removes config, and returns purge count", async () => {
