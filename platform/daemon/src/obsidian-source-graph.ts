@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import type { WriteDb } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
@@ -14,6 +14,7 @@ export interface IndexObsidianSourceStructureInput {
 	readonly root: string;
 	readonly filePath: string;
 	readonly content: string;
+	readonly markdownPathIndex?: ObsidianMarkdownPathIndex;
 }
 
 export interface IndexObsidianSourceStructureResult {
@@ -50,6 +51,12 @@ interface HeadingSection {
 	readonly heading: string;
 	readonly level: number;
 	readonly body: string;
+}
+
+export interface ObsidianMarkdownPathIndex {
+	readonly byStem: ReadonlyMap<string, string>;
+	readonly byNormalizedStem: ReadonlyMap<string, string>;
+	readonly byRel: ReadonlyMap<string, string>;
 }
 
 function normalizedRoot(root: string): string {
@@ -305,23 +312,54 @@ function wikiLinks(content: string): string[] {
 	return [...links];
 }
 
-function findMarkdownByStem(root: string, target: string): string | null {
-	const wanted = slug(target).replace(/_/g, "-");
-	const stack = [root];
-	while (stack.length > 0) {
-		const dir = stack.pop();
-		if (!dir) continue;
-		for (const entry of readdirSync(dir, { withFileTypes: true })) {
-			const path = join(dir, entry.name);
-			if (entry.isDirectory()) {
-				if ([".obsidian", ".trash", ".hermes"].includes(entry.name)) continue;
-				stack.push(path);
-			} else if (entry.isFile() && entry.name.endsWith(".md")) {
-				if (slug(basename(entry.name, ".md")).replace(/_/g, "-") === wanted) return path;
-			}
-		}
+function existingMarkdownPath(path: string): string | null {
+	try {
+		return existsSync(path) && statSync(path).isFile() ? normalizedPath(path) : null;
+	} catch {
+		return null;
 	}
-	return null;
+}
+
+function markdownTarget(target: string): string {
+	return target.endsWith(".md") ? target : `${target}.md`;
+}
+
+export function buildObsidianMarkdownPathIndex(root: string, files: readonly string[]): ObsidianMarkdownPathIndex {
+	const normalized = normalizedRoot(root);
+	const byStem = new Map<string, string>();
+	const byNormalizedStem = new Map<string, string>();
+	const byRel = new Map<string, string>();
+	for (const file of files) {
+		const path = normalizedPath(file);
+		const rel = relPath(normalized, path);
+		if (!rel.endsWith(".md")) continue;
+		byRel.set(rel, path);
+		const stem = displayNameForFile(path);
+		if (!byStem.has(stem)) byStem.set(stem, path);
+		const normalizedStem = slug(stem);
+		if (!byNormalizedStem.has(normalizedStem)) byNormalizedStem.set(normalizedStem, path);
+	}
+	return { byStem, byNormalizedStem, byRel };
+}
+
+function resolveWikiLinkPath(
+	root: string,
+	filePath: string,
+	target: string,
+	index?: ObsidianMarkdownPathIndex,
+): { path: string; rel: string; found: boolean } {
+	const targetPath = markdownTarget(target);
+	const candidates = [join(dirname(filePath), targetPath), join(root, targetPath)];
+	for (const candidate of candidates) {
+		const found = existingMarkdownPath(candidate);
+		if (found) return { path: found, rel: relPath(root, found), found: true };
+	}
+	const indexed =
+		index?.byRel.get(targetPath) ??
+		(target.includes("/") ? undefined : (index?.byStem.get(target) ?? index?.byNormalizedStem.get(slug(target))));
+	if (indexed) return { path: indexed, rel: relPath(root, indexed), found: true };
+	const rel = targetPath;
+	return { path: normalizedPath(join(root, rel)), rel, found: false };
 }
 
 function folderRelatives(root: string, filePath: string): string[] {
@@ -509,18 +547,16 @@ export function indexObsidianSourceStructure(
 			dependenciesTouched++;
 
 		for (const link of wikiLinks(content)) {
-			const found = findMarkdownByStem(root, link);
-			const targetRel = found ? relPath(root, normalizedPath(found)) : `${link}.md`;
-			const targetPath = found ? normalizedPath(found) : join(root, targetRel);
+			const targetPath = resolveWikiLinkPath(root, filePath, link, input.markdownPathIndex);
 			const target = upsertSourceEntity(db, {
-				id: idFor(input.agentId, input.sourceId, "document", targetRel),
-				name: displayNameForFile(targetPath),
-				canonicalName: sourceCanonical(input.sourceId, "document", targetRel),
-				entityType: found ? "source_document" : "source_document_reference",
+				id: idFor(input.agentId, input.sourceId, "document", targetPath.rel),
+				name: displayNameForFile(targetPath.path),
+				canonicalName: sourceCanonical(input.sourceId, "document", targetPath.rel),
+				entityType: targetPath.found ? "source_document" : "source_document_reference",
 				agentId: input.agentId,
 				sourceId: input.sourceId,
 				sourceRoot: root,
-				sourcePath: normalizedPath(targetPath),
+				sourcePath: targetPath.path,
 				now,
 			});
 			documentEntitiesTouched++;
@@ -531,7 +567,7 @@ export function indexObsidianSourceStructure(
 					agentId: input.agentId,
 					type: "wiki_link",
 					strength: 0.9,
-					confidence: found ? 1 : 0.7,
+					confidence: targetPath.found ? 1 : 0.7,
 					reason: requireDependencyReason("related_to", `Obsidian wiki link [[${link}]] in ${fileRel}`),
 					sourceId: input.sourceId,
 					sourceRoot: root,
