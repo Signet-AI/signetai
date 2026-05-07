@@ -415,7 +415,7 @@ subscription-backed CLI session, or gateway.
 | `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |
 | `models` | map | Named model entries for this target |
 
-Example ACPX background target:
+Example ACPX background target (see also `docs/ACP-INTEGRATION.md` for the architecture and current limitations):
 
 ```yaml
 inference:
