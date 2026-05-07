@@ -172,7 +172,7 @@ describe("Obsidian source graph structure", () => {
 		const doc = join(vault, "literature", "Arch-Linux", "hyprland.md");
 		const nestedTarget = join(vault, "literature", "Other", "Deep Target.md");
 		mkdirSync(join(vault, "literature", "Other"), { recursive: true });
-		writeFileSync(doc, "# Hyprland\n\nLinks to [[Deep Target]].\n");
+		writeFileSync(doc, "# Hyprland\n\nLinks to [[deep-target]].\n");
 		writeFileSync(nestedTarget, "# Deep Target\n\nThis file exists elsewhere in the vault.\n");
 		const markdownPathIndex = buildObsidianMarkdownPathIndex(vault, [doc, nestedTarget]);
 

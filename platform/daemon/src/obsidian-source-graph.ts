@@ -55,6 +55,7 @@ interface HeadingSection {
 
 export interface ObsidianMarkdownPathIndex {
 	readonly byStem: ReadonlyMap<string, string>;
+	readonly byNormalizedStem: ReadonlyMap<string, string>;
 	readonly byRel: ReadonlyMap<string, string>;
 }
 
@@ -326,15 +327,19 @@ function markdownTarget(target: string): string {
 export function buildObsidianMarkdownPathIndex(root: string, files: readonly string[]): ObsidianMarkdownPathIndex {
 	const normalized = normalizedRoot(root);
 	const byStem = new Map<string, string>();
+	const byNormalizedStem = new Map<string, string>();
 	const byRel = new Map<string, string>();
 	for (const file of files) {
 		const path = normalizedPath(file);
 		const rel = relPath(normalized, path);
 		if (!rel.endsWith(".md")) continue;
 		byRel.set(rel, path);
-		if (!byStem.has(displayNameForFile(path))) byStem.set(displayNameForFile(path), path);
+		const stem = displayNameForFile(path);
+		if (!byStem.has(stem)) byStem.set(stem, path);
+		const normalizedStem = slug(stem);
+		if (!byNormalizedStem.has(normalizedStem)) byNormalizedStem.set(normalizedStem, path);
 	}
-	return { byStem, byRel };
+	return { byStem, byNormalizedStem, byRel };
 }
 
 function resolveWikiLinkPath(
@@ -349,7 +354,9 @@ function resolveWikiLinkPath(
 		const found = existingMarkdownPath(candidate);
 		if (found) return { path: found, rel: relPath(root, found), found: true };
 	}
-	const indexed = index?.byRel.get(targetPath) ?? (target.includes("/") ? undefined : index?.byStem.get(target));
+	const indexed =
+		index?.byRel.get(targetPath) ??
+		(target.includes("/") ? undefined : (index?.byStem.get(target) ?? index?.byNormalizedStem.get(slug(target))));
 	if (indexed) return { path: indexed, rel: relPath(root, indexed), found: true };
 	const rel = targetPath;
 	return { path: normalizedPath(join(root, rel)), rel, found: false };
