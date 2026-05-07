@@ -89,7 +89,7 @@ import {
 	searchTranscriptFallback,
 	upsertSessionTranscript,
 } from "./session-transcripts";
-import { type StructuralFeatures, buildCandidateFeatures, getStructuralFeatures } from "./structural-features";
+import { type StructuralFeatures, getStructuralFeatures } from "./structural-features";
 import { assembleInheritedContextBlock, resolveParentSession } from "./subagent-context";
 import { isObject, isRenderError, isRenderResult } from "./synthesis-worker-protocol";
 import { searchTemporalFallback } from "./temporal-fallback";
