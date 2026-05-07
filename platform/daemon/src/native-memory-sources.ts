@@ -49,6 +49,17 @@ export interface NativeMemoryBridgeOptions {
 	readonly fetchEmbedding?: SourceEmbeddingFetch;
 	readonly agentsDir?: string;
 	readonly includeConfiguredSources?: boolean;
+	readonly yieldEveryFiles?: number;
+	readonly onFileIndexed?: (event: NativeMemoryFileIndexEvent) => void;
+}
+
+export interface NativeMemoryFileIndexEvent {
+	readonly source: NativeMemorySource;
+	readonly filePath: string;
+	readonly indexed: boolean;
+	readonly scanned: number;
+	readonly total: number;
+	readonly changed: number;
 }
 
 interface IndexedNativeMemory {
@@ -440,16 +451,30 @@ export function startNativeMemoryBridge(
 
 	const runScan = async (): Promise<number> => {
 		let count = 0;
-		const yielder = yieldEvery(20);
+		const yielder = yieldEvery(options.yieldEveryFiles ?? 20);
 		for (const source of activeBridgeSources(sources, options)) {
+			let changedCount = 0;
+			let scanned = 0;
 			const key = sourceStateKey(source, agentId);
 			const current = new Set<string>();
 			const rootExists = existsSync(source.root);
 			if (rootExists) {
+				const files: string[] = [];
 				for await (const file of walkMarkdownFiles(source.root)) {
 					if (!matchesPattern(source, file)) continue;
+					files.push(file);
+					await yielder();
+				}
+				const total = files.length;
+				for (const file of files) {
+					scanned++;
+					const changed = await indexNativeMemoryFile(source, file, agentId, options);
+					if (changed) {
+						count++;
+						changedCount++;
+					}
 					current.add(file);
-					if (await indexNativeMemoryFile(source, file, agentId, options)) count++;
+					options.onFileIndexed?.({ source, filePath: file, indexed: changed, scanned, total, changed: changedCount });
 					await yielder();
 				}
 				const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
