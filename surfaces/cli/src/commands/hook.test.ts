@@ -357,6 +357,30 @@ describe("buildUserPromptSubmitBody", () => {
 		});
 	});
 
+	test("keeps Claude Code prompt-submit agent_id out of Signet scope", () => {
+		expect(
+			buildUserPromptSubmitBody(
+				{
+					userMessage: "inspect this",
+					sessionKey: "child-session",
+					agent_id: "claude-subagent",
+				},
+				"claude-code",
+				"/tmp/project",
+			),
+		).toEqual({
+			harness: "claude-code",
+			project: "/tmp/project",
+			userMessage: "inspect this",
+			userPrompt: "",
+			sessionKey: "child-session",
+			transcriptPath: "",
+			transcript: "",
+			harnessAgentId: "claude-subagent",
+			runtimePath: "legacy",
+		});
+	});
+
 	test("hook command uses daemon result transport for user-prompt-submit", async () => {
 		const seen: Array<{ path: string; body: string; runtimePath: string | null; timeout?: number }> = [];
 		const lines: string[] = [];

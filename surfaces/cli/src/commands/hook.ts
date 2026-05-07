@@ -500,8 +500,14 @@ export function buildUserPromptSubmitBody(
 	const userPrompt = pickString(body?.prompt, body?.user_prompt, body?.userPrompt);
 	const userMessage = pickString(body?.user_message, body?.userMessage, userPrompt);
 	const lastAssistantMessage = readLastAssistantMessage(body);
-	const agentId = pickString(body?.signet_agent_id, body?.signetAgentId, body?.agentId, body?.agent_id);
-	const harnessAgentId = pickString(body?.harness_agent_id, body?.harnessAgentId);
+	const nativeAgentId = harness === "claude-code" ? pickString(body?.agent_id) : "";
+	const agentId = pickString(
+		body?.signet_agent_id,
+		body?.signetAgentId,
+		body?.agentId,
+		nativeAgentId ? "" : body?.agent_id,
+	);
+	const harnessAgentId = pickString(body?.harness_agent_id, body?.harnessAgentId, nativeAgentId);
 	return {
 		harness,
 		project,
