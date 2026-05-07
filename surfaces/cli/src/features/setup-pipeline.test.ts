@@ -80,4 +80,12 @@ describe("buildSetupInference", () => {
 			taskClass: "memory_extraction",
 		});
 	});
+
+	it("selects ACPX agent from detected providers when no harness was selected", () => {
+		const inference = buildSetupInference("acpx", "haiku", [], ["acpx", "claude-code"]);
+		expect(inference?.targets["background-acpx"]).toMatchObject({
+			executor: "acpx",
+			acpx: { agent: "claude-code" },
+		});
+	});
 });

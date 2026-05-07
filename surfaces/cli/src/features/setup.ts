@@ -304,6 +304,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				embeddingModel: deps.normalizeStringValue(options.embeddingModel) || undefined,
 				extractionProvider: migrationExtractionProvider,
 				extractionModel: deps.normalizeStringValue(options.extractionModel) || undefined,
+				availableExtractionProviders: availableToolExtractionProviders,
 				signetSecretsEnabled,
 				graphiqEnabled,
 			});
@@ -389,6 +390,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					deps.normalizeStringValue(existingPipeline.extractionModel) ||
 					deps.normalizeStringValue(existingExtraction.model) ||
 					undefined,
+				availableExtractionProviders: availableToolExtractionProviders,
 				signetSecretsEnabled,
 				graphiqEnabled,
 			});
@@ -758,7 +760,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				choices: [
 					{ value: "gpt-5-codex-mini", name: "gpt-5-codex-mini (recommended default)" },
 					{ value: "haiku", name: "haiku (Claude Code lightweight)" },
-					{ value: "anthropic/claude-haiku-4-5-20251001", name: "anthropic/claude-haiku-4-5 (OpenCode provider/model)" },
+					{
+						value: "anthropic/claude-haiku-4-5-20251001",
+						name: "anthropic/claude-haiku-4-5 (OpenCode provider/model)",
+					},
 				],
 			});
 		}
@@ -932,6 +937,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		embeddingDimensions,
 		extractionProvider,
 		extractionModel,
+		availableExtractionProviders: availableToolExtractionProviders,
 		searchBalance,
 		searchTopK,
 		searchMinScore,

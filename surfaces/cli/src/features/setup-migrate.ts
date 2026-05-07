@@ -70,6 +70,7 @@ export async function runExistingSetupWizard(
 		embeddingModel?: string;
 		extractionProvider?: ExtractionProviderChoice;
 		extractionModel?: string;
+		availableExtractionProviders?: readonly ExtractionProviderChoice[];
 		signetSecretsEnabled?: boolean;
 		graphiqEnabled?: boolean;
 	},
@@ -225,6 +226,7 @@ export async function runExistingSetupWizard(
 				options.extractionProvider,
 				options.extractionModel || defaultExtractionModel(options.extractionProvider),
 				detectedHarnesses,
+				options.availableExtractionProviders,
 			);
 			if (inference) config.inference = inference;
 		}

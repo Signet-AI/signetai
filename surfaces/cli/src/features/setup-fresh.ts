@@ -134,7 +134,12 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		const memory = readRecord(config.memory);
 		memory.pipelineV2 = buildSetupPipeline(cfg.extractionProvider, cfg.extractionModel);
 		config.memory = memory;
-		const inference = buildSetupInference(cfg.extractionProvider, cfg.extractionModel, cfg.harnesses);
+		const inference = buildSetupInference(
+			cfg.extractionProvider,
+			cfg.extractionModel,
+			cfg.harnesses,
+			cfg.availableExtractionProviders,
+		);
 		if (inference) config.inference = inference;
 
 		writeFileSync(join(cfg.basePath, "agent.yaml"), formatYaml(config));

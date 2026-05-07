@@ -83,9 +83,15 @@ export interface SetupInferenceConfig {
 	readonly workloads: Record<string, unknown>;
 }
 
-function selectAcpxAgent(harnesses: readonly string[]): Extract<HarnessChoice, "codex" | "claude-code" | "opencode"> {
+function selectAcpxAgent(
+	harnesses: readonly string[],
+	availableProviders: readonly ExtractionProviderChoice[] = [],
+): Extract<HarnessChoice, "codex" | "claude-code" | "opencode"> {
 	for (const harness of harnesses) {
 		if (harness === "codex" || harness === "claude-code" || harness === "opencode") return harness;
+	}
+	for (const provider of availableProviders) {
+		if (provider === "codex" || provider === "claude-code" || provider === "opencode") return provider;
 	}
 	return "codex";
 }
@@ -94,6 +100,7 @@ export function buildSetupInference(
 	provider: ExtractionProviderChoice,
 	model?: string,
 	harnesses: readonly string[] = [],
+	availableProviders: readonly ExtractionProviderChoice[] = [],
 ): SetupInferenceConfig | undefined {
 	if (provider !== "acpx") return undefined;
 	const resolved = model?.trim() || defaultExtractionModel(provider);
@@ -104,7 +111,7 @@ export function buildSetupInference(
 			"background-acpx": {
 				executor: "acpx",
 				acpx: {
-					agent: selectAcpxAgent(harnesses),
+					agent: selectAcpxAgent(harnesses, availableProviders),
 					version: "0.7.0",
 					mode: "exec",
 					permissions: "deny-all",
