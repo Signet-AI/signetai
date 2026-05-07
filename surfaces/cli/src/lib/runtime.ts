@@ -421,7 +421,9 @@ function findExecutableOnPath(name: string, pathValue: string | undefined = proc
 
 function processRuntimeCommand(): string {
 	if (basename(process.execPath).startsWith("bun")) return process.execPath;
-	return findExecutableOnPath("bun") ?? "bun";
+	const found = findExecutableOnPath("bun");
+	if (found) return found;
+	throw new Error("bun executable not found on PATH. Reinstall bun or run signet with bun.");
 }
 
 function xmlEscape(value: string): string {

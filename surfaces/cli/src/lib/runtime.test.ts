@@ -94,6 +94,7 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(strings).toHaveLength(2);
 		expect(strings[0]).toBe(process.execPath);
 		expect(strings[1]).toBe("/opt/signet/dist/daemon.js");
+		expect(strings[0]).toMatch(/^\//);
 	});
 
 	it("uses launchctl bootstrap against the current user launchd domain", () => {
