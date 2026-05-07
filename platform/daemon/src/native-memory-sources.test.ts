@@ -530,6 +530,44 @@ describe("native memory sources", () => {
 		expect(rows).toEqual({ artifacts: 1, entities: 0 });
 	});
 
+	it("can expand unchanged Obsidian artifacts after a lightweight source scan", async () => {
+		const root = join(dir, "vault");
+		const source = obsidianNativeMemorySource(root, "Vault", "obsidian:vault");
+		const file = join(root, "permanent", "Signet.md");
+		mkdirSync(join(root, "permanent"), { recursive: true });
+		writeFileSync(
+			file,
+			"# Signet Sources\n\nSource-backed memory can first index the file artifact, then later add graph rows and embeddings without changing the note.\n",
+		);
+
+		expect(
+			await indexNativeMemoryFile(source, file, "agent-native", {
+				sourceGraphEnabled: false,
+			}),
+		).toBe(true);
+		expect(
+			await indexNativeMemoryFile(source, file, "agent-native", {
+				embeddingConfig: { provider: "native", model: "test", dimensions: 3, base_url: "" },
+				fetchEmbedding: async () => [1, 2, 3],
+			}),
+		).toBe(true);
+
+		const rows = getDbAccessor().withReadDb((db) => ({
+			entities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_id = ?")
+					.get("agent-native", "obsidian:vault") as { count: number }
+			).count,
+			embeddings: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM embeddings WHERE agent_id = ? AND source_type = ?")
+					.get("agent-native", "source_obsidian_chunk") as { count: number }
+			).count,
+		}));
+		expect(rows.entities).toBeGreaterThan(0);
+		expect(rows.embeddings).toBeGreaterThan(0);
+	});
+
 	it("skips hidden Obsidian vault directories by default", async () => {
 		const root = join(dir, "vault");
 		mkdirSync(join(root, ".claude"), { recursive: true });

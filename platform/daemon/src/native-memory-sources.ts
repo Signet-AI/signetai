@@ -10,7 +10,9 @@ import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import { hashNormalizedBody, indexExternalMemoryArtifact, softDeleteArtifactRowsForPath } from "./memory-lineage";
 import {
+	OBSIDIAN_CHUNK_SOURCE_TYPE,
 	type SourceEmbeddingFetch,
+	buildObsidianSourceChunks,
 	indexObsidianSourceEmbeddings,
 	purgeObsidianSourceEmbeddings,
 	purgeObsidianSourceFileEmbeddings,
@@ -261,6 +263,54 @@ function nativeArtifactContentHash(filePath: string, agentId: string): string | 
 	}
 }
 
+function obsidianGraphExists(agentId: string, sourceId: string, filePath: string): boolean {
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const row = db
+				.prepare(
+					`SELECT 1 FROM entities
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND source_path = ?
+					   AND entity_type = 'source_document'
+					 LIMIT 1`,
+				)
+				.get(agentId, sourceId, filePath.replace(/\\/g, "/")) as { "1": number } | undefined;
+			return row !== undefined;
+		});
+	} catch {
+		return false;
+	}
+}
+
+function obsidianEmbeddingsExist(input: {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly root: string;
+	readonly filePath: string;
+	readonly content: string;
+}): boolean {
+	const chunks = buildObsidianSourceChunks(input);
+	if (chunks.length === 0) return true;
+	try {
+		return getDbAccessor().withReadDb((db) => {
+			const rows = db
+				.prepare(
+					`SELECT source_id FROM embeddings
+					 WHERE agent_id = ?
+					   AND source_type = ?
+					   AND source_id IN (${chunks.map(() => "?").join(", ")})`,
+				)
+				.all(input.agentId, OBSIDIAN_CHUNK_SOURCE_TYPE, ...chunks.map((chunk) => chunk.id)) as Array<{
+				source_id: string;
+			}>;
+			return new Set(rows.map((row) => row.source_id)).size === chunks.length;
+		});
+	} catch {
+		return false;
+	}
+}
+
 function activeNativeArtifactPaths(source: NativeMemorySource, agentId: string): string[] {
 	const normalizedRoot = resolve(source.root).replace(/\\/g, "/").replace(/\/$/, "");
 	const rootPrefix = `${normalizedRoot}/`;
@@ -328,27 +378,49 @@ export async function indexNativeMemoryFile(
 	const key = fingerprintKey(source, filePath, agentId);
 	const hash = contentFingerprint(content);
 	const persistedHash = nativeArtifactContentHash(filePath, agentId);
+	const obsidian = source.harness === "obsidian" && pattern.kind === "source_obsidian_markdown";
+	const sourceId = obsidian ? (source.sourceId ?? sourceIdForObsidianRoot(source.root)) : null;
+	const graphRequested = obsidian && (options.sourceGraphEnabled ?? true);
+	const embeddingRequested =
+		obsidian &&
+		options.embeddingConfig?.provider !== "none" &&
+		options.embeddingConfig !== undefined &&
+		options.fetchEmbedding !== undefined;
+	const semanticComplete =
+		!obsidian ||
+		((!graphRequested || obsidianGraphExists(agentId, sourceId ?? "", filePath)) &&
+			(!embeddingRequested ||
+				obsidianEmbeddingsExist({
+					agentId,
+					sourceId: sourceId ?? "",
+					root: source.root,
+					filePath,
+					content,
+				})));
 	const cached = indexed.get(key);
 	if (cached?.contentHash === hash) {
-		if (persistedHash === hash) return false;
+		if (persistedHash === hash && semanticComplete) return false;
 		indexed.delete(key);
 	}
-	if (persistedHash === hash) {
+	if (persistedHash === hash && semanticComplete) {
 		indexed.set(key, { contentHash: hash });
 		return false;
 	}
 
 	try {
-		indexExternalMemoryArtifact({
-			agentId,
-			sourcePath: filePath,
-			sourceKind: pattern.kind,
-			harness: source.harness,
-			content,
-			sourceMtimeMs: mtimeMs,
-		});
-		if (source.harness === "obsidian" && pattern.kind === "source_obsidian_markdown") {
-			const sourceId = source.sourceId ?? sourceIdForObsidianRoot(source.root);
+		const artifactChanged = persistedHash !== hash;
+		if (artifactChanged) {
+			indexExternalMemoryArtifact({
+				agentId,
+				sourcePath: filePath,
+				sourceKind: pattern.kind,
+				harness: source.harness,
+				content,
+				sourceMtimeMs: mtimeMs,
+			});
+		}
+		let semanticIndexed = false;
+		if (obsidian && sourceId) {
 			if (options.sourceGraphEnabled ?? true) {
 				indexObsidianSourceStructure({
 					agentId,
@@ -359,6 +431,7 @@ export async function indexNativeMemoryFile(
 					content,
 					markdownPathIndex: options.markdownPathIndex,
 				});
+				semanticIndexed = true;
 			}
 			if (options.embeddingConfig && options.fetchEmbedding) {
 				const embeddingResult = await indexObsidianSourceEmbeddings({
@@ -378,15 +451,18 @@ export async function indexNativeMemoryFile(
 						skipped: embeddingResult.skipped,
 					});
 				}
+				semanticIndexed = true;
 			}
 		}
 		indexed.set(key, { contentHash: hash });
-		logger.info("watcher", "Indexed native memory artifact", {
-			harness: source.harness,
-			kind: pattern.kind,
-			path: filePath,
-		});
-		return true;
+		if (artifactChanged) {
+			logger.info("watcher", "Indexed native memory artifact", {
+				harness: source.harness,
+				kind: pattern.kind,
+				path: filePath,
+			});
+		}
+		return artifactChanged || semanticIndexed;
 	} catch (err) {
 		logger.warn("watcher", "Failed indexing native memory artifact", {
 			harness: source.harness,
