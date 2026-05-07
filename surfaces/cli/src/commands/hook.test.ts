@@ -250,7 +250,27 @@ describe("buildSessionStartBody", () => {
 			harness: "claude-code",
 			project: "/tmp/explicit",
 			agentId: "cli-signet-agent",
+			harnessAgentId: "claude-subagent",
 			sessionKey: "sess-1",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("keeps Claude Code session-start agent_id out of Signet scope without an explicit parent", () => {
+		expect(
+			buildSessionStartBody(
+				{
+					agent_id: "claude-subagent",
+					sessionKey: "child-session",
+					cwd: "/tmp/project",
+				},
+				{ harness: "claude-code" },
+			),
+		).toEqual({
+			harness: "claude-code",
+			project: "/tmp/project",
+			harnessAgentId: "claude-subagent",
+			sessionKey: "child-session",
 			runtimePath: "legacy",
 		});
 	});

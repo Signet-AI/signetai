@@ -457,7 +457,7 @@ export function buildSessionStartBody(
 	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
 	const body = input;
-	const nativeAgentId = hasParentReference(body) ? pickString(body?.agent_id) : "";
+	const nativeAgentId = options.harness === "claude-code" || hasParentReference(body) ? pickString(body?.agent_id) : "";
 	const signetAgentId = pickString(
 		options.agentId,
 		body?.signet_agent_id,
