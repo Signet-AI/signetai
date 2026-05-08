@@ -3425,6 +3425,29 @@ routes accept optional `agent_id`.
 List proposal records. Query parameters: `status`, `operation`, `limit`,
 `offset`.
 
+### GET /api/ontology/proposals/:id
+
+Return one ontology proposal by id, scoped to the resolved `agent_id`. Returns
+`404` when the proposal does not exist in that agent scope. Use this before
+apply/reject flows when an operator needs to inspect the exact operation,
+payload, rationale, risk, status, source provenance, and evidence that will be
+promoted or rejected.
+
+```text
+/api/ontology/proposals/prop_123?agent_id=ant
+```
+
+### GET /api/ontology/proposals/conflicts
+
+List pending `add_claim_value` proposal conflicts grouped by claim slot. Query
+parameters: `agent_id` and `limit`. Each conflict group includes the entity,
+aspect, group, claim key, competing values, and proposal ids so operators can
+review contradictory pending proposals before consolidation or apply.
+
+```text
+/api/ontology/proposals/conflicts?agent_id=ant&limit=100
+```
+
 ### GET /api/ontology/proposals/:id/evidence
 
 Resolve a proposal's evidence references against session transcripts and

@@ -226,11 +226,17 @@ is the source of truth once KA tables are populated.
 
 The knowledge architecture schema defines the canonical entity types:
 `person`, `project`, `system`, `tool`, `concept`, `skill`, `task`,
+`source`, `artifact`, `agent`, `policy`, `action`, `workflow`, `event`,
+`object_type`, `interface`, `observation`, `claim_slot`, `claim_value`,
 `unknown`.
 
 All specs that create entities MUST use this taxonomy. Procedural memory
 creates `entity_type = 'skill'`. Multi-agent creates agent-scoped
-entities. The taxonomy is not extensible without updating KA.
+entities. The ontology proposal loop extends KA's canonical taxonomy with
+source/proposal lifecycle labels so extraction can model artifacts,
+observations, claim slots, and claim values without minting ad-hoc string
+categories. The taxonomy is not extensible without updating KA and this
+invariant in the same change.
 
 **Planned extension:** DP-14 (Discovered Principles) in the desire
 paths epic will add `principle` as an entity type for emergent
