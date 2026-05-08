@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-05-08
 - Features: capture ACPX JSON events; add proposal maintenance loop; split stable and nightly channels.
-- Bug fixes: align release commits with version sync; match connector list schema; keep dev workspace links local; prune migration backups before copy; catch release version sync regression; harden recent regression surfaces.
+- Bug fixes: stream logs without EventSource; align release commits with version sync; match connector list schema; keep dev workspace links local; prune migration backups before copy; catch release version sync regression; harden recent regression surfaces.
 - Docs: update ACPX integration architecture.
 
 ### 2026-05-07
@@ -38,6 +38,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: correct stale documentation claims; add nyashkn contributor.
 
 ## Release Ledger
+
+## [0.115.4] - 2026-05-08
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.3..v0.115.4`.
+
+### Bug Fixes
+
+- **cli**: stream logs without EventSource (#660)
 
 ## [0.115.3] - 2026-05-08
 
