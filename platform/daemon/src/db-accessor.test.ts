@@ -157,6 +157,40 @@ describe("DbAccessor", () => {
 		]);
 	});
 
+	test("ignores migration backups removed during metadata collection", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		const dbDir = join(dbPath, "..");
+		writeFileSync(dbPath, "database");
+
+		const files = new Map<string, number>([
+			["test.db.bak-v60-3000", 3000],
+			["test.db.bak-v61-4000", 4000],
+			["test.db.bak-v62-5000", 5000],
+		]);
+		const missing = Object.assign(new Error("ENOENT: no such file or directory, stat"), { code: "ENOENT" });
+
+		backupBeforeMigration({ exec: () => {} }, dbPath, 63, {
+			copyFileSync: (_source, dest) => {
+				files.set(String(dest).slice(dbDir.length + 1), 6000);
+			},
+			readdirSync: () => ["test.db.bak-v59-2000", ...Array.from(files.keys())],
+			statSync: (path) => {
+				const name = String(path).slice(dbDir.length + 1);
+				const mtime = files.get(name);
+				if (mtime === undefined) throw missing;
+				return { mtimeMs: mtime };
+			},
+			unlinkSync: (path) => {
+				files.delete(String(path).slice(dbDir.length + 1));
+			},
+			now: () => 6000,
+			log: () => {},
+		});
+
+		expect(files.has("test.db.bak-v63-6000")).toBe(true);
+	});
+
 	test("cleans partial migration backup when copy fails", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));

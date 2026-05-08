@@ -401,6 +401,10 @@ function readErrorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
+function isMissingPathError(err: unknown): boolean {
+	return err instanceof Error && "code" in err && (err.code === "ENOENT" || err.code === "ENOTDIR");
+}
+
 function migrationBackups(
 	dbPath: string,
 	deps: MigrationBackupDeps,
@@ -410,7 +414,14 @@ function migrationBackups(
 	return deps
 		.readdirSync(dir)
 		.filter((f) => f.startsWith(`${base}.bak-v`))
-		.map((f) => ({ name: f, mtime: deps.statSync(join(dir, f)).mtimeMs }))
+		.flatMap((f) => {
+			try {
+				return [{ name: f, mtime: deps.statSync(join(dir, f)).mtimeMs }];
+			} catch (err) {
+				if (isMissingPathError(err)) return [];
+				throw err;
+			}
+		})
 		.sort((a, b) => b.mtime - a.mtime);
 }
 
