@@ -291,6 +291,32 @@ describe("inference config + decision engine", () => {
 		expect(parsed.value.targets.background?.acpx?.terminal).toBe("disabled");
 	});
 
+	it("parses ACPX event capture configuration", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					background: {
+						executor: "acpx",
+						acpx: {
+							agent: "codex",
+							format: "json",
+							captureEvents: true,
+							maxCapturedEvents: 128,
+						},
+						models: { default: { model: "gpt-5-codex-mini" } },
+					},
+				},
+			},
+		});
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.background?.acpx).toMatchObject({
+			format: "json",
+			captureEvents: true,
+			maxCapturedEvents: 128,
+		});
+	});
+
 	it("keeps legacy command and ACPX extraction as side-effect compatibility instead of router LLM extraction", () => {
 		const commandLegacy = compileLegacyRoutingConfig({
 			extraction: {

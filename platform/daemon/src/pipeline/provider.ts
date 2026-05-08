@@ -955,6 +955,9 @@ export type AcpxPermissionMode = "inherit" | "deny-all" | "approve-reads" | "app
 export type AcpxHooksMode = "inherit" | "disabled" | "enabled";
 export type AcpxTerminalMode = "inherit" | "disabled" | "enabled";
 export type AcpxSessionMode = "exec" | "session";
+export type AcpxOutputFormat = "quiet" | "json";
+
+export type AcpxJsonEvent = Readonly<Record<string, unknown>>;
 
 export interface AcpxProviderConfig {
 	readonly agent: string;
@@ -969,6 +972,10 @@ export interface AcpxProviderConfig {
 	readonly hooks?: AcpxHooksMode;
 	readonly terminal?: AcpxTerminalMode;
 	readonly allowedTools?: readonly string[];
+	readonly format?: AcpxOutputFormat;
+	readonly captureEvents?: boolean;
+	readonly maxCapturedEvents?: number;
+	readonly onEvent?: (event: AcpxJsonEvent) => void;
 	readonly timeoutMs?: number;
 	readonly extraArgs?: readonly string[];
 }
@@ -1003,6 +1010,10 @@ function resolveAcpxCwd(cwd: string | undefined): string | undefined {
 	return isAbsolute(cwd) ? cwd : resolvePath(cwd);
 }
 
+function resolveAcpxFormat(config: Pick<AcpxProviderConfig, "format" | "captureEvents">): AcpxOutputFormat {
+	return config.format ?? (config.captureEvents ? "json" : "quiet");
+}
+
 function buildAcpxCommand(
 	config: AcpxProviderConfig,
 	timeoutMs: number,
@@ -1015,7 +1026,7 @@ function buildAcpxCommand(
 		if (bin.endsWith("npx") || bin.endsWith("npx.cmd")) args.push("-y");
 		args.push(packageRef);
 	}
-	args.push("--format", "quiet");
+	args.push("--format", resolveAcpxFormat(config));
 	args.push("--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))));
 	if (cwd) args.push("--cwd", cwd);
 	if (config.model) args.push("--model", config.model);
@@ -1031,12 +1042,83 @@ function buildAcpxCommand(
 	return { bin, args, cwd };
 }
 
+function isJsonRecord(value: unknown): value is AcpxJsonEvent {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function acpxStringField(record: AcpxJsonEvent, key: string): string | undefined {
+	const value = record[key];
+	return typeof value === "string" ? value : undefined;
+}
+
+function extractAcpxTextCandidate(event: AcpxJsonEvent): string | undefined {
+	for (const key of ["text", "final", "output", "content", "message"] as const) {
+		const direct = acpxStringField(event, key);
+		if (direct?.trim()) return direct;
+	}
+	for (const key of ["result", "response", "data"] as const) {
+		const nested = event[key];
+		if (typeof nested === "string" && nested.trim()) return nested;
+		if (isJsonRecord(nested)) {
+			const candidate = extractAcpxTextCandidate(nested);
+			if (candidate?.trim()) return candidate;
+		}
+	}
+	return undefined;
+}
+
+function isAcpxFinalEvent(event: AcpxJsonEvent): boolean {
+	const type = acpxStringField(event, "type")?.toLowerCase();
+	if (type && ["result", "final", "complete", "completed", "done", "response"].includes(type)) return true;
+	return ["result", "response", "final"].some((key) => event[key] !== undefined);
+}
+
+function parseAcpxJsonOutput(
+	stdout: string,
+	config: Pick<AcpxProviderConfig, "agent" | "captureEvents" | "maxCapturedEvents" | "onEvent">,
+): string {
+	const maxCapturedEvents = Math.max(0, config.maxCapturedEvents ?? 200);
+	let emittedEvents = 0;
+	let finalText: string | undefined;
+	const lines = stdout
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index] as string;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(line);
+		} catch (error) {
+			throw new Error(
+				`${config.agent} via ACPX emitted invalid JSON on line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		if (!isJsonRecord(parsed)) {
+			throw new Error(`${config.agent} via ACPX emitted non-object JSON event on line ${index + 1}`);
+		}
+		if (isAcpxFinalEvent(parsed)) {
+			const candidate = extractAcpxTextCandidate(parsed);
+			if (candidate?.trim()) finalText = candidate;
+		}
+		if (emittedEvents < maxCapturedEvents) {
+			emittedEvents += 1;
+			config.onEvent?.(parsed);
+		}
+	}
+
+	if (finalText?.trim()) return finalText.trim();
+	throw new Error(`${config.agent} via ACPX JSON output did not include a final response`);
+}
+
 export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 	return {
 		name: `acpx:${config.agent}${config.model ? `:${config.model}` : ""}`,
 		async generate(prompt, opts): Promise<string> {
 			const timeoutMs = opts?.timeoutMs ?? config.timeoutMs ?? 60_000;
 			const { bin, args, cwd } = buildAcpxCommand(config, timeoutMs);
+			const outputFormat = resolveAcpxFormat(config);
 			return new Promise<string>((resolve, reject) => {
 				let stdout = "";
 				let stderr = "";
@@ -1072,7 +1154,13 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 							reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
 							return;
 						}
-						const text = stdout.trim();
+						let text: string;
+						try {
+							text = outputFormat === "json" ? parseAcpxJsonOutput(stdout, config) : stdout.trim();
+						} catch (error) {
+							reject(error);
+							return;
+						}
 						if (!text) {
 							reject(new Error(`${config.agent} via ACPX returned empty response`));
 							return;
