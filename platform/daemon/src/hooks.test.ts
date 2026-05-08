@@ -875,6 +875,101 @@ hooks:
 		}
 	});
 
+	test.serial(
+		"inherits parent transcript for Claude Code sub-agent sessions without changing Signet scope",
+		async () => {
+			createMemoryDb([]);
+			const db = openTestDb();
+			db.prepare(
+				`INSERT INTO session_transcripts
+			 (session_key, content, harness, project, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"parent-session",
+				"User: keep the Juniper EX4300 VLAN audit focused on trunk ports.\nAssistant: confirmed, trunk ports are the scope.",
+				"claude-code",
+				"/tmp/network",
+				"default",
+				"2026-03-25T10:00:00.000Z",
+				"2026-03-25T10:05:00.000Z",
+			);
+			db.close();
+
+			const result = await handleSessionStart({
+				harness: "claude-code",
+				project: "/tmp/network",
+				sessionKey: "child-session",
+				harnessAgentId: "general-purpose",
+			});
+
+			expect(result.inject).toContain("## Inherited from Parent Session");
+			expect(result.inject).toContain("Parent session: parent-session");
+			expect(result.inject).toContain("Juniper EX4300 VLAN audit");
+		},
+	);
+
+	test.serial("inherits parent transcript from OpenClaw lineage session keys", async () => {
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, harness, project, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"agent:nicholai:main",
+			"User: Signet source cards should expand inline, not open sidebars.",
+			"openclaw",
+			null,
+			"nicholai",
+			"2026-03-25T10:00:00.000Z",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.close();
+
+		const result = await handleSessionStart({
+			harness: "openclaw",
+			sessionKey: "agent:nicholai:subagent:abc123",
+		});
+
+		expect(result.inject).toContain("Parent session: agent:nicholai:main");
+		expect(result.inject).toContain("source cards should expand inline");
+	});
+
+	test.serial("honors sub-agent inherited context disable switch", async () => {
+		writeAgentYaml(`
+memory:
+  pipelineV2:
+    subagents:
+      inheritContext: false
+`);
+		createMemoryDb([]);
+		const db = openTestDb();
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, harness, project, agent_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"parent-disabled",
+			"User: this context should not be inherited.",
+			"claude-code",
+			"/tmp/disabled",
+			"default",
+			"2026-03-25T10:00:00.000Z",
+			"2026-03-25T10:05:00.000Z",
+		);
+		db.close();
+
+		const result = await handleSessionStart({
+			harness: "claude-code",
+			project: "/tmp/disabled",
+			sessionKey: "child-disabled",
+			harnessAgentId: "general-purpose",
+		});
+
+		expect(result.inject).not.toContain("Inherited from Parent Session");
+		expect(result.inject).not.toContain("this context should not be inherited");
+	});
+
 	test.serial("respects shared visibility at session start", async () => {
 		createMemoryDb([
 			{

@@ -6,7 +6,11 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-08
+- Docs: update ACPX integration architecture.
+
 ### 2026-05-07
+- Features: inherit parent context for sub-agent sessions; add ACPX routing backend.
 - Bug fixes: gate npm publish on daemon release assets; dedupe resumed session-start hooks; stabilize Obsidian source sync; index Obsidian sources asynchronously; harden recall authorization.
 - Docs: refine ontology artifact model; add north star ontology.
 
@@ -31,10 +35,41 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: include Hermes plugin in signetai package; harden connector install and diagnostics.
 - Docs: correct stale documentation claims; add nyashkn contributor.
 
-### 2026-04-30
-- Bug fixes: make prompt-submit embedding timeout configurable; apply is_deleted filter to BM25 FTS path.
-
 ## Release Ledger
+
+## [0.113.1] - 2026-05-08
+
+Release summary: 1 docs update.
+Tag range: `v0.113.0..v0.113.1`.
+
+### Docs
+
+- update ACPX integration architecture (#645)
+
+## [0.113.0] - 2026-05-07
+
+Release summary: 1 feature.
+Tag range: `v0.112.0..v0.113.0`.
+
+### Features
+
+- inherit parent context for sub-agent sessions (#632)
+
+## [0.112.0] - 2026-05-07
+
+Release summary: 1 feature.
+Tag range: `v0.111.14..v0.112.0`.
+
+### Features
+
+- **inference**: add ACPX routing backend (#642)
+
+## [0.111.14] - 2026-05-07
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.111.13..v0.111.14`.
+
+No notable changes were captured from conventional commit subjects for this release.
 
 ## [0.111.13] - 2026-05-07
 

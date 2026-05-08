@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getBypassedSessionKeys, resetSessions } from "../session-tracker";
@@ -14,6 +14,7 @@ import {
 	LlmConcurrencySemaphore,
 	SemaphoreTimeoutError,
 	awaitSubprocessWithDeadline,
+	createAcpxProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
 	createLlamaCppProvider,
@@ -119,6 +120,117 @@ function getNumberField(record: Record<string, unknown>, key: string): number | 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe("createAcpxProvider", () => {
+	it("runs ACPX one-shot exec with pinned version-compatible args and sterile hook env", async () => {
+		const root = join(tmpdir(), `signet-acpx-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx.sh");
+		const argsPath = join(root, "args.json");
+		const promptPath = join(root, "prompt.txt");
+		const hooksPath = join(root, "hooks.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+cat > ${JSON.stringify(promptPath)}
+printf '%s' "\${SIGNET_NO_HOOKS:-}" > ${JSON.stringify(hooksPath)}
+printf '  acpx answer  \\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({
+				agent: "codex",
+				model: "gpt-5-codex-mini",
+				bin,
+				permissions: "deny-all",
+				hooks: "disabled",
+				terminal: "disabled",
+				mode: "session",
+				session: "background",
+				allowedTools: ["read_file"],
+			});
+			await expect(provider.generate("hello acpx", { timeoutMs: 1000 })).resolves.toBe("acpx answer");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args).toContain("--format");
+			expect(args).toContain("quiet");
+			expect(args).toContain("--deny-all");
+			expect(args).toContain("--no-terminal");
+			expect(args).toContain("codex");
+			const agentIndex = args.indexOf("codex");
+			expect(args.slice(agentIndex)).toEqual([
+				"codex",
+				"-s",
+				"background",
+				"exec",
+				"--file",
+				"-",
+			]);
+			expect(readFileSync(promptPath, "utf-8")).toBe("hello acpx");
+			expect(readFileSync(hooksPath, "utf-8")).toBe("1");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+
+	it("passes configured ACPX package to an absolute launcher", async () => {
+		const root = join(tmpdir(), `signet-acpx-package-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-bunx.sh");
+		const argsPath = join(root, "args.json");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+printf 'ok\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, package: "acpx@0.7.0", hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args.slice(0, 3)).toEqual(["acpx@0.7.0", "--format", "quiet"]);
+			expect(args).toContain("codex");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("normalizes relative ACPX cwd before spawning and forwarding --cwd", async () => {
+		const root = join(tmpdir(), `signet-acpx-cwd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(join(root, "workspace"), { recursive: true });
+		const bin = join(root, "fake-acpx.sh");
+		const argsPath = join(root, "args.json");
+		const pwdPath = join(root, "pwd.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+pwd > ${JSON.stringify(pwdPath)}
+printf 'ok\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousCwd = process.cwd();
+		try {
+			process.chdir(root);
+			const provider = createAcpxProvider({ agent: "codex", bin, cwd: "workspace", hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			const cwdIndex = args.indexOf("--cwd");
+			expect(cwdIndex).toBeGreaterThanOrEqual(0);
+			expect(args[cwdIndex + 1]).toBe(join(root, "workspace"));
+			expect(readFileSync(pwdPath, "utf-8").trim()).toBe(join(root, "workspace"));
+		} finally {
+			process.chdir(previousCwd);
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+});
 
 describe("createOllamaProvider", () => {
 	afterEach(() => restoreFetch());

@@ -322,14 +322,6 @@ async fn pipeline_endpoints() {
     assert_eq!(body["paused"], false);
 }
 
-#[tokio::test]
-#[ignore = "requires built daemon binary"]
-async fn predictor_endpoints() {
-    let server = TestServer::start().await;
-
-    let resp = server.get("/api/predictor/status").await;
-    assert_eq!(resp.status(), 200);
-}
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]

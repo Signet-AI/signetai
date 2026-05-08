@@ -189,10 +189,6 @@
 				"deterministic": ["models"],
 				"ignoreFields": []
 			},
-			"GET /api/predictor/status": {
-				"deterministic": ["enabled", "modelLoaded"],
-				"ignoreFields": ["lastTrainedAt"]
-			},
 			"GET /api/memory/timeline": {
 				"deterministic": ["events.*.id", "events.*.type"],
 				"ignoreFields": ["events.*.timestamp"],

@@ -43,6 +43,16 @@ describe("Bug 7: /api/update/run accepts targetVersion in body", () => {
 	});
 });
 
+describe("update channel config route", () => {
+	it("accepts and validates channel updates", () => {
+		const routeBody = mustMatch(DAEMON_SRC, /app\.post\("\/api\/update\/config"[\s\S]*?\}\);/);
+		expect(routeBody).toContain("channelRaw");
+		expect(routeBody).toContain("parseUpdateChannel(channelRaw)");
+		expect(routeBody).toContain("channel must be stable or nightly");
+		expect(routeBody).toContain("setUpdateConfig({ autoInstall, checkInterval, channel");
+	});
+});
+
 describe("Bug 1: CLI gives update/run enough time for desktop refresh", () => {
 	it("fetchFromDaemon for /api/update/run uses the shared install timeout", () => {
 		// Find the update install section — look for the POST to update/run
@@ -63,5 +73,11 @@ describe("Bug 1: CLI gives update/run enough time for desktop refresh", () => {
 	it("CLI reports skipped desktop refresh reasons", () => {
 		expect(CLI_SRC).toContain('data.desktopUpdate?.status === "skipped"');
 		expect(CLI_SRC).toContain("Desktop: ${data.desktopUpdate.message}");
+	});
+
+	it("CLI exposes stable/nightly update channel management", () => {
+		expect(CLI_SRC).toContain('.command("channel [channel]")');
+		expect(CLI_SRC).toContain("stable = default tested releases");
+		expect(CLI_SRC).toContain("Nightly tracks @next builds");
 	});
 });

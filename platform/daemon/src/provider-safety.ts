@@ -42,7 +42,7 @@ export interface ProviderSafetySnapshot {
 	readonly allowRemoteProvidersExplicit: boolean;
 }
 
-const REMOTE_PROVIDERS = new Set(["claude-code", "codex", "opencode", "anthropic", "openrouter", "command"]);
+const REMOTE_PROVIDERS = new Set(["acpx", "claude-code", "codex", "opencode", "anthropic", "openrouter", "command"]);
 const LOCAL_PROVIDERS = new Set(["none", "llama-cpp", "ollama"]);
 const AUDIT_FILE = ".daemon/provider-transitions.json";
 

@@ -210,6 +210,7 @@ export const DEFAULT_PROVIDER_RATE_LIMIT: Required<ProviderRateLimitConfig> = {
 export interface PipelineExtractionConfig {
 	readonly provider:
 		| "none"
+		| "acpx"
 		| "llama-cpp"
 		| "ollama"
 		| "claude-code"
@@ -322,6 +323,11 @@ export interface PipelineContinuityConfig {
 	readonly recoveryBudgetChars: number;
 }
 
+export interface PipelineSubagentsConfig {
+	readonly inheritContext: boolean;
+	readonly tailChars: number;
+}
+
 export interface PipelineWriteGateConfig {
 	readonly enabled: boolean;
 	readonly threshold: number;
@@ -352,6 +358,7 @@ export interface PipelineV2Config {
 	readonly guardrails: PipelineGuardrailsConfig;
 	readonly telemetry: PipelineTelemetryConfig;
 	readonly continuity: PipelineContinuityConfig;
+	readonly subagents?: PipelineSubagentsConfig;
 	readonly embeddingTracker: PipelineEmbeddingTrackerConfig;
 	readonly synthesis: PipelineSynthesisConfig;
 	readonly procedural: PipelineProceduralConfig;
@@ -386,6 +393,7 @@ export interface PipelineSynthesisConfig {
 	readonly enabled: boolean;
 	readonly provider:
 		| "none"
+		| "acpx"
 		| "llama-cpp"
 		| "ollama"
 		| "claude-code"

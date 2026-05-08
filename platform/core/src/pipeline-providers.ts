@@ -5,6 +5,7 @@ export const OPENCODE_PIPELINE_SYSTEM_PROMPT =
 
 export const PIPELINE_PROVIDER_CHOICES = [
 	"none",
+	"acpx",
 	"llama-cpp",
 	"ollama",
 	"claude-code",
@@ -26,6 +27,7 @@ export const DEFAULT_PIPELINE_TIMEOUT_MS = 90000;
 
 const MODEL_DEFAULTS = {
 	none: "",
+	acpx: "gpt-5-codex-mini",
 	"llama-cpp": "qwen3.5:4b",
 	ollama: "qwen3:4b",
 	"claude-code": "haiku",

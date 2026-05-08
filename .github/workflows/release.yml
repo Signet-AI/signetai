@@ -1,4 +1,4 @@
-name: Release
+name: Nightly Release
 
 on:
   push:
@@ -8,7 +8,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     concurrency:
-      group: release-pipeline
+      group: nightly-release-pipeline
       cancel-in-progress: true
     # Skip release commits (prevent loops) and non-code commits
     if: "!contains(github.event.head_commit.message, 'chore: release')"
@@ -132,7 +132,7 @@ jobs:
           git push origin HEAD:main
           git push origin "v$NEW_VERSION"
 
-      - name: Create GitHub Release (draft)
+      - name: Create GitHub Nightly Release (draft prerelease)
         id: create_release
         if: steps.changes.outputs.skip != 'true'
         run: |
@@ -144,10 +144,10 @@ jobs:
             echo "::error::Missing CHANGELOG.md section for v$NEW_VERSION"
             exit 1
           fi
-          # Create as draft — daemon assets are uploaded by build-daemon before
+          # Create as a draft prerelease — daemon assets are uploaded by build-daemon before
           # the publish job verifies asset completeness, undrafts the release,
-          # and publishes npm packages.
-          gh release create "v$NEW_VERSION" --draft --title "v$NEW_VERSION" --notes "$NOTES"
+          # and publishes npm packages to the nightly channel.
+          gh release create "v$NEW_VERSION" --draft --prerelease --title "v$NEW_VERSION" --notes "$NOTES"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -291,26 +291,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish to npm
+      - name: Publish to npm nightly channel
         run: |
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
-          CURRENT=$(npm view signetai version 2>/dev/null || echo "0.0.0")
+          CURRENT=$(npm view "signetai@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")
           if [ "$CURRENT" = "$NEW_VERSION" ]; then
-            echo "signetai@$NEW_VERSION already published, skipping"
+            echo "signetai@$NEW_VERSION already published, refreshing next tag"
+            npm dist-tag add "signetai@${NEW_VERSION}" next
+            npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" next || true
           else
             cd dist/signetai && npm publish --tag next --access public
             cd ../../integrations/openclaw/memory-adapter && npm publish --tag next --access public || true
           fi
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
-
-      - name: Promote to latest
-        if: needs.release.outputs.bump_level != 'major'
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
-          npm dist-tag add "signetai@${NEW_VERSION}" latest
-          npm dist-tag add "@signetai/signet-memory-openclaw@${NEW_VERSION}" latest || true
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc

@@ -62,7 +62,8 @@ function pendingInjectSet(sessionID: string, inject: string): void {
 		const oldest = pendingInject.keys().next().value;
 		if (oldest !== undefined) pendingInject.delete(oldest);
 	}
-	pendingInject.set(sessionID, inject);
+	const existing = pendingInject.get(sessionID);
+	pendingInject.set(sessionID, existing ? `${existing}\n${inject}` : inject);
 }
 
 function readRuntimeEnv(name: string): string | undefined {
@@ -116,12 +117,30 @@ function promptSubmitTimeout(): number {
 // session.deleted provides properties.info.id (Session object).
 function extractSessionId(props: Record<string, unknown> | undefined): string | undefined {
 	if (!props) return undefined;
+	if (typeof props.id === "string") return props.id;
 	if (typeof props.sessionID === "string") return props.sessionID;
+	if (typeof props.sessionId === "string") return props.sessionId;
 	const info = props.info;
 	if (typeof info !== "object" || info === null) return undefined;
 	const id = Reflect.get(info, "id");
 	if (typeof id === "string") return id;
+	const sessionID = Reflect.get(info, "sessionID");
+	if (typeof sessionID === "string") return sessionID;
+	const sessionId = Reflect.get(info, "sessionId");
+	if (typeof sessionId === "string") return sessionId;
 	return undefined;
+}
+
+function extractParentSessionId(props: Record<string, unknown> | undefined): string | undefined {
+	if (!props) return undefined;
+	if (typeof props.parentID === "string") return props.parentID;
+	if (typeof props.parentId === "string") return props.parentId;
+	const info = props.info;
+	if (typeof info !== "object" || info === null) return undefined;
+	const parentID = Reflect.get(info, "parentID");
+	if (typeof parentID === "string") return parentID;
+	const parentId = Reflect.get(info, "parentId");
+	return typeof parentId === "string" ? parentId : undefined;
 }
 
 // ============================================================================
@@ -170,6 +189,9 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 	const client = createDaemonClient(daemonUrl);
 
 	let sessionContext = "";
+	const startedSessions = new Set<string>();
+	const startingSessions = new Map<string, Promise<string>>();
+	const parentBySession = new Map<string, string>();
 	const start = await client.postResult<SessionStartResult>(
 		"/api/hooks/session-start",
 		{
@@ -189,6 +211,39 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		sessionContext = staticFallback();
 	}
 
+	async function ensureSessionStarted(sessionID: string): Promise<string> {
+		if (startedSessions.has(sessionID)) return "";
+		const existing = startingSessions.get(sessionID);
+		if (existing) {
+			await existing;
+			return "";
+		}
+
+		const startSession = client
+			.post<SessionStartResult>(
+				"/api/hooks/session-start",
+				{
+					harness: HARNESS,
+					project: directory,
+					agentId,
+					sessionKey: sessionID,
+					parentSessionKey: parentBySession.get(sessionID),
+					runtimePath: RUNTIME_PATH,
+				},
+				sessionStartTimeout(),
+			)
+			.then((result) => {
+				startedSessions.add(sessionID);
+				return result?.inject ?? "";
+			});
+		startingSessions.set(sessionID, startSession);
+		try {
+			return await startSession;
+		} finally {
+			startingSessions.delete(sessionID);
+		}
+	}
+
 	return {
 		// ------------------------------------------------------------------
 		// Per-prompt memory recall — extract user text and call daemon
@@ -205,6 +260,14 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			pendingInject.delete(input.sessionID);
 
 			try {
+				try {
+					const startInject = await ensureSessionStarted(input.sessionID);
+					if (startInject) pendingInjectSet(input.sessionID, startInject);
+				} catch {
+					// Session-start context is optional; still run prompt-submit so
+					// recall and transcript capture stay fail-open independently.
+				}
+
 				const result = await client.post<UserPromptSubmitResult>(
 					"/api/hooks/user-prompt-submit",
 					{
@@ -230,22 +293,33 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		// ------------------------------------------------------------------
 		"experimental.chat.system.transform": async (input, output): Promise<void> => {
 			if (!input.sessionID) return;
+			let startInject = "";
+			try {
+				startInject = await ensureSessionStarted(input.sessionID);
+			} catch {
+				// Signet context is optional; never break OpenCode prompt rendering.
+			}
 			const inject = pendingInject.get(input.sessionID);
+			const parts = [startInject, inject].filter((part) => part?.trim());
+			if (parts.length > 0) {
+				output.system.push(parts.join("\n"));
+			}
 			if (inject) {
 				pendingInject.delete(input.sessionID);
-				output.system.push(inject);
 			}
 		},
 
 		// ------------------------------------------------------------------
 		// Inject memory context before context compaction
 		// ------------------------------------------------------------------
-		"experimental.session.compacting": async (_input, output): Promise<void> => {
+		"experimental.session.compacting": async (input, output): Promise<void> => {
 			try {
 				const result = await client.post<PreCompactionResult>(
 					"/api/hooks/pre-compaction",
 					{
 						harness: HARNESS,
+						agentId,
+						sessionKey: input.sessionID,
 						runtimePath: RUNTIME_PATH,
 					},
 					READ_TIMEOUT,
@@ -274,6 +348,12 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			};
 		}): Promise<void> => {
 			try {
+				if (event.type === "session.created") {
+					const sid = extractSessionId(event.properties);
+					const parent = extractParentSessionId(event.properties);
+					if (sid && parent) parentBySession.set(sid, parent);
+				}
+
 				if (event.type === "session.idle" || event.type === "session.deleted") {
 					const sid = extractSessionId(event.properties);
 
@@ -288,19 +368,25 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 
 					client
 						.post(
-						"/api/hooks/session-end",
-						{
-							harness: HARNESS,
-							runtimePath: RUNTIME_PATH,
-							reason: event.type,
-							sessionKey: sid,
-							...(transcript ? { transcript } : {}),
-						},
-						WRITE_TIMEOUT,
-					)
+							"/api/hooks/session-end",
+							{
+								harness: HARNESS,
+								agentId,
+								runtimePath: RUNTIME_PATH,
+								reason: event.type,
+								sessionKey: sid,
+								...(transcript ? { transcript } : {}),
+							},
+							WRITE_TIMEOUT,
+						)
 						.catch((e) => {
 							console.warn("[signet] session-end fire-and-forget failed:", e);
 						});
+					if (sid) {
+						startedSessions.delete(sid);
+						parentBySession.delete(sid);
+						pendingInject.delete(sid);
+					}
 				}
 
 				if (event.type === "session.compacted" && event.summary) {

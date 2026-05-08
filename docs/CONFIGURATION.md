@@ -396,13 +396,42 @@ subscription-backed CLI session, or gateway.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `executor` | string | `claude-code`, `codex`, `opencode`, `anthropic`, `openrouter`, `ollama`, `llama-cpp`, `openai-compatible`, or `command` |
+| `executor` | string | `acpx`, `claude-code`, `codex`, `opencode`, `anthropic`, `openrouter`, `ollama`, `llama-cpp`, `openai-compatible`, or `command` |
 | `kind` | string | Optional explicit target kind. Inferred when omitted |
 | `account` | string | Account id from `inference.accounts` |
 | `endpoint` | string | Optional base URL override |
 | `command` | object | Command executor config with `bin`, optional `args`, `cwd`, and `env` |
+| `agent` | string | For `executor: acpx`, the harness adapter to run, for example `codex`, `claude-code`, or `opencode` |
+| `acpxVersion` / `version` | string | Optional ACPX package version. Defaults to Signet's pinned ACPX version |
+| `mode` | string | Optional ACPX execution mode. Defaults to one-shot exec |
+| `cwd` | string | Optional working directory for harness execution |
+| `session` | string | Optional ACPX session identifier when a persistent session is desired |
+| `permissions` | string | Optional ACPX permission policy passed through to the harness |
+| `hooks` | string | Set to `disabled` for sterile/background execution (`SIGNET_NO_HOOKS=1`) |
+| `terminal` | boolean | For ACPX, set `false` to pass `--no-terminal` |
+| `allowedTools` | array | Optional ACPX allowed-tool list |
+| `timeoutMs` | number | Per-call ACPX subprocess deadline |
+| `extraArgs` | array | Additional ACPX CLI args appended after Signet-managed args |
 | `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |
 | `models` | map | Named model entries for this target |
+
+Example ACPX background target (see also `docs/ACP-INTEGRATION.md` for the architecture and current limitations):
+
+```yaml
+inference:
+  targets:
+    background-codex:
+      executor: acpx
+      agent: codex
+      hooks: disabled
+      terminal: false
+      timeoutMs: 120000
+      models:
+        mini:
+          model: gpt-5-codex-mini
+          reasoning: medium
+          toolUse: true
+```
 
 Model fields:
 
@@ -536,7 +565,7 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `provider` | `"llama-cpp"` | — | `"none"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, or `"command"` |
+| `provider` | `"llama-cpp"` | — | `"none"`, `"acpx"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, or `"command"` |
 | `model` | `"qwen3.5:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
@@ -565,7 +594,7 @@ that billing behavior.
 `rateLimit` is opt-in. If the stanza is omitted, Signet preserves the
 provider's existing behavior with no throughput throttling. When
 configured, it applies only to remote or paid providers
-(`claude-code`, `anthropic`, `openrouter`, `codex`, `opencode`).
+(`acpx`, `claude-code`, `anthropic`, `openrouter`, `codex`, `opencode`).
 Ollama and `command` providers are always exempt. If you set `rateLimit`
 on an exempt provider, Signet logs a warning and passes calls through
 unthrottled.
@@ -599,6 +628,13 @@ When using `ollama`, the model must be available locally. When using
 Codex CLI as the extraction provider. Lower `minConfidence` to capture
 more facts at the cost of noise; raise it to write only high-confidence
 facts.
+
+`acpx` is available as a setup compatibility value for installations that also
+have a top-level `inference:` block. ACPX needs harness/session config, so
+legacy `memory.pipelineV2.extraction.provider: acpx` by itself is not compiled
+into an implicit `legacy-extraction` target; keep the generated
+`inference.targets.*.executor: acpx` block or configure ACPX through top-level
+inference routing.
 
 There are two command paths with different contracts. Top-level
 `inference.targets.*.executor: command` is a normal inference provider: the
@@ -914,6 +950,29 @@ activity) to aid recovery after context compaction or session restart.
 Checkpoints are triggered by five events: `periodic`, `pre_compaction`,
 `session_end`, `agent`, and `explicit`. Secrets are redacted before
 storage.
+
+
+### Sub-agents (`subagents`)
+
+Controls deterministic parent-session context inherited by sub-agent sessions
+at `session-start`. This uses stored active transcripts and checkpoints; it
+does not make an LLM call.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `inheritContext` | `true` | — | Inject a compact parent context block when parent lineage is available |
+| `tailChars` | `3000` | 0-20000 | Max transcript tail characters included from the parent session |
+
+```yaml
+memory:
+  pipelineV2:
+    subagents:
+      inheritContext: true
+      tailChars: 3000
+```
+
+Set `inheritContext: false` to disable automatic inherited context while
+leaving the explicit `session_search` MCP/API surface available.
 
 
 ### Telemetry (`telemetry`)

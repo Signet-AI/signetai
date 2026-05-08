@@ -78,6 +78,8 @@ export interface FreshSetupConfig {
 	readonly embeddingDimensions: number;
 	readonly extractionProvider: ExtractionProviderChoice;
 	readonly extractionModel: string;
+	readonly availableExtractionProviders: readonly ExtractionProviderChoice[];
+	readonly acpxBin?: string;
 	readonly searchBalance: number;
 	readonly searchTopK: number;
 	readonly searchMinScore: number;

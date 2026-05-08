@@ -33,20 +33,20 @@ describe("setup deployment defaults", () => {
 		expect(defaultEmbeddingProviderForDeployment("server")).toBe("native");
 	});
 
-	it("prefers non-local extraction defaults on vps based on harness availability and detection", () => {
-		expect(defaultExtractionProviderForDeployment("vps", "ollama", ["claude-code"])).toBe("claude-code");
-		expect(defaultExtractionProviderForDeployment("vps", "none", ["codex"])).toBe("codex");
+	it("prefers non-local extraction defaults on vps based on ACPX availability and legacy harness detection", () => {
+		expect(defaultExtractionProviderForDeployment("vps", "ollama", ["acpx", "claude-code"])).toBe("acpx");
+		expect(defaultExtractionProviderForDeployment("vps", "none", ["acpx", "codex"])).toBe("acpx");
 		expect(defaultExtractionProviderForDeployment("vps", "none", ["opencode"])).toBe("opencode");
 		expect(defaultExtractionProviderForDeployment("vps", "codex")).toBe("codex");
 		expect(defaultExtractionProviderForDeployment("vps", "none")).toBe("none");
 	});
 
-	it("prefers selected harness extraction providers before other detected tooling on vps", () => {
-		expect(defaultExtractionProviderForDeployment("vps", "claude-code", ["claude-code", "codex"], ["codex"])).toBe(
-			"codex",
+	it("prefers selected harnesses through ACPX before other detected tooling on vps", () => {
+		expect(defaultExtractionProviderForDeployment("vps", "claude-code", ["acpx", "claude-code", "codex"], ["codex"])).toBe(
+			"acpx",
 		);
-		expect(defaultExtractionProviderForDeployment("vps", "none", ["opencode", "claude-code"], ["opencode"])).toBe(
-			"opencode",
+		expect(defaultExtractionProviderForDeployment("vps", "none", ["acpx", "opencode", "claude-code"], ["opencode"])).toBe(
+			"acpx",
 		);
 	});
 
@@ -62,9 +62,9 @@ describe("setup deployment defaults", () => {
 		expect(defaultExtractionProviderForDeployment("server", "codex")).toBe("codex");
 	});
 
-	it("preserves local/server detection precedence (ollama before opencode)", () => {
+	it("preserves local/server detection precedence unless ACPX is available", () => {
 		expect(detectExtractionProviderFromAvailable(["ollama", "opencode"])).toBe("ollama");
-		expect(detectExtractionProviderFromAvailable(["claude-code", "ollama", "opencode"])).toBe("claude-code");
+		expect(detectExtractionProviderFromAvailable(["acpx", "claude-code", "ollama", "opencode"])).toBe("acpx");
 		expect(detectExtractionProviderFromAvailable(["opencode"])).toBe("opencode");
 		expect(detectExtractionProviderFromAvailable([])).toBe("none");
 	});

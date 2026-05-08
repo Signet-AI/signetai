@@ -26,6 +26,7 @@ import {
 	type LlmProviderStreamEvent,
 	type LlmProviderStreamResult,
 	type StreamCapableLlmProvider,
+	createAcpxProvider,
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
@@ -509,6 +510,12 @@ export class InferenceRouter {
 			const account = target.account ? loaded.config.accounts[target.account] : undefined;
 			const credential = await this.resolveCredential(account?.credentialRef);
 			switch (target.executor) {
+				case "acpx":
+					if (!target.acpx) throw new Error(`Missing ACPX config for target ${targetId}`);
+					return createAcpxProvider({
+						...target.acpx,
+						model: model.model,
+					});
 				case "anthropic":
 					if (!credential) throw new Error(`Missing credential for account ${target.account ?? "anthropic"}`);
 					return createAnthropicProvider({

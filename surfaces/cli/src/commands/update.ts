@@ -24,6 +24,21 @@ interface UpdateDeps {
 
 const UPDATE_INSTALL_TIMEOUT_MS = 15 * 60_000;
 
+type UpdateChannel = "stable" | "nightly";
+
+function parseUpdateChannel(value: unknown): UpdateChannel | null {
+	if (typeof value !== "string") return null;
+	const normalized = value.trim().toLowerCase();
+	if (normalized === "stable" || normalized === "latest") return "stable";
+	if (normalized === "nightly" || normalized === "next") return "nightly";
+	return null;
+}
+
+function formatUpdateChannel(channel: string | undefined): string {
+	if (channel === "nightly") return chalk.yellow("nightly");
+	return chalk.green("stable");
+}
+
 export function registerUpdateCommands(program: Command, deps: UpdateDeps): void {
 	const updateCmd = program.command("update").description("Check, install, and manage auto-updates");
 
@@ -185,6 +200,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 			const data = await deps.fetchFromDaemon<{
 				autoInstall?: boolean;
 				checkInterval?: number;
+				channel?: string;
 				pendingRestartVersion?: string;
 				lastAutoUpdateAt?: string;
 				lastAutoUpdateError?: string;
@@ -201,6 +217,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 				`  ${chalk.dim("Auto-install:")} ${data.autoInstall ? chalk.green("enabled") : chalk.dim("disabled")}`,
 			);
 			console.log(`  ${chalk.dim("Interval:")}     every ${data.checkInterval || "?"}s`);
+			console.log(`  ${chalk.dim("Channel:")}      ${formatUpdateChannel(data.channel)}`);
 			console.log(`  ${chalk.dim("In progress:")}  ${data.updateInProgress ? chalk.yellow("yes") : chalk.dim("no")}`);
 			if (data.pendingRestartVersion) {
 				console.log(`  ${chalk.dim("Pending:")}      v${data.pendingRestartVersion} (restart required)`);
@@ -210,6 +227,51 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 			}
 			if (data.lastAutoUpdateError) {
 				console.log(`  ${chalk.dim("Last error:")}   ${chalk.yellow(data.lastAutoUpdateError)}`);
+			}
+		});
+
+	updateCmd
+		.command("channel [channel]")
+		.description("Show or set the update channel (stable or nightly)")
+		.action(async (rawChannel?: string) => {
+			if (!rawChannel) {
+				const data = await deps.fetchFromDaemon<{ channel?: string }>("/api/update/config");
+				if (!data) {
+					console.error(chalk.red("Failed to get update channel"));
+					process.exit(1);
+				}
+				console.log(`Update channel: ${formatUpdateChannel(data.channel)}`);
+				console.log(chalk.dim("  stable = default tested releases; nightly = opt-in next builds"));
+				return;
+			}
+
+			const channel = parseUpdateChannel(rawChannel);
+			if (!channel) {
+				console.error(chalk.red("Channel must be stable or nightly"));
+				process.exit(1);
+			}
+
+			const data = await deps.fetchFromDaemon<{
+				success?: boolean;
+				persisted?: boolean;
+				config?: { channel?: string };
+			}>("/api/update/config", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ channel }),
+			});
+
+			if (!data?.success) {
+				console.error(chalk.red("Failed to set update channel"));
+				process.exit(1);
+			}
+
+			console.log(chalk.green(`✓ Update channel set to ${data.config?.channel ?? channel}`));
+			if (channel === "nightly") {
+				console.log(chalk.yellow("  Nightly tracks @next builds and may be unstable."));
+			}
+			if (data.persisted === false) {
+				console.log(chalk.yellow("  ⚠ Could not persist updates block to agent.yaml"));
 			}
 		});
 
@@ -238,6 +300,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 
 			const data = await deps.fetchFromDaemon<{ success?: boolean; persisted?: boolean }>("/api/update/config", {
 				method: "POST",
+				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ autoInstall: true, checkInterval: interval }),
 			});
 
@@ -260,6 +323,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 		.action(async () => {
 			const data = await deps.fetchFromDaemon<{ success?: boolean; persisted?: boolean }>("/api/update/config", {
 				method: "POST",
+				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ autoInstall: false }),
 			});
 

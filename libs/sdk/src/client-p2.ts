@@ -744,72 +744,55 @@ export class SignetClientP2 {
 		return this.transport.post<AgentMessageSendResponse>("/api/cross-agent/messages", opts);
 	}
 
-	// --- Predictor ---
+	// --- Predictor (retired) ---
 
-	/**
-	 * @example
-	 * const status = await client.getPredictorStatus();
-	 */
-	async getPredictorStatus(): Promise<PredictorStatusResponse> {
-		return this.transport.get<PredictorStatusResponse>("/api/predictor/status");
+	private predictorDeprecated(): never {
+		throw new Error(
+			"Signet predictor APIs were removed in v0.112. Use memory search telemetry and pipeline diagnostics instead.",
+		);
 	}
 
-	/**
-	 * @example
-	 * const { comparisons, count } = await client.getComparisonsByProject('my-project');
-	 */
-	async getComparisonsByProject(project: string): Promise<ComparisonsByProjectResponse> {
-		return this.transport.get<ComparisonsByProjectResponse>("/api/predictor/comparisons/by-project", { project });
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async getPredictorStatus(): Promise<never> {
+		this.predictorDeprecated();
 	}
 
-	/**
-	 * @example
-	 * const { comparisons, count } = await client.getComparisonsByEntity('entity-123');
-	 */
-	async getComparisonsByEntity(entityId: string): Promise<ComparisonsByEntityResponse> {
-		return this.transport.get<ComparisonsByEntityResponse>("/api/predictor/comparisons/by-entity", {
-			entity_id: entityId,
-		});
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async getComparisonsByProject(_project: string): Promise<ComparisonsByProjectResponse> {
+		this.predictorDeprecated();
 	}
 
-	/**
-	 * @example
-	 * const { comparisons, total } = await client.listComparisons({ limit: 50, offset: 0 });
-	 */
-	async listComparisons(opts?: {
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async getComparisonsByEntity(_entityId: string): Promise<ComparisonsByEntityResponse> {
+		this.predictorDeprecated();
+	}
+
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async listComparisons(_opts?: {
 		readonly limit?: number;
 		readonly offset?: number;
 		readonly agentId?: string;
 	}): Promise<ComparisonsListResponse> {
-		return this.transport.get<ComparisonsListResponse>("/api/predictor/comparisons", opts);
+		this.predictorDeprecated();
 	}
 
-	/**
-	 * @example
-	 * const { runs, count } = await client.listTrainingRuns();
-	 */
-	async listTrainingRuns(opts?: {
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async listTrainingRuns(_opts?: {
 		readonly agentId?: string;
 		readonly limit?: number;
 	}): Promise<TrainingRunsResponse> {
-		return this.transport.get<TrainingRunsResponse>("/api/predictor/training", opts);
+		this.predictorDeprecated();
 	}
 
-	/**
-	 * @example
-	 * const { count } = await client.getTrainingPairsCount();
-	 */
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async getTrainingPairsCount(): Promise<TrainingPairsCountResponse> {
-		return this.transport.get<TrainingPairsCountResponse>("/api/predictor/training-pairs-count");
+		this.predictorDeprecated();
 	}
 
-	/**
-	 * @example
-	 * const result = await client.trainPredictor({ force: false });
-	 */
-	async trainPredictor(opts?: {
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async trainPredictor(_opts?: {
 		readonly force?: boolean;
 	}): Promise<TrainPredictorResponse> {
-		return this.transport.post<TrainPredictorResponse>("/api/predictor/train", opts ?? {});
+		this.predictorDeprecated();
 	}
 }

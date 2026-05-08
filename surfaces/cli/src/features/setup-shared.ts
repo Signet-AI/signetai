@@ -13,7 +13,7 @@ export type HarnessChoice =
 	| "hermes-agent"
 	| "gemini";
 export type EmbeddingProviderChoice = "native" | "llama-cpp" | "ollama" | "openai" | "none";
-export type ExtractionProviderChoice = "claude-code" | "llama-cpp" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
+export type ExtractionProviderChoice = "acpx" | "claude-code" | "llama-cpp" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
 export type DeploymentTypeChoice = "local" | "vps" | "server";
 export interface ResolveSetupExtractionProviderOptions {
@@ -39,6 +39,7 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 ];
 export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "llama-cpp", "ollama", "openai", "none"];
 export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
+	"acpx",
 	"claude-code",
 	"llama-cpp",
 	"ollama",
@@ -49,8 +50,9 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 ];
 export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
 export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
-const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["claude-code", "codex", "opencode"];
+const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["acpx", "claude-code", "codex", "opencode"];
 const DETECTED_EXTRACTION_PROVIDER_ORDER: readonly ExtractionProviderChoice[] = [
+	"acpx",
 	"llama-cpp",
 	"claude-code",
 	"codex",
@@ -262,7 +264,7 @@ function extractionProvidersFromHarnesses(harnesses: readonly HarnessChoice[]): 
 	for (const harness of harnesses) {
 		let provider: ExtractionProviderChoice | null = null;
 		if (harness === "claude-code" || harness === "codex" || harness === "opencode") {
-			provider = harness;
+			provider = "acpx";
 		}
 		if (provider && !providers.includes(provider)) {
 			providers.push(provider);
