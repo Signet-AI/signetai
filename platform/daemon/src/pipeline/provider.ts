@@ -1067,6 +1067,12 @@ function extractAcpxTextCandidate(event: AcpxJsonEvent): string | undefined {
 	return undefined;
 }
 
+function isAcpxFinalEvent(event: AcpxJsonEvent): boolean {
+	const type = acpxStringField(event, "type")?.toLowerCase();
+	if (type && ["result", "final", "complete", "completed", "done", "response"].includes(type)) return true;
+	return ["result", "response", "final"].some((key) => event[key] !== undefined);
+}
+
 function parseAcpxJsonOutput(
 	stdout: string,
 	config: Pick<AcpxProviderConfig, "agent" | "captureEvents" | "maxCapturedEvents" | "onEvent">,
@@ -1092,8 +1098,10 @@ function parseAcpxJsonOutput(
 		if (!isJsonRecord(parsed)) {
 			throw new Error(`${config.agent} via ACPX emitted non-object JSON event on line ${index + 1}`);
 		}
-		const candidate = extractAcpxTextCandidate(parsed);
-		if (candidate?.trim()) finalText = candidate;
+		if (isAcpxFinalEvent(parsed)) {
+			const candidate = extractAcpxTextCandidate(parsed);
+			if (candidate?.trim()) finalText = candidate;
+		}
 		if (emittedEvents < maxCapturedEvents) {
 			emittedEvents += 1;
 			config.onEvent?.(parsed);

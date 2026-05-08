@@ -219,6 +219,8 @@ printf '%s\n' '{"type":"result","text":"final answer"}'
 			bin,
 			`#!/usr/bin/env bash
 printf '%s\n' '{"type":"session","session_id":"acpx-session-1"}'
+printf '%s\n' '{"type":"assistant_delta","text":"partial answer"}'
+printf '%s\n' '{"type":"progress","message":"still working"}'
 `,
 		);
 		chmodSync(bin, 0o755);
