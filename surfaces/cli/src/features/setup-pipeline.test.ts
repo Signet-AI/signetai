@@ -144,4 +144,29 @@ describe("buildSetupInference", () => {
 			},
 		});
 	});
+
+	it("removes generated ACPX task classes from legacy target-only workloads", () => {
+		const config: Record<string, unknown> = {
+			inference: {
+				...buildSetupInference("acpx", "haiku", ["codex"], ["acpx"], "/usr/local/bin/bunx"),
+				workloads: {
+					memoryExtraction: { target: "background-acpx/default" },
+					sessionSynthesis: { target: "background-acpx/default" },
+				},
+				taskClasses: {
+					memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+					session_synthesis: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+					custom_review: { reasoning: "high", toolsRequired: true, privacy: "local" },
+				},
+			},
+		};
+
+		applySetupInferenceRoute(config, undefined);
+
+		expect(config.inference).toEqual({
+			taskClasses: {
+				custom_review: { reasoning: "high", toolsRequired: true, privacy: "local" },
+			},
+		});
+	});
 });

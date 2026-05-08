@@ -172,11 +172,11 @@ export function applySetupInferenceRoute(
 	if (route.targets) Reflect.deleteProperty(route.targets, "background-acpx");
 	if (route.policies) Reflect.deleteProperty(route.policies, "background-acpx");
 	if (route.workloads?.memoryExtraction && isGeneratedAcpxWorkload(route.workloads.memoryExtraction)) {
-		generatedTaskClasses.add(getAcpxWorkloadTaskClass(route.workloads.memoryExtraction));
+		generatedTaskClasses.add(getAcpxWorkloadTaskClass(route.workloads.memoryExtraction, "memory_extraction"));
 		Reflect.deleteProperty(route.workloads, "memoryExtraction");
 	}
 	if (route.workloads?.sessionSynthesis && isGeneratedAcpxWorkload(route.workloads.sessionSynthesis)) {
-		generatedTaskClasses.add(getAcpxWorkloadTaskClass(route.workloads.sessionSynthesis));
+		generatedTaskClasses.add(getAcpxWorkloadTaskClass(route.workloads.sessionSynthesis, "session_synthesis"));
 		Reflect.deleteProperty(route.workloads, "sessionSynthesis");
 	}
 	for (const taskClass of generatedTaskClasses) {
@@ -192,9 +192,10 @@ export function applySetupInferenceRoute(
 	if (Object.keys(route).length === 0) Reflect.deleteProperty(config, "inference");
 }
 
-function getAcpxWorkloadTaskClass(value: unknown): string {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return "";
-	return String((value as { taskClass?: unknown }).taskClass ?? "");
+function getAcpxWorkloadTaskClass(value: unknown, fallback: string): string {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return fallback;
+	const taskClass = (value as { taskClass?: unknown }).taskClass;
+	return typeof taskClass === "string" && taskClass.length > 0 ? taskClass : fallback;
 }
 
 function isGeneratedAcpxTaskClass(taskClass: string, value: unknown): boolean {
