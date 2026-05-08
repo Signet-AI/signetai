@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { doRestart, doStart, doStop, requestPipelinePauseApi, summarizePipelineToggle } from "./daemon.js";
+import { doRestart, doStart, doStop, requestPipelinePauseApi, showLogs, summarizePipelineToggle } from "./daemon.js";
 
 describe("requestPipelinePauseApi", () => {
 	it("uses the live daemon pause endpoint when available", async () => {
@@ -196,6 +196,69 @@ describe("daemon lifecycle recovery", () => {
 		await doRestart({ openclaw: false }, deps);
 
 		expect(synced).toBe(false);
+	});
+});
+
+describe("showLogs follow mode", () => {
+	it("streams daemon logs without relying on a global EventSource", async () => {
+		const logs: string[] = [];
+		const originalEventSource = (globalThis as typeof globalThis & { EventSource?: unknown }).EventSource;
+		const logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			logs.push(args.join(" "));
+		});
+		try {
+			(globalThis as typeof globalThis & { EventSource?: unknown }).EventSource = undefined;
+			const encoder = new TextEncoder();
+			const streamed = [
+				'data: {"type":"connected"}\n\n',
+				'data: {"timestamp":"2026-05-08T21:05:00.000Z","level":"info","category":"daemon","message":"follow works"}\n\n',
+			];
+			let requestCount = 0;
+			const deps = makeDeps({
+				getDaemonStatus: async () => ({
+					running: true,
+					pid: 42,
+					uptime: 1,
+					version: "0.115.3",
+					host: "127.0.0.1",
+					bindHost: "127.0.0.1",
+					networkMode: "local",
+					extraction: null,
+				}),
+				fetch: async (input) => {
+					requestCount += 1;
+					const url = String(input);
+					if (url.includes("/api/logs/stream")) {
+						return new Response(
+							new ReadableStream({
+								start(controller) {
+									for (const chunk of streamed) {
+										controller.enqueue(encoder.encode(chunk));
+									}
+									controller.close();
+								},
+							}),
+							{ status: 200, headers: { "Content-Type": "text/event-stream" } },
+						);
+					}
+					return new Response(JSON.stringify({ logs: [], count: 0 }), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				},
+			});
+
+			await showLogs({ follow: true }, deps);
+
+			expect(requestCount).toBe(2);
+			expect(logs.join("\n")).toContain("Streaming logs");
+			expect(logs.join("\n")).toContain("follow works");
+		} finally {
+			logSpy.mockRestore();
+			if (originalEventSource !== undefined) {
+				(globalThis as typeof globalThis & { EventSource?: unknown }).EventSource = originalEventSource;
+			}
+		}
 	});
 });
 

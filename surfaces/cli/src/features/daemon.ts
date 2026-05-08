@@ -39,6 +39,8 @@ interface LogPayload {
 	readonly count: number;
 }
 
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
 interface Deps {
 	readonly agentsDir: string;
 	readonly defaultPort: number;
@@ -52,6 +54,7 @@ interface Deps {
 	readonly startDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly stopDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly confirmRestartSync?: () => Promise<boolean>;
+	readonly fetch?: FetchLike;
 	readonly isInteractive?: () => boolean;
 	readonly syncTemplates?: (basePath: string) => Promise<void>;
 }
@@ -171,7 +174,7 @@ export async function showLogs(options: LogOptions, deps: Deps): Promise<void> {
 		if (logs !== null) {
 			printApiLogs(logs);
 			if (options.follow) {
-				await followLogs(deps.defaultPort);
+				await followLogs(deps.defaultPort, deps.fetch ?? fetch);
 			}
 			return;
 		}
@@ -316,12 +319,13 @@ function readPipelinePauseApiResponse(value: unknown): PipelinePauseApiResponse 
 	if (value.success !== true) return null;
 	if (typeof value.changed !== "boolean") return null;
 	if (typeof value.paused !== "boolean") return null;
-	if (value.file !== null && typeof value.file !== "string") return null;
-	if (typeof value.mode !== "string") return null;
+	const file = value.file === null ? null : typeof value.file === "string" ? value.file : undefined;
+	const mode = typeof value.mode === "string" ? value.mode : undefined;
+	if (file === undefined || mode === undefined) return null;
 	return {
 		changed: value.changed,
-		file: value.file,
-		mode: value.mode,
+		file,
+		mode,
 		paused: value.paused,
 		success: true,
 	};
@@ -335,7 +339,7 @@ function readApiError(value: unknown, fallback: string): string {
 export async function requestPipelinePauseApi(
 	port: number,
 	paused: boolean,
-	doFetch: typeof fetch = fetch,
+	doFetch: FetchLike = fetch,
 ): Promise<PipelinePauseApiResult> {
 	let res: Response;
 	try {
@@ -536,7 +540,8 @@ async function fetchApiLogs(limit: number, options: LogOptions, deps: Deps): Pro
 			params.set("category", options.category);
 		}
 
-		const res = await fetch(`http://localhost:${deps.defaultPort}/api/logs?${params}`);
+		const fetchImpl = deps.fetch ?? fetch;
+		const res = await fetchImpl(`http://localhost:${deps.defaultPort}/api/logs?${params}`);
 		const json = await res.json();
 		return readLogPayload(json);
 	} catch {
@@ -556,31 +561,68 @@ function printApiLogs(payload: LogPayload): void {
 	}
 }
 
-async function followLogs(port: number): Promise<void> {
+async function followLogs(port: number, fetchImpl: FetchLike = fetch): Promise<void> {
 	console.log();
 	console.log(chalk.dim("  Streaming logs... (Ctrl+C to stop)\n"));
 
-	await new Promise<void>((resolve) => {
-		const source = new EventSource(`http://localhost:${port}/api/logs/stream`);
-		source.onmessage = (event) => {
-			try {
-				const json = JSON.parse(event.data);
-				const entry = readLogEntry(json);
-				if (entry === null || entry.category === "connected") {
-					return;
-				}
-				console.log(`  ${formatLogEntry(entry)}`);
-			} catch {
-				// Ignore parse errors
-			}
-		};
-
-		source.onerror = () => {
+	try {
+		const res = await fetchImpl(`http://localhost:${port}/api/logs/stream`, {
+			headers: { Accept: "text/event-stream" },
+		});
+		if (!res.ok || !res.body) {
 			console.log(chalk.red("  Stream disconnected"));
-			source.close();
-			resolve();
-		};
-	});
+			return;
+		}
+
+		const reader = res.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			buffer = printCompleteLogEvents(buffer);
+		}
+
+		buffer += decoder.decode();
+		printCompleteLogEvents(`${buffer}\n\n`);
+	} catch {
+		console.log(chalk.red("  Stream disconnected"));
+	}
+}
+
+function printCompleteLogEvents(buffer: string): string {
+	const normalized = buffer.replace(/\r\n/g, "\n");
+	let remaining = normalized;
+	let boundary = remaining.indexOf("\n\n");
+	while (boundary !== -1) {
+		const eventBlock = remaining.slice(0, boundary);
+		printLogEventBlock(eventBlock);
+		remaining = remaining.slice(boundary + 2);
+		boundary = remaining.indexOf("\n\n");
+	}
+	return remaining;
+}
+
+function printLogEventBlock(eventBlock: string): void {
+	const data = eventBlock
+		.split("\n")
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => line.slice(5).trimStart())
+		.join("\n");
+	if (!data) return;
+
+	try {
+		const json = JSON.parse(data);
+		const entry = readLogEntry(json);
+		if (entry === null || entry.category === "connected") {
+			return;
+		}
+		console.log(`  ${formatLogEntry(entry)}`);
+	} catch {
+		// Ignore malformed SSE payloads.
+	}
 }
 
 function readFileLogs(basePath: string, limit: number, options: LogOptions): void {
