@@ -1,6 +1,6 @@
 {
   "name": "@signet/connector-llama-cpp",
-  "version": "0.110.1",
+  "version": "0.113.1",
   "description": "Signet connector for llama.cpp — installs runtime chat client and session hooks",
   "type": "module",
   "main": "./dist/index.js",

@@ -127,17 +127,6 @@ const SIGNET_CORE_TOOLS: ReadonlyArray<{
 	},
 ];
 
-function mcpToOpenAiTools(tools: McpListToolsResponse["tools"]): OpenAiTool[] {
-	return tools.map((tool) => ({
-		type: "function" as const,
-		function: {
-			name: tool.name,
-			description: tool.description || `Signet tool: ${tool.name}`,
-			parameters: normalizeInputSchema(tool.inputSchema),
-		},
-	}));
-}
-
 function normalizeInputSchema(schema: unknown): OpenAiTool["function"]["parameters"] {
 	if (typeof schema !== "object" || schema === null) {
 		return { type: "object", properties: {} };

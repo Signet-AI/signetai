@@ -46,16 +46,6 @@ function isJsonObject(value: unknown): value is JsonObject {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readJsonConfig(path: string): JsonObject | null {
-	if (!existsSync(path)) return null;
-	try {
-		const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
-		return isJsonObject(parsed) ? parsed : null;
-	} catch {
-		return null;
-	}
-}
-
 function buildSystemPrompt(basePath: string): string {
 	const parts: string[] = [];
 	const identityFiles = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"] as const;
