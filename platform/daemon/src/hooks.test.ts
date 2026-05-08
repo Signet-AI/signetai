@@ -1939,6 +1939,113 @@ describe("handleSessionEnd", () => {
 		expect(manifest).toContain('transcript_path: "memory/test/transcripts/transcript.jsonl"');
 	});
 
+	test.serial("resumed session-end with same harness session id gets distinct immutable artifact ids", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "resumed-claude-transcript.txt");
+		const sessionKey = "claude-resumed-session";
+		const harnessSessionId = "reused-claude-uuid";
+		const project = "/home/user/signetai";
+
+		writeFileSync(
+			transcriptPath,
+			"User: first part asked about release channels.\nAssistant: first close summarized release-channel work.\n".repeat(
+				8,
+			),
+		);
+		expect(
+			(
+				await handleSessionEnd({
+					harness: "claude-code",
+					transcriptPath,
+					sessionKey,
+					sessionId: harnessSessionId,
+					cwd: project,
+				})
+			).queued,
+		).toBe(true);
+
+		writeFileSync(
+			transcriptPath,
+			"User: resumed part investigated daemon startup failures and backup pruning.\nAssistant: resumed close summarized daemon migration backup fixes.\n".repeat(
+				8,
+			),
+		);
+		expect(
+			(
+				await handleSessionEnd({
+					harness: "claude-code",
+					transcriptPath,
+					sessionKey,
+					sessionId: harnessSessionId,
+					cwd: project,
+				})
+			).queued,
+		).toBe(true);
+
+		const db = openTestDb();
+		try {
+			const jobs = db
+				.prepare(
+					`SELECT id, session_id, session_key, captured_at, transcript
+					 FROM summary_jobs
+					 WHERE session_key = ?
+					 ORDER BY rowid ASC`,
+				)
+				.all(sessionKey) as Array<{
+				id: string;
+				session_id: string;
+				session_key: string;
+				captured_at: string;
+				transcript: string;
+			}>;
+
+			expect(jobs).toHaveLength(2);
+			expect(jobs[0].session_key).toBe(sessionKey);
+			expect(jobs[1].session_key).toBe(sessionKey);
+			expect(jobs[0].session_id).not.toBe(harnessSessionId);
+			expect(jobs[1].session_id).not.toBe(harnessSessionId);
+			expect(jobs[0].session_id).not.toBe(jobs[1].session_id);
+			expect(jobs[0].session_id).toStartWith(`session-end:path:${transcriptPath}:`);
+			expect(jobs[1].session_id).toStartWith(`session-end:path:${transcriptPath}:`);
+
+			await writeSummaryArtifact({
+				agentId: "default",
+				sessionId: jobs[0].session_id,
+				sessionKey,
+				project,
+				harness: "claude-code",
+				capturedAt: jobs[0].captured_at,
+				startedAt: null,
+				endedAt: jobs[0].captured_at,
+				summary: "# First resumed session notes\n\nFirst close content.",
+				provider: null,
+			});
+			await writeSummaryArtifact({
+				agentId: "default",
+				sessionId: jobs[1].session_id,
+				sessionKey,
+				project,
+				harness: "claude-code",
+				capturedAt: jobs[1].captured_at,
+				startedAt: null,
+				endedAt: jobs[1].captured_at,
+				summary: "# Second resumed session notes\n\nDifferent close content.",
+				provider: null,
+			});
+
+			const summaries = db
+				.prepare(
+					`SELECT COUNT(*) AS count
+					 FROM memory_artifacts
+					 WHERE session_key = ? AND source_kind = 'summary'`,
+				)
+				.get(sessionKey) as { count: number };
+			expect(summaries.count).toBe(2);
+		} finally {
+			db.close();
+		}
+	});
+
 	test.serial("defers canonical JSONL rewrite until after session-end response", async () => {
 		createMemoryDb([]);
 		const transcriptPath = join(TEST_DIR, "deferred-canonical-transcript.txt");
