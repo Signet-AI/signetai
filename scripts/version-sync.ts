@@ -20,6 +20,7 @@ const FORGE_MANIFEST_FILES = [
 	"surfaces/cli/templates/forge/manifest.json",
 	"dist/signetai/templates/forge/manifest.json",
 ];
+const PUBLISH_RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
 
 function parseSemver(version: string): [number, number, number] {
 	const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -217,7 +218,20 @@ function regenerateCargoLock(cargoFile: string): void {
 	}
 }
 
-function resolveWorkspaceProtocols(files: readonly string[], version: string, checkOnly: boolean): string[] {
+function resolveWorkspaceSpec(spec: string, version: string): string {
+	switch (spec) {
+		case "workspace:*":
+			return version;
+		case "workspace:^":
+			return `^${version}`;
+		case "workspace:~":
+			return `~${version}`;
+		default:
+			return spec;
+	}
+}
+
+export function resolveWorkspaceProtocols(files: readonly string[], version: string, checkOnly: boolean): string[] {
 	const patched: string[] = [];
 	for (const file of files) {
 		const raw = readFileSync(file, "utf8");
@@ -225,14 +239,25 @@ function resolveWorkspaceProtocols(files: readonly string[], version: string, ch
 		// Only resolve for packages that will be published
 		if (!pkg.publishConfig || pkg.private) continue;
 
-		let changed = raw;
-		// Replace workspace: protocols with resolved versions
-		changed = changed.replace(/"workspace:\*"/g, `"${version}"`);
-		changed = changed.replace(/"workspace:\^"/g, `"^${version}"`);
-		changed = changed.replace(/"workspace:~"/g, `"~${version}"`);
-		if (changed !== raw) {
+		let changed = false;
+		// Replace workspace: protocols only in runtime dependency fields. Dev-only
+		// workspace links must stay local so the nightly release can run bun install
+		// before the newly bumped internal packages have been published.
+		for (const field of PUBLISH_RUNTIME_DEPENDENCY_FIELDS) {
+			const deps = pkg[field];
+			if (!deps || typeof deps !== "object" || Array.isArray(deps)) continue;
+			for (const [name, spec] of Object.entries(deps as Record<string, unknown>)) {
+				if (typeof spec !== "string") continue;
+				const resolved = resolveWorkspaceSpec(spec, version);
+				if (resolved !== spec) {
+					(deps as Record<string, unknown>)[name] = resolved;
+					changed = true;
+				}
+			}
+		}
+		if (changed) {
 			if (!checkOnly) {
-				writeFileSync(file, changed);
+				writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
 			}
 			patched.push(file);
 		}
