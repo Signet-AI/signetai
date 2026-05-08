@@ -1069,10 +1069,7 @@ function extractAcpxTextCandidate(event: AcpxJsonEvent): string | undefined {
 
 function isAcpxFinalEvent(event: AcpxJsonEvent): boolean {
 	const type = acpxStringField(event, "type")?.toLowerCase();
-	if (type) {
-		return ["result", "final", "complete", "completed", "done", "response"].includes(type);
-	}
-	return ["result", "response", "final"].some((key) => event[key] !== undefined);
+	return type !== undefined && ["result", "final", "complete", "completed", "done", "response"].includes(type);
 }
 
 function parseAcpxJsonOutput(
