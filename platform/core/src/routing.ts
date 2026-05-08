@@ -84,6 +84,7 @@ export type RoutingAcpxPermissionMode = "inherit" | "deny-all" | "approve-reads"
 export type RoutingAcpxHooksMode = "inherit" | "disabled" | "enabled";
 export type RoutingAcpxTerminalMode = "inherit" | "disabled" | "enabled";
 export type RoutingAcpxSessionMode = "exec" | "session";
+export type RoutingAcpxOutputFormat = "quiet" | "json";
 
 export interface RoutingAcpxConfig {
 	readonly agent: string;
@@ -97,6 +98,9 @@ export interface RoutingAcpxConfig {
 	readonly hooks?: RoutingAcpxHooksMode;
 	readonly terminal?: RoutingAcpxTerminalMode;
 	readonly allowedTools?: readonly string[];
+	readonly format?: RoutingAcpxOutputFormat;
+	readonly captureEvents?: boolean;
+	readonly maxCapturedEvents?: number;
 	readonly timeoutMs?: number;
 	readonly extraArgs?: readonly string[];
 }
@@ -496,6 +500,12 @@ function asAcpxSessionMode(value: unknown): RoutingAcpxSessionMode | undefined {
 		: undefined;
 }
 
+function asAcpxOutputFormat(value: unknown): RoutingAcpxOutputFormat | undefined {
+	return typeof value === "string" && ["quiet", "json"].includes(value)
+		? (value as RoutingAcpxOutputFormat)
+		: undefined;
+}
+
 function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 	if (!isRecord(raw)) return undefined;
 	const nested = isRecord(raw.acpx) ? raw.acpx : raw;
@@ -515,6 +525,9 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 		hooks: asAcpxHooksMode(nested.hooks ?? nested.hooksMode ?? nested.hooks_mode),
 		terminal: asAcpxTerminalMode(nested.terminal ?? nested.terminalMode ?? nested.terminal_mode),
 		allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
+		format: asAcpxOutputFormat(nested.format ?? nested.outputFormat ?? nested.output_format),
+		captureEvents: asBool(nested.captureEvents ?? nested.capture_events),
+		maxCapturedEvents: asPositiveInt(nested.maxCapturedEvents ?? nested.max_captured_events),
 		timeoutMs: asPositiveInt(nested.timeoutMs ?? nested.timeout_ms),
 		extraArgs: extraArgs.length > 0 ? extraArgs : undefined,
 	};

@@ -121,6 +121,40 @@ npx -y acpx@0.7.0 \
 The prompt is written to stdin. The final text response is read from stdout and
 returned to the current `LlmProvider` abstraction.
 
+### JSON event capture
+
+Signet can also ask ACPX for JSON output:
+
+```yaml
+inference:
+  targets:
+    background-acpx:
+      executor: acpx
+      acpx:
+        agent: codex
+        format: json
+        captureEvents: true
+        maxCapturedEvents: 200
+      models:
+        default:
+          model: gpt-5-codex-mini
+```
+
+With `format: json`, the daemon reads ACPX stdout as newline-delimited JSON
+events. Each event is parsed and validated. The provider still returns a plain
+final string to existing callers by extracting the final response from the last
+result-like event, so background memory extraction does not need a new provider
+API.
+
+`captureEvents: true` is a convenience flag that defaults the ACPX output format
+to JSON when `format` is omitted. Provider-level callers can also attach an
+event callback; Signet limits callback delivery with `maxCapturedEvents`
+(default `200`) while still scanning the full stream for the final response.
+
+This is intentionally the first Zed-inspired step, not the whole session model:
+Signet now has a typed ACPX event parsing seam, but durable dashboard-visible
+event/session storage is still future work.
+
 If `mode: session` and `session: <name>` are configured, Signet still uses the
 one-shot `exec --file -` prompt path, but attaches the named ACPX session:
 
@@ -216,7 +250,9 @@ What is not implemented yet
 
 The current ACPX backend is deliberately narrow. It does **not** yet implement:
 
-- ACPX JSON event ingestion into Signet's trace/session store.
+- Durable ACPX JSON event ingestion into Signet's trace/session store. The
+  provider can parse JSON events and preserve the final text contract, but raw
+  events are not yet persisted as dashboard-visible session history.
 - Persistent multi-turn ACPX conversations as a first-class daemon session
   abstraction.
 - A `signet acp --agent <name>` ACP server/proxy command.
@@ -256,14 +292,17 @@ The current useful path is incremental:
 
 1. **Done: ACPX inference target.** Route background Signet workloads through
    `executor: acpx` and keep direct providers as fallbacks.
-2. **Next: richer ACPX telemetry.** Capture JSON event output, tool-call
-   structure, usage, and request/session ids without changing the provider API
-   more than necessary.
-3. **Next: persistent session semantics.** Make named ACPX sessions a daemon
+2. **Done: ACPX JSON parsing seam.** ACPX targets can request JSON output,
+   validate each event, optionally deliver bounded provider callbacks, and still
+   return a final text response to existing callers.
+3. **Next: durable ACPX telemetry.** Persist selected JSON event output,
+   tool-call structure, usage, and request/session ids into the daemon's trace
+   or session store.
+4. **Next: persistent session semantics.** Make named ACPX sessions a daemon
    concept rather than only a CLI flag passthrough.
-4. **Later: Signet ACP proxy.** Add a real ACP server/proxy that can inject
+5. **Later: Signet ACP proxy.** Add a real ACP server/proxy that can inject
    identity and memory at the protocol boundary for any ACP-compatible client.
-5. **Later: multi-agent coordination.** Use Signet's agent registry, skills,
+6. **Later: multi-agent coordination.** Use Signet's agent registry, skills,
    memory graph, and workload policies to delegate work across ACP sessions.
 
 Migration guidance

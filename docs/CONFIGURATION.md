@@ -410,6 +410,9 @@ subscription-backed CLI session, or gateway.
 | `hooks` | string | Set to `disabled` for sterile/background execution (`SIGNET_NO_HOOKS=1`) |
 | `terminal` | boolean | For ACPX, set `false` to pass `--no-terminal` |
 | `allowedTools` | array | Optional ACPX allowed-tool list |
+| `format` / `outputFormat` | string | ACPX output format. `quiet` is the default; `json` parses ACPX JSON events and extracts the final response |
+| `captureEvents` | boolean | When true, defaults ACPX to JSON output and enables the provider event-capture path |
+| `maxCapturedEvents` | number | Maximum number of JSON events delivered to the provider-side event callback; defaults to 200 |
 | `timeoutMs` | number | Per-call ACPX subprocess deadline |
 | `extraArgs` | array | Additional ACPX CLI args appended after Signet-managed args |
 | `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |
@@ -425,6 +428,8 @@ inference:
       agent: codex
       hooks: disabled
       terminal: false
+      format: json
+      captureEvents: true
       timeoutMs: 120000
       models:
         mini:

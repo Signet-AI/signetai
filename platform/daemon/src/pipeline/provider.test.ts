@@ -174,6 +174,63 @@ printf '  acpx answer  \\n'
 		}
 	});
 
+	it("captures ACPX JSON events while preserving the final text provider contract", async () => {
+		const root = join(tmpdir(), `signet-acpx-events-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-json.sh");
+		const argsPath = join(root, "args.json");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+printf '%s\n' '{"type":"session","session_id":"acpx-session-1"}'
+printf '%s\n' '{"type":"assistant_delta","delta":"partial "}'
+printf '%s\n' '{"type":"result","text":"final answer"}'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const events: unknown[] = [];
+		try {
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				captureEvents: true,
+				onEvent: (event) => events.push(event),
+			});
+			await expect(provider.generate("hello json", { timeoutMs: 1000 })).resolves.toBe("final answer");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args).toContain("--format");
+			expect(args[args.indexOf("--format") + 1]).toBe("json");
+			expect(events).toEqual([
+				{ type: "session", session_id: "acpx-session-1" },
+				{ type: "assistant_delta", delta: "partial " },
+				{ type: "result", text: "final answer" },
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects ACPX JSON output that does not contain a final response", async () => {
+		const root = join(tmpdir(), `signet-acpx-events-empty-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-json-empty.sh");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' '{"type":"session","session_id":"acpx-session-1"}'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, format: "json", captureEvents: true });
+			await expect(provider.generate("hello json", { timeoutMs: 1000 })).rejects.toThrow(
+				"codex via ACPX JSON output did not include a final response",
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 
 	it("passes configured ACPX package to an absolute launcher", async () => {
 		const root = join(tmpdir(), `signet-acpx-package-${Date.now()}-${Math.random().toString(36).slice(2)}`);
