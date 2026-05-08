@@ -24,8 +24,6 @@ import { join } from "node:path";
 import { BaseConnector, type InstallResult, type UninstallResult } from "@signet/connector-base";
 import { expandHome, hasValidIdentity, resolveSignetDaemonUrl } from "@signet/core";
 
-type JsonObject = Record<string, unknown>;
-
 interface LlamaCppRuntimeConfig {
 	readonly signetDaemonUrl: string;
 	readonly llamaServerUrl: string;
@@ -41,10 +39,6 @@ const DEFAULT_CONFIG: Omit<LlamaCppRuntimeConfig, "systemPrompt"> = {
 	contextLength: 8192,
 	gpuLayers: 99,
 };
-
-function isJsonObject(value: unknown): value is JsonObject {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function buildSystemPrompt(basePath: string): string {
 	const parts: string[] = [];

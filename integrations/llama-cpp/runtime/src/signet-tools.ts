@@ -238,7 +238,10 @@ interface ToolApiMapping {
 const TOOL_API_MAP: Record<string, ToolApiMapping> = {
 	memory_search: { method: "POST", buildUrl: (base) => `${base}/api/memory/recall` },
 	memory_store: { method: "POST", buildUrl: (base) => `${base}/api/memory/remember` },
-	memory_get: { method: "GET", buildUrl: (base, args) => `${base}/api/memory/${args.id}` },
+	memory_get: {
+		method: "GET",
+		buildUrl: (base, args) => `${base}/api/memory/${encodeURIComponent(String(args.id ?? ""))}`,
+	},
 	memory_list: { method: "GET", buildUrl: (base) => `${base}/api/memories` },
 	memory_modify: { method: "POST", buildUrl: (base) => `${base}/api/memory/modify` },
 	memory_forget: { method: "POST", buildUrl: (base) => `${base}/api/memory/forget` },

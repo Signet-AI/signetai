@@ -19,10 +19,8 @@
     "../runtime/dist"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
+    "build": "cd ../runtime && bun run build && cd ../connector && bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
-    "build:runtime": "cd ../runtime && bun run build",
-    "build:all": "bun run build:runtime && bun run build",
     "dev": "bun --watch src/index.ts",
     "typecheck": "tsc --noEmit"
   },
