@@ -1312,7 +1312,7 @@ pub struct PipelineV2Config {
     pub feedback: FeedbackConfig,
     pub significance: Option<SignificanceConfig>,
     pub predictor: Option<PredictorConfig>,
-    pub predictor_pipeline: PredictorPipelineConfig,
+    // pub predictor_pipeline: PredictorPipelineConfig, // hard-deprecated in 0.112.0
     pub model_registry: ModelRegistryConfig,
 }
 
@@ -1345,7 +1345,7 @@ impl Default for PipelineV2Config {
             feedback: FeedbackConfig::default(),
             significance: Some(SignificanceConfig::default()),
             predictor: Some(PredictorConfig::default()),
-            predictor_pipeline: PredictorPipelineConfig::default(),
+            // predictor_pipeline: PredictorPipelineConfig::default(), // hard-deprecated in 0.112.0
             model_registry: ModelRegistryConfig::default(),
         }
     }
