@@ -2767,7 +2767,7 @@ export interface ConstellationGraph {
 
 export async function getConstellationOverlay(agentId: string): Promise<ConstellationGraph | null> {
 	try {
-		const path = `${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(agentId)}`;
+		const path = `${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(agentId)}&limit=150&max_aspects_per_entity=6&max_attributes_per_aspect=4&dependency_limit=500`;
 		const res = await fetch(path);
 		if (!res.ok) return null;
 		return (await res.json()) as ConstellationGraph;

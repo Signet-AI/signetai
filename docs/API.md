@@ -3474,6 +3474,17 @@ signet knowledge attributes Nicholai food restaurants favorite_restaurant --stat
 signet knowledge hygiene
 ```
 
+### GET /api/knowledge/constellation
+
+Return the bounded graph overlay used by the dashboard Ontology constellation.
+Query parameters: `agent_id`, `limit`, `max_aspects_per_entity`,
+`max_attributes_per_aspect`, and `dependency_limit`. The daemon clamps these
+limits so dashboard navigation cannot load the entire knowledge graph into one
+read response.
+
+Defaults: `limit=150`, `max_aspects_per_entity=6`,
+`max_attributes_per_aspect=4`, and `dependency_limit=500`.
+
 ### GET /api/knowledge/hygiene
 
 Return a report-only graph hygiene scan. Query parameters: `agent_id`, `limit`,
