@@ -421,6 +421,9 @@ async fn connectors_list() {
     let server = TestServer::start().await;
     let resp = server.get("/api/connectors").await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["connectors"].is_array());
+    assert_eq!(body["count"], body["connectors"].as_array().unwrap().len());
 }
 
 #[tokio::test]
