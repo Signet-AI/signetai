@@ -15,7 +15,7 @@ import { daemonAccessLines } from "../lib/network.js";
 import Database from "../sqlite.js";
 import { installForge, managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { buildSetupInference, buildSetupPipeline } from "./setup-pipeline.js";
+import { applySetupInferenceRoute, buildSetupInference, buildSetupPipeline } from "./setup-pipeline.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
 import { formatWorkspaceSourceRepoSync, readErr, readRecord } from "./setup-shared.js";
@@ -139,8 +139,9 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			cfg.extractionModel,
 			cfg.harnesses,
 			cfg.availableExtractionProviders,
+			cfg.acpxBin,
 		);
-		if (inference) config.inference = inference;
+		applySetupInferenceRoute(config, inference);
 
 		writeFileSync(join(cfg.basePath, "agent.yaml"), formatYaml(config));
 

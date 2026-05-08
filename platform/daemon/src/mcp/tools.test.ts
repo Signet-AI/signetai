@@ -226,6 +226,7 @@ describe("createMcpServer", () => {
 		expect(names).toContain("entity_attributes");
 		expect(names).toContain("knowledge_expand_session");
 		expect(names).toContain("lcm_expand");
+		expect(names).toContain("session_search");
 		expect(names).toContain("agent_peers");
 		expect(names).toContain("agent_message_send");
 		expect(names).toContain("agent_message_inbox");
@@ -247,7 +248,7 @@ describe("createMcpServer", () => {
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(51);
+		expect(names.length).toBe(52);
 	});
 
 	it("registers generic code tools when GraphIQ has an active project", async () => {
@@ -641,6 +642,52 @@ describe("createMcpServer", () => {
 		});
 	});
 
+	describe("session_search", () => {
+		it("calls the session transcript search endpoint with lineage hints", async () => {
+			const cap: { url?: string; method?: string; body?: string } = {};
+			mockFetch(
+				200,
+				{
+					query: "Juniper trunk ports",
+					hits: [
+						{
+							sessionKey: "parent-session",
+							project: "/tmp/network",
+							updatedAt: "2026-03-25T10:05:00.000Z",
+							excerpt: "keep the Juniper EX4300 VLAN audit focused on trunk ports",
+							rank: -1.2,
+						},
+					],
+					count: 1,
+				},
+				cap,
+			);
+
+			const result = await callTool(server, "session_search", {
+				query: "Juniper trunk ports",
+				session_key: "parent-session",
+				current_session_key: "child-session",
+				agent_id: "research-agent",
+				project: "/tmp/network",
+				limit: 3,
+			});
+
+			expect(cap.url).toBe("http://localhost:3850/api/sessions/search");
+			expect(cap.method).toBe("POST");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body).toEqual({
+				query: "Juniper trunk ports",
+				sessionKey: "parent-session",
+				currentSessionKey: "child-session",
+				agentId: "research-agent",
+				project: "/tmp/network",
+				limit: 3,
+			});
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toContain("Juniper EX4300 VLAN audit");
+		});
+	});
+
 	describe("memory_store", () => {
 		it("requires agent-provided prospective hints", () => {
 			const schema = getRegisteredTools(server).memory_store.inputSchema as unknown as {
@@ -649,9 +696,9 @@ describe("createMcpServer", () => {
 
 			expect(schema.safeParse({ content: "Remember this fact" }).success).toBe(false);
 			expect(schema.safeParse({ content: "Remember this fact", hints: [] }).success).toBe(false);
-			expect(schema.safeParse({ content: "Remember this fact", hints: ["What fact should be remembered?"] }).success).toBe(
-				true,
-			);
+			expect(
+				schema.safeParse({ content: "Remember this fact", hints: ["What fact should be remembered?"] }).success,
+			).toBe(true);
 		});
 
 		it("calls remember endpoint", async () => {

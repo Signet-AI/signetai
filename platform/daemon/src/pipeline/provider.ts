@@ -10,7 +10,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
@@ -951,7 +951,6 @@ function replacePromptTokens(value: string, prompt: string): string {
 	return value.split("$PROMPT").join(prompt).split("{{prompt}}").join(prompt);
 }
 
-
 export type AcpxPermissionMode = "inherit" | "deny-all" | "approve-reads" | "approve-all";
 export type AcpxHooksMode = "inherit" | "disabled" | "enabled";
 export type AcpxTerminalMode = "inherit" | "disabled" | "enabled";
@@ -962,6 +961,7 @@ export interface AcpxProviderConfig {
 	readonly model?: string;
 	readonly version?: string;
 	readonly bin?: string;
+	readonly package?: string;
 	readonly cwd?: string;
 	readonly session?: string;
 	readonly mode?: AcpxSessionMode;
@@ -993,20 +993,31 @@ function acpxEnv(hooks: AcpxHooksMode | undefined): NodeJS.ProcessEnv {
 	if (hooks === "disabled") {
 		env.SIGNET_NO_HOOKS = "1";
 	} else if (hooks === "enabled") {
-		delete env.SIGNET_NO_HOOKS;
+		env.SIGNET_NO_HOOKS = undefined;
 	}
 	return env;
 }
 
-function buildAcpxCommand(config: AcpxProviderConfig, timeoutMs: number): { bin: string; args: string[] } {
+function resolveAcpxCwd(cwd: string | undefined): string | undefined {
+	if (!cwd) return undefined;
+	return isAbsolute(cwd) ? cwd : resolvePath(cwd);
+}
+
+function buildAcpxCommand(
+	config: AcpxProviderConfig,
+	timeoutMs: number,
+): { bin: string; args: string[]; cwd?: string } {
 	const bin = config.bin ?? "npx";
+	const cwd = resolveAcpxCwd(config.cwd);
+	const packageRef = config.package ?? (!config.bin ? `acpx@${config.version ?? DEFAULT_ACPX_VERSION}` : undefined);
 	const args: string[] = [];
-	if (!config.bin) {
-		args.push("-y", `acpx@${config.version ?? DEFAULT_ACPX_VERSION}`);
+	if (packageRef) {
+		if (bin.endsWith("npx") || bin.endsWith("npx.cmd")) args.push("-y");
+		args.push(packageRef);
 	}
 	args.push("--format", "quiet");
 	args.push("--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))));
-	if (config.cwd) args.push("--cwd", config.cwd);
+	if (cwd) args.push("--cwd", cwd);
 	if (config.model) args.push("--model", config.model);
 	args.push(...acpxPermissionArgs(config.permissions));
 	if (config.terminal === "disabled") args.push("--no-terminal");
@@ -1017,7 +1028,7 @@ function buildAcpxCommand(config: AcpxProviderConfig, timeoutMs: number): { bin:
 		args.push("-s", config.session);
 	}
 	args.push("exec", "--file", "-");
-	return { bin, args };
+	return { bin, args, cwd };
 }
 
 export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
@@ -1025,13 +1036,13 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 		name: `acpx:${config.agent}${config.model ? `:${config.model}` : ""}`,
 		async generate(prompt, opts): Promise<string> {
 			const timeoutMs = opts?.timeoutMs ?? config.timeoutMs ?? 60_000;
-			const { bin, args } = buildAcpxCommand(config, timeoutMs);
+			const { bin, args, cwd } = buildAcpxCommand(config, timeoutMs);
 			return new Promise<string>((resolve, reject) => {
 				let stdout = "";
 				let stderr = "";
 				let settled = false;
 				const child = nodeSpawn(bin, args, {
-					cwd: config.cwd,
+					cwd,
 					env: acpxEnv(config.hooks),
 					stdio: ["pipe", "pipe", "pipe"],
 					windowsHide: true,

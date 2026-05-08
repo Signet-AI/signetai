@@ -15,35 +15,20 @@ import {
 	ts,
 } from "$lib/stores/tasks.svelte";
 import Plus from "@lucide/svelte/icons/plus";
-import Zap from "@lucide/svelte/icons/zap";
 import { onMount } from "svelte";
 
 // biome-ignore lint/style/useConst: Mutated from template callback.
 let selectedColumn = $state(0);
 // biome-ignore lint/style/useConst: Mutated from template callback.
 let selectedTask = $state(0);
-let predictorActive = $state(false);
 
 const taskCount = $derived(ts.tasks.length);
 
 onMount(() => {
 	fetchTasks();
-	checkPredictor();
 	const interval = setInterval(fetchTasks, 15_000);
 	return () => clearInterval(interval);
 });
-
-async function checkPredictor(): Promise<void> {
-	try {
-		const res = await fetch(`${API_BASE}/api/predictor/status`);
-		if (res.ok) {
-			const data = await res.json();
-			predictorActive = data.enabled === true;
-		}
-	} catch {
-		predictorActive = false;
-	}
-}
 </script>
 
 <div class="tasks-panel">
@@ -51,12 +36,6 @@ async function checkPredictor(): Promise<void> {
 		<div class="tasks-header-left">
 			<span class="tasks-title">SCHEDULER</span>
 			<span class="tasks-count">{taskCount} TASKS</span>
-			{#if predictorActive}
-				<span class="predictor-badge">
-					<Zap class="size-2.5" />
-					PREDICTOR
-				</span>
-			{/if}
 		</div>
 		<button class="new-task-btn" onclick={() => openForm()}>
 			<Plus class="size-3" />
@@ -155,22 +134,6 @@ async function checkPredictor(): Promise<void> {
 		font-size: 8px;
 		letter-spacing: 0.1em;
 		color: var(--sig-text-muted);
-	}
-
-	.predictor-badge {
-		display: flex;
-		align-items: center;
-		gap: 3px;
-		font-family: var(--font-mono);
-		font-size: 8px;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: var(--sig-highlight-text);
-		background: var(--sig-highlight-muted);
-		border: 1px solid var(--sig-highlight-dim);
-		padding: 1px 6px;
-		border-radius: 4px;
-		line-height: 1.4;
 	}
 
 	.new-task-btn {

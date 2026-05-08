@@ -281,7 +281,6 @@ function testPipelineCfg(): PipelineV2Config {
 			minEntityOverlap: 1,
 			noveltyThreshold: 0.15,
 		},
-		predictorPipeline: { agentFeedback: false, trainingTelemetry: false },
 		modelRegistry: { enabled: false, refreshIntervalMs: 3600_000 },
 		hints: {
 			enabled: true,

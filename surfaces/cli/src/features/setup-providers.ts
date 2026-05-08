@@ -130,6 +130,24 @@ export async function preflightOllamaEmbedding(model: string): Promise<{
 	}
 }
 
+export function resolveCommandPath(command: string): string | undefined {
+	try {
+		const result = spawnSync(process.platform === "win32" ? "where" : "which", [command], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: COMMAND_DETECTION_TIMEOUT_MS,
+			windowsHide: true,
+		});
+		if (result.status !== 0) return undefined;
+		return result.stdout
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.find(Boolean);
+	} catch {
+		return undefined;
+	}
+}
+
 export function hasCommand(command: string): boolean {
 	try {
 		const result = spawnSync(command, ["--version"], {

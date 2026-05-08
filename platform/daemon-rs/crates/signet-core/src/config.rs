@@ -1344,8 +1344,16 @@ impl Default for PipelineV2Config {
             structural: StructuralConfig::default(),
             feedback: FeedbackConfig::default(),
             significance: Some(SignificanceConfig::default()),
+<<<<<<< HEAD
             predictor: Some(PredictorConfig::default()),
             // predictor_pipeline: PredictorPipelineConfig::default(), // hard-deprecated in 0.112.0
+=======
+            predictor: None,
+            predictor_pipeline: PredictorPipelineConfig {
+                agent_feedback: false,
+                training_telemetry: false,
+            },
+>>>>>>> origin/main
             model_registry: ModelRegistryConfig::default(),
         }
     }

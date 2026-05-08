@@ -163,6 +163,10 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		retentionDays: 7,
 		recoveryBudgetChars: 2000,
 	},
+	subagents: {
+		inheritContext: true,
+		tailChars: 3000,
+	},
 	telemetryEnabled: false,
 	telemetry: {
 		posthogHost: "",
@@ -404,6 +408,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 	const guardrailsRaw = raw.guardrails as Record<string, unknown> | undefined;
 	const telemetryRaw = raw.telemetry as Record<string, unknown> | undefined;
 	const continuityRaw = raw.continuity as Record<string, unknown> | undefined;
+	const subagentsRaw = raw.subagents as Record<string, unknown> | undefined;
 	const embeddingTrackerRaw = raw.embeddingTracker as Record<string, unknown> | undefined;
 	const synthesisRaw = raw.synthesis as Record<string, unknown> | undefined;
 	const proceduralRaw = raw.procedural as Record<string, unknown> | undefined;
@@ -829,6 +834,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 				10000,
 				d.continuity.recoveryBudgetChars,
 			),
+		},
+		subagents: {
+			inheritContext: resolveBool(subagentsRaw?.inheritContext, undefined, d.subagents?.inheritContext ?? true),
+			tailChars: clampNonNegative(subagentsRaw?.tailChars, 20000, d.subagents?.tailChars ?? 3000),
 		},
 
 		telemetryEnabled: typeof raw.telemetryEnabled === "boolean" ? raw.telemetryEnabled : d.telemetryEnabled,

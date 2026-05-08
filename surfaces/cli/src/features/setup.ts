@@ -18,6 +18,7 @@ import {
 	hasLlamaCppServer,
 	preflightOllamaEmbedding,
 	promptOpenAIEmbeddingModel,
+	resolveCommandPath,
 	validateOllamaModelNonInteractive,
 } from "./setup-providers.js";
 import {
@@ -123,9 +124,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const hasCodexCommand = hasCommand("codex");
 	const hasOllamaCommand = hasCommand("ollama");
 	const hasOpenCodeCommand = hasCommand("opencode");
+	const acpxBin = resolveCommandPath("bunx") ?? resolveCommandPath("npx");
 	const llamaCppServerAvailable = await hasLlamaCppServer();
 	const availableToolExtractionProviders: ExtractionProviderChoice[] = [];
-	if (hasClaudeCommand || hasCodexCommand || hasOpenCodeCommand) availableToolExtractionProviders.push("acpx");
+	if (acpxBin && (hasClaudeCommand || hasCodexCommand || hasOpenCodeCommand))
+		availableToolExtractionProviders.push("acpx");
 	if (llamaCppServerAvailable) availableToolExtractionProviders.push("llama-cpp");
 	if (hasClaudeCommand) availableToolExtractionProviders.push("claude-code");
 	if (hasCodexCommand) availableToolExtractionProviders.push("codex");
@@ -305,6 +308,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				extractionProvider: migrationExtractionProvider,
 				extractionModel: deps.normalizeStringValue(options.extractionModel) || undefined,
 				availableExtractionProviders: availableToolExtractionProviders,
+				acpxBin,
 				signetSecretsEnabled,
 				graphiqEnabled,
 			});
@@ -391,6 +395,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					deps.normalizeStringValue(existingExtraction.model) ||
 					undefined,
 				availableExtractionProviders: availableToolExtractionProviders,
+				acpxBin,
 				signetSecretsEnabled,
 				graphiqEnabled,
 			});
@@ -938,6 +943,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		extractionProvider,
 		extractionModel,
 		availableExtractionProviders: availableToolExtractionProviders,
+		acpxBin,
 		searchBalance,
 		searchTopK,
 		searchMinScore,

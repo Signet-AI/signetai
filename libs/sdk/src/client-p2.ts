@@ -744,8 +744,9 @@ export class SignetClientP2 {
 		return this.transport.post<AgentMessageSendResponse>("/api/cross-agent/messages", opts);
 	}
 
-	// --- Predictor ---
+	// --- Predictor (retired) ---
 
+<<<<<<< HEAD
 	/**
 	 * @example
 	 * const status = await client.getPredictorStatus();
@@ -769,23 +770,55 @@ export class SignetClientP2 {
 
 	async listTrainingRuns(_opts?: any): Promise<never> {
 		throw new Error("Predictor is hard-deprecated.");
+=======
+	private predictorDeprecated(): never {
+		throw new Error(
+			"Signet predictor APIs were removed in v0.112. Use memory search telemetry and pipeline diagnostics instead.",
+		);
 	}
 
-	/**
-	 * @example
-	 * const { count } = await client.getTrainingPairsCount();
-	 */
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async getPredictorStatus(): Promise<never> {
+		this.predictorDeprecated();
+	}
+
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async getComparisonsByProject(_project: string): Promise<ComparisonsByProjectResponse> {
+		this.predictorDeprecated();
+	}
+
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async getComparisonsByEntity(_entityId: string): Promise<ComparisonsByEntityResponse> {
+		this.predictorDeprecated();
+	}
+
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async listComparisons(_opts?: {
+		readonly limit?: number;
+		readonly offset?: number;
+		readonly agentId?: string;
+	}): Promise<ComparisonsListResponse> {
+		this.predictorDeprecated();
+	}
+
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async listTrainingRuns(_opts?: {
+		readonly agentId?: string;
+		readonly limit?: number;
+	}): Promise<TrainingRunsResponse> {
+		this.predictorDeprecated();
+>>>>>>> origin/main
+	}
+
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async getTrainingPairsCount(): Promise<TrainingPairsCountResponse> {
-		return this.transport.get<TrainingPairsCountResponse>("/api/predictor/training-pairs-count");
+		this.predictorDeprecated();
 	}
 
-	/**
-	 * @example
-	 * const result = await client.trainPredictor({ force: false });
-	 */
-	async trainPredictor(opts?: {
+	/** @deprecated Signet predictor APIs were removed in 0.112. */
+	async trainPredictor(_opts?: {
 		readonly force?: boolean;
 	}): Promise<TrainPredictorResponse> {
-		return this.transport.post<TrainPredictorResponse>("/api/predictor/train", opts ?? {});
+		this.predictorDeprecated();
 	}
 }

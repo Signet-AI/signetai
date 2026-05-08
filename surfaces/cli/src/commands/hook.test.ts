@@ -4,6 +4,7 @@ import {
 	buildCodexHookOutput,
 	buildCompactionCompleteBody,
 	buildSessionEndBody,
+	buildSessionStartBody,
 	buildSessionStartFallback,
 	buildUserPromptSubmitBody,
 	pickSessionKey,
@@ -170,6 +171,136 @@ describe("buildSessionEndBody", () => {
 			runtimePath: "legacy",
 		});
 	});
+
+	test("preserves existing agentId and non-Claude agent_id inputs as Signet scope", () => {
+		expect(buildSessionEndBody({ agentId: "research-agent", sessionKey: "sess-1" }, "claude-code").agentId).toBe(
+			"research-agent",
+		);
+		expect(buildSessionEndBody({ agent_id: "legacy-agent", sessionKey: "sess-2" }, "custom-harness").agentId).toBe(
+			"legacy-agent",
+		);
+		expect(
+			buildSessionEndBody(
+				{ agentId: "legacy-agent", signetAgentId: "explicit-agent", sessionKey: "sess-3" },
+				"claude-code",
+			).agentId,
+		).toBe("explicit-agent");
+	});
+
+	test("keeps Claude Code session-end agent_id out of Signet scope", () => {
+		expect(buildSessionEndBody({ agent_id: "claude-subagent", sessionKey: "sess-4" }, "claude-code").agentId).toBe(
+			undefined,
+		);
+		expect(
+			buildSessionEndBody(
+				{ agent_id: "claude-subagent", signet_agent_id: "research-agent", sessionKey: "sess-5" },
+				"claude-code",
+			).agentId,
+		).toBe("research-agent");
+	});
+});
+
+describe("buildSessionStartBody", () => {
+	test("keeps harness agent ids separate from Signet agent scope", () => {
+		expect(
+			buildSessionStartBody(
+				{
+					agent_id: "claude-subagent",
+					parentID: "parent-session",
+					sessionKey: "child-session",
+					cwd: "/tmp/project",
+					signetAgentId: "research-agent",
+				},
+				{ harness: "claude-code", context: "extra context" },
+			),
+		).toEqual({
+			harness: "claude-code",
+			project: "/tmp/project",
+			agentId: "research-agent",
+			harnessAgentId: "claude-subagent",
+			parentSessionKey: "parent-session",
+			context: "extra context",
+			sessionKey: "child-session",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("preserves legacy agentId input as Signet scope", () => {
+		expect(
+			buildSessionStartBody(
+				{
+					agentId: "research-agent",
+					sessionKey: "sess-1",
+					cwd: "/tmp/project",
+				},
+				{ harness: "custom-harness" },
+			),
+		).toEqual({
+			harness: "custom-harness",
+			project: "/tmp/project",
+			agentId: "research-agent",
+			sessionKey: "sess-1",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("preserves legacy agent_id input as Signet scope when it is not a native sub-agent payload", () => {
+		expect(
+			buildSessionStartBody(
+				{
+					agent_id: "research-agent",
+					sessionKey: "sess-1",
+					cwd: "/tmp/project",
+				},
+				{ harness: "custom-harness" },
+			),
+		).toEqual({
+			harness: "custom-harness",
+			project: "/tmp/project",
+			agentId: "research-agent",
+			sessionKey: "sess-1",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("prefers explicit CLI agent id for Signet scope", () => {
+		expect(
+			buildSessionStartBody(
+				{
+					agent_id: "claude-subagent",
+					signet_agent_id: "stdin-signet-agent",
+					session_id: "sess-1",
+				},
+				{ harness: "claude-code", project: "/tmp/explicit", agentId: "cli-signet-agent" },
+			),
+		).toEqual({
+			harness: "claude-code",
+			project: "/tmp/explicit",
+			agentId: "cli-signet-agent",
+			harnessAgentId: "claude-subagent",
+			sessionKey: "sess-1",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("keeps Claude Code session-start agent_id out of Signet scope without an explicit parent", () => {
+		expect(
+			buildSessionStartBody(
+				{
+					agent_id: "claude-subagent",
+					sessionKey: "child-session",
+					cwd: "/tmp/project",
+				},
+				{ harness: "claude-code" },
+			),
+		).toEqual({
+			harness: "claude-code",
+			project: "/tmp/project",
+			harnessAgentId: "claude-subagent",
+			sessionKey: "child-session",
+			runtimePath: "legacy",
+		});
+	});
 });
 
 describe("buildUserPromptSubmitBody", () => {
@@ -196,6 +327,104 @@ describe("buildUserPromptSubmitBody", () => {
 			transcript: "user: hi",
 			runtimePath: "legacy",
 			lastAssistantMessage: "prior answer",
+		});
+	});
+
+	test("does not treat harness agent_id as Signet scope on prompt submit", () => {
+		expect(
+			buildUserPromptSubmitBody(
+				{
+					userMessage: "inspect this",
+					sessionKey: "child-session",
+					harness_agent_id: "claude-subagent",
+					signet_agent_id: "research-agent",
+				},
+				"claude-code",
+				"/tmp/project",
+			),
+		).toEqual({
+			harness: "claude-code",
+			project: "/tmp/project",
+			userMessage: "inspect this",
+			userPrompt: "",
+			sessionKey: "child-session",
+			transcriptPath: "",
+			transcript: "",
+			agentId: "research-agent",
+			harnessAgentId: "claude-subagent",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("preserves existing agentId prompt-submit input as Signet scope", () => {
+		expect(
+			buildUserPromptSubmitBody(
+				{
+					userMessage: "inspect this",
+					sessionKey: "child-session",
+					agentId: "research-agent",
+				},
+				"custom-harness",
+				"/tmp/project",
+			),
+		).toEqual({
+			harness: "custom-harness",
+			project: "/tmp/project",
+			userMessage: "inspect this",
+			userPrompt: "",
+			sessionKey: "child-session",
+			transcriptPath: "",
+			transcript: "",
+			agentId: "research-agent",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("preserves existing agent_id prompt-submit input as Signet scope", () => {
+		expect(
+			buildUserPromptSubmitBody(
+				{
+					userMessage: "inspect this",
+					sessionKey: "child-session",
+					agent_id: "research-agent",
+				},
+				"custom-harness",
+				"/tmp/project",
+			),
+		).toEqual({
+			harness: "custom-harness",
+			project: "/tmp/project",
+			userMessage: "inspect this",
+			userPrompt: "",
+			sessionKey: "child-session",
+			transcriptPath: "",
+			transcript: "",
+			agentId: "research-agent",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("keeps Claude Code prompt-submit agent_id out of Signet scope", () => {
+		expect(
+			buildUserPromptSubmitBody(
+				{
+					userMessage: "inspect this",
+					sessionKey: "child-session",
+					agent_id: "claude-subagent",
+				},
+				"claude-code",
+				"/tmp/project",
+			),
+		).toEqual({
+			harness: "claude-code",
+			project: "/tmp/project",
+			userMessage: "inspect this",
+			userPrompt: "",
+			sessionKey: "child-session",
+			transcriptPath: "",
+			transcript: "",
+			harnessAgentId: "claude-subagent",
+			runtimePath: "legacy",
 		});
 	});
 
@@ -271,7 +500,7 @@ describe("buildCompactionCompleteBody", () => {
 		expect(
 			buildCompactionCompleteBody(
 				{
-					agentId: "agent-7",
+					signetAgentId: "agent-7",
 					sessionKey: "sess-3",
 					project: "/tmp/explicit-project",
 					cwd: "/tmp/cwd-project",
@@ -293,7 +522,7 @@ describe("buildCompactionCompleteBody", () => {
 		expect(
 			buildCompactionCompleteBody(
 				{
-					agentId: "agent-8",
+					signet_agent_id: "agent-8",
 					project: "/tmp/legacy-project",
 					sessionId: "sess-legacy-id",
 				},
@@ -310,10 +539,49 @@ describe("buildCompactionCompleteBody", () => {
 		});
 	});
 
+	test("preserves existing agentId and agent_id compaction input as Signet scope", () => {
+		expect(
+			buildCompactionCompleteBody(
+				{
+					agentId: "agent-9",
+					agent_id: "agent-snake",
+					sessionKey: "sess-5",
+				},
+				"custom-harness",
+				"summary text",
+			),
+		).toEqual({
+			agentId: "agent-9",
+			harness: "custom-harness",
+			sessionKey: "sess-5",
+			summary: "summary text",
+			runtimePath: "legacy",
+		});
+	});
+
 	test("omits unset optional lineage fields instead of serializing blank strings", () => {
 		expect(buildCompactionCompleteBody(null, "claude-code", "summary text")).toEqual({
 			harness: "claude-code",
 			summary: "summary text",
+			runtimePath: "legacy",
+		});
+	});
+
+	test("uses legacy agent_id values for compaction Signet scope", () => {
+		expect(
+			buildCompactionCompleteBody(
+				{
+					agent_id: "research-agent",
+					sessionKey: "sess-4",
+				},
+				"claude-code",
+				"summary text",
+			),
+		).toEqual({
+			harness: "claude-code",
+			summary: "summary text",
+			agentId: "research-agent",
+			sessionKey: "sess-4",
 			runtimePath: "legacy",
 		});
 	});

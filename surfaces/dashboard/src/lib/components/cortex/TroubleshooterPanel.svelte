@@ -55,7 +55,6 @@ const groupDefs: readonly GroupDef[] = [
 			{ label: "Health", kind: "api", method: "GET", path: "/health" },
 			{ label: "Diagnostics", kind: "api", method: "GET", path: "/api/diagnostics" },
 			{ label: "Pipeline", kind: "api", method: "GET", path: "/api/pipeline/status" },
-			{ label: "Predictor", kind: "api", method: "GET", path: "/api/predictor/status" },
 			{ label: "Git", kind: "api", method: "GET", path: "/api/git/status" },
 			{ label: "Embeddings", kind: "api", method: "GET", path: "/api/embeddings/health" },
 		],

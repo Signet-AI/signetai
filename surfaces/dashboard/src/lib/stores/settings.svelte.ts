@@ -251,25 +251,12 @@ class SettingsStore {
 			semanticContradictionEnabled: true,
 			rerankerEnabled: true,
 		};
-		const PREDICTOR: Record<string, boolean> = { enabled: true };
-		const PREDICTOR_PIPELINE: Record<string, boolean> = {
-			agentFeedback: true,
-			trainingTelemetry: false,
-		};
 		const SEARCH: Record<string, boolean> = { rehearsal_enabled: true };
 
 		if (path[0] === "memory" && path[1] === "pipelineV2") {
 			if (path.length === 3) {
 				const key = path[2];
 				if (key in PIPELINE) return PIPELINE[key];
-			}
-			if (path.length === 4 && path[2] === "predictor") {
-				const key = path[3];
-				if (key in PREDICTOR) return PREDICTOR[key];
-			}
-			if (path.length === 4 && path[2] === "predictorPipeline") {
-				const key = path[3];
-				if (key in PREDICTOR_PIPELINE) return PREDICTOR_PIPELINE[key];
 			}
 		}
 		if (path[0] === "search") {
@@ -329,10 +316,10 @@ class SettingsStore {
 	}
 
 	addCustomHarness(name: string): void {
-		name = name.trim();
-		if (!name) return;
+		const trimmedName = name.trim();
+		if (!trimmedName) return;
 		const arr = this.harnessArray();
-		if (!arr.includes(name)) this.set(this.agent, ["harnesses"], [...arr, name]);
+		if (!arr.includes(trimmedName)) this.set(this.agent, ["harnesses"], [...arr, trimmedName]);
 	}
 
 	removeCustomHarness(name: string): void {

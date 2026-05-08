@@ -89,6 +89,7 @@ export interface RoutingAcpxConfig {
 	readonly agent: string;
 	readonly version?: string;
 	readonly bin?: string;
+	readonly package?: string;
 	readonly cwd?: string;
 	readonly session?: string;
 	readonly mode?: RoutingAcpxSessionMode;
@@ -506,6 +507,7 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 		agent,
 		version: asString(nested.version ?? nested.acpxVersion ?? nested.acpx_version),
 		bin: asString(nested.bin ?? nested.command),
+		package: asString(nested.package ?? nested.packageRef ?? nested.package_ref),
 		cwd: asString(nested.cwd ?? nested.workspace),
 		session: asString(nested.session ?? nested.sessionName ?? nested.session_name),
 		mode: asAcpxSessionMode(nested.mode),
