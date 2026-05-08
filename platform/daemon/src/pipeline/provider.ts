@@ -1101,7 +1101,7 @@ function parseAcpxJsonOutput(
 			const candidate = extractAcpxTextCandidate(parsed);
 			if (candidate?.trim()) finalText = candidate;
 		}
-		if (emittedEvents < maxCapturedEvents) {
+		if (config.captureEvents === true && emittedEvents < maxCapturedEvents) {
 			emittedEvents += 1;
 			config.onEvent?.(parsed);
 		}

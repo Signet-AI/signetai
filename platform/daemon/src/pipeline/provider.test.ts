@@ -211,6 +211,34 @@ printf '%s\n' '{"type":"result","text":"final answer"}'
 		}
 	});
 
+	it("does not deliver ACPX JSON events when captureEvents is disabled", async () => {
+		const root = join(tmpdir(), `signet-acpx-events-disabled-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-json-disabled.sh");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' '{"type":"session","session_id":"acpx-session-1"}'
+printf '%s\n' '{"type":"result","text":"final answer"}'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const events: unknown[] = [];
+		try {
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				format: "json",
+				captureEvents: false,
+				onEvent: (event) => events.push(event),
+			});
+			await expect(provider.generate("hello json", { timeoutMs: 1000 })).resolves.toBe("final answer");
+			expect(events).toEqual([]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects ACPX JSON output that does not contain a final response", async () => {
 		const root = join(tmpdir(), `signet-acpx-events-empty-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(root, { recursive: true });
