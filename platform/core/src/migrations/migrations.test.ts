@@ -164,6 +164,9 @@ describe("migration framework", () => {
 
 		// v50 tables (dependency audit)
 		expect(tableNames).toContain("entity_dependency_history");
+
+		// v66 tables (ontology proposal loop)
+		expect(tableNames).toContain("ontology_proposals");
 	});
 
 	test("memories table has expected v2 columns", () => {

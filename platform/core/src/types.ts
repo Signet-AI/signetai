@@ -383,7 +383,6 @@ export interface PipelineModelRegistryConfig {
 	readonly refreshIntervalMs: number;
 }
 
-
 export interface PipelineEmbeddingTrackerConfig {
 	readonly enabled: boolean;
 	readonly pollMs: number;
@@ -698,7 +697,28 @@ export interface DecisionResult {
 
 // -- Knowledge Architecture types --
 
-export const ENTITY_TYPES = ["person", "project", "system", "tool", "concept", "skill", "task", "unknown"] as const;
+export const ENTITY_TYPES = [
+	"person",
+	"project",
+	"system",
+	"tool",
+	"concept",
+	"skill",
+	"task",
+	"source",
+	"artifact",
+	"agent",
+	"policy",
+	"action",
+	"workflow",
+	"event",
+	"object_type",
+	"interface",
+	"observation",
+	"claim_slot",
+	"claim_value",
+	"unknown",
+] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
 export const ATTRIBUTE_KINDS = ["attribute", "constraint"] as const;
@@ -712,8 +732,11 @@ export const DEPENDENCY_TYPES = [
 	"uses",
 	"requires",
 	"owned_by",
+	"owns",
 	"blocks",
 	"informs",
+	"maintains",
+	"implements",
 	// knowledge
 	"built",
 	"depends_on",
@@ -722,14 +745,22 @@ export const DEPENDENCY_TYPES = [
 	"teaches",
 	"knows",
 	"assumes",
+	"supports_claim",
+	"authored_by",
+	"links_to",
 	// structural
+	"contains",
+	"contains_note",
 	"contradicts",
 	"supersedes",
 	"part_of",
+	"produced_artifact",
 	// temporal / execution flow
 	"precedes",
 	"follows",
 	"triggers",
+	"may_execute",
+	"requires_approval_from",
 	// impact
 	"impacts",
 	"produces",
@@ -739,6 +770,46 @@ export type DependencyType = (typeof DEPENDENCY_TYPES)[number];
 
 export const TASK_STATUSES = ["open", "in_progress", "blocked", "done", "cancelled"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+export const ONTOLOGY_PROPOSAL_STATUSES = ["pending", "applied", "rejected", "failed"] as const;
+export type OntologyProposalStatus = (typeof ONTOLOGY_PROPOSAL_STATUSES)[number];
+
+export const ONTOLOGY_PROPOSAL_OPERATIONS = [
+	"create_entity",
+	"add_claim_value",
+	"create_link",
+	"merge_entities",
+	"supersede_claim_value",
+	"create_policy",
+	"create_action_type",
+	"create_interface",
+	"attach_interface",
+] as const;
+export type OntologyProposalOperation = (typeof ONTOLOGY_PROPOSAL_OPERATIONS)[number];
+
+export interface OntologyProposal {
+	readonly id: string;
+	readonly agentId: string;
+	readonly operation: string;
+	readonly status: OntologyProposalStatus;
+	readonly payload: Readonly<Record<string, unknown>>;
+	readonly confidence: number;
+	readonly rationale: string;
+	readonly evidence: readonly unknown[];
+	readonly risk: string | null;
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
+	readonly sourcePath: string | null;
+	readonly sourceRoot: string | null;
+	readonly createdBy: string;
+	readonly appliedBy: string | null;
+	readonly rejectedBy: string | null;
+	readonly result: Readonly<Record<string, unknown>> | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly appliedAt: string | null;
+	readonly rejectedAt: string | null;
+}
 
 export interface EntityAspect {
 	readonly id: string;
@@ -765,6 +836,12 @@ export interface EntityAttribute {
 	readonly importance: number;
 	readonly status: AttributeStatus;
 	readonly supersededBy: string | null;
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
+	readonly sourcePath: string | null;
+	readonly sourceRoot: string | null;
+	readonly proposalId: string | null;
+	readonly proposalEvidence: readonly unknown[];
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }
@@ -779,6 +856,12 @@ export interface EntityDependency {
 	readonly strength: number;
 	readonly confidence: number;
 	readonly reason: string | null;
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
+	readonly sourcePath: string | null;
+	readonly sourceRoot: string | null;
+	readonly proposalId: string | null;
+	readonly proposalEvidence: readonly unknown[];
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }

@@ -19,8 +19,10 @@ import {
 	getUpdateState,
 	initUpdateSystem,
 	normalizeTargetVersion,
+	npmTagForUpdateChannel,
 	parseBooleanFlag,
 	parseInstalledPackageVersion,
+	parseUpdateChannel,
 	parseUpdateInterval,
 	updateDesktopInstallAfterUpdate,
 	verifyInstalledVersion,
@@ -428,6 +430,26 @@ describe("config helpers", () => {
 		expect(parseUpdateInterval(100)).toBeNull(); // Below min
 		expect(parseUpdateInterval(999999999)).toBeNull(); // Above max
 		expect(parseUpdateInterval("not a number")).toBeNull();
+	});
+
+	it("parseUpdateChannel normalizes product channels and legacy npm aliases", () => {
+		expect(parseUpdateChannel("stable")).toBe("stable");
+		expect(parseUpdateChannel("latest")).toBe("stable");
+		expect(parseUpdateChannel("nightly")).toBe("nightly");
+		expect(parseUpdateChannel("next")).toBe("nightly");
+		expect(parseUpdateChannel("canary")).toBeNull();
+		expect(parseUpdateChannel(undefined)).toBeNull();
+	});
+
+	it("maps update channels to npm dist-tags", () => {
+		expect(npmTagForUpdateChannel("stable")).toBe("latest");
+		expect(npmTagForUpdateChannel("nightly")).toBe("next");
+	});
+
+	it("only queries GitHub latest for the stable channel", () => {
+		expect(UPDATE_SYSTEM_SRC).toContain('if (updateConfig.channel === "stable")');
+		expect(UPDATE_SYSTEM_SRC).toContain("fetchStableFromGitHub()");
+		expect(UPDATE_SYSTEM_SRC).toContain("fetchLatestFromNpm(updateConfig.channel)");
 	});
 
 	it("categorizeUpdateError classifies known patterns", () => {

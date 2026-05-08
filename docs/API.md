@@ -183,6 +183,7 @@ silent fallback or hard-blocked extraction after boot.
     "pendingRestart": null,
     "autoInstall": false,
     "checkInterval": 21600,
+    "channel": "stable",
     "lastCheckAt": null,
     "lastError": null,
     "timerActive": true
@@ -3484,6 +3485,108 @@ memories, and safe mention-link candidates where an existing entity name appears
 in a memory that is not yet linked. This endpoint does not mutate graph data.
 
 MCP exposes the same report as `knowledge_hygiene_report`.
+
+
+Ontology proposal loop
+----------------------
+
+Ontology maintenance writes reviewable proposals before mutating semantic graph
+state. Read routes require `recall`; mutation routes require `modify`. All
+routes accept optional `agent_id`.
+
+### GET /api/ontology/proposals
+
+List proposal records. Query parameters: `status`, `operation`, `limit`,
+`offset`.
+
+### GET /api/ontology/proposals/:id
+
+Return one ontology proposal by id, scoped to the resolved `agent_id`. Returns
+`404` when the proposal does not exist in that agent scope. Use this before
+apply/reject flows when an operator needs to inspect the exact operation,
+payload, rationale, risk, status, source provenance, and evidence that will be
+promoted or rejected.
+
+```text
+/api/ontology/proposals/prop_123?agent_id=ant
+```
+
+### GET /api/ontology/proposals/conflicts
+
+List pending `add_claim_value` proposal conflicts grouped by claim slot. Query
+parameters: `agent_id` and `limit`. Each conflict group includes the entity,
+aspect, group, claim key, competing values, and proposal ids so operators can
+review contradictory pending proposals before consolidation or apply.
+
+```text
+/api/ontology/proposals/conflicts?agent_id=ant&limit=100
+```
+
+### GET /api/ontology/proposals/:id/evidence
+
+Resolve a proposal's evidence references against session transcripts and
+indexed memory artifacts. The endpoint never reads arbitrary filesystem paths.
+
+### GET /api/ontology/claims/evidence
+
+Resolve evidence for already-applied claim values from stored attribute
+provenance. Applied rows include the applying proposal id and copied proposal
+evidence when the value was promoted through the proposal loop, so this endpoint
+returns exact proposal lineage before broader source fallback evidence. Query
+parameters: `entity`, `aspect`, `group`, `claim`, `status`, `kind`, `limit`,
+`offset`.
+
+```text
+/api/ontology/claims/evidence?entity=Signet&aspect=architecture&group=ontology&claim=proposal_loop
+```
+
+### GET /api/ontology/links/:id/evidence
+
+Resolve evidence for an already-applied ontology link from stored dependency
+provenance. Links applied through proposals include the applying proposal id and
+copied proposal evidence before broader source fallback evidence.
+
+### POST /api/ontology/extract
+
+Extract candidate ontology proposals from an agent-scoped transcript or memory
+artifact. Body parameters: `from`, `agent_id`, `write_proposals`, `created_by`,
+`limit`, `use_provider`, `provider_timeout_ms`, and `provider_max_tokens`.
+`from` accepts refs such as `transcript:<id>`, `artifact:<source_path>`, or
+`source:<source_path>`. The route dry-runs by default and writes pending
+proposals only when `write_proposals` is true. When `use_provider` is true, the
+route uses the configured `memory_extraction` inference workload and falls back
+to deterministic extraction if no valid provider proposals are returned.
+Provider-returned `questions` are surfaced in the response for review; this
+route does not persist first-class question objects yet.
+
+### POST /api/ontology/consolidate
+
+Consolidate pending ontology proposals into higher-confidence pending proposals.
+Body parameters: `agent_id`, `status`, `limit`, `write_proposals`, `created_by`,
+`use_provider`, `provider_timeout_ms`, and `provider_max_tokens`. The route
+dry-runs by default. Provider-backed consolidation uses the configured
+`memory_extraction` inference workload and never mutates ontology state directly;
+it writes only pending proposals when `write_proposals` is true.
+
+### POST /api/ontology/proposals
+
+Create one pending ontology proposal.
+
+### POST /api/ontology/proposals/batch
+
+Create multiple pending proposals atomically.
+
+### POST /api/ontology/proposals/:id/apply
+
+Apply one pending proposal through its explicit operation handler.
+
+### POST /api/ontology/proposals/:id/reject
+
+Reject one pending proposal without mutating graph state.
+
+### POST /api/ontology/proposals/repair/duplicates
+
+Detect duplicate same-agent entities and optionally write merge proposals.
 
 
 Dreaming

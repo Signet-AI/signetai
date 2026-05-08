@@ -72,6 +72,7 @@ import { registerHookCommands } from "./commands/hook.js";
 import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMcpCommands } from "./commands/mcp.js";
 import { registerMemoryCommands } from "./commands/memory.js";
+import { registerOntologyCommands } from "./commands/ontology.js";
 import { registerPortableCommands } from "./commands/portable.js";
 import { registerRouteCommands } from "./commands/route.js";
 import { registerSecretCommands } from "./commands/secret.js";
@@ -1160,6 +1161,11 @@ registerMemoryCommands(program, {
 });
 
 registerKnowledgeCommands(program, {
+	ensureDaemonForSecrets,
+	secretApiCall,
+});
+
+registerOntologyCommands(program, {
 	ensureDaemonForSecrets,
 	secretApiCall,
 });

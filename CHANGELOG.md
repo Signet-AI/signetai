@@ -7,6 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-08
+- Features: add proposal maintenance loop; split stable and nightly channels.
 - Docs: update ACPX integration architecture.
 
 ### 2026-05-07
@@ -36,6 +37,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: correct stale documentation claims; add nyashkn contributor.
 
 ## Release Ledger
+
+## [0.114.0] - 2026-05-08
+
+Release summary: 2 features.
+Tag range: `v0.113.1..v0.114.0`.
+
+### Features
+
+- **ontology**: add proposal maintenance loop (#639)
+- **release**: split stable and nightly channels (#648)
 
 ## [0.113.1] - 2026-05-08
 

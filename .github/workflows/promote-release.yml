@@ -4,21 +4,28 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to promote to latest (e.g. 0.2.0)"
+        description: "Nightly version to promote to stable/latest (e.g. 0.113.1)"
         required: true
         type: string
 
 jobs:
   promote:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Promote to latest
+      - name: Promote to stable/latest
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+          set -euo pipefail
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
+          npm view "signetai@${VERSION}" version >/dev/null
           npm dist-tag add "signetai@${VERSION}" latest
           npm dist-tag add "@signetai/signet-memory-openclaw@${VERSION}" latest || true
-          echo "Promoted v${VERSION} to latest"
+          gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
+          echo "Promoted v${VERSION} to stable/latest"
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
           VERSION: ${{ inputs.version }}

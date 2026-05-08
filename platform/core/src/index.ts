@@ -17,6 +17,8 @@ export {
 	ATTRIBUTE_STATUSES,
 	DEPENDENCY_TYPES,
 	TASK_STATUSES,
+	ONTOLOGY_PROPOSAL_STATUSES,
+	ONTOLOGY_PROPOSAL_OPERATIONS,
 	TASK_HARNESSES,
 	DEFAULT_PROVIDER_RATE_LIMIT,
 } from "./types";
@@ -70,6 +72,9 @@ export type {
 	AttributeStatus,
 	DependencyType,
 	TaskStatus,
+	OntologyProposalStatus,
+	OntologyProposalOperation,
+	OntologyProposal,
 	TaskHarness,
 	EntityAspect,
 	EntityAttribute,

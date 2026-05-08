@@ -32,6 +32,7 @@ flowchart TD
   DP[Desire Paths Epic]
   OEC[Ontology Evolution Core]
   OGW[Ontology Governance Workflow]
+  OPL[Ontology Proposal Loop]
   SSF[SSM Foundation Eval]
   EIPT[Engram-Informed Predictor Track]
   SST[SSM Temporal Backbone]
@@ -74,6 +75,8 @@ flowchart TD
   KA --> OEC
   DP --> OEC
   OEC --> OGW
+  KA --> OPL
+  DMC -.-> OPL
   PMS --> SSF
   DP --> SSF
   PMS --> EIPT
@@ -142,6 +145,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `predictive-memory-scorer` | MSAM-COMPARISON | How should scoring balance structural vs behavioral signals? |
 | `desire-paths-epic`, `retroactive-supersession` | RESEARCH-COMPETITIVE-SYSTEMS | What retrieval, lifecycle, and integration patterns from competing systems should be adopted? |
 | `ontology-evolution-core`, `ontology-governance-workflow` | RESEARCH-ONTOLOGY-EVOLUTION | How should ontology schema and governance evolve without losing local-first simplicity? |
+| `ontology-proposal-loop` | RESEARCH-ONTOLOGY-EVOLUTION, memory-md-rolling-window-lineage, dreaming-memory-consolidation, model-provider-router | How should extraction and consolidation propose ontology changes without directly mutating semantic state? |
 | `ssm-foundation-evaluation`, `ssm-temporal-backbone`, `ssm-graph-traversal-model` | RESEARCH-SSM-INTEGRATION, SSM-GRAPH-INTERSECTION, SSM-LITERATURE-REVIEW, SYNTHETIC-DATA-GENERATION | How should SSM research translate into benchmarked, staged deployment without violating retrieval invariants? |
 | `engram-informed-predictor-track` | arxiv:2601.07372, RESEARCH-SSM-INTEGRATION, ssm-foundation-evaluation | How should Engram design patterns be translated into Signet scorer and SSM architecture decisions? |
 | `macos-sqlite-runtime-discovery` | RESEARCH-MACOS-SQLITE-RUNTIME-DISCOVERY | How should Signet select a compatible SQLite runtime on macOS so Bun can load sqlite-vec? |
@@ -222,11 +226,17 @@ is the source of truth once KA tables are populated.
 
 The knowledge architecture schema defines the canonical entity types:
 `person`, `project`, `system`, `tool`, `concept`, `skill`, `task`,
+`source`, `artifact`, `agent`, `policy`, `action`, `workflow`, `event`,
+`object_type`, `interface`, `observation`, `claim_slot`, `claim_value`,
 `unknown`.
 
 All specs that create entities MUST use this taxonomy. Procedural memory
 creates `entity_type = 'skill'`. Multi-agent creates agent-scoped
-entities. The taxonomy is not extensible without updating KA.
+entities. The ontology proposal loop extends KA's canonical taxonomy with
+source/proposal lifecycle labels so extraction can model artifacts,
+observations, claim slots, and claim values without minting ad-hoc string
+categories. The taxonomy is not extensible without updating KA and this
+invariant in the same change.
 
 **Planned extension:** DP-14 (Discovered Principles) in the desire
 paths epic will add `principle` as an entity type for emergent
@@ -755,6 +765,7 @@ Legend:
 | `sub-agent-context-continuity` | approved | `docs/specs/approved/sub-agent-context-continuity.md` | `session-continuity-protocol`, `multi-agent-support` | - | Parent transcript query + deterministic sub-agent inheritance (issue #315) |
 | `ontology-evolution-core` | planning | `docs/specs/planning/ontology-evolution-core.md` | `knowledge-architecture-schema`, `desire-paths-epic` | `ontology-governance-workflow` | Confidence/provenance edges, co-occurrence signals, typed relationships, temporal lineage |
 | `ontology-governance-workflow` | planning | `docs/specs/planning/ontology-governance-workflow.md` | `ontology-evolution-core`, `knowledge-architecture-schema` | - | Proposal/review workflow for ontology-impacting schema changes |
+| `ontology-proposal-loop` | approved | `docs/specs/approved/ontology-proposal-loop.md` | `knowledge-architecture-schema`, `memory-md-rolling-window-lineage` | - | Agent-scoped proposal storage and explicit apply/reject loop for reviewable ontology maintenance |
 | `ssm-foundation-evaluation` | planning | `docs/specs/planning/ssm-foundation-evaluation.md` | `predictive-memory-scorer`, `desire-paths-epic` | `ssm-temporal-backbone` | Benchmark harness and canary gates for SSM adoption |
 | `engram-informed-predictor-track` | planning | `docs/specs/planning/engram-informed-predictor-track.md` | `predictive-memory-scorer` | `ssm-temporal-backbone` | Engram-pattern translation lane for scorer ablations and SSM handoff contracts |
 | `ssm-temporal-backbone` | planning | `docs/specs/planning/ssm-temporal-backbone.md` | `ssm-foundation-evaluation`, `ontology-evolution-core`, `session-continuity-protocol` | `ssm-graph-traversal-model` | Shadow-mode temporal state model with fallback |
@@ -853,6 +864,11 @@ constraint surfacing and agent scoping invariants.
 **ontology-governance-workflow**: Ontology-impacting schema changes require
 proposal/review metadata, compatibility notes, and rollback guidance with
 INDEX/dependency consistency checks in CI.
+
+**ontology-proposal-loop**: Extraction and consolidation produce durable,
+agent-scoped proposal objects before ontology mutation. Operators and agents
+can inspect, apply, or reject proposed semantic changes with evidence and audit
+metadata preserved.
 
 **ssm-foundation-evaluation**: SSM benchmarks and canary suites produce
 reproducible, decision-grade comparisons against current scorer behavior.

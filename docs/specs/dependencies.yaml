@@ -1,5 +1,5 @@
 version: 3
-updated_at: "2026-04-02"
+updated_at: "2026-05-06"
 
 specs:
   - id: memory-pipeline-v2
@@ -674,6 +674,28 @@ specs:
       - "Ontology-impacting changes follow proposal and review workflow before merge"
       - "Compatibility, migration, and rollback notes are required for ontology schema changes"
       - "CI checks catch ontology contract drift across INDEX and dependencies metadata"
+    decision: null
+
+  - id: ontology-proposal-loop
+    status: approved
+    path: docs/specs/approved/ontology-proposal-loop.md
+    hard_depends_on:
+      - knowledge-architecture-schema
+      - memory-md-rolling-window-lineage
+    soft_depends_on:
+      - model-provider-router
+      - dreaming-memory-consolidation
+    blocks: []
+    informed_by:
+      - docs/research/technical/RESEARCH-ONTOLOGY-EVOLUTION.md
+      - docs/specs/complete/memory-md-rolling-window-lineage.md
+      - docs/specs/approved/dreaming-memory-consolidation.md
+      - docs/specs/approved/model-provider-router.md
+    success_criteria:
+      - "Extraction and consolidation can persist proposed ontology operations without mutating ontology state"
+      - "Operators and agents can list, inspect, apply, and reject proposals through daemon API and CLI surfaces"
+      - "Applied proposals record audit metadata and mutate ontology state only through explicit operation handlers"
+      - "All proposal reads and writes are agent-scoped and preserve evidence references for later lineage inspection"
     decision: null
 
 

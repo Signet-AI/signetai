@@ -72,6 +72,7 @@ import { up as contentOnlyMemoriesFtsUpdate } from "./063-content-only-memories-
 import { up as sourceGraphProvenance } from "./064-source-graph-provenance";
 import { up as sourceEmbeddingAgentScope } from "./065-source-embedding-agent-scope";
 import { up as memorySearchTelemetry } from "./066-memory-search-telemetry";
+import { up as ontologyProposals } from "./067-ontology-proposals";
 
 // -- Public interface consumed by Database.init() --
 
@@ -612,6 +613,20 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: memorySearchTelemetry,
 		artifacts: {
 			tables: ["memory_search_telemetry"],
+		},
+	},
+	{
+		version: 67,
+		name: "ontology-proposals",
+		up: ontologyProposals,
+		artifacts: {
+			tables: ["ontology_proposals"],
+			columns: [
+				{ table: "entity_attributes", column: "proposal_id" },
+				{ table: "entity_attributes", column: "proposal_evidence" },
+				{ table: "entity_dependencies", column: "proposal_id" },
+				{ table: "entity_dependencies", column: "proposal_evidence" },
+			],
 		},
 	},
 ];

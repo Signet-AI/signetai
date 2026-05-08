@@ -155,6 +155,71 @@ describe("auth guard co-location", () => {
 		});
 	});
 
+	describe("ontology routes need guards", () => {
+		it("POST /api/ontology/proposals returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "POST", "/api/ontology/proposals")).toBe(403);
+		});
+
+		it("POST /api/ontology/proposals/batch returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "POST", "/api/ontology/proposals/batch")).toBe(403);
+		});
+
+		it("GET /api/ontology/proposals/:id/evidence returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "GET", "/api/ontology/proposals/test/evidence")).toBe(403);
+		});
+
+		it("GET /api/ontology/proposals/conflicts returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "GET", "/api/ontology/proposals/conflicts")).toBe(403);
+		});
+
+		it("POST /api/ontology/extract returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "POST", "/api/ontology/extract")).toBe(403);
+		});
+
+		it("POST /api/ontology/consolidate returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "POST", "/api/ontology/consolidate")).toBe(403);
+		});
+
+		it("GET /api/ontology/claims/evidence returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "GET", "/api/ontology/claims/evidence")).toBe(403);
+		});
+
+		it("GET /api/ontology/links/:id/evidence returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "GET", "/api/ontology/links/link-1/evidence")).toBe(403);
+		});
+
+		it("POST /api/ontology/proposals/repair/duplicates returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "POST", "/api/ontology/proposals/repair/duplicates")).toBe(403);
+		});
+	});
+
 	describe("connector routes need guards", () => {
 		it("POST /api/connectors returns 403 without auth", async () => {
 			const app = await makeApp();

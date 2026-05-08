@@ -36,6 +36,7 @@ import {
 	checkForUpdates as checkForUpdatesImpl,
 	getUpdateState,
 	parseBooleanFlag,
+	parseUpdateChannel,
 	parseUpdateInterval,
 	runUpdate as runUpdateImpl,
 	setUpdateConfig,
@@ -460,14 +461,17 @@ export function registerMiscRoutes(app: Hono): void {
 			auto_install: boolean | string;
 			checkInterval: number | string;
 			check_interval: number | string;
+			channel: string;
 		}>;
 
 		const body = (await c.req.json()) as UpdateConfigBody;
 		const autoInstallRaw = body.autoInstall ?? body.auto_install;
 		const checkIntervalRaw = body.checkInterval ?? body.check_interval;
+		const channelRaw = body.channel;
 
 		let autoInstall: boolean | undefined;
 		let checkInterval: number | undefined;
+		let channel: ReturnType<typeof parseUpdateChannel> | undefined;
 
 		if (autoInstallRaw !== undefined) {
 			const parsed = parseBooleanFlag(autoInstallRaw);
@@ -491,11 +495,19 @@ export function registerMiscRoutes(app: Hono): void {
 			checkInterval = parsed;
 		}
 
-		const changed = autoInstall !== undefined || checkInterval !== undefined;
+		if (channelRaw !== undefined) {
+			const parsed = parseUpdateChannel(channelRaw);
+			if (parsed === null) {
+				return c.json({ success: false, error: "channel must be stable or nightly" }, 400);
+			}
+			channel = parsed;
+		}
+
+		const changed = autoInstall !== undefined || checkInterval !== undefined || channel !== undefined;
 		let persisted = true;
 
 		if (changed) {
-			const result = setUpdateConfig({ autoInstall, checkInterval });
+			const result = setUpdateConfig({ autoInstall, checkInterval, channel: channel ?? undefined });
 			persisted = result.persisted;
 		}
 
