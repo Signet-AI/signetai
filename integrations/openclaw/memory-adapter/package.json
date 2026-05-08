@@ -36,8 +36,8 @@
     "@sinclair/typebox": "0.34.47"
   },
   "devDependencies": {
-    "@signet/core": "workspace:*",
-    "@signet/sdk": "workspace:*",
+    "@signet/core": "0.115.1",
+    "@signet/sdk": "0.115.1",
     "@types/node": "^22.0.0"
   },
   "peerDependencies": {

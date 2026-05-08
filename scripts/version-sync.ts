@@ -73,7 +73,7 @@ function listTargetPackageFiles(): string[] {
 		.filter((file) => !EXCLUDED_FILES.has(file));
 }
 
-function updateFileVersion(filePath: string, targetVersion: string): boolean {
+function updateFileVersion(filePath: string, targetVersion: string, checkOnly: boolean): boolean {
 	const raw = readFileSync(filePath, "utf8");
 	const versionPattern = /("version"\s*:\s*")([^"]+)(")/;
 	if (!versionPattern.test(raw)) {
@@ -85,7 +85,9 @@ function updateFileVersion(filePath: string, targetVersion: string): boolean {
 		return false;
 	}
 
-	writeFileSync(filePath, next);
+	if (!checkOnly) {
+		writeFileSync(filePath, next);
+	}
 	return true;
 }
 
@@ -113,7 +115,7 @@ function usesWorkspaceVersion(raw: string): boolean {
 	return /\[package\][^\[]*version\.workspace\s*=\s*true/s.test(raw);
 }
 
-function updateCargoVersion(filePath: string, targetVersion: string): boolean {
+function updateCargoVersion(filePath: string, targetVersion: string, checkOnly: boolean): boolean {
 	const raw = readFileSync(filePath, "utf8");
 	// Crates that inherit version from workspace root — nothing to update
 	if (usesWorkspaceVersion(raw)) return false;
@@ -128,7 +130,9 @@ function updateCargoVersion(filePath: string, targetVersion: string): boolean {
 		return false;
 	}
 
-	writeFileSync(filePath, next);
+	if (!checkOnly) {
+		writeFileSync(filePath, next);
+	}
 	return true;
 }
 
@@ -147,7 +151,7 @@ function regenerateCargoLock(cargoFile: string): void {
 	}
 }
 
-function resolveWorkspaceProtocols(files: readonly string[], version: string): string[] {
+function resolveWorkspaceProtocols(files: readonly string[], version: string, checkOnly: boolean): string[] {
 	const patched: string[] = [];
 	for (const file of files) {
 		const raw = readFileSync(file, "utf8");
@@ -161,7 +165,9 @@ function resolveWorkspaceProtocols(files: readonly string[], version: string): s
 		changed = changed.replace(/"workspace:\^"/g, `"^${version}"`);
 		changed = changed.replace(/"workspace:~"/g, `"~${version}"`);
 		if (changed !== raw) {
-			writeFileSync(file, changed);
+			if (!checkOnly) {
+				writeFileSync(file, changed);
+			}
 			patched.push(file);
 		}
 	}
@@ -177,13 +183,19 @@ function getArg(name: string): string | null {
 	return process.argv[index + 1] ?? null;
 }
 
-function syncForgeManifestCopies(): string[] {
+function hasFlag(name: string): boolean {
+	return process.argv.includes(name);
+}
+
+function syncForgeManifestCopies(checkOnly: boolean): string[] {
 	const source = readFileSync(FORGE_VERSION_FILE, "utf8");
 	const updated: string[] = [];
 	for (const file of FORGE_MANIFEST_FILES) {
 		const raw = readFileSync(file, "utf8");
 		if (raw === source) continue;
-		writeFileSync(file, source);
+		if (!checkOnly) {
+			writeFileSync(file, source);
+		}
 		updated.push(file);
 	}
 	return updated;
@@ -191,6 +203,10 @@ function syncForgeManifestCopies(): string[] {
 
 function main() {
 	const explicitVersion = getArg("--to");
+	const checkOnly = hasFlag("--check");
+	if (explicitVersion && checkOnly) {
+		throw new Error("Use either --to or --check, not both");
+	}
 	if (explicitVersion) {
 		parseSemver(explicitVersion);
 	}
@@ -211,7 +227,7 @@ function main() {
 
 	const updated: string[] = [];
 	for (const file of packageFiles) {
-		if (updateFileVersion(file, targetVersion)) {
+		if (updateFileVersion(file, targetVersion, checkOnly)) {
 			updated.push(file);
 		}
 	}
@@ -234,15 +250,17 @@ function main() {
 
 	// Resolve workspace: protocols in publishable packages so npm publish
 	// ships real version strings instead of "workspace:*".
-	const resolved = resolveWorkspaceProtocols(packageFiles, targetVersion);
+	const resolved = resolveWorkspaceProtocols(packageFiles, targetVersion, checkOnly);
 
 	// Sync Cargo.toml files under platform/ and runtimes/
 	const cargoUpdated: string[] = [];
 	const cargoFiles = listCargoFiles();
 	for (const file of cargoFiles) {
-		if (updateCargoVersion(file, targetVersion)) {
+		if (updateCargoVersion(file, targetVersion, checkOnly)) {
 			cargoUpdated.push(file);
-			regenerateCargoLock(file);
+			if (!checkOnly) {
+				regenerateCargoLock(file);
+			}
 		}
 	}
 
@@ -260,7 +278,22 @@ function main() {
 		throw new Error(`Cargo version sync failed. Mismatches:\n- ${cargoMismatches.join("\n- ")}`);
 	}
 
-	const forgeManifestUpdated = syncForgeManifestCopies();
+	const forgeManifestUpdated = syncForgeManifestCopies(checkOnly);
+
+	if (
+		checkOnly &&
+		(updated.length > 0 || cargoUpdated.length > 0 || resolved.length > 0 || forgeManifestUpdated.length > 0)
+	) {
+		const drift = [
+			...updated.map((file) => `package version: ${file}`),
+			...cargoUpdated.map((file) => `Cargo version: ${file}`),
+			...resolved.map((file) => `workspace protocol: ${file}`),
+			...forgeManifestUpdated.map((file) => `Forge manifest copy: ${file}`),
+		];
+		throw new Error(
+			`Version sync drift detected at ${targetVersion}:\n- ${drift.join("\n- ")}\n\nRun bun scripts/version-sync.ts before merging.`,
+		);
+	}
 
 	if (updated.length === 0 && cargoUpdated.length === 0 && resolved.length === 0 && forgeManifestUpdated.length === 0) {
 		console.log(`All versions already aligned at ${targetVersion}.`);
