@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	backupBeforeMigration,
 	closeDbAccessor,
 	getDbAccessor,
 	initDbAccessor,
@@ -112,6 +113,112 @@ describe("DbAccessor", () => {
 
 		// Should not throw
 		closeDbAccessor();
+	});
+
+	test("prunes old migration backups before copying a new one", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		const dbDir = join(dbPath, "..");
+		writeFileSync(dbPath, "database");
+
+		const files = new Map<string, number>([
+			["test.db.bak-v58-1000", 1000],
+			["test.db.bak-v59-2000", 2000],
+			["test.db.bak-v60-3000", 3000],
+			["test.db.bak-v61-4000", 4000],
+			["test.db.bak-v62-5000", 5000],
+		]);
+		const operations: string[] = [];
+
+		backupBeforeMigration({ exec: () => {} }, dbPath, 62, {
+			copyFileSync: (source, dest) => {
+				operations.push(`copy:${source}->${dest}`);
+				expect(operations).toContain("unlink:test.db.bak-v58-1000");
+				files.set(String(dest).slice(dbDir.length + 1), 6000);
+			},
+			readdirSync: () => Array.from(files.keys()),
+			statSync: (path) => ({ mtimeMs: files.get(String(path).slice(dbDir.length + 1)) ?? 0 }),
+			unlinkSync: (path) => {
+				const name = String(path).slice(dbDir.length + 1);
+				operations.push(`unlink:${name}`);
+				files.delete(name);
+			},
+			now: () => 6000,
+			log: () => {},
+		});
+
+		expect(operations[0]).toBe("unlink:test.db.bak-v58-1000");
+		expect(Array.from(files.keys()).sort()).toEqual([
+			"test.db.bak-v59-2000",
+			"test.db.bak-v60-3000",
+			"test.db.bak-v61-4000",
+			"test.db.bak-v62-5000",
+			"test.db.bak-v62-6000",
+		]);
+	});
+
+	test("ignores migration backups removed during metadata collection", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		const dbDir = join(dbPath, "..");
+		writeFileSync(dbPath, "database");
+
+		const files = new Map<string, number>([
+			["test.db.bak-v60-3000", 3000],
+			["test.db.bak-v61-4000", 4000],
+			["test.db.bak-v62-5000", 5000],
+		]);
+		const missing = Object.assign(new Error("ENOENT: no such file or directory, stat"), { code: "ENOENT" });
+
+		backupBeforeMigration({ exec: () => {} }, dbPath, 63, {
+			copyFileSync: (_source, dest) => {
+				files.set(String(dest).slice(dbDir.length + 1), 6000);
+			},
+			readdirSync: () => ["test.db.bak-v59-2000", ...Array.from(files.keys())],
+			statSync: (path) => {
+				const name = String(path).slice(dbDir.length + 1);
+				const mtime = files.get(name);
+				if (mtime === undefined) throw missing;
+				return { mtimeMs: mtime };
+			},
+			unlinkSync: (path) => {
+				files.delete(String(path).slice(dbDir.length + 1));
+			},
+			now: () => 6000,
+			log: () => {},
+		});
+
+		expect(files.has("test.db.bak-v63-6000")).toBe(true);
+	});
+
+	test("cleans partial migration backup when copy fails", () => {
+		const dbPath = tmpDbPath();
+		cleanupDirs.push(join(dbPath, ".."));
+		const dbDir = join(dbPath, "..");
+		const files = new Map<string, number>();
+		const operations: string[] = [];
+
+		expect(() =>
+			backupBeforeMigration({ exec: () => {} }, dbPath, 65, {
+				copyFileSync: (_source, dest) => {
+					const name = String(dest).slice(dbDir.length + 1);
+					files.set(name, 1);
+					throw new Error("ENOSPC: no space left on device, copyfile");
+				},
+				readdirSync: () => Array.from(files.keys()),
+				statSync: (path) => ({ mtimeMs: files.get(String(path).slice(dbDir.length + 1)) ?? 0 }),
+				unlinkSync: (path) => {
+					const name = String(path).slice(dbDir.length + 1);
+					operations.push(`unlink:${name}`);
+					files.delete(name);
+				},
+				now: () => 7000,
+				log: () => {},
+			}),
+		).toThrow(/Free disk space and retry/);
+
+		expect(operations).toContain("unlink:test.db.bak-v65-7000");
+		expect(files.has("test.db.bak-v65-7000")).toBe(false);
 	});
 });
 
