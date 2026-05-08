@@ -7,4 +7,12 @@ describe("version consistency workflow", () => {
 
 		expect(workflow).toContain("bun scripts/version-sync.ts --check");
 	});
+
+	test("nightly release uses central version sync for release commits", () => {
+		const workflow = readFileSync(".github/workflows/release.yml", "utf8");
+
+		expect(workflow).toContain('bun scripts/version-sync.ts --to "$NEW_VERSION"');
+		expect(workflow).not.toContain("mapfile -t PACKAGE_FILES");
+		expect(workflow).not.toContain("jq --arg v");
+	});
 });
