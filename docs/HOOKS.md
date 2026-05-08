@@ -79,12 +79,16 @@ Called when a new agent session begins. Returns memories and context formatted f
 {
   "harness": "openclaw",
   "agentId": "optional-agent-id",
+  "harnessAgentId": "optional-harness-native-subagent-id",
+  "parentSessionKey": "optional-parent-session-key",
   "context": "optional context string",
   "sessionKey": "optional-session-identifier"
 }
 ```
 
-`harness` is required. Everything else is optional.
+`harness` is required. Everything else is optional. `agentId` is the Signet
+persistence scope. Harness-native sub-agent identifiers should be sent as
+`harnessAgentId`; they are used only for parent-session inference.
 
 ### Response
 

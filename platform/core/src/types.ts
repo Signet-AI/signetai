@@ -323,6 +323,11 @@ export interface PipelineContinuityConfig {
 	readonly recoveryBudgetChars: number;
 }
 
+export interface PipelineSubagentsConfig {
+	readonly inheritContext: boolean;
+	readonly tailChars: number;
+}
+
 export interface PipelineWriteGateConfig {
 	readonly enabled: boolean;
 	readonly threshold: number;
@@ -353,6 +358,7 @@ export interface PipelineV2Config {
 	readonly guardrails: PipelineGuardrailsConfig;
 	readonly telemetry: PipelineTelemetryConfig;
 	readonly continuity: PipelineContinuityConfig;
+	readonly subagents?: PipelineSubagentsConfig;
 	readonly embeddingTracker: PipelineEmbeddingTrackerConfig;
 	readonly synthesis: PipelineSynthesisConfig;
 	readonly procedural: PipelineProceduralConfig;

@@ -2389,12 +2389,22 @@ for injection into the harness system prompt. Requires `remember` permission
 ```json
 {
   "harness": "claude-code",
+  "project": "/workspace/repo",
+  "agentId": "optional-signet-agent-id",
+  "harnessAgentId": "optional-harness-subagent-id",
+  "parentSessionKey": "optional-parent-session-key",
   "sessionKey": "session-uuid",
   "runtimePath": "plugin"
 }
 ```
 
-`harness` is required.
+`harness` is required. `agentId` is the Signet persistence scope. Harness
+native sub-agent identifiers, such as Claude Code's `agent_id`, must be sent as
+`harnessAgentId`; they are lineage hints and are not used for Signet data
+scoping. `parentSessionKey` may be provided when the harness exposes explicit
+lineage. If it is absent, Signet infers parent context where possible from
+harness-native signals such as OpenClaw lineage session keys or recent Claude
+Code parent activity in the same project.
 
 **Response** — implementation-defined context object returned by
 `handleSessionStart`.
@@ -2776,6 +2786,69 @@ Both raw keys (`abc123`) and prefixed keys (`session:abc123`) are accepted.
 ```
 
 Returns `404` if the session key is not found.
+
+### GET /api/sessions/:key/transcript
+
+Return the canonical cleaned transcript for a session. Results are scoped to
+the authenticated agent; pass `agent_id` only when calling with an authorized
+agent scope.
+
+Both raw keys (`abc123`) and prefixed keys (`session:abc123`) are accepted.
+
+**Response**
+
+```json
+{
+  "sessionKey": "session-uuid",
+  "agentId": "default",
+  "content": "User: ...\nAssistant: ..."
+}
+```
+
+Returns `404` if no transcript exists for that session and agent scope.
+
+### POST /api/sessions/search
+
+Search active or completed session transcripts. This route powers the
+`session_search` MCP tool and is intended for sub-agents that need to inspect
+the parent session without forcing a large token snapshot into every spawn.
+Results are agent-scoped and require `recall` permission.
+
+**Request body**
+
+```json
+{
+  "query": "Juniper trunk ports",
+  "sessionKey": "optional-specific-session",
+  "currentSessionKey": "agent:nicholai:subagent:abc123",
+  "agentId": "nicholai",
+  "project": "/workspace/repo",
+  "limit": 5
+}
+```
+
+`query` is required. `limit` is clamped to `1..20`. If `sessionKey` is absent
+and `currentSessionKey` encodes OpenClaw sub-agent lineage, Signet defaults the
+search to the inferred parent session. Otherwise, Signet searches transcripts
+in the requested agent and project scope while excluding `currentSessionKey`.
+
+**Response**
+
+```json
+{
+  "query": "Juniper trunk ports",
+  "hits": [
+    {
+      "sessionKey": "agent:nicholai:main",
+      "project": "/workspace/repo",
+      "updatedAt": "2026-03-25T10:05:00.000Z",
+      "excerpt": "keep the Juniper EX4300 VLAN audit focused on trunk ports",
+      "rank": -1.2
+    }
+  ],
+  "count": 1
+}
+```
 
 ### GET /api/sessions/summaries
 
@@ -3914,9 +3987,9 @@ MCP Server
 Model Context Protocol endpoint using Streamable HTTP transport (stateless).
 Supports POST (send messages), GET (SSE stream), and DELETE (session teardown).
 
-Exposes memory tools: `memory_search`, `memory_store`, `memory_get`,
-`memory_list`, `memory_modify`, `memory_forget`. See `docs/MCP.md` for full
-tool documentation.
+Exposes memory/session tools: `memory_search`, `session_search`,
+`memory_store`, `memory_get`, `memory_list`, `memory_modify`, `memory_forget`.
+See `docs/MCP.md` for full tool documentation.
 
 **POST /mcp** — Send MCP JSON-RPC messages. Returns JSON or SSE stream.
 

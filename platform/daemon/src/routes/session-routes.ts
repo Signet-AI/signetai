@@ -13,6 +13,8 @@ import {
 	renewSession,
 	unbypassSession,
 } from "../session-tracker.js";
+import { getSessionTranscriptContent } from "../session-transcripts.js";
+import { searchSessionTranscripts } from "../subagent-context.js";
 import { expandTemporalNode } from "../temporal-expand.js";
 import { authConfig } from "./state.js";
 import { readOptionalJsonObject, resolveScopedAgentId, resolveScopedProject } from "./utils.js";
@@ -85,6 +87,12 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 	app.use("/api/sessions/summaries", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
+	app.use("/api/sessions/search", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
 	app.use("/api/git/*", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
 	});
@@ -94,6 +102,69 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const sessions = listLiveSessions(scopedAgent.agentId);
 		return c.json({ sessions, count: sessions.length });
+	});
+
+	app.post("/api/sessions/search", async (c) => {
+		const body = await readOptionalJsonObject(c);
+		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+		const query = typeof body.query === "string" ? body.query.trim() : "";
+		if (query.length === 0) return c.json({ error: "query is required" }, 400);
+
+		const rawAgentId =
+			(typeof body.agentId === "string" ? body.agentId : undefined) ??
+			(typeof body.agent_id === "string" ? body.agent_id : undefined) ??
+			c.req.query("agent_id");
+		const rawCurrentSessionKey =
+			(typeof body.currentSessionKey === "string" ? body.currentSessionKey : undefined) ??
+			(typeof body.current_session_key === "string" ? body.current_session_key : undefined);
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId: rawAgentId,
+				sessionKey: rawCurrentSessionKey ?? (typeof body.sessionKey === "string" ? body.sessionKey : undefined),
+			}),
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+
+		const scopedProject = resolveScopedProject(
+			c,
+			(typeof body.project === "string" ? body.project : undefined) ?? c.req.query("project"),
+		);
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+
+		const limitRaw = typeof body.limit === "number" ? body.limit : Number(c.req.query("limit") ?? 10);
+		const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(20, Math.trunc(limitRaw))) : 10;
+		const sessionKey =
+			(typeof body.sessionKey === "string" ? body.sessionKey : undefined) ??
+			(typeof body.session_key === "string" ? body.session_key : undefined);
+
+		const hits = getDbAccessor().withReadDb((db) =>
+			searchSessionTranscripts({
+				db,
+				query,
+				agentId: scopedAgent.agentId,
+				sessionKey,
+				currentSessionKey: rawCurrentSessionKey,
+				project: scopedProject.project,
+				limit,
+			}),
+		);
+		return c.json({ query, hits, count: hits.length });
+	});
+
+	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", (c) => {
+		const key = normalizeSessionKey(c.req.param("key"));
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			resolveAgentId({
+				agentId: c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+				sessionKey: key,
+			}),
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const content = getSessionTranscriptContent(key, scopedAgent.agentId);
+		if (!content) return c.json({ error: "Transcript not found" }, 404);
+		return c.json({ sessionKey: key, agentId: scopedAgent.agentId, content });
 	});
 
 	app.get("/api/sessions/:key{(?!summaries$)[^/]+}", (c) => {

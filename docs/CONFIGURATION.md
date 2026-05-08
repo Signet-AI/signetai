@@ -415,7 +415,7 @@ subscription-backed CLI session, or gateway.
 | `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |
 | `models` | map | Named model entries for this target |
 
-Example ACPX background target:
+Example ACPX background target (see also `docs/ACP-INTEGRATION.md` for the architecture and current limitations):
 
 ```yaml
 inference:
@@ -950,6 +950,29 @@ activity) to aid recovery after context compaction or session restart.
 Checkpoints are triggered by five events: `periodic`, `pre_compaction`,
 `session_end`, `agent`, and `explicit`. Secrets are redacted before
 storage.
+
+
+### Sub-agents (`subagents`)
+
+Controls deterministic parent-session context inherited by sub-agent sessions
+at `session-start`. This uses stored active transcripts and checkpoints; it
+does not make an LLM call.
+
+| Field | Default | Range | Description |
+|-------|---------|-------|-------------|
+| `inheritContext` | `true` | — | Inject a compact parent context block when parent lineage is available |
+| `tailChars` | `3000` | 0-20000 | Max transcript tail characters included from the parent session |
+
+```yaml
+memory:
+  pipelineV2:
+    subagents:
+      inheritContext: true
+      tailChars: 3000
+```
+
+Set `inheritContext: false` to disable automatic inherited context while
+leaving the explicit `session_search` MCP/API surface available.
 
 
 ### Telemetry (`telemetry`)
