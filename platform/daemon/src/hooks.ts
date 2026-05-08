@@ -3091,17 +3091,21 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	// storage must preserve the full canonical transcript.
 	const retainedTranscript = transcript;
 
-	// Derive a stable session identity for artifact paths.  When the
-	// transcript is empty and no explicit sessionId was provided,
-	// deriveSessionEndFallbackId returns a random UUID — making this call
-	// non-idempotent.  This is acceptable because: (a) empty-transcript
-	// sessions skip the transcript artifact write (guard below) and the
-	// summary job (< 500 char guard), so no ghost artifacts accumulate;
-	// (b) very short (1–499 char) transcripts do write a transcript
-	// artifact with a non-deterministic path, but the summary job is
-	// still skipped, limiting blast radius.
-	const sessionId =
-		req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, retainedTranscript);
+	// Derive a session-end artifact identity from the stable harness identity
+	// plus transcript path/content. Some harnesses reuse the same sessionId
+	// when a conversation is resumed; raw reuse would make immutable summary
+	// artifacts collide with an earlier close of the same conversation.
+	// `sessionKey` remains the continuity/grouping key, while this sessionId is
+	// the immutable artifact identity for this particular session-end snapshot.
+	// When the transcript is empty, deriveSessionEndFallbackId returns a random
+	// UUID; empty sessions skip summaries and transcript artifacts below, and
+	// very short transcript artifacts intentionally prefer uniqueness over
+	// mutating a prior immutable artifact.
+	const sessionId = deriveSessionEndFallbackId(
+		req.sessionId?.trim() || sessionKey,
+		req.transcriptPath,
+		retainedTranscript,
+	);
 
 	// Lossless retention: keep the live transcript snapshot available to
 	// subsequent hook calls before returning. The heavier canonical JSONL
