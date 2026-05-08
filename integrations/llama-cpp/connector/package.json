@@ -1,0 +1,46 @@
+{
+  "name": "@signet/connector-llama-cpp",
+  "version": "0.110.1",
+  "description": "Signet connector for llama.cpp — installs runtime chat client and session hooks",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "signet-llama-chat": "../runtime/dist/index.js"
+  },
+  "files": [
+    "dist",
+    "../runtime/dist"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
+    "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build:runtime": "cd ../runtime && bun run build",
+    "build:all": "bun run build:runtime && bun run build",
+    "dev": "bun --watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@signet/connector-base": "workspace:*",
+    "@signet/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "keywords": [
+    "signet",
+    "llama-cpp",
+    "connector",
+    "ai-memory",
+    "agent-identity",
+    "local-llm"
+  ],
+  "license": "Apache-2.0"
+}

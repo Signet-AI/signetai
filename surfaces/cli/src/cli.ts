@@ -28,6 +28,7 @@ import { CodexConnector } from "@signet/connector-codex";
 import { ForgeConnector } from "@signet/connector-forge";
 import { GeminiConnector } from "@signet/connector-gemini";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
+import { LlamaCppConnector } from "@signet/connector-llama-cpp";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
@@ -101,6 +102,13 @@ import { syncTemplates } from "./features/sync.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
 import {
+	acquireNativeSyncLock,
+	embeddingProvider,
+	hasNativeModelCache,
+	isRecord,
+	releaseNativeSyncLock,
+} from "./lib/native-sync.js";
+import {
 	AGENTS_DIR,
 	DEFAULT_PORT,
 	formatUptime,
@@ -112,13 +120,6 @@ import {
 	startDaemon,
 	stopDaemon,
 } from "./lib/runtime.js";
-import {
-	acquireNativeSyncLock,
-	embeddingProvider,
-	hasNativeModelCache,
-	isRecord,
-	releaseNativeSyncLock,
-} from "./lib/native-sync.js";
 import "./sqlite.js";
 
 // Template directory location (relative to built CLI)
@@ -362,6 +363,16 @@ async function configureHarnessHooks(
 			}
 			for (const w of result.warnings ?? []) {
 				console.warn(chalk.yellow(`  ${w}`));
+			}
+			break;
+		}
+		case "llama-cpp": {
+			const connector = new LlamaCppConnector();
+			const result = await connector.install(basePath);
+			if (!result.success) {
+				console.warn(chalk.yellow(`  Warning: llama.cpp integration setup failed: ${result.message}`));
+			} else {
+				console.log(chalk.green(`  ✓ ${result.message}`));
 			}
 			break;
 		}

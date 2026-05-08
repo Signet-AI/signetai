@@ -11,9 +11,18 @@ export type HarnessChoice =
 	| "codex"
 	| "forge"
 	| "hermes-agent"
-	| "gemini";
+	| "gemini"
+	| "llama-cpp";
 export type EmbeddingProviderChoice = "native" | "llama-cpp" | "ollama" | "openai" | "none";
-export type ExtractionProviderChoice = "acpx" | "claude-code" | "llama-cpp" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
+export type ExtractionProviderChoice =
+	| "acpx"
+	| "claude-code"
+	| "llama-cpp"
+	| "ollama"
+	| "opencode"
+	| "codex"
+	| "openrouter"
+	| "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
 export type DeploymentTypeChoice = "local" | "vps" | "server";
 export interface ResolveSetupExtractionProviderOptions {
@@ -36,8 +45,15 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"forge",
 	"hermes-agent",
 	"gemini",
+	"llama-cpp",
 ];
-export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = ["native", "llama-cpp", "ollama", "openai", "none"];
+export const EMBEDDING_PROVIDER_CHOICES: readonly EmbeddingProviderChoice[] = [
+	"native",
+	"llama-cpp",
+	"ollama",
+	"openai",
+	"none",
+];
 export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = [
 	"acpx",
 	"claude-code",
@@ -50,7 +66,12 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 ];
 export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];
 export const DEPLOYMENT_TYPE_CHOICES: readonly DeploymentTypeChoice[] = ["local", "vps", "server"];
-const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = ["acpx", "claude-code", "codex", "opencode"];
+const VPS_NON_LOCAL_EXTRACTION_PROVIDERS: readonly ExtractionProviderChoice[] = [
+	"acpx",
+	"claude-code",
+	"codex",
+	"opencode",
+];
 const DETECTED_EXTRACTION_PROVIDER_ORDER: readonly ExtractionProviderChoice[] = [
 	"acpx",
 	"llama-cpp",
@@ -92,6 +113,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.codex) harnesses.push("Codex");
 	if (detection.harnesses.hermesAgent) harnesses.push("Hermes Agent");
 	if (detection.harnesses.gemini) harnesses.push("Gemini");
+	if (detection.harnesses.llamaCpp) harnesses.push("llama.cpp");
 	if (detection.harnesses.forge) harnesses.push("Forge");
 	if (harnesses.length > 0) {
 		lines.push(`    ✓ Harnesses: ${harnesses.join(", ")}`);

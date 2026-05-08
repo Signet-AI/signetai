@@ -440,6 +440,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		{ value: "pi", name: "Pi", checked: existingHarnesses.includes("pi") },
 		{ value: "hermes-agent", name: "Hermes Agent", checked: existingHarnesses.includes("hermes-agent") },
 		{ value: "gemini", name: "Gemini CLI (Google)", checked: existingHarnesses.includes("gemini") },
+		{ value: "llama-cpp", name: "llama.cpp (local chat runtime)", checked: existingHarnesses.includes("llama-cpp") },
 		{
 			value: "forge",
 			name: "Forge (native Signet harness)",

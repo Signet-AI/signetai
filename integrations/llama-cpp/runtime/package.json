@@ -1,0 +1,24 @@
+{
+  "name": "@signet/llama-cpp-runtime",
+  "version": "0.110.1",
+  "description": "Interactive chat runtime for llama.cpp with Signet tool calling",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "signet-llama-chat": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target node",
+    "dev": "bun --watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "Apache-2.0"
+}

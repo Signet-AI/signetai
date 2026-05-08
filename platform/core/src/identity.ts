@@ -195,6 +195,7 @@ export interface SetupDetection {
 		forge: boolean;
 		hermesAgent: boolean;
 		gemini: boolean;
+		llamaCpp: boolean;
 	};
 }
 
@@ -498,6 +499,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			forge: isForgeInstalled(basePath, home),
 			hermesAgent: resolveHermesRepoPath() !== null,
 			gemini: existsSync(join(home, ".gemini", "settings.json")),
+			llamaCpp: existsSync(join(home, ".config", "signet-llama-cpp", "config.json")),
 		},
 	};
 }
