@@ -202,7 +202,7 @@ async fn memory_crud() {
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["total"], 0);
+    assert_eq!(body["stats"]["total"], 0);
 
     // Remember
     let resp = server

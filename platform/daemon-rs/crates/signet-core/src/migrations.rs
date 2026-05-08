@@ -344,10 +344,17 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
         }
     }
 
+    ensure_schema_parity_guards(conn)?;
+
     if count > 0 {
         info!(count, "migrations applied");
     }
 
+    Ok(())
+}
+
+fn ensure_schema_parity_guards(conn: &Connection) -> Result<(), CoreError> {
+    add_column_if_missing(conn, "entities", "mentions", "INTEGER DEFAULT 0");
     Ok(())
 }
 
@@ -389,6 +396,7 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
         }
         5 => {
             add_column_if_missing(conn, "entities", "canonical_name", "TEXT");
+            add_column_if_missing(conn, "entities", "mentions", "INTEGER DEFAULT 0");
             add_column_if_missing(conn, "relations", "mentions", "INTEGER DEFAULT 1");
             add_column_if_missing(conn, "relations", "confidence", "REAL DEFAULT 0.5");
             add_column_if_missing(conn, "relations", "updated_at", "TEXT");
@@ -709,4 +717,30 @@ fn repair_bogus_version(conn: &Connection) -> Result<(), CoreError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn columns(conn: &Connection, table: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info(\"{table}\")"))
+            .expect("table info statement prepares");
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .expect("table info query runs")
+            .map(|row| row.expect("column row reads"))
+            .collect()
+    }
+
+    #[test]
+    fn migrations_install_knowledge_graph_mentions_columns() {
+        let conn = Connection::open_in_memory().expect("in-memory db opens");
+
+        run(&conn).expect("migrations run");
+
+        assert!(columns(&conn, "entities").contains(&"mentions".to_string()));
+        assert!(columns(&conn, "relations").contains(&"mentions".to_string()));
+        assert!(columns(&conn, "memory_entity_mentions").contains(&"mention_text".to_string()));
+    }
 }
