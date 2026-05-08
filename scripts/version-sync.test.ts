@@ -3,11 +3,51 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { VERSION_SYNC_PACKAGE_GLOBS, collectCargoLockMismatches, findCargoLockPackageVersion } from "./version-sync";
+import {
+	VERSION_SYNC_PACKAGE_GLOBS,
+	collectCargoLockMismatches,
+	findCargoLockPackageVersion,
+	resolveWorkspaceDependencyVersions,
+} from "./version-sync";
 
 describe("version-sync", () => {
 	test("keeps web workspace manifests out of Signet release version sync", () => {
 		expect(VERSION_SYNC_PACKAGE_GLOBS).not.toContain("web/**/package.json");
+	});
+
+	test("aligns checked-in publishable workspace dependency specs before release installs", () => {
+		const raw = `{
+  "name": "@signetai/signet-memory-openclaw",
+  "version": "0.115.1",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.47"
+  },
+  "devDependencies": {
+    "@signet/core": "0.115.1",
+    "@signet/sdk": "workspace:*",
+    "@types/node": "^22.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=0.1.0"
+  }
+}
+`;
+
+		const next = resolveWorkspaceDependencyVersions(raw, new Set(["@signet/core", "@signet/sdk"]), "0.115.2");
+		const parsed = JSON.parse(next) as {
+			devDependencies: Record<string, string>;
+			dependencies: Record<string, string>;
+			peerDependencies: Record<string, string>;
+		};
+
+		expect(parsed.devDependencies["@signet/core"]).toBe("0.115.2");
+		expect(parsed.devDependencies["@signet/sdk"]).toBe("0.115.2");
+		expect(parsed.devDependencies["@types/node"]).toBe("^22.0.0");
+		expect(parsed.dependencies["@sinclair/typebox"]).toBe("0.34.47");
+		expect(parsed.peerDependencies.openclaw).toBe(">=0.1.0");
 	});
 
 	test("reads local package versions from Cargo.lock entries", () => {

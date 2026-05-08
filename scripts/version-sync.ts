@@ -20,6 +20,26 @@ const FORGE_MANIFEST_FILES = [
 	"surfaces/cli/templates/forge/manifest.json",
 	"dist/signetai/templates/forge/manifest.json",
 ];
+const WORKSPACE_DEPENDENCY_FIELDS = [
+	"dependencies",
+	"devDependencies",
+	"optionalDependencies",
+	"peerDependencies",
+] as const;
+
+type PackageJson = {
+	readonly name?: unknown;
+	readonly private?: unknown;
+	readonly publishConfig?: unknown;
+	readonly dependencies?: unknown;
+	readonly devDependencies?: unknown;
+	readonly optionalDependencies?: unknown;
+	readonly peerDependencies?: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
 
 function parseSemver(version: string): [number, number, number] {
 	const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -72,6 +92,17 @@ function listTargetPackageFiles(): string[] {
 		.map((line) => line.trim())
 		.filter(Boolean)
 		.filter((file) => !EXCLUDED_FILES.has(file));
+}
+
+function collectWorkspacePackageNames(files: readonly string[]): Set<string> {
+	const names = new Set<string>();
+	for (const file of files) {
+		const pkg = JSON.parse(readFileSync(file, "utf8")) as PackageJson;
+		if (typeof pkg.name === "string" && pkg.name.length > 0) {
+			names.add(pkg.name);
+		}
+	}
+	return names;
 }
 
 function updateFileVersion(filePath: string, targetVersion: string, checkOnly: boolean): boolean {
@@ -217,19 +248,43 @@ function regenerateCargoLock(cargoFile: string): void {
 	}
 }
 
-function resolveWorkspaceProtocols(files: readonly string[], version: string, checkOnly: boolean): string[] {
+export function resolveWorkspaceDependencyVersions(
+	raw: string,
+	workspacePackageNames: ReadonlySet<string>,
+	version: string,
+): string {
+	const pkg = JSON.parse(raw) as PackageJson;
+	const next = pkg as Record<string, unknown>;
+	let changed = false;
+
+	for (const field of WORKSPACE_DEPENDENCY_FIELDS) {
+		const deps = next[field];
+		if (!isRecord(deps)) continue;
+
+		for (const [name, spec] of Object.entries(deps)) {
+			if (!workspacePackageNames.has(name) || typeof spec !== "string" || spec === version) continue;
+			deps[name] = version;
+			changed = true;
+		}
+	}
+
+	return changed ? `${JSON.stringify(next, null, 2)}\n` : raw;
+}
+
+function resolveWorkspaceProtocols(
+	files: readonly string[],
+	workspacePackageNames: ReadonlySet<string>,
+	version: string,
+	checkOnly: boolean,
+): string[] {
 	const patched: string[] = [];
 	for (const file of files) {
 		const raw = readFileSync(file, "utf8");
-		const pkg = JSON.parse(raw) as Record<string, unknown>;
-		// Only resolve for packages that will be published
+		const pkg = JSON.parse(raw) as PackageJson;
+		// Only resolve for packages that will be published.
 		if (!pkg.publishConfig || pkg.private) continue;
 
-		let changed = raw;
-		// Replace workspace: protocols with resolved versions
-		changed = changed.replace(/"workspace:\*"/g, `"${version}"`);
-		changed = changed.replace(/"workspace:\^"/g, `"^${version}"`);
-		changed = changed.replace(/"workspace:~"/g, `"~${version}"`);
+		const changed = resolveWorkspaceDependencyVersions(raw, workspacePackageNames, version);
 		if (changed !== raw) {
 			if (!checkOnly) {
 				writeFileSync(file, changed);
@@ -314,9 +369,10 @@ function main() {
 		console.log(`Local reference (${localReferenceVersion}) was behind origin/main (${remoteReferenceVersion}).`);
 	}
 
-	// Resolve workspace: protocols in publishable packages so npm publish
-	// ships real version strings instead of "workspace:*".
-	const resolved = resolveWorkspaceProtocols(packageFiles, targetVersion, checkOnly);
+	// Resolve workspace package references in publishable packages so the
+	// release commit remains installable after all workspace versions are bumped.
+	const workspacePackageNames = collectWorkspacePackageNames(packageFiles);
+	const resolved = resolveWorkspaceProtocols(packageFiles, workspacePackageNames, targetVersion, checkOnly);
 
 	// Sync Cargo.toml files under platform/ and runtimes/
 	const cargoUpdated: string[] = [];
