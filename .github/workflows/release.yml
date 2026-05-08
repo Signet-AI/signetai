@@ -118,7 +118,7 @@ jobs:
           # (Docker smoke and consumer builds) stay deterministic.
           bun install
 
-          git add -u -- package.json platform surfaces integrations libs dist runtimes CHANGELOG.md bun.lock
+          git add -u -- package.json platform surfaces integrations libs plugins dist runtimes CHANGELOG.md bun.lock
           git commit -m "chore: release $NEW_VERSION"
           git tag "v$NEW_VERSION"
 

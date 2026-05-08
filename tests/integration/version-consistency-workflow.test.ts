@@ -15,5 +15,6 @@ describe("version consistency workflow", () => {
 
 		expect(syncIndex).toBeGreaterThan(-1);
 		expect(installIndex).toBeGreaterThan(syncIndex);
+		expect(workflow).toContain("git add -u -- package.json platform surfaces integrations libs plugins dist runtimes");
 	});
 });
