@@ -47,10 +47,12 @@ export interface UpdateRunResult {
 	desktopUpdate?: DesktopUpdateResult;
 }
 
+export type UpdateChannel = "stable" | "nightly";
+
 export interface UpdateConfig {
 	autoInstall: boolean;
 	checkInterval: number; // seconds
-	channel: "latest" | "next";
+	channel: UpdateChannel;
 }
 
 export interface UpdateState {
@@ -71,6 +73,8 @@ interface GitHubReleaseResponse {
 	html_url: string;
 	body?: string;
 	published_at?: string;
+	draft?: boolean;
+	prerelease?: boolean;
 }
 
 export type DesktopUpdateStatus = "updated" | "skipped" | "error";
@@ -95,6 +99,10 @@ export interface DesktopInstallDetection {
 
 const GITHUB_REPO = "Signet-AI/signetai";
 const NPM_PACKAGE = "signetai";
+const CHANNEL_TO_NPM_TAG: Record<UpdateChannel, "latest" | "next"> = {
+	stable: "latest",
+	nightly: "next",
+};
 const EXACT_SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const MANAGED_DESKTOP_LAUNCHER_MARKER = "# signet-desktop managed launcher";
 
@@ -122,7 +130,7 @@ let lastAutoUpdateError: string | null = null;
 let updateConfig: UpdateConfig = {
 	autoInstall: false,
 	checkInterval: DEFAULT_UPDATE_INTERVAL_SECONDS,
-	channel: "latest" as const,
+	channel: "stable" as const,
 };
 let restartCallback: (() => void) | null = null;
 
@@ -220,7 +228,11 @@ export function getUpdateSummary(): string | null {
 			agentsDir,
 			env: process.env,
 		});
-		const installCmd = getGlobalInstallCommand(packageManager.family, NPM_PACKAGE);
+		const installPackage =
+			updateConfig.channel === "nightly"
+				? `${NPM_PACKAGE}@${npmTagForUpdateChannel(updateConfig.channel)}`
+				: NPM_PACKAGE;
+		const installCmd = getGlobalInstallCommand(packageManager.family, installPackage);
 		const fullInstallCmd = `${installCmd.command} ${installCmd.args.join(" ")}`;
 
 		return `Signet v${latest} is available (current: v${currentVersion}).\n\nTo update Signet:\n  ${fullInstallCmd}\n  signet daemon restart\n  signet sync\n\nThese are the ONLY supported update commands. Do not use npx, bunx, or signet update install.${notes}`;
@@ -255,11 +267,23 @@ export function parseUpdateInterval(value: unknown): number | null {
 	return parsed;
 }
 
+export function parseUpdateChannel(value: unknown): UpdateChannel | null {
+	if (typeof value !== "string") return null;
+	const normalized = value.trim().toLowerCase();
+	if (normalized === "stable" || normalized === "latest") return "stable";
+	if (normalized === "nightly" || normalized === "next") return "nightly";
+	return null;
+}
+
+export function npmTagForUpdateChannel(channel: UpdateChannel): "latest" | "next" {
+	return CHANNEL_TO_NPM_TAG[channel];
+}
+
 function loadUpdateConfig(): UpdateConfig {
 	const defaults: UpdateConfig = {
 		autoInstall: false,
 		checkInterval: DEFAULT_UPDATE_INTERVAL_SECONDS,
-		channel: "latest" as const,
+		channel: "stable" as const,
 	};
 
 	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
@@ -288,9 +312,9 @@ function loadUpdateConfig(): UpdateConfig {
 					}
 				}
 
-				const channelRaw = updates.channel;
-				if (channelRaw === "next" || channelRaw === "latest") {
-					defaults.channel = channelRaw;
+				const channel = parseUpdateChannel(updates.channel);
+				if (channel !== null) {
+					defaults.channel = channel;
 				}
 			}
 
@@ -346,7 +370,7 @@ export function persistUpdateConfig(config: UpdateConfig): boolean {
 // Network
 // ---------------------------------------------------------------------------
 
-async function fetchLatestFromGitHub(): Promise<{
+async function fetchStableFromGitHub(): Promise<{
 	version: string;
 	releaseUrl?: string;
 	releaseNotes?: string;
@@ -365,6 +389,9 @@ async function fetchLatestFromGitHub(): Promise<{
 	}
 
 	const data = (await res.json()) as GitHubReleaseResponse;
+	if (data.draft || data.prerelease) {
+		throw new Error("GitHub latest release is not stable");
+	}
 	const version = data.tag_name.replace(/^v/, "");
 
 	return {
@@ -375,8 +402,9 @@ async function fetchLatestFromGitHub(): Promise<{
 	};
 }
 
-async function fetchLatestFromNpm(channel: "latest" | "next" = "latest"): Promise<string> {
-	const npmRes = await fetch(`https://registry.npmjs.org/${NPM_PACKAGE}/${channel}`, {
+async function fetchLatestFromNpm(channel: UpdateChannel = "stable"): Promise<string> {
+	const tag = npmTagForUpdateChannel(channel);
+	const npmRes = await fetch(`https://registry.npmjs.org/${NPM_PACKAGE}/${tag}`, {
 		signal: AbortSignal.timeout(10000),
 	});
 
@@ -407,14 +435,16 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 
 	const errors: string[] = [];
 
-	try {
-		const github = await fetchLatestFromGitHub();
-		result.latestVersion = github.version;
-		result.releaseUrl = github.releaseUrl;
-		result.releaseNotes = github.releaseNotes;
-		result.publishedAt = github.publishedAt;
-	} catch (e) {
-		errors.push((e as Error).message);
+	if (updateConfig.channel === "stable") {
+		try {
+			const github = await fetchStableFromGitHub();
+			result.latestVersion = github.version;
+			result.releaseUrl = github.releaseUrl;
+			result.releaseNotes = github.releaseNotes;
+			result.publishedAt = github.publishedAt;
+		} catch (e) {
+			errors.push((e as Error).message);
+		}
 	}
 
 	if (!result.latestVersion) {
@@ -1066,12 +1096,18 @@ export function stopUpdateTimer(): void {
 export function setUpdateConfig(patch: {
 	autoInstall?: boolean;
 	checkInterval?: number;
+	channel?: UpdateChannel;
 }): { config: UpdateConfig; persisted: boolean } {
 	if (patch.autoInstall !== undefined) {
 		updateConfig.autoInstall = patch.autoInstall;
 	}
 	if (patch.checkInterval !== undefined) {
 		updateConfig.checkInterval = patch.checkInterval;
+	}
+	if (patch.channel !== undefined) {
+		updateConfig.channel = patch.channel;
+		lastUpdateCheck = null;
+		lastUpdateCheckTime = null;
 	}
 
 	stopUpdateTimer();

@@ -183,6 +183,7 @@ silent fallback or hard-blocked extraction after boot.
     "pendingRestart": null,
     "autoInstall": false,
     "checkInterval": 21600,
+    "channel": "stable",
     "lastCheckAt": null,
     "lastError": null,
     "timerActive": true
