@@ -204,15 +204,23 @@ export async function executeSignetTool(
 
 	try {
 		const url = mapping.buildUrl(daemonUrl, args);
+		let body: string;
+		if (mapping.hookPath) {
+			const hookBody: Record<string, unknown> = { ...args, harness: "llama-cpp" };
+			if (args.sessionKey) hookBody.sessionKey = args.sessionKey;
+			body = JSON.stringify(hookBody);
+		} else {
+			body = JSON.stringify(args);
+		}
+
 		const res = await fetch(url, {
 			method: mapping.method,
 			headers: {
 				"Content-Type": "application/json",
 				"x-signet-runtime-path": "plugin",
-				"x-signet-actor": "llama-cpp",
-				"x-signet-actor-type": "harness",
+				"x-signet-harness": "llama-cpp",
 			},
-			body: mapping.method !== "GET" ? JSON.stringify(args) : undefined,
+			body: mapping.method !== "GET" ? body : undefined,
 			signal: AbortSignal.timeout(30_000),
 		});
 
@@ -233,11 +241,12 @@ export async function executeSignetTool(
 interface ToolApiMapping {
 	method: string;
 	buildUrl: (baseUrl: string, args: Record<string, unknown>) => string;
+	hookPath?: string;
 }
 
 const TOOL_API_MAP: Record<string, ToolApiMapping> = {
-	memory_search: { method: "POST", buildUrl: (base) => `${base}/api/memory/recall` },
-	memory_store: { method: "POST", buildUrl: (base) => `${base}/api/memory/remember` },
+	memory_search: { method: "POST", buildUrl: (base) => `${base}/api/hooks/recall`, hookPath: "recall" },
+	memory_store: { method: "POST", buildUrl: (base) => `${base}/api/hooks/remember`, hookPath: "remember" },
 	memory_get: {
 		method: "GET",
 		buildUrl: (base, args) => `${base}/api/memory/${encodeURIComponent(String(args.id ?? ""))}`,

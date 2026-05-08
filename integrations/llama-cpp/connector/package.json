@@ -12,14 +12,13 @@
     }
   },
   "bin": {
-    "signet-llama-chat": "../runtime/dist/index.js"
+    "signet-llama-chat": "./dist/signet-llama-chat.js"
   },
   "files": [
-    "dist",
-    "../runtime/dist"
+    "dist"
   ],
   "scripts": {
-    "build": "cd ../runtime && bun run build && cd ../connector && bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
+    "build": "bun build ../runtime/src/index.ts --outfile dist/signet-llama-chat.js --target node && bun build src/index.ts --outdir dist --target node --external better-sqlite3 && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "bun --watch src/index.ts",
     "typecheck": "tsc --noEmit"
