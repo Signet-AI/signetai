@@ -221,6 +221,18 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(stopHandler.command).toBe("SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook session-end -H codex");
 	});
 
+	test("remote lifecycle hooks remain idempotent across repeated installs", async () => {
+		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850/";
+
+		await connector().install(tempHome);
+		await connector().install(tempHome);
+
+		const hooks = readHooksJson().hooks as Record<string, Record<string, unknown>[]>;
+		expect(hooks.SessionStart).toHaveLength(1);
+		expect(hooks.UserPromptSubmit).toHaveLength(1);
+		expect(hooks.Stop).toHaveLength(1);
+	});
+
 	test("rejects unsafe remote daemon URLs before writing Codex config", async () => {
 		process.env.SIGNET_DAEMON_URL = 'http://192.168.0.60:3850/" && calc';
 

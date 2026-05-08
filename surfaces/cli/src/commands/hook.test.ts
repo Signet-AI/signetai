@@ -301,6 +301,28 @@ describe("buildSessionStartBody", () => {
 			runtimePath: "legacy",
 		});
 	});
+
+	test("forwards parent_key aliases for explicit parent context", () => {
+		expect(
+			buildSessionStartBody(
+				{ parent_key: "parent-from-snake", sessionKey: "child-session", cwd: "/tmp/project" },
+				{ harness: "custom-harness" },
+			),
+		).toMatchObject({
+			parentSessionKey: "parent-from-snake",
+			sessionKey: "child-session",
+		});
+
+		expect(
+			buildSessionStartBody(
+				{ parentKey: "parent-from-camel", sessionKey: "child-session", cwd: "/tmp/project" },
+				{ harness: "custom-harness" },
+			),
+		).toMatchObject({
+			parentSessionKey: "parent-from-camel",
+			sessionKey: "child-session",
+		});
+	});
 });
 
 describe("buildUserPromptSubmitBody", () => {

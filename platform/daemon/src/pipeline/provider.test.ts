@@ -211,6 +211,36 @@ printf '%s\n' '{"type":"result","text":"final answer"}'
 		}
 	});
 
+	it("uses ACP JSON-RPC message chunks as final text when completion carries only stop metadata", async () => {
+		const root = join(tmpdir(), `signet-acpx-jsonrpc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-jsonrpc.sh");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello "}}}}'
+printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}}'
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const events: unknown[] = [];
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				format: "json",
+				captureEvents: true,
+				onEvent: (event) => events.push(event),
+			});
+
+			await expect(provider.generate("hello json", { timeoutMs: 1000 })).resolves.toBe("hello world");
+			expect(events).toHaveLength(3);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("does not deliver ACPX JSON events when captureEvents is disabled", async () => {
 		const root = join(tmpdir(), `signet-acpx-events-disabled-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(root, { recursive: true });
@@ -317,7 +347,6 @@ printf 'ok\n'
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
-
 });
 
 describe("createOllamaProvider", () => {

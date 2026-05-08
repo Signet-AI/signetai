@@ -718,6 +718,23 @@ describe("handleSessionStart", () => {
 		expect(restarted.inject).toContain("Fresh startup memory");
 	});
 
+	test.serial("deduplicates session-start by agent and harness scope", async () => {
+		createMemoryDb([{ content: "Scoped startup memory", importance: 0.9 }]);
+		const sessionKey = "shared-session-key";
+
+		await handleSessionStart({ harness: "codex", sessionKey });
+
+		const otherHarness = await handleSessionStart({ harness: "claude-code", sessionKey });
+		expect(otherHarness.memories.length).toBe(1);
+		expect(otherHarness.inject).toContain("Scoped startup memory");
+
+		const otherAgent = await handleSessionStart({ harness: "codex", sessionKey, agentId: "agent-b" });
+		expect(otherAgent.inject).toContain("Signet Status");
+
+		const duplicate = await handleSessionStart({ harness: "codex", sessionKey });
+		expect(duplicate.memories).toEqual([]);
+	});
+
 	test.serial("loads identity from agent.yaml", async () => {
 		writeAgentYaml(`
 agent:

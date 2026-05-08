@@ -1662,6 +1662,11 @@ export function getEntityHealth(
 			args.push(since);
 		}
 
+		const predictorComparisonsExists = db
+			.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'predictor_comparisons'")
+			.get();
+		if (!predictorComparisonsExists) return [];
+
 		const rows = db
 			.prepare(
 				`SELECT

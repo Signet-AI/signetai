@@ -158,7 +158,10 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		return;
 	}
 	markSourceIndexInFlight(input.source.id);
-	markSourceIndexJobRunning(input.source.id, job.id);
+	if (!markSourceIndexJobRunning(input.source.id, job.id)) {
+		clearSourceIndexInFlight(input.source.id);
+		return;
+	}
 
 	let bridge: NativeMemoryBridgeHandle | null = null;
 

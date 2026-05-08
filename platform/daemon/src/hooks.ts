@@ -187,6 +187,24 @@ async function appendCanonicalLiveTranscriptTurns(params: {
 const sessionStartSeen = new Map<string, number>();
 const SESSION_START_SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+function sessionStartDedupeKey(req: {
+	readonly harness?: string;
+	readonly agentId?: string;
+	readonly project?: string;
+	readonly cwd?: string;
+	readonly sessionKey?: string;
+	readonly sessionId?: string;
+}): string | null {
+	const sessionKey = req.sessionKey || req.sessionId;
+	if (!sessionKey) return null;
+	return [
+		resolveAgentId({ agentId: req.agentId, sessionKey }),
+		req.harness ?? "",
+		req.project ?? req.cwd ?? "",
+		sessionKey,
+	].join("\0");
+}
+
 function pruneSessionStartSeen(now = Date.now()): void {
 	for (const [sessionKey, seenAt] of sessionStartSeen.entries()) {
 		if (now - seenAt > SESSION_START_SEEN_TTL_MS) sessionStartSeen.delete(sessionKey);
@@ -1443,7 +1461,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// a minimal stub. Identity files / MEMORY.md are already in the context.
 	// Must fire BEFORE initContinuity to avoid resetting accumulated state.
 	pruneSessionStartSeen();
-	if (req.sessionKey && sessionStartSeen.has(req.sessionKey)) {
+	const dedupeKey = sessionStartDedupeKey(req);
+	if (dedupeKey && sessionStartSeen.has(dedupeKey)) {
 		logger.info("hooks", "Session start dedup — returning minimal stub", {
 			harness: req.harness,
 			sessionKey: req.sessionKey,
@@ -1947,8 +1966,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Mark this session as having received the full inject
-	if (req.sessionKey) {
-		sessionStartSeen.set(req.sessionKey, Date.now());
+	if (dedupeKey) {
+		sessionStartSeen.set(dedupeKey, Date.now());
 	}
 
 	return {
@@ -2986,6 +3005,8 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 
 	if (req.reason === "clear") {
 		// Caller intends to discard session context — skip checkpoint, just clean up
+		const dedupeKey = sessionStartDedupeKey(req);
+		if (dedupeKey) sessionStartSeen.delete(dedupeKey);
 		if (sessionKey) sessionStartSeen.delete(sessionKey);
 		clearContinuity(sessionKey);
 		return { memoriesSaved: 0 };

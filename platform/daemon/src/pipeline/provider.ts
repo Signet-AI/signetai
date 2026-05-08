@@ -1069,7 +1069,27 @@ function extractAcpxTextCandidate(event: AcpxJsonEvent): string | undefined {
 
 function isAcpxFinalEvent(event: AcpxJsonEvent): boolean {
 	const type = acpxStringField(event, "type")?.toLowerCase();
-	return type !== undefined && ["result", "final", "complete", "completed", "done", "response"].includes(type);
+	if (type !== undefined && ["result", "final", "complete", "completed", "done", "response"].includes(type))
+		return true;
+	const result = event.result;
+	return isJsonRecord(result) && typeof result.stopReason === "string";
+}
+
+function extractAcpxMessageChunk(event: AcpxJsonEvent): string | undefined {
+	if (acpxStringField(event, "method") !== "session/update") return undefined;
+	const params = event.params;
+	if (!isJsonRecord(params)) return undefined;
+	const update = params.update;
+	if (!isJsonRecord(update)) return undefined;
+	const sessionUpdate = acpxStringField(update, "sessionUpdate")?.toLowerCase();
+	if (sessionUpdate !== undefined && !sessionUpdate.includes("message")) return undefined;
+	const content = update.content;
+	if (typeof content === "string" && content.length > 0) return content;
+	if (isJsonRecord(content)) {
+		const text = acpxStringField(content, "text");
+		if (text !== undefined) return text;
+	}
+	return undefined;
 }
 
 function parseAcpxJsonOutput(
@@ -1079,6 +1099,7 @@ function parseAcpxJsonOutput(
 	const maxCapturedEvents = Math.max(0, config.maxCapturedEvents ?? 200);
 	let emittedEvents = 0;
 	let finalText: string | undefined;
+	let streamedText = "";
 	const lines = stdout
 		.split(/\r?\n/)
 		.map((line) => line.trim())
@@ -1097,9 +1118,15 @@ function parseAcpxJsonOutput(
 		if (!isJsonRecord(parsed)) {
 			throw new Error(`${config.agent} via ACPX emitted non-object JSON event on line ${index + 1}`);
 		}
+		const chunk = extractAcpxMessageChunk(parsed);
+		if (chunk !== undefined) streamedText += chunk;
 		if (isAcpxFinalEvent(parsed)) {
 			const candidate = extractAcpxTextCandidate(parsed);
-			if (candidate?.trim()) finalText = candidate;
+			if (candidate?.trim()) {
+				finalText = candidate;
+			} else if (streamedText.trim()) {
+				finalText = streamedText;
+			}
 		}
 		if (config.captureEvents === true && emittedEvents < maxCapturedEvents) {
 			emittedEvents += 1;

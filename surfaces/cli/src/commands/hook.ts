@@ -466,7 +466,14 @@ export function buildSessionStartBody(
 		nativeAgentId ? "" : body?.agent_id,
 	);
 	const harnessAgentId = pickString(body?.harness_agent_id, body?.harnessAgentId, nativeAgentId);
-	const parentSessionKey = pickString(body?.parent_session_key, body?.parentSessionKey, body?.parentID, body?.parentId);
+	const parentSessionKey = pickString(
+		body?.parent_session_key,
+		body?.parentSessionKey,
+		body?.parent_key,
+		body?.parentKey,
+		body?.parentID,
+		body?.parentId,
+	);
 	return {
 		harness: options.harness,
 		project: pickString(options.project, body?.cwd),

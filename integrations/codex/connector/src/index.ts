@@ -184,7 +184,9 @@ function escapeRegExp(value: string): string {
 }
 
 function isSignetHookCommand(cmd: string): boolean {
-	const normalized = cmd.trim().replace(/\s+/g, " ");
+	let normalized = cmd.trim().replace(/\s+/g, " ");
+	normalized = normalized.replace(/^SIGNET_DAEMON_URL=(?:'[^']*'|"[^"]*"|\S+)\s+/i, "");
+	normalized = normalized.replace(/^set "SIGNET_DAEMON_URL=[^"]*" && /i, "");
 	return SIGNET_HOOK_SUBCOMMANDS.some((subcommand) => {
 		const hook = `hook\\s+${escapeRegExp(subcommand)}\\b`;
 		const bare = new RegExp(`^(?:signet|signet\\.(?:cmd|ps1|bat|exe))\\s+${hook}`, "i");
