@@ -262,13 +262,26 @@ export function resolveWorkspaceDependencyVersions(
 		if (!isRecord(deps)) continue;
 
 		for (const [name, spec] of Object.entries(deps)) {
-			if (!workspacePackageNames.has(name) || typeof spec !== "string" || spec === version) continue;
-			deps[name] = version;
+			if (!workspacePackageNames.has(name) || typeof spec !== "string") continue;
+			const resolved = resolveWorkspaceDependencySpec(spec, version);
+			if (resolved === spec) continue;
+			deps[name] = resolved;
 			changed = true;
 		}
 	}
 
 	return changed ? `${JSON.stringify(next, null, 2)}\n` : raw;
+}
+
+function resolveWorkspaceDependencySpec(spec: string, version: string): string {
+	if (spec === "workspace:*") return version;
+	if (spec === "workspace:^") return `^${version}`;
+	if (spec === "workspace:~") return `~${version}`;
+
+	const concrete = spec.match(/^([~^]?)(\d+\.\d+\.\d+)$/);
+	if (concrete) return concrete[2] === version ? spec : `${concrete[1]}${version}`;
+
+	return spec;
 }
 
 function resolveWorkspaceProtocols(
