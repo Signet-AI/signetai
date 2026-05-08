@@ -259,9 +259,13 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedEntity("e-hidden", "Hidden", { mentions: 0 });
 		seedAspect("asp-hub-a", "e-hub", "alpha");
 		seedAspect("asp-hub-b", "e-hub", "beta");
+		seedAspect("asp-hub-c", "e-hub", "gamma");
+		seedAspect("asp-hub-d", "e-hub", "delta");
 		seedAspect("asp-hidden", "e-hidden", "hidden");
 		seedAttribute("attr-hub-a-1", "asp-hub-a", { content: "important alpha", memoryId: "mem-a" });
 		seedAttribute("attr-hub-a-2", "asp-hub-a", { content: "less important alpha" });
+		seedAttribute("attr-hub-a-3", "asp-hub-a", { content: "third alpha" });
+		seedAttribute("attr-hub-a-4", "asp-hub-a", { content: "fourth alpha" });
 		seedAttribute("attr-hidden", "asp-hidden", { content: "hidden attr" });
 		seedDependency("dep-visible", "e-hub", "e-leaf", { strength: 0.9 });
 		seedDependency("dep-hidden", "e-hub", "e-hidden", { strength: 0.8 });
