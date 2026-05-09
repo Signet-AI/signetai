@@ -536,6 +536,44 @@ memory:
 		expect(json.status).toBe("pinned_requires_force");
 	});
 
+	it("GET /api/memories hides soft-deleted memories from dashboard lists", async () => {
+		seedMemory({
+			id: "mem-visible",
+			content: "Visible dashboard memory",
+			contentHash: "hash-mem-visible",
+		});
+		seedMemory({
+			id: "mem-legacy-null",
+			content: "Legacy active dashboard memory",
+			contentHash: "hash-mem-legacy-null",
+			pinned: 1,
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memories SET is_deleted = NULL, importance = 0.95 WHERE id = ?").run("mem-legacy-null");
+		});
+		seedMemory({
+			id: "mem-deleted",
+			content: "Deleted dashboard memory should not leak",
+			contentHash: "hash-mem-deleted",
+		});
+
+		const deleteRes = await app.request("http://localhost/api/memory/mem-deleted?reason=dashboard cleanup", {
+			method: "DELETE",
+		});
+		expect(deleteRes.status).toBe(200);
+
+		const res = await app.request("http://localhost/api/memories?limit=10");
+		const json = (await res.json()) as {
+			memories: Array<{ id: string; content: string }>;
+			stats: { total: number; critical: number };
+		};
+
+		expect(res.status).toBe(200);
+		expect(new Set(json.memories.map((memory) => memory.id))).toEqual(new Set(["mem-legacy-null", "mem-visible"]));
+		expect(json.stats.total).toBe(2);
+		expect(json.stats.critical).toBe(1);
+	});
+
 	it("POST /api/memory/modify returns per-item results (atomic per item)", async () => {
 		seedMemory({
 			id: "mem-a",

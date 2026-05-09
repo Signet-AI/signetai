@@ -237,12 +237,17 @@ export function registerMemoryRoutes(app: Hono): void {
 					.prepare(`
       SELECT id, content, created_at, who, importance, tags, source_type, pinned, type
       FROM memories
+      WHERE COALESCE(is_deleted, 0) = 0
       ORDER BY created_at DESC
       LIMIT ? OFFSET ?
     `)
 					.all(limit, offset);
 
-				const totalResult = db.prepare("SELECT COUNT(*) as count FROM memories").get() as { count: number };
+				const totalResult = db
+					.prepare("SELECT COUNT(*) as count FROM memories WHERE COALESCE(is_deleted, 0) = 0")
+					.get() as {
+					count: number;
+				};
 				let embeddingsCount = 0;
 				try {
 					const embResult = db.prepare("SELECT COUNT(*) as count FROM embeddings").get() as { count: number };
@@ -250,7 +255,9 @@ export function registerMemoryRoutes(app: Hono): void {
 				} catch {
 					// embeddings table might not exist
 				}
-				const critResult = db.prepare("SELECT COUNT(*) as count FROM memories WHERE importance >= 0.9").get() as {
+				const critResult = db
+					.prepare("SELECT COUNT(*) as count FROM memories WHERE COALESCE(is_deleted, 0) = 0 AND importance >= 0.9")
+					.get() as {
 					count: number;
 				};
 
