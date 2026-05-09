@@ -74,7 +74,7 @@ inference:
     background-acpx:
       executor: acpx
       acpx:
-        agent: codex          # codex, claude-code, opencode, or another ACPX agent
+        agent: codex          # codex, claude (Claude Code), opencode, or another ACPX agent
         version: "0.7.0"      # pinned by default
         mode: exec            # current default: one-shot exec
         permissions: deny-all
@@ -172,7 +172,7 @@ ACPX target config lives under `inference.targets.<name>.acpx`.
 
 | Field | Type | Description |
 |---|---|---|
-| `agent` | string | ACPX agent command, for example `codex`, `claude-code`, or `opencode`. |
+| `agent` | string | ACPX agent command, for example `codex`, `claude` for Claude Code, or `opencode`. Legacy `claude-code` values are normalized to `claude` before spawning ACPX. |
 | `version` / `acpxVersion` | string | ACPX npm package version. Defaults to Signet's pinned `0.7.0`. |
 | `bin` | string | Optional executable override. If omitted, Signet runs `npx -y acpx@<version>`. |
 | `cwd` | string | Working directory for ACPX and the harness. |

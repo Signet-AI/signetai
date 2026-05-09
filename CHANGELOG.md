@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-09
+- Bug fixes: use claude connector for Claude Code.
+
 ### 2026-05-08
 - Features: capture ACPX JSON events; add proposal maintenance loop; split stable and nightly channels.
 - Bug fixes: restore knowledge graph mentions schema; bound ontology constellation graph reads; avoid resumed summary artifact collisions; stream logs without EventSource; align release commits with version sync; match connector list schema; keep dev workspace links local; prune migration backups before copy; catch release version sync regression; harden recent regression surfaces.
@@ -33,11 +36,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-05-02
 - Bug fixes: align exposed memory tools with harness guidance; sanitize generated hints; pass remember hints through; guide recall query shape.
 
-### 2026-05-01
-- Bug fixes: include Hermes plugin in signetai package; harden connector install and diagnostics.
-- Docs: correct stale documentation claims; add nyashkn contributor.
-
 ## Release Ledger
+
+## [0.115.8] - 2026-05-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.7..v0.115.8`.
+
+### Bug Fixes
+
+- **acpx**: use claude connector for Claude Code
 
 ## [0.115.7] - 2026-05-08
 
