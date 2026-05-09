@@ -401,7 +401,7 @@ subscription-backed CLI session, or gateway.
 | `account` | string | Account id from `inference.accounts` |
 | `endpoint` | string | Optional base URL override |
 | `command` | object | Command executor config with `bin`, optional `args`, `cwd`, and `env` |
-| `agent` | string | For `executor: acpx`, the harness adapter to run, for example `codex`, `claude-code`, or `opencode` |
+| `agent` | string | For `executor: acpx`, the ACPX adapter command to run, for example `codex`, `claude` for Claude Code, or `opencode`. Signet normalizes legacy `claude-code` values to ACPX's `claude` command. |
 | `acpxVersion` / `version` | string | Optional ACPX package version. Defaults to Signet's pinned ACPX version |
 | `mode` | string | Optional ACPX execution mode. Defaults to one-shot exec |
 | `cwd` | string | Optional working directory for harness execution |

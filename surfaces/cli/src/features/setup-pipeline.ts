@@ -83,15 +83,21 @@ export interface SetupInferenceConfig {
 	readonly workloads: Record<string, unknown>;
 }
 
+type SetupAcpxAgent = "codex" | "claude" | "opencode";
+
+function toAcpxAgent(provider: Extract<HarnessChoice, "codex" | "claude-code" | "opencode">): SetupAcpxAgent {
+	return provider === "claude-code" ? "claude" : provider;
+}
+
 function selectAcpxAgent(
 	harnesses: readonly string[],
 	availableProviders: readonly ExtractionProviderChoice[] = [],
-): Extract<HarnessChoice, "codex" | "claude-code" | "opencode"> {
+): SetupAcpxAgent {
 	for (const harness of harnesses) {
-		if (harness === "codex" || harness === "claude-code" || harness === "opencode") return harness;
+		if (harness === "codex" || harness === "claude-code" || harness === "opencode") return toAcpxAgent(harness);
 	}
 	for (const provider of availableProviders) {
-		if (provider === "codex" || provider === "claude-code" || provider === "opencode") return provider;
+		if (provider === "codex" || provider === "claude-code" || provider === "opencode") return toAcpxAgent(provider);
 	}
 	return "codex";
 }

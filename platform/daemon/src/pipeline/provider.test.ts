@@ -317,6 +317,31 @@ printf 'ok\n'
 		}
 	});
 
+	it("maps the legacy claude-code agent alias to ACPX's claude command", async () => {
+		const root = join(tmpdir(), `signet-acpx-claude-alias-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-bunx.sh");
+		const argsPath = join(root, "args.json");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+printf 'ok\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({ agent: "claude-code", bin, package: "acpx@0.7.0", hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args).toContain("claude");
+			expect(args).not.toContain("claude-code");
+			expect(args.slice(args.indexOf("claude"))).toEqual(["claude", "exec", "--file", "-"]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("normalizes relative ACPX cwd before spawning and forwarding --cwd", async () => {
 		const root = join(tmpdir(), `signet-acpx-cwd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(join(root, "workspace"), { recursive: true });

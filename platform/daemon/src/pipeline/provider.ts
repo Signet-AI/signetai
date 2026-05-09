@@ -982,6 +982,10 @@ export interface AcpxProviderConfig {
 
 const DEFAULT_ACPX_VERSION = "0.7.0";
 
+function normalizeAcpxAgent(agent: string): string {
+	return agent === "claude-code" ? "claude" : agent;
+}
+
 function acpxPermissionArgs(mode: AcpxPermissionMode | undefined): string[] {
 	switch (mode) {
 		case "deny-all":
@@ -1034,7 +1038,7 @@ function buildAcpxCommand(
 	if (config.terminal === "disabled") args.push("--no-terminal");
 	if (config.allowedTools) args.push("--allowed-tools", config.allowedTools.join(","));
 	args.push(...(config.extraArgs ?? []));
-	args.push(config.agent);
+	args.push(normalizeAcpxAgent(config.agent));
 	if ((config.mode ?? "exec") === "session" && config.session) {
 		args.push("-s", config.session);
 	}
