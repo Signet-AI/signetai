@@ -260,6 +260,27 @@ async fn memory_crud() {
     assert_eq!(executed["results"][0]["status"], "deleted");
     assert!(executed["results"][0]["newVersion"].is_number());
 
+    let resp = server
+        .post(
+            "/api/memory/forget",
+            json!({
+                "ids": [body["id"].as_str().unwrap_or(""), "missing-memory-id"],
+                "mode": "execute",
+                "reason": "contract replay id status parity"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let repeated = server.json(resp).await;
+    assert_eq!(repeated["mode"], "execute");
+    assert_eq!(repeated["requested"], 2);
+    assert_eq!(repeated["deleted"], 0);
+    assert_eq!(repeated["results"].as_array().map(Vec::len), Some(2));
+    assert_eq!(repeated["results"][0]["id"], body["id"]);
+    assert_eq!(repeated["results"][0]["status"], "already_deleted");
+    assert_eq!(repeated["results"][1]["id"], "missing-memory-id");
+    assert_eq!(repeated["results"][1]["status"], "not_found");
+
     // List should still respond after mutation history updates
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);

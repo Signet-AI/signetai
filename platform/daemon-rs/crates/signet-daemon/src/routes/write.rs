@@ -1383,6 +1383,19 @@ fn parse_optional_bool(value: Option<&Value>) -> Result<bool, &'static str> {
     value.as_bool().ok_or("force must be a boolean")
 }
 
+fn dedupe_forget_ids(ids: Vec<String>, limit: usize) -> Vec<String> {
+    ids.into_iter()
+        .fold(Vec::new(), |mut acc, id| {
+            if !acc.contains(&id) {
+                acc.push(id);
+            }
+            acc
+        })
+        .into_iter()
+        .take(limit)
+        .collect()
+}
+
 fn build_forget_confirm_token(ids: &[String]) -> String {
     let mut deduped = ids.to_vec();
     deduped.sort();
@@ -1473,27 +1486,17 @@ pub async fn forget_batch(
             .into_response();
     }
 
+    let requested_ids = dedupe_forget_ids(ids, limit);
     let candidates_result = state
         .pool
         .read({
-            let ids = ids.clone();
+            let ids = requested_ids.clone();
             move |conn| {
-                let deduped: Vec<String> = ids
-                    .into_iter()
-                    .fold(Vec::new(), |mut acc, id| {
-                        if !acc.contains(&id) {
-                            acc.push(id);
-                        }
-                        acc
-                    })
-                    .into_iter()
-                    .take(limit)
-                    .collect();
-                if deduped.is_empty() {
+                if ids.is_empty() {
                     return Ok(Vec::new());
                 }
 
-                let placeholders = std::iter::repeat_n("?", deduped.len())
+                let placeholders = std::iter::repeat_n("?", ids.len())
                     .collect::<Vec<_>>()
                     .join(", ");
                 let sql = format!(
@@ -1501,7 +1504,7 @@ pub async fn forget_batch(
                 );
                 let mut stmt = conn.prepare(&sql)?;
                 let rows = stmt
-                    .query_map(rusqlite::params_from_iter(deduped.iter()), |row| {
+                    .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
                         Ok(ForgetCandidate {
                             id: row.get(0)?,
                             pinned: row.get::<_, i64>(1)? != 0,
@@ -1510,7 +1513,7 @@ pub async fn forget_batch(
                         })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(deduped
+                Ok(ids
                     .into_iter()
                     .filter_map(|id| rows.iter().find(|row| row.id == id).cloned())
                     .collect())
@@ -1610,7 +1613,7 @@ pub async fn forget_batch(
     let result = state
         .pool
         .write(Priority::High, move |conn| {
-            let results = candidate_ids
+            let results = requested_ids
                 .into_iter()
                 .map(|id| {
                     transactions::forget(
