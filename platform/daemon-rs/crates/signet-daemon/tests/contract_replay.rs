@@ -195,6 +195,18 @@ async fn status_returns_db_info() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn auth_whoami_matches_typescript_local_shape() {
+    let server = TestServer::start().await;
+    let resp = server.get("/api/auth/whoami").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["authenticated"], false);
+    assert!(body["claims"].is_null());
+    assert_eq!(body["mode"], "local");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn memory_crud() {
     let server = TestServer::start().await;
 

@@ -215,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/status", get(status))
+        .route("/api/auth/whoami", get(routes::auth::whoami))
         // Memory read routes
         .route("/api/memories", get(routes::memory::list))
         .route(
