@@ -982,6 +982,10 @@ export interface AcpxProviderConfig {
 
 const DEFAULT_ACPX_VERSION = "0.7.0";
 
+function normalizeAcpxAgent(agent: string): string {
+	return agent === "claude-code" ? "claude" : agent;
+}
+
 function acpxPermissionArgs(mode: AcpxPermissionMode | undefined): string[] {
 	switch (mode) {
 		case "deny-all":
@@ -1005,9 +1009,23 @@ function acpxEnv(hooks: AcpxHooksMode | undefined): NodeJS.ProcessEnv {
 	return env;
 }
 
-function resolveAcpxCwd(cwd: string | undefined): string | undefined {
-	if (!cwd) return undefined;
-	return isAbsolute(cwd) ? cwd : resolvePath(cwd);
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
+
+function resolveAcpxCwd(cwd: string | undefined, hooks: AcpxHooksMode | undefined): string | undefined {
+	if (cwd) return isAbsolute(cwd) ? cwd : resolvePath(cwd);
+	if (hooks !== "disabled") return undefined;
+	const isolatedCwd = join(getAgentsDir(), ".daemon", "acpx-background");
+	mkdirSync(isolatedCwd, { recursive: true });
+	return isolatedCwd;
+}
+
+function resolveAcpxAllowedTools(
+	config: Pick<AcpxProviderConfig, "allowedTools" | "hooks">,
+): readonly string[] | undefined {
+	if (config.allowedTools !== undefined) return config.allowedTools;
+	return config.hooks === "disabled" ? [] : undefined;
 }
 
 function resolveAcpxFormat(config: Pick<AcpxProviderConfig, "format" | "captureEvents">): AcpxOutputFormat {
@@ -1019,8 +1037,9 @@ function buildAcpxCommand(
 	timeoutMs: number,
 ): { bin: string; args: string[]; cwd?: string } {
 	const bin = config.bin ?? "npx";
-	const cwd = resolveAcpxCwd(config.cwd);
+	const cwd = resolveAcpxCwd(config.cwd, config.hooks);
 	const packageRef = config.package ?? (!config.bin ? `acpx@${config.version ?? DEFAULT_ACPX_VERSION}` : undefined);
+	const allowedTools = resolveAcpxAllowedTools(config);
 	const args: string[] = [];
 	if (packageRef) {
 		if (bin.endsWith("npx") || bin.endsWith("npx.cmd")) args.push("-y");
@@ -1032,9 +1051,9 @@ function buildAcpxCommand(
 	if (config.model) args.push("--model", config.model);
 	args.push(...acpxPermissionArgs(config.permissions));
 	if (config.terminal === "disabled") args.push("--no-terminal");
-	if (config.allowedTools) args.push("--allowed-tools", config.allowedTools.join(","));
+	if (allowedTools) args.push("--allowed-tools", allowedTools.join(","));
 	args.push(...(config.extraArgs ?? []));
-	args.push(config.agent);
+	args.push(normalizeAcpxAgent(config.agent));
 	if ((config.mode ?? "exec") === "session" && config.session) {
 		args.push("-s", config.session);
 	}
