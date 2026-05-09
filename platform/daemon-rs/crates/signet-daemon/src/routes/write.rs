@@ -518,10 +518,25 @@ mod tests {
     use crate::state::ExtractionRuntimeState;
 
     use super::{
-        RememberBody, dead_letter_blocked_extraction_memory, guard_forget_scope, normalize_scope,
-        parse_remember_tags, parse_visibility, remember, resolve_remember_agent,
+        ForgetBatchBody, RememberBody, dead_letter_blocked_extraction_memory, guard_forget_scope,
+        normalize_scope, parse_remember_tags, parse_visibility, remember, resolve_remember_agent,
         require_session_scope_for_write,
     };
+
+    #[test]
+    fn forget_batch_body_accepts_camel_case_confirm_token() {
+        let body: ForgetBatchBody = serde_json::from_value(json!({
+            "mode": "execute",
+            "ids": ["mem-1"],
+            "reason": "operator request",
+            "confirmToken": "preview-token",
+            "ifVersion": 7,
+        }))
+        .unwrap();
+
+        assert_eq!(body.confirm_token.as_deref(), Some("preview-token"));
+        assert_eq!(body.if_version, Some(json!(7)));
+    }
 
     #[test]
     fn remember_tags_accepts_comma_separated_strings() {
@@ -1390,7 +1405,9 @@ pub struct ForgetBatchBody {
     pub limit: Option<Value>,
     pub reason: Option<String>,
     pub force: Option<Value>,
+    #[serde(alias = "confirmToken")]
     pub confirm_token: Option<String>,
+    #[serde(alias = "ifVersion")]
     pub if_version: Option<Value>,
 }
 
@@ -1669,7 +1686,7 @@ pub async fn forget_batch(
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
-                "error": "confirm_token is required for large forget operations; run preview first",
+                "error": "confirmToken is required for large forget operations; run preview first",
                 "requiresConfirm": true,
                 "confirmToken": confirm_token,
                 "count": candidates.len(),
