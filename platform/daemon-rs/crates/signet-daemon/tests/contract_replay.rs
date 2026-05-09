@@ -218,7 +218,49 @@ async fn memory_crud() {
     let body = server.json(resp).await;
     assert!(body["id"].is_string() || body["status"].is_string());
 
-    // List should now have >= 1
+    // Batch forget preview should match the TypeScript daemon route shape.
+    let resp = server
+        .post(
+            "/api/memory/forget",
+            json!({
+                "ids": [body["id"].as_str().unwrap_or("")],
+                "mode": "preview"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let forget = server.json(resp).await;
+    assert_eq!(forget["mode"], "preview");
+    assert_eq!(forget["count"], 1);
+    assert_eq!(forget["requiresConfirm"], false);
+    assert!(forget["confirmToken"].is_string());
+    assert_eq!(forget["candidates"].as_array().map(Vec::len), Some(1));
+    assert_eq!(forget["candidates"][0]["id"], body["id"]);
+    assert!(forget["candidates"][0]["score"].is_number());
+    assert!(forget["candidates"][0]["pinned"].is_boolean());
+    assert!(forget["candidates"][0]["version"].is_number());
+
+    let resp = server
+        .post(
+            "/api/memory/forget",
+            json!({
+                "ids": [body["id"].as_str().unwrap_or("")],
+                "mode": "execute",
+                "reason": "contract replay cleanup"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let executed = server.json(resp).await;
+    assert_eq!(executed["mode"], "execute");
+    assert_eq!(executed["requested"], 1);
+    assert_eq!(executed["deleted"], 1);
+    assert_eq!(executed["results"].as_array().map(Vec::len), Some(1));
+    assert_eq!(executed["results"][0]["id"], body["id"]);
+    assert_eq!(executed["results"][0]["status"], "deleted");
+    assert!(executed["results"][0]["newVersion"].is_number());
+
+    // List should still respond after mutation history updates
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);
 }

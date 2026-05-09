@@ -244,6 +244,10 @@ async fn main() -> anyhow::Result<()> {
             axum::routing::post(routes::write::remember),
         )
         .route(
+            "/api/memory/forget",
+            axum::routing::post(routes::write::forget_batch),
+        )
+        .route(
             "/api/memory/{id}/recover",
             axum::routing::post(routes::write::recover),
         )
