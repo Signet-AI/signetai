@@ -16,8 +16,8 @@ use signet_core::db::Priority;
 use signet_services::session::SessionTracker;
 use signet_services::transactions;
 
-use crate::auth::middleware::{authenticate_headers, require_scope_guard};
-use crate::auth::types::TokenScope;
+use crate::auth::middleware::{authenticate_headers, require_permission_guard, require_scope_guard};
+use crate::auth::types::{Permission, TokenScope};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -207,6 +207,44 @@ fn guard_write_scope(
         user: None,
     };
     require_scope_guard(&auth, &target, state.auth_mode, is_loopback(peer))
+}
+
+fn guard_forget_scope(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+    agent_ids: &[String],
+) -> Result<(), Box<axum::response::Response>> {
+    let is_local = is_loopback(peer);
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )?;
+    require_permission_guard(&auth, Permission::Forget, state.auth_mode, is_local)?;
+
+    let targets = if agent_ids.is_empty() {
+        vec!["default".to_string()]
+    } else {
+        agent_ids
+            .iter()
+            .fold(Vec::new(), |mut acc, agent| {
+                if !acc.contains(agent) {
+                    acc.push(agent.clone());
+                }
+                acc
+            })
+    };
+    for agent_id in targets {
+        let target = TokenScope {
+            project: None,
+            agent: Some(agent_id),
+            user: None,
+        };
+        require_scope_guard(&auth, &target, state.auth_mode, is_local)?;
+    }
+    Ok(())
 }
 
 fn dead_letter_blocked_extraction_memory(
@@ -480,8 +518,9 @@ mod tests {
     use crate::state::ExtractionRuntimeState;
 
     use super::{
-        RememberBody, dead_letter_blocked_extraction_memory, normalize_scope, parse_remember_tags,
-        parse_visibility, remember, resolve_remember_agent, require_session_scope_for_write,
+        RememberBody, dead_letter_blocked_extraction_memory, guard_forget_scope, normalize_scope,
+        parse_remember_tags, parse_visibility, remember, resolve_remember_agent,
+        require_session_scope_for_write,
     };
 
     #[test]
@@ -527,6 +566,19 @@ mod tests {
     fn resolve_remember_agent_inherits_session_scope_when_missing() {
         let agent = resolve_remember_agent(None, Some("agent:agent-a:sess-1")).unwrap();
         assert_eq!(agent, "agent-a");
+    }
+
+    #[tokio::test]
+    async fn batch_forget_guard_requires_authentication_in_team_mode() {
+        let (state, _dir) = build_test_state_with_auth(AuthMode::Team, Some(vec![7; 32])).await;
+        let err = guard_forget_scope(
+            state.as_ref(),
+            &HeaderMap::new(),
+            &SocketAddr::from(([203, 0, 113, 10], 3850)),
+            &["default".to_string()],
+        )
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
@@ -814,6 +866,13 @@ mod tests {
     }
 
     async fn build_test_state() -> (Arc<crate::state::AppState>, tempfile::TempDir) {
+        build_test_state_with_auth(AuthMode::Local, None).await
+    }
+
+    async fn build_test_state_with_auth(
+        auth_mode: AuthMode,
+        auth_secret: Option<Vec<u8>>,
+    ) -> (Arc<crate::state::AppState>, tempfile::TempDir) {
         let dir = tempdir().expect("tempdir");
         let db = dir.path().join("memory").join("memories.db");
         std::fs::create_dir_all(db.parent().expect("db parent")).expect("create memory dir");
@@ -881,8 +940,8 @@ mod tests {
                 None,
                 None, // llm provider
                 None,
-                AuthMode::Local,
-                None,
+                auth_mode,
+                auth_secret,
                 AuthRateLimiter::from_rules(&rules),
                 AuthRateLimiter::from_rules(&rules),
             )),
@@ -1434,6 +1493,8 @@ fn forget_result_json(id: String, result: transactions::ForgetResult) -> serde_j
 
 pub async fn forget_batch(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     body: Result<Json<ForgetBatchBody>, axum::extract::rejection::JsonRejection>,
 ) -> axum::response::Response {
     let Json(body) = match body {
@@ -1493,7 +1554,7 @@ pub async fn forget_batch(
             let ids = requested_ids.clone();
             move |conn| {
                 if ids.is_empty() {
-                    return Ok(Vec::new());
+                    return Ok((Vec::new(), Vec::new()));
                 }
 
                 let placeholders = std::iter::repeat_n("?", ids.len())
@@ -1513,16 +1574,24 @@ pub async fn forget_batch(
                         })
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(ids
+                let agent_sql = format!(
+                    "SELECT DISTINCT COALESCE(NULLIF(agent_id, ''), 'default') FROM memories WHERE id IN ({placeholders})"
+                );
+                let mut agent_stmt = conn.prepare(&agent_sql)?;
+                let agent_ids = agent_stmt
+                    .query_map(rusqlite::params_from_iter(ids.iter()), |row| row.get(0))?
+                    .collect::<Result<Vec<String>, _>>()?;
+                let candidates = ids
                     .into_iter()
                     .filter_map(|id| rows.iter().find(|row| row.id == id).cloned())
-                    .collect())
+                    .collect();
+                Ok((candidates, agent_ids))
             }
         })
         .await;
 
-    let candidates = match candidates_result {
-        Ok(candidates) => candidates,
+    let (candidates, agent_ids) = match candidates_result {
+        Ok(lookup) => lookup,
         Err(err) => {
             warn!(err = %err, "forget preview failed");
             return (
@@ -1532,6 +1601,9 @@ pub async fn forget_batch(
                 .into_response();
         }
     };
+    if let Err(resp) = guard_forget_scope(state.as_ref(), &headers, &peer, &agent_ids) {
+        return *resp;
+    }
     let candidate_ids = candidates
         .iter()
         .map(|candidate| candidate.id.clone())
