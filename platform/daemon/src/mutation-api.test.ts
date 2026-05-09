@@ -61,7 +61,9 @@ describe("mutation API routes", () => {
 		mkdirSync(join(agentsDir, "memory"), { recursive: true });
 		writeFileSync(
 			join(agentsDir, "agent.yaml"),
-			`memory:
+			`embedding:
+  provider: none
+memory:
   pipelineV2:
     enabled: false
     shadowMode: false
