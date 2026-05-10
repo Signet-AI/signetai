@@ -31,7 +31,7 @@ export interface SignetDesktopBridge {
 	quickCapture(content: string): Promise<void>;
 	searchMemories(query: string, limit?: number): Promise<string>;
 	pickDirectory?(options?: { title?: string }): Promise<string | null>;
-	checkForUpdate(): Promise<string | null>;
+	checkForUpdate(): Promise<unknown>;
 	quit(): Promise<void>;
 	onWindowStateChange(callback: (state: DesktopWindowState) => void): () => void;
 }

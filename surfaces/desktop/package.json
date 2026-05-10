@@ -20,7 +20,8 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@signet/tray": "workspace:*"
+    "@signet/tray": "workspace:*",
+    "electron-updater": "^6.8.3"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
@@ -52,7 +53,8 @@
       "category": "public.app-category.productivity",
       "icon": "icons/icon.icns",
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ]
     },
     "win": {
@@ -71,7 +73,14 @@
     },
     "directories": {
       "output": "release"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Signet-AI",
+        "repo": "signetai"
+      }
+    ]
   },
   "author": "Signet AI <hello@signetai.sh>"
 }

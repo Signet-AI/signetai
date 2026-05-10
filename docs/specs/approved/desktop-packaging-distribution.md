@@ -10,6 +10,7 @@ success_criteria:
   - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
   - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
   - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
+  - "Desktop releases publish electron-updater metadata and app artifacts so packaged installs can self-update"
   - "The supported source-build path is exposed through `signet desktop build` and `signet desktop install`"
 scope_boundary: "Desktop packaging, runtime bundling preference, CI workflows, and Arch metadata generation. Does not replace npm package publishing flows."
 ---
@@ -47,6 +48,10 @@ Arch.
 6. The official local source-build entrypoint is `signet desktop build`;
    `signet desktop install` builds from the same source checkout and installs
    a native launcher where the platform implementation exists.
+7. Packaged desktop releases must publish update metadata (`latest*.yml`) and
+   platform artifacts required by `electron-updater`, including macOS zip
+   artifacts, so desktop users can move to new dashboard/runtime bundles
+   without reinstalling manually.
 
 ## Integration notes
 
