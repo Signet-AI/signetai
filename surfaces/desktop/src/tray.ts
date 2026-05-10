@@ -112,6 +112,7 @@ function recentMenu(memories: readonly RecentMemory[]): MenuItemConstructorOptio
 export class DesktopTray {
 	readonly #daemon: DaemonManager;
 	readonly #openDashboard: () => void;
+	readonly #checkForUpdate: () => void;
 	#tray: Tray | null = null;
 	#lastJson = "";
 	#timer: NodeJS.Timeout | null = null;
@@ -122,9 +123,10 @@ export class DesktopTray {
 	#polling = false;
 	#pollAgain = false;
 
-	constructor(daemon: DaemonManager, openDashboard: () => void) {
+	constructor(daemon: DaemonManager, openDashboard: () => void, checkForUpdate: () => void) {
 		this.#daemon = daemon;
 		this.#openDashboard = openDashboard;
+		this.#checkForUpdate = checkForUpdate;
 	}
 
 	start(): void {
@@ -214,9 +216,14 @@ export class DesktopTray {
 			{ label: "Recent Memories", submenu: recentMenu(this.#snapshot?.recentMemories ?? []) },
 			{ type: "separator" },
 			{ label: "Start Daemon", enabled: !running, click: () => void this.#daemon.start().then(() => this.poll()) },
-			{ label: "Restart Daemon", enabled: ownsBundled, click: () => void this.#daemon.restart().then(() => this.poll()) },
+			{
+				label: "Restart Daemon",
+				enabled: ownsBundled,
+				click: () => void this.#daemon.restart().then(() => this.poll()),
+			},
 			{ label: "Stop Daemon", enabled: ownsBundled, click: () => void this.#daemon.stop().then(() => this.poll()) },
 			{ type: "separator" },
+			{ label: "Check for Updates…", click: this.#checkForUpdate },
 			{ label: "Quit Signet", click: () => app.quit() },
 		];
 	}

@@ -40,6 +40,12 @@ The Electron desktop app provides:
 - quick memory capture
 - memory search
 - bundled daemon fallback for consumer installs
+- desktop update checks from the tray menu and on startup for packaged builds
+
+When a packaged update is available, Signet prompts to download it and then
+restart into the new build. The dashboard is bundled into the desktop app, so
+desktop updates are how desktop users receive new dashboard pages such as
+Sources.
 
 The dashboard is still the same web dashboard served by the daemon. Browser
 usage and desktop usage share the dashboard codepath.
@@ -75,7 +81,7 @@ The desktop workflow builds Electron artifacts for:
 | Platform | Artifact |
 |---|---|
 | Linux | `.AppImage` and `.deb` |
-| macOS | `.dmg` |
+| macOS | `.dmg` and updater `.zip` |
 | Windows | installer `.exe` |
 | Arch | AppImage-backed AUR metadata |
 

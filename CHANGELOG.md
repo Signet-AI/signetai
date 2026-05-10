@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-10
-- Bug fixes: match feature flag response shape.
+- Bug fixes: add packaged app updates; match feature flag response shape.
 
 ### 2026-05-09
 - Bug fixes: hide deleted rows from list endpoint; add auth whoami parity route; disable embeddings in mutation api route tests; add batch memory forget route parity; isolate background acpx summaries; use claude connector for Claude Code.
@@ -37,6 +37,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: correct stale documentation claims.
 
 ## Release Ledger
+
+## [0.115.15] - 2026-05-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.14..v0.115.15`.
+
+### Bug Fixes
+
+- **desktop**: add packaged app updates (#673)
 
 ## [0.115.14] - 2026-05-10
 

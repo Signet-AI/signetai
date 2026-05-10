@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, normalize, relative, sep } from "node:path";
 import { BrowserWindow, Menu, type OpenDialogOptions, app, dialog, ipcMain, protocol, shell } from "electron";
 import { DaemonManager } from "./daemon-manager.js";
+import { checkForDesktopUpdate, configureDesktopUpdates } from "./desktop-updates.js";
 import { dashboardRoot, preloadPath } from "./paths.js";
 import { daemonRouteTarget, isDaemonRouteUrl } from "./protocol-routes.js";
 import { DesktopTray } from "./tray.js";
@@ -304,7 +305,7 @@ function registerIpc(): void {
 	ipcMain.handle("desktop:quickCapture", (_event, content: string) => quickCapture(content));
 	ipcMain.handle("desktop:searchMemories", (_event, query: string, limit?: number) => searchMemories(query, limit));
 	ipcMain.handle("desktop:pickDirectory", (_event, options?: { title?: string }) => pickDirectory(options));
-	ipcMain.handle("desktop:checkForUpdate", () => null);
+	ipcMain.handle("desktop:checkForUpdate", () => checkForDesktopUpdate({ showNoUpdateDialog: true }));
 	ipcMain.handle("desktop:quit", () => app.quit());
 }
 
@@ -318,11 +319,13 @@ app.setName("Signet");
 
 app.whenReady().then(async () => {
 	Menu.setApplicationMenu(null);
+	configureDesktopUpdates();
 	await registerDashboardProtocol();
 	registerIpc();
-	tray = new DesktopTray(daemon, showDashboard);
+	tray = new DesktopTray(daemon, showDashboard, () => void checkForDesktopUpdate({ showNoUpdateDialog: true }));
 	tray.start();
 	showDashboard();
+	setTimeout(() => void checkForDesktopUpdate(), 5000);
 
 	app.on("activate", () => showDashboard());
 });
