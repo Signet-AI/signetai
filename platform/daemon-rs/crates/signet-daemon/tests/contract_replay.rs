@@ -42,6 +42,11 @@ impl Drop for TestServer {
 impl TestServer {
     /// Start a daemon on an ephemeral port with a fresh DB.
     async fn start() -> Self {
+        Self::start_with_agent_yaml(|_| "agent:\n  name: test-agent\n  version: 1\n".to_string())
+            .await
+    }
+
+    async fn start_with_agent_yaml(build_yaml: impl FnOnce(&str) -> String) -> Self {
         let tmpdir = tempfile::tempdir().expect("failed to create tmpdir");
         let port = ephemeral_port();
         let base = format!("http://127.0.0.1:{port}");
@@ -53,11 +58,8 @@ impl TestServer {
         let daemon_dir = tmpdir.path().join(".daemon/logs");
         std::fs::create_dir_all(&daemon_dir).unwrap();
 
-        // Write a minimal agent.yaml
-        let yaml = format!(
-            "agent:\n  name: test-agent\n  version: 1\nhome: {}\n",
-            tmpdir.path().display()
-        );
+        // Write agent.yaml before startup so config-derived routes match TS daemon behavior.
+        let yaml = build_yaml(&tmpdir.path().display().to_string());
         std::fs::write(tmpdir.path().join("agent.yaml"), &yaml).unwrap();
 
         // Spawn daemon in background
@@ -315,6 +317,30 @@ async fn config_endpoints() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn features_endpoint_returns_agent_yaml_boolean_flags_only() {
+    let server = TestServer::start_with_agent_yaml(|_| {
+        format!(
+            "agent:\n  name: test-agent\n  version: 1\nfeatures:\n  rustDaemon: true\n  betaWidget: false\n  stringTrue: \"true\"\n  stringFalse: \"false\"\n  ignoredNumber: 1\n  ignoredString: yes\n"
+        )
+    })
+    .await;
+
+    let resp = server.get("/api/features").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body,
+        json!({
+            "rustDaemon": true,
+            "betaWidget": false,
+            "stringTrue": true,
+            "stringFalse": false,
+        })
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn search_endpoints() {
     let server = TestServer::start().await;
 
@@ -396,7 +422,6 @@ async fn pipeline_endpoints() {
     assert_eq!(body["success"], true);
     assert_eq!(body["paused"], false);
 }
-
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
