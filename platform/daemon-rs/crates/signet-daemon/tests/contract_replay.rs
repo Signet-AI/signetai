@@ -665,3 +665,26 @@ async fn embeddings_stats() {
     let resp = server.get("/api/embeddings").await;
     assert_eq!(resp.status(), 200);
 }
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn embeddings_status_matches_typescript_none_provider_shape() {
+    let server = TestServer::start_with_agent_yaml(|_| {
+        "agent:\n  name: test-agent\n  version: 1\nembedding:\n  provider: none\n  model: nomic-embed-text\n  dimensions: 768\n".to_string()
+    })
+    .await;
+
+    let resp = server.get("/api/embeddings/status").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["provider"], "none");
+    assert_eq!(body["model"], "nomic-embed-text");
+    assert_eq!(body["base_url"], "http://localhost:11434");
+    assert_eq!(body["available"], false);
+    assert!(body["checkedAt"].as_str().is_some_and(|value| !value.is_empty()));
+    assert_eq!(
+        body["error"],
+        "Embedding provider set to 'none' — vector search disabled"
+    );
+    assert!(body["tracker"].is_null());
+}
