@@ -769,13 +769,47 @@ function isWorkingTreeDirtyWith(run: typeof runGit, repoPath: string, timeoutMs:
 function isWorkingTreeDirtyWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<boolean>;
 function isWorkingTreeDirtyWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<boolean>;
 function isWorkingTreeDirtyWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<boolean> {
-	return mapMaybePromise(run(["status", "--porcelain", "--ignore-submodules=all"], repoPath, timeoutMs), (result) => {
-		if (!result.ok) {
-			return true;
-		}
+	return mapMaybePromise(
+		run(["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=all"], repoPath, timeoutMs),
+		(result) => {
+			if (!result.ok) {
+				return true;
+			}
 
-		return result.stdout.trim().length > 0;
-	});
+			return result.stdout
+				.split("\n")
+				.map((line) => line.trimEnd())
+				.filter((line) => line.length > 0)
+				.some((line) => !isGeneratedSourceRepoStatusLine(line));
+		},
+	);
+}
+
+const GENERATED_SOURCE_REPO_PATH_PREFIXES = [
+	"dist/signetai/dashboard/",
+	"dist/signetai/dist/",
+	"dist/signetai/hermes-plugin/",
+	"dist/signetai/node_modules/",
+	"dist/signetai/skills/",
+	"surfaces/desktop/dist/",
+	"surfaces/desktop/release/",
+	"surfaces/desktop/resources/",
+];
+
+function isGeneratedSourceRepoStatusLine(line: string): boolean {
+	const path = parsePorcelainStatusPath(line);
+	if (!path) return false;
+	return GENERATED_SOURCE_REPO_PATH_PREFIXES.some((prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix));
+}
+
+function parsePorcelainStatusPath(line: string): string | null {
+	if (line.length < 4) return null;
+	const rawPath = line.slice(3);
+	const renameSeparator = " -> ";
+	const path = rawPath.includes(renameSeparator)
+		? rawPath.slice(rawPath.lastIndexOf(renameSeparator) + renameSeparator.length)
+		: rawPath;
+	return path.replace(/^\"|\"$/g, "");
 }
 
 function readUpstreamBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;

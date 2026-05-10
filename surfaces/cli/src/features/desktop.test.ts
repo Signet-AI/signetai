@@ -151,6 +151,43 @@ describe("desktop source checkout resolution", () => {
 });
 
 describe("desktop source build", () => {
+	test("syncs the managed workspace checkout before building by default", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const workspace = join(home, "workspace");
+		const calls: string[] = [];
+		try {
+			mkdirSync(workspace, { recursive: true });
+			const result = buildDesktopFromSource(
+				{},
+				{
+					cwd: home,
+					env: { SIGNET_PATH: workspace },
+					syncWorkspaceSourceRepo: (workspaceDir) => {
+						calls.push(`sync ${workspaceDir}`);
+						return {
+							status: "pulled",
+							path: root,
+							message: "pulled latest Signet source checkout",
+							branch: "main",
+							defaultBranch: "main",
+						};
+					},
+					runner: (cmd, args, opts) => {
+						calls.push(`${cmd} ${args.join(" ")} @ ${opts.cwd}`);
+						return { status: 0 };
+					},
+				},
+			);
+
+			expect(result.repo).toBe(root);
+			expect(calls).toEqual([`sync ${workspace}`, `bun install @ ${root}`, `bun run build:desktop @ ${root}`]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test("runs dependency install before desktop build", () => {
 		const root = makeCheckout();
 		const calls: string[] = [];
@@ -278,6 +315,48 @@ describe("linux desktop install", () => {
 
 			expect(lstatSync(result.binary).isSymbolicLink()).toBe(false);
 			expect(readFileSync(result.binary, "utf8")).toContain(`exec '${result.appImage}' "$@"`);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("syncs managed checkout before default install builds", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const workspace = join(home, "workspace");
+		const calls: string[] = [];
+		try {
+			mkdirSync(workspace, { recursive: true });
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			writeFileSync(join(release, "Signet-0.1.0-linux-x86_64.AppImage"), "app");
+
+			const result = installDesktopFromSource(
+				{},
+				{
+					home,
+					env: { SIGNET_PATH: workspace },
+					platform: "linux",
+					syncWorkspaceSourceRepo: (workspaceDir) => {
+						calls.push(`sync ${workspaceDir}`);
+						return {
+							status: "pulled",
+							path: root,
+							message: "pulled latest Signet source checkout",
+							branch: "main",
+							defaultBranch: "main",
+						};
+					},
+					runner: (cmd, args, opts) => {
+						calls.push(`${cmd} ${args.join(" ")} @ ${opts.cwd}`);
+						return { status: 0 };
+					},
+				},
+			);
+
+			expect(existsSync(result.appImage)).toBe(true);
+			expect(calls).toEqual([`sync ${workspace}`, `bun install @ ${root}`, `bun run build:desktop @ ${root}`]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 			rmSync(home, { recursive: true, force: true });

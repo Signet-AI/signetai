@@ -115,6 +115,29 @@ describe("syncWorkspaceSourceRepo", () => {
 		expect(result.message).toContain("already current");
 	});
 
+	it("pulls through generated desktop build artifacts", () => {
+		const { remoteUrl, workDir } = seedRemote();
+		const workspaceDir = makeTempDir("signet-source-workspace-");
+
+		expect(syncWorkspace(workspaceDir, remoteUrl).status).toBe("cloned");
+		const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir);
+		mkdirSync(join(repoPath, "surfaces", "desktop", "release"), { recursive: true });
+		mkdirSync(join(repoPath, "surfaces", "desktop", "resources", "daemon"), { recursive: true });
+		mkdirSync(join(repoPath, "dist", "signetai", "hermes-plugin"), { recursive: true });
+		writeFileSync(join(repoPath, "surfaces", "desktop", "release", "Signet-0.1.0-linux-x64.AppImage"), "app");
+		writeFileSync(join(repoPath, "surfaces", "desktop", "resources", "daemon", "daemon.js"), "daemon");
+		writeFileSync(join(repoPath, "dist", "signetai", "hermes-plugin", "plugin.py"), "plugin");
+		pushRemoteChange(workDir, "# signet\n\nremote build fix\n", "remote build fix");
+
+		const result = syncWorkspace(workspaceDir, remoteUrl);
+
+		expect(result.status).toBe("pulled");
+		expect(readFileSync(join(repoPath, "README.md"), "utf-8")).toContain("remote build fix");
+		expect(
+			readFileSync(join(repoPath, "surfaces", "desktop", "release", "Signet-0.1.0-linux-x64.AppImage"), "utf-8"),
+		).toBe("app");
+	});
+
 	it("fetches but does not pull over local workspace changes", () => {
 		const { remoteUrl, workDir } = seedRemote();
 		const workspaceDir = makeTempDir("signet-source-workspace-");
