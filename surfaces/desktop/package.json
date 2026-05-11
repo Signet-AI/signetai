@@ -14,7 +14,7 @@
     "build:main": "tsc -p tsconfig.json",
     "stage:runtime": "node scripts/stage-runtime.mjs",
     "build": "bun run build:main",
-    "build:desktop": "bun run build:core && bun run build:tray && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder",
+    "build:desktop": "bun run build:core && bun run build:tray && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder --publish never",
     "dev": "bun run build:tray && bun run build:dashboard && bun run build:main && electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test"

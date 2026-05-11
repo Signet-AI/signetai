@@ -96,6 +96,12 @@ describe("Docker build pipeline regression guard", () => {
 		expect(desktopBuild.indexOf("bun run build:core")).toBeLessThan(desktopBuild.indexOf("bun run build:daemon"));
 	});
 
+	it("keeps Electron Builder from auto-publishing during tag builds", () => {
+		expect(desktopBuild).toBeDefined();
+		if (!desktopBuild) return;
+		expect(desktopBuild).toContain("electron-builder --publish never");
+	});
+
 	it("uses a cross-platform skills copy script for daemon builds", () => {
 		expect(daemonCopySkills).toBe("bun ../../scripts/copy-skills.ts");
 		expect(daemonCopySkills).not.toContain("cp -r");
