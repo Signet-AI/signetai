@@ -1820,11 +1820,13 @@ export function pruneGenericEntities(
 	const candidates = accessor.withReadDb((db) => {
 		const rows = db
 			.prepare(
-				`SELECT id, name, entity_type
-				 FROM entities
-				 WHERE agent_id = ?
-				   AND COALESCE(pinned, 0) = 0
-				 ORDER BY updated_at DESC
+				`SELECT e.id, e.name, e.entity_type
+				 FROM entities e
+				 WHERE e.agent_id = ?
+				   AND COALESCE(e.pinned, 0) = 0
+				   AND e.entity_type NOT IN ('skill')
+				   AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
+				 ORDER BY e.updated_at DESC
 				 LIMIT ?`,
 			)
 			.all(agentId, Math.max(batchSize * 10, 200)) as GenericEntityCandidate[];

@@ -157,6 +157,30 @@ describe("graph-transactions", () => {
 			expect(mentions).toHaveLength(2);
 		});
 
+		it("persists typed short concrete entities through the shared quality gate", () => {
+			const now = new Date().toISOString();
+			const result = txPersistEntities(asWriteDb(db), {
+				entities: [
+					{
+						source: "AI",
+						sourceType: "product",
+						relationship: "uses",
+						target: "Go",
+						targetType: "tool",
+						confidence: 0.8,
+					},
+				],
+				sourceMemoryId: "mem-1",
+				agentId: "agent-1",
+				extractedAt: now,
+			});
+
+			expect(result.entitiesInserted).toBe(2);
+			expect(result.relationsInserted).toBe(1);
+			const names = db.prepare("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
+			expect(names.map((row) => row.name)).toEqual(["AI", "Go"]);
+		});
+
 		it("rejects generic scaffolding triples without partial source writes", () => {
 			const now = new Date().toISOString();
 			const result = txPersistEntities(asWriteDb(db), {

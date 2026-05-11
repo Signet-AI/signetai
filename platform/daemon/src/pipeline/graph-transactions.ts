@@ -365,10 +365,6 @@ export function txPersistEntities(db: WriteDb, input: PersistEntitiesInput): Per
 	for (const triple of input.entities) {
 		// Pre-validate both names before any DB writes — prevents phantom mention
 		// increments on the source when the target would be filtered by upsertEntity.
-		const srcCanon = triple.source.trim().toLowerCase().replace(/\s+/g, " ");
-		const tgtCanon = triple.target.trim().toLowerCase().replace(/\s+/g, " ");
-		if (srcCanon.length < 4 || tgtCanon.length < 4) continue;
-
 		const sourceType = normalizeEntityType(triple.sourceType);
 		const targetType = normalizeEntityType(triple.targetType);
 		if (!shouldPersistEntity(triple.source, sourceType) || !shouldPersistEntity(triple.target, targetType)) continue;
