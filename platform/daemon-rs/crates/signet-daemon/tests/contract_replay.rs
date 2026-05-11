@@ -9,6 +9,7 @@
 //!   cargo test -p signet-daemon --test contract_replay -- --ignored
 
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::json;
@@ -136,6 +137,10 @@ impl TestServer {
 
     async fn json(&self, resp: reqwest::Response) -> serde_json::Value {
         resp.json().await.expect("failed to parse json")
+    }
+
+    fn memory_db_path(&self) -> PathBuf {
+        self._tmpdir.path().join("memory/memories.db")
     }
 }
 
@@ -305,6 +310,73 @@ async fn memory_crud() {
     // List should still respond after mutation history updates
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn most_used_memories_orders_limits_and_shapes_hot_list() {
+    let server = TestServer::start().await;
+    seed_most_used_memories(&server.memory_db_path());
+
+    let resp = server.get("/api/memories/most-used?limit=2").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let memories = body["memories"].as_array().expect("memories array");
+    assert_eq!(memories.len(), 2);
+
+    assert_eq!(memories[0]["id"], "hot-most-used");
+    assert_eq!(memories[0]["content"], "Most accessed memory");
+    assert_eq!(memories[0]["access_count"], 5);
+    assert_eq!(memories[0]["importance"], 0.2);
+    assert_eq!(memories[0]["type"], "fact");
+    assert_eq!(memories[0]["tags"], "hot,alpha");
+
+    // Same access_count should tie-break by importance descending, matching
+    // the TypeScript daemon's dashboard hot-list SQL contract.
+    assert_eq!(memories[1]["id"], "hot-important-tiebreaker");
+    assert_eq!(memories[1]["access_count"], 3);
+    assert_eq!(memories[1]["importance"], 0.9);
+}
+
+fn seed_most_used_memories(path: &std::path::Path) {
+    let conn = rusqlite::Connection::open(path).expect("open memories db");
+    let now = "2026-05-11T00:00:00Z";
+    for (id, content, hash, access_count, importance, tags) in [
+        (
+            "hot-most-used",
+            "Most accessed memory",
+            "contract-hot-most-used",
+            5_i64,
+            0.2_f64,
+            "hot,alpha",
+        ),
+        (
+            "hot-important-tiebreaker",
+            "Important tiebreaker memory",
+            "contract-hot-important",
+            3_i64,
+            0.9_f64,
+            "hot,beta",
+        ),
+        (
+            "hot-lower-tiebreaker",
+            "Lower tiebreaker memory",
+            "contract-hot-lower",
+            3_i64,
+            0.1_f64,
+            "hot,gamma",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO memories (
+                id, content, normalized_content, content_hash, type, tags,
+                access_count, importance, extraction_status, created_at,
+                updated_at, updated_by
+             ) VALUES (?1, ?2, ?2, ?3, 'fact', ?6, ?4, ?5, 'completed', ?7, ?7, 'contract_replay')",
+            rusqlite::params![id, content, hash, access_count, importance, tags, now],
+        )
+        .expect("seed most-used memory");
+    }
 }
 
 #[tokio::test]
