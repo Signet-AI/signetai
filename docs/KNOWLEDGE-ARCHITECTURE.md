@@ -81,12 +81,23 @@ actually matter. The noise has been refined away. What remains is structure.
 Entities
 --------
 
-Everything in the database is either an entity, or it belongs to one.
+Everything in the database is either a semantic object, evidence for one,
+or derived structure that belongs to one.
 
-An entity is anything that can be identified — a person, a project, a
-system, a tool, a concept. Entities are persistent. They accumulate
-knowledge over time. They never expire. They are the organizing scope of
-the entire knowledge graph.
+An entity is an identity-bearing semantic object: a person, organization,
+project, product, system/tool, artifact/document/source, place, or event.
+Entities are concrete enough that an agent can point at them, revisit them,
+attach evidence to them, and ask follow-up questions about them later. Abstract
+descriptions belong in aspects, attributes, claims, or relations rather than
+being minted as entity rows.
+
+Events are first-class entities because time-aware recall depends on them.
+`Signet Daily Digest — 2026-05-10` is an event. It can have an `occurred_at`
+attribute, participants, related artifacts, source provenance, and relations to
+the projects/products it summarized. A question like "when was our last daily
+digest?" should sort daily-digest events by time and expand to source artifacts
+only when evidence is needed; it should not scrape transcript soup hoping a
+timestamp appears nearby.
 
 `nicholai` is an entity. `ooIDE` is an entity. `WorkOS` is an entity.
 Their relationships to each other — that nicholai works on ooIDE, that

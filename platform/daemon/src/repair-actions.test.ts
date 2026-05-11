@@ -19,6 +19,7 @@ import {
 	deduplicateMemories,
 	getDedupStats,
 	getEmbeddingGapStats,
+	pruneGenericEntities,
 	reembedMissingMemories,
 	releaseStaleLeases,
 	requeueDeadJobs,
@@ -299,6 +300,41 @@ describe("checkRepairGate", () => {
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
 		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(true);
+	});
+});
+
+describe("pruneGenericEntities", () => {
+	it("dry-runs and deletes generic entities without touching pinned or concrete entities", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const limiter = createRateLimiter();
+		const now = new Date().toISOString();
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, 'default', ?, ?, ?, ?)`,
+			);
+			insert.run("ent-sender", "Sender", "sender", "person", 174, 0, now, now);
+			insert.run("ent-signet", "Signet", "signet", "project", 5, 0, now, now);
+			insert.run("ent-pinned", "Summary", "summary", "document", 3, 1, now, now);
+
+			const dryRun = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: true });
+			expect(dryRun.success).toBe(true);
+			expect(dryRun.affected).toBe(1);
+			expect(dryRun.message).toContain("Sender");
+
+			const result = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: false });
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(1);
+
+			const remaining = db.prepare("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
+			expect(remaining.map((row) => row.name)).toEqual(["Signet", "Summary"]);
+		} finally {
+			db.close();
+		}
 	});
 });
 

@@ -11,14 +11,14 @@ function makeDbPath(): string {
 	return join(dir, "memories.db");
 }
 
-function seedEntity(id: string, name: string, mentions = 1): void {
+function seedEntity(id: string, name: string, mentions = 1, entityType = "project"): void {
 	const now = "2026-04-19T00:00:00.000Z";
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO entities
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-			 VALUES (?, ?, ?, 'concept', 'default', ?, ?, ?)`,
-		).run(id, name, name.toLowerCase(), mentions, now, now);
+			 VALUES (?, ?, ?, ?, 'default', ?, ?, ?)`,
+		).run(id, name, name.toLowerCase(), entityType, mentions, now, now);
 	});
 }
 

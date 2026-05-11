@@ -167,6 +167,8 @@ specs:
     success_criteria:
       - "Memory retrieval returns structurally related context, not just embedding-similar fragments"
       - "Entity graph traversal produces richer context than flat embedding search alone"
+      - "Extraction creates only concrete identity-bearing semantic objects as entities, with events first-class for time-aware recall"
+      - "Pronouns, metadata roles, headings, discourse fragments, prompt scaffolding, and abstract claim/policy/action slots are rejected or pruned instead of becoming entities"
     decision: null
 
   - id: knowledge-architecture-navigation
