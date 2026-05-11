@@ -156,7 +156,9 @@ export function isKnownAbstractEntityType(type: string | undefined): boolean {
 
 export function classifyEntityQuality(name: string, type?: string): EntityQualityResult {
 	const canonical = normalizeEntityName(name);
-	if (canonical.length < 4) return { ok: false, reason: "too_short" };
+	const normalizedType = normalizeEntityType(type);
+	const hasConcreteType = isConcreteEntityType(normalizedType);
+
 	if (/^\d+$/.test(canonical)) return { ok: false, reason: "numeric_only" };
 	if (GENERIC_CANONICAL_NAMES.has(canonical)) return { ok: false, reason: "generic_or_scaffolding_name" };
 	if (METADATA_LABELS.has(canonical)) return { ok: false, reason: "metadata_role" };
@@ -167,8 +169,8 @@ export function classifyEntityQuality(name: string, type?: string): EntityQualit
 	if (/^(current|pending|primary)\s+/i.test(canonical)) {
 		return { ok: false, reason: "section_heading" };
 	}
+	if (canonical.length < 4 && !hasConcreteType) return { ok: false, reason: "too_short" };
 
-	const normalizedType = normalizeEntityType(type);
 	if (normalizedType && normalizedType !== "extracted" && normalizedType !== "unknown") {
 		if (!isConcreteEntityType(normalizedType)) {
 			return {
