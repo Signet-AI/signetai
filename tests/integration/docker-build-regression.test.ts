@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 const rootDir = fileURLToPath(new URL("../../", import.meta.url));
 const dockerfile = readFileSync(join(rootDir, "deploy/docker/Dockerfile"), "utf8");
 const dockerignore = readFileSync(join(rootDir, ".dockerignore"), "utf8");
-const openclawPackageJson = JSON.parse(readFileSync(join(rootDir, "integrations/openclaw/memory-adapter/package.json"), "utf8"));
+const openclawPackageJson = JSON.parse(
+	readFileSync(join(rootDir, "integrations/openclaw/memory-adapter/package.json"), "utf8"),
+);
 const daemonPackageJson = JSON.parse(readFileSync(join(rootDir, "platform/daemon/package.json"), "utf8"));
 const desktopPackageJson = JSON.parse(readFileSync(join(rootDir, "surfaces/desktop/package.json"), "utf8"));
 const openclawBuild =
@@ -38,6 +40,16 @@ const desktopBuild =
 	"build:desktop" in desktopPackageJson.scripts &&
 	typeof desktopPackageJson.scripts["build:desktop"] === "string"
 		? desktopPackageJson.scripts["build:desktop"]
+		: undefined;
+const desktopTypecheck =
+	typeof desktopPackageJson === "object" &&
+	desktopPackageJson !== null &&
+	"scripts" in desktopPackageJson &&
+	typeof desktopPackageJson.scripts === "object" &&
+	desktopPackageJson.scripts !== null &&
+	"typecheck" in desktopPackageJson.scripts &&
+	typeof desktopPackageJson.scripts.typecheck === "string"
+		? desktopPackageJson.scripts.typecheck
 		: undefined;
 const desktopHomepage =
 	typeof desktopPackageJson === "object" &&
@@ -94,6 +106,13 @@ describe("Docker build pipeline regression guard", () => {
 		expect(desktopBuild).toStartWith("bun run build:core");
 		expect(desktopBuild).toContain("bun run build:daemon");
 		expect(desktopBuild.indexOf("bun run build:core")).toBeLessThan(desktopBuild.indexOf("bun run build:daemon"));
+	});
+
+	it("keeps desktop typecheck aligned with workspace dependency order", () => {
+		expect(desktopTypecheck).toBeDefined();
+		if (!desktopTypecheck) return;
+		expect(desktopTypecheck).toStartWith("bun run build:tray");
+		expect(desktopTypecheck).toContain("tsc -p tsconfig.json --noEmit");
 	});
 
 	it("keeps Electron Builder from auto-publishing during tag builds", () => {
