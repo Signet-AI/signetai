@@ -342,6 +342,37 @@ describe("pruneGenericEntities", () => {
 			db.close();
 		}
 	});
+
+	it("continues scanning past recent valid entities to find older generic rows", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const limiter = createRateLimiter();
+		const recent = "2026-05-11T18:00:00.000Z";
+		const old = "2026-05-01T18:00:00.000Z";
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, 'default', ?, 0, ?, ?)`,
+			);
+			for (let i = 0; i < 510; i += 1) {
+				insert.run(`ent-project-${i}`, `Project ${i}`, `project ${i}`, "project", 1, recent, recent);
+			}
+			insert.run("ent-sender-old", "Sender", "sender", "person", 12, old, old);
+
+			const dryRun = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: true,
+				batchSize: 1,
+			});
+			expect(dryRun.success).toBe(true);
+			expect(dryRun.affected).toBe(1);
+			expect(dryRun.message).toContain("Sender");
+		} finally {
+			db.close();
+		}
+	});
 });
 
 describe("structuralBackfill", () => {

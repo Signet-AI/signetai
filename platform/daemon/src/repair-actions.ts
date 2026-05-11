@@ -1818,24 +1818,33 @@ export function pruneGenericEntities(
 	const batchSize = Math.max(1, Math.min(Math.floor(options?.batchSize ?? 100), 500));
 	const agentId = options?.agentId ?? "default";
 	const candidates = accessor.withReadDb((db) => {
-		const rows = db
-			.prepare(
-				`SELECT e.id, e.name, e.entity_type
-				 FROM entities e
-				 WHERE e.agent_id = ?
-				   AND COALESCE(e.pinned, 0) = 0
-				   AND e.entity_type NOT IN ('skill')
-				   AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
-				 ORDER BY e.updated_at DESC
-				 LIMIT ?`,
-			)
-			.all(agentId, Math.max(batchSize * 10, 200)) as GenericEntityCandidate[];
-		return rows
-			.flatMap((row): GenericEntityCandidate[] => {
+		const candidates: GenericEntityCandidate[] = [];
+		const pageSize = Math.max(batchSize * 10, 500);
+		let offset = 0;
+		const selectPage = db.prepare(
+			`SELECT e.id, e.name, e.entity_type
+			 FROM entities e
+			 WHERE e.agent_id = ?
+			   AND COALESCE(e.pinned, 0) = 0
+			   AND e.entity_type NOT IN ('skill')
+			   AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
+			 ORDER BY e.updated_at DESC
+			 LIMIT ? OFFSET ?`,
+		);
+
+		for (;;) {
+			const rows = selectPage.all(agentId, pageSize, offset) as GenericEntityCandidate[];
+			if (rows.length === 0) break;
+			for (const row of rows) {
 				const quality = classifyEntityQuality(row.name, row.entity_type);
-				return quality.ok ? [] : [{ ...row, reason: quality.reason }];
-			})
-			.slice(0, batchSize);
+				if (!quality.ok) {
+					candidates.push({ ...row, reason: quality.reason });
+					if (candidates.length >= batchSize) return candidates;
+				}
+			}
+			offset += rows.length;
+		}
+		return candidates;
 	});
 
 	if (options?.dryRun ?? true) {
