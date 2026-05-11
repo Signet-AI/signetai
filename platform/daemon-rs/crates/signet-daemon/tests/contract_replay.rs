@@ -218,6 +218,13 @@ async fn memory_crud() {
     let body = server.json(resp).await;
     assert_eq!(body["stats"]["total"], 0);
 
+    // Dashboard hot-list route should match the TypeScript daemon's
+    // tolerant response shape even when no memories have been accessed yet.
+    let resp = server.get("/api/memories/most-used?limit=bad").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["memories"].as_array().map(Vec::len), Some(0));
+
     // Remember
     let resp = server
         .post(
@@ -681,7 +688,11 @@ async fn embeddings_status_matches_typescript_none_provider_shape() {
     assert_eq!(body["model"], "nomic-embed-text");
     assert_eq!(body["base_url"], "http://localhost:11434");
     assert_eq!(body["available"], false);
-    assert!(body["checkedAt"].as_str().is_some_and(|value| !value.is_empty()));
+    assert!(
+        body["checkedAt"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
     assert_eq!(
         body["error"],
         "Embedding provider set to 'none' — vector search disabled"

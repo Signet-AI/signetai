@@ -24,6 +24,11 @@ pub struct ListParams {
     offset: Option<usize>,
 }
 
+#[derive(Deserialize)]
+pub struct MostUsedParams {
+    limit: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct ListResponse {
     memories: Vec<serde_json::Value>,
@@ -101,6 +106,52 @@ pub async fn list(
         });
 
     Json(result)
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/memories/most-used
+// ---------------------------------------------------------------------------
+
+pub async fn most_used(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<MostUsedParams>,
+) -> Json<serde_json::Value> {
+    let limit = params
+        .limit
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .filter(|raw| *raw >= 1)
+        .unwrap_or(6)
+        .min(200);
+
+    let memories = state
+        .pool
+        .read(move |conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT id, content, access_count, importance, type, tags
+                 FROM memories
+                 WHERE access_count > 0
+                 ORDER BY access_count DESC, importance DESC
+                 LIMIT ?1",
+            )?;
+            let memories: Vec<serde_json::Value> = stmt
+                .query_map(rusqlite::params![limit], |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "content": row.get::<_, String>(1)?,
+                        "access_count": row.get::<_, i64>(2)?,
+                        "importance": row.get::<_, f64>(3)?,
+                        "type": row.get::<_, String>(4)?,
+                        "tags": row.get::<_, Option<String>>(5)?,
+                    }))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(memories)
+        })
+        .await
+        .unwrap_or_default();
+
+    Json(serde_json::json!({ "memories": memories }))
 }
 
 // ---------------------------------------------------------------------------
