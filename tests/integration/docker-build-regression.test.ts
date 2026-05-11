@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const rootDir = fileURLToPath(new URL("../../", import.meta.url));
 const dockerfile = readFileSync(join(rootDir, "deploy/docker/Dockerfile"), "utf8");
+const dockerImageWorkflow = readFileSync(join(rootDir, ".github/workflows/docker-image.yml"), "utf8");
 const dockerignore = readFileSync(join(rootDir, ".dockerignore"), "utf8");
 const openclawPackageJson = JSON.parse(
 	readFileSync(join(rootDir, "integrations/openclaw/memory-adapter/package.json"), "utf8"),
@@ -128,5 +129,11 @@ describe("Docker build pipeline regression guard", () => {
 
 	it("keeps desktop Linux package metadata complete for deb generation", () => {
 		expect(desktopHomepage).toBe("https://signetai.sh");
+	});
+
+	it("fails Docker release CI when GHCR latest is not publicly pullable", () => {
+		expect(dockerImageWorkflow).toContain("Verify public GHCR pull");
+		expect(dockerImageWorkflow).toContain("DOCKER_CONFIG=\"${tmp_config}\" docker manifest inspect ghcr.io/signet-ai/signet:latest");
+		expect(dockerImageWorkflow).toContain("is not publicly pullable");
 	});
 });
