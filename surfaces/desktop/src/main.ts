@@ -317,7 +317,7 @@ protocol.registerSchemesAsPrivileged([
 
 app.setName("Signet");
 
-if (process.platform === "darwin") {
+if (process.platform === "darwin" && app.dock) {
 	app.dock.setIcon(iconPath("icon.png"));
 }
 
