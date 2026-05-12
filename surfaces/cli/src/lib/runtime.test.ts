@@ -70,6 +70,7 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<string>0.0.0.0</string>");
 		expect(plist).toContain("<key>SIGNET_PATH</key>");
 		expect(plist).toContain("<string>/Users/user/.agents</string>");
+		expect(plist).toContain("<key>HOME</key>");
 		expect(plist).toContain("<key>RunAtLoad</key>");
 		expect(plist).toContain("<true/>");
 		expect(plist).toContain("<key>KeepAlive</key>");
