@@ -1355,6 +1355,39 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 	);
 
+	server.registerTool(
+		"secret_exec_status",
+		{
+			title: "Secret Exec Status",
+			description:
+				"Poll a queued secret_exec job by id. Returns redacted stdout/stderr/code once the job completes; secret values never appear in results.",
+			inputSchema: z.object({
+				jobId: z.string().min(1).describe("Job id returned by secret_exec"),
+			}),
+			annotations: { readOnlyHint: true },
+		},
+		async ({ jobId }) => {
+			const result = await daemonFetch<{
+				id: string;
+				status: string;
+				stdout?: string;
+				stderr?: string;
+				code?: number;
+				timedOut?: boolean;
+				error?: string;
+				createdAt?: string;
+				startedAt?: string;
+				completedAt?: string;
+				timeoutMs?: number;
+			}>(baseUrl, `/api/secrets/exec/${encodeURIComponent(jobId)}`);
+
+			if (!result.ok) {
+				return errorResult(`Secret exec status failed: ${result.error}`);
+			}
+			return textResult(result.data);
+		},
+	);
+
 	// ------------------------------------------------------------------
 	// mcp_server_list — list routed marketplace MCP tools
 	// ------------------------------------------------------------------
