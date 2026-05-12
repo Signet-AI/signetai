@@ -213,8 +213,10 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/status", get(status))
+        .route("/api/auth/whoami", get(routes::auth::whoami))
         // Memory read routes
         .route("/api/memories", get(routes::memory::list))
+        .route("/api/memories/most-used", get(routes::memory::most_used))
         .route(
             "/api/memory/{id}",
             get(routes::memory::get).delete(routes::write::delete),
@@ -228,6 +230,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/memory/search", get(routes::search::search_get))
         .route("/memory/search", get(routes::search::legacy_search))
         .route("/api/embeddings", get(routes::search::embeddings_stats))
+        .route(
+            "/api/embeddings/status",
+            get(routes::search::embeddings_stats),
+        )
         // Write routes
         .route(
             "/api/memory/remember",
@@ -248,6 +254,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/memory/modify",
             axum::routing::post(routes::write::modify_batch),
+        )
+        .route(
+            "/api/memory/forget",
+            axum::routing::post(routes::write::forget_batch),
         )
         .route(
             "/api/memory/feedback",

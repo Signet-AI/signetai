@@ -9,8 +9,10 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
+use signet_core::CoreError;
 use signet_core::db::Priority;
 use signet_services::session::SessionTracker;
 use signet_services::transactions;
@@ -1141,6 +1143,335 @@ pub struct DeleteParams {
     pub reason: Option<String>,
     pub force: Option<String>,
     pub if_version: Option<i64>,
+}
+
+const MAX_FORGET_BATCH: usize = 200;
+const FORGET_CONFIRM_THRESHOLD: usize = 25;
+
+#[derive(Debug, Deserialize)]
+pub struct ForgetBatchBody {
+    pub mode: Option<String>,
+    pub ids: Option<Vec<String>>,
+    pub query: Option<String>,
+    #[serde(rename = "type")]
+    pub memory_type: Option<String>,
+    pub tags: Option<String>,
+    pub who: Option<String>,
+    pub source_type: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub scope: Option<String>,
+    pub limit: Option<usize>,
+    pub reason: Option<String>,
+    pub force: Option<bool>,
+    pub if_version: Option<i64>,
+    pub confirm_token: Option<String>,
+    pub changed_by: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ForgetCandidate {
+    id: String,
+    pinned: i64,
+    version: i64,
+    score: f64,
+}
+
+fn trim_opt(value: Option<String>) -> Option<String> {
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn forget_confirm_token(ids: &[String]) -> String {
+    let mut unique = ids.to_vec();
+    unique.sort();
+    unique.dedup();
+    let canonical = unique.join("|");
+    let digest = Sha256::digest(canonical.as_bytes());
+    let hex = digest
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    hex[..32].to_string()
+}
+
+fn forget_result_json(id: String, result: transactions::ForgetResult) -> serde_json::Value {
+    match result {
+        transactions::ForgetResult::Deleted { new_version } => serde_json::json!({
+            "id": id,
+            "status": "deleted",
+            "newVersion": new_version,
+        }),
+        transactions::ForgetResult::NotFound => {
+            serde_json::json!({"id": id, "status": "not_found"})
+        }
+        transactions::ForgetResult::AlreadyDeleted => {
+            serde_json::json!({"id": id, "status": "already_deleted"})
+        }
+        transactions::ForgetResult::VersionConflict { current } => serde_json::json!({
+            "id": id,
+            "status": "version_conflict",
+            "currentVersion": current,
+        }),
+        transactions::ForgetResult::PinnedRequiresForce => {
+            serde_json::json!({"id": id, "status": "pinned"})
+        }
+        transactions::ForgetResult::AutonomousForceDenied => {
+            serde_json::json!({"id": id, "status": "autonomous_force_denied"})
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/memory/forget
+// ---------------------------------------------------------------------------
+
+pub async fn forget_batch(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ForgetBatchBody>,
+) -> axum::response::Response {
+    let mode = trim_opt(body.mode.clone()).unwrap_or_else(|| "preview".to_string());
+    if mode != "preview" && mode != "execute" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "mode must be preview or execute"})),
+        )
+            .into_response();
+    }
+
+    let limit = body.limit.unwrap_or(20).clamp(1, MAX_FORGET_BATCH);
+    let ids = body
+        .ids
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    let query = trim_opt(body.query);
+    let memory_type = trim_opt(body.memory_type);
+    let tags = trim_opt(body.tags);
+    let who = trim_opt(body.who);
+    let source_type = trim_opt(body.source_type);
+    let since = trim_opt(body.since);
+    let until = trim_opt(body.until);
+    let scope = body.scope.map(|v| v.trim().to_string());
+
+    let has_query_scope = query.is_some()
+        || memory_type.is_some()
+        || tags.is_some()
+        || who.is_some()
+        || source_type.is_some()
+        || since.is_some()
+        || until.is_some()
+        || scope.is_some();
+    if ids.is_empty() && !has_query_scope {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "query, ids, or at least one filter (type/tags/who/source_type/since/until) is required"
+            })),
+        )
+            .into_response();
+    }
+
+    let candidates = state
+        .pool
+        .read(move |conn: &rusqlite::Connection| -> Result<Vec<ForgetCandidate>, CoreError> {
+            if !ids.is_empty() {
+                let mut deduped = Vec::<String>::new();
+                for id in ids.into_iter().take(limit) {
+                    if !deduped.contains(&id) {
+                        deduped.push(id);
+                    }
+                }
+                if deduped.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let placeholders = std::iter::repeat_n("?", deduped.len()).collect::<Vec<_>>().join(", ");
+                let sql = format!(
+                    "SELECT id, pinned, version FROM memories WHERE (is_deleted = 0 OR is_deleted IS NULL) AND id IN ({placeholders})"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(deduped.iter()), |row| {
+                        Ok(ForgetCandidate {
+                            id: row.get(0)?,
+                            pinned: row.get(1)?,
+                            version: row.get(2)?,
+                            score: 0.0,
+                        })
+                    })?
+                    .filter_map(|row| row.ok())
+                    .collect::<Vec<_>>();
+                return Ok(deduped
+                    .iter()
+                    .filter_map(|id| rows.iter().find(|row| &row.id == id).cloned())
+                    .collect());
+            }
+
+            let mut clauses = vec!["(is_deleted = 0 OR is_deleted IS NULL)".to_string()];
+            let mut args = Vec::<String>::new();
+            if let Some(value) = query {
+                clauses.push("(content LIKE ? OR tags LIKE ?)".to_string());
+                args.push(format!("%{value}%"));
+                args.push(format!("%{value}%"));
+            }
+            if let Some(value) = memory_type {
+                clauses.push("type = ?".to_string());
+                args.push(value);
+            }
+            if let Some(value) = tags {
+                for tag in value.split(',').map(str::trim).filter(|tag| !tag.is_empty()) {
+                    clauses.push("tags LIKE ?".to_string());
+                    args.push(format!("%{tag}%"));
+                }
+            }
+            if let Some(value) = who {
+                clauses.push("who = ?".to_string());
+                args.push(value);
+            }
+            if let Some(value) = source_type {
+                clauses.push("source_type = ?".to_string());
+                args.push(value);
+            }
+            if let Some(value) = scope {
+                clauses.push("scope = ?".to_string());
+                args.push(value);
+            } else {
+                clauses.push("scope IS NULL".to_string());
+            }
+            if let Some(value) = since {
+                clauses.push("created_at >= ?".to_string());
+                args.push(value);
+            }
+            if let Some(value) = until {
+                clauses.push("created_at <= ?".to_string());
+                args.push(value);
+            }
+
+            let sql = format!(
+                "SELECT id, pinned, version FROM memories WHERE {} ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT {limit}",
+                clauses.join(" AND ")
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(args.iter()), |row| {
+                    Ok(ForgetCandidate {
+                        id: row.get(0)?,
+                        pinned: row.get(1)?,
+                        version: row.get(2)?,
+                        score: 0.0,
+                    })
+                })?
+                .filter_map(|row| row.ok())
+                .collect::<Vec<_>>();
+            Ok(rows)
+        })
+        .await
+        .unwrap_or_default();
+
+    let candidate_ids: Vec<String> = candidates.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+    let confirm_token = forget_confirm_token(&candidate_ids);
+    let requires_confirm = candidate_ids.len() > FORGET_CONFIRM_THRESHOLD;
+
+    if mode == "preview" {
+        return Json(serde_json::json!({
+            "mode": "preview",
+            "count": candidates.len(),
+            "requiresConfirm": requires_confirm,
+            "confirmToken": confirm_token,
+            "candidates": candidates.iter().map(|c| serde_json::json!({
+                "id": c.id,
+                "score": (c.score * 1000.0).round() / 1000.0,
+                "pinned": c.pinned != 0,
+                "version": c.version,
+            })).collect::<Vec<_>>()
+        }))
+        .into_response();
+    }
+
+    let Some(reason) = trim_opt(body.reason) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "reason is required for execute mode"})),
+        )
+            .into_response();
+    };
+    if body.if_version.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "if_version is not supported for batch forget; use DELETE /api/memory/:id for version-guarded deletes"
+            })),
+        )
+            .into_response();
+    }
+    if requires_confirm && body.confirm_token.as_deref() != Some(confirm_token.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "confirm_token is required for large forget operations; run preview first",
+                "requiresConfirm": true,
+                "confirmToken": confirm_token,
+                "count": candidates.len(),
+            })),
+        )
+            .into_response();
+    }
+    if let Some(resp) = check_mutations_frozen(&state) {
+        return resp;
+    }
+
+    let force = body.force.unwrap_or(false);
+    let actor = trim_opt(body.changed_by).unwrap_or_else(|| "api".to_string());
+    let requested = candidate_ids.len();
+    let result = state
+        .pool
+        .write(Priority::High, move |conn| {
+            let mut results = Vec::new();
+            for id in candidate_ids {
+                let tx_result = transactions::forget(
+                    conn,
+                    &transactions::ForgetInput {
+                        id: &id,
+                        force,
+                        if_version: None,
+                        actor: &actor,
+                        reason: Some(reason.as_str()),
+                        actor_type: None,
+                    },
+                )?;
+                results.push(forget_result_json(id, tx_result));
+            }
+            Ok(serde_json::Value::Array(results))
+        })
+        .await;
+
+    match result {
+        Ok(results_value) => {
+            let results = results_value.as_array().cloned().unwrap_or_default();
+            let deleted = results
+                .iter()
+                .filter(|result| result.get("status").and_then(|v| v.as_str()) == Some("deleted"))
+                .count();
+            Json(serde_json::json!({
+                "mode": "execute",
+                "requested": requested,
+                "deleted": deleted,
+                "results": results,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            warn!(err = %e, "batch forget failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Forget failed"})),
+            )
+                .into_response()
+        }
+    }
 }
 
 pub async fn delete(

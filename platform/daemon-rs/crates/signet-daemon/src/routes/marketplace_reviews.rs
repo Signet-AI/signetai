@@ -5,7 +5,7 @@
 //! `<SIGNET_PATH>/marketplace/{reviews.json,reviews-config.json}` so clients can
 //! switch between TS and Rust daemon runtimes without data-shape drift.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use axum::{
     Json,
@@ -19,6 +19,7 @@ use crate::state::AppState;
 use crate::workspace_paths;
 
 const REVIEWS_SYNC_URL: &str = "https://reviews.signetai.sh/api/reviews/sync";
+static REVIEWS_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -249,6 +250,10 @@ pub async fn create(
         synced_at: None,
     };
 
+    let _guard = match REVIEWS_FILE_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     let mut reviews = read_reviews(&state);
     reviews.insert(0, review.clone());
     if let Err(e) = write_reviews(&state, &reviews) {
