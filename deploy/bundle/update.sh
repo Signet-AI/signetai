@@ -158,6 +158,7 @@ if [ "$FAILED" -gt 0 ]; then
   echo ""
   err "$FAILED component(s) failed — manifest NOT advanced for failed components"
   err "Re-run the updater to retry"
+  exit 1
 fi
 
 echo "$REMOTE_VERSION" > "$SIGNET_INSTALL_DIR/VERSION"
