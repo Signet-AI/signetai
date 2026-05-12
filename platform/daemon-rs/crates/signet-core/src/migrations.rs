@@ -257,9 +257,19 @@ static MIGRATIONS: &[Migration] = &[
         name: "task-agent-scope",
         sql: include_str!("sql/039-task-agent-scope.sql"),
     },
+    Migration {
+        version: 40,
+        name: "memory-search-telemetry",
+        sql: include_str!("sql/040-memory-search-telemetry.sql"),
+    },
+    Migration {
+        version: 41,
+        name: "ontology-proposals",
+        sql: include_str!("sql/041-ontology-proposals.sql"),
+    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 39;
+pub const LATEST_SCHEMA_VERSION: u32 = 41;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {
@@ -306,6 +316,7 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
 
     // Repair v0.1.65 CLI bug: versions stamped without actual DDL
     repair_bogus_version(conn)?;
+    repair_missing_rust_parity_versions(conn)?;
 
     let mut done = applied(conn)?;
     let mut count = 0;
@@ -365,14 +376,37 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
     }
 
     ensure_cross_daemon_parity_columns(conn)?;
-    ensure_rust_only_parity_tables(conn)?;
 
     Ok(())
 }
 
-fn ensure_rust_only_parity_tables(conn: &Connection) -> Result<(), CoreError> {
-    conn.execute_batch(include_str!("sql/040-memory-search-telemetry.sql"))?;
-    conn.execute_batch(include_str!("sql/041-ontology-proposals.sql"))?;
+fn migration_table_exists(conn: &Connection, table: &str) -> Result<bool, CoreError> {
+    let exists = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(exists > 0)
+}
+
+/// Clear tracked Rust parity migrations if an older checkout stamped their
+/// versions but did not create the corresponding tables. The normal migration
+/// runner will then apply and record versions 40/41 in `schema_migrations`.
+fn repair_missing_rust_parity_versions(conn: &Connection) -> Result<(), CoreError> {
+    let repairs = [
+        (40_u32, "memory_search_telemetry"),
+        (41_u32, "ontology_proposals"),
+    ];
+
+    for (version, table) in repairs {
+        if !migration_table_exists(conn, table)? {
+            conn.execute(
+                "DELETE FROM schema_migrations WHERE version = ?1",
+                rusqlite::params![version],
+            )?;
+        }
+    }
+
     Ok(())
 }
 
@@ -894,7 +928,10 @@ mod tests {
 
         run(&conn).expect("rerun migrations reconciles runtime tables");
 
-        for table in ["memory_search_telemetry", "ontology_proposals"] {
+        for (version, table) in [
+            (40_i64, "memory_search_telemetry"),
+            (41_i64, "ontology_proposals"),
+        ] {
             let exists: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -903,6 +940,18 @@ mod tests {
                 )
                 .expect("query sqlite_master");
             assert_eq!(exists, 1, "{table} should be present after reconciliation");
+
+            let stamped: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
+                    [version],
+                    |row| row.get(0),
+                )
+                .expect("query schema_migrations");
+            assert_eq!(
+                stamped, 1,
+                "migration {version} should be recorded after reconciliation"
+            );
         }
     }
 }
