@@ -19,9 +19,11 @@ CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+RED='\033[0;31m'
 info()  { printf "${CYAN}  →${NC} %s\n" "$1"; }
 ok()    { printf "${GREEN}  ✓${NC} %s\n" "$1"; }
 warn()  { printf "${YELLOW}  !${NC} %s\n" "$1"; }
+err()   { printf "${RED}  ✗${NC} %s\n" "$1" >&2; }
 
 # Detect platform
 detect_platform() {
@@ -109,6 +111,17 @@ for comp in $COMPONENTS; do
     warn "Failed to download $comp"
     continue
   }
+
+  if [ -n "$REMOTE_SHA" ]; then
+    ACTUAL_SHA="$(shasum -a 256 "$TMPDIR/$FILENAME" 2>/dev/null | awk '{print $1}' || sha256sum "$TMPDIR/$FILENAME" 2>/dev/null | awk '{print $1}')"
+    if [ -z "$ACTUAL_SHA" ]; then
+      warn "No checksum tool available — skipping verification for $comp"
+    elif [ "$ACTUAL_SHA" != "$REMOTE_SHA" ]; then
+      err "Checksum mismatch for $comp (expected $REMOTE_SHA, got $ACTUAL_SHA)"
+      rm -f "$TMPDIR/$FILENAME"
+      continue
+    fi
+  fi
 
   DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
   rm -rf "$DEST"

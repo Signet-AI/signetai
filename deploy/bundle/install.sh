@@ -290,6 +290,8 @@ main() {
   printf "${BOLD}  Downloading components...${NC}\n"
   echo ""
 
+  REQUIRED_COMPONENTS="bun daemon-js"
+
   for entry in "${COMPONENTS[@]}"; do
     name="${entry%%:*}"
     artifact="${entry#*:}"
@@ -307,7 +309,15 @@ main() {
 
     dest="$SIGNET_INSTALL_DIR/runtime/${name}"
     download "$name" "$filename" "$sha" "$dest" || {
-      warn "'$name' not available for $PLATFORM"
+      case " $REQUIRED_COMPONENTS " in
+        *" $name "*)
+          err "Required component '$name' failed — aborting"
+          exit 1
+          ;;
+        *)
+          warn "'$name' not available for $PLATFORM"
+          ;;
+      esac
     }
   done
 

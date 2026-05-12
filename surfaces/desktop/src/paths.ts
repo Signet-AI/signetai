@@ -8,8 +8,9 @@ const appRoot = normalize(resolve(distDir, ".."));
 const repoRoot = normalize(resolve(appRoot, "../.."));
 
 function assertSafePath(base: string, target: string): string {
+	const safeBase = `${normalize(base)}/`;
 	const normalized = normalize(target);
-	if (!normalized.startsWith(normalize(base))) {
+	if (normalized !== normalize(base) && !normalized.startsWith(safeBase)) {
 		throw new Error(`Path traversal blocked: ${target} escapes ${base}`);
 	}
 	return normalized;
