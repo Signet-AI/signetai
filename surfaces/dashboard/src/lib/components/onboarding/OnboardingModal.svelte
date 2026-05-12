@@ -1,7 +1,7 @@
 <script lang="ts">
 import { invalidateAll } from "$app/navigation";
 import { type ConfigFile, type DaemonStatus, type Harness, type MemoryStats, saveConfigFileResult } from "$lib/api";
-import { applyRecommendedPipelineSetup } from "$lib/components/tabs/settings/pipeline-settings";
+import { applyRecommendedPipelineSetup, resolveSynthesisEnabled } from "$lib/components/tabs/settings/pipeline-settings";
 import { Button } from "$lib/components/ui/button/index.js";
 import { Checkbox } from "$lib/components/ui/checkbox/index.js";
 import { Input } from "$lib/components/ui/input/index.js";
@@ -165,7 +165,7 @@ function hydrateFromSettings(): void {
 	selectedHarnesses = st.harnessArray();
 	if (selectedHarnesses.length === 0 && harnessOptions.length > 0) selectedHarnesses = [harnessOptions[0].id];
 	if (!selectedHarness && selectedHarnesses.length > 0) selectedHarness = selectedHarnesses[0];
-	synthesisEnabled = provider !== "none";
+	synthesisEnabled = resolveSynthesisEnabled(st.agent);
 	initialized = true;
 }
 
