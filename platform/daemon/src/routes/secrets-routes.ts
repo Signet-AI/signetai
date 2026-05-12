@@ -133,7 +133,8 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			if (!session) return c.json({ error: "session is required" }, 400);
 			const activate = parseOptionalBoolean(body.activate) ?? false;
 			const folderId = parseOptionalString(body.folderId);
-			const status = await getBitwardenStatus({ configured: true, activeProvider: activate, session });
+			const currentActiveProvider = (await getActiveSecretProvider()) === "bitwarden";
+			const status = await getBitwardenStatus({ configured: true, activeProvider: currentActiveProvider, session });
 			if (!status.connected) {
 				return c.json({ error: status.error ?? "Bitwarden session is not connected", ...status, success: false }, 400);
 			}
@@ -142,7 +143,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			else deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
 			if (activate) await setActiveSecretProvider("bitwarden");
 			logger.info("secrets", "Connected Bitwarden session", { connected: status.connected, activate });
-			return c.json({ success: true, ...status });
+			return c.json({ success: true, ...status, activeProvider: activate || currentActiveProvider });
 		} catch (e) {
 			const err = e as Error;
 			logger.error("secrets", "Failed to connect Bitwarden", err);

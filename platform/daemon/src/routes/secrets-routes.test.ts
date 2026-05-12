@@ -315,7 +315,7 @@ describe("secrets routes plugin capability enforcement", () => {
 			body: JSON.stringify({ session: "bad", activate: true }),
 		});
 		expect(rejected.status).toBe(400);
-		expect(await rejected.json()).toMatchObject({ success: false, connected: false, activeProvider: true });
+		expect(await rejected.json()).toMatchObject({ success: false, connected: false, activeProvider: false });
 
 		const status = await app.request("/api/secrets/bitwarden/status");
 		expect(status.status).toBe(200);
