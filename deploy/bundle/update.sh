@@ -93,6 +93,7 @@ fi
 
 # Download changed components
 COMPONENTS="$(jq -r '.components | keys[]' "$REMOTE_MANIFEST")"
+STAGED=""
 UPDATED=0
 FAILED=0
 
@@ -126,8 +127,7 @@ for comp in $COMPONENTS; do
     fi
   fi
 
-  DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
-  STAGE="$TMPDIR/extract-$comp"
+  STAGE="$TMPDIR/staged/$comp"
   mkdir -p "$STAGE"
   if ! tar xzf "$TMPDIR/$FILENAME" -C "$STAGE"; then
     err "Failed to extract $comp"
@@ -135,29 +135,28 @@ for comp in $COMPONENTS; do
     FAILED=$((FAILED + 1))
     continue
   fi
-  mkdir -p "$SIGNET_INSTALL_DIR/runtime"
-  OLD="$DEST-old"
-  if [ -d "$DEST" ]; then
-    mv "$DEST" "$OLD"
-  fi
-  if ! mv "$STAGE" "$DEST" 2>/dev/null; then
-    err "Failed to install $comp"
-    if [ -d "$OLD" ]; then mv "$OLD" "$DEST"; fi
-    rm -rf "$STAGE"
-    FAILED=$((FAILED + 1))
-    continue
-  fi
-  rm -rf "$OLD"
+  STAGED="$STAGED $comp"
   UPDATED=$((UPDATED + 1))
-  ok "$comp updated"
 done
 
 if [ "$FAILED" -gt 0 ]; then
   echo ""
-  err "$FAILED component(s) failed — manifest NOT advanced for failed components"
-  err "Re-run the updater to retry"
+  err "$FAILED component(s) failed — nothing installed, re-run to retry"
+  rm -rf "$TMPDIR/staged"
   exit 1
 fi
+
+if [ -n "$STAGED" ]; then
+  mkdir -p "$SIGNET_INSTALL_DIR/runtime"
+  for comp in $STAGED; do
+    DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
+    rm -rf "$DEST"
+    mv "$TMPDIR/staged/$comp" "$DEST"
+    ok "$comp updated"
+  done
+fi
+
+rm -rf "$TMPDIR/staged"
 
 cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"
 echo "$REMOTE_VERSION" > "$SIGNET_INSTALL_DIR/VERSION"

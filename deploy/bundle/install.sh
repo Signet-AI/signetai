@@ -145,9 +145,10 @@ download() {
     rm -rf "$tmp_extract" "$tmp"
     return 1
   fi
-  rm -rf "$dest"
-  mv "$tmp_extract" "$dest"
-  touch "$dest/.complete"
+  local stage_dir="$SIGNET_INSTALL_DIR/runtime/staging/$name"
+  mkdir -p "$stage_dir"
+  rm -rf "$stage_dir"
+  mv "$tmp_extract" "$stage_dir"
   rm -f "$tmp"
   ok "$name"
   return 0
@@ -309,18 +310,31 @@ main() {
     fi
 
     dest="$SIGNET_INSTALL_DIR/runtime/${name}"
-    download "$name" "$filename" "$sha" "$dest" || {
-      case " $REQUIRED_COMPONENTS " in
-        *" $name "*)
-          err "Required component '$name' failed — aborting"
-          exit 1
-          ;;
-        *)
-          warn "'$name' not available for $PLATFORM"
-          ;;
-      esac
-    }
+  download "$name" "$filename" "$sha" "$dest" || {
+    case " $REQUIRED_COMPONENTS " in
+      *" $name "*)
+        err "Required component '$name' failed — aborting"
+        rm -rf "$SIGNET_INSTALL_DIR/runtime/staging"
+        exit 1
+        ;;
+      *)
+        warn "'$name' not available for $PLATFORM"
+        ;;
+    esac
+  }
+done
+
+STAGING="$SIGNET_INSTALL_DIR/runtime/staging"
+if [ -d "$STAGING" ]; then
+  for dir in "$STAGING"/*/; do
+    [ -d "$dir" ] || continue
+    comp_name="$(basename "$dir")"
+    rm -rf "$SIGNET_INSTALL_DIR/runtime/$comp_name"
+    mv "$dir" "$SIGNET_INSTALL_DIR/runtime/$comp_name"
+    touch "$SIGNET_INSTALL_DIR/runtime/$comp_name/.complete"
   done
+  rm -rf "$STAGING"
+fi
 
   cp "${tmpdir}/manifest.json" "$SIGNET_INSTALL_DIR/manifest.json"
   echo ""
