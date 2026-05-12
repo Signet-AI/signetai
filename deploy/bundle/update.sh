@@ -242,8 +242,6 @@ if [ -n "$STAGED" ]; then
     fi
   done
 fi
-  done
-fi
 
 rm -rf "$TMPDIR/staged"
 

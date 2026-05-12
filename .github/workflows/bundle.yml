@@ -160,6 +160,13 @@ jobs:
       - name: Create artifact directory
         run: mkdir -p "$ARTIFACT_DIR"
 
+      - name: Validate shell scripts
+        run: |
+          for f in deploy/bundle/install.sh deploy/bundle/update.sh deploy/bundle/uninstall.sh; do
+            echo "Checking $f..."
+            bash -n "$f"
+          done
+
       - name: Install JS dependencies
         run: bun install
 
