@@ -143,17 +143,21 @@ describe("local secrets provider", () => {
 		const marker = join(agentsDir, "child-survived.txt");
 		const child = join(agentsDir, "timeout-child.mjs");
 		const parent = join(agentsDir, "timeout-parent.mjs");
-		writeFileSync(child, `setTimeout(() => Bun.write(${JSON.stringify(marker)}, process.env.OPENAI_API_KEY), 1200);\n`);
+		writeFileSync(child, "setTimeout(() => Bun.write(process.env.MARKER_PATH, process.env.OPENAI_API_KEY), 1200);\n");
 		writeFileSync(
 			parent,
 			[
 				'import { spawn } from "node:child_process";',
-				`spawn(process.execPath, [${JSON.stringify(child)}], { env: process.env, stdio: "ignore" });`,
+				'spawn(process.execPath, [process.env.CHILD_SCRIPT], { env: process.env, stdio: "ignore" });',
 				"setTimeout(() => {}, 5000);",
 			].join("\n"),
 		);
 
+		process.env.MARKER_PATH = marker;
+		process.env.CHILD_SCRIPT = child;
 		const result = await execWithSecrets(`bun ${parent}`, { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 200 });
+		process.env.MARKER_PATH = undefined;
+		process.env.CHILD_SCRIPT = undefined;
 		await new Promise((resolve) => setTimeout(resolve, 1400));
 
 		expect(result.code).toBe(124);

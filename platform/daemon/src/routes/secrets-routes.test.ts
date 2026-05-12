@@ -132,6 +132,18 @@ describe("secrets routes plugin capability enforcement", () => {
 		expect(statusBody?.result?.stdout).not.toContain("sk-route-background");
 	});
 
+	test("rejects empty or malformed secret exec maps", async () => {
+		const app = makeApp(makeHost());
+		for (const secrets of [{}, [], "OPENAI_API_KEY", { OPENAI_API_KEY: "" }]) {
+			const res = await app.request("/api/secrets/exec", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ command: "bun --version", secrets }),
+			});
+			expect(res.status).toBe(400);
+		}
+	});
+
 	test("1Password compatibility status route does not require configured token", async () => {
 		const res = await makeApp(makeHost()).request("/api/secrets/1password/status");
 		expect(res.status).toBe(200);

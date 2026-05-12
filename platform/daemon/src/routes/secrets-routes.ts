@@ -235,15 +235,22 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			if (!body.command) {
 				return c.json({ error: "command is required" }, 400);
 			}
-			if (!body.secrets || Object.keys(body.secrets).length === 0) {
-				return c.json({ error: "secrets map is required" }, 400);
+			const secrets = body.secrets;
+			if (
+				!secrets ||
+				typeof secrets !== "object" ||
+				Array.isArray(secrets) ||
+				Object.keys(secrets).length === 0 ||
+				Object.values(secrets).some((value) => typeof value !== "string" || value.trim().length === 0)
+			) {
+				return c.json({ error: "non-empty secrets map is required" }, 400);
 			}
 
 			const timeoutMs = normalizeSecretExecTimeoutMs(body.timeoutMs);
-			const job = startSecretExecJob(body.command, body.secrets, { timeoutMs });
+			const job = startSecretExecJob(body.command, secrets, { timeoutMs });
 			logger.info("secrets", "exec_with_secrets queued", {
 				jobId: job.id,
-				secretCount: Object.keys(body.secrets).length,
+				secretCount: Object.keys(secrets).length,
 				timeoutMs,
 			});
 			return c.json(job, 202);
