@@ -11,7 +11,14 @@
 use std::net::TcpListener;
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use hmac::{Hmac, Mac};
 use serde_json::json;
+use sha2::Sha256;
+
+type HmacSha256 = Hmac<Sha256>;
+const AUTH_SECRET: &[u8] = b"contract-replay-auth-secret-32bytes";
 
 struct TestServer {
     #[allow(dead_code)] // kept for debugging
@@ -42,6 +49,15 @@ impl Drop for TestServer {
 impl TestServer {
     /// Start a daemon on an ephemeral port with a fresh DB.
     async fn start() -> Self {
+        Self::start_with_auth_mode(None).await
+    }
+
+    /// Start a daemon with team auth enabled and a fixed secret for scoped-token replay.
+    async fn start_team_auth() -> Self {
+        Self::start_with_auth_mode(Some("team")).await
+    }
+
+    async fn start_with_auth_mode(auth_mode: Option<&str>) -> Self {
         let tmpdir = tempfile::tempdir().expect("failed to create tmpdir");
         let port = ephemeral_port();
         let base = format!("http://127.0.0.1:{port}");
@@ -52,12 +68,15 @@ impl TestServer {
         std::fs::create_dir_all(&memory_dir).unwrap();
         let daemon_dir = tmpdir.path().join(".daemon/logs");
         std::fs::create_dir_all(&daemon_dir).unwrap();
+        if auth_mode.is_some() {
+            std::fs::write(tmpdir.path().join(".daemon/auth-secret"), AUTH_SECRET).unwrap();
+        }
 
         // Write a minimal agent.yaml
-        let yaml = format!(
-            "agent:\n  name: test-agent\n  version: 1\nhome: {}\n",
-            tmpdir.path().display()
-        );
+        let auth_yaml = auth_mode
+            .map(|mode| format!("auth:\n  method: token\n  mode: {mode}\n"))
+            .unwrap_or_default();
+        let yaml = format!("agent:\n  name: test-agent\n  version: 1\n{}", auth_yaml);
         std::fs::write(tmpdir.path().join("agent.yaml"), &yaml).unwrap();
 
         // Spawn daemon in background
@@ -206,6 +225,37 @@ impl TestServer {
             .send()
             .await
             .expect("request failed")
+    }
+
+    async fn post_bearer(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        token: &str,
+    ) -> reqwest::Response {
+        self.client
+            .post(format!("{}{path}", self.base))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .expect("request failed")
+    }
+
+    fn scoped_token(agent: &str) -> String {
+        let now = chrono::Utc::now().timestamp();
+        let payload = json!({
+            "sub": format!("test-{agent}"),
+            "scope": {"agent": agent},
+            "role": "agent",
+            "iat": now,
+            "exp": now + 3600,
+        });
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+        let mut mac = HmacSha256::new_from_slice(AUTH_SECRET).expect("valid hmac secret");
+        mac.update(payload_b64.as_bytes());
+        let sig_b64 = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        format!("{payload_b64}.{sig_b64}")
     }
 
     async fn patch(&self, path: &str, body: serde_json::Value) -> reqwest::Response {
@@ -866,6 +916,56 @@ async fn knowledge_expand_native_graph_data() {
     assert_eq!(body["entityName"], "Signet");
     assert_eq!(body["total"], 1);
     assert_eq!(body["summaries"][0]["sessionKey"], "session-signet-expand");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn knowledge_expand_enforces_authenticated_agent_scope() {
+    let server = TestServer::start_team_auth().await;
+    server.seed_knowledge_expand_fixture();
+    let other_agent_token = TestServer::scoped_token("other-agent");
+
+    let resp = server
+        .post_bearer(
+            "/api/knowledge/expand",
+            json!({"entity": "Signet"}),
+            &other_agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["memories"].as_array().unwrap().len(), 0);
+
+    let resp = server
+        .post_bearer(
+            "/api/knowledge/expand",
+            json!({"entity": "Signet", "agentId": "default"}),
+            &other_agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "scope restricted to agent 'other-agent'");
+
+    let resp = server
+        .post_bearer(
+            "/api/knowledge/expand/session",
+            json!({"entityName": "Signet", "sessionId": "session-signet-expand"}),
+            &other_agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["total"], 0);
+
+    let resp = server
+        .post_bearer(
+            "/api/knowledge/expand/session",
+            json!({"entityName": "Signet", "agentId": "default"}),
+            &other_agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
 }
 
 #[tokio::test]

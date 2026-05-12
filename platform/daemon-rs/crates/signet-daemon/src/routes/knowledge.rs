@@ -1,16 +1,17 @@
 //! Knowledge graph route handlers.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::extract::{ConnectInfo, Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
-
 use signet_services::graph;
 
+use crate::auth::middleware::{authenticate_headers, resolve_scoped_agent};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -396,6 +397,29 @@ pub async fn stats(
     }
 }
 
+fn scoped_agent_or_response(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    requested: Option<&str>,
+) -> Result<String, Response> {
+    let is_local = peer.ip().is_loopback();
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map_err(|resp| *resp)?;
+    resolve_scoped_agent(&auth, state.auth_mode, is_local, requested).map_err(|reason| {
+        (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": reason})),
+        )
+            .into_response()
+    })
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/knowledge/expand
 // ---------------------------------------------------------------------------
@@ -411,6 +435,8 @@ pub struct ExpandRequest {
 
 pub async fn expand(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<ExpandRequest>,
 ) -> axum::response::Response {
     let entity_name = body.entity.unwrap_or_default().trim().to_string();
@@ -421,7 +447,11 @@ pub async fn expand(
         )
             .into_response();
     }
-    let agent_id = body.agent_id.unwrap_or_else(|| "default".to_string());
+    let agent_id = match scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref())
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let aspect_filter = body
         .aspect
         .map(|s| s.trim().to_string())
@@ -588,6 +618,8 @@ pub struct ExpandSessionRequest {
 
 pub async fn expand_session(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<ExpandSessionRequest>,
 ) -> axum::response::Response {
     let entity_name = body.entity_name.unwrap_or_default().trim().to_string();
@@ -598,7 +630,11 @@ pub async fn expand_session(
         )
             .into_response();
     }
-    let agent_id = body.agent_id.unwrap_or_else(|| "default".to_string());
+    let agent_id = match scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref())
+    {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let session_id = body.session_id;
     let max_results = body.max_results.unwrap_or(10).clamp(1, 50);
 
