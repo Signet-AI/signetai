@@ -1,6 +1,6 @@
 {
   "name": "signetai",
-  "version": "0.115.19",
+  "version": "0.116.0",
   "description": "Local-first identity, memory, and secrets for AI agents",
   "type": "module",
   "bin": {

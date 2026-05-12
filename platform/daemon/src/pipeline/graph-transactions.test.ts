@@ -75,7 +75,7 @@ describe("graph-transactions", () => {
 			const now = new Date().toISOString();
 
 			const first = txPersistEntities(asWriteDb(db), {
-				entities: [{ source: "User", relationship: "likes", target: "Cats", confidence: 0.8 }],
+				entities: [{ source: "Nicholai", relationship: "likes", target: "Cats", confidence: 0.8 }],
 				sourceMemoryId: "mem-1",
 				extractedAt: now,
 				agentId: "default",
@@ -84,7 +84,7 @@ describe("graph-transactions", () => {
 			expect(first.entitiesUpdated).toBe(0);
 
 			const second = txPersistEntities(asWriteDb(db), {
-				entities: [{ source: "user", relationship: "likes", target: "cats", confidence: 0.7 }],
+				entities: [{ source: "nicholai", relationship: "likes", target: "cats", confidence: 0.7 }],
 				sourceMemoryId: "mem-2",
 				extractedAt: now,
 				agentId: "default",
@@ -101,7 +101,7 @@ describe("graph-transactions", () => {
 			expect(entities).toHaveLength(2);
 			expect(entities[0].canonical_name).toBe("cats");
 			expect(entities[0].mentions).toBe(2);
-			expect(entities[1].canonical_name).toBe("user");
+			expect(entities[1].canonical_name).toBe("nicholai");
 			expect(entities[1].mentions).toBe(2);
 		});
 
@@ -155,6 +155,63 @@ describe("graph-transactions", () => {
 
 			const mentions = db.query("SELECT * FROM memory_entity_mentions").all();
 			expect(mentions).toHaveLength(2);
+		});
+
+		it("persists typed short concrete entities through the shared quality gate", () => {
+			const now = new Date().toISOString();
+			const result = txPersistEntities(asWriteDb(db), {
+				entities: [
+					{
+						source: "AI",
+						sourceType: "product",
+						relationship: "uses",
+						target: "Go",
+						targetType: "tool",
+						confidence: 0.8,
+					},
+				],
+				sourceMemoryId: "mem-1",
+				agentId: "agent-1",
+				extractedAt: now,
+			});
+
+			expect(result.entitiesInserted).toBe(2);
+			expect(result.relationsInserted).toBe(1);
+			const names = db.prepare("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
+			expect(names.map((row) => row.name)).toEqual(["AI", "Go"]);
+		});
+
+		it("rejects generic scaffolding triples without partial source writes", () => {
+			const now = new Date().toISOString();
+			const result = txPersistEntities(asWriteDb(db), {
+				entities: [
+					{
+						source: "Sender",
+						sourceType: "person",
+						relationship: "said",
+						target: "Signet",
+						targetType: "project",
+						confidence: 0.9,
+					},
+					{
+						source: "Signet Daily Digest — 2026-05-10",
+						sourceType: "event",
+						relationship: "summarized",
+						target: "Signet Desktop",
+						targetType: "product",
+						confidence: 0.9,
+					},
+				],
+				sourceMemoryId: "mem-events",
+				extractedAt: now,
+				agentId: "default",
+			});
+
+			expect(result.entitiesInserted).toBe(2);
+			expect(result.relationsInserted).toBe(1);
+			expect(result.mentionsLinked).toBe(2);
+			const names = db.query("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
+			expect(names.map((row) => row.name)).toEqual(["Signet Daily Digest — 2026-05-10", "Signet Desktop"]);
 		});
 
 		it("records reasoned related_to audit history for structured co-occurrences", () => {

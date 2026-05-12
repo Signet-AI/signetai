@@ -7,7 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-11
-- Bug fixes: prebuild tray before typecheck; disable electron-builder auto publish.
+- Features: add header images for three new essays; add three new essays on memory architecture and sovereignty.
+- Bug fixes: enforce concrete semantic objects; refresh stale web content index; replace placeholder images with original vault artwork; prebuild tray before typecheck; disable electron-builder auto publish.
 
 ### 2026-05-10
 - Bug fixes: sync source before install; add embeddings status parity route; add packaged app updates; match feature flag response shape.
@@ -35,6 +36,22 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Performance: speed up memory recall.
 
 ## Release Ledger
+
+## [0.116.0] - 2026-05-11
+
+Release summary: 2 features and 3 bug fixes.
+Tag range: `v0.115.19..v0.116.0`.
+
+### Features
+
+- **blog**: add header images for three new essays (#680)
+- **blog**: add three new essays on memory architecture and sovereignty (#678)
+
+### Bug Fixes
+
+- **ontology**: enforce concrete semantic objects (#684)
+- refresh stale web content index (#679)
+- **blog**: replace placeholder images with original vault artwork (#681)
 
 ## [0.115.19] - 2026-05-11
 
