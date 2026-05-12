@@ -318,7 +318,7 @@ jobs:
             linux-x64)    SQLITE_VEC_PKG="sqlite-vec-linux-x64" ;;
             linux-arm64)  SQLITE_VEC_PKG="sqlite-vec-linux-arm64" ;;
           esac
-          find "node_modules/$SQLITE_VEC_PKG" -name '*.dylib' -o -name '*.so' -o -name '*.dll' 2>/dev/null | while read -r f; do
+          find "node_modules/$SQLITE_VEC_PKG" \( -name '*.dylib' -o -name '*.so' -o -name '*.dll' \) 2>/dev/null | while read -r f; do
             cp "$f" "$STAGE/"
           done
           if [ -z "$(ls -A "$STAGE" 2>/dev/null)" ]; then
@@ -418,7 +418,7 @@ jobs:
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
-          find /tmp/all-artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name 'manifest-*.json' \) | while read -r f; do
+          find /tmp/all-artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name 'manifest-*.json' -o -name '*.dmg' -o -name '*.zip' \) | while read -r f; do
             gh release upload "$TAG" "$f" --repo "$REPO" --clobber
           done
 

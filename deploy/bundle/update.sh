@@ -152,6 +152,7 @@ if [ -n "$STAGED" ]; then
     DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
     rm -rf "$DEST"
     mv "$TMPDIR/staged/$comp" "$DEST"
+    touch "$DEST/.complete"
     ok "$comp updated"
   done
 fi
