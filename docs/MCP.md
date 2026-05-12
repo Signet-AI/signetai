@@ -449,8 +449,10 @@ are never exposed to agents.
 
 Queue a shell command with secrets injected as environment variables. Output
 is automatically redacted, secret values never appear in results. Bare
-secret names resolve through the local provider, for example
-`OPENAI_API_KEY` is equivalent to `local://OPENAI_API_KEY`.
+secret names resolve through the active Signet secrets provider: local by
+default, or Bitwarden first when Bitwarden is active. Use `local://NAME` to
+force the local encrypted store, `bw://...` to reference a Bitwarden item
+explicitly, or `op://...` for 1Password compatibility references.
 
 **Parameters:**
 
