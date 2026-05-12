@@ -20,6 +20,14 @@ function append(value: string, previous: string[]): string[] {
 	return [...previous, value];
 }
 
+async function readSecretFromStdin(): Promise<string> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of process.stdin) {
+		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+	}
+	return Buffer.concat(chunks).toString("utf-8").trim();
+}
+
 export function registerSecretCommands(program: Command, deps: SecretDeps): void {
 	const secretCmd = program.command("secret").description("Manage encrypted secrets").enablePositionalOptions();
 
@@ -404,14 +412,17 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 	const bitwardenCmd = secretCmd.command("bitwarden").alias("bw").description("Manage Bitwarden integration");
 
 	bitwardenCmd
-		.command("connect [session]")
+		.command("connect")
+		.allowExcessArguments(false)
 		.description("Connect Bitwarden using a `bw unlock --raw` session token")
 		.option("--activate", "Use Bitwarden as the active Signet secrets provider after connecting", false)
 		.option("--folder <folderId>", "Folder id for Signet-managed Bitwarden items")
-		.action(async (rawSession: string | undefined, options: { activate: boolean; folder?: string }) => {
+		.option("--session-stdin", "Read the Bitwarden session token from stdin instead of prompting", false)
+		.action(async (options: { activate: boolean; folder?: string; sessionStdin: boolean }) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
-			const session =
-				rawSession ?? (await password({ message: "Bitwarden session token (`bw unlock --raw`):", mask: "•" }));
+			const session = options.sessionStdin
+				? await readSecretFromStdin()
+				: await password({ message: "Bitwarden session token (`bw unlock --raw`):", mask: "•" });
 			if (!session) {
 				console.error(chalk.red("  Session token cannot be empty"));
 				process.exit(1);
@@ -457,7 +468,9 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 				const error = readString(data, "error");
 				if (!configured) {
 					console.log(chalk.dim("  Bitwarden is not connected."));
-					console.log(chalk.dim('  Run: bw login && signet secret bitwarden connect "$(bw unlock --raw)"'));
+					console.log(
+						chalk.dim("  Run: bw login && bw unlock --raw | signet secret bitwarden connect --session-stdin"),
+					);
 					return;
 				}
 				console.log(

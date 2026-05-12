@@ -152,15 +152,15 @@ Bitwarden is opt-in. By default, Signet continues to use the existing local encr
 Signet uses the official Bitwarden CLI session model: log in/unlock with `bw`, then hand Signet the short-lived session token.
 
 ```bash
-# One-time Bitwarden CLI login/unlock outside Signet
+# One-time Bitwarden CLI login outside Signet
 bw login
-BW_SESSION=$(bw unlock --raw)
 
-# Connect but keep the local Signet store active
-signet secret bitwarden connect "$BW_SESSION"
+# Connect but keep the local Signet store active. The session token is read
+# from stdin so it is not written to shell history or process argv.
+bw unlock --raw | signet secret bitwarden connect --session-stdin
 
 # Connect and immediately make Bitwarden the active backing store
-signet secret bitwarden connect "$BW_SESSION" --activate
+bw unlock --raw | signet secret bitwarden connect --session-stdin --activate
 
 # Switch providers later without losing either store
 signet secret bitwarden use bitwarden

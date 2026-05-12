@@ -2348,7 +2348,7 @@ Return Bitwarden provider status. Bitwarden is opt-in; when it is not connected,
 
 ### POST /api/secrets/bitwarden/connect
 
-Validate and store a Bitwarden CLI session token from `bw unlock --raw`. Body: `{ "session": "...", "activate": true, "folderId": "optional-folder-id" }`. If `activate` is true, future Signet secret writes use Bitwarden as the backing store while internal provider metadata remains local.
+Validate and store a Bitwarden CLI session token from `bw unlock --raw`. Body: `{ "session": "...", "activate": true, "folderId": "optional-folder-id" }`. If `activate` is true, future Signet secret writes use Bitwarden as the backing store while internal provider metadata remains local. CLI users should pipe the token with `bw unlock --raw | signet secret bitwarden connect --session-stdin` rather than passing it as an argument.
 
 ### DELETE /api/secrets/bitwarden/connect
 
