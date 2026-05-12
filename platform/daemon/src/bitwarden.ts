@@ -296,10 +296,10 @@ class BwCliClient implements BitwardenClient {
 		const encoded = await runBw(["encode"], { input: JSON.stringify(updated), session: this.session });
 		if (existing) {
 			return toItemDetails(
-				parseJson(await runBw(["edit", "item", existing.id, encoded.trim()], { session: this.session })),
+				parseJson(await runBw(["edit", "item", existing.id], { input: encoded.trim(), session: this.session })),
 			);
 		}
-		return toItemDetails(parseJson(await runBw(["create", "item", encoded.trim()], { session: this.session })));
+		return toItemDetails(parseJson(await runBw(["create", "item"], { input: encoded.trim(), session: this.session })));
 	}
 
 	async deleteSecret(name: string): Promise<boolean> {

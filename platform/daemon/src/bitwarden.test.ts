@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
 	type BitwardenClient,
 	type BitwardenItemDetails,
@@ -108,5 +109,13 @@ describe("Bitwarden secrets provider", () => {
 		expect(result.dryRun).toBe(true);
 		expect(result.skippedCount).toBe(1);
 		expect(readCount).toBe(0);
+	});
+	test("Bitwarden CLI writes do not pass session tokens or secret-bearing payloads through argv", () => {
+		const source = readFileSync(new URL("./bitwarden.ts", import.meta.url), "utf8");
+		expect(source).not.toContain('"--session"');
+		expect(source).not.toContain('["create", "item", encoded.trim()]');
+		expect(source).not.toContain('["edit", "item", existing.id, encoded.trim()]');
+		expect(source).toContain('runBw(["create", "item"], { input: encoded.trim(), session: this.session })');
+		expect(source).toContain('runBw(["edit", "item", existing.id], { input: encoded.trim(), session: this.session })');
 	});
 });
