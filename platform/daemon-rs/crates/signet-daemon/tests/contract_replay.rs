@@ -1189,7 +1189,7 @@ async fn ontology_native_proposal_lifecycle() {
                 "confidence": 0.82,
                 "rationale": "Observed in product planning notes",
                 "evidence": [{"quote": "Signet Cloud offer"}],
-                "created_by": "contract-replay"
+                "createdBy": "contract-replay"
             }),
         )
         .await;
@@ -1261,7 +1261,7 @@ async fn ontology_native_proposal_lifecycle() {
                 },
                 "confidence": 0.7,
                 "evidence": [{"quote": "ten dollars monthly"}],
-                "source_kind": "transcript"
+                "sourceKind": "transcript"
             }),
         )
         .await;
@@ -1298,7 +1298,7 @@ async fn ontology_native_proposal_lifecycle() {
                     "payload": {"entity": "Signet", "aspect": "pricing", "claim": "$10/mo"},
                     "confidence": 0.7
                 }],
-                "created_by": "batch-replay"
+                "createdBy": "batch-replay"
             }),
         )
         .await;

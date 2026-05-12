@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ProposalQuery {
     agent_id: Option<String>,
     status: Option<String>,
@@ -32,6 +33,7 @@ pub struct ProposalQuery {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ProposalBody {
     agent_id: Option<String>,
     operation: Option<String>,
