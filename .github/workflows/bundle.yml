@@ -421,7 +421,7 @@ jobs:
         run: |
           VERSION="$(jq -r '.version' package.json)"
           bun deploy/bundle/scripts/generate-manifest.ts \
-            "$VERSION" "$PLATFORM" "$ARTIFACT_DIR" \
+            "$VERSION" "$PLATFORM" "$ARTIFACT_DIR" "bundle-latest" \
             > "$ARTIFACT_DIR/manifest-$PLATFORM.json"
 
       - name: Upload artifacts
