@@ -87,15 +87,14 @@ function matchGlob(pattern: string, path: string): boolean {
 }
 
 function globToRegex(pattern: string): RegExp {
-	let normalized = pattern
+	const normalized = pattern
 		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
 		.replace(/\*\*/g, "{{GLOBSTAR}}")
 		.replace(/\*/g, "[^/]*")
 		.replace(/\?/g, "[^/]")
+		.replace(/\/\{\{GLOBSTAR\}\}/g, "(?:/.*)?")
+		.replace(/\{\{GLOBSTAR\}\}\//g, "(?:.*/)?")
 		.replace(/\{\{GLOBSTAR\}\}/g, ".*");
-	if (normalized.startsWith(".*/")) {
-		normalized = `(?:${normalized}|${normalized.replace(/^\\\.\\*\//, "")})`;
-	}
 	return new RegExp(`^${normalized}$`, "i");
 }
 

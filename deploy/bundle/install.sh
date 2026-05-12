@@ -138,9 +138,7 @@ download() {
     fi
   fi
 
-  rm -rf "$dest"
-  mkdir -p "$dest"
-  local tmp_extract="${tmpdir}/extract-${comp}"
+  local tmp_extract="${tmpdir}/extract-${name}"
   mkdir -p "$tmp_extract"
   if ! tar xzf "$tmp" -C "$tmp_extract"; then
     err "Failed to extract $name"
