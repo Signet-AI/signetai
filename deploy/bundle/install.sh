@@ -112,11 +112,18 @@ download() {
   local url="${DOWNLOAD_BASE}/${filename}"
   local tmp="${tmpdir}/${filename}"
 
-  if [ -f "$dest/.complete" ]; then
-    ok "$name (cached)"
-    return 0
+  if [ -f "$dest/.complete" ] && [ -f "$SIGNET_INSTALL_DIR/manifest.json" ]; then
+    local old_sha=""
+    if command -v jq >/dev/null 2>&1; then
+      old_sha="$(jq -r ".components.\"${name}\".sha256 // \"\"" "$SIGNET_INSTALL_DIR/manifest.json" 2>/dev/null || true)"
+    fi
+    if [ -n "$old_sha" ] && [ "$old_sha" = "$sha" ]; then
+      ok "$name (up to date)"
+      return 0
+    fi
   fi
 
+  rm -f "$dest/.complete"
   info "Downloading $name..."
   curl -fsSL "$url" -o "$tmp" || {
     err "Failed to download $name"
@@ -131,6 +138,7 @@ download() {
     fi
   fi
 
+  rm -rf "$dest"
   mkdir -p "$dest"
   tar xzf "$tmp" -C "$dest"
   touch "$dest/.complete"
@@ -191,25 +199,7 @@ generate_wrappers() {
 #!/usr/bin/env bash
 SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export SIGNET_DIR
-
-SIGNET_NODE="$SIGNET_DIR/runtime/node/bin/node"
-SIGNET_CLI="$SIGNET_DIR/runtime/cli/cli.js"
-SIGNET_DAEMON="$SIGNET_DIR/runtime/daemon-js/daemon.js"
-
-case "${1:-}" in
-  start)
-    exec "$SIGNET_NODE" "$SIGNET_DAEMON" "$@"
-    ;;
-  daemon)
-    case "${2:-}" in
-      start|restart)
-        exec "$SIGNET_NODE" "$SIGNET_DAEMON" "$@"
-        ;;
-    esac
-    ;;
-esac
-
-exec "$SIGNET_NODE" "$SIGNET_CLI" "$@"
+exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" "$@"
 WRAPPER
   chmod +x "${bindir}/signet"
 
