@@ -232,7 +232,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 				timeoutMs?: number;
 			};
 
-			if (!body.command) {
+			if (typeof body.command !== "string" || body.command.trim().length === 0) {
 				return c.json({ error: "command is required" }, 400);
 			}
 			const secrets = body.secrets;
@@ -280,7 +280,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 				timeoutMs?: number;
 			};
 
-			if (!body.command) {
+			if (typeof body.command !== "string" || body.command.trim().length === 0) {
 				return c.json({ error: "command is required" }, 400);
 			}
 

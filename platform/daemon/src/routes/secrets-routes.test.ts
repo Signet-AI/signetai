@@ -132,6 +132,22 @@ describe("secrets routes plugin capability enforcement", () => {
 		expect(statusBody?.result?.stdout).not.toContain("sk-route-background");
 	});
 
+	test("rejects malformed secret exec commands before queueing", async () => {
+		const app = makeApp(makeHost());
+		for (const [path, body] of [
+			["/api/secrets/exec", { command: {}, secrets: { OPENAI_API_KEY: "OPENAI_API_KEY" } }],
+			["/api/secrets/OPENAI_API_KEY/exec", { command: "   " }],
+		] as const) {
+			const res = await app.request(path, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			});
+
+			expect(res.status).toBe(400);
+		}
+	});
+
 	test("rejects empty or malformed secret exec maps", async () => {
 		const app = makeApp(makeHost());
 		for (const secrets of [{}, [], "OPENAI_API_KEY", { OPENAI_API_KEY: "" }]) {
