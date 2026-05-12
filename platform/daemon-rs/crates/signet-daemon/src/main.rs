@@ -232,7 +232,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/embeddings", get(routes::search::embeddings_stats))
         .route(
             "/api/embeddings/status",
-            get(routes::search::embeddings_stats),
+            get(routes::search::embeddings_status),
         )
         // Write routes
         .route(

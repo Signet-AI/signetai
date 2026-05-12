@@ -914,6 +914,75 @@ async fn marketplace_reviews_native_roundtrip() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn marketplace_reviews_preserve_concurrent_file_writes() {
+    let server = TestServer::start().await;
+    let mut handles = Vec::new();
+
+    for i in 0..20 {
+        let client = server.client.clone();
+        let url = format!("{}/api/marketplace/reviews", server.base);
+        handles.push(tokio::spawn(async move {
+            client
+                .post(url)
+                .json(&json!({
+                    "targetType": "skill",
+                    "targetId": "skills.sh/concurrent",
+                    "displayName": format!("reviewer-{i}"),
+                    "rating": 5,
+                    "title": format!("Review {i}"),
+                    "body": format!("Concurrent review {i}")
+                }))
+                .send()
+                .await
+                .expect("create review request")
+        }));
+    }
+
+    for handle in handles {
+        let resp = handle.await.expect("review task join");
+        assert_eq!(resp.status(), 200);
+    }
+
+    let resp = server
+        .get("/api/marketplace/reviews?type=skill&id=skills.sh%2Fconcurrent")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["total"], 20);
+    assert_eq!(body["summary"]["count"], 20);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn existing_documented_routes_remain_mounted() {
+    let server = TestServer::start().await;
+
+    let resp = server.get("/api/auth/whoami").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["authenticated"], false);
+    assert_eq!(body["claims"], serde_json::Value::Null);
+    assert_eq!(body["mode"], "local");
+
+    let resp = server.get("/api/memories/most-used?limit=2").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["memories"].is_array());
+
+    let resp = server.get("/api/embeddings/status").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body.get("provider").is_some());
+    assert!(body.get("model").is_some());
+    assert!(body.get("available").is_some());
+    assert!(body.get("tracker").is_some());
+
+    let resp = server.post("/api/memory/forget", json!({})).await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn telemetry_memory_search_native_list_and_export() {
     let server = TestServer::start().await;
     server.seed_memory_search_telemetry_fixture();
