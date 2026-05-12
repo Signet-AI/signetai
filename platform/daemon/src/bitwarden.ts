@@ -6,7 +6,7 @@ export const BITWARDEN_MANAGED_FOLDER_SECRET = "BITWARDEN_MANAGED_FOLDER_ID";
 
 const SECRET_REF_PREFIX = "bw://";
 const DEFAULT_BW_TIMEOUT_MS = 30_000;
-const SECRET_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export interface BitwardenFolder {
 	readonly id: string;

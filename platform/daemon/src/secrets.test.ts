@@ -275,11 +275,11 @@ describe("local secrets provider", () => {
 				return [];
 			},
 			async listItems() {
-				return [{ id: "item-1", name: "ANTHROPIC_KEY", folderId: null }];
+				return [{ id: "item-1", name: "anthropic_key", folderId: null }];
 			},
 			async getItem(id: string) {
 				expect(id).toBe("item-1");
-				return { id, name: "ANTHROPIC_KEY", folderId: null, login: { username: "signet", password: "sk-bw" } };
+				return { id, name: "anthropic_key", folderId: null, login: { username: "signet", password: "sk-bw" } };
 			},
 			async putSecret() {
 				throw new Error("not used");
@@ -288,7 +288,7 @@ describe("local secrets provider", () => {
 				return false;
 			},
 			async resolveSecret(ref: string) {
-				expect(ref).toBe("bw://name/ANTHROPIC_KEY");
+				expect(ref).toBe("bw://name/anthropic_key");
 				return "sk-bw";
 			},
 		};

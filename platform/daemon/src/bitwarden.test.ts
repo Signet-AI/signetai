@@ -61,6 +61,8 @@ describe("Bitwarden secrets provider", () => {
 	test("recognizes bw:// references and normalizes Signet secret names", () => {
 		expect(isBitwardenReference("bw://name/OPENAI_API_KEY")).toBe(true);
 		expect(isBitwardenReference("OPENAI_API_KEY")).toBe(false);
+		expect(buildBitwardenManagedSecretName("anthropic_key")).toBe("anthropic_key");
+		expect(buildBitwardenManagedSecretName("ANTHROPIC_KEY")).toBe("ANTHROPIC_KEY");
 		expect(buildBitwardenManagedSecretName("OpenAI API Key")).toBe("OPENAI_API_KEY");
 		expect(buildBitwardenManagedSecretName("1password-token")).toBe("SECRET_1PASSWORD_TOKEN");
 	});
