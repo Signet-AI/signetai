@@ -290,42 +290,36 @@ async function finish(): Promise<void> {
 				<button class="icon-button sig-switch" type="button" aria-label="Dismiss onboarding" onclick={dismiss}>×</button>
 			</header>
 
-			<div class="progress-rail" aria-hidden="true">
-				<span class="progress-node progress-node-active">01 Identity</span>
-				<span class="progress-line"></span>
-				<span class="progress-node progress-node-active">02 Harness</span>
-				<span class="progress-line"></span>
-				<span class="progress-node progress-node-active">03 Memory</span>
-				<span class="progress-line progress-line-muted"></span>
-				<span class="progress-node">04 Sources</span>
-			</div>
-
 			<div class="onboarding-body">
-				<aside class="setup-summary setup-panel" aria-hidden="true">
-					<div class="summary-readout">
-						<span class="summary-label">ACTIVE PROFILE</span>
-						<strong>{agentName.trim() || "My Agent"}</strong>
-						<p>{agentDescription.trim() || "Personal AI assistant"}</p>
-					</div>
-					<div class="summary-grid">
+				<aside class="step-nav" aria-label="Onboarding steps">
+					<div class="step-nav-item step-nav-item-active">
+						<span class="step-nav-index">01</span>
 						<div>
-							<span>provider</span>
-							<strong>{providerOption.label}</strong>
-						</div>
-						<div>
-							<span>model</span>
-							<strong>{provider === "none" ? "disabled" : model}</strong>
-						</div>
-						<div>
-							<span>harnesses</span>
-							<strong>{selectedHarnesses.length || 0} selected</strong>
-						</div>
-						<div>
-							<span>next</span>
-							<strong>{afterSaveTab === "sources" ? "sources" : afterSaveTab === "settings" ? "settings" : "dashboard"}</strong>
+							<strong>Identity</strong>
+							<small>Name and describe your agent</small>
 						</div>
 					</div>
-					<p class="summary-note">Recommended: keep the default harness, choose the extraction backend you already trust, then connect sources.</p>
+					<div class="step-nav-item">
+						<span class="step-nav-index">02</span>
+						<div>
+							<strong>Harness sync</strong>
+							<small>Select harnesses to sync with</small>
+						</div>
+					</div>
+					<div class="step-nav-item">
+						<span class="step-nav-index">03</span>
+						<div>
+							<strong>Memory engine</strong>
+							<small>Choose memory extraction routes</small>
+						</div>
+					</div>
+					<div class="step-nav-item">
+						<span class="step-nav-index">04</span>
+						<div>
+							<strong>Sources</strong>
+							<small>Review and continue</small>
+						</div>
+					</div>
 				</aside>
 
 				<main class="setup-main">
@@ -354,7 +348,7 @@ async function finish(): Promise<void> {
 							<span class="step">02</span>
 							<div>
 								<h3>Harness sync</h3>
-								<p>Choose where Signet should maintain this identity. Installed harnesses are ready now.</p>
+								<p>Choose where Signet maintains this identity.</p>
 							</div>
 						</div>
 						<div class="harness-list">
@@ -377,7 +371,7 @@ async function finish(): Promise<void> {
 							<span class="step">03</span>
 							<div>
 								<h3>Memory engine</h3>
-								<p>Pick the extraction path. The common choices are first; advanced routes stay available without dominating the flow.</p>
+								<p>Pick an extraction route. Advanced routes stay available without dominating the flow.</p>
 							</div>
 						</div>
 
@@ -386,6 +380,7 @@ async function finish(): Promise<void> {
 							{#each PROVIDERS as option (option.value)}
 								{#if option.value === "acpx" || option.value === "ollama" || option.value === "codex" || option.value === "claude-code"}
 									<button type="button" class="provider-card sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)} aria-pressed={provider === option.value}>
+										<span class="provider-radio" aria-hidden="true"></span>
 										<span class="provider-mode">{option.mode}</span>
 										{#if provider === option.value}<span class="selected-badge">selected</span>{/if}
 										<strong>{option.label}</strong>
@@ -403,6 +398,7 @@ async function finish(): Promise<void> {
 								{#each PROVIDERS as option (option.value)}
 									{#if option.value !== "acpx" && option.value !== "ollama" && option.value !== "codex" && option.value !== "claude-code"}
 										<button type="button" class="provider-card provider-card-compact sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)} aria-pressed={provider === option.value}>
+											<span class="provider-radio" aria-hidden="true"></span>
 											<span class="provider-mode">{option.mode}</span>
 											{#if provider === option.value}<span class="selected-badge">selected</span>{/if}
 											<strong>{option.label}</strong>
@@ -468,7 +464,7 @@ async function finish(): Promise<void> {
 					<Button variant="ghost" type="button" onclick={dismiss}>Skip for now</Button>
 				</div>
 				<div class="action-cluster">
-					<Button type="button" onclick={finish} disabled={saving}>{saving ? "Saving…" : afterSaveTab === "sources" ? "Continue to sources" : "Save setup"}</Button>
+					<Button type="button" onclick={finish} disabled={saving}>{saving ? "Saving…" : afterSaveTab === "sources" ? "Continue to sources →" : "Save setup"}</Button>
 				</div>
 			</footer>
 		</div>
@@ -491,8 +487,8 @@ async function finish(): Promise<void> {
 
 	.onboarding-modal {
 		position: relative;
-		width: min(1060px, 100%);
-		max-height: min(900px, calc(100vh - 48px));
+		width: min(1180px, 100%);
+		max-height: min(900px, calc(100vh - 32px));
 		display: flex;
 		flex-direction: column;
 		background: var(--sig-bg);
@@ -530,11 +526,12 @@ async function finish(): Promise<void> {
 		align-items: flex-start;
 		justify-content: space-between;
 		gap: 24px;
-		padding: 20px 30px 18px;
+		padding: 18px 30px 15px;
+		border-bottom: 1px solid var(--sig-border-strong);
 		background:
 			linear-gradient(var(--sig-grid-line) 1px, transparent 1px),
 			linear-gradient(90deg, var(--sig-grid-line) 1px, transparent 1px),
-			linear-gradient(135deg, color-mix(in srgb, var(--sig-surface-raised), var(--sig-highlight) 8%), var(--sig-bg) 64%);
+			linear-gradient(135deg, color-mix(in srgb, var(--sig-surface-raised), var(--sig-highlight) 5%), var(--sig-bg) 68%);
 		background-size: 28px 28px, 28px 28px, auto;
 		overflow: hidden;
 	}
@@ -563,9 +560,7 @@ async function finish(): Promise<void> {
 	.field > span,
 	.step,
 	.harness-state,
-	.provider-mode,
-	.summary-label,
-	.summary-grid span {
+	.provider-mode {
 		font-family: var(--font-mono, monospace);
 		font-size: 10px;
 		letter-spacing: 0.1em;
@@ -596,8 +591,7 @@ async function finish(): Promise<void> {
 	h2,
 	.lede,
 	h3,
-	.section-head p,
-	.summary-readout p {
+	.section-head p {
 		margin: 0;
 	}
 
@@ -613,9 +607,9 @@ async function finish(): Promise<void> {
 
 	.lede {
 		max-width: 650px;
-		margin-top: 10px;
-		font-size: 14px;
-		line-height: 1.45;
+		margin-top: 7px;
+		font-size: 13px;
+		line-height: 1.35;
 		color: var(--sig-text);
 	}
 
@@ -630,62 +624,78 @@ async function finish(): Promise<void> {
 		cursor: pointer;
 	}
 
-	.progress-rail {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 9px 30px;
-		border-right: 1px solid var(--sig-border);
-		background: var(--sig-surface);
-	}
-
-	.progress-node {
-		display: grid;
-		place-items: center;
-		width: auto;
-		min-width: 82px;
-		height: 20px;
-		padding: 0 8px;
-		border: 1px solid var(--sig-border);
-		font-family: var(--font-mono, monospace);
-		font-size: 10px;
-		color: var(--sig-text-muted);
-		background: var(--sig-bg);
-	}
-
-	.progress-node-active {
-		border-color: var(--sig-highlight-dim);
-		color: var(--sig-highlight-text);
-		background: var(--sig-highlight-muted);
-	}
-
-	.progress-line {
-		flex: 1;
-		height: 1px;
-		background: linear-gradient(90deg, var(--sig-highlight), var(--sig-border-strong));
-		opacity: 0.55;
-	}
-
-	.progress-line-muted {
-		background: var(--sig-border);
-	}
-
 	.onboarding-body {
 		display: grid;
-		grid-template-columns: 1fr;
-		gap: 14px;
-		padding: 14px 16px 16px;
+		grid-template-columns: 196px minmax(0, 1fr);
+		gap: 0;
+		padding: 0;
 		overflow: auto;
 		background:
 			radial-gradient(circle at 22% 18%, var(--sig-highlight-dim), transparent 28%),
 			var(--sig-bg);
 	}
 
+	.step-nav {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		padding: 18px 16px;
+		border-right: 1px solid var(--sig-border-strong);
+		background: color-mix(in srgb, var(--sig-surface), transparent 18%);
+	}
+
+	.step-nav-item {
+		position: relative;
+		display: grid;
+		grid-template-columns: 28px minmax(0, 1fr);
+		gap: 10px;
+		padding: 11px 0 11px 12px;
+		border-left: 2px solid transparent;
+		color: var(--sig-text-muted);
+	}
+
+	.step-nav-item-active {
+		border-left-color: var(--sig-highlight);
+		color: var(--sig-highlight-text);
+		background: linear-gradient(90deg, var(--sig-highlight-muted), transparent 88%);
+	}
+
+	.step-nav-index,
+	.step-nav-item strong,
+	.step-nav-item small {
+		font-family: var(--font-mono, monospace);
+		text-transform: uppercase;
+	}
+
+	.step-nav-index {
+		font-size: 11px;
+		letter-spacing: 0.1em;
+		color: currentColor;
+	}
+
+	.step-nav-item strong {
+		display: block;
+		font-size: 11px;
+		letter-spacing: 0.11em;
+		color: currentColor;
+	}
+
+	.step-nav-item small {
+		display: block;
+		margin-top: 5px;
+		font-size: 11px;
+		line-height: 1.35;
+		letter-spacing: 0.01em;
+		text-transform: none;
+		color: var(--sig-text-muted);
+	}
+
 	.setup-main {
 		display: grid;
-		grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+		grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
 		gap: 14px;
 		align-items: start;
+		padding: 8px 16px 8px;
 	}
 
 	.setup-panel {
@@ -693,7 +703,7 @@ async function finish(): Promise<void> {
 		border: 1px solid var(--sig-border-strong);
 		border-radius: var(--sig-radius);
 		background: color-mix(in srgb, var(--sig-surface), transparent 5%);
-		padding: 14px;
+		padding: 10px;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 3px rgba(0, 0, 0, 0.28);
 		overflow: hidden;
 	}
@@ -704,61 +714,6 @@ async function finish(): Promise<void> {
 		inset: 0;
 		pointer-events: none;
 		background: linear-gradient(135deg, rgba(255, 255, 255, 0.035), transparent 42%);
-	}
-
-	.setup-summary {
-		display: none;
-	}
-
-	.summary-readout {
-		position: relative;
-		padding-right: 16px;
-		border-right: 1px solid var(--sig-border);
-	}
-
-	.summary-readout strong {
-		display: block;
-		margin-top: 8px;
-		font-family: var(--font-display, monospace);
-		font-size: 26px;
-		line-height: 1;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--sig-text-bright);
-	}
-
-	.summary-readout p,
-	.summary-note {
-		margin-top: 10px;
-		font-size: 13px;
-		line-height: 1.45;
-		color: var(--sig-text-muted);
-	}
-
-	.summary-grid {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		border: 1px solid var(--sig-border);
-		background: var(--sig-bg);
-	}
-
-	.summary-grid div {
-		padding: 10px 11px;
-		border-right: 1px solid var(--sig-border);
-	}
-
-	.summary-grid div:last-child {
-		border-right: 0;
-	}
-
-	.summary-grid strong {
-		display: block;
-		margin-top: 4px;
-		font-family: var(--font-mono, monospace);
-		font-size: 15px;
-		line-height: 1.1;
-		color: var(--sig-text-bright);
-		word-break: break-word;
 	}
 
 	.identity-panel {
@@ -775,7 +730,7 @@ async function finish(): Promise<void> {
 		display: flex;
 		gap: 12px;
 		align-items: flex-start;
-		margin-bottom: 11px;
+		margin-bottom: 8px;
 	}
 
 	.step {
@@ -810,7 +765,7 @@ async function finish(): Promise<void> {
 	.field-grid {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 12px;
+		gap: 10px;
 	}
 
 	.field,
@@ -834,7 +789,7 @@ async function finish(): Promise<void> {
 	}
 
 	:global(.onboarding-textarea) {
-		min-height: 56px !important;
+		min-height: 48px !important;
 		resize: vertical;
 	}
 
@@ -842,7 +797,7 @@ async function finish(): Promise<void> {
 	.provider-detail {
 		display: flex;
 		flex-direction: column;
-		gap: 9px;
+		gap: 8px;
 	}
 
 	.harness-list {
@@ -898,8 +853,8 @@ async function finish(): Promise<void> {
 	.provider-grid {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 9px;
-		margin-bottom: 12px;
+		gap: 8px;
+		margin-bottom: 10px;
 	}
 
 	.provider-group-title {
@@ -927,11 +882,27 @@ async function finish(): Promise<void> {
 
 	.provider-card {
 		position: relative;
-		min-height: 64px;
-		padding: 10px 12px;
+		min-height: 40px;
+		padding: 8px 10px 8px 30px;
 		text-align: left;
 		color: var(--sig-text);
 		cursor: pointer;
+	}
+
+	.provider-radio {
+		position: absolute;
+		top: 13px;
+		left: 12px;
+		width: 12px;
+		height: 12px;
+		border: 1px solid var(--sig-border-strong);
+		background: var(--sig-bg);
+	}
+
+	.provider-card-active .provider-radio {
+		border-color: var(--sig-highlight);
+		background: var(--sig-highlight);
+		box-shadow: inset 0 0 0 3px var(--sig-bg), 0 0 9px color-mix(in srgb, var(--sig-highlight), transparent 36%);
 	}
 
 	.provider-card small {
@@ -940,7 +911,7 @@ async function finish(): Promise<void> {
 
 	.provider-card strong {
 		display: block;
-		margin: 6px 0 0;
+		margin: 4px 0 0;
 		font-family: var(--font-display, monospace);
 		font-size: 13px;
 		letter-spacing: 0.08em;
@@ -972,8 +943,8 @@ async function finish(): Promise<void> {
 	.advanced-toggle {
 		grid-column: 1 / -1;
 		justify-content: center;
-		min-height: 36px;
-		padding: 8px 12px;
+		min-height: 28px;
+		padding: 6px 10px;
 		font-family: var(--font-mono, monospace);
 		font-size: 11px;
 		letter-spacing: 0.08em;
@@ -986,7 +957,7 @@ async function finish(): Promise<void> {
 		display: flex;
 		gap: 12px;
 		align-items: center;
-		padding: 10px 12px;
+		padding: 8px 10px;
 		border: 1px solid var(--sig-border-strong);
 		border-radius: var(--sig-radius);
 		background: var(--sig-bg);
@@ -1038,7 +1009,7 @@ async function finish(): Promise<void> {
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
-		padding: 12px 18px;
+		padding: 10px 18px;
 		background: var(--sig-surface);
 	}
 
@@ -1057,9 +1028,8 @@ async function finish(): Promise<void> {
 			grid-template-columns: 1fr;
 		}
 
-		.setup-summary {
-			position: relative;
-			min-height: auto;
+		.step-nav {
+			display: none;
 		}
 
 		.identity-panel,
@@ -1105,8 +1075,7 @@ async function finish(): Promise<void> {
 		}
 
 		.header-coordinate,
-		.progress-rail,
-		.setup-summary {
+		.step-nav {
 			display: none;
 		}
 
