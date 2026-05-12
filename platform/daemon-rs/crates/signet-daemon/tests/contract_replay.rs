@@ -910,6 +910,20 @@ async fn marketplace_reviews_native_roundtrip() {
     assert_eq!(body["success"], true);
     assert_eq!(body["config"]["enabled"], true);
     assert_eq!(body["config"]["endpointUrl"], "https://example.com/reviews");
+
+    let marketplace_dir = server._tmpdir.path().join("marketplace");
+    let mut entries: Vec<String> = std::fs::read_dir(&marketplace_dir)
+        .expect("marketplace dir exists")
+        .map(|entry| {
+            entry
+                .expect("marketplace dir entry")
+                .file_name()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+    entries.sort();
+    assert_eq!(entries, vec!["reviews-config.json", "reviews.json"]);
 }
 
 #[tokio::test]

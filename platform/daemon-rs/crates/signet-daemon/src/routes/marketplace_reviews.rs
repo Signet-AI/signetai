@@ -5,7 +5,10 @@
 //! `<SIGNET_PATH>/marketplace/{reviews.json,reviews-config.json}` so clients can
 //! switch between TS and Rust daemon runtimes without data-shape drift.
 
-use std::sync::{Arc, LazyLock, Mutex};
+use std::{
+    io::Write,
+    sync::{Arc, LazyLock, Mutex},
+};
 
 use axum::{
     Json,
@@ -106,13 +109,49 @@ fn read_reviews(state: &AppState) -> Result<Vec<MarketplaceReview>, String> {
     }
 }
 
+fn atomic_write_json(path: &std::path::Path, raw: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "marketplace path has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "marketplace path has invalid file name".to_string())?;
+    let tmp_name = format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    );
+    let tmp_path = parent.join(tmp_name);
+
+    let write_result = (|| -> Result<(), String> {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp_path)
+            .map_err(|e| e.to_string())?;
+        file.write_all(raw.as_bytes()).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        std::fs::rename(&tmp_path, path).map_err(|e| e.to_string())?;
+        if let Ok(parent_dir) = std::fs::File::open(parent) {
+            let _ = parent_dir.sync_all();
+        }
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    write_result
+}
+
 fn write_reviews(state: &AppState, reviews: &[MarketplaceReview]) -> Result<(), String> {
     let path = reviews_path(state).map_err(|e| e.to_string())?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let raw = serde_json::to_string_pretty(reviews).map_err(|e| e.to_string())?;
-    std::fs::write(path, raw).map_err(|e| e.to_string())
+    atomic_write_json(&path, &raw)
 }
 
 fn read_config(state: &AppState) -> ReviewsSyncConfig {
@@ -128,11 +167,8 @@ fn read_config(state: &AppState) -> ReviewsSyncConfig {
 
 fn write_config(state: &AppState, config: &ReviewsSyncConfig) -> Result<(), String> {
     let path = config_path(state).map_err(|e| e.to_string())?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(path, raw).map_err(|e| e.to_string())
+    atomic_write_json(&path, &raw)
 }
 
 fn parse_target_type(value: Option<String>) -> Option<String> {
