@@ -458,9 +458,10 @@ secret names resolve through the local provider, for example
 |------|------|----------|-------------|
 | `command` | string | yes | Shell command to execute |
 | `secrets` | object | yes | Map of env var name to secret reference (Signet name or `op://...`) |
+| `timeoutSeconds` | number | no | Max subprocess runtime; defaults to 300 seconds, max 1800 |
+| `async` | boolean | no | Queue command and return job id immediately |
 
-**Returns:** Object with `stdout`, `stderr`, and `code` (exit code).
-Secret values in output are replaced with `[REDACTED]`.
+**Returns:** Object with `stdout`, `stderr`, and `code` (exit code), or an async job object when `async` is true. Secret values in output are replaced with `[REDACTED]`.
 
 **Example:**
 
@@ -473,7 +474,7 @@ Secret values in output are replaced with `[REDACTED]`.
 }
 ```
 
-**Daemon endpoint:** `POST /api/secrets/exec` (30s timeout)
+**Daemon endpoint:** `POST /api/secrets/exec` (5 minute default daemon timeout; async job mode available)
 
 ### Optional GraphIQ Code Tools
 

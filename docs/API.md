@@ -2294,13 +2294,29 @@ all values before spawning.
 ```
 
 Both `command` and `secrets` are required. The `secrets` map must contain at
-least one entry.
+least one entry. `timeoutMs` is optional and defaults to 5 minutes; values are
+clamped between 1 second and 30 minutes. Set `async: true` to queue the command
+and return immediately instead of holding the HTTP request open.
 
-**Response**
+**Synchronous response**
 
 ```json
-{ "code": 0, "stdout": "...", "stderr": "" }
+{ "code": 0, "stdout": "...", "stderr": "", "timedOut": false }
 ```
+
+Timed-out commands are terminated by the daemon and return code `124` with
+`timedOut: true`.
+
+**Asynchronous response (`202`)**
+
+```json
+{ "id": "uuid", "status": "queued", "createdAt": "...", "timeoutMs": 300000 }
+```
+
+### GET /api/secrets/exec/:jobId
+
+Return the in-memory status for an asynchronous secret exec job. Completed jobs
+include the same redacted `result` object as the synchronous response.
 
 ### POST /api/secrets/:name/exec
 

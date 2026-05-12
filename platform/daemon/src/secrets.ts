@@ -11,6 +11,7 @@
  */
 
 import { execSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
@@ -55,7 +56,34 @@ export interface ExecResult {
 	stdout: string;
 	stderr: string;
 	code: number;
+	timedOut?: boolean;
 }
+
+export interface SecretExecOptions {
+	timeoutMs?: number;
+	maxOutputBytes?: number;
+}
+
+export type SecretExecJobStatus = "queued" | "running" | "completed" | "failed";
+
+export interface SecretExecJob {
+	id: string;
+	status: SecretExecJobStatus;
+	createdAt: string;
+	startedAt?: string;
+	completedAt?: string;
+	timeoutMs: number;
+	result?: ExecResult;
+	error?: string;
+}
+
+const DEFAULT_SECRET_EXEC_TIMEOUT_MS = 5 * 60_000;
+const MAX_SECRET_EXEC_TIMEOUT_MS = 30 * 60_000;
+const MIN_SECRET_EXEC_TIMEOUT_MS = 1_000;
+const DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
+const SECRET_EXEC_JOB_TTL_MS = 60 * 60_000;
+
+const secretExecJobs = new Map<string, SecretExecJob>();
 
 export interface SecretContextV1 {
 	readonly agentId?: string;
@@ -343,7 +371,11 @@ const SHELL_META = /[;&|`$(){}[\]<>!\\]/;
  * @param command  Command string to execute (parsed as argv, no shell)
  * @param secretRefs  Map of env var name → secret name, e.g. { OPENAI_API_KEY: "OPENAI_API_KEY" }
  */
-export async function execWithSecrets(command: string, secretRefs: Record<string, string>): Promise<ExecResult> {
+export async function execWithSecrets(
+	command: string,
+	secretRefs: Record<string, string>,
+	options: SecretExecOptions = {},
+): Promise<ExecResult> {
 	if (SHELL_META.test(command)) {
 		return { stdout: "", stderr: "command contains disallowed shell metacharacters", code: 1 };
 	}
@@ -354,6 +386,8 @@ export async function execWithSecrets(command: string, secretRefs: Record<string
 		return { stdout: "", stderr: "empty command", code: 1 };
 	}
 	const cmd = argv.map((a) => a.replace(/^["']|["']$/g, ""));
+	const timeoutMs = normalizeSecretExecTimeoutMs(options.timeoutMs);
+	const maxOutputBytes = normalizeSecretExecMaxOutputBytes(options.maxOutputBytes);
 
 	// Resolve all secret values up front so we can redact them from output
 	const resolved: Record<string, string> = {};
@@ -380,6 +414,7 @@ export async function execWithSecrets(command: string, secretRefs: Record<string
 	recordSecretEvent("secret.exec_started", {
 		secretCount: Object.keys(secretRefs).length,
 		envVars: Object.keys(secretRefs),
+		timeoutMs,
 	});
 
 	return new Promise((resolve, reject) => {
@@ -391,36 +426,84 @@ export async function execWithSecrets(command: string, secretRefs: Record<string
 
 		let stdout = "";
 		let stderr = "";
+		let stdoutBytes = 0;
+		let stderrBytes = 0;
+		let stdoutTruncated = false;
+		let stderrTruncated = false;
+		let settled = false;
+		let timedOut = false;
 
-		proc.stdout?.on("data", (d) => {
-			stdout += d.toString();
-		});
-		proc.stderr?.on("data", (d) => {
-			stderr += d.toString();
-		});
+		const timer = setTimeout(() => {
+			timedOut = true;
+			proc.kill("SIGTERM");
+			setTimeout(() => {
+				if (!settled && proc.exitCode === null) proc.kill("SIGKILL");
+			}, 2_000).unref();
+		}, timeoutMs);
+		timer.unref();
 
-		proc.on("close", (code) => {
-			// Zero out resolved values from memory (best-effort in JS)
+		function appendOutput(
+			current: string,
+			bytes: number,
+			chunk: Buffer,
+			stream: "stdout" | "stderr",
+		): [string, number] {
+			if (bytes >= maxOutputBytes) {
+				if (stream === "stdout") stdoutTruncated = true;
+				else stderrTruncated = true;
+				return [current, bytes + chunk.length];
+			}
+			const remaining = maxOutputBytes - bytes;
+			const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+			if (chunk.length > remaining) {
+				if (stream === "stdout") stdoutTruncated = true;
+				else stderrTruncated = true;
+			}
+			return [current + slice.toString(), bytes + chunk.length];
+		}
+
+		function zeroResolved(): void {
 			for (const key of Object.keys(resolved)) {
 				resolved[key] = "";
 			}
+		}
+
+		proc.stdout?.on("data", (d: Buffer) => {
+			[stdout, stdoutBytes] = appendOutput(stdout, stdoutBytes, d, "stdout");
+		});
+		proc.stderr?.on("data", (d: Buffer) => {
+			[stderr, stderrBytes] = appendOutput(stderr, stderrBytes, d, "stderr");
+		});
+
+		proc.on("close", (code) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			zeroResolved();
+			const finalCode = timedOut ? 124 : (code ?? 1);
+			if (stdoutTruncated) stdout += "\n[signet secret exec: stdout truncated]\n";
+			if (stderrTruncated) stderr += "\n[signet secret exec: stderr truncated]\n";
+			if (timedOut) stderr += `\n[signet secret exec: timed out after ${timeoutMs}ms]\n`;
 
 			recordSecretEvent("secret.exec_completed", {
-				code: code ?? 1,
+				code: finalCode,
 				secretCount: secretValues.length,
+				timedOut,
 			});
 
 			resolve({
 				stdout: redact(stdout),
 				stderr: redact(stderr),
-				code: code ?? 1,
+				code: finalCode,
+				...(timedOut ? { timedOut: true } : {}),
 			});
 		});
 
 		proc.on("error", (err) => {
-			for (const key of Object.keys(resolved)) {
-				resolved[key] = "";
-			}
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			zeroResolved();
 			recordSecretEvent("secret.exec_completed", {
 				code: 1,
 				secretCount: secretValues.length,
@@ -429,6 +512,67 @@ export async function execWithSecrets(command: string, secretRefs: Record<string
 			reject(err);
 		});
 	});
+}
+
+export function startSecretExecJob(
+	command: string,
+	secretRefs: Record<string, string>,
+	options: SecretExecOptions = {},
+): SecretExecJob {
+	pruneSecretExecJobs();
+	const timeoutMs = normalizeSecretExecTimeoutMs(options.timeoutMs);
+	const job: SecretExecJob = {
+		id: randomUUID(),
+		status: "queued",
+		createdAt: new Date().toISOString(),
+		timeoutMs,
+	};
+	secretExecJobs.set(job.id, job);
+
+	void (async () => {
+		job.status = "running";
+		job.startedAt = new Date().toISOString();
+		try {
+			job.result = await execWithSecrets(command, secretRefs, { ...options, timeoutMs });
+			job.status = "completed";
+		} catch (err) {
+			job.status = "failed";
+			job.error = err instanceof Error ? err.message : String(err);
+		} finally {
+			job.completedAt = new Date().toISOString();
+		}
+	})();
+
+	return { ...job };
+}
+
+export function getSecretExecJob(id: string): SecretExecJob | undefined {
+	pruneSecretExecJobs();
+	const job = secretExecJobs.get(id);
+	return job ? { ...job, result: job.result ? { ...job.result } : undefined } : undefined;
+}
+
+export function resetSecretExecJobsForTests(): void {
+	secretExecJobs.clear();
+}
+
+export function normalizeSecretExecTimeoutMs(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_SECRET_EXEC_TIMEOUT_MS;
+	return Math.min(MAX_SECRET_EXEC_TIMEOUT_MS, Math.max(MIN_SECRET_EXEC_TIMEOUT_MS, Math.trunc(value)));
+}
+
+function normalizeSecretExecMaxOutputBytes(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES;
+	return Math.min(DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES, Math.max(1024, Math.trunc(value)));
+}
+
+function pruneSecretExecJobs(now = Date.now()): void {
+	for (const [id, job] of secretExecJobs) {
+		const timestamp = Date.parse(job.completedAt ?? job.createdAt);
+		if (Number.isFinite(timestamp) && now - timestamp > SECRET_EXEC_JOB_TTL_MS) {
+			secretExecJobs.delete(id);
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

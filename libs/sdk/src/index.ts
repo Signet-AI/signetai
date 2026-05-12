@@ -51,6 +51,8 @@ import type {
 	RecallResponse,
 	RecoverResult,
 	RememberResult,
+	SecretExecJob,
+	SecretExecOptions,
 	SecretExecResult,
 	SecretListResponse,
 	SessionInfo,
@@ -978,11 +980,23 @@ export class SignetClient extends SignetClientHelpers {
 	 * console.log(result.stdout, result.code);
 	 * ```
 	 */
-	async execWithSecrets(command: string, secrets: Record<string, string>): Promise<SecretExecResult> {
-		return this.transport.post<SecretExecResult>("/api/secrets/exec", {
+	async execWithSecrets(
+		command: string,
+		secrets: Record<string, string>,
+		options: SecretExecOptions = {},
+	): Promise<SecretExecResult | SecretExecJob> {
+		return this.transport.post<SecretExecResult | SecretExecJob>("/api/secrets/exec", {
 			command,
 			secrets,
+			...options,
 		});
+	}
+
+	/**
+	 * Get the status/result for an async secret exec job.
+	 */
+	async getSecretExecJob(jobId: string): Promise<SecretExecJob> {
+		return this.transport.get<SecretExecJob>(`/api/secrets/exec/${jobId}`);
 	}
 
 	/**
@@ -1291,6 +1305,8 @@ export type {
 	RecallResult,
 	RecoverResult,
 	RememberResult,
+	SecretExecJob,
+	SecretExecOptions,
 	SecretExecResult,
 	SecretListResponse,
 	SessionInfo,

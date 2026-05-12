@@ -139,7 +139,9 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 		)
 		.passThroughOptions()
 		.option("-s, --secret <name>", "Secret to inject (repeatable, must precede command)", append, [] as string[])
-		.action(async (parts: string[], opts: { secret: string[] }) => {
+		.option("--timeout <seconds>", "Maximum subprocess runtime before Signet terminates it", "300")
+		.option("--async", "Queue the command and print a job id immediately")
+		.action(async (parts: string[], opts: { secret: string[]; timeout: string; async?: boolean }) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
 			if (opts.secret.length === 0) {
 				console.error(chalk.red("  At least one --secret is required."));
@@ -171,11 +173,34 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 				.map((arg) => `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/`/g, "\\`").replace(/\$/g, "\\$")}"`)
 				.join(" ");
 
+			const timeoutSeconds = Number.parseInt(opts.timeout, 10);
+			if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+				console.error(chalk.red("  --timeout must be a positive number of seconds."));
+				process.exitCode = 1;
+				return;
+			}
+			const timeoutMs = timeoutSeconds * 1000;
+			const requestTimeoutMs = opts.async === true ? 10_000 : timeoutMs + 5_000;
+
 			try {
-				const { ok, data } = await deps.secretApiCall("POST", "/api/secrets/exec", { command, secrets }, 60_000);
+				const { ok, data } = await deps.secretApiCall(
+					"POST",
+					"/api/secrets/exec",
+					{ command, secrets, timeoutMs, async: opts.async === true },
+					requestTimeoutMs,
+				);
 				if (!ok) {
 					console.error(chalk.red(`  Error: ${readError(data)}`));
 					process.exitCode = 1;
+					return;
+				}
+
+				if (opts.async === true) {
+					const jobId = readString(data, "id");
+					const status = readString(data, "status") ?? "queued";
+					console.log(`Secret exec queued: ${chalk.cyan(jobId ?? "unknown")}`);
+					console.log(chalk.dim(`Status: ${status}`));
+					console.log(chalk.dim(`Poll with: signet secret exec-status ${jobId}`));
 					return;
 				}
 
@@ -187,12 +212,42 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 				process.exitCode = code ?? 1;
 			} catch (err) {
 				if (err instanceof Error && err.name === "TimeoutError") {
-					console.error(chalk.red("  Error: command timed out after 60 seconds."));
-					console.error(chalk.dim("  The subprocess may still be running on the daemon."));
-					console.error(chalk.dim("  Streaming support is planned — see TODO in source."));
+					console.error(
+						chalk.red(`  Error: daemon request timed out after ${Math.round(requestTimeoutMs / 1000)} seconds.`),
+					);
+					console.error(chalk.dim("  Retry with --async for long-running commands."));
 				} else {
 					console.error(chalk.red(`  Error: ${readThrown(err)}`));
 				}
+				process.exitCode = 1;
+			}
+		});
+
+	secretCmd
+		.command("exec-status <jobId>")
+		.description("Check an asynchronous secret exec job")
+		.action(async (jobId: string) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			try {
+				const { ok, data } = await deps.secretApiCall("GET", `/api/secrets/exec/${jobId}`, undefined, 10_000);
+				if (!ok) {
+					console.error(chalk.red(`  Error: ${readError(data)}`));
+					process.exitCode = 1;
+					return;
+				}
+				const status = readString(data, "status") ?? "unknown";
+				console.log(`Status: ${status}`);
+				const result = readRecord(data, "result");
+				if (result) {
+					const stdout = readString(result, "stdout");
+					const stderr = readString(result, "stderr");
+					const code = readNumber(result, "code");
+					if (stdout) process.stdout.write(stdout);
+					if (stderr) process.stderr.write(stderr);
+					process.exitCode = code ?? 1;
+				}
+			} catch (err) {
+				console.error(chalk.red(`  Error: ${readThrown(err)}`));
 				process.exitCode = 1;
 			}
 		});

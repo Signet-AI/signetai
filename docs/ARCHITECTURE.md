@@ -975,7 +975,8 @@ All endpoints are served by the Hono server on port 3850.
 | `/api/harnesses/regenerate` | POST | local | Regenerate harness configs |
 | `/api/skills` | GET | local | List installed skills |
 | `/api/secrets` | GET | admin | List secret names |
-| `/api/secrets/exec` | POST | admin | Execute with multiple secrets |
+| `/api/secrets/exec` | POST | admin | Execute or queue with multiple secrets |
+| `/api/secrets/exec/:jobId` | GET | admin | Inspect async secret exec job |
 | `/api/secrets/:name/exec` | POST | admin | Execute with single secret (legacy) |
 | `/api/documents` | GET/POST | documents | List or enqueue documents |
 | `/api/documents/:id` | GET/DELETE | documents | Get or delete a document |

@@ -5,7 +5,17 @@ import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePa
 import { recordPluginAuditEvent } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index.js";
 import type { PluginHostV1 } from "../plugins/index.js";
-import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "../secrets.js";
+import {
+	deleteSecret,
+	execWithSecrets,
+	getSecret,
+	getSecretExecJob,
+	hasSecret,
+	listSecrets,
+	normalizeSecretExecTimeoutMs,
+	putSecret,
+	startSecretExecJob,
+} from "../secrets.js";
 import { authConfig } from "./state.js";
 
 function parseOptionalString(value: unknown): string | undefined {
@@ -219,6 +229,8 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			const body = (await c.req.json()) as {
 				command?: string;
 				secrets?: Record<string, string>;
+				timeoutMs?: number;
+				async?: boolean;
 			};
 
 			if (!body.command) {
@@ -228,10 +240,22 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 				return c.json({ error: "secrets map is required" }, 400);
 			}
 
-			const result = await execWithSecrets(body.command, body.secrets);
+			const timeoutMs = normalizeSecretExecTimeoutMs(body.timeoutMs);
+			if (body.async === true) {
+				const job = startSecretExecJob(body.command, body.secrets, { timeoutMs });
+				logger.info("secrets", "exec_with_secrets queued", {
+					jobId: job.id,
+					secretCount: Object.keys(body.secrets).length,
+					timeoutMs,
+				});
+				return c.json(job, 202);
+			}
+
+			const result = await execWithSecrets(body.command, body.secrets, { timeoutMs });
 			logger.info("secrets", "exec_with_secrets completed", {
 				secretCount: Object.keys(body.secrets).length,
 				code: result.code,
+				timeoutMs,
 			});
 			return c.json(result);
 		} catch (e) {
@@ -239,6 +263,14 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			logger.error("secrets", "exec_with_secrets failed", err);
 			return c.json({ error: err.message }, 500);
 		}
+	});
+
+	app.get("/api/secrets/exec/:jobId", (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:exec"]);
+		if (denied) return denied;
+		const job = getSecretExecJob(c.req.param("jobId"));
+		if (!job) return c.json({ error: "secret exec job not found" }, 404);
+		return c.json(job);
 	});
 
 	app.post("/api/secrets/:name/exec", async (c) => {
@@ -249,6 +281,8 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			const body = (await c.req.json()) as {
 				command?: string;
 				secrets?: Record<string, string>;
+				timeoutMs?: number;
+				async?: boolean;
 			};
 
 			if (!body.command) {
@@ -256,11 +290,18 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			}
 
 			const secretRefs: Record<string, string> = body.secrets ?? { [name]: name };
+			const timeoutMs = normalizeSecretExecTimeoutMs(body.timeoutMs);
+			if (body.async === true) {
+				const job = startSecretExecJob(body.command, secretRefs, { timeoutMs });
+				logger.info("secrets", "exec_with_secrets queued", { name, jobId: job.id, timeoutMs });
+				return c.json(job, 202);
+			}
 
-			const result = await execWithSecrets(body.command, secretRefs);
+			const result = await execWithSecrets(body.command, secretRefs, { timeoutMs });
 			logger.info("secrets", "exec_with_secrets completed", {
 				name,
 				code: result.code,
+				timeoutMs,
 			});
 			return c.json(result);
 		} catch (e) {

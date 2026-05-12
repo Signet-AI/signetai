@@ -722,6 +722,23 @@ export interface SecretExecResult {
 	readonly stdout: string;
 	readonly stderr: string;
 	readonly code: number;
+	readonly timedOut?: boolean;
+}
+
+export interface SecretExecOptions {
+	readonly timeoutMs?: number;
+	readonly async?: boolean;
+}
+
+export interface SecretExecJob {
+	readonly id: string;
+	readonly status: "queued" | "running" | "completed" | "failed";
+	readonly createdAt: string;
+	readonly startedAt?: string;
+	readonly completedAt?: string;
+	readonly timeoutMs: number;
+	readonly result?: SecretExecResult;
+	readonly error?: string;
 }
 
 export interface OnePasswordStatus {

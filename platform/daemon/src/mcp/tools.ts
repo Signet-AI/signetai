@@ -1319,22 +1319,37 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.describe(
 						'Map of env var name → secret ref, e.g. { "OPENAI_API_KEY": "OPENAI_API_KEY" } or { "DB_PASSWORD": "op://vault/item/password" }',
 					),
+				timeoutSeconds: z
+					.number()
+					.int()
+					.positive()
+					.max(1800)
+					.optional()
+					.describe("Maximum subprocess runtime; defaults to 5 minutes"),
+				async: z
+					.boolean()
+					.optional()
+					.describe("Queue the command and return a job id immediately instead of holding the tool call open"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ command, secrets }) => {
+		async ({ command, secrets, timeoutSeconds, async }) => {
 			if (Object.keys(secrets).length === 0) {
 				return errorResult("secrets map must contain at least one entry");
 			}
 
+			const timeoutMs = timeoutSeconds ? timeoutSeconds * 1000 : undefined;
+			const requestTimeout = async === true ? 10_000 : Math.max(10_000, (timeoutMs ?? 5 * 60_000) + 5_000);
 			const result = await daemonFetch<{
-				stdout: string;
-				stderr: string;
-				code: number;
+				stdout?: string;
+				stderr?: string;
+				code?: number;
+				id?: string;
+				status?: string;
 			}>(baseUrl, "/api/secrets/exec", {
 				method: "POST",
-				body: { command, secrets },
-				timeout: 30_000,
+				body: { command, secrets, timeoutMs, async },
+				timeout: requestTimeout,
 			});
 
 			if (!result.ok) {

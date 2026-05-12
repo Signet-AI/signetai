@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { queryPluginAuditEvents } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "../plugins/bundled/secrets.js";
 import { PluginHostV1 } from "../plugins/host.js";
+import { putSecret, resetSecretExecJobsForTests } from "../secrets.js";
 import { registerSecretRoutes } from "./secrets-routes.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -36,6 +37,7 @@ describe("secrets routes plugin capability enforcement", () => {
 	});
 
 	afterEach(() => {
+		resetSecretExecJobsForTests();
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
@@ -92,6 +94,43 @@ describe("secrets routes plugin capability enforcement", () => {
 		expect(listed.status).toBe(200);
 		expect(listedBody.secrets).toEqual(["OPENAI_API_KEY"]);
 		expect(JSON.stringify(listedBody)).not.toContain("sk-test");
+	});
+
+	test("queues async secret exec jobs and polls status without holding the route open", async () => {
+		await putSecret("OPENAI_API_KEY", "sk-route-background");
+		const app = makeApp(makeHost());
+		const script = join(agentsDir, "route-background.mjs");
+		writeFileSync(script, "setTimeout(() => process.stdout.write(process.env.OPENAI_API_KEY), 25);\n");
+
+		const queued = await app.request("/api/secrets/exec", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				command: `bun ${script}`,
+				secrets: { OPENAI_API_KEY: "OPENAI_API_KEY" },
+				async: true,
+				timeoutMs: 1000,
+			}),
+		});
+
+		expect(queued.status).toBe(202);
+		const queuedBody = (await queued.json()) as { id: string; status: string; result?: unknown };
+		expect(queuedBody.id.length).toBeGreaterThan(0);
+		expect(["queued", "running"]).toContain(queuedBody.status);
+		expect(queuedBody.result).toBeUndefined();
+
+		let statusBody: { status: string; result?: { stdout: string; code: number } } | undefined;
+		for (let i = 0; i < 20 && statusBody?.status !== "completed"; i++) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			const status = await app.request(`/api/secrets/exec/${queuedBody.id}`);
+			expect(status.status).toBe(200);
+			statusBody = (await status.json()) as { status: string; result?: { stdout: string; code: number } };
+		}
+
+		expect(statusBody?.status).toBe("completed");
+		expect(statusBody?.result?.code).toBe(0);
+		expect(statusBody?.result?.stdout).toBe("[REDACTED]");
+		expect(statusBody?.result?.stdout).not.toContain("sk-route-background");
 	});
 
 	test("1Password compatibility status route does not require configured token", async () => {
