@@ -125,19 +125,12 @@ Clicking an entity node opens an inspector panel showing the entity type,
 aspects list, dependency edges, and memory count. Clicking a memory node
 opens the existing memory detail panel.
 
-**Predictor Metrics**
+**Predictor Placeholders**
 
-When the predictive memory scorer is enabled, a Predictor tab surfaces
-scorer health metrics:
-
-- NDCG@10 score from the most recent continuity evaluation
-- EMA-smoothed model health signal (rolling quality indicator)
-- Drift detection status (flags when model performance has degraded)
-- Training pair count (total comparison pairs accumulated)
-
-The predictor follows the current runtime config. Current navigation routes
-predictor status through Settings and related ontology health panels; legacy
-`#predictor` hashes continue to resolve to Settings.
+The dashboard does not currently ship a standalone Predictor tab. Legacy
+`#predictor` hashes resolve to Settings, and the Knowledge view includes
+placeholder predictor slices that stay empty until scorer comparison rows exist
+in the daemon database.
 
 
 **Pipeline — Active Sessions**

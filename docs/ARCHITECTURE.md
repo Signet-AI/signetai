@@ -90,9 +90,9 @@ application and provides the native desktop UI, menu bar tray, bundled daemon
 runtime, quick actions, and notifications. `@signet/tray` lives in
 `surfaces/tray/` and is a shared tray/menu state utility package only.
 
-`predictor` lives in `platform/predictor/`. It is the predictive memory scorer sidecar, written in Rust.
-It implements autograd, checkpointing, and data loading for real-time
-preference scoring. (WIP)
+Predictor-related tables and diagnostics remain in the schema for future
+scoring work, but there is no shipped `platform/predictor/` sidecar package in
+the current tree.
 
 `@signet/native` lives in `platform/native/` and provides Rust/NAPI bindings for SIMD vector operations
 (cosine similarity, normalization) used by the daemon for fast
@@ -132,7 +132,7 @@ Harness hook fires (session-start / user-prompt / session-end)
       structured evidence shaping balances lexical, semantic,
       prospective hint, and traversal evidence,
       currentness shaping dampens grouped claim-key superseded structured facts,
-      predictor path can rerank if available
+      predictor score slots remain nullable until a scorer is wired in
 ```
 
 The database is the source of truth. The daemon's file watcher is
@@ -1012,8 +1012,6 @@ All endpoints are served by the Hono server on port 3850.
 | `/api/telemetry/export` | GET | analytics | Export telemetry as NDJSON |
 | `/api/telemetry/memory-search` | GET | analytics | Query local recall QA telemetry |
 | `/api/telemetry/memory-search/export` | GET | analytics | Export recall QA telemetry as NDJSON |
-| `/api/timeline/:id` | GET | analytics | Entity event timeline |
-| `/api/timeline/:id/export` | GET | analytics | Export timeline with metadata |
 | `/api/git/status` | GET | local | Git sync status |
 | `/api/git/pull` | POST | local | Pull from remote |
 | `/api/git/push` | POST | local | Push to remote |

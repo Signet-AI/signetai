@@ -563,32 +563,21 @@ tool use. Future providers can be added by implementing `LlmProvider` and
 passing the instance to `startWorker`.
 
 
-Predictor Scorer Integration
+Predictor Schema Placeholders
 ---
 
-The predictive memory scorer hooks into the pipeline at two lifecycle
-points.
+The schema still carries predictor-oriented columns and historical comparison
+tables, including nullable `session_memories.predictor_score`,
+`session_memories.predictor_rank`, and `predictor_comparisons`. These fields
+are retained so future scorer work can attach training and comparison data
+without another migration churn.
 
-**Session-start (scoring):** During `session-start` hook processing, after
-the baseline candidate pool is assembled via hybrid search and graph
-traversal, `runPredictorScoring` is called with the candidate set and their
-feature vectors. The sidecar (Rust predictor process) re-ranks candidates
-using its trained model. If the predictor is unavailable or in cold-start,
-baseline ordering is used unchanged. The fused scores are used to re-sort
-the final injection list. A predictor status line is appended to the
-injected context when the predictor is active.
-
-**Session-end (training pairs):** After the continuity scoring pass writes
-per-memory relevance scores to `session_memories`, `runSessionComparison`
-is called in the summary worker. It builds comparison pairs from the session
-— injected memories with their final relevance scores — and writes them to
-`predictor_comparisons`. The EMA health signal and drift detector are updated
-based on the session's NDCG@10 score.
-
-In the current config defaults, the predictor path is enabled, but it
-still fails open. During cold start, sidecar unavailability, or explicit
-`predictor.enabled: false`, both hooks fall back to baseline ordering and
-the baseline pipeline remains unchanged.
+The current daemon does not ship or start a predictive scorer sidecar.
+`session-start` assembles candidates with hybrid search, graph traversal, and
+baseline score ordering; predictor score and rank slots remain `null` unless a
+future scorer path writes them. Dashboard predictor helpers currently return
+empty slices, and entity health reads `predictor_comparisons` only when rows
+exist.
 
 
 Optional Reranking

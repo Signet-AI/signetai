@@ -4033,37 +4033,6 @@ same filters as `GET /api/telemetry/memory-search`; `limit` is clamped to
 1-10000.
 
 
-Timeline
---------
-
-Requires `analytics` permission.
-
-### GET /api/timeline/:id
-
-Build a chronological timeline for a memory entity, combining mutation
-history, log events, and errors associated with the given ID.
-
-**Response** — timeline object with ordered events from `buildTimeline()`.
-
-### GET /api/timeline/:id/export
-
-Same as `GET /api/timeline/:id` but wraps the result in an export envelope
-with version and timestamp metadata.
-
-**Response**
-
-```json
-{
-  "meta": {
-    "version": "0.109.x",
-    "exportedAt": "2026-02-21T10:00:00.000Z",
-    "entityId": "uuid"
-  },
-  "timeline": { ... }
-}
-```
-
-
 Logs
 ----
 
