@@ -8,7 +8,7 @@
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { constants, access, stat } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import type {
 	ConnectorConfig,
 	ConnectorResource,
@@ -110,12 +110,14 @@ function globToRegex(pattern: string): RegExp {
 }
 
 async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
-	const { rootPath, patterns, ignorePatterns, maxFileSize } = settings;
+	const { patterns, ignorePatterns, maxFileSize } = settings;
+	const resolvedRoot = resolve(settings.rootPath);
 	const seen = new Set<string>();
 	const results: DiscoveredFile[] = [];
 
-	for await (const absolutePath of walkDir(rootPath, rootPath, ignorePatterns)) {
-		const rel = absolutePath.slice(rootPath.length + 1);
+	for await (const absolutePath of walkDir(resolvedRoot, resolvedRoot, ignorePatterns)) {
+		const rel = relative(resolvedRoot, absolutePath);
+		if (!rel || rel.startsWith("..")) continue;
 		const matches = patterns.some((p) => matchGlob(p, rel));
 		if (!matches) continue;
 		if (seen.has(rel)) continue;
