@@ -186,6 +186,15 @@ jobs:
           bun build ./src/cli.ts --outfile ./dist/cli.js --target node
           tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js
 
+      # ── Dashboard ──
+
+      - name: Build dashboard
+        run: |
+          cd surfaces/dashboard
+          bun install
+          bun run build
+          tar czf "$ARTIFACT_DIR/signet-dashboard.tar.gz" -C build .
+
       # ── Daemon JS bundle ──
 
       - name: Build daemon JS bundle
@@ -218,15 +227,6 @@ jobs:
           cp "target/$RUST_TARGET/release/signet-predictor" "$STAGE/signet-predictor"
           chmod +x "$STAGE/signet-predictor"
           tar czf "$ARTIFACT_DIR/signet-predictor-$PLATFORM.tar.gz" -C "$STAGE" signet-predictor
-
-      # ── Dashboard ──
-
-      - name: Build dashboard
-        run: |
-          cd surfaces/dashboard
-          bun install
-          bun run build
-          tar czf "$ARTIFACT_DIR/signet-dashboard.tar.gz" -C build .
 
       # ── Connectors ──
 

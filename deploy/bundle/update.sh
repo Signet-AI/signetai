@@ -44,6 +44,13 @@ LOCAL_MANIFEST="$SIGNET_INSTALL_DIR/manifest.json"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
+SHA256_CMD=""
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA256_CMD="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  SHA256_CMD="shasum -a 256"
+fi
+
 if [ ! -f "$LOCAL_MANIFEST" ]; then
   echo "No Signet installation found at $SIGNET_INSTALL_DIR"
   echo "Run the installer first: curl -fsSL https://signetai.sh/install.sh | bash"
@@ -134,10 +141,14 @@ for comp in $COMPONENTS; do
   }
 
   if [ -n "$REMOTE_SHA" ]; then
-    ACTUAL_SHA="$(shasum -a 256 "$TMPDIR/$FILENAME" 2>/dev/null | awk '{print $1}' || sha256sum "$TMPDIR/$FILENAME" 2>/dev/null | awk '{print $1}')"
-    if [ -z "$ACTUAL_SHA" ]; then
-      warn "No checksum tool available — skipping verification for $comp"
-    elif [ "$ACTUAL_SHA" != "$REMOTE_SHA" ]; then
+    if [ -z "$SHA256_CMD" ]; then
+      err "No checksum tool available — cannot verify $comp. Install sha256sum or shasum and retry."
+      rm -f "$TMPDIR/$FILENAME"
+      FAILED=$((FAILED + 1))
+      continue
+    fi
+    ACTUAL_SHA="$($SHA256_CMD "$TMPDIR/$FILENAME" | awk '{print $1}')"
+    if [ "$ACTUAL_SHA" != "$REMOTE_SHA" ]; then
       err "Checksum mismatch for $comp (expected $REMOTE_SHA, got $ACTUAL_SHA)"
       rm -f "$TMPDIR/$FILENAME"
       FAILED=$((FAILED + 1))

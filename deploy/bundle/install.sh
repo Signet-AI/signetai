@@ -376,12 +376,15 @@ fi
 
   export PATH="$SIGNET_INSTALL_DIR/bin:$PATH"
 
+  SETUP_RC=0
   if [ "${SIGNET_NO_SETUP:-}" != "1" ]; then
     info "Running initial setup..."
-    signet setup --non-interactive --embedding-provider none --extraction-provider none 2>/dev/null || {
+    signet setup --non-interactive --embedding-provider none --extraction-provider none 2>/dev/null || SETUP_RC=$?
+    if [ "$SETUP_RC" -ne 0 ]; then
       warn "Setup had issues — run 'signet setup' manually later"
-    }
-    ok "Setup complete"
+    else
+      ok "Setup complete"
+    fi
   fi
 
   if [ "${SIGNET_NO_START:-}" != "1" ]; then
