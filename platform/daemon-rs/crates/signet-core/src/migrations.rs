@@ -458,8 +458,13 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
 
     conn.execute_batch(
         "UPDATE connectors
-            SET settings_json = COALESCE(NULLIF(NULLIF(settings_json, ''), '{}'), NULLIF(config_json, ''), '{}')
-          WHERE 1 = 1;",
+            SET settings_json = NULLIF(config_json, '')
+          WHERE NULLIF(config_json, '') IS NOT NULL
+            AND (
+                settings_json IS NULL
+                OR settings_json = ''
+                OR (settings_json = '{}' AND COALESCE(updated_at, '') = COALESCE(created_at, ''))
+            );",
     )?;
 
     Ok(())
@@ -914,6 +919,25 @@ mod tests {
             )
             .expect("read backfilled settings_json");
         assert_eq!(after, r#"{"vault":"/tmp/vault"}"#);
+
+        conn.execute(
+            r#"UPDATE connectors
+               SET settings_json = '{}', updated_at = datetime('now', '+1 second')
+               WHERE id = 'obsidian-main'"#,
+            [],
+        )
+        .expect("simulate intentional empty settings payload");
+
+        run(&conn).expect("rerun migrations preserves intentional empty settings");
+
+        let intentional_empty: String = conn
+            .query_row(
+                "SELECT settings_json FROM connectors WHERE id = 'obsidian-main'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read intentionally empty settings_json");
+        assert_eq!(intentional_empty, "{}");
     }
 
     #[test]
