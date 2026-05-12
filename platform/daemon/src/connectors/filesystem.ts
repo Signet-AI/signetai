@@ -6,10 +6,9 @@
  * embedding, and indexing are handled downstream by the document worker.
  */
 
-import { readFileSync } from "node:fs";
-import { access, stat, constants } from "node:fs/promises";
-import { join, basename, resolve } from "node:path";
-import { Glob } from "bun";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { constants, access, stat } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import type {
 	ConnectorConfig,
 	ConnectorResource,
@@ -19,8 +18,8 @@ import type {
 	SyncResult,
 } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
-import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 import { logger } from "../logger";
+import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -68,51 +67,76 @@ interface DiscoveredFile {
 	readonly size: number;
 }
 
+async function* walkDir(dir: string, dot: boolean): AsyncGenerator<string> {
+	const entries = readdirSync(dir, { withFileTypes: true });
+	for (const entry of entries) {
+		if (!dot && entry.name.startsWith(".")) continue;
+		const fullPath = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			yield* walkDir(fullPath, dot);
+		} else if (entry.isFile()) {
+			yield fullPath;
+		}
+	}
+}
+
+function matchGlob(pattern: string, path: string): boolean {
+	const regex = globToRegex(pattern);
+	return regex.test(path);
+}
+
+function globToRegex(pattern: string): RegExp {
+	const escaped = pattern
+		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+		.replace(/\*\*/g, "{{GLOBSTAR}}")
+		.replace(/\*/g, "[^/]*")
+		.replace(/\?/g, "[^/]")
+		.replace(/\{\{GLOBSTAR\}\}/g, ".*");
+	return new RegExp(`^${escaped}$`, "i");
+}
+
 async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
 	const { rootPath, patterns, ignorePatterns, maxFileSize } = settings;
 	const seen = new Set<string>();
 	const results: DiscoveredFile[] = [];
 
-	for (const pattern of patterns) {
-		const glob = new Glob(pattern);
-		for await (const rel of glob.scan({ cwd: rootPath, dot: false })) {
-			if (seen.has(rel)) continue;
+	for await (const absolutePath of walkDir(rootPath, false)) {
+		const rel = absolutePath.slice(rootPath.length + 1);
+		const matches = patterns.some((p) => matchGlob(p, rel));
+		if (!matches) continue;
+		if (seen.has(rel)) continue;
 
-			// Check against ignore patterns — skip if any segment matches
-			const segments = rel.split("/");
-			const ignored = ignorePatterns.some(
-				(ig) => segments.some((seg) => seg === ig) || rel.startsWith(ig + "/") || rel === ig,
-			);
-			if (ignored) continue;
+		const segments = rel.split("/");
+		const ignored = ignorePatterns.some(
+			(ig) => segments.some((seg) => seg === ig) || rel.startsWith(`${ig}/`) || rel === ig,
+		);
+		if (ignored) continue;
 
-			const absolutePath = join(rootPath, rel);
-			let fileStat: Awaited<ReturnType<typeof stat>>;
-			try {
-				fileStat = await stat(absolutePath);
-			} catch {
-				// File disappeared between scan and stat — skip
-				continue;
-			}
-
-			if (!fileStat.isFile()) continue;
-			if (fileStat.size > maxFileSize) {
-				logger.debug("pipeline", "Skipping oversized file", {
-					path: rel,
-					size: fileStat.size,
-					maxFileSize,
-				});
-				continue;
-			}
-
-			seen.add(rel);
-			results.push({
-				absolutePath,
-				relativePath: rel,
-				name: basename(rel),
-				mtime: fileStat.mtime,
-				size: fileStat.size,
-			});
+		let fileStat: Awaited<ReturnType<typeof stat>>;
+		try {
+			fileStat = await stat(absolutePath);
+		} catch {
+			continue;
 		}
+
+		if (!fileStat.isFile()) continue;
+		if (fileStat.size > maxFileSize) {
+			logger.debug("pipeline", "Skipping oversized file", {
+				path: rel,
+				size: fileStat.size,
+				maxFileSize,
+			});
+			continue;
+		}
+
+		seen.add(rel);
+		results.push({
+			absolutePath,
+			relativePath: rel,
+			name: basename(rel),
+			mtime: fileStat.mtime,
+			size: fileStat.size,
+		});
 	}
 
 	return results;

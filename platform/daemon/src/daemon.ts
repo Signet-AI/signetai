@@ -12,7 +12,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync
 import { readFile as readFileAsync } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
 	type AgentDefinition,
@@ -149,6 +150,9 @@ import { mountWidgetRoutes } from "./routes/widget.js";
 import { isReadyResponse } from "./synthesis-worker-protocol";
 import { initUpdateSystem, startUpdateTimer, stopUpdateTimer } from "./update-system";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 let httpServer: import("node:net").Server | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
@@ -783,7 +787,7 @@ function resolveDaemonBinary(): string | null {
 	const ext = process.platform === "win32" ? ".exe" : "";
 	const arch = process.arch;
 	const plat = process.platform;
-	const monoRoot = join(import.meta.dir, "..", "..", "..");
+	const monoRoot = join(__dirname, "..", "..", "..");
 	const devPaths = [
 		join(monoRoot, "platform", "daemon-rs", "target", "release", `signet-daemon${ext}`),
 		join(monoRoot, "platform", "daemon-rs", "target", "debug", `signet-daemon${ext}`),
@@ -793,7 +797,7 @@ function resolveDaemonBinary(): string | null {
 		if (existsSync(p)) return p;
 	}
 	const name = `signet-daemon-${plat}-${arch}${ext}`;
-	const npmPath = join(import.meta.dir, "..", "bin", name);
+	const npmPath = join(__dirname, "..", "bin", name);
 	if (existsSync(npmPath)) return npmPath;
 	return null;
 }
@@ -1293,8 +1297,8 @@ async function main() {
 	startFdPollMonitor();
 
 	const { extensionPath } = getVectorRuntimeStatus();
-	const bundled = join(import.meta.dir, "synthesis-render-worker.js");
-	const workerPath = existsSync(bundled) ? bundled : join(import.meta.dir, "synthesis-render-worker.ts");
+	const bundled = join(__dirname, "synthesis-render-worker.js");
+	const workerPath = existsSync(bundled) ? bundled : join(__dirname, "synthesis-render-worker.ts");
 	let synthWorker: Worker | null = null;
 	try {
 		synthWorker = new Worker(workerPath);
@@ -1653,7 +1657,7 @@ async function main() {
 	});
 }
 
-if (import.meta.main) {
+if (process.argv[1] && resolve(process.argv[1]) === __filename) {
 	main().catch((err) => {
 		logger.error("daemon", "Fatal error", err);
 		process.exit(1);
