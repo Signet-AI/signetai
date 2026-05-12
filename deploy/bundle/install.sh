@@ -290,7 +290,7 @@ main() {
   printf "${BOLD}  Downloading components...${NC}\n"
   echo ""
 
-  REQUIRED_COMPONENTS="bun daemon-js"
+  REQUIRED_COMPONENTS="bun cli daemon-js"
 
   for entry in "${COMPONENTS[@]}"; do
     name="${entry%%:*}"

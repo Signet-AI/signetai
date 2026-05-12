@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, join, normalize, resolve } from "node:path";
+import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
 
@@ -8,9 +8,9 @@ const appRoot = normalize(resolve(distDir, ".."));
 const repoRoot = normalize(resolve(appRoot, "../.."));
 
 function assertSafePath(base: string, target: string): string {
-	const safeBase = `${normalize(base)}/`;
 	const normalized = normalize(target);
-	if (normalized !== normalize(base) && !normalized.startsWith(safeBase)) {
+	const rel = relative(normalize(base), normalized);
+	if (rel.startsWith("..") || resolve(rel) === rel) {
 		throw new Error(`Path traversal blocked: ${target} escapes ${base}`);
 	}
 	return normalized;

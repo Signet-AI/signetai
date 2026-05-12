@@ -11,6 +11,8 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+const PLATFORM_SUFFIXES = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
+
 const [version, platform, artifactDir] = process.argv.slice(2);
 
 if (!version || !platform || !artifactDir) {
@@ -30,11 +32,16 @@ interface Component {
 
 function parseComponentFromFilename(filename: string): string | null {
 	if (!filename.endsWith(".tar.gz")) return null;
-	const base = filename.replace(/\.tar\.gz$/, "");
-	if (base.startsWith("signet-")) {
-		return base.replace(/^signet-/, "");
+	let base = filename.replace(/\.tar\.gz$/, "");
+	if (!base.startsWith("signet-")) return null;
+	base = base.replace(/^signet-/, "");
+	for (const suffix of PLATFORM_SUFFIXES) {
+		if (base.endsWith(`-${suffix}`)) {
+			base = base.slice(0, -suffix.length - 1);
+			break;
+		}
 	}
-	return null;
+	return base;
 }
 
 function main() {
