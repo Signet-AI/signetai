@@ -83,8 +83,8 @@ curl -fsSL "${DOWNLOAD_BASE}/manifest-${PLATFORM}.json" -o "$REMOTE_MANIFEST" ||
   exit 1
 }
 
-if ! command -v jq >/dev/null 2>&1; then
-  warn "jq not found — performing full reinstall"
+if ! command -v jq >/dev/null 2>&1 && [ ! -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
+  warn "jq and bundled node not found — performing full reinstall"
   rm -rf "$LOCKFILE"
   curl -fsSL "${DOWNLOAD_BASE}/install.sh" | SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash
   exit $?
@@ -108,17 +108,63 @@ safe_tar_extract() {
   tar xzf "$archive" -C "$dest"
 }
 
+json_value() {
+  local key="$1" file="${2:-${TMPDIR}/manifest-latest.json}"
+  if [ "$key" = ".version" ]; then
+    sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -1
+    return
+  fi
+  local name field
+  name="$(printf '%s' "$key" | sed -n 's/.*\."([^"]*)"\..*/\1/p' 2>/dev/null || echo "")"
+  if [ -z "$name" ]; then
+    name="$(printf '%s' "$key" | sed 's/\.components\.//;s/\..*//' | tr -d '"')"
+  fi
+  field="$(printf '%s' "$key" | sed 's/.*\.\([a-zA-Z0-9_]*\)$/\1/')"
+  sed -n "/\"${name}\"/,/}/p" "$file" | sed -n "s/^[[:space:]]*\"${field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
+}
+
+get_manifest_value() {
+  local key="$1" file="${2:-$REMOTE_MANIFEST}"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r "$key" "$file" 2>/dev/null
+  elif [ -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
+    "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e "
+      const fs=require('fs');
+      const d=JSON.parse(fs.readFileSync('$file','utf8'));
+      const parts='${key}'.split('.').filter(Boolean);
+      let v=d; for(const p of parts) v=v?.[p];
+      if(v!==undefined) process.stdout.write(String(v));
+    " 2>/dev/null || true
+  else
+    json_value "$key" "$file"
+  fi
+}
+
+manifest_keys() {
+  local file="${1:-$REMOTE_MANIFEST}"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.components | keys[]' "$file" 2>/dev/null
+  elif [ -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
+    "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e "
+      const d=JSON.parse(require('fs').readFileSync('$file','utf8'));
+      if(d.components) Object.keys(d.components).forEach(k=>process.stdout.write(k+'\n'));
+    " 2>/dev/null || true
+  else
+    sed -n '/"components"/,/^}/p' "$file" | sed -n 's/^[[:space:]]*"\([^"]*\)"[[:space:]]*:.*/\1/p' | grep -v '^components$'
+  fi
+}
+
 # Compare versions
-LOCAL_VERSION="$(jq -r '.version' "$LOCAL_MANIFEST")"
-REMOTE_VERSION="$(jq -r '.version' "$REMOTE_MANIFEST")"
+LOCAL_VERSION="$(get_manifest_value '.version' "$LOCAL_MANIFEST")"
+REMOTE_VERSION="$(get_manifest_value '.version' "$REMOTE_MANIFEST")"
 
 if [ "$LOCAL_VERSION" = "$REMOTE_VERSION" ]; then
   # Check individual component checksums
   CHANGED=0
-  COMPONENTS="$(jq -r '.components | keys[]' "$REMOTE_MANIFEST")"
+  COMPONENTS="$(manifest_keys "$REMOTE_MANIFEST")"
   for comp in $COMPONENTS; do
-    LOCAL_SHA="$(jq -r ".components.\"$comp\".sha256 // \"\"" "$LOCAL_MANIFEST")"
-    REMOTE_SHA="$(jq -r ".components.\"$comp\".sha256 // \"\"" "$REMOTE_MANIFEST")"
+    LOCAL_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$LOCAL_MANIFEST")"
+    REMOTE_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$REMOTE_MANIFEST")"
     if [ "$LOCAL_SHA" != "$REMOTE_SHA" ] && [ -n "$REMOTE_SHA" ]; then
       CHANGED=$((CHANGED + 1))
     fi
@@ -135,7 +181,7 @@ else
 fi
 
 # Download changed components
-COMPONENTS="$(jq -r '.components | keys[]' "$REMOTE_MANIFEST")"
+COMPONENTS="$(manifest_keys "$REMOTE_MANIFEST")"
 STAGED=""
 
 # Clean stale .old dirs from any previous failed update
@@ -147,9 +193,9 @@ UPDATED=0
 FAILED=0
 
 for comp in $COMPONENTS; do
-  LOCAL_SHA="$(jq -r ".components.\"$comp\".sha256 // \"\"" "$LOCAL_MANIFEST" 2>/dev/null || echo "")"
-  REMOTE_SHA="$(jq -r ".components.\"$comp\".sha256 // \"\"" "$REMOTE_MANIFEST")"
-  REMOTE_URL="$(jq -r ".components.\"$comp\".url // \"\"" "$REMOTE_MANIFEST")"
+  LOCAL_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$LOCAL_MANIFEST")"
+  REMOTE_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$REMOTE_MANIFEST")"
+  REMOTE_URL="$(get_manifest_value ".components.\"$comp\".url" "$REMOTE_MANIFEST")"
 
   if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
     continue

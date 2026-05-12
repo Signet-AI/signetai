@@ -146,15 +146,16 @@ safe_tar_extract() {
   tar xzf "$archive" -C "$dest"
 }
 
-download() {
-  local name="$1" filename="$2" sha="$3" dest="$4"
-  local url="${DOWNLOAD_BASE}/${filename}"
+download_url() {
+  local name="$1" url="$2" filename="$3" sha="$4" dest="$5"
   local tmp="${tmpdir}/${filename}"
 
   if [ -f "$dest/.complete" ] && [ -f "$SIGNET_INSTALL_DIR/manifest.json" ]; then
     local old_sha=""
     if command -v jq >/dev/null 2>&1; then
       old_sha="$(jq -r ".components.\"${name}\".sha256 // \"\"" "$SIGNET_INSTALL_DIR/manifest.json" 2>/dev/null || true)"
+    else
+      old_sha="$(json_value ".components.\"${name}\".sha256" "$SIGNET_INSTALL_DIR/manifest.json")"
     fi
     if [ -n "$old_sha" ] && [ "$old_sha" = "$sha" ]; then
       ok "$name (up to date)"
@@ -214,21 +215,19 @@ fetch_manifest() {
 # Handles: .version, .components."name".sha256, .components."name".url
 json_value() {
   local key="$1" file="${2:-${tmpdir}/manifest.json}"
-  # .version -> extract top-level "version": "..."
   if [ "$key" = ".version" ]; then
     sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -1
     return
   fi
-  # .components."NAME".FIELD -> extract from components block
+  # Parse .components."NAME".FIELD
   local name field
-  name="$(echo "$key" | sed 's/\.components\.\\"//;s/\\"\.//' | cut -d'.' -f1)"
-  field="$(echo "$key" | sed 's/.*\.//' | tr -d '"')"
-  awk -v name="\"$name\"" -v field="\"$field\"" '
-    $0 ~ name ":" { found=1 }
-    found && $0 ~ field ":" {
-      gsub(/^[^:]*:[[:space:]]*"/, ""); gsub(/".*/, ""); print; exit
-    }
-  ' "$file"
+  name="$(printf '%s' "$key" | sed -n 's/.*\."([^"]*)"\..*/\1/p' 2>/dev/null || echo "")"
+  if [ -z "$name" ]; then
+    name="$(printf '%s' "$key" | sed "s/\\.components\\.//;s/\\..*//" | tr -d '"')"
+  fi
+  field="$(printf '%s' "$key" | sed 's/.*\.\([a-zA-Z0-9_]*\)$/\1/')"
+  # Find the line with the component key, then scan forward for the field
+  sed -n "/\"${name}\"/,/}/p" "$file" | sed -n "s/^[[:space:]]*\"${field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
 }
 
 get_manifest_value() {
@@ -251,21 +250,9 @@ get_manifest_value() {
 # ── Component list (Node.js runtime) ──
 
 COMPONENTS=(
-  "node:signet-node-${PLATFORM}"
-  "cli:signet-cli"
-  "daemon-js:signet-daemon-js-${PLATFORM}"
-  "daemon-rs:signet-daemon-rs-${PLATFORM}"
-  "predictor:signet-predictor-${PLATFORM}"
-  "dashboard:signet-dashboard"
-  "connectors:signet-connectors"
-  "plugin-opencode:signet-plugin-opencode"
-  "plugin-oh-my-pi:signet-plugin-oh-my-pi"
-  "plugin-pi:signet-plugin-pi"
-  "native:signet-native-${PLATFORM}"
-  "onnxruntime:signet-onnxruntime-${PLATFORM}"
-  "sqlite-vec:signet-sqlite-vec-${PLATFORM}"
-  "skills:signet-skills"
-  "templates:signet-templates"
+  node cli daemon-js daemon-rs predictor dashboard
+  connectors plugin-opencode plugin-oh-my-pi plugin-pi
+  native onnxruntime sqlite-vec skills templates
 )
 
 # ── Generate wrapper scripts (Bun-only) ──
@@ -368,17 +355,26 @@ main() {
 
   REQUIRED_COMPONENTS="node cli daemon-js native onnxruntime sqlite-vec"
 
-  for entry in "${COMPONENTS[@]}"; do
-    name="${entry%%:*}"
-    artifact="${entry#*:}"
-    filename="${artifact}.tar.gz"
-
+  for name in "${COMPONENTS[@]}"; do
     sha=""
-    if command -v jq >/dev/null 2>&1; then
-      sha="$(jq -r ".components.\"${name}\".sha256 // \"\"" "${tmpdir}/manifest.json" 2>/dev/null || true)"
-    else
-      sha="$(json_value ".components.\"${name}\".sha256" "${tmpdir}/manifest.json")"
+    comp_url=""
+    sha="$(get_manifest_value ".components.\"${name}\".sha256")"
+    comp_url="$(get_manifest_value ".components.\"${name}\".url")"
+
+    # Skip components not in the manifest
+    if [ -z "$comp_url" ]; then
+      case " $REQUIRED_COMPONENTS " in
+        *" $name "*)
+          err "Required component '$name' not in manifest — aborting"
+          exit 1
+          ;;
+        *)
+          continue
+          ;;
+      esac
     fi
+
+    filename="$(basename "$comp_url")"
 
     if [ -z "$sha" ]; then
       case " $REQUIRED_COMPONENTS " in
@@ -394,7 +390,7 @@ main() {
     fi
 
     dest="$SIGNET_INSTALL_DIR/runtime/${name}"
-  download "$name" "$filename" "$sha" "$dest" || {
+  download_url "$name" "$comp_url" "$filename" "$sha" "$dest" || {
     case " $REQUIRED_COMPONENTS " in
       *" $name "*)
         err "Required component '$name' failed — aborting"
