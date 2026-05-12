@@ -264,6 +264,62 @@ describe("secrets routes plugin capability enforcement", () => {
 		expect(await disconnected.json()).toMatchObject({ success: true, disconnected: true, activeProvider: false });
 	});
 
+	test("Bitwarden connect validates session before persisting or activating", async () => {
+		setBitwardenClientFactoryForTests(
+			async (session: string): Promise<BitwardenClient> => ({
+				async status() {
+					return session === "good" ? { status: "unlocked" } : { status: "locked" };
+				},
+				async listFolders() {
+					return [];
+				},
+				async listItems() {
+					return [];
+				},
+				async getItem(id: string) {
+					return { id, name: id, login: { password: null } };
+				},
+				async putSecret(name: string, value: string) {
+					return { id: name, name, login: { password: value } };
+				},
+				async deleteSecret() {
+					return false;
+				},
+				async resolveSecret() {
+					throw new Error("not found");
+				},
+			}),
+		);
+		const app = makeApp(makeHost());
+
+		const rejected = await app.request("/api/secrets/bitwarden/connect", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ session: "bad", activate: true }),
+		});
+		expect(rejected.status).toBe(400);
+		expect(await rejected.json()).toMatchObject({ success: false, connected: false, activeProvider: true });
+
+		const status = await app.request("/api/secrets/bitwarden/status");
+		expect(status.status).toBe(200);
+		expect(await status.json()).toMatchObject({ configured: false, connected: false, activeProvider: false });
+
+		const useBitwarden = await app.request("/api/secrets/bitwarden/provider", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ provider: "bitwarden" }),
+		});
+		expect(useBitwarden.status).toBe(400);
+
+		const accepted = await app.request("/api/secrets/bitwarden/connect", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ session: "good", activate: false }),
+		});
+		expect(accepted.status).toBe(200);
+		expect(await accepted.json()).toMatchObject({ success: true, connected: true, activeProvider: false });
+	});
+
 	test("1Password compatibility status route does not require configured token", async () => {
 		const res = await makeApp(makeHost()).request("/api/secrets/1password/status");
 		expect(res.status).toBe(200);

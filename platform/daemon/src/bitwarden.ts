@@ -430,7 +430,11 @@ function runBw(
 	options: { readonly session: string; readonly input?: string; readonly timeoutMs?: number },
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const proc = spawn("bw", [...args, "--session", options.session], { stdio: "pipe", windowsHide: true });
+		const proc = spawn("bw", [...args], {
+			stdio: "pipe",
+			windowsHide: true,
+			env: { ...process.env, BW_SESSION: options.session },
+		});
 		let stdout = "";
 		let stderr = "";
 		let settled = false;

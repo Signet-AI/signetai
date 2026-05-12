@@ -1306,7 +1306,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	// ------------------------------------------------------------------
 	server.registerTool(
 		"secret_exec",
-		"secret_exec_status",
 		{
 			title: "Execute with Secrets",
 			description:
@@ -1319,7 +1318,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.object({})
 					.catchall(z.string())
 					.describe(
-						'Map of env var name → secret ref, e.g. { "OPENAI_API_KEY": "OPENAI_API_KEY" } or { "DB_PASSWORD": "op://vault/item/password" }',
+						'Map of env var name → secret ref, e.g. { "OPENAI_API_KEY": "OPENAI_API_KEY" } or { "DB_PASSWORD": "bw://name/DB_PASSWORD" }',
 					),
 				timeoutSeconds: z
 					.number()

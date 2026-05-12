@@ -1,7 +1,6 @@
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
 import {
-	BITWARDEN_ACTIVE_PROVIDER_SECRET,
 	BITWARDEN_MANAGED_FOLDER_SECRET,
 	BITWARDEN_SESSION_SECRET,
 	getBitwardenStatus,
@@ -134,10 +133,13 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			if (!session) return c.json({ error: "session is required" }, 400);
 			const activate = parseOptionalBoolean(body.activate) ?? false;
 			const folderId = parseOptionalString(body.folderId);
+			const status = await getBitwardenStatus({ configured: true, activeProvider: activate, session });
+			if (!status.connected) {
+				return c.json({ error: status.error ?? "Bitwarden session is not connected", ...status, success: false }, 400);
+			}
 			await putSecret(BITWARDEN_SESSION_SECRET, session);
 			if (folderId) await putSecret(BITWARDEN_MANAGED_FOLDER_SECRET, folderId);
 			if (activate) await setActiveSecretProvider("bitwarden");
-			const status = await getBitwardenStatus({ configured: true, activeProvider: activate, session });
 			logger.info("secrets", "Connected Bitwarden session", { connected: status.connected, activate });
 			return c.json({ success: true, ...status });
 		} catch (e) {
@@ -175,8 +177,14 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		const provider = parseOptionalString(body.provider);
 		if (provider !== "local" && provider !== "bitwarden")
 			return c.json({ error: "provider must be local or bitwarden" }, 400);
-		if (provider === "bitwarden" && !hasSecret(BITWARDEN_SESSION_SECRET))
-			return c.json({ error: "Bitwarden is not connected" }, 400);
+		if (provider === "bitwarden") {
+			if (!hasSecret(BITWARDEN_SESSION_SECRET)) return c.json({ error: "Bitwarden is not connected" }, 400);
+			const session = await getSecret(BITWARDEN_SESSION_SECRET);
+			const status = await getBitwardenStatus({ configured: true, activeProvider: true, session });
+			if (!status.connected) {
+				return c.json({ error: status.error ?? "Bitwarden session is not connected", ...status, success: false }, 400);
+			}
+		}
 		await setActiveSecretProvider(provider);
 		return c.json({ success: true, provider });
 	});
