@@ -223,6 +223,8 @@ describe(`${MODEL} dependency synthesis`, () => {
 				structural: {
 					...DEFAULT_PIPELINE_V2.structural,
 					dependencyBatchSize: 1,
+					synthesisMaxFacts: 10,
+					synthesisTopEntities: 10,
 					synthesisMaxStallMs: 60_000,
 				},
 			},
@@ -232,7 +234,7 @@ describe(`${MODEL} dependency synthesis`, () => {
 		expect(calls).toBe(0);
 		expect(db.prepare("SELECT COUNT(*) AS n FROM entity_dependencies").get()).toEqual({ n: 0 });
 
-		db.prepare("UPDATE memory_jobs SET completed_at = ? WHERE id = 'job-stale'").run("2999-01-01T00:00:00+00:00");
+		seedCompletedExtractionJob(db, "job-recent", "agent-b", "2030-01-01 00:00:00");
 		await runDependencySynthesisTick(deps);
 		expect(calls).toBe(1);
 		expect(db.prepare("SELECT source_entity_id, target_entity_id FROM entity_dependencies").get()).toEqual({
