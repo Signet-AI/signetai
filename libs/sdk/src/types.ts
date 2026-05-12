@@ -727,7 +727,6 @@ export interface SecretExecResult {
 
 export interface SecretExecOptions {
 	readonly timeoutMs?: number;
-	readonly async?: boolean;
 }
 
 export interface SecretExecJob {

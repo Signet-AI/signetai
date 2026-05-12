@@ -184,7 +184,7 @@ The daemon resolves `$secret:NAME` references internally when making API calls. 
 
 ## Executing Commands with Secrets
 
-The daemon can spawn a subprocess with secrets injected into its environment. The agent provides references (names), not values.
+The daemon queues a subprocess with secrets injected into its environment. The agent provides references (names), not values.
 
 **HTTP API:**
 
@@ -204,25 +204,27 @@ Content-Type: application/json
 The map is `{ env_var_name: secret_reference }` where a reference can be a
 stored Signet secret name or a 1Password `op://...` reference. The daemon:
 1. Resolves each secret reference to its value
-2. Spawns the subprocess with the resolved values in the environment
+2. Queues the subprocess with the resolved values in the environment
 3. Enforces a bounded timeout (5 minutes by default, max 30 minutes)
-4. Returns stdout/stderr with any secret values redacted from the output
+4. Returns HTTP `202` immediately with a job id
+5. Exposes redacted stdout/stderr and exit code through `GET /api/secrets/exec/:jobId`
 
-For long-running commands, pass `"async": true` and optional `"timeoutMs"` to
-queue work and poll `GET /api/secrets/exec/:jobId` instead of keeping the HTTP
-request open.
+Secret exec is always queued; there is no synchronous request mode. This keeps
+large jobs such as SSH/rsync transfers from tying daemon request handling to
+subprocess lifetime. Pass optional `"timeoutMs"` to bound the background job.
 
-**Response:**
+**Queued response:**
 
 ```json
 {
-  "stdout": "...",
-  "stderr": "",
-  "code": 0
+  "id": "uuid",
+  "status": "queued",
+  "createdAt": "...",
+  "timeoutMs": 300000
 }
 ```
 
-If a secret value appears anywhere in stdout or stderr, it is replaced with `[REDACTED]`.
+When the job completes, if a secret value appears anywhere in stdout or stderr, it is replaced with `[REDACTED]`.
 
 Provider-qualified local refs are accepted wherever secret references are
 accepted:
@@ -268,9 +270,9 @@ The full secrets API is documented in [API.md](./API.md#secrets-api). Summary:
 | `/api/secrets` | GET | List secret names |
 | `/api/secrets/:name` | POST | Store a secret |
 | `/api/secrets/:name` | DELETE | Delete a secret |
-| `/api/secrets/exec` | POST | Execute or queue command with one or more secrets injected |
-| `/api/secrets/exec/:jobId` | GET | Inspect async secret exec job status |
-| `/api/secrets/:name/exec` | POST | Legacy single-secret exec |
+| `/api/secrets/exec` | POST | Queue command with one or more secrets injected |
+| `/api/secrets/exec/:jobId` | GET | Inspect queued secret exec job status |
+| `/api/secrets/:name/exec` | POST | Legacy single-secret queued exec |
 | `/api/secrets/1password/status` | GET | 1Password integration status |
 | `/api/secrets/1password/connect` | POST | Connect/save service account token |
 | `/api/secrets/1password/connect` | DELETE | Disconnect/remove stored token |

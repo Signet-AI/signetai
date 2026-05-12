@@ -7,7 +7,6 @@ import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index
 import type { PluginHostV1 } from "../plugins/index.js";
 import {
 	deleteSecret,
-	execWithSecrets,
 	getSecret,
 	getSecretExecJob,
 	hasSecret,
@@ -230,7 +229,6 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 				command?: string;
 				secrets?: Record<string, string>;
 				timeoutMs?: number;
-				async?: boolean;
 			};
 
 			if (!body.command) {
@@ -241,23 +239,13 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			}
 
 			const timeoutMs = normalizeSecretExecTimeoutMs(body.timeoutMs);
-			if (body.async === true) {
-				const job = startSecretExecJob(body.command, body.secrets, { timeoutMs });
-				logger.info("secrets", "exec_with_secrets queued", {
-					jobId: job.id,
-					secretCount: Object.keys(body.secrets).length,
-					timeoutMs,
-				});
-				return c.json(job, 202);
-			}
-
-			const result = await execWithSecrets(body.command, body.secrets, { timeoutMs });
-			logger.info("secrets", "exec_with_secrets completed", {
+			const job = startSecretExecJob(body.command, body.secrets, { timeoutMs });
+			logger.info("secrets", "exec_with_secrets queued", {
+				jobId: job.id,
 				secretCount: Object.keys(body.secrets).length,
-				code: result.code,
 				timeoutMs,
 			});
-			return c.json(result);
+			return c.json(job, 202);
 		} catch (e) {
 			const err = e as Error;
 			logger.error("secrets", "exec_with_secrets failed", err);
@@ -282,7 +270,6 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 				command?: string;
 				secrets?: Record<string, string>;
 				timeoutMs?: number;
-				async?: boolean;
 			};
 
 			if (!body.command) {
@@ -291,19 +278,9 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 
 			const secretRefs: Record<string, string> = body.secrets ?? { [name]: name };
 			const timeoutMs = normalizeSecretExecTimeoutMs(body.timeoutMs);
-			if (body.async === true) {
-				const job = startSecretExecJob(body.command, secretRefs, { timeoutMs });
-				logger.info("secrets", "exec_with_secrets queued", { name, jobId: job.id, timeoutMs });
-				return c.json(job, 202);
-			}
-
-			const result = await execWithSecrets(body.command, secretRefs, { timeoutMs });
-			logger.info("secrets", "exec_with_secrets completed", {
-				name,
-				code: result.code,
-				timeoutMs,
-			});
-			return c.json(result);
+			const job = startSecretExecJob(body.command, secretRefs, { timeoutMs });
+			logger.info("secrets", "exec_with_secrets queued", { name, jobId: job.id, timeoutMs });
+			return c.json(job, 202);
 		} catch (e) {
 			const err = e as Error;
 			logger.error("secrets", "exec_with_secrets failed", err, { name });

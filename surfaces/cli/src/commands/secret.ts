@@ -132,7 +132,7 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 	secretCmd
 		.command("exec <command...>")
 		.description(
-			"Run a command with secrets injected as environment variables\n" +
+			"Queue a command with secrets injected as environment variables\n" +
 				"  NOTE: --secret flags must appear before the command token.\n" +
 				"  Secrets are available via process.env / os.environ in the subprocess;\n" +
 				"  shell-level $VAR expansion is intentionally disabled for security.",
@@ -140,8 +140,7 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 		.passThroughOptions()
 		.option("-s, --secret <name>", "Secret to inject (repeatable, must precede command)", append, [] as string[])
 		.option("--timeout <seconds>", "Maximum subprocess runtime before Signet terminates it", "300")
-		.option("--async", "Queue the command and print a job id immediately")
-		.action(async (parts: string[], opts: { secret: string[]; timeout: string; async?: boolean }) => {
+		.action(async (parts: string[], opts: { secret: string[]; timeout: string }) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
 			if (opts.secret.length === 0) {
 				console.error(chalk.red("  At least one --secret is required."));
@@ -180,13 +179,13 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 				return;
 			}
 			const timeoutMs = timeoutSeconds * 1000;
-			const requestTimeoutMs = opts.async === true ? 10_000 : timeoutMs + 5_000;
+			const requestTimeoutMs = 10_000;
 
 			try {
 				const { ok, data } = await deps.secretApiCall(
 					"POST",
 					"/api/secrets/exec",
-					{ command, secrets, timeoutMs, async: opts.async === true },
+					{ command, secrets, timeoutMs },
 					requestTimeoutMs,
 				);
 				if (!ok) {
@@ -195,27 +194,19 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 					return;
 				}
 
-				if (opts.async === true) {
-					const jobId = readString(data, "id");
-					const status = readString(data, "status") ?? "queued";
-					console.log(`Secret exec queued: ${chalk.cyan(jobId ?? "unknown")}`);
-					console.log(chalk.dim(`Status: ${status}`));
-					console.log(chalk.dim(`Poll with: signet secret exec-status ${jobId}`));
-					return;
-				}
-
-				const stdout = readString(data, "stdout");
-				const stderr = readString(data, "stderr");
-				const code = readNumber(data, "code");
-				if (stdout) process.stdout.write(stdout);
-				if (stderr) process.stderr.write(stderr);
-				process.exitCode = code ?? 1;
+				const jobId = readString(data, "id");
+				const status = readString(data, "status") ?? "queued";
+				console.log(`Secret exec queued: ${chalk.cyan(jobId ?? "unknown")}`);
+				console.log(chalk.dim(`Status: ${status}`));
+				console.log(chalk.dim(`Poll with: signet secret exec-status ${jobId}`));
 			} catch (err) {
 				if (err instanceof Error && err.name === "TimeoutError") {
 					console.error(
 						chalk.red(`  Error: daemon request timed out after ${Math.round(requestTimeoutMs / 1000)} seconds.`),
 					);
-					console.error(chalk.dim("  Retry with --async for long-running commands."));
+					console.error(
+						chalk.dim("  The daemon queues secret exec jobs; retry or poll the queued job if one was returned."),
+					);
 				} else {
 					console.error(chalk.red(`  Error: ${readThrown(err)}`));
 				}

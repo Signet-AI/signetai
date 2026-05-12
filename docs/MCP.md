@@ -447,7 +447,7 @@ are never exposed to agents.
 
 ### secret_exec
 
-Run a shell command with secrets injected as environment variables. Output
+Queue a shell command with secrets injected as environment variables. Output
 is automatically redacted, secret values never appear in results. Bare
 secret names resolve through the local provider, for example
 `OPENAI_API_KEY` is equivalent to `local://OPENAI_API_KEY`.
@@ -456,12 +456,11 @@ secret names resolve through the local provider, for example
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `command` | string | yes | Shell command to execute |
+| `command` | string | yes | Shell command to queue |
 | `secrets` | object | yes | Map of env var name to secret reference (Signet name or `op://...`) |
-| `timeoutSeconds` | number | no | Max subprocess runtime; defaults to 300 seconds, max 1800 |
-| `async` | boolean | no | Queue command and return job id immediately |
+| `timeoutSeconds` | number | no | Max subprocess runtime for the queued job; defaults to 300 seconds, max 1800 |
 
-**Returns:** Object with `stdout`, `stderr`, and `code` (exit code), or an async job object when `async` is true. Secret values in output are replaced with `[REDACTED]`.
+**Returns:** A queued secret exec job object with `id`, `status`, and `timeoutMs`. Poll the daemon job endpoint for redacted `stdout`, `stderr`, and `code` after completion. Secret values in output are replaced with `[REDACTED]`.
 
 **Example:**
 
@@ -474,7 +473,7 @@ secret names resolve through the local provider, for example
 }
 ```
 
-**Daemon endpoint:** `POST /api/secrets/exec` (5 minute default daemon timeout; async job mode available)
+**Daemon endpoint:** `POST /api/secrets/exec` (always queued; 5 minute default job timeout)
 
 ### Optional GraphIQ Code Tools
 
@@ -652,7 +651,7 @@ requests to the daemon API with these headers:
 - `x-signet-actor: mcp-server` — identifies the calling actor
 - `x-signet-actor-type: harness` — actor type classification
 
-The default request timeout is 10 seconds, except for `secret_exec` which
+The default request timeout is 10 seconds. `secret_exec` also returns quickly because
 uses 30 seconds to allow for longer-running commands.
 
 Errors are returned as MCP error results with `isError: true` and a

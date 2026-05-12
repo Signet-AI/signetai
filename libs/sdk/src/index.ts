@@ -970,22 +970,22 @@ export class SignetClient extends SignetClientHelpers {
 	}
 
 	/**
-	 * Execute a command with secrets injected as env vars.
+	 * Queue a command with secrets injected as env vars.
 	 *
 	 * @example
 	 * ```typescript
-	 * const result = await client.execWithSecrets("echo $GREETING", {
-	 *   GREETING: "MY_SECRET"
+	 * const job = await client.execWithSecrets("node ./sync.js", {
+	 *   API_TOKEN: "MY_SECRET"
 	 * });
-	 * console.log(result.stdout, result.code);
+	 * const status = await client.getSecretExecJob(job.id);
 	 * ```
 	 */
 	async execWithSecrets(
 		command: string,
 		secrets: Record<string, string>,
 		options: SecretExecOptions = {},
-	): Promise<SecretExecResult | SecretExecJob> {
-		return this.transport.post<SecretExecResult | SecretExecJob>("/api/secrets/exec", {
+	): Promise<SecretExecJob> {
+		return this.transport.post<SecretExecJob>("/api/secrets/exec", {
 			command,
 			secrets,
 			...options,
@@ -993,7 +993,7 @@ export class SignetClient extends SignetClientHelpers {
 	}
 
 	/**
-	 * Get the status/result for an async secret exec job.
+	 * Get the status/result for a queued secret exec job.
 	 */
 	async getSecretExecJob(jobId: string): Promise<SecretExecJob> {
 		return this.transport.get<SecretExecJob>(`/api/secrets/exec/${jobId}`);

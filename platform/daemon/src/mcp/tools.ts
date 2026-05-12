@@ -1308,7 +1308,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		{
 			title: "Execute with Secrets",
 			description:
-				"Run a shell command with secrets injected as environment variables. " +
+				"Queue a command with secrets injected as environment variables. " +
 				"Provide a secrets map where keys are env var names and values are Signet secret names or 1Password references (op://vault/item/field). " +
 				"Output is automatically redacted — secret values never appear in results.",
 			inputSchema: z.object({
@@ -1326,20 +1326,16 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.max(1800)
 					.optional()
 					.describe("Maximum subprocess runtime; defaults to 5 minutes"),
-				async: z
-					.boolean()
-					.optional()
-					.describe("Queue the command and return a job id immediately instead of holding the tool call open"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ command, secrets, timeoutSeconds, async }) => {
+		async ({ command, secrets, timeoutSeconds }) => {
 			if (Object.keys(secrets).length === 0) {
 				return errorResult("secrets map must contain at least one entry");
 			}
 
 			const timeoutMs = timeoutSeconds ? timeoutSeconds * 1000 : undefined;
-			const requestTimeout = async === true ? 10_000 : Math.max(10_000, (timeoutMs ?? 5 * 60_000) + 5_000);
+			const requestTimeout = 10_000;
 			const result = await daemonFetch<{
 				stdout?: string;
 				stderr?: string;
@@ -1348,7 +1344,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				status?: string;
 			}>(baseUrl, "/api/secrets/exec", {
 				method: "POST",
-				body: { command, secrets, timeoutMs, async },
+				body: { command, secrets, timeoutMs },
 				timeout: requestTimeout,
 			});
 

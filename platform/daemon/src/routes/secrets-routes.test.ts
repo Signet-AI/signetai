@@ -96,7 +96,7 @@ describe("secrets routes plugin capability enforcement", () => {
 		expect(JSON.stringify(listedBody)).not.toContain("sk-test");
 	});
 
-	test("queues async secret exec jobs and polls status without holding the route open", async () => {
+	test("queues secret exec jobs by default and polls status without holding the route open", async () => {
 		await putSecret("OPENAI_API_KEY", "sk-route-background");
 		const app = makeApp(makeHost());
 		const script = join(agentsDir, "route-background.mjs");
@@ -108,7 +108,6 @@ describe("secrets routes plugin capability enforcement", () => {
 			body: JSON.stringify({
 				command: `bun ${script}`,
 				secrets: { OPENAI_API_KEY: "OPENAI_API_KEY" },
-				async: true,
 				timeoutMs: 1000,
 			}),
 		});
