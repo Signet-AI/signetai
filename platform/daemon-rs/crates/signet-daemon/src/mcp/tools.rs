@@ -21,10 +21,7 @@ fn session_agent_id(session_key: &str) -> Option<String> {
     Some(id.to_string())
 }
 
-fn resolve_agent_id(
-    explicit: Option<&str>,
-    session_key: Option<&str>,
-) -> Result<String, String> {
+fn resolve_agent_id(explicit: Option<&str>, session_key: Option<&str>) -> Result<String, String> {
     let bound = session_key.and_then(session_agent_id);
     let explicit = explicit.map(str::trim).filter(|s| !s.is_empty());
     if let Some(agent) = explicit {
@@ -467,7 +464,10 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let pinned = args.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+    let pinned = args
+        .get("pinned")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if session_key.is_none() && (visibility != "global" || scope.is_some()) {
         return ToolCallResult::error(
             "non-default visibility/scope requires session_key".to_string(),

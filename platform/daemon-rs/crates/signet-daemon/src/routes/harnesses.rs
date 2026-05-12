@@ -54,7 +54,10 @@ fn binary_name(name: &str) -> String {
 }
 
 fn signet_managed_forge_path(home: &std::path::Path) -> PathBuf {
-    home.join(".config").join("signet").join("bin").join(binary_name("forge"))
+    home.join(".config")
+        .join("signet")
+        .join("bin")
+        .join(binary_name("forge"))
 }
 
 fn workspace_forge_candidate_paths(agents_dir: &std::path::Path) -> Vec<PathBuf> {
@@ -156,7 +159,10 @@ fn is_signet_forge_binary(path: &std::path::Path) -> bool {
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };
-    if bytes.windows(FORGE_PRIMARY_MARKER.len()).any(|w| w == FORGE_PRIMARY_MARKER.as_bytes()) {
+    if bytes
+        .windows(FORGE_PRIMARY_MARKER.len())
+        .any(|w| w == FORGE_PRIMARY_MARKER.as_bytes())
+    {
         return true;
     }
     let matches = FORGE_FALLBACK_MARKERS
@@ -177,10 +183,9 @@ fn is_compatible_forge_binary(path: &std::path::Path) -> bool {
         return false;
     };
     FORGE_COMPAT_MARKER_GROUPS.iter().all(|group| {
-        group.iter().any(|marker| {
-            bytes.windows(marker.len())
-                .any(|w| w == marker.as_bytes())
-        })
+        group
+            .iter()
+            .any(|marker| bytes.windows(marker.len()).any(|w| w == marker.as_bytes()))
     })
 }
 

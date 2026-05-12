@@ -31,17 +31,26 @@ pub async fn list(
     headers: HeaderMap,
 ) -> axum::response::Response {
     let is_local = peer.ip().is_loopback();
-    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+    let auth = match authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-        Ok(id) => id,
-        Err(reason) => return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": reason})),
-        ).into_response(),
-    };
+    let agent_id =
+        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
 
     let tracker_sessions = state.sessions.list_sessions(Some(&agent_id));
     let tracker_keys: std::collections::HashSet<String> =
@@ -109,8 +118,15 @@ pub async fn list(
     // Tracker keys are always normalized; DB rows may still carry the prefix.
     // Annotate with live bypass state from the in-memory tracker.
     for mut p in presence_only {
-        let raw_sk = p.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let sk = raw_sk.strip_prefix("session:").unwrap_or(&raw_sk).to_string();
+        let raw_sk = p
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let sk = raw_sk
+            .strip_prefix("session:")
+            .unwrap_or(&raw_sk)
+            .to_string();
         if !tracker_keys.contains(&sk) {
             if let Some(obj) = p.as_object_mut() {
                 // Write normalized key back so output is consistent.
@@ -151,7 +167,12 @@ async fn find_live_session(
     agent_id: &str,
 ) -> Option<Option<serde_json::Value>> {
     // Check tracker first (fast in-memory path).
-    if state.sessions.list_sessions(Some(agent_id)).iter().any(|s| s.key == key) {
+    if state
+        .sessions
+        .list_sessions(Some(agent_id))
+        .iter()
+        .any(|s| s.key == key)
+    {
         return Some(None);
     }
 
@@ -210,14 +231,26 @@ pub async fn get(
     headers: HeaderMap,
 ) -> axum::response::Response {
     let is_local = peer.ip().is_loopback();
-    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+    let auth = match authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-        Ok(id) => id,
-        Err(reason) => return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": reason}))).into_response(),
-    };
+    let agent_id =
+        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
     // Normalize session: prefix so raw and prefixed keys both resolve.
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
 
@@ -243,7 +276,11 @@ pub async fn get(
             }
             (StatusCode::OK, Json(obj)).into_response()
         }
-        _ => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response(),
+        _ => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        )
+            .into_response(),
     }
 }
 
@@ -265,19 +302,35 @@ pub async fn bypass(
     Json(body): Json<BypassBody>,
 ) -> axum::response::Response {
     let is_local = peer.ip().is_loopback();
-    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+    let auth = match authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-        Ok(id) => id,
-        Err(reason) => return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": reason}))).into_response(),
-    };
+    let agent_id =
+        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
     let key = key.strip_prefix("session:").unwrap_or(&key).to_string();
 
     // Verify the session exists for this agent (tracker or presence-only).
     if find_live_session(&state, &key, &agent_id).await.is_none() {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        )
+            .into_response();
     }
 
     let enabled = body.enabled.unwrap_or(true);

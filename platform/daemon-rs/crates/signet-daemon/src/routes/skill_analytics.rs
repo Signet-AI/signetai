@@ -11,7 +11,9 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::auth::middleware::{authenticate_headers, require_permission_guard, resolve_scoped_agent};
+use crate::auth::middleware::{
+    authenticate_headers, require_permission_guard, resolve_scoped_agent,
+};
 use crate::auth::types::Permission;
 use crate::state::AppState;
 
@@ -42,23 +44,31 @@ pub async fn summary(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let is_local = peer.ip().is_loopback();
-    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+    let auth = match authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    if let Err(e) = require_permission_guard(&auth, Permission::Analytics, state.auth_mode, is_local) {
+    if let Err(e) =
+        require_permission_guard(&auth, Permission::Analytics, state.auth_mode, is_local)
+    {
         return *e;
     }
-    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-        Ok(id) => id,
-        Err(reason) => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": reason})),
-            )
-                .into_response();
-        }
-    };
+    let agent_id =
+        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
     let since = params.since;
     let limit = params.limit.unwrap_or(10).clamp(1, 100);
 

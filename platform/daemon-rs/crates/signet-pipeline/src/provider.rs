@@ -149,7 +149,12 @@ impl OllamaLlmProvider {
         Self::with_context(base_url, model, timeout_ms, None)
     }
 
-    pub fn with_context(base_url: &str, model: &str, timeout_ms: u64, max_context_tokens: Option<u32>) -> Self {
+    pub fn with_context(
+        base_url: &str,
+        model: &str,
+        timeout_ms: u64,
+        max_context_tokens: Option<u32>,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(timeout_ms.max(5000)))
             .build()
@@ -590,7 +595,12 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
                 .filter(|s| !s.is_empty())
                 .unwrap_or(DEFAULT_OLLAMA_URL);
             info!(provider = "ollama", model = %cfg.model, url, timeout_ms = timeout, "LLM provider initialized");
-            Arc::new(OllamaLlmProvider::with_context(url, &cfg.model, timeout, cfg.max_context_tokens))
+            Arc::new(OllamaLlmProvider::with_context(
+                url,
+                &cfg.model,
+                timeout,
+                cfg.max_context_tokens,
+            ))
         }
         "anthropic" => {
             let key = cfg.api_key.as_deref().unwrap_or("");
@@ -607,7 +617,12 @@ pub fn from_config(cfg: &LlmProviderConfig) -> Arc<dyn LlmProvider> {
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .unwrap_or(DEFAULT_OLLAMA_URL);
-            Arc::new(OllamaLlmProvider::with_context(url, &cfg.model, timeout, cfg.max_context_tokens))
+            Arc::new(OllamaLlmProvider::with_context(
+                url,
+                &cfg.model,
+                timeout,
+                cfg.max_context_tokens,
+            ))
         }
     }
 }

@@ -91,9 +91,10 @@ pub struct McpTool {
 // ---------------------------------------------------------------------------
 
 fn load_servers(state: &AppState) -> Vec<McpServer> {
-    let Ok(path) =
-        workspace_paths::child_file(&state.config.base_path, &["marketplace", "mcp-servers.json"])
-    else {
+    let Ok(path) = workspace_paths::child_file(
+        &state.config.base_path,
+        &["marketplace", "mcp-servers.json"],
+    ) else {
         return Vec::new();
     };
     match std::fs::read_to_string(&path) {
@@ -142,11 +143,9 @@ fn load_policy(state: &AppState) -> ExposurePolicy {
 }
 
 fn save_policy(state: &AppState, policy: &ExposurePolicy) -> Result<(), String> {
-    let path = workspace_paths::child_file(
-        &state.config.base_path,
-        &["marketplace", "mcp-policy.json"],
-    )
-    .map_err(|e| format!("path: {e}"))?;
+    let path =
+        workspace_paths::child_file(&state.config.base_path, &["marketplace", "mcp-policy.json"])
+            .map_err(|e| format!("path: {e}"))?;
     let json = serde_json::to_string_pretty(policy).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(path, json).map_err(|e| format!("write: {e}"))
 }

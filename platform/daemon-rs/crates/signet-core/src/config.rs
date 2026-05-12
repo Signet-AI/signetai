@@ -564,7 +564,7 @@ pub struct AgentManifest {
     pub home: Option<HomeConfig>,
     pub auth: Option<AuthConfig>,
     pub capabilities: Option<Vec<String>>,
-    pub features: Option<HashMap<String, serde_json::Value>>,
+    pub features: Option<std::collections::HashMap<String, serde_json::Value>>,
     #[serde(rename = "harnessCompatibility")]
     pub harness_compatibility: Option<Vec<String>>,
     pub hooks: Option<HooksConfig>,

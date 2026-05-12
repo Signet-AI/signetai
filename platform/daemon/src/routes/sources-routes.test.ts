@@ -34,6 +34,7 @@ describe("Sources routes", () => {
 		process.env.SIGNET_PATH = dir;
 		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		mkdirSync(join(dir, "memory"), { recursive: true });
+		closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 

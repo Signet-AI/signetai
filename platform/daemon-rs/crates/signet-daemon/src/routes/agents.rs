@@ -59,7 +59,11 @@ pub async fn list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     match result {
         Ok(agents) => Json(json!({ "agents": agents })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -67,7 +71,10 @@ pub async fn list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 // GET /api/agents/:name
 // ---------------------------------------------------------------------------
 
-pub async fn get(State(state): State<Arc<AppState>>, Path(name): Path<String>) -> impl IntoResponse {
+pub async fn get(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
     let result = state
         .pool
         .read(move |conn| {
@@ -80,8 +87,16 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(name): Path<String>) -
 
     match result {
         Ok(Some(agent)) => Json(agent).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "error": "Agent not found" }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Agent not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -109,7 +124,13 @@ pub async fn create(
 ) -> impl IntoResponse {
     let name = match body.name.filter(|n| !n.is_empty()) {
         Some(n) => n,
-        None => return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name is required" }))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "name is required" })),
+            )
+                .into_response();
+        }
     };
     if let Some(err) = validate_name(&name) {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": err }))).into_response();
@@ -134,7 +155,11 @@ pub async fn create(
 
     match result {
         Ok(agent) => (StatusCode::CREATED, Json(agent)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -148,7 +173,11 @@ pub async fn delete(
     Query(params): Query<DeleteQuery>,
 ) -> impl IntoResponse {
     if name == "default" {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Cannot remove the default agent" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Cannot remove the default agent" })),
+        )
+            .into_response();
     }
     let purge = params.purge.as_deref() == Some("true");
 
@@ -166,23 +195,35 @@ pub async fn delete(
                 return Ok(json!({ "__not_found": true }));
             }
             if purge {
-                conn.execute("DELETE FROM memories WHERE agent_id = ?1", rusqlite::params![name])?;
+                conn.execute(
+                    "DELETE FROM memories WHERE agent_id = ?1",
+                    rusqlite::params![name],
+                )?;
             } else {
                 conn.execute(
                     "UPDATE memories SET visibility = 'archived' WHERE agent_id = ?1",
                     rusqlite::params![name],
                 )?;
             }
-            conn.execute("DELETE FROM agents WHERE name = ?1", rusqlite::params![name])?;
+            conn.execute(
+                "DELETE FROM agents WHERE name = ?1",
+                rusqlite::params![name],
+            )?;
             Ok(json!({ "success": true, "purged": purge }))
         })
         .await;
 
     match result {
-        Ok(v) if v.get("__not_found").is_some() => {
-            (StatusCode::NOT_FOUND, Json(json!({ "error": "Agent not found" }))).into_response()
-        }
+        Ok(v) if v.get("__not_found").is_some() => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Agent not found" })),
+        )
+            .into_response(),
         Ok(v) => Json(v).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }

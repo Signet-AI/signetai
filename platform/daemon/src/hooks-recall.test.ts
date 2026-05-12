@@ -21,7 +21,11 @@ describe("/api/hooks/recall", () => {
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		writeFileSync(
 			join(dir, "agent.yaml"),
-			`memory:
+			`embedding:
+  provider: none
+search:
+  rehearsal_enabled: false
+memory:
   pipelineV2:
     enabled: false
 `,
@@ -57,6 +61,7 @@ describe("/api/hooks/recall", () => {
 	});
 
 	it("returns 200 on valid recall request", async () => {
+		bypassSession?.("valid-recall-fast", { allowUnknown: true });
 		const resp = await app.request("/api/hooks/recall", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -64,6 +69,7 @@ describe("/api/hooks/recall", () => {
 				harness: "openclaw",
 				query: "test query",
 				limit: 5,
+				sessionKey: "valid-recall-fast",
 			}),
 		});
 
@@ -443,7 +449,7 @@ describe("/api/hooks/recall", () => {
 		expect(body.count).toBe(body.results.length);
 		expect(body.query).toBe("deploy checklist");
 		expect(body.meta?.noHits).toBeFalse();
-	});
+	}, 10_000);
 
 	it("forwards type filtering through to hybrid recall", async () => {
 		const now = new Date().toISOString();

@@ -48,7 +48,10 @@ pub fn normalize_and_hash(content: &str) -> NormalizedContent {
 }
 
 fn normalize_storage(s: &str) -> String {
-    s.replace("\r\n", "\n").replace('\r', "\n").trim().to_string()
+    s.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim()
+        .to_string()
 }
 
 fn collapse_whitespace(s: &str) -> String {
@@ -117,7 +120,9 @@ mod tests {
 
     #[test]
     fn storage_preserves_multiline_markdown() {
-        let r = normalize_and_hash("  ## Session Logs\r\n\r\n| id | kind |\r\n|----|------|\r\n| a | summary |\r\n");
+        let r = normalize_and_hash(
+            "  ## Session Logs\r\n\r\n| id | kind |\r\n|----|------|\r\n| a | summary |\r\n",
+        );
         assert_eq!(
             r.storage,
             "## Session Logs\n\n| id | kind |\n|----|------|\n| a | summary |"

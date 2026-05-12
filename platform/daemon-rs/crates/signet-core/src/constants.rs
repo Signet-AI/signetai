@@ -2,11 +2,16 @@ pub const DEFAULT_EMBEDDING_DIMENSIONS: usize = 768;
 
 /// All valid dependency types for entity_dependencies.
 pub const DEPENDENCY_TYPES: &[&str] = &[
+    // core
     "uses",
     "requires",
     "owned_by",
+    "owns",
     "blocks",
     "informs",
+    "maintains",
+    "implements",
+    // knowledge
     "built",
     "depends_on",
     "related_to",
@@ -14,12 +19,23 @@ pub const DEPENDENCY_TYPES: &[&str] = &[
     "teaches",
     "knows",
     "assumes",
+    "supports_claim",
+    "authored_by",
+    "links_to",
+    // structural
+    "contains",
+    "contains_note",
     "contradicts",
     "supersedes",
     "part_of",
+    "produced_artifact",
+    // temporal / execution flow
     "precedes",
     "follows",
     "triggers",
+    "may_execute",
+    "requires_approval_from",
+    // impact
     "impacts",
     "produces",
     "consumes",

@@ -1662,11 +1662,6 @@ export function getEntityHealth(
 			args.push(since);
 		}
 
-		const predictorComparisonsExists = db
-			.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'predictor_comparisons'")
-			.get();
-		if (!predictorComparisonsExists) return [];
-
 		const rows = db
 			.prepare(
 				`SELECT
@@ -1860,16 +1855,11 @@ export function getKnowledgeGraphForConstellation(
 		const aspectRows = db
 			.prepare(
 				`SELECT id, entity_id, name, weight
-				 FROM (
-				   SELECT id, entity_id, name, weight,
-				          ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY weight DESC, name ASC) AS rn
-				   FROM entity_aspects
-				   WHERE agent_id = ? AND entity_id IN (${entityIdPlaceholders})
-				 ) ranked_aspects
-				 WHERE rn <= ?
+				 FROM entity_aspects
+				 WHERE agent_id = ? AND entity_id IN (${entityIdPlaceholders})
 				 ORDER BY entity_id ASC, weight DESC, name ASC`,
 			)
-			.all(agentId, ...entityIds, maxAspectsPerEntity) as Array<Record<string, unknown>>;
+			.all(agentId, ...entityIds) as Array<Record<string, unknown>>;
 
 		const aspectsByEntity = new Map<
 			string,
@@ -1903,16 +1893,11 @@ export function getKnowledgeGraphForConstellation(
 			const attrRows = db
 				.prepare(
 					`SELECT id, aspect_id, content, kind, importance, memory_id
-					 FROM (
-					   SELECT id, aspect_id, content, kind, importance, memory_id,
-					          ROW_NUMBER() OVER (PARTITION BY aspect_id ORDER BY importance DESC, id ASC) AS rn
-					   FROM entity_attributes
-					   WHERE agent_id = ? AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
-					 ) ranked_attributes
-					 WHERE rn <= ?
+					 FROM entity_attributes
+					 WHERE agent_id = ? AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
 					 ORDER BY aspect_id ASC, importance DESC`,
 				)
-				.all(agentId, ...aspectIds, maxAttributesPerAspect) as Array<Record<string, unknown>>;
+				.all(agentId, ...aspectIds) as Array<Record<string, unknown>>;
 
 			for (const row of attrRows) {
 				const aspectId = row.aspect_id as string;

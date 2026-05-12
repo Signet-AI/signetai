@@ -1153,6 +1153,13 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 			return c.json({ success: true, name: plan.slug, output: result.output });
 		}
 
+		if (process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL === "1") {
+			return c.json(
+				{ success: false, error: "Skill installation disabled for test" },
+				503,
+			);
+		}
+
 		const packageManager = resolvePrimaryPackageManager({
 			agentsDir: getAgentsDir(),
 			env: process.env,

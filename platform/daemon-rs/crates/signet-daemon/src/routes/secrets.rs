@@ -97,6 +97,35 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
     Json(serde_json::json!({ "secrets": names }))
 }
 
+/// GET /api/secrets/1password/status — 1Password provider status.
+///
+/// The TypeScript daemon exposes this compatibility endpoint even when no
+/// service-account token is configured. Rust currently has no native
+/// 1Password client, but it can still preserve the client contract: report an
+/// unconfigured provider instead of letting the dynamic secret-name route catch
+/// the path or returning 404.
+pub async fn onepassword_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let store = load_store(&state);
+    let configured = store
+        .secrets
+        .contains_key("ONEPASSWORD_SERVICE_ACCOUNT_TOKEN");
+
+    if configured {
+        Json(serde_json::json!({
+            "configured": true,
+            "connected": false,
+            "error": "1Password provider is configured but native Rust vault listing is not available yet",
+            "vaults": []
+        }))
+    } else {
+        Json(serde_json::json!({
+            "configured": false,
+            "connected": false,
+            "vaults": []
+        }))
+    }
+}
+
 /// POST /api/secrets/:name — store a secret
 pub async fn put(
     State(state): State<Arc<AppState>>,

@@ -20,8 +20,7 @@ use signet_services::transactions;
 
 use crate::memory_lineage::{
     ArtifactKind, MemorySentence, SummaryArtifactInput, SummaryFact, is_noise_session,
-    resolve_memory_sentence, write_memory_projection, write_summary_artifact,
-    write_summary_to_dag,
+    resolve_memory_sentence, write_memory_projection, write_summary_artifact, write_summary_to_dag,
 };
 use crate::provider::{GenerateOpts, LlmProvider, LlmSemaphore};
 
@@ -889,7 +888,9 @@ mod tests {
                     .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
                     .unwrap_or(0);
                 let dag: i64 = conn
-                    .query_row("SELECT COUNT(*) FROM session_summaries", [], |row| row.get(0))
+                    .query_row("SELECT COUNT(*) FROM session_summaries", [], |row| {
+                        row.get(0)
+                    })
                     .unwrap_or(0);
                 Ok((artifacts, memories, dag))
             })

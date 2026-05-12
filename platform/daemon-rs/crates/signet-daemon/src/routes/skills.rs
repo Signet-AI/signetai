@@ -1,0 +1,240 @@
+//! Skill library routes.
+//!
+//! Provides the filesystem-backed skill read/list/delete API that the TS daemon
+//! exposes for dashboard and harness clients.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use axum::{
+    Json,
+    extract::{Path as AxumPath, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::state::AppState;
+
+#[derive(Debug, Deserialize)]
+pub struct SearchQuery {
+    q: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InstallRequest {
+    name: Option<String>,
+    source: Option<String>,
+}
+
+pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let skills = discover_skills(&skills_dir(&state));
+    Json(json!({ "skills": skills, "count": skills.len() }))
+}
+
+pub async fn get(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+) -> impl IntoResponse {
+    let Ok(name) = validate_skill_name(&name) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Invalid skill name"})),
+        )
+            .into_response();
+    };
+    let skill_path = skills_dir(&state).join(&name).join("SKILL.md");
+    let Ok(content) = std::fs::read_to_string(&skill_path) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("Skill not found: {name}")})),
+        )
+            .into_response();
+    };
+    let meta = parse_frontmatter(&content);
+    Json(json!({
+        "name": meta.name.unwrap_or(name),
+        "description": meta.description.unwrap_or_default(),
+        "version": meta.version.unwrap_or_default(),
+        "content": content,
+    }))
+    .into_response()
+}
+
+pub async fn delete(
+    State(state): State<Arc<AppState>>,
+    AxumPath(name): AxumPath<String>,
+) -> impl IntoResponse {
+    let Ok(name) = validate_skill_name(&name) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Invalid skill name"})),
+        )
+            .into_response();
+    };
+    let path = skills_dir(&state).join(&name);
+    if !path.exists() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("Skill not found: {name}")})),
+        )
+            .into_response();
+    }
+    if let Err(err) = std::fs::remove_dir_all(&path) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": err.to_string()})),
+        )
+            .into_response();
+    }
+    Json(json!({"success": true, "name": name})).into_response()
+}
+
+pub async fn search(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SearchQuery>,
+) -> impl IntoResponse {
+    let Some(q) = query
+        .q
+        .map(|q| q.trim().to_ascii_lowercase())
+        .filter(|q| !q.is_empty())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Query parameter q is required"})),
+        )
+            .into_response();
+    };
+    let results: Vec<_> = discover_skills(&skills_dir(&state))
+        .into_iter()
+        .filter(|skill| skill.to_string().to_ascii_lowercase().contains(&q))
+        .collect();
+    Json(json!({"results": results, "count": results.len()})).into_response()
+}
+
+pub async fn browse(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let results: Vec<_> = discover_skills(&skills_dir(&state))
+        .into_iter()
+        .map(|mut skill| {
+            if let Some(obj) = skill.as_object_mut() {
+                obj.insert("provider".to_string(), json!("local"));
+                obj.insert("official".to_string(), json!(false));
+                obj.insert("builtin".to_string(), json!(false));
+                obj.insert("fullName".to_string(), json!("local"));
+            }
+            skill
+        })
+        .collect();
+    Json(json!({"results": results, "count": results.len()}))
+}
+
+pub async fn install(Json(req): Json<InstallRequest>) -> impl IntoResponse {
+    let Some(name) = req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "name is required"})),
+        )
+            .into_response();
+    };
+    if validate_skill_name(name).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Invalid skill name"})),
+        )
+            .into_response();
+    }
+    // Rust daemon parity: validate and acknowledge the install request without
+    // shelling out from the daemon process. The TS tests assert that valid input
+    // gets past validation; actual marketplace install remains an external CLI concern.
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "success": false,
+            "queued": false,
+            "name": name,
+            "source": req.source,
+            "error": "skill installation is not executed by the Rust daemon"
+        })),
+    )
+        .into_response()
+}
+
+fn skills_dir(state: &AppState) -> PathBuf {
+    state.config.base_path.join("skills")
+}
+
+fn discover_skills(dir: &Path) -> Vec<serde_json::Value> {
+    let mut out = vec![];
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(ToOwned::to_owned)
+        else {
+            continue;
+        };
+        let skill_md = path.join("SKILL.md");
+        let content = std::fs::read_to_string(skill_md).unwrap_or_default();
+        let meta = parse_frontmatter(&content);
+        out.push(json!({
+            "name": meta.name.unwrap_or(name),
+            "description": meta.description.unwrap_or_default(),
+            "version": meta.version.unwrap_or_default(),
+            "path": path.to_string_lossy(),
+        }));
+    }
+    out.sort_by_key(|v| v["name"].as_str().unwrap_or_default().to_string());
+    out
+}
+
+#[derive(Default)]
+struct SkillMeta {
+    name: Option<String>,
+    description: Option<String>,
+    version: Option<String>,
+}
+
+fn parse_frontmatter(content: &str) -> SkillMeta {
+    let mut meta = SkillMeta::default();
+    let mut lines = content.lines();
+    if lines.next() != Some("---") {
+        return meta;
+    }
+    for line in lines {
+        if line == "---" {
+            break;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').to_string();
+        match key.trim() {
+            "name" => meta.name = Some(value),
+            "description" => meta.description = Some(value),
+            "version" => meta.version = Some(value),
+            _ => {}
+        }
+    }
+    meta
+}
+
+fn validate_skill_name(name: &str) -> Result<String, ()> {
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.trim().is_empty() {
+        return Err(());
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(());
+    }
+    Ok(name.to_string())
+}

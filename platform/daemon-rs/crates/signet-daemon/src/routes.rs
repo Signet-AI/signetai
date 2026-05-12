@@ -1,7 +1,7 @@
 //! HTTP route handlers for the Signet daemon.
 
 pub mod agents;
-pub mod auth;
+pub mod compat;
 pub mod config;
 pub mod connectors;
 pub mod crossagent;
@@ -12,13 +12,19 @@ pub mod harnesses;
 pub mod hooks;
 pub mod knowledge;
 pub mod marketplace;
+pub mod marketplace_reviews;
 pub mod memory;
+pub mod ontology;
 pub mod pipeline;
+pub mod plugins;
 pub mod repair;
 pub mod scheduler;
-pub mod skill_analytics;
 pub mod search;
 pub mod secrets;
 pub mod sessions;
+pub mod skill_analytics;
+pub mod skills;
+pub mod sources;
+pub mod telemetry;
 pub mod timeline;
 pub mod write;

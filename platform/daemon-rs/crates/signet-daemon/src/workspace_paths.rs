@@ -6,7 +6,9 @@ fn canonical_root(root: &Path) -> std::io::Result<PathBuf> {
 
 fn child(root: &Path, parts: &[&str]) -> std::io::Result<PathBuf> {
     let root = canonical_root(root)?;
-    let path = parts.iter().fold(root.clone(), |path, part| path.join(part));
+    let path = parts
+        .iter()
+        .fold(root.clone(), |path, part| path.join(part));
     if !path.starts_with(&root) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

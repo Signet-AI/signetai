@@ -55,7 +55,9 @@ fn record_skill_invocation(
         "INSERT INTO skill_invocations
          (id, skill_name, agent_id, source, latency_ms, success, error_text, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        rusqlite::params![id, skill, agent_id, source, latency, success, error_text, now],
+        rusqlite::params![
+            id, skill, agent_id, source, latency, success, error_text, now
+        ],
     )?;
 
     conn.execute(
@@ -157,20 +159,26 @@ pub async fn create(
     Json(body): Json<CreateTask>,
 ) -> impl IntoResponse {
     let is_local = peer.ip().is_loopback();
-    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+    let auth = match authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    let agent_id = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-        Ok(id) => id,
-        Err(reason) => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": reason})),
-            )
-                .into_response();
-        }
-    };
+    let agent_id =
+        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
 
     if !VALID_HARNESSES.contains(&body.harness.as_str()) {
         return (
@@ -442,22 +450,30 @@ pub async fn trigger(
     let run_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     let is_local = peer.ip().is_loopback();
-    let auth = match authenticate_headers(state.auth_mode, state.auth_secret.as_deref(), &headers, is_local) {
+    let auth = match authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        &headers,
+        is_local,
+    ) {
         Ok(a) => a,
         Err(e) => return *e,
     };
-    let scoped_agent = match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
-        Ok(id) => id,
-        Err(reason) => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": reason})),
-            )
-                .into_response();
-        }
-    };
+    let scoped_agent =
+        match resolve_scoped_agent(&auth, state.auth_mode, is_local, params.agent_id.as_deref()) {
+            Ok(id) => id,
+            Err(reason) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": reason})),
+                )
+                    .into_response();
+            }
+        };
     let enforce_scope = state.auth_mode != crate::auth::types::AuthMode::Local
-        && !(state.auth_mode == crate::auth::types::AuthMode::Hybrid && is_local && !auth.result.authenticated);
+        && !(state.auth_mode == crate::auth::types::AuthMode::Hybrid
+            && is_local
+            && !auth.result.authenticated);
 
     let result = state
         .pool
@@ -509,9 +525,7 @@ pub async fn trigger(
         .await;
 
     match result {
-        Ok(val) if val.get("error").is_some() => {
-            (StatusCode::NOT_FOUND, Json(val)).into_response()
-        }
+        Ok(val) if val.get("error").is_some() => (StatusCode::NOT_FOUND, Json(val)).into_response(),
         Ok(val) => (StatusCode::ACCEPTED, Json(val)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

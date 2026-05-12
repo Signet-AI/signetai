@@ -289,7 +289,10 @@ async fn worker_loop(
             .await;
         match recover {
             Ok(ref v) if v.as_u64().unwrap_or(0) > 0 => {
-                info!(updated = v.as_u64().unwrap_or(0), "startup recovery: marked exhausted pending job(s) as dead")
+                info!(
+                    updated = v.as_u64().unwrap_or(0),
+                    "startup recovery: marked exhausted pending job(s) as dead"
+                )
             }
             Ok(_) => {}
             Err(e) => warn!("startup recovery failed (non-fatal): {e}"),
@@ -363,7 +366,9 @@ async fn worker_loop(
 
         // Process based on job type
         let result = match job.job_type.as_str() {
-            "extract" | "extraction" => process_extract(&pool, &job, &provider, &semaphore, &config).await,
+            "extract" | "extraction" => {
+                process_extract(&pool, &job, &provider, &semaphore, &config).await
+            }
             other => {
                 warn!(job_type = other, "unknown job type");
                 Err(format!("unknown job type: {other}"))

@@ -145,7 +145,11 @@ pub async fn upsert_presence(
                     return None;
                 }
                 let id = parts.next().unwrap_or("").trim();
-                if id.is_empty() { None } else { Some(id.to_string()) }
+                if id.is_empty() {
+                    None
+                } else {
+                    Some(id.to_string())
+                }
             })
         });
     let project = body

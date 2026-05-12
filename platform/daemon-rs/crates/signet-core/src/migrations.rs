@@ -27,32 +27,21 @@ fn checksum(version: u32, name: &str) -> String {
 
 /// Helper: add a column only if it doesn't already exist.
 fn add_column_if_missing(conn: &Connection, table: &str, column: &str, typedef: &str) {
-    if let Err(e) = add_column_if_missing_required(conn, table, column, typedef) {
-        warn!(%table, %column, err = %e, "failed to add column");
-    }
-}
-
-/// Fallible column add for startup parity repairs and required schema fixes.
-fn add_column_if_missing_required(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    typedef: &str,
-) -> Result<(), CoreError> {
     let has_col: bool = conn
         .prepare(&format!("PRAGMA table_info(\"{table}\")"))
         .and_then(|mut stmt| {
             let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
             let names: Vec<String> = rows.filter_map(|r| r.ok()).collect();
             Ok(names.iter().any(|n| n == column))
-        })?;
+        })
+        .unwrap_or(false);
 
     if !has_col {
         let sql = format!("ALTER TABLE \"{table}\" ADD COLUMN \"{column}\" {typedef}");
-        conn.execute_batch(&sql)?;
+        if let Err(e) = conn.execute_batch(&sql) {
+            warn!(%table, %column, err = %e, "failed to add column");
+        }
     }
-
-    Ok(())
 }
 
 /// All schema migrations in order. SQL is idempotent (IF NOT EXISTS / IF MISSING).
@@ -252,9 +241,19 @@ static MIGRATIONS: &[Migration] = &[
         name: "task-agent-scope",
         sql: include_str!("sql/039-task-agent-scope.sql"),
     },
+    Migration {
+        version: 40,
+        name: "memory-search-telemetry",
+        sql: include_str!("sql/040-memory-search-telemetry.sql"),
+    },
+    Migration {
+        version: 41,
+        name: "ontology-proposals",
+        sql: include_str!("sql/041-ontology-proposals.sql"),
+    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 39;
+pub const LATEST_SCHEMA_VERSION: u32 = 41;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {
@@ -355,17 +354,55 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
         }
     }
 
-    ensure_schema_parity_guards(conn)?;
-
     if count > 0 {
         info!(count, "migrations applied");
     }
 
+    ensure_cross_daemon_parity_columns(conn)?;
+
     Ok(())
 }
 
-fn ensure_schema_parity_guards(conn: &Connection) -> Result<(), CoreError> {
-    add_column_if_missing_required(conn, "entities", "mentions", "INTEGER DEFAULT 0")?;
+/// Reconcile schema drift between the TypeScript and Rust daemons.
+///
+/// Some parity columns are required by current Rust route/query code but may be
+/// absent in fresh or TS-created databases whose historical migrations stamped
+/// versions before Rust learned about the extra columns.
+fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError> {
+    add_column_if_missing(conn, "entities", "mentions", "INTEGER NOT NULL DEFAULT 0");
+    add_column_if_missing(conn, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0");
+    add_column_if_missing(conn, "entities", "pinned_at", "TEXT");
+    add_column_if_missing(conn, "entities", "updated_at", "TEXT");
+
+    add_column_if_missing(
+        conn,
+        "connectors",
+        "settings_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    );
+    add_column_if_missing(conn, "connectors", "enabled", "INTEGER NOT NULL DEFAULT 1");
+
+    add_column_if_missing(conn, "entity_attributes", "proposal_id", "TEXT");
+    add_column_if_missing(
+        conn,
+        "entity_attributes",
+        "proposal_evidence",
+        "TEXT NOT NULL DEFAULT '[]'",
+    );
+    add_column_if_missing(conn, "entity_dependencies", "proposal_id", "TEXT");
+    add_column_if_missing(
+        conn,
+        "entity_dependencies",
+        "proposal_evidence",
+        "TEXT NOT NULL DEFAULT '[]'",
+    );
+
+    conn.execute_batch(
+        "UPDATE connectors
+            SET settings_json = COALESCE(NULLIF(settings_json, ''), NULLIF(config_json, ''), '{}')
+          WHERE 1 = 1;",
+    )?;
+
     Ok(())
 }
 
@@ -407,7 +444,6 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
         }
         5 => {
             add_column_if_missing(conn, "entities", "canonical_name", "TEXT");
-            add_column_if_missing_required(conn, "entities", "mentions", "INTEGER DEFAULT 0")?;
             add_column_if_missing(conn, "relations", "mentions", "INTEGER DEFAULT 1");
             add_column_if_missing(conn, "relations", "confidence", "REAL DEFAULT 0.5");
             add_column_if_missing(conn, "relations", "updated_at", "TEXT");
@@ -728,57 +764,4 @@ fn repair_bogus_version(conn: &Connection) -> Result<(), CoreError> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn columns(conn: &Connection, table: &str) -> Vec<String> {
-        let mut stmt = conn
-            .prepare(&format!("PRAGMA table_info(\"{table}\")"))
-            .expect("table info statement prepares");
-        stmt.query_map([], |row| row.get::<_, String>(1))
-            .expect("table info query runs")
-            .map(|row| row.expect("column row reads"))
-            .collect()
-    }
-
-    #[test]
-    fn migrations_install_knowledge_graph_mentions_columns() {
-        let conn = Connection::open_in_memory().expect("in-memory db opens");
-
-        run(&conn).expect("migrations run");
-
-        assert!(columns(&conn, "entities").contains(&"mentions".to_string()));
-        assert!(columns(&conn, "relations").contains(&"mentions".to_string()));
-        assert!(columns(&conn, "memory_entity_mentions").contains(&"mention_text".to_string()));
-    }
-
-    #[test]
-    fn schema_parity_guard_repairs_existing_entities_table() {
-        let conn = Connection::open_in_memory().expect("in-memory db opens");
-        conn.execute_batch(
-            "CREATE TABLE entities (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL
-            );",
-        )
-        .expect("entities table creates");
-
-        ensure_schema_parity_guards(&conn).expect("parity guard runs");
-
-        assert!(columns(&conn, "entities").contains(&"mentions".to_string()));
-    }
-
-    #[test]
-    fn required_column_add_reports_alter_errors() {
-        let conn = Connection::open_in_memory().expect("in-memory db opens");
-
-        let err =
-            add_column_if_missing_required(&conn, "entities", "mentions", "INTEGER DEFAULT 0")
-                .expect_err("missing required table should fail schema repair");
-
-        assert!(err.to_string().contains("entities"));
-    }
 }

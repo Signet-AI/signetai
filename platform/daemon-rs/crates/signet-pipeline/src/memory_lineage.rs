@@ -1034,7 +1034,11 @@ fn is_noise_artifact_group(rows: &[NoiseArtifactRow]) -> bool {
         if is_temp_project(row.project.as_deref()) {
             return true;
         }
-        if row.project.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+        if row
+            .project
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
             has_project = true;
         }
     }
@@ -1100,7 +1104,9 @@ pub fn purge_canonical_noise_sessions(
             )
             .map_err(|err| err.to_string())?;
         let paths = path_stmt
-            .query_map(params![agent_id, session_token], |row| row.get::<_, String>(0))
+            .query_map(params![agent_id, session_token], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|err| err.to_string())?
             .filter_map(Result::ok)
             .collect::<Vec<_>>();
@@ -1514,7 +1520,8 @@ fn render_section(heading: &str, lines: &[String]) -> String {
 }
 
 fn join_parts(parts: &[String]) -> String {
-    parts.iter()
+    parts
+        .iter()
         .filter(|part| !part.trim().is_empty())
         .cloned()
         .collect::<Vec<_>>()
@@ -1668,7 +1675,10 @@ fn render_index_section(index_block: &str, base: &[String]) -> Result<String, St
         return Ok(index_block.to_string());
     }
 
-    let mut lines = index_block.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+    let mut lines = index_block
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
     while lines.len() > 2 {
         lines.pop();
         let next = lines.join("\n").trim_end().to_string();
@@ -2429,7 +2439,11 @@ mod tests {
         }
 
         let rendered = write_memory_projection(&conn, &root, "default").unwrap();
-        assert!(rendered.content.contains("## Session Ledger (Last 30 Days)"));
+        assert!(
+            rendered
+                .content
+                .contains("## Session Ledger (Last 30 Days)")
+        );
         assert!(rendered.content.contains("older ledger rows clipped:"));
         assert!(!rendered.content.contains("/tmp/signetai"));
         assert!(tok.encode_ordinary(&rendered.content).len() <= MEMORY_MD_MAX_TOKENS);
@@ -2467,7 +2481,8 @@ mod tests {
         .unwrap();
         assert!(root.join(&write.artifact_path).exists());
 
-        let removed = purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
+        let removed =
+            purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
         assert_eq!(removed, 1);
         assert!(!root.join(&write.artifact_path).exists());
 
@@ -2540,7 +2555,8 @@ mod tests {
         )
         .unwrap();
 
-        let removed = purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
+        let removed =
+            purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
         assert_eq!(removed, 1);
 
         let tombstones: i64 = conn
@@ -2620,7 +2636,8 @@ mod tests {
         )
         .unwrap();
 
-        let removed = purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
+        let removed =
+            purge_canonical_noise_sessions(&conn, &root, "default", "test cleanup").unwrap();
         assert_eq!(removed, 0);
 
         let artifacts: i64 = conn

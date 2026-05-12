@@ -48,27 +48,38 @@ impl Default for StructuralConfig {
 /// One-line descriptions for each dependency type (mirrors structural-dependency.ts).
 /// Parallel to DEPENDENCY_TYPES — indices must match.
 pub const DEP_DESCRIPTIONS: &[&str] = &[
-    "actively calls or consumes at runtime",         // uses
-    "cannot function without (hard prerequisite)",   // requires
-    "maintained or governed by",                     // owned_by
-    "prevents progress of",                          // blocks
-    "sends data or signals to",                      // informs
-    "was created or constructed by",                 // built
+    "actively calls or consumes at runtime",              // uses
+    "cannot function without (hard prerequisite)",        // requires
+    "maintained or governed by",                          // owned_by
+    "owns, controls, or is responsible for",              // owns
+    "prevents progress of",                               // blocks
+    "sends data or signals to",                           // informs
+    "keeps operational, updated, or healthy",             // maintains
+    "provides the concrete implementation for",           // implements
+    "was created or constructed by",                      // built
     "needs but does not directly call (soft dependency)", // depends_on
-    "associated loosely, no directional dependency", // related_to
-    "acquired knowledge from",                       // learned_from
-    "transfers knowledge to",                        // teaches
-    "is aware of or references",                     // knows
-    "presupposes as true without verifying",         // assumes
-    "conflicts with or negates",                     // contradicts
-    "replaces or obsoletes",                         // supersedes
-    "is a component or subset of",                   // part_of
-    "must happen before (temporal)",                 // precedes
-    "happens after (temporal)",                      // follows
-    "causes to start or execute",                    // triggers
-    "change here affects (blast radius)",            // impacts
-    "generates as output",                           // produces
-    "takes as input",                                // consumes
+    "associated loosely, no directional dependency",      // related_to
+    "acquired knowledge from",                            // learned_from
+    "transfers knowledge to",                             // teaches
+    "is aware of or references",                          // knows
+    "presupposes as true without verifying",              // assumes
+    "provides evidence for a claim",                      // supports_claim
+    "was written or authored by",                         // authored_by
+    "links or points to another source",                  // links_to
+    "contains or encloses as a child item",               // contains
+    "contains a note, document, or knowledge artifact",   // contains_note
+    "conflicts with or negates",                          // contradicts
+    "replaces or obsoletes",                              // supersedes
+    "is a component or subset of",                        // part_of
+    "created a concrete artifact as evidence or output",  // produced_artifact
+    "must happen before (temporal)",                      // precedes
+    "happens after (temporal)",                           // follows
+    "causes to start or execute",                         // triggers
+    "is permitted or capable of executing",               // may_execute
+    "needs approval from the named actor or policy",      // requires_approval_from
+    "change here affects (blast radius)",                 // impacts
+    "generates as output",                                // produces
+    "takes as input",                                     // consumes
 ];
 
 /// A structural job (classify or dependency).
@@ -675,7 +686,7 @@ mod tests {
 
     #[test]
     fn valid_dependency_types() {
-        assert_eq!(DEPENDENCY_TYPES.len(), 21);
+        assert_eq!(DEPENDENCY_TYPES.len(), 32);
         assert!(DEPENDENCY_TYPES.contains(&"uses"));
         assert!(DEPENDENCY_TYPES.contains(&"informs"));
         assert!(DEPENDENCY_TYPES.contains(&"consumes"));

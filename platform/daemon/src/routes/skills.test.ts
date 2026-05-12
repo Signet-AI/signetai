@@ -473,15 +473,25 @@ This is a test skill.`,
 	});
 
 	it("POST /api/skills/install accepts valid name with source", async () => {
-		// This will fail at the spawn step (no real skills CLI), but should
-		// get past validation and not return 400
-		const res = await app.request("/api/skills/install", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ name: "web-search", source: "Signet-AI/signetai" }),
-		});
-		// Will be 500 (skills CLI not available) or 200 — not 400 validation error
-		expect(res.status).not.toBe(400);
+		const prevDisableInstall = process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL;
+		process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL = "1";
+		try {
+			// This will be short-circuited in test mode, but should get past validation
+			// and not return 400.
+			const res = await app.request("/api/skills/install", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: "web-search", source: "Signet-AI/signetai" }),
+			});
+			// Should not fail at validation.
+			expect(res.status).not.toBe(400);
+		} finally {
+			if (prevDisableInstall === undefined) {
+				Reflect.deleteProperty(process.env as Record<string, string | undefined>, "SIGNET_TEST_DISABLE_SKILLS_INSTALL");
+			} else {
+				process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL = prevDisableInstall;
+			}
+		}
 	});
 
 	it("POST /api/skills/install rejects invalid JSON body", async () => {
