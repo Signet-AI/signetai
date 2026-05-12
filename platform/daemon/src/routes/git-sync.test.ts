@@ -1,16 +1,18 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitConfig, loadGitConfig } from "./git-config";
 import {
 	getAutoCommitQueueStateForTests,
 	getGitStatus,
+	gitAutoCommitForTests,
 	resetGitHealthForTests,
 	scheduleAutoCommit,
 	setGitCommandRunnerForTests,
 	setGitRepoProbeForTests,
 	stopGitSyncTimer,
+	toRelativeGitPathForTests,
 } from "./git-sync";
 import { type GitConfig, applyGitConfigPatch } from "./session-routes";
 
@@ -151,6 +153,57 @@ describe("scheduleAutoCommit", () => {
 		} finally {
 			gitConfig.autoCommit = previous;
 			await stopGitSyncTimer();
+		}
+	});
+});
+
+describe("git auto-commit scoping", () => {
+	it("normalizes equivalent watcher paths before converting them to git pathspecs", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-git-paths-"));
+		const link = `${root}-link`;
+		try {
+			mkdirSync(join(root, "nested"));
+			writeFileSync(join(root, "nested", "AGENTS.md"), "identity");
+			symlinkSync(root, link, "dir");
+
+			expect(toRelativeGitPathForTests(root, join(root, "nested", "..", "nested", "AGENTS.md"))).toBe(
+				"nested/AGENTS.md",
+			);
+			expect(toRelativeGitPathForTests(root, join(link, "nested", "AGENTS.md"))).toBe("nested/AGENTS.md");
+			expect(toRelativeGitPathForTests(root, join(root, "..", "outside.md"))).toBeNull();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(link, { recursive: true, force: true });
+		}
+	});
+
+	it("commits only queued auto-commit pathspecs instead of the whole index", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-git-autocommit-"));
+		const previous = gitConfig.autoCommit;
+		const calls: string[][] = [];
+		try {
+			gitConfig.autoCommit = true;
+			mkdirSync(join(root, ".git"));
+			writeFileSync(join(root, "AGENTS.md"), "identity");
+			setGitRepoProbeForTests(() => true);
+			setGitCommandRunnerForTests(async (_cmd, args) => {
+				calls.push(args);
+				if (args[0] === "status") return { code: 0, stdout: "M AGENTS.md\n", stderr: "" };
+				return { code: 0, stdout: "", stderr: "" };
+			});
+
+			await gitAutoCommitForTests(root, [join(root, "AGENTS.md")]);
+
+			const commit = calls.find((args) => args[0] === "commit");
+			expect(commit).toBeDefined();
+			expect(commit).toContain("--");
+			expect(commit?.slice((commit?.indexOf("--") ?? -1) + 1)).toEqual(["AGENTS.md"]);
+		} finally {
+			gitConfig.autoCommit = previous;
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 });

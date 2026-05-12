@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { SIGNET_GIT_PROTECTED_PATHS, mergeSignetGitignoreEntries } from "@signet/core";
 import { logger } from "../logger";
 import { getSecret, hasSecret } from "../secrets.js";
@@ -768,12 +768,29 @@ async function gitUntrackProtectedFiles(dir: string): Promise<void> {
 const GIT_AUTOCOMMIT_TIMEOUT_MS = 30_000;
 let autocommitInFlight = false;
 
+function canonicalPathForContainment(path: string): string {
+	const absolute = resolve(path);
+	try {
+		return realpathSync.native(absolute);
+	} catch {
+		const parent = dirname(absolute);
+		if (parent !== absolute && existsSync(parent)) {
+			try {
+				return join(realpathSync.native(parent), basename(absolute));
+			} catch {
+				// Fall through to the normalized absolute path.
+			}
+		}
+		return absolute;
+	}
+}
+
 function toRelativeGitPath(dir: string, path: string): string | null {
-	const normalizedDir = dir.endsWith("/") ? dir : `${dir}/`;
-	if (!path.startsWith(normalizedDir)) return null;
-	const relative = path.slice(normalizedDir.length);
-	if (!relative || relative.startsWith("../") || relative.includes("/../")) return null;
-	return relative;
+	const canonicalDir = canonicalPathForContainment(dir);
+	const candidate = canonicalPathForContainment(isAbsolute(path) ? path : join(dir, path));
+	const relativePath = relative(canonicalDir, candidate);
+	if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) return null;
+	return relativePath.replace(/\\/g, "/");
 }
 
 async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void> {
@@ -788,6 +805,10 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 		const relativeFiles = Array.from(
 			new Set(changedFiles.map((file) => toRelativeGitPath(dir, file)).filter((file): file is string => Boolean(file))),
 		);
+		const droppedChanges = changedFiles.length - relativeFiles.length;
+		if (droppedChanges > 0) {
+			logger.warn("git", `Dropped ${droppedChanges} auto-commit paths outside the git workspace`);
+		}
 		if (relativeFiles.length === 0) return;
 
 		const fileList = relativeFiles.join(", ");
@@ -814,7 +835,7 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 		}
 		if (!statusResult.stdout.trim()) return;
 
-		const commitResult = await runGitCommand(["commit", "-m", message], dir, {
+		const commitResult = await runGitCommand(["commit", "-m", message, "--", ...relativeFiles], dir, {
 			timeoutMs: MUTATING_GIT_TIMEOUT_MS,
 		});
 		if (commitResult.code === 0) {
@@ -855,12 +876,20 @@ export function getAutoCommitQueueStateForTests(): { pending: boolean; queued: n
 	return { pending: commitTimer !== null || commitPending, queued: pendingChanges.length };
 }
 
+export async function gitAutoCommitForTests(dir: string, changedFiles: string[]): Promise<void> {
+	await gitAutoCommit(dir, changedFiles);
+}
+
 export function setGitCommandRunnerForTests(runner: CommandRunner | null): void {
 	commandRunner = runner ?? runBoundedCommand;
 }
 
 export function setGitRepoProbeForTests(probe: ((dir: string) => boolean) | null): void {
 	gitRepoProbe = probe ?? ((dir: string): boolean => existsSync(join(dir, ".git")));
+}
+
+export function toRelativeGitPathForTests(dir: string, path: string): string | null {
+	return toRelativeGitPath(dir, path);
 }
 
 export function resetGitHealthForTests(): void {
