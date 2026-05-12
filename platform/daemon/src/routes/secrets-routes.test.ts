@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { type BitwardenClient, setBitwardenClientFactoryForTests } from "../bitwarden.js";
 import { queryPluginAuditEvents } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "../plugins/bundled/secrets.js";
 import { PluginHostV1 } from "../plugins/host.js";
@@ -169,6 +170,98 @@ describe("secrets routes plugin capability enforcement", () => {
 		});
 
 		expect(res.status).toBe(400);
+	});
+
+	test("Bitwarden routes connect, activate, write through, migrate, and disconnect without losing local fallback", async () => {
+		const items = new Map<string, string>();
+		const folders = [{ id: "folder-1", name: "Signet" }];
+		const makeClient = async (_session: string): Promise<BitwardenClient> => ({
+			async status() {
+				return { status: "unlocked", userEmail: "agent@example.com", serverUrl: "https://vault.bitwarden.com" };
+			},
+			async listFolders() {
+				return folders;
+			},
+			async listItems() {
+				return Array.from(items.keys()).map((name) => ({ id: `item-${name}`, name }));
+			},
+			async getItem(id: string) {
+				const name = id.replace(/^item-/, "");
+				return { id, name, login: { password: items.get(name) ?? null } };
+			},
+			async putSecret(name: string, value: string) {
+				items.set(name, value);
+				return { id: `item-${name}`, name, login: { password: value } };
+			},
+			async deleteSecret(name: string) {
+				return items.delete(name);
+			},
+			async resolveSecret(ref: string) {
+				const name = decodeURIComponent(ref.replace("bw://name/", ""));
+				const value = items.get(name);
+				if (!value) throw new Error(`Bitwarden item '${name}' not found`);
+				return value;
+			},
+		});
+		setBitwardenClientFactoryForTests(makeClient);
+		const app = makeApp(makeHost());
+
+		const local = await app.request("/api/secrets/LOCAL_ONLY", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ value: "local-value" }),
+		});
+		expect(local.status).toBe(200);
+
+		const connected = await app.request("/api/secrets/bitwarden/connect", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ session: "bw-session", activate: true, folderId: "folder-1" }),
+		});
+		expect(connected.status).toBe(200);
+		expect(await connected.json()).toMatchObject({
+			success: true,
+			configured: true,
+			connected: true,
+			activeProvider: true,
+		});
+
+		const storedInBitwarden = await app.request("/api/secrets/BW_ONLY", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ value: "bw-value" }),
+		});
+		expect(storedInBitwarden.status).toBe(200);
+		expect(items.get("BW_ONLY")).toBe("bw-value");
+
+		const listed = await app.request("/api/secrets");
+		expect(listed.status).toBe(200);
+		expect(await listed.json()).toMatchObject({ provider: "bitwarden", secrets: ["BW_ONLY", "LOCAL_ONLY"] });
+
+		const dryRun = await app.request("/api/secrets/bitwarden/migrate", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ dryRun: true }),
+		});
+		expect(dryRun.status).toBe(200);
+		expect(await dryRun.json()).toMatchObject({ success: true, dryRun: true, migratedCount: 0, skippedCount: 1 });
+
+		const migrated = await app.request("/api/secrets/bitwarden/migrate", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ dryRun: false, overwrite: true }),
+		});
+		expect(migrated.status).toBe(200);
+		expect(await migrated.json()).toMatchObject({ success: true, dryRun: false, migratedCount: 1 });
+		expect(items.get("LOCAL_ONLY")).toBe("local-value");
+
+		const foldersRes = await app.request("/api/secrets/bitwarden/folders");
+		expect(foldersRes.status).toBe(200);
+		expect(await foldersRes.json()).toEqual({ folders: [{ id: "folder-1", name: "Signet" }], count: 1 });
+
+		const disconnected = await app.request("/api/secrets/bitwarden/connect", { method: "DELETE" });
+		expect(disconnected.status).toBe(200);
+		expect(await disconnected.json()).toMatchObject({ success: true, disconnected: true, activeProvider: false });
 	});
 
 	test("1Password compatibility status route does not require configured token", async () => {

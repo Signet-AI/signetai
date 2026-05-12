@@ -46,7 +46,7 @@ describe("local secrets provider", () => {
 	test("bare names and local:// references resolve through the same local store", async () => {
 		await putSecret("OPENAI_API_KEY", "sk-test-local");
 
-		expect(listSecrets()).toEqual(["OPENAI_API_KEY"]);
+		expect(await listSecrets()).toEqual(["OPENAI_API_KEY"]);
 		expect(hasSecret("local://OPENAI_API_KEY")).toBe(true);
 		expect(await getSecret("local://OPENAI_API_KEY")).toBe("sk-test-local");
 
@@ -62,7 +62,7 @@ describe("local secrets provider", () => {
 		await putSecret("OPENAI_API_KEY", "sk-test-local");
 		const before = readFileSync(secretsFile(), "utf-8");
 
-		expect(listSecrets()).toEqual(["OPENAI_API_KEY"]);
+		expect(await listSecrets()).toEqual(["OPENAI_API_KEY"]);
 		expect(await localSecretProvider.resolve("local://OPENAI_API_KEY", {})).toMatchObject({
 			ref: "local://OPENAI_API_KEY",
 			providerId: "local",
@@ -226,7 +226,7 @@ describe("local secrets provider", () => {
 		mkdirSync(join(agentsDir, ".secrets"), { recursive: true });
 		writeFileSync(secretsFile(), "not-json", { mode: 0o600 });
 
-		expect(() => listSecrets()).toThrow("Failed to read secrets store");
+		expect(listSecrets()).rejects.toThrow("Failed to read secrets store");
 		const health = await localSecretProvider.health({});
 		expect(health.status).toBe("unhealthy");
 		expect(readFileSync(secretsFile(), "utf-8")).toBe("not-json");
@@ -262,7 +262,7 @@ describe("local secrets provider", () => {
 	test("delete accepts local:// compatibility references", async () => {
 		await putSecret("GITHUB_TOKEN", "ghp_test");
 		expect(deleteSecret("local://GITHUB_TOKEN")).toBe(true);
-		expect(listSecrets()).toEqual([]);
+		expect(await listSecrets()).toEqual([]);
 	});
 });
 

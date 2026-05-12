@@ -9,6 +9,9 @@ import { SignetTransport } from "./transport.js";
 import type {
 	BatchModifyItemResult,
 	BatchModifyResponse,
+	BitwardenConnectResult,
+	BitwardenMigrationResult,
+	BitwardenStatus,
 	CheckpointListResponse,
 	ConfigListResponse,
 	ConfigWriteResponse,
@@ -1000,6 +1003,80 @@ export class SignetClient extends SignetClientHelpers {
 	}
 
 	/**
+	 * Get Bitwarden connection/provider status.
+	 */
+	async getBitwardenStatus(): Promise<BitwardenStatus> {
+		return this.transport.get<BitwardenStatus>("/api/secrets/bitwarden/status");
+	}
+
+	/**
+	 * Connect a Bitwarden CLI session token (`bw unlock --raw`).
+	 */
+	async connectBitwarden(
+		session: string,
+		options: { readonly activate?: boolean; readonly folderId?: string } = {},
+	): Promise<BitwardenConnectResult> {
+		return this.transport.post<BitwardenConnectResult>("/api/secrets/bitwarden/connect", {
+			session,
+			...options,
+		});
+	}
+
+	/**
+	 * Disconnect Bitwarden and return to the local Signet provider.
+	 */
+	async disconnectBitwarden(): Promise<{
+		success: boolean;
+		disconnected: boolean;
+		existed: boolean;
+		activeProvider: boolean;
+	}> {
+		return this.transport.del<{ success: boolean; disconnected: boolean; existed: boolean; activeProvider: boolean }>(
+			"/api/secrets/bitwarden/connect",
+		);
+	}
+
+	/**
+	 * Switch active secret provider.
+	 */
+	async setSecretProvider(
+		provider: "local" | "bitwarden",
+	): Promise<{ success: boolean; provider: "local" | "bitwarden" }> {
+		return this.transport.post<{ success: boolean; provider: "local" | "bitwarden" }>(
+			"/api/secrets/bitwarden/provider",
+			{
+				provider,
+			},
+		);
+	}
+
+	/**
+	 * List Bitwarden folders.
+	 */
+	async listBitwardenFolders(): Promise<{
+		folders: readonly { readonly id: string; readonly name: string }[];
+		count: number;
+	}> {
+		return this.transport.get<{ folders: readonly { readonly id: string; readonly name: string }[]; count: number }>(
+			"/api/secrets/bitwarden/folders",
+		);
+	}
+
+	/**
+	 * Copy local Signet secrets into Bitwarden. Defaults to dry-run unless `dryRun: false`.
+	 */
+	async migrateSecretsToBitwarden(
+		opts: {
+			readonly dryRun?: boolean;
+			readonly deleteLocal?: boolean;
+			readonly overwrite?: boolean;
+			readonly folderId?: string;
+		} = {},
+	): Promise<BitwardenMigrationResult> {
+		return this.transport.post<BitwardenMigrationResult>("/api/secrets/bitwarden/migrate", opts);
+	}
+
+	/**
 	 * Get 1Password connection status.
 	 *
 	 * @example
@@ -1275,6 +1352,9 @@ export type {
 	MemorySearchTelemetryResponse,
 	MemorySearchTelemetryResult,
 	ModifyResult,
+	BitwardenConnectResult,
+	BitwardenMigrationResult,
+	BitwardenStatus,
 	OnePasswordConnectResult,
 	OnePasswordImportResult,
 	OnePasswordStatus,

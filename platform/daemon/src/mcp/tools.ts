@@ -1306,11 +1306,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	// ------------------------------------------------------------------
 	server.registerTool(
 		"secret_exec",
+		"secret_exec_status",
 		{
 			title: "Execute with Secrets",
 			description:
 				"Queue a command with secrets injected as environment variables. " +
-				"Provide a secrets map where keys are env var names and values are Signet secret names or 1Password references (op://vault/item/field). " +
+				"Provide a secrets map where keys are env var names and values are Signet secret names, Bitwarden references (bw://name/NAME or bw://item/ITEM_ID/password), or 1Password references (op://vault/item/field). " +
 				"Output is automatically redacted — secret values never appear in results.",
 			inputSchema: z.object({
 				command: z.string().describe("Shell command to execute"),

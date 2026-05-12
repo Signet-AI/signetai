@@ -1916,7 +1916,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	// Surface available secrets so agents know what's available
 	try {
-		const secretNames = listSecrets();
+		const secretNames = await listSecrets();
 		if (secretNames.length > 0) {
 			injectParts.push("\n## Available Secrets\n");
 			injectParts.push("Use the `secret_exec` MCP tool to run commands with these secrets injected as env vars.\n");

@@ -457,7 +457,7 @@ secret names resolve through the local provider, for example
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `command` | string | yes | Shell command to queue |
-| `secrets` | object | yes | Map of env var name to secret reference (Signet name or `op://...`) |
+| `secrets` | object | yes | Map of env var name to secret reference (Signet name, `bw://...`, or `op://...`) |
 | `timeoutSeconds` | number | no | Max subprocess runtime for the queued job; defaults to 300 seconds, max 1800 |
 
 **Returns:** A queued secret exec job object with `id`, `status`, and `timeoutMs`. Poll with `secret_exec_status` for redacted `stdout`, `stderr`, and `code` after completion. Secret values in output are replaced with `[REDACTED]`.
