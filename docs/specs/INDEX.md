@@ -222,26 +222,34 @@ The existing `importance` column on `memories` remains for backwards
 compatibility and cold-start scoring, but the structural computation
 is the source of truth once KA tables are populated.
 
-### 3. Entity type taxonomy is canonical
+### 3. Entity type taxonomy is concrete
 
-The knowledge architecture schema defines the canonical entity types:
-`person`, `project`, `system`, `tool`, `concept`, `skill`, `task`,
-`source`, `artifact`, `agent`, `policy`, `action`, `workflow`, `event`,
-`object_type`, `interface`, `observation`, `claim_slot`, `claim_value`,
-`unknown`.
+The knowledge architecture schema defines the canonical concrete entity types:
+`person`, `organization`, `project`, `product`, `system`, `tool`, `artifact`,
+`document`, `source`, `place`, and `event`.
 
-All specs that create entities MUST use this taxonomy. Procedural memory
-creates `entity_type = 'skill'`. Multi-agent creates agent-scoped
-entities. The ontology proposal loop extends KA's canonical taxonomy with
-source/proposal lifecycle labels so extraction can model artifacts,
-observations, claim slots, and claim values without minting ad-hoc string
-categories. The taxonomy is not extensible without updating KA and this
-invariant in the same change.
+Entities are identity-bearing semantic objects: things the agent can point at,
+revisit, update, and ask about later. Events are first-class because temporal
+questions such as "when was our last daily digest?" should resolve through
+provenance-backed happenings with time attributes, participants, event types,
+and related artifacts.
 
-**Planned extension:** DP-14 (Discovered Principles) in the desire
-paths epic will add `principle` as an entity type for emergent
-cross-entity patterns. This invariant must be updated when DP-14
-lands.
+Claims, aspects, and attributes describe entities. Relations carry predicates.
+Artifacts carry evidence. Extraction MUST NOT mint entities from pronouns,
+metadata roles (`Sender`, `Recipient`, `Author`), generic role words (`User`,
+`Assistant`, `System`), section headings (`Summary`, `Current Work`, `Primary
+Request`), discourse fragments, prompt scaffolding, claim slots, policies,
+actions, or workflows. Those belong in facts, aspects, attributes, relations,
+or operational/proposal layers.
+
+Legacy rows may still use older types while repair actions converge existing
+databases, but all new extraction and structured graph writes must pass the
+concrete taxonomy gate. The taxonomy is not extensible without updating KA and
+this invariant in the same change.
+
+Ontology-governance specs can still propose new semantic object classes, but
+new classes must explain why the object is identity-bearing and why aspects,
+attributes, relations, or proposal records cannot represent it cleanly.
 
 ### 4. Scorer consumes all available signals
 

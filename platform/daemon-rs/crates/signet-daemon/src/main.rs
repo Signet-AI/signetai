@@ -218,6 +218,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/whoami", get(routes::auth::whoami))
         // Memory read routes
         .route("/api/memories", get(routes::memory::list))
+        .route("/api/memories/most-used", get(routes::memory::most_used))
         .route(
             "/api/memory/{id}",
             get(routes::memory::get).delete(routes::write::delete),

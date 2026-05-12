@@ -12,6 +12,7 @@ import {
 	MEMORY_TYPES,
 	type MemoryType,
 } from "@signet/core";
+import { classifyEntityQuality, concreteEntityTypesForPrompt, normalizeEntityType } from "../entity-quality";
 import { logger } from "../logger";
 import { type LlmProvider, RateLimitExceededError } from "./provider";
 
@@ -32,12 +33,13 @@ const VALID_TYPES = new Set<string>(MEMORY_TYPES);
 // ---------------------------------------------------------------------------
 
 function buildExtractionPrompt(content: string): string {
-	return `Extract key facts and entity relationships from this text.
+	const entityTypes = concreteEntityTypesForPrompt();
+	return `Extract key facts and concrete semantic-object relationships from this text.
 
 Return JSON with two arrays: "facts" and "entities".
 
 Each fact: {"content": "...", "type": "fact|preference|decision|rationale|procedural|semantic", "confidence": 0.0-1.0}
-Each entity: {"source": "...", "source_type": "person|project|system|tool|concept|skill|task|unknown", "relationship": "...", "target": "...", "target_type": "person|project|system|tool|concept|skill|task|unknown", "confidence": 0.0-1.0}
+Each entity: {"source": "...", "source_type": "${entityTypes}", "relationship": "...", "target": "...", "target_type": "${entityTypes}", "confidence": 0.0-1.0}
 
 IMPORTANT — Atomic facts:
 Each fact must be fully understandable WITHOUT the original conversation. Include the specific subject (package name, file path, component, tool) and enough context that a reader seeing only this fact knows exactly what it refers to.
@@ -48,6 +50,11 @@ GOOD: "The @signet/connector-opencode install() function writes pre-bundled sign
 BAD: "Uses PostgreSQL instead of MongoDB"
 GOOD: "The auth service uses PostgreSQL instead of MongoDB for better relational query support"
 
+Entity discipline:
+Entities are identity-bearing semantic objects only: people, organizations, projects, products, systems/tools, artifacts/documents/sources, places, and events.
+Events are first-class only for real happenings with a date/time, provenance, participants, a target object, or an event type (for example: "Daily Digest — 2026-05-10" or "PR #675 merged on 2026-05-11").
+Do NOT create entities for pronouns, metadata roles, headings, discourse fragments, generic role words, prompt scaffolding, claim slots, policies, actions, workflows, or abstract concepts. Put descriptions in facts/aspects/attributes; put predicates in relationships.
+
 Types: fact (objective info), preference (user likes/dislikes), decision (choices made), rationale (WHY a decision was made — reasoning, alternatives considered, tradeoffs), procedural (how-to knowledge), semantic (concepts/definitions).
 
 When you see a decision with reasoning, extract BOTH a decision fact AND a rationale fact. The rationale should capture the WHY, including alternatives considered and tradeoffs.
@@ -57,11 +64,18 @@ Examples:
 Input: "User prefers dark mode and uses vim keybindings in VS Code"
 Output:
 {"facts": [
-  {"content": "User prefers dark mode for all editor and terminal interfaces", "type": "preference", "confidence": 0.9},
-  {"content": "User uses vim keybindings in VS Code as their primary editing mode", "type": "preference", "confidence": 0.9}
+  {"content": "Nicholai prefers dark mode for all editor and terminal interfaces", "type": "preference", "confidence": 0.9},
+  {"content": "Nicholai uses vim keybindings in VS Code as their primary editing mode", "type": "preference", "confidence": 0.9}
 ], "entities": [
-  {"source": "User", "source_type": "person", "relationship": "prefers", "target": "dark mode", "target_type": "concept", "confidence": 0.9},
-  {"source": "User", "source_type": "person", "relationship": "uses", "target": "vim keybindings", "target_type": "tool", "confidence": 0.9}
+  {"source": "Nicholai", "source_type": "person", "relationship": "uses", "target": "VS Code", "target_type": "tool", "confidence": 0.9}
+]}
+
+Input: "The Signet Daily Digest was published on 2026-05-10 and summarized the desktop updater work."
+Output:
+{"facts": [
+  {"content": "The Signet Daily Digest published on 2026-05-10 summarized the desktop updater work", "type": "fact", "confidence": 0.85}
+], "entities": [
+  {"source": "Signet Daily Digest — 2026-05-10", "source_type": "event", "relationship": "summarized", "target": "Signet Desktop", "target_type": "product", "confidence": 0.85}
 ]}
 
 Input: "Decided to use PostgreSQL instead of MongoDB for the auth service because relational queries suit the access-control schema better and we need ACID transactions"
@@ -361,15 +375,26 @@ function validateEntity(raw: unknown, warnings: string[]): ExtractedEntity | nul
 	const rawConf = typeof obj.confidence === "number" ? obj.confidence : 0.5;
 	const confidence = Math.max(0, Math.min(1, rawConf));
 
-	const sourceType = typeof obj.source_type === "string" ? obj.source_type.trim() : undefined;
-	const targetType = typeof obj.target_type === "string" ? obj.target_type.trim() : undefined;
+	const sourceType = normalizeEntityType(typeof obj.source_type === "string" ? obj.source_type : undefined);
+	const targetType = normalizeEntityType(typeof obj.target_type === "string" ? obj.target_type : undefined);
+
+	const sourceQuality = classifyEntityQuality(source, sourceType);
+	if (!sourceQuality.ok) {
+		warnings.push(`Rejected source entity "${source}" (${sourceQuality.reason})`);
+		return null;
+	}
+	const targetQuality = classifyEntityQuality(target, targetType);
+	if (!targetQuality.ok) {
+		warnings.push(`Rejected target entity "${target}" (${targetQuality.reason})`);
+		return null;
+	}
 
 	return {
 		source,
-		sourceType: sourceType || undefined,
+		sourceType,
 		relationship,
 		target,
-		targetType: targetType || undefined,
+		targetType,
 		confidence,
 	};
 }

@@ -1,4 +1,5 @@
 import type { DbAccessor } from "./db-accessor";
+import { classifyEntityQuality, normalizeEntityName } from "./entity-quality";
 
 const GENERIC_ENTITY_NAMES = new Set([
 	"a",
@@ -84,14 +85,14 @@ export interface KnowledgeHygieneReport {
 }
 
 function normalize(value: string): string {
-	return value.trim().toLowerCase().replace(/\s+/g, " ");
+	return normalizeEntityName(value);
 }
 
-function reasonForEntity(name: string, canonicalName: string, mentions: number): string | null {
+function reasonForEntity(name: string, canonicalName: string, mentions: number, entityType?: string): string | null {
+	const quality = classifyEntityQuality(name || canonicalName, entityType);
+	if (!quality.ok) return quality.reason ?? "invalid_entity";
 	const canonical = normalize(canonicalName || name);
-	if (canonical.length < 2) return "too_short";
 	if (GENERIC_ENTITY_NAMES.has(canonical)) return "generic_word";
-	if (/^\d+$/.test(canonical)) return "numeric_only";
 	if (mentions === 0) return "zero_mentions";
 	return null;
 }
@@ -137,7 +138,12 @@ export function getKnowledgeHygieneReport(
 
 		const suspiciousEntities = entities
 			.flatMap((entity): SuspiciousEntity[] => {
-				const reason = reasonForEntity(entity.name, entity.canonical_name ?? entity.name, entity.mentions ?? 0);
+				const reason = reasonForEntity(
+					entity.name,
+					entity.canonical_name ?? entity.name,
+					entity.mentions ?? 0,
+					entity.entity_type,
+				);
 				return reason
 					? [
 							{
@@ -212,7 +218,7 @@ export function getKnowledgeHygieneReport(
 
 		const safeMentionCandidates: SafeMentionCandidate[] = [];
 		const knownEntities = entities.filter(
-			(entity) => !reasonForEntity(entity.name, entity.canonical_name ?? entity.name, 1),
+			(entity) => !reasonForEntity(entity.name, entity.canonical_name ?? entity.name, 1, entity.entity_type),
 		);
 		for (const memory of memories) {
 			if (safeMentionCandidates.length >= limit) break;

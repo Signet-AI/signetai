@@ -11,6 +11,7 @@ import type { ExtractedEntity } from "@signet/core";
 import type { WriteDb } from "../db-accessor";
 import { countChanges } from "../db-helpers";
 import { requireDependencyReason } from "../dependency-history";
+import { normalizeEntityType, shouldPersistEntity } from "../entity-quality";
 import { isDecisionContent } from "../inline-entity-linker";
 
 // ---------------------------------------------------------------------------
@@ -224,14 +225,16 @@ function markSupersededSiblings(
 function upsertEntity(
 	db: WriteDb,
 	rawName: string,
-	entityType: string,
+	entityType: string | undefined,
 	agentId: string,
 	now: string,
 ): UpsertEntityResult | null {
 	const canonical = toCanonicalName(rawName);
+	const normalizedType = normalizeEntityType(entityType) ?? "extracted";
 
-	// Skip trivially short names like "50", "0", "cli", "npm"
-	if (canonical.length < 4) return null;
+	// Skip trivially short names like "50", "0", "cli", "npm" and
+	// non-concrete scaffolding such as "Sender", "We're", or "Summary".
+	if (!shouldPersistEntity(rawName, normalizedType === "extracted" ? undefined : normalizedType)) return null;
 
 	// Look up by canonical_name first, then fall back to name (handles
 	// rows where canonical_name was never backfilled and is still NULL).
@@ -249,10 +252,10 @@ function upsertEntity(
 			 SET mentions = mentions + 1, updated_at = ?
 			 WHERE id = ?`,
 		).run(now, existing.id);
-		// Upgrade entity_type if currently "extracted" and we have a real type
-		if (entityType !== "extracted" && existing.entity_type === "extracted") {
+		// Upgrade entity_type if currently "extracted" and we have a concrete type
+		if (normalizedType !== "extracted" && existing.entity_type === "extracted") {
 			db.prepare(`UPDATE entities SET entity_type = ? WHERE id = ? AND entity_type = 'extracted'`).run(
-				entityType,
+				normalizedType,
 				existing.id,
 			);
 		}
@@ -265,7 +268,7 @@ function upsertEntity(
 			`INSERT INTO entities
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
-		).run(id, rawName, canonical, entityType, agentId, now, now);
+		).run(id, rawName, canonical, normalizedType, agentId, now, now);
 		return { id, inserted: true };
 	} catch (e) {
 		// name UNIQUE constraint collision — fall back to existing row.
@@ -362,17 +365,17 @@ export function txPersistEntities(db: WriteDb, input: PersistEntitiesInput): Per
 	for (const triple of input.entities) {
 		// Pre-validate both names before any DB writes — prevents phantom mention
 		// increments on the source when the target would be filtered by upsertEntity.
-		const srcCanon = triple.source.trim().toLowerCase().replace(/\s+/g, " ");
-		const tgtCanon = triple.target.trim().toLowerCase().replace(/\s+/g, " ");
-		if (srcCanon.length < 4 || tgtCanon.length < 4) continue;
+		const sourceType = normalizeEntityType(triple.sourceType);
+		const targetType = normalizeEntityType(triple.targetType);
+		if (!shouldPersistEntity(triple.source, sourceType) || !shouldPersistEntity(triple.target, targetType)) continue;
 
-		const source = upsertEntity(db, triple.source, triple.sourceType ?? "extracted", input.agentId, now);
+		const source = upsertEntity(db, triple.source, sourceType, input.agentId, now);
 		// Defensive — pre-check above should prevent null, but guard anyway
 		if (source === null) continue;
 		if (source.inserted) entitiesInserted++;
 		else entitiesUpdated++;
 
-		const target = upsertEntity(db, triple.target, triple.targetType ?? "extracted", input.agentId, now);
+		const target = upsertEntity(db, triple.target, targetType, input.agentId, now);
 		if (target === null) continue;
 		if (target.inserted) entitiesInserted++;
 		else entitiesUpdated++;
@@ -482,7 +485,7 @@ export function txPersistStructured(db: WriteDb, input: PersistStructuredInput):
 			.get(canonical, input.agentId) as { id: string } | undefined;
 
 		if (!row) {
-			const inserted = upsertEntity(db, sa.entityName, sa.entityType ?? "unknown", input.agentId, input.now);
+			const inserted = upsertEntity(db, sa.entityName, sa.entityType, input.agentId, input.now);
 			if (!inserted) continue;
 			if (inserted.inserted) entitiesInserted++;
 			else entitiesUpdated++;
