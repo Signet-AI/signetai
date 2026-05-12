@@ -316,7 +316,6 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
 
     // Repair v0.1.65 CLI bug: versions stamped without actual DDL
     repair_bogus_version(conn)?;
-    repair_missing_rust_parity_versions(conn)?;
 
     let mut done = applied(conn)?;
     let mut count = 0;
@@ -376,36 +375,6 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
     }
 
     ensure_cross_daemon_parity_columns(conn)?;
-
-    Ok(())
-}
-
-fn migration_table_exists(conn: &Connection, table: &str) -> Result<bool, CoreError> {
-    let exists = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-        [table],
-        |row| row.get::<_, i64>(0),
-    )?;
-    Ok(exists > 0)
-}
-
-/// Clear tracked Rust parity migrations if an older checkout stamped their
-/// versions but did not create the corresponding tables. The normal migration
-/// runner will then apply and record versions 40/41 in `schema_migrations`.
-fn repair_missing_rust_parity_versions(conn: &Connection) -> Result<(), CoreError> {
-    let repairs = [
-        (40_u32, "memory_search_telemetry"),
-        (41_u32, "ontology_proposals"),
-    ];
-
-    for (version, table) in repairs {
-        if !migration_table_exists(conn, table)? {
-            conn.execute(
-                "DELETE FROM schema_migrations WHERE version = ?1",
-                rusqlite::params![version],
-            )?;
-        }
-    }
 
     Ok(())
 }
@@ -941,16 +910,9 @@ mod tests {
     }
 
     #[test]
-    fn reconciles_rust_only_tables_when_versions_already_applied() {
+    fn records_rust_parity_migrations_in_schema_ledger() {
         let conn = Connection::open_in_memory().expect("open in-memory db");
         run(&conn).expect("initial migrations run");
-        conn.execute_batch(
-            "DROP TABLE memory_search_telemetry;
-             DROP TABLE ontology_proposals;",
-        )
-        .expect("simulate TS-created database that already stamped versions");
-
-        run(&conn).expect("rerun migrations reconciles runtime tables");
 
         for (version, table) in [
             (40_i64, "memory_search_telemetry"),
@@ -963,7 +925,10 @@ mod tests {
                     |row| row.get(0),
                 )
                 .expect("query sqlite_master");
-            assert_eq!(exists, 1, "{table} should be present after reconciliation");
+            assert_eq!(
+                exists, 1,
+                "{table} should be created by migration {version}"
+            );
 
             let stamped: i64 = conn
                 .query_row(
@@ -974,7 +939,7 @@ mod tests {
                 .expect("query schema_migrations");
             assert_eq!(
                 stamped, 1,
-                "migration {version} should be recorded after reconciliation"
+                "migration {version} should be recorded in schema_migrations"
             );
         }
     }
