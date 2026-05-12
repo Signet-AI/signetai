@@ -263,6 +263,7 @@ export {
 	getMissingIdentityFiles,
 	summarizeIdentity,
 	readStaticIdentity,
+	resolveSpecialIdentityFiles,
 	resolveStartupIdentityFiles,
 	resolveSessionStartTimeoutMs,
 	resolvePromptSubmitTimeoutMs,

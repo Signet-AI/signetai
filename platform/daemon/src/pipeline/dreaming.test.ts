@@ -7,6 +7,9 @@
 
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
@@ -106,6 +109,14 @@ describe("dreaming", () => {
 		db.close();
 	});
 
+	function withTempIdentity(files: Record<string, string>): string {
+		const dir = mkdtempSync(join(tmpdir(), "dreaming-identity-"));
+		for (const [name, content] of Object.entries(files)) {
+			writeFileSync(join(dir, name), content);
+		}
+		return dir;
+	}
+
 	describe("state management", () => {
 		it("returns zero state for new agent", () => {
 			const state = getDreamingState(accessor, AGENT);
@@ -204,6 +215,30 @@ describe("dreaming", () => {
 			expect(passes.length).toBe(1);
 			expect(passes[0]?.mode).toBe("compact");
 			expect(passes[0]?.status).toBe("completed");
+		});
+
+		it("loads configured startup identity and DREAMING.md special prompt", async () => {
+			seedEntity(db, "ent-1", "Signet", "project");
+			const dir = withTempIdentity({
+				"agent.yaml":
+					"identity:\n  preset: minimal\n  startup:\n    load:\n      - path: AGENTS.md\n        role: startup_rules\n        budget: 12000\n  special:\n    - path: DREAMING.md\n      kind: dreaming\n      role: dreaming_prompt\n      budget: 4000\n",
+				"AGENTS.md": "Startup rules are loaded normally.",
+				"SOUL.md": "Soul should not be loaded by the minimal startup preset.",
+				"DREAMING.md": "Dreaming-specific reflection instructions.",
+			});
+			try {
+				const generate = async (prompt: string) => {
+					expect(prompt).toContain("Startup rules are loaded normally.");
+					expect(prompt).toContain("Dreaming-specific reflection instructions.");
+					expect(prompt).toContain("<dreaming_prompt>");
+					expect(prompt).not.toContain("Soul should not be loaded");
+					return JSON.stringify({ mutations: [], summary: "Prompt inspected" });
+				};
+
+				await runDreamingPass(accessor, generate, defaultCfg(), dir, AGENT, "compact");
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
 		});
 
 		it("applies create_entity mutations", async () => {
