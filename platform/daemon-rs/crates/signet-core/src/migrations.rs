@@ -383,6 +383,12 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
     add_column_if_missing(conn, "connectors", "enabled", "INTEGER NOT NULL DEFAULT 1");
 
     add_column_if_missing(conn, "entity_attributes", "proposal_id", "TEXT");
+    add_column_if_missing(conn, "entity_attributes", "group_key", "TEXT");
+    add_column_if_missing(conn, "entity_attributes", "claim_key", "TEXT");
+    add_column_if_missing(conn, "entity_attributes", "source_id", "TEXT");
+    add_column_if_missing(conn, "entity_attributes", "source_kind", "TEXT");
+    add_column_if_missing(conn, "entity_attributes", "source_path", "TEXT");
+    add_column_if_missing(conn, "entity_attributes", "source_root", "TEXT");
     add_column_if_missing(
         conn,
         "entity_attributes",
@@ -390,6 +396,12 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
         "TEXT NOT NULL DEFAULT '[]'",
     );
     add_column_if_missing(conn, "entity_dependencies", "proposal_id", "TEXT");
+    add_column_if_missing(conn, "entity_dependencies", "confidence", "REAL");
+    add_column_if_missing(conn, "entity_dependencies", "reason", "TEXT");
+    add_column_if_missing(conn, "entity_dependencies", "source_id", "TEXT");
+    add_column_if_missing(conn, "entity_dependencies", "source_kind", "TEXT");
+    add_column_if_missing(conn, "entity_dependencies", "source_path", "TEXT");
+    add_column_if_missing(conn, "entity_dependencies", "source_root", "TEXT");
     add_column_if_missing(
         conn,
         "entity_dependencies",

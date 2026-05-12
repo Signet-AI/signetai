@@ -17,7 +17,7 @@ use serde::Deserialize;
 
 use crate::{
     auth::{
-        middleware::{authenticate_headers, require_permission_guard, AuthState},
+        middleware::{AuthState, authenticate_headers, require_permission_guard},
         types::{AuthMode, Permission},
     },
     routes::pipeline::is_loopback,
@@ -102,8 +102,15 @@ fn require_telemetry_access(
     Ok(auth)
 }
 
-fn apply_auth_scope(query: &mut MemorySearchQuery, auth: &AuthState, mode: AuthMode, is_local: bool) {
-    if mode == AuthMode::Local || (mode == AuthMode::Hybrid && is_local && !auth.result.authenticated) {
+fn apply_auth_scope(
+    query: &mut MemorySearchQuery,
+    auth: &AuthState,
+    mode: AuthMode,
+    is_local: bool,
+) {
+    if mode == AuthMode::Local
+        || (mode == AuthMode::Hybrid && is_local && !auth.result.authenticated)
+    {
         return;
     }
     if let Some(claims) = auth.result.claims.as_ref() {

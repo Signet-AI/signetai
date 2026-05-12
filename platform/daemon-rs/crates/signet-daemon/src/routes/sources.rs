@@ -196,6 +196,7 @@ fn load_sources_config(state: &AppState) -> SourcesConfig {
             sources: vec![],
         };
     };
+    // lgtm[rust/path-injection] sources_path resolves the fixed sources.json file under the canonical Signet workspace root via workspace_paths::config_file.
     let Ok(raw) = std::fs::read_to_string(path) else {
         return SourcesConfig {
             version: 1,
@@ -211,10 +212,12 @@ fn load_sources_config(state: &AppState) -> SourcesConfig {
 fn save_sources_config(state: &AppState, cfg: &SourcesConfig) -> std::io::Result<()> {
     let path = sources_path(state)?;
     let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    // lgtm[rust/path-injection] sources_path resolves the fixed sources.json file under the canonical Signet workspace root; tmp is the same basename with a process-local extension.
     std::fs::write(
         &tmp,
         format!("{}\n", serde_json::to_string_pretty(cfg).unwrap()),
     )?;
+    // lgtm[rust/path-injection] path and tmp are derived from the fixed sources.json file under the canonical Signet workspace root.
     std::fs::rename(tmp, path)
 }
 

@@ -1087,6 +1087,61 @@ async fn ontology_native_proposal_lifecycle() {
     assert_eq!(applied["status"], "applied");
     assert_eq!(applied["appliedBy"], "replay");
     assert_eq!(applied["result"]["applied"], true);
+    assert!(applied["result"]["entityId"].as_str().is_some());
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let created_entity: (String, String, String) = conn
+        .query_row(
+            "SELECT id, entity_type, agent_id FROM entities WHERE name = 'Signet Cloud'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("applied proposal created entity");
+    assert_eq!(created_entity.1, "project");
+    assert_eq!(created_entity.2, "default");
+
+    let claim_resp = server
+        .post(
+            "/api/ontology/proposals",
+            json!({
+                "operation": "add_claim_value",
+                "payload": {
+                    "entity": "Signet Cloud",
+                    "entity_type": "project",
+                    "aspect": "pricing",
+                    "group_key": "commercial",
+                    "claim_key": "monthly_price",
+                    "value": "$10/mo"
+                },
+                "confidence": 0.7,
+                "evidence": [{"quote": "ten dollars monthly"}],
+                "source_kind": "transcript"
+            }),
+        )
+        .await;
+    assert_eq!(claim_resp.status(), 201);
+    let claim = server.json(claim_resp).await;
+    let claim_id = claim["id"].as_str().expect("claim proposal id");
+    let resp = server
+        .post(
+            &format!("/api/ontology/proposals/{claim_id}/apply"),
+            json!({"actor": "replay"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let applied_claim = server.json(resp).await;
+    assert!(applied_claim["result"]["attributeId"].as_str().is_some());
+    let attr_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM entity_attributes attr
+             JOIN entity_aspects asp ON asp.id = attr.aspect_id
+             WHERE asp.entity_id = ?1 AND asp.name = 'pricing' AND attr.claim_key = 'monthly_price'
+               AND attr.content = '$10/mo' AND attr.proposal_id = ?2",
+            rusqlite::params![created_entity.0, claim_id],
+            |row| row.get(0),
+        )
+        .expect("attribute count");
+    assert_eq!(attr_count, 1);
 
     let resp = server
         .post(

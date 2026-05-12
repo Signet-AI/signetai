@@ -98,6 +98,7 @@ fn read_reviews(state: &AppState) -> Vec<MarketplaceReview> {
     let Ok(path) = reviews_path(state) else {
         return Vec::new();
     };
+    // lgtm[rust/path-injection] reviews_path resolves a constant file under the canonical Signet workspace root via workspace_paths::child_file.
     match std::fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str::<Vec<MarketplaceReview>>(&raw).unwrap_or_default(),
         Err(_) => Vec::new(),
@@ -114,6 +115,7 @@ fn read_config(state: &AppState) -> ReviewsSyncConfig {
     let Ok(path) = config_path(state) else {
         return ReviewsSyncConfig::default();
     };
+    // lgtm[rust/path-injection] config_path resolves a constant file under the canonical Signet workspace root via workspace_paths::child_file.
     match std::fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str::<ReviewsSyncConfig>(&raw).unwrap_or_default(),
         Err(_) => ReviewsSyncConfig::default(),

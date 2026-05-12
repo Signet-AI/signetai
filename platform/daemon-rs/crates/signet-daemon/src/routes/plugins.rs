@@ -75,6 +75,7 @@ fn read_enabled(state: &AppState) -> bool {
     let Ok(path) = registry_path(state) else {
         return true;
     };
+    // lgtm[rust/path-injection] registry_path resolves a constant file under the canonical Signet workspace root via workspace_paths::child_file.
     let Ok(raw) = std::fs::read_to_string(path) else {
         return true;
     };
@@ -364,6 +365,7 @@ pub async fn audit(
     let mut events = Vec::new();
 
     if let Some(path) = path {
+        // lgtm[rust/path-injection] audit_path resolves a constant audit file under the canonical Signet workspace root via workspace_paths::child_file.
         if let Ok(raw) = std::fs::read_to_string(path) {
             for line in raw.lines().filter(|line| !line.trim().is_empty()) {
                 let Some(event) = parse_audit_event(line) else {

@@ -167,6 +167,240 @@ const SELECT_PROPOSAL: &str =
     applied_by, rejected_by, result, created_at, updated_at, applied_at, rejected_at
     FROM ontology_proposals";
 
+fn canonical(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn read_payload_string(payload: &JsonValue, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn read_payload_f64(payload: &JsonValue, key: &str) -> Option<f64> {
+    payload
+        .get(key)
+        .and_then(|v| v.as_f64())
+        .map(|v| v.clamp(0.0, 1.0))
+}
+
+fn normalize_entity_type(raw: Option<String>) -> String {
+    raw.unwrap_or_else(|| "concept".to_string())
+}
+
+fn normalize_attribute_kind(raw: Option<String>) -> String {
+    match raw.as_deref() {
+        Some("constraint") => "constraint".to_string(),
+        Some("preference") => "preference".to_string(),
+        Some("fact") | Some("claim") | Some("attribute") | None => "fact".to_string(),
+        Some(other) => other.to_string(),
+    }
+}
+
+fn normalize_dependency_type(raw: Option<String>) -> String {
+    raw.unwrap_or_else(|| "related_to".to_string())
+}
+
+fn proposal_audit_evidence(row: &ProposalRow) -> String {
+    row.evidence.clone()
+}
+
+fn resolve_entity(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    name: &str,
+) -> Result<Option<String>, CoreError> {
+    let key = canonical(name);
+    Ok(conn
+        .query_row(
+            "SELECT id FROM entities WHERE agent_id = ?1 AND (canonical_name = ?2 OR lower(name) = ?2) LIMIT 1",
+            rusqlite::params![agent_id, key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
+fn resolve_or_create_entity(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    name: &str,
+    entity_type: &str,
+) -> Result<String, CoreError> {
+    if let Some(id) = resolve_entity(conn, agent_id, name)? {
+        return Ok(id);
+    }
+    let id = Uuid::new_v4().to_string();
+    let ts = now();
+    conn.execute(
+        "INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)",
+        rusqlite::params![id, name, canonical(name), entity_type, agent_id, ts],
+    )?;
+    Ok(id)
+}
+
+fn resolve_or_create_aspect(
+    conn: &rusqlite::Connection,
+    entity_id: &str,
+    agent_id: &str,
+    name: &str,
+) -> Result<String, CoreError> {
+    let key = canonical(name);
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM entity_aspects WHERE entity_id = ?1 AND agent_id = ?2 AND canonical_name = ?3 LIMIT 1",
+            rusqlite::params![entity_id, agent_id, key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        return Ok(id);
+    }
+    let id = Uuid::new_v4().to_string();
+    let ts = now();
+    conn.execute(
+        "INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0.5, ?6, ?6)",
+        rusqlite::params![id, entity_id, agent_id, name, key, ts],
+    )?;
+    Ok(id)
+}
+
+fn apply_create_entity(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let name = read_payload_string(payload, "name").ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+    let entity_type = normalize_entity_type(read_payload_string(payload, "entity_type"));
+    let entity_id = resolve_or_create_entity(conn, &row.agent_id, &name, &entity_type)?;
+    Ok(json!({"entityId": entity_id, "entity": name, "applied": true}))
+}
+
+fn apply_add_claim_value(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let entity =
+        read_payload_string(payload, "entity").ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+    let aspect =
+        read_payload_string(payload, "aspect").ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+    let claim_key = read_payload_string(payload, "claim_key")
+        .or_else(|| read_payload_string(payload, "claim"))
+        .unwrap_or_else(|| "general".to_string());
+    let value = read_payload_string(payload, "value")
+        .or_else(|| read_payload_string(payload, "claim"))
+        .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+    let entity_type = normalize_entity_type(read_payload_string(payload, "entity_type"));
+    let entity_id = resolve_or_create_entity(conn, &row.agent_id, &entity, &entity_type)?;
+    let aspect_id = resolve_or_create_aspect(conn, &entity_id, &row.agent_id, &aspect)?;
+    let group_key =
+        read_payload_string(payload, "group_key").unwrap_or_else(|| "general".to_string());
+    let kind = normalize_attribute_kind(read_payload_string(payload, "kind"));
+    let normalized = canonical(&value);
+    if let Some(existing) = conn
+        .query_row(
+            "SELECT id FROM entity_attributes
+             WHERE aspect_id = ?1 AND agent_id = ?2 AND kind = ?3 AND normalized_content = ?4
+               AND COALESCE(group_key, 'general') = ?5 AND COALESCE(claim_key, 'general') = ?6 AND status = 'active'
+             LIMIT 1",
+            rusqlite::params![aspect_id, row.agent_id, kind, normalized, group_key, claim_key],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        conn.execute(
+            "UPDATE entity_attributes SET proposal_id = ?1, proposal_evidence = ?2, updated_at = ?3 WHERE id = ?4 AND agent_id = ?5",
+            rusqlite::params![row.id, proposal_audit_evidence(row), now(), existing, row.agent_id],
+        )?;
+        return Ok(json!({"entityId": entity_id, "aspectId": aspect_id, "attributeId": existing, "deduped": true, "applied": true}));
+    }
+    let id = Uuid::new_v4().to_string();
+    let ts = now();
+    let confidence = read_payload_f64(payload, "confidence").unwrap_or(row.confidence);
+    let importance = read_payload_f64(payload, "importance").unwrap_or(confidence);
+    conn.execute(
+        "INSERT INTO entity_attributes
+         (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status,
+          group_key, claim_key, created_at, updated_at, source_id, source_kind, source_path, source_root,
+          proposal_id, proposal_evidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', ?9, ?10, ?11, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        rusqlite::params![
+            id, aspect_id, row.agent_id, kind, value, normalized, confidence, importance,
+            group_key, claim_key, ts, row.source_id, row.source_kind, row.source_path, row.source_root,
+            row.id, proposal_audit_evidence(row)
+        ],
+    )?;
+    Ok(
+        json!({"entityId": entity_id, "aspectId": aspect_id, "attributeId": id, "deduped": false, "applied": true}),
+    )
+}
+
+fn apply_create_link(
+    conn: &rusqlite::Connection,
+    row: &ProposalRow,
+    payload: &JsonValue,
+) -> Result<JsonValue, CoreError> {
+    let source = read_payload_string(payload, "source_entity")
+        .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+    let target = read_payload_string(payload, "target_entity")
+        .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+    let source_type = normalize_entity_type(read_payload_string(payload, "source_type"));
+    let target_type = normalize_entity_type(read_payload_string(payload, "target_type"));
+    let source_id = resolve_or_create_entity(conn, &row.agent_id, &source, &source_type)?;
+    let target_id = resolve_or_create_entity(conn, &row.agent_id, &target, &target_type)?;
+    let dependency_type = normalize_dependency_type(read_payload_string(payload, "link_type"));
+    let strength = read_payload_f64(payload, "strength").unwrap_or(0.5);
+    let confidence = read_payload_f64(payload, "confidence").unwrap_or(row.confidence);
+    let reason = read_payload_string(payload, "reason").unwrap_or_else(|| row.rationale.clone());
+    if let Some(existing) = conn
+        .query_row(
+            "SELECT id FROM entity_dependencies WHERE source_entity_id = ?1 AND target_entity_id = ?2 AND dependency_type = ?3 AND agent_id = ?4 LIMIT 1",
+            rusqlite::params![source_id, target_id, dependency_type, row.agent_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        conn.execute(
+            "UPDATE entity_dependencies SET strength = ?1, confidence = ?2, reason = ?3, updated_at = ?4,
+             source_id = ?5, source_kind = ?6, source_path = ?7, source_root = ?8, proposal_id = ?9, proposal_evidence = ?10
+             WHERE id = ?11 AND agent_id = ?12",
+            rusqlite::params![strength, confidence, reason, now(), row.source_id, row.source_kind, row.source_path, row.source_root, row.id, proposal_audit_evidence(row), existing, row.agent_id],
+        )?;
+        return Ok(json!({"dependencyId": existing, "sourceId": source_id, "targetId": target_id, "updated": true, "applied": true}));
+    }
+    let id = Uuid::new_v4().to_string();
+    let ts = now();
+    conn.execute(
+        "INSERT INTO entity_dependencies
+         (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, reason,
+          created_at, updated_at, source_id, source_kind, source_path, source_root, proposal_id, proposal_evidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![id, source_id, target_id, row.agent_id, dependency_type, strength, confidence, reason, ts, row.source_id, row.source_kind, row.source_path, row.source_root, row.id, proposal_audit_evidence(row)],
+    )?;
+    Ok(
+        json!({"dependencyId": id, "sourceId": source_id, "targetId": target_id, "updated": false, "applied": true}),
+    )
+}
+
+fn apply_operation(conn: &rusqlite::Connection, row: &ProposalRow) -> Result<JsonValue, CoreError> {
+    let payload = parse_json(&row.payload, json!({}));
+    match row.operation.as_str() {
+        "create_entity" => apply_create_entity(conn, row, &payload),
+        "add_claim_value" | "add_claim" => apply_add_claim_value(conn, row, &payload),
+        "create_link" => apply_create_link(conn, row, &payload),
+        _ => Err(rusqlite::Error::InvalidQuery.into()),
+    }
+}
+
 fn insert_proposal(
     conn: &rusqlite::Connection,
     input: ProposalBody,
@@ -408,7 +642,7 @@ async fn transition(
         }
         let ts = now();
         let result_json = if status == "applied" {
-            json!({"operation": row.operation, "payload": parse_json(&row.payload, json!({})), "applied": true})
+            apply_operation(conn, &row)?
         } else {
             json!({"reason": reason})
         };
