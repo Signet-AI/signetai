@@ -8,6 +8,31 @@ function Write-Ok($msg)    { Write-Host "  [OK] $msg" -ForegroundColor Green }
 function Write-Warn($msg)  { Write-Host "  [!] $msg" -ForegroundColor Yellow }
 function Write-Err($msg)   { Write-Host "  [X] $msg" -ForegroundColor Red }
 
+function Add-UserPathEntry($dir) {
+    if (-not $dir) { return }
+
+    $parts = @($env:PATH -split ';' | Where-Object { $_ })
+    if ($parts -notcontains $dir) {
+        $env:PATH = "$dir;$env:PATH"
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $userParts = @($userPath -split ';' | Where-Object { $_ })
+    $alreadyPersisted = $false
+    foreach ($entry in $userParts) {
+        if ([string]::Equals($entry.TrimEnd('\'), $dir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+            $alreadyPersisted = $true
+            break
+        }
+    }
+
+    if (-not $alreadyPersisted) {
+        $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $dir } else { "$userPath;$dir" }
+        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+        Write-Info "Added $dir to the user PATH for future terminals"
+    }
+}
+
 # --- Banner ---
 Write-Host ""
 Write-Host ([char]0x2501 * 50)
@@ -26,6 +51,10 @@ try {
     $bunVersion = & bun --version 2>$null
     if ($LASTEXITCODE -eq 0) {
         Write-Ok "Bun: v$bunVersion"
+        $bunCommand = Get-Command bun -ErrorAction SilentlyContinue
+        if ($bunCommand -and $bunCommand.Source) {
+            Add-UserPathEntry (Split-Path -Parent $bunCommand.Source)
+        }
         $HasBun = $true
     }
 } catch {}
@@ -100,7 +129,7 @@ if (-not $HasBun) {
     $bunInstall = if ($env:BUN_INSTALL) { $env:BUN_INSTALL } else { Join-Path $HOME ".bun" }
     $bunBin = Join-Path $bunInstall "bin"
     if (Test-Path (Join-Path $bunBin "bun.exe")) {
-        $env:PATH = "$bunBin;$env:PATH"
+        Add-UserPathEntry $bunBin
     }
 
     try {
@@ -130,6 +159,7 @@ if ($HasBun) {
         Write-Err "bun install failed"
         if ($HasNode) {
             Write-Info "Falling back to npm..."
+            Add-UserPathEntry (Join-Path $env:APPDATA "npm")
             & npm install -g signetai
             if ($LASTEXITCODE -ne 0) {
                 Write-Err "npm install also failed"
@@ -140,6 +170,7 @@ if ($HasBun) {
         }
     }
 } elseif ($HasNode) {
+    Add-UserPathEntry (Join-Path $env:APPDATA "npm")
     & npm install -g signetai
     if ($LASTEXITCODE -ne 0) {
         Write-Err "npm install failed"
