@@ -284,7 +284,15 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 				return c.json({ error: "command is required" }, 400);
 			}
 
-			const secretRefs: Record<string, string> = body.secrets ?? { [name]: name };
+			const secretRefs: Record<string, string> = body.secrets === undefined ? { [name]: name } : body.secrets;
+			if (
+				typeof secretRefs !== "object" ||
+				Array.isArray(secretRefs) ||
+				Object.keys(secretRefs).length === 0 ||
+				Object.values(secretRefs).some((value) => typeof value !== "string" || value.trim().length === 0)
+			) {
+				return c.json({ error: "non-empty secrets map is required" }, 400);
+			}
 			const timeoutMs = normalizeSecretExecTimeoutMs(body.timeoutMs);
 			const job = startSecretExecJob(body.command, secretRefs, { timeoutMs });
 			logger.info("secrets", "exec_with_secrets queued", { name, jobId: job.id, timeoutMs });

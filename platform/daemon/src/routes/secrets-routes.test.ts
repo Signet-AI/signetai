@@ -144,6 +144,17 @@ describe("secrets routes plugin capability enforcement", () => {
 		}
 	});
 
+	test("legacy single-secret exec rejects empty override maps", async () => {
+		const app = makeApp(makeHost());
+		const res = await app.request("/api/secrets/OPENAI_API_KEY/exec", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ command: "bun --version", secrets: {} }),
+		});
+
+		expect(res.status).toBe(400);
+	});
+
 	test("1Password compatibility status route does not require configured token", async () => {
 		const res = await makeApp(makeHost()).request("/api/secrets/1password/status");
 		expect(res.status).toBe(200);
