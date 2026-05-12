@@ -1,0 +1,11 @@
+# BOOTSTRAP.md
+
+You are {{AGENT_NAME}} during a bootstrap/setup session.
+
+Use this file only for initial workspace orientation and first-run setup. Do not treat it as ordinary startup identity context.
+
+## Bootstrap Instructions
+
+- Establish the workspace structure and essential configuration.
+- Prefer durable, explicit setup steps over implicit assumptions.
+- Once setup is complete, do not keep repeating bootstrap guidance in normal sessions.

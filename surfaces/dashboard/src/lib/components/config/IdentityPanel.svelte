@@ -21,6 +21,8 @@ const CHAR_BUDGETS: Record<string, number> = {
 	"SOUL.md": 4000,
 	"IDENTITY.md": 2000,
 	"DREAMING.md": 4000,
+	"HEARTBEAT.md": 4000,
+	"BOOTSTRAP.md": 4000,
 };
 
 const mdFiles = $derived(configFiles?.filter((f) => f.name.endsWith(".md")) ?? []);

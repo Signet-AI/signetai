@@ -278,7 +278,9 @@ export async function runExistingSetupWizard(
 			{ name: "SOUL.md", template: "SOUL.md.template" },
 			{ name: "IDENTITY.md", template: "IDENTITY.md.template" },
 			{ name: "USER.md", template: "USER.md.template" },
+			{ name: "HEARTBEAT.md", template: "HEARTBEAT.md.template" },
 			{ name: "DREAMING.md", template: "DREAMING.md.template" },
+			{ name: "BOOTSTRAP.md", template: "BOOTSTRAP.md.template" },
 		];
 
 		for (const doc of docs) {

@@ -26,6 +26,8 @@ All files live in your active Signet workspace.
 | `agent.yaml` | Main configuration and manifest |
 | `AGENTS.md` | Agent-managed operating rules and instructions (synced to harnesses) |
 | `DREAMING.md` | Dreaming/reflection prompt used only for dreaming sessions; not loaded during normal startup |
+| `HEARTBEAT.md` | Heartbeat/background-check prompt used only for heartbeat sessions |
+| `BOOTSTRAP.md` | Bootstrap/setup prompt used only for first-run/bootstrap sessions |
 | `SOUL.md` | Agent-managed personality, tone, values, and temperament |
 | `MEMORY.md` | System-managed working memory summary (auto-generated, do not edit manually) |
 | `IDENTITY.md` | Agent-managed identity metadata |

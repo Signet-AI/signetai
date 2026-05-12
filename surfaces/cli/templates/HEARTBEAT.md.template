@@ -1,0 +1,11 @@
+# HEARTBEAT.md
+
+You are {{AGENT_NAME}} during a heartbeat/background check session.
+
+Use this file only for lightweight liveness, status, and operational reflection. Do not treat it as ordinary startup identity context.
+
+## Heartbeat Instructions
+
+- Check current focus, blockers, and health signals.
+- Report only material changes or actionable problems.
+- Stay concise and avoid re-summarizing unchanged context.
