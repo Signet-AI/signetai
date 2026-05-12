@@ -6,7 +6,7 @@
  * embedding, and indexing are handled downstream by the document worker.
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { constants, access, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import type {
@@ -69,7 +69,6 @@ interface DiscoveredFile {
 
 async function* walkDir(
 	dir: string,
-	rootPath: string,
 	ignorePatterns: readonly string[],
 	relativePrefix: string = "",
 ): AsyncGenerator<string> {
@@ -85,7 +84,7 @@ async function* walkDir(
 		if (ignorePatterns.some((p) => entry.name === p || relativePath === p || relativePath.startsWith(`${p}/`))) continue;
 		const fullPath = join(dir, entry.name);
 		if (entry.isDirectory()) {
-			yield* walkDir(fullPath, rootPath, ignorePatterns, relativePath);
+			yield* walkDir(fullPath, ignorePatterns, relativePath);
 		} else if (entry.isFile()) {
 			yield fullPath;
 		}
@@ -121,7 +120,7 @@ async function discoverFiles(settings: FilesystemSettings): Promise<readonly Dis
 	const seen = new Set<string>();
 	const results: DiscoveredFile[] = [];
 
-	for await (const absolutePath of walkDir(resolvedRoot, resolvedRoot, ignorePatterns)) {
+	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns)) {
 		const rel = relative(resolvedRoot, absolutePath);
 		if (!rel || rel.startsWith("..")) continue;
 		const matches = patterns.some((p) => matchGlob(p, rel));
