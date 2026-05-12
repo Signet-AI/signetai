@@ -29,7 +29,7 @@ const targets: Array<{
 	{ entrypoint: "./src/pipeline/extraction-thread.ts", outfile: "./dist/extraction-thread.js" },
 ];
 
-const isBun = typeof Bun !== "undefined";
+const isBun = typeof Bun !== "undefined" && !process.env.FORCE_NODE_BUILD;
 let ok = true;
 
 if (isBun) {

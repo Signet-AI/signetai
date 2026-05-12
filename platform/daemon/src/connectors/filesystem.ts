@@ -67,13 +67,14 @@ interface DiscoveredFile {
 	readonly size: number;
 }
 
-async function* walkDir(dir: string, dot: boolean): AsyncGenerator<string> {
+async function* walkDir(dir: string, rootPath: string, ignorePatterns: readonly string[]): AsyncGenerator<string> {
 	const entries = readdirSync(dir, { withFileTypes: true });
 	for (const entry of entries) {
-		if (!dot && entry.name.startsWith(".")) continue;
+		if (entry.name.startsWith(".")) continue;
+		if (ignorePatterns.includes(entry.name)) continue;
 		const fullPath = join(dir, entry.name);
 		if (entry.isDirectory()) {
-			yield* walkDir(fullPath, dot);
+			yield* walkDir(fullPath, rootPath, ignorePatterns);
 		} else if (entry.isFile()) {
 			yield fullPath;
 		}
@@ -86,13 +87,16 @@ function matchGlob(pattern: string, path: string): boolean {
 }
 
 function globToRegex(pattern: string): RegExp {
-	const escaped = pattern
+	let normalized = pattern
 		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
 		.replace(/\*\*/g, "{{GLOBSTAR}}")
 		.replace(/\*/g, "[^/]*")
 		.replace(/\?/g, "[^/]")
 		.replace(/\{\{GLOBSTAR\}\}/g, ".*");
-	return new RegExp(`^${escaped}$`, "i");
+	if (normalized.startsWith(".*/")) {
+		normalized = `(?:${normalized}|${normalized.replace(/^\\\.\\*\//, "")})`;
+	}
+	return new RegExp(`^${normalized}$`, "i");
 }
 
 async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
@@ -100,17 +104,11 @@ async function discoverFiles(settings: FilesystemSettings): Promise<readonly Dis
 	const seen = new Set<string>();
 	const results: DiscoveredFile[] = [];
 
-	for await (const absolutePath of walkDir(rootPath, false)) {
+	for await (const absolutePath of walkDir(rootPath, rootPath, ignorePatterns)) {
 		const rel = absolutePath.slice(rootPath.length + 1);
 		const matches = patterns.some((p) => matchGlob(p, rel));
 		if (!matches) continue;
 		if (seen.has(rel)) continue;
-
-		const segments = rel.split("/");
-		const ignored = ignorePatterns.some(
-			(ig) => segments.some((seg) => seg === ig) || rel.startsWith(`${ig}/`) || rel === ig,
-		);
-		if (ignored) continue;
 
 		let fileStat: Awaited<ReturnType<typeof stat>>;
 		try {

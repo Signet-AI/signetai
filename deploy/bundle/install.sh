@@ -140,7 +140,15 @@ download() {
 
   rm -rf "$dest"
   mkdir -p "$dest"
-  tar xzf "$tmp" -C "$dest"
+  local tmp_extract="${tmpdir}/extract-${comp}"
+  mkdir -p "$tmp_extract"
+  if ! tar xzf "$tmp" -C "$tmp_extract"; then
+    err "Failed to extract $name"
+    rm -rf "$tmp_extract" "$tmp"
+    return 1
+  fi
+  rm -rf "$dest"
+  mv "$tmp_extract" "$dest"
   touch "$dest/.complete"
   rm -f "$tmp"
   ok "$name"

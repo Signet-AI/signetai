@@ -183,6 +183,8 @@ jobs:
       # ── Daemon JS bundle ──
 
       - name: Build daemon JS bundle
+        env:
+          FORCE_NODE_BUILD: "1"
         run: |
           cd platform/daemon
           bun run build

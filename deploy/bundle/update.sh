@@ -127,9 +127,16 @@ for comp in $COMPONENTS; do
   fi
 
   DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
+  STAGE="$TMPDIR/extract-$comp"
+  mkdir -p "$STAGE"
+  if ! tar xzf "$TMPDIR/$FILENAME" -C "$STAGE"; then
+    err "Failed to extract $comp"
+    rm -rf "$STAGE"
+    FAILED=$((FAILED + 1))
+    continue
+  fi
   rm -rf "$DEST"
-  mkdir -p "$DEST"
-  tar xzf "$TMPDIR/$FILENAME" -C "$DEST"
+  mv "$STAGE" "$DEST"
   UPDATED=$((UPDATED + 1))
 
   jq --arg comp "$comp" --arg sha "$REMOTE_SHA" '.components[$comp].sha256 = $sha' "$LOCAL_MANIFEST" > "${TMPDIR}/manifest-updated.json" && mv "${TMPDIR}/manifest-updated.json" "$LOCAL_MANIFEST"
