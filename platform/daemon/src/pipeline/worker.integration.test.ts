@@ -113,7 +113,7 @@ const EXTRACTION_RESPONSE = JSON.stringify({
 			source_type: "person",
 			relationship: "relocated_to",
 			target: "Seattle",
-			target_type: "concept",
+			target_type: "place",
 			confidence: 0.9,
 		},
 		{
@@ -121,7 +121,7 @@ const EXTRACTION_RESPONSE = JSON.stringify({
 			source_type: "person",
 			relationship: "relocated_from",
 			target: "Portland",
-			target_type: "concept",
+			target_type: "place",
 			confidence: 0.85,
 		},
 	],

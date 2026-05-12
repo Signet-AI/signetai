@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::state::AppState;
+use crate::{state::AppState, workspace_paths};
 
 const DEFAULT_OBSIDIAN_EXCLUDE_GLOBS: &[&str] = &[
     "**/.obsidian/**",
@@ -185,12 +185,17 @@ pub async fn delete_source(
     Json(json!({"success": true, "source": source})).into_response()
 }
 
-fn sources_path(state: &AppState) -> PathBuf {
-    state.config.base_path.join("sources.json")
+fn sources_path(state: &AppState) -> std::io::Result<PathBuf> {
+    workspace_paths::config_file(&state.config.base_path, "sources.json")
 }
 
 fn load_sources_config(state: &AppState) -> SourcesConfig {
-    let path = sources_path(state);
+    let Ok(path) = sources_path(state) else {
+        return SourcesConfig {
+            version: 1,
+            sources: vec![],
+        };
+    };
     let Ok(raw) = std::fs::read_to_string(path) else {
         return SourcesConfig {
             version: 1,
@@ -204,10 +209,7 @@ fn load_sources_config(state: &AppState) -> SourcesConfig {
 }
 
 fn save_sources_config(state: &AppState, cfg: &SourcesConfig) -> std::io::Result<()> {
-    let path = sources_path(state);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let path = sources_path(state)?;
     let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
     std::fs::write(
         &tmp,

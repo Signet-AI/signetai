@@ -4,18 +4,25 @@
 //! ledger API. It intentionally reads `memory_search_telemetry` from SQLite and
 //! returns the same item/export shapes used by the TS daemon.
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use rusqlite::{ToSql, types::Value};
 use serde::Deserialize;
 
-use crate::state::AppState;
+use crate::{
+    auth::{
+        middleware::{authenticate_headers, require_permission_guard, AuthState},
+        types::{AuthMode, Permission},
+    },
+    routes::pipeline::is_loopback,
+    state::AppState,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct MemorySearchQuery {
@@ -76,6 +83,37 @@ fn parse_no_hits(raw: Option<&str>) -> Option<bool> {
         Some("1") | Some("true") => Some(true),
         Some("0") | Some("false") => Some(false),
         _ => None,
+    }
+}
+
+fn require_telemetry_access(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+) -> Result<AuthState, Box<Response>> {
+    let is_local = is_loopback(peer);
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )?;
+    require_permission_guard(&auth, Permission::Analytics, state.auth_mode, is_local)?;
+    Ok(auth)
+}
+
+fn apply_auth_scope(query: &mut MemorySearchQuery, auth: &AuthState, mode: AuthMode, is_local: bool) {
+    if mode == AuthMode::Local || (mode == AuthMode::Hybrid && is_local && !auth.result.authenticated) {
+        return;
+    }
+    if let Some(claims) = auth.result.claims.as_ref() {
+        if let Some(agent) = claims.scope.agent.as_ref() {
+            query.agent_id = Some(agent.clone());
+            query.agent_id_camel = None;
+        }
+        if let Some(project) = claims.scope.project.as_ref() {
+            query.project = Some(project.clone());
+        }
     }
 }
 
@@ -224,8 +262,16 @@ async fn load_items(
 /// GET /api/telemetry/memory-search
 pub async fn memory_search(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<MemorySearchQuery>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(mut query): Query<MemorySearchQuery>,
 ) -> impl IntoResponse {
+    let is_local = is_loopback(&peer);
+    let auth = match require_telemetry_access(&state, &headers, &peer) {
+        Ok(auth) => auth,
+        Err(resp) => return *resp,
+    };
+    apply_auth_scope(&mut query, &auth, state.auth_mode, is_local);
     match load_items(state, query, false).await {
         Ok(items) => (
             StatusCode::OK,
@@ -243,8 +289,16 @@ pub async fn memory_search(
 /// GET /api/telemetry/memory-search/export
 pub async fn memory_search_export(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<MemorySearchQuery>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(mut query): Query<MemorySearchQuery>,
 ) -> Response {
+    let is_local = is_loopback(&peer);
+    let auth = match require_telemetry_access(&state, &headers, &peer) {
+        Ok(auth) => auth,
+        Err(resp) => return *resp,
+    };
+    apply_auth_scope(&mut query, &auth, state.auth_mode, is_local);
     match load_items(state, query, true).await {
         Ok(items) => {
             let mut headers = HeaderMap::new();

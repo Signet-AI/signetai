@@ -142,9 +142,11 @@ function goodProvider(): LlmProvider {
 		],
 		entities: [
 			{
-				source: "User",
+				source: "Nicholai",
+				source_type: "person",
 				relationship: "prefers",
 				target: "dark mode",
+				target_type: "tool",
 				confidence: 0.9,
 			},
 		],
