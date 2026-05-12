@@ -127,7 +127,13 @@ for comp in $COMPONENTS; do
   REMOTE_SHA="$(jq -r ".components.\"$comp\".sha256 // \"\"" "$REMOTE_MANIFEST")"
   REMOTE_URL="$(jq -r ".components.\"$comp\".url // \"\"" "$REMOTE_MANIFEST")"
 
-  if [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || [ -z "$REMOTE_URL" ]; then
+  if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
+    continue
+  fi
+
+  if [ -z "$REMOTE_URL" ]; then
+    err "Component $comp has no download URL — cannot update"
+    FAILED=$((FAILED + 1))
     continue
   fi
 

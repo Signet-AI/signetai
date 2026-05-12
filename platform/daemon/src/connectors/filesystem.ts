@@ -67,7 +67,12 @@ interface DiscoveredFile {
 	readonly size: number;
 }
 
-async function* walkDir(dir: string, rootPath: string, ignorePatterns: readonly string[]): AsyncGenerator<string> {
+async function* walkDir(
+	dir: string,
+	rootPath: string,
+	ignorePatterns: readonly string[],
+	relativePrefix: string = "",
+): AsyncGenerator<string> {
 	let entries: ReturnType<typeof readdirSync>;
 	try {
 		entries = readdirSync(dir, { withFileTypes: true });
@@ -76,10 +81,11 @@ async function* walkDir(dir: string, rootPath: string, ignorePatterns: readonly 
 	}
 	for (const entry of entries) {
 		if (entry.name.startsWith(".")) continue;
-		if (ignorePatterns.includes(entry.name)) continue;
+		const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+		if (ignorePatterns.some((p) => entry.name === p || relativePath === p || relativePath.startsWith(`${p}/`))) continue;
 		const fullPath = join(dir, entry.name);
 		if (entry.isDirectory()) {
-			yield* walkDir(fullPath, rootPath, ignorePatterns);
+			yield* walkDir(fullPath, rootPath, ignorePatterns, relativePath);
 		} else if (entry.isFile()) {
 			yield fullPath;
 		}
