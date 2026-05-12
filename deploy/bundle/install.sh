@@ -107,6 +107,16 @@ sha_verify() {
   echo "$expected  $file" | $SHA256_CMD -c --quiet 2>/dev/null
 }
 
+safe_tar_extract() {
+  local archive="$1" dest="$2"
+  if tar tf "$archive" 2>/dev/null | grep -qE '^(\.\./|/)'; then
+    err "Archive contains unsafe paths (absolute or parent traversal)"
+    return 1
+  fi
+  mkdir -p "$dest"
+  tar xzf "$archive" -C "$dest" --strip-components=0
+}
+
 download() {
   local name="$1" filename="$2" sha="$3" dest="$4"
   local url="${DOWNLOAD_BASE}/${filename}"
@@ -145,8 +155,8 @@ download() {
 
   local tmp_extract="${tmpdir}/extract-${name}"
   mkdir -p "$tmp_extract"
-  if ! tar xzf "$tmp" -C "$tmp_extract"; then
-    err "Failed to extract $name"
+  if ! safe_tar_extract "$tmp" "$tmp_extract"; then
+    err "Failed to safely extract $name"
     rm -rf "$tmp_extract" "$tmp"
     return 1
   fi

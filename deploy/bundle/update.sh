@@ -65,6 +65,16 @@ if ! command -v jq >/dev/null 2>&1; then
   exit $?
 fi
 
+safe_tar_extract() {
+  local archive="$1" dest="$2"
+  if tar tf "$archive" 2>/dev/null | grep -qE '^(\.\./|/)'; then
+    err "Archive contains unsafe paths (absolute or parent traversal)"
+    return 1
+  fi
+  mkdir -p "$dest"
+  tar xzf "$archive" -C "$dest" --strip-components=0
+}
+
 # Compare versions
 LOCAL_VERSION="$(jq -r '.version' "$LOCAL_MANIFEST")"
 REMOTE_VERSION="$(jq -r '.version' "$REMOTE_MANIFEST")"
@@ -128,9 +138,8 @@ for comp in $COMPONENTS; do
   fi
 
   STAGE="$TMPDIR/staged/$comp"
-  mkdir -p "$STAGE"
-  if ! tar xzf "$TMPDIR/$FILENAME" -C "$STAGE"; then
-    err "Failed to extract $comp"
+  if ! safe_tar_extract "$TMPDIR/$FILENAME" "$STAGE"; then
+    err "Failed to safely extract $comp"
     rm -rf "$STAGE"
     FAILED=$((FAILED + 1))
     continue
@@ -150,10 +159,18 @@ if [ -n "$STAGED" ]; then
   mkdir -p "$SIGNET_INSTALL_DIR/runtime"
   for comp in $STAGED; do
     DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
-    rm -rf "$DEST"
-    mv "$TMPDIR/staged/$comp" "$DEST"
-    touch "$DEST/.complete"
-    ok "$comp updated"
+    OLD="${DEST}.old"
+    if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
+    if mv "$TMPDIR/staged/$comp" "$DEST" 2>/dev/null; then
+      rm -rf "$OLD"
+      touch "$DEST/.complete"
+      ok "$comp updated"
+    else
+      err "Failed to install $comp — rolling back"
+      if [ -d "$OLD" ]; then mv "$OLD" "$DEST"; fi
+      rm -rf "$TMPDIR/staged"
+      exit 1
+    fi
   done
 fi
 
