@@ -30,10 +30,11 @@ let prevSelectedFile = $state("");
 let editorContent = $state("");
 let saving = $state(false);
 let savedByFile = $state<Record<string, string>>({});
-const collapsed = $state(false);
+let collapsed = $state(false);
 let jumpMenuOpen = $state(false);
 let jumpFilter = $state("");
-const jumpInputRef = $state<HTMLInputElement | null>(null);
+// biome-ignore lint/style/useConst: Svelte bind:this writes the DOM node into this reference at runtime.
+let jumpInputRef = $state<HTMLInputElement | null>(null);
 
 const activeFile = $derived(mdFiles.find((f) => f.name === selectedFile));
 
@@ -96,6 +97,14 @@ function handlePanelKey(e: KeyboardEvent): void {
 		jumpMenuOpen = false;
 		jumpFilter = "";
 	}
+}
+
+function expandPanel(): void {
+	collapsed = false;
+}
+
+function collapsePanel(): void {
+	collapsed = true;
 }
 
 function selectFileWithGuard(name: string): void {
@@ -163,7 +172,7 @@ export function discard(): void {
 		<button
 			type="button"
 			class="collapse-toggle"
-			onclick={() => (collapsed = false)}
+			onclick={expandPanel}
 			title="Open identity panel"
 		>
 			<PanelLeft size={14} />
@@ -219,7 +228,7 @@ export function discard(): void {
 			<button
 				type="button"
 				class="collapse-toggle"
-				onclick={() => (collapsed = true)}
+				onclick={collapsePanel}
 				title="Collapse panel"
 			>
 				<PanelLeftClose size={14} />
