@@ -375,7 +375,14 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
     }
 
     ensure_cross_daemon_parity_columns(conn)?;
+    ensure_rust_only_parity_tables(conn)?;
 
+    Ok(())
+}
+
+fn ensure_rust_only_parity_tables(conn: &Connection) -> Result<(), CoreError> {
+    conn.execute_batch(include_str!("sql/040-memory-search-telemetry.sql"))?;
+    conn.execute_batch(include_str!("sql/041-ontology-proposals.sql"))?;
     Ok(())
 }
 
@@ -847,4 +854,33 @@ fn repair_bogus_version(conn: &Connection) -> Result<(), CoreError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconciles_rust_only_tables_when_versions_already_applied() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        run(&conn).expect("initial migrations run");
+        conn.execute_batch(
+            "DROP TABLE memory_search_telemetry;
+             DROP TABLE ontology_proposals;",
+        )
+        .expect("simulate TS-created database that already stamped versions");
+
+        run(&conn).expect("rerun migrations reconciles runtime tables");
+
+        for table in ["memory_search_telemetry", "ontology_proposals"] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("query sqlite_master");
+            assert_eq!(exists, 1, "{table} should be present after reconciliation");
+        }
+    }
 }
