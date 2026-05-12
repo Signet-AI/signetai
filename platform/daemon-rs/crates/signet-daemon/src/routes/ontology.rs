@@ -5,12 +5,12 @@
 //! intentionally conservative, but the proposal lifecycle is now persisted,
 //! filterable, and body-tested instead of being a status-only compatibility stub.
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use chrono::{SecondsFormat, Utc};
@@ -20,7 +20,10 @@ use serde_json::{Value as JsonValue, json};
 use signet_core::{db::Priority, error::CoreError};
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::{
+    auth::middleware::{authenticate_headers, resolve_scoped_agent},
+    state::AppState,
+};
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -451,8 +454,28 @@ fn insert_proposal(
         .map(row_to_value)?)
 }
 
+fn scoped_agent_or_response(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+    requested: Option<&str>,
+) -> Result<String, Response> {
+    let is_local = peer.ip().is_loopback();
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map_err(|resp| *resp)?;
+    resolve_scoped_agent(&auth, state.auth_mode, is_local, requested)
+        .map_err(|reason| (StatusCode::FORBIDDEN, Json(json!({"error": reason}))).into_response())
+}
+
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(query): Query<ProposalQuery>,
 ) -> Response {
     if query.status.as_ref().is_some_and(|s| !valid_status(s)) {
@@ -462,7 +485,10 @@ pub async fn list(
         )
             .into_response();
     }
-    let agent = agent_id(query.agent_id.clone());
+    let agent = match scoped_agent_or_response(&state, peer, &headers, query.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let limit = parse_limit(query.limit.as_deref(), 50, 200);
     let offset = parse_offset(query.offset.as_deref());
     let result = state
@@ -508,10 +534,15 @@ pub async fn list(
 
 pub async fn get(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(query): Query<ProposalQuery>,
 ) -> Response {
-    let agent = agent_id(query.agent_id);
+    let agent = match scoped_agent_or_response(&state, peer, &headers, query.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let result = state
         .pool
         .read(move |conn| {
@@ -540,6 +571,8 @@ pub async fn get(
 
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<ProposalBody>,
 ) -> Response {
     if clean(body.operation.clone()).is_none() {
@@ -560,11 +593,16 @@ pub async fn create(
         )
             .into_response();
     }
+    let requested_agent = body.agent_id.as_deref();
+    let agent = match scoped_agent_or_response(&state, peer, &headers, requested_agent) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let result = state
         .pool
         .write_tx(
             Priority::High,
-            move |conn| -> Result<JsonValue, CoreError> { insert_proposal(conn, body, "default") },
+            move |conn| -> Result<JsonValue, CoreError> { insert_proposal(conn, body, &agent) },
         )
         .await;
     match result {
@@ -577,8 +615,17 @@ pub async fn create(
     }
 }
 
-pub async fn batch(State(state): State<Arc<AppState>>, Json(body): Json<ProposalBody>) -> Response {
-    let proposals = body.proposals.unwrap_or_default();
+pub async fn batch(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<ProposalBody>,
+) -> Response {
+    let agent = match scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    let proposals = body.proposals.clone().unwrap_or_default();
     let result = state
         .pool
         .write_tx(
@@ -601,11 +648,7 @@ pub async fn batch(State(state): State<Arc<AppState>>, Json(body): Json<Proposal
                     if proposal.source_root.is_none() {
                         proposal.source_root = body.source_root.clone();
                     }
-                    items.push(insert_proposal(
-                        conn,
-                        proposal,
-                        body.agent_id.as_deref().unwrap_or("default"),
-                    )?);
+                    items.push(insert_proposal(conn, proposal, &agent)?);
                 }
                 Ok(json!({"items": items, "count": items.len()}))
             },
@@ -624,10 +667,10 @@ pub async fn batch(State(state): State<Arc<AppState>>, Json(body): Json<Proposal
 async fn transition(
     state: Arc<AppState>,
     id: String,
+    agent: String,
     body: ProposalBody,
     status: &'static str,
 ) -> Response {
-    let agent = agent_id(body.agent_id.clone());
     let actor = clean(body.actor).unwrap_or_else(|| "operator".to_string());
     let reason = clean(body.reason);
     let result = state
@@ -680,26 +723,43 @@ async fn transition(
 
 pub async fn apply(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<ProposalBody>,
 ) -> Response {
-    transition(state, id, body, "applied").await
+    let agent = match scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    transition(state, id, agent, body, "applied").await
 }
 
 pub async fn reject(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<ProposalBody>,
 ) -> Response {
-    transition(state, id, body, "rejected").await
+    let agent = match scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
+    transition(state, id, agent, body, "rejected").await
 }
 
 pub async fn evidence(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(query): Query<ProposalQuery>,
 ) -> Response {
-    let agent = agent_id(query.agent_id);
+    let agent = match scoped_agent_or_response(&state, peer, &headers, query.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let result = state
         .pool
         .read(move |conn| {
@@ -741,9 +801,14 @@ pub async fn evidence(
 
 pub async fn conflicts(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(query): Query<ProposalQuery>,
 ) -> Response {
-    let agent = agent_id(query.agent_id);
+    let agent = match scoped_agent_or_response(&state, peer, &headers, query.agent_id.as_deref()) {
+        Ok(id) => id,
+        Err(resp) => return resp,
+    };
     let limit = parse_limit(query.limit.as_deref(), 500, 1000);
     let result = state.pool.read(move |conn| {
         let mut stmt = conn.prepare(
@@ -775,18 +840,42 @@ pub async fn conflicts(
     }
 }
 
-pub async fn repair_duplicates() -> impl IntoResponse {
+pub async fn repair_duplicates(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None) {
+        return resp;
+    }
     (
         StatusCode::OK,
         Json(json!({"items": [], "proposals": [], "count": 0, "writtenCount": 0, "dryRun": true})),
     )
+        .into_response()
 }
 
-pub async fn extract(Json(body): Json<ProposalBody>) -> Response {
+pub async fn extract(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<ProposalBody>,
+) -> Response {
+    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+        return resp;
+    }
     (StatusCode::OK, Json(json!({"items": [], "proposals": [], "count": 0, "writtenCount": 0, "dryRun": !body.write_proposals.unwrap_or(false)}))).into_response()
 }
 
-pub async fn consolidate(Json(body): Json<ProposalBody>) -> Response {
+pub async fn consolidate(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<ProposalBody>,
+) -> Response {
+    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+        return resp;
+    }
     if body.limit.is_some_and(|l| l < 0) {
         return (
             StatusCode::BAD_REQUEST,
@@ -797,10 +886,24 @@ pub async fn consolidate(Json(body): Json<ProposalBody>) -> Response {
     (StatusCode::OK, Json(json!({"items": [], "proposals": [], "applied": 0, "count": 0, "writtenCount": 0, "dryRun": !body.write_proposals.unwrap_or(false)}))).into_response()
 }
 
-pub async fn claim_evidence() -> impl IntoResponse {
-    (StatusCode::OK, Json(json!({"items": [], "count": 0})))
+pub async fn claim_evidence(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None) {
+        return resp;
+    }
+    (StatusCode::OK, Json(json!({"items": [], "count": 0}))).into_response()
 }
 
-pub async fn link_evidence() -> impl IntoResponse {
-    (StatusCode::OK, Json(json!({"items": [], "count": 0})))
+pub async fn link_evidence(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None) {
+        return resp;
+    }
+    (StatusCode::OK, Json(json!({"items": [], "count": 0}))).into_response()
 }

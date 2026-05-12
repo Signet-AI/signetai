@@ -7,19 +7,19 @@
 
 use std::{
     io::Write,
+    net::SocketAddr,
     sync::{Arc, LazyLock, Mutex},
 };
 
 use axum::{
     Json,
-    extract::{Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{ConnectInfo, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 
-use crate::state::AppState;
-use crate::workspace_paths;
+use crate::{auth::middleware::authenticate_headers, state::AppState, workspace_paths};
 
 const REVIEWS_SYNC_URL: &str = "https://reviews.signetai.sh/api/reviews/sync";
 static REVIEWS_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -265,11 +265,32 @@ fn avg_rating(reviews: &[MarketplaceReview]) -> f64 {
     ((total as f64 / reviews.len() as f64) * 100.0).round() / 100.0
 }
 
+fn require_authenticated_or_response(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    let is_local = peer.ip().is_loopback();
+    authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map(|_| ())
+    .map_err(|resp| *resp)
+}
+
 /// GET /api/marketplace/reviews
 pub async fn list(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(query): Query<ListReviewsQuery>,
-) -> impl IntoResponse {
+) -> Response {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers) {
+        return resp;
+    }
     let target_type = parse_target_type(query.target_type);
     let target_id = parse_text(query.id);
     let limit = page_limit(query.limit);
@@ -281,7 +302,8 @@ pub async fn list(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": e})),
-            );
+            )
+                .into_response();
         }
     };
     reviews.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -309,13 +331,19 @@ pub async fn list(
             "summary": {"count": filtered.len(), "avgRating": avg_rating(&filtered)}
         })),
     )
+        .into_response()
 }
 
 /// POST /api/marketplace/reviews
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<CreateReviewBody>,
-) -> impl IntoResponse {
+) -> Response {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers) {
+        return resp;
+    }
     let target_type = parse_target_type(body.target_type);
     let target_id = parse_text(body.target_id);
     let display_name = parse_text(body.display_name);
@@ -344,7 +372,7 @@ pub async fn create(
             Json(
                 serde_json::json!({"error": "targetType, targetId, displayName, rating, title, and body are required"}),
             ),
-        );
+        ).into_response();
     };
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -372,7 +400,8 @@ pub async fn create(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": e})),
-            );
+            )
+                .into_response();
         }
     };
     reviews.insert(0, review.clone());
@@ -380,17 +409,26 @@ pub async fn create(
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
-        );
+        )
+            .into_response();
     }
 
     (
         StatusCode::OK,
         Json(serde_json::json!({"success": true, "review": review})),
     )
+        .into_response()
 }
 
 /// GET /api/marketplace/reviews/config
-pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+pub async fn get_config(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers) {
+        return resp;
+    }
     let config = read_config(&state);
     let pending = read_reviews(&state)
         .unwrap_or_default()
@@ -409,13 +447,19 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<serde_json::
         "lastSyncError": config.last_sync_error,
         "pending": pending,
     }))
+    .into_response()
 }
 
 /// PATCH /api/marketplace/reviews/config
 pub async fn patch_config(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<PatchConfigBody>,
-) -> impl IntoResponse {
+) -> Response {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers) {
+        return resp;
+    }
     let current = read_config(&state);
     let endpoint_url = if let Some(endpoint_url) = body.endpoint_url.as_deref() {
         match validate_endpoint_url(endpoint_url) {
@@ -424,7 +468,8 @@ pub async fn patch_config(
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(serde_json::json!({"error": error})),
-                );
+                )
+                    .into_response();
             }
         }
     } else {
@@ -442,11 +487,13 @@ pub async fn patch_config(
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
-        );
+        )
+            .into_response();
     }
 
     (
         StatusCode::OK,
         Json(serde_json::json!({"success": true, "config": next})),
     )
+        .into_response()
 }

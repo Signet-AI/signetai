@@ -258,6 +258,30 @@ impl TestServer {
             .expect("request failed")
     }
 
+    async fn get_bearer(&self, path: &str, token: &str) -> reqwest::Response {
+        self.client
+            .get(format!("{}{path}", self.base))
+            .bearer_auth(token)
+            .send()
+            .await
+            .expect("request failed")
+    }
+
+    async fn patch_bearer(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+        token: &str,
+    ) -> reqwest::Response {
+        self.client
+            .patch(format!("{}{path}", self.base))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            .expect("request failed")
+    }
+
     fn scoped_token(agent: &str) -> String {
         let now = chrono::Utc::now().timestamp();
         let payload = json!({
@@ -1100,6 +1124,46 @@ async fn marketplace_reviews_native_roundtrip() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn marketplace_reviews_enforces_team_auth_on_mutations() {
+    let server = TestServer::start_team_auth().await;
+    let token = TestServer::scoped_token("default");
+
+    let review_body = json!({
+        "targetType": "skill",
+        "targetId": "skills.sh/private",
+        "displayName": "avery",
+        "rating": 4,
+        "title": "Useful",
+        "body": "Scoped write"
+    });
+
+    let resp = server
+        .post("/api/marketplace/reviews", review_body.clone())
+        .await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server
+        .post_bearer("/api/marketplace/reviews", review_body, &token)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .patch("/api/marketplace/reviews/config", json!({"enabled": true}))
+        .await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server
+        .patch_bearer(
+            "/api/marketplace/reviews/config",
+            json!({"enabled": true}),
+            &token,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn marketplace_reviews_preserve_concurrent_file_writes() {
     let server = TestServer::start().await;
     let mut handles = Vec::new();
@@ -1460,6 +1524,72 @@ async fn ontology_native_proposal_lifecycle() {
     let batch = server.json(resp).await;
     assert_eq!(batch["count"], 1);
     assert_eq!(batch["items"][0]["createdBy"], "batch-replay");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn ontology_proposals_enforce_authenticated_agent_scope() {
+    let server = TestServer::start_team_auth().await;
+    let other_agent_token = TestServer::scoped_token("other-agent");
+
+    let proposal_body = json!({
+        "operation": "create_entity",
+        "payload": {"name": "Scoped Entity", "entityType": "concept"},
+        "rationale": "scope regression test"
+    });
+
+    let resp = server
+        .post("/api/ontology/proposals", proposal_body.clone())
+        .await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server
+        .post_bearer(
+            "/api/ontology/proposals",
+            json!({
+                "agentId": "default",
+                "operation": "create_entity",
+                "payload": {"name": "Forbidden Entity"}
+            }),
+            &other_agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "scope restricted to agent 'other-agent'");
+
+    let resp = server
+        .post_bearer("/api/ontology/proposals", proposal_body, &other_agent_token)
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body = server.json(resp).await;
+    let id = body["id"].as_str().unwrap().to_string();
+    assert_eq!(body["agentId"], "other-agent");
+
+    let resp = server
+        .get_bearer(
+            "/api/ontology/proposals?agentId=default",
+            &other_agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = server
+        .get_bearer("/api/ontology/proposals", &other_agent_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["items"][0]["agentId"], "other-agent");
+
+    let resp = server
+        .post_bearer(
+            &format!("/api/ontology/proposals/{id}/apply"),
+            json!({"agentId": "default", "actor": "operator"}),
+            &other_agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
 }
 
 #[tokio::test]
