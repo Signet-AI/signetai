@@ -11,6 +11,20 @@ function toRecord(value: unknown): Record<string, unknown> | null {
 		: null;
 }
 
+function mutableRecord(value: unknown): Record<string, unknown> | null {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function ensureRecord(root: Record<string, unknown>, key: string): Record<string, unknown> {
+	const existing = mutableRecord(root[key]);
+	if (existing) return existing;
+	const next: Record<string, unknown> = {};
+	root[key] = next;
+	return next;
+}
+
 function readPipeline(agent: unknown): Record<string, unknown> | null {
 	const root = toRecord(agent);
 	const mem = toRecord(root?.memory);
@@ -110,4 +124,94 @@ export function resolveSynthesisEnabled(agent: unknown): boolean {
 	const pipeline = readPipeline(agent);
 	if (resolveSynthesisProvider(agent) === "none") return false;
 	return readBoolean(pipeline, "synthesis", "enabled") ?? true;
+}
+export type AcpxDashboardAgent = "codex" | "claude-code" | "opencode";
+
+export const ACPX_DASHBOARD_AGENT_OPTIONS: Array<{
+	readonly value: AcpxDashboardAgent;
+	readonly label: string;
+	readonly model: string;
+}> = [
+	{ value: "codex", label: "Codex CLI", model: "gpt-5-codex-mini" },
+	{ value: "claude-code", label: "Claude Code", model: "claude-haiku-4-5" },
+	{ value: "opencode", label: "OpenCode", model: "anthropic/claude-haiku-4-5-20251001" },
+];
+
+export function defaultAcpxDashboardAgent(agentConfig: unknown): AcpxDashboardAgent {
+	const inference = toRecord(toRecord(agentConfig)?.inference);
+	const target = toRecord(toRecord(inference?.targets)?.["background-acpx"]);
+	const acpx = toRecord(target?.acpx);
+	const configured = acpx?.agent;
+	if (configured === "claude-code" || configured === "opencode" || configured === "codex") return configured;
+	const harnesses = toRecord(agentConfig)?.harnesses;
+	if (Array.isArray(harnesses)) {
+		for (const harness of harnesses) {
+			if (harness === "codex" || harness === "claude-code" || harness === "opencode") return harness;
+		}
+	}
+	return "codex";
+}
+
+export function defaultAcpxDashboardModel(agent: AcpxDashboardAgent): string {
+	return ACPX_DASHBOARD_AGENT_OPTIONS.find((option) => option.value === agent)?.model ?? "gpt-5-codex-mini";
+}
+
+export function applyAcpxDashboardSetup(
+	agentConfig: Record<string, unknown>,
+	options: { readonly agent: AcpxDashboardAgent; readonly model?: string },
+): void {
+	const model = options.model?.trim() || defaultAcpxDashboardModel(options.agent);
+	const memory = ensureRecord(agentConfig, "memory");
+	const pipeline = ensureRecord(memory, "pipelineV2");
+	pipeline.enabled = true;
+	pipeline.extractionProvider = "acpx";
+	pipeline.extractionModel = model;
+	pipeline.semanticContradictionEnabled = true;
+	pipeline.graphEnabled = true;
+	pipeline.rerankerEnabled = true;
+	pipeline.autonomousEnabled = true;
+	pipeline.allowUpdateDelete = true;
+	pipeline.maintenanceMode = "execute";
+	pipeline.synthesis = {
+		enabled: true,
+		provider: "acpx",
+		model,
+		timeout: 120000,
+	};
+
+	const inference = ensureRecord(agentConfig, "inference");
+	inference.defaultPolicy = "background-acpx";
+	const targets = ensureRecord(inference, "targets");
+	targets["background-acpx"] = {
+		executor: "acpx",
+		acpx: {
+			agent: options.agent,
+			package: "acpx@0.7.0",
+			version: "0.7.0",
+			mode: "exec",
+			permissions: "deny-all",
+			hooks: "disabled",
+			terminal: "inherit",
+		},
+		models: {
+			default: {
+				model,
+				reasoning: "medium",
+				toolUse: true,
+				costTier: "medium",
+			},
+		},
+	};
+	const policies = ensureRecord(inference, "policies");
+	policies["background-acpx"] = {
+		mode: "automatic",
+		defaultTargets: ["background-acpx/default"],
+		fallbackTargets: ["background-acpx/default"],
+	};
+	const taskClasses = ensureRecord(inference, "taskClasses");
+	taskClasses.memory_extraction = { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" };
+	taskClasses.session_synthesis = { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" };
+	const workloads = ensureRecord(inference, "workloads");
+	workloads.memoryExtraction = { target: "background-acpx/default", taskClass: "memory_extraction" };
+	workloads.sessionSynthesis = { target: "background-acpx/default", taskClass: "session_synthesis" };
 }
