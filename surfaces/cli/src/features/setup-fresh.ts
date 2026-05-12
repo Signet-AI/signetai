@@ -121,6 +121,13 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 				top_k: cfg.searchTopK,
 				min_score: cfg.searchMinScore,
 			},
+			identity: {
+				preset: cfg.identityPreset,
+				startup: {
+					load: cfg.startupIdentityFiles,
+				},
+				special: cfg.specialIdentityFiles,
+			},
 		};
 
 		if (cfg.embeddingProvider !== "none") {
@@ -157,12 +164,12 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 			disableGraphiqState(cfg.basePath);
 		}
 
-		const docFiles = [
-			{ name: "MEMORY.md", template: "MEMORY.md.template" },
-			{ name: "SOUL.md", template: "SOUL.md.template" },
-			{ name: "IDENTITY.md", template: "IDENTITY.md.template" },
-			{ name: "USER.md", template: "USER.md.template" },
-		];
+		const docFiles = Array.from(
+			new Set([
+				...cfg.startupIdentityFiles.map((entry) => entry.path),
+				...cfg.specialIdentityFiles.map((entry) => entry.path),
+			]),
+		).map((name) => ({ name, template: `${name}.template` }));
 
 		for (const doc of docFiles) {
 			const templatePath = join(templatesDir, doc.template);
@@ -266,11 +273,17 @@ export async function runFreshSetup(cfg: FreshSetupConfig, deps: SetupDeps): Pro
 		console.log(chalk.dim("  Files created:"));
 		console.log(chalk.dim(`    ${cfg.basePath}/`));
 		console.log(chalk.dim("    ├── agent.yaml    manifest & config"));
-		console.log(chalk.dim("    ├── AGENTS.md     agent instructions"));
-		console.log(chalk.dim("    ├── SOUL.md       personality & tone"));
-		console.log(chalk.dim("    ├── IDENTITY.md   agent identity"));
-		console.log(chalk.dim("    ├── USER.md       your profile"));
-		console.log(chalk.dim("    ├── MEMORY.md     working memory"));
+		const reportedDocs = Array.from(
+			new Set([
+				"AGENTS.md",
+				...cfg.startupIdentityFiles.map((entry) => entry.path),
+				...cfg.specialIdentityFiles.map((entry) => entry.path),
+			]),
+		).filter((name) => existsSync(join(cfg.basePath, name)));
+		for (const name of reportedDocs) {
+			const special = cfg.specialIdentityFiles.some((entry) => entry.path === name) ? " (special session)" : "";
+			console.log(chalk.dim(`    ├── ${name.padEnd(12)}${special}`));
+		}
 		console.log(chalk.dim("    ├── signetai/     Signet source checkout"));
 		console.log(chalk.dim("    └── memory/       database & vectors"));
 

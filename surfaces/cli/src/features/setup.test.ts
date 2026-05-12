@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -82,6 +82,13 @@ function stubDeps(overrides: Partial<SetupDeps> = {}): SetupDeps {
 		})),
 		...overrides,
 	};
+}
+
+function writeIdentityTemplates(dir: string): void {
+	mkdirSync(dir, { recursive: true });
+	for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "DREAMING.md"]) {
+		writeFileSync(join(dir, `${name}.template`), `${name} for {{AGENT_NAME}}`);
+	}
 }
 
 describe("setupWizard non-interactive harness hooks", () => {
@@ -307,7 +314,37 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(detectedHarnessesForExistingSetup(detection, [])).toContain("hermes-agent");
 	});
 
-	it("fails fast on unknown non-interactive harness values in the existing-install path", async () => {
+	it("writes minimal identity preset with DREAMING.md as special-session file", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-minimal-identity-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+
+		const freshDetection: SetupDetection = {
+			...fakeDetection(basePath),
+			agentsDir: false,
+			memoryDb: false,
+		};
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => freshDetection),
+		});
+
+		await setupWizard({ nonInteractive: true, identityPreset: "minimal", skipGit: true }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("preset: minimal");
+		expect(agentYaml).toContain("path: AGENTS.md");
+		expect(agentYaml).toContain("path: DREAMING.md");
+		expect(agentYaml).toContain("kind: dreaming");
+		expect(existsSync(join(basePath, "AGENTS.md"))).toBe(true);
+		expect(existsSync(join(basePath, "DREAMING.md"))).toBe(true);
+		expect(existsSync(join(basePath, "SOUL.md"))).toBe(false);
+	});
+
+	it("fails fast on unknown non-interactive identity presets", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-invalid-harness-"));
 		const basePath = join(root, "agents");
 		mkdirSync(basePath, { recursive: true });
@@ -324,9 +361,11 @@ describe("setupWizard non-interactive harness hooks", () => {
 				detectExistingSetup: mock(() => fakeDetection(basePath)),
 			});
 
-			await expect(setupWizard({ nonInteractive: true, harness: ["pi,nope"] }, deps)).rejects.toThrow("process.exit:1");
+			await expect(setupWizard({ nonInteractive: true, identityPreset: "maximalist" }, deps)).rejects.toThrow(
+				"process.exit:1",
+			);
 			expect(errorSpy).toHaveBeenCalled();
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("Unknown --harness value(s): nope");
+			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("Unknown --identity-preset value: maximalist");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();

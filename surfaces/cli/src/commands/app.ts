@@ -96,6 +96,10 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		)
 		.option("--with-graphiq", "Install and enable the optional GraphIQ code retrieval plugin")
 		.option("--disable-graphiq", "Leave the optional GraphIQ plugin disabled during setup")
+		.option(
+			"--identity-preset <preset>",
+			"Identity preset for startup/special prompt files (minimal, hermes, openclaw, custom)",
+		)
 		.action(deps.setupWizard);
 
 	const dashboard = program

@@ -2,7 +2,17 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { NETWORK_MODES, type NetworkMode, disableGraphiqState, parseSimpleYaml, readNetworkMode } from "@signet/core";
+import {
+	IDENTITY_PRESETS,
+	type IdentityContextFileEntry,
+	type IdentityPresetName,
+	type IdentitySpecialFileEntry,
+	NETWORK_MODES,
+	type NetworkMode,
+	disableGraphiqState,
+	parseSimpleYaml,
+	readNetworkMode,
+} from "@signet/core";
 import chalk from "chalk";
 import open from "open";
 import ora from "ora";
@@ -51,6 +61,24 @@ import {
 	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps, SetupWizardOptions } from "./setup-types.js";
+
+const IDENTITY_PRESET_CHOICES = ["minimal", "hermes", "openclaw", "custom"] as const;
+
+function cloneStartupFiles(preset: IdentityPresetName): IdentityContextFileEntry[] {
+	return IDENTITY_PRESETS[preset].startup.map((entry) => ({ ...entry }));
+}
+
+function cloneSpecialFiles(preset: IdentityPresetName): IdentitySpecialFileEntry[] {
+	return IDENTITY_PRESETS[preset].special.map((entry) => ({ ...entry }));
+}
+
+function toStartupChoice(entry: IdentityContextFileEntry, checked: boolean) {
+	return {
+		value: entry.path,
+		name: `${entry.path}${entry.role ? ` — ${entry.role.replace(/_/g, " ")}` : ""}`,
+		checked,
+	};
+}
 
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
 	console.log(deps.signetLogo());
@@ -120,6 +148,14 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingHarnesses = readHarnesses(existingConfig.harnesses);
 	const normalizedExistingHarnesses = normalizeHarnessList(existingHarnesses, deps);
 	const existingNetworkMode = readNetworkMode(existingConfig);
+	const existingIdentity = readRecord(existingConfig.identity);
+	const configuredIdentityPreset = deps.normalizeChoice(options.identityPreset, IDENTITY_PRESET_CHOICES);
+	const existingIdentityPreset = deps.normalizeChoice(existingIdentity.preset, IDENTITY_PRESET_CHOICES);
+	if (options.identityPreset && !configuredIdentityPreset) {
+		failSetupValidation(
+			`Unknown --identity-preset value: ${options.identityPreset}. Valid choices: ${IDENTITY_PRESET_CHOICES.join(", ")}.`,
+		);
+	}
 	const hasClaudeCommand = hasCommand("claude");
 	const hasCodexCommand = hasCommand("codex");
 	const hasOllamaCommand = hasCommand("ollama");
@@ -421,6 +457,51 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			return;
 		}
 		console.log();
+	}
+
+	const defaultIdentityPreset: IdentityPresetName = configuredIdentityPreset ?? existingIdentityPreset ?? "minimal";
+	const identityPreset: IdentityPresetName = nonInteractive
+		? defaultIdentityPreset
+		: await select({
+				message: "Identity/context preset:",
+				choices: [
+					{
+						value: "minimal",
+						name: "Minimal — AGENTS.md startup context + DREAMING.md for dreaming sessions",
+						description: "Lowest token use; DREAMING.md is special-session only.",
+					},
+					{
+						value: "hermes",
+						name: "Hermes — SOUL.md primary identity + AGENTS.md/project context",
+						description: "Grounded in Hermes' current SOUL.md and project-context discovery model.",
+					},
+					{
+						value: "openclaw",
+						name: "OpenClaw — rich character-forward identity stack",
+						description: "AGENTS, SOUL, IDENTITY, USER, MEMORY plus special HEARTBEAT/DREAMING/BOOTSTRAP prompts.",
+					},
+					{
+						value: "custom",
+						name: "Custom — choose startup files explicitly",
+						description: "Start from Minimal, then select files and order for token efficiency.",
+					},
+				],
+				default: defaultIdentityPreset,
+			});
+
+	let startupIdentityFiles = cloneStartupFiles(identityPreset);
+	let specialIdentityFiles = cloneSpecialFiles(identityPreset);
+	if (!nonInteractive && identityPreset === "custom") {
+		const availableStartupFiles = [...IDENTITY_PRESETS.openclaw.startup, ...IDENTITY_PRESETS.hermes.startup].filter(
+			(entry, index, entries) => entries.findIndex((candidate) => candidate.path === entry.path) === index,
+		);
+		const selected = await checkbox({
+			message: "Which files should load during normal startup?",
+			choices: availableStartupFiles.map((entry) => toStartupChoice(entry, entry.path === "AGENTS.md")),
+		});
+		startupIdentityFiles = availableStartupFiles.filter((entry) => selected.includes(entry.path));
+		if (startupIdentityFiles.length === 0) startupIdentityFiles = cloneStartupFiles("minimal");
+		specialIdentityFiles = cloneSpecialFiles("custom");
 	}
 
 	const configuredName = deps.normalizeStringValue(options.name);
@@ -957,6 +1038,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		createLocalBackup: options.createLocalBackup === true,
 		signetSecretsEnabled,
 		graphiqEnabled,
+		identityPreset,
+		startupIdentityFiles,
+		specialIdentityFiles,
 	};
 
 	await runFreshSetup(cfg, deps);

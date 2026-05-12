@@ -250,6 +250,7 @@ export type { MigrationDb, Migration } from "./migrations/index";
 // Identity file management
 export {
 	IDENTITY_FILES,
+	IDENTITY_PRESETS,
 	REQUIRED_IDENTITY_KEYS,
 	OPTIONAL_IDENTITY_KEYS,
 	detectExistingSetup,
@@ -262,6 +263,7 @@ export {
 	getMissingIdentityFiles,
 	summarizeIdentity,
 	readStaticIdentity,
+	resolveStartupIdentityFiles,
 	resolveSessionStartTimeoutMs,
 	resolvePromptSubmitTimeoutMs,
 	STATIC_IDENTITY_OFFLINE_STATUS,
@@ -275,6 +277,12 @@ export {
 } from "./identity";
 export type {
 	IdentityFileSpec,
+	IdentityPresetName,
+	IdentityFileContext,
+	IdentitySessionKind,
+	IdentityContextFileEntry,
+	IdentitySpecialFileEntry,
+	IdentityPresetSpec,
 	IdentityFile,
 	IdentityMap,
 	SetupDetection,

@@ -1,4 +1,10 @@
-import type { SetupDetection, WorkspaceSourceRepoSyncResult } from "@signet/core";
+import type {
+	IdentityContextFileEntry,
+	IdentityPresetName,
+	IdentitySpecialFileEntry,
+	SetupDetection,
+	WorkspaceSourceRepoSyncResult,
+} from "@signet/core";
 import type { EmbeddingProviderChoice, ExtractionProviderChoice, OpenClawRuntimeChoice } from "./setup-shared.js";
 
 export interface SetupWizardOptions {
@@ -23,6 +29,7 @@ export interface SetupWizardOptions {
 	disableSignetSecrets?: boolean;
 	withGraphiq?: boolean;
 	disableGraphiq?: boolean;
+	identityPreset?: string;
 }
 
 export interface SetupDeps {
@@ -93,4 +100,7 @@ export interface FreshSetupConfig {
 	readonly createLocalBackup: boolean;
 	readonly signetSecretsEnabled: boolean;
 	readonly graphiqEnabled: boolean;
+	readonly identityPreset: IdentityPresetName;
+	readonly startupIdentityFiles: readonly IdentityContextFileEntry[];
+	readonly specialIdentityFiles: readonly IdentitySpecialFileEntry[];
 }

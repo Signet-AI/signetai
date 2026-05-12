@@ -9,6 +9,7 @@ import {
 	readStaticIdentity,
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
+	resolveStartupIdentityFiles,
 } from "../identity";
 import { parseSimpleYaml } from "../yaml";
 
@@ -105,7 +106,7 @@ describe("readStaticIdentity", () => {
 		expect(result).not.toContain("## Soul");
 	});
 
-	test("reads all five identity files", () => {
+	test("reads all five legacy identity files", () => {
 		writeFileSync(join(TMP, "AGENTS.md"), "agents");
 		writeFileSync(join(TMP, "SOUL.md"), "soul");
 		writeFileSync(join(TMP, "IDENTITY.md"), "identity");
@@ -119,6 +120,34 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("## Identity");
 		expect(result).toContain("## About Your User");
 		expect(result).toContain("## Working Memory");
+	});
+
+	test("minimal preset loads only AGENTS.md during startup and leaves DREAMING.md special-session only", () => {
+		writeFileSync(
+			join(TMP, "agent.yaml"),
+			"identity:\n  preset: minimal\n  startup:\n    load:\n      - path: AGENTS.md\n        role: operating_instructions\n        budget: 12000\n  special:\n    - path: DREAMING.md\n      kind: dreaming\n      role: dreaming_prompt\n      budget: 4000\n",
+		);
+		writeFileSync(join(TMP, "AGENTS.md"), "agents");
+		writeFileSync(join(TMP, "DREAMING.md"), "dreaming");
+		writeFileSync(join(TMP, "SOUL.md"), "soul");
+
+		expect(resolveStartupIdentityFiles(TMP).map((entry) => entry.path)).toEqual(["AGENTS.md"]);
+		const result = readStaticIdentity(TMP);
+		expect(result).toContain("agents");
+		expect(result).not.toContain("dreaming");
+		expect(result).not.toContain("soul");
+	});
+
+	test("respects configured startup identity file order", () => {
+		writeFileSync(
+			join(TMP, "agent.yaml"),
+			"identity:\n  preset: custom\n  startup:\n    load:\n      - path: USER.md\n        role: user_profile\n        budget: 6000\n      - path: AGENTS.md\n        role: operating_instructions\n        budget: 12000\n",
+		);
+		writeFileSync(join(TMP, "AGENTS.md"), "agents");
+		writeFileSync(join(TMP, "USER.md"), "user");
+
+		const result = readStaticIdentity(TMP) ?? "";
+		expect(result.indexOf("## About Your User")).toBeLessThan(result.indexOf("## Agent Instructions"));
 	});
 });
 

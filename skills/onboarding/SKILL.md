@@ -9,15 +9,20 @@ builtin: true
 # /onboarding
 
 Walk the user through an interactive interview to personalize their
-Signet workspace. This populates the identity files (AGENTS.md,
-SOUL.md, IDENTITY.md, USER.md) with their preferences, personality
-settings, and profile information.
+Signet workspace. Start by choosing the identity/context preset
+(OpenClaw, Hermes, Minimal, or Custom) so onboarding matches the user's
+token budget and identity-file conventions instead of assuming one fixed
+stack. Minimal loads only AGENTS.md during startup and still creates
+DREAMING.md as a special dreaming-session prompt file.
 
 ## What This Skill Does
 
 This skill writes configuration files to `~/.agents/`. Specifically:
 
-- Reads and writes: IDENTITY.md, SOUL.md, USER.md, AGENTS.md
+- Reads and writes whichever startup identity files the selected preset uses
+  (for example AGENTS.md only in Minimal, or the richer OpenClaw stack)
+- Writes special session prompt files such as DREAMING.md without loading
+  them into ordinary startup context
 - Runs `signet setup` if Signet isn't initialized yet
 - Does NOT access external APIs or services
 - Does NOT send data anywhere outside the local machine
@@ -43,7 +48,8 @@ signet setup --non-interactive \
   --name "My Agent" \
   --description "Personal AI assistant" \
   --harness claude-code \
-  --embedding-provider <ollama|openai|none> \
+  --identity-preset minimal \
+  --embedding-provider <ollama|openai|native|none> \
   --extraction-provider <claude-code|codex|opencode|ollama|none>
 ```
 
@@ -72,24 +78,41 @@ This is getting to know someone, not filling out a form.
 
 ## Starting the Interview
 
-Before asking any questions, present the full outline so the user
-knows what to expect:
+Before asking detailed identity questions, present the full outline and
+start with the identity preset/context-budget choice:
 
 ```
 here's what we'll walk through together:
 
-1. agent identity — who am i? (name, creature type, vibe)
-2. personality & tone — how should i communicate?
-3. your profile — who are you?
-4. behavior settings — how should i operate?
-5. review — make sure everything looks right
-6. workspace audit — health check on the setup
+1. identity preset — OpenClaw, Hermes, Minimal, or Custom
+2. identity files — choose startup-loaded files and order, if using Custom
+3. special session files — DREAMING.md for dreaming sessions, HEARTBEAT.md for heartbeat sessions, etc.
+4. agent identity — who am i? (name, creature type, vibe), if the preset uses that layer
+5. personality & tone — how should i communicate?, if the preset uses that layer
+6. your profile — who are you?, if the preset uses that layer
+7. behavior settings — how should i operate?
+8. review — make sure everything looks right
+9. workspace audit — health check on the setup
 
 this takes about 5-10 minutes. nothing is permanent — you can change
 any of this later by running /onboarding again or editing the files
 directly in ~/.agents/.
 
-ready? let's start with who i am.
+first, pick your identity/context preset:
+
+- OpenClaw — rich workspace identity using OpenClaw-style templates such as
+  AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md, HEARTBEAT.md,
+  BOOT/BOOTSTRAP.md, and DREAMING.md.
+- Hermes — Hermes-style primary identity centered on SOUL.md plus Hermes'
+  project-context discovery behavior (.hermes.md/HERMES.md, AGENTS.md,
+  CLAUDE.md, .cursorrules). Do not invent OpenClaw's SOUL/IDENTITY/USER
+  stack semantics for Hermes.
+- Minimal — AGENTS.md only for startup context, lowest token use. Still
+  include DREAMING.md as a special dreaming-session prompt file; it is not
+  loaded into normal startup context.
+- Custom — choose any startup files and explicit load order.
+
+ready? let's choose the preset first.
 ```
 
 ---

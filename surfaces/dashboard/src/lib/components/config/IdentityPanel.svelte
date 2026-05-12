@@ -12,7 +12,7 @@ interface Props {
 	onDirtyChange?: (dirty: boolean) => void;
 }
 
-let { configFiles, onDirtyChange }: Props = $props();
+const { configFiles, onDirtyChange }: Props = $props();
 
 const CHAR_BUDGETS: Record<string, number> = {
 	"AGENTS.md": 12000,
@@ -20,6 +20,7 @@ const CHAR_BUDGETS: Record<string, number> = {
 	"USER.md": 6000,
 	"SOUL.md": 4000,
 	"IDENTITY.md": 2000,
+	"DREAMING.md": 4000,
 };
 
 const mdFiles = $derived(configFiles?.filter((f) => f.name.endsWith(".md")) ?? []);
@@ -29,10 +30,10 @@ let prevSelectedFile = $state("");
 let editorContent = $state("");
 let saving = $state(false);
 let savedByFile = $state<Record<string, string>>({});
-let collapsed = $state(false);
+const collapsed = $state(false);
 let jumpMenuOpen = $state(false);
 let jumpFilter = $state("");
-let jumpInputRef = $state<HTMLInputElement | null>(null);
+const jumpInputRef = $state<HTMLInputElement | null>(null);
 
 const activeFile = $derived(mdFiles.find((f) => f.name === selectedFile));
 
