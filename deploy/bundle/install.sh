@@ -196,7 +196,7 @@ get_manifest_value() {
 COMPONENTS=(
   "node:signet-node-${PLATFORM}"
   "cli:signet-cli"
-  "daemon-js:signet-daemon-js"
+  "daemon-js:signet-daemon-js-${PLATFORM}"
   "daemon-rs:signet-daemon-rs-${PLATFORM}"
   "predictor:signet-predictor-${PLATFORM}"
   "dashboard:signet-dashboard"
