@@ -454,6 +454,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 		SIGNET_HOST: input.host,
 		SIGNET_BIND: input.bind,
 		SIGNET_PATH: input.agentsDir,
+		HOME: process.env.HOME ?? homedir(),
 		PATH: process.env.PATH ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 	};
 	const envEntries = Object.entries(env)
