@@ -317,7 +317,7 @@ main() {
   printf "${BOLD}  Downloading components...${NC}\n"
   echo ""
 
-  REQUIRED_COMPONENTS="node cli daemon-js"
+  REQUIRED_COMPONENTS="node cli daemon-js native onnxruntime sqlite-vec"
 
   for entry in "${COMPONENTS[@]}"; do
     name="${entry%%:*}"
