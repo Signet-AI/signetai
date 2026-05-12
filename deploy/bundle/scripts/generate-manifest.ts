@@ -53,10 +53,15 @@ function main() {
 		if (!component) continue;
 
 		const shaFile = join(artifactDir, `${file}.sha256`);
-		let sha256 = "";
-		if (existsSync(shaFile)) {
-			const content = readFileSync(shaFile, "utf8").trim();
-			sha256 = content.split(/\s+/)[0];
+		if (!existsSync(shaFile)) {
+			console.error(`Missing checksum: ${file}.sha256 — cannot publish unsigned artifact`);
+			process.exit(1);
+		}
+		const content = readFileSync(shaFile, "utf8").trim();
+		const sha256 = content.split(/\s+/)[0];
+		if (!sha256 || sha256.length < 32) {
+			console.error(`Invalid checksum in ${shaFile}: "${content}"`);
+			process.exit(1);
 		}
 
 		components[component] = {

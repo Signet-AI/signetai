@@ -355,6 +355,15 @@ main() {
       sha="$(curl -fsSL "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
     fi
 
+    if [ -z "$sha" ]; then
+      case " $REQUIRED_COMPONENTS " in
+        *" $name "*)
+          err "Required component '$name' has no checksum — refusing unverified download"
+          exit 1
+          ;;
+      esac
+    fi
+
     dest="$SIGNET_INSTALL_DIR/runtime/${name}"
   download "$name" "$filename" "$sha" "$dest" || {
     case " $REQUIRED_COMPONENTS " in
