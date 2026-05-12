@@ -8,6 +8,7 @@ import GlobalCommandPalette from "$lib/components/command/GlobalCommandPalette.s
 import PageFooter from "$lib/components/layout/PageFooter.svelte";
 import TabContentLoader from "$lib/components/layout/TabContentLoader.svelte";
 import WindowTitlebar from "$lib/components/layout/WindowTitlebar.svelte";
+import OnboardingModal from "$lib/components/onboarding/OnboardingModal.svelte";
 import * as Sidebar from "$lib/components/ui/sidebar/index.js";
 import { Toaster } from "$lib/components/ui/sonner/index.js";
 import { isDesktopShell } from "$lib/desktop-shell";
@@ -294,6 +295,12 @@ $effect(() => {
 </div>
 
 <GlobalCommandPalette />
+<OnboardingModal
+	configFiles={data.configFiles}
+	memoryStats={data.memoryStats}
+	{daemonStatus}
+	onnavigate={setTab}
+/>
 
 <Toaster
 	position="bottom-right"
