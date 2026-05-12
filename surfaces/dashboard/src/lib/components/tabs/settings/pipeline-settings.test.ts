@@ -196,7 +196,11 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 			pipelineV2: {
 				enabled: true,
 				extractionProvider: "acpx",
-				extractionModel: "haiku",
+				extractionModel: "gpt-5-codex-mini",
+				extraction: {
+					provider: "acpx",
+					model: "gpt-5-codex-mini",
+				},
 				synthesis: {
 					enabled: true,
 					provider: "acpx",
@@ -240,6 +244,49 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 			workloads: {
 				memoryExtraction: { target: "background-acpx/default", taskClass: "memory_extraction" },
 				sessionSynthesis: { target: "background-acpx/default", taskClass: "session_synthesis" },
+			},
+		});
+	});
+
+	it("applies onboarding endpoint and ACPX harness choices", () => {
+		const localAgent: Record<string, unknown> = {};
+		applyRecommendedPipelineSetup(localAgent, {
+			provider: "llama-cpp",
+			model: "qwen3.5:4b",
+			endpoint: "http://127.0.0.1:8080/v1",
+		});
+		expect(localAgent.memory).toMatchObject({
+			pipelineV2: {
+				extractionProvider: "llama-cpp",
+				extractionModel: "qwen3.5:4b",
+				extractionEndpoint: "http://127.0.0.1:8080/v1",
+				extractionBaseUrl: "http://127.0.0.1:8080/v1",
+				extraction: {
+					provider: "llama-cpp",
+					model: "qwen3.5:4b",
+					endpoint: "http://127.0.0.1:8080/v1",
+				},
+				synthesis: {
+					provider: "llama-cpp",
+					model: "qwen3.5:4b",
+					endpoint: "http://127.0.0.1:8080/v1",
+				},
+			},
+		});
+
+		const acpxAgent: Record<string, unknown> = {};
+		applyRecommendedPipelineSetup(acpxAgent, {
+			provider: "acpx",
+			model: "gpt-5-codex-mini",
+			acpxHarness: "codex",
+		});
+		expect(acpxAgent.memory).toMatchObject({
+			pipelineV2: {
+				extraction: {
+					provider: "acpx",
+					model: "gpt-5-codex-mini",
+					harness: "codex",
+				},
 			},
 		});
 	});

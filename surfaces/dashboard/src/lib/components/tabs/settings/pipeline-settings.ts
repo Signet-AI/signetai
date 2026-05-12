@@ -177,22 +177,50 @@ function acpxCommandAgent(agent: AcpxDashboardAgent): string {
 
 export function applyRecommendedPipelineSetup(
 	agentConfig: Record<string, unknown>,
-	options: { readonly provider?: PipelineProviderChoice; readonly model?: string; readonly agent?: AcpxDashboardAgent } = {},
+		options: {
+			readonly provider?: PipelineProviderChoice;
+			readonly model?: string;
+			readonly agent?: AcpxDashboardAgent;
+			readonly endpoint?: string;
+			readonly acpxHarness?: string;
+			readonly synthesisEnabled?: boolean;
+		} = {},
 ): void {
 	const provider = options.provider ?? "acpx";
 	const model = options.model?.trim() || defaultPipelineModel(provider);
+	const endpoint = options.endpoint?.trim() ?? "";
+	const acpxHarness = options.acpxHarness?.trim() ?? "";
+	const enabled = provider !== "none";
 	const memory = ensureRecord(agentConfig, "memory");
 	const pipeline = ensureRecord(memory, "pipelineV2");
-	pipeline.enabled = provider !== "none";
+	const extraction = ensureRecord(pipeline, "extraction");
+	pipeline.enabled = enabled;
 	pipeline.extractionProvider = provider;
 	pipeline.extractionModel = model;
-	pipeline.semanticContradictionEnabled = provider !== "none";
-	pipeline.graphEnabled = provider !== "none";
-	pipeline.rerankerEnabled = provider !== "none";
+	extraction.provider = provider;
+	extraction.model = model;
+	if (endpoint) {
+		pipeline.extractionEndpoint = endpoint;
+		pipeline.extractionBaseUrl = endpoint;
+		extraction.endpoint = endpoint;
+	} else {
+		pipeline.extractionEndpoint = undefined;
+		pipeline.extractionBaseUrl = undefined;
+		extraction.endpoint = undefined;
+	}
+	if (provider === "acpx" && acpxHarness) {
+		extraction.harness = acpxHarness;
+	} else {
+		extraction.harness = undefined;
+	}
+	pipeline.semanticContradictionEnabled = enabled;
+	pipeline.graphEnabled = enabled;
+	pipeline.rerankerEnabled = enabled;
 	pipeline.synthesis = {
-		enabled: provider !== "none",
+		enabled: options.synthesisEnabled ?? enabled,
 		provider,
 		model,
+		...(endpoint ? { endpoint } : {}),
 		timeout: 120000,
 	};
 
