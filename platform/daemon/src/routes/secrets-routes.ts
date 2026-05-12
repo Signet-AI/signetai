@@ -1,5 +1,12 @@
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
+import {
+	BITWARDEN_MANAGED_FOLDER_SECRET,
+	BITWARDEN_SESSION_SECRET,
+	getBitwardenStatus,
+	listBitwardenFolders,
+	migrateLocalSecretsToBitwarden,
+} from "../bitwarden.js";
 import { logger } from "../logger.js";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "../onepassword.js";
 import { recordPluginAuditEvent } from "../plugins/audit.js";
@@ -7,13 +14,19 @@ import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index
 import type { PluginHostV1 } from "../plugins/index.js";
 import {
 	SecretExecQueueFullError,
+	deleteLocalSecretForMigration,
 	deleteSecret,
+	deleteSecretFromActiveProvider,
+	getActiveSecretProvider,
+	getLocalSecretValue,
 	getSecret,
 	getSecretExecJob,
 	hasSecret,
+	listLocalSecretNames,
 	listSecrets,
 	normalizeSecretExecTimeoutMs,
 	putSecret,
+	setActiveSecretProvider,
 	startSecretExecJob,
 } from "../secrets.js";
 import { authConfig } from "./state.js";
@@ -82,15 +95,143 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		return requirePermission("admin", authConfig)(c, next);
 	});
 
-	app.get("/api/secrets", (c) => {
+	app.get("/api/secrets", async (c) => {
 		const denied = rejectIfCapabilityDenied(c, host, ["secrets:list"]);
 		if (denied) return denied;
 		try {
-			const names = listSecrets();
-			return c.json({ secrets: names });
+			const names = await listSecrets();
+			const provider = await getActiveSecretProvider();
+			return c.json({ secrets: names, provider });
 		} catch (e) {
 			logger.error("secrets", "Failed to list secrets", e as Error);
 			return c.json({ error: "Failed to list secrets" }, 500);
+		}
+	});
+
+	app.get("/api/secrets/bitwarden/status", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		if (denied) return denied;
+		const activeProvider = (await getActiveSecretProvider()) === "bitwarden";
+		try {
+			const configured = hasSecret(BITWARDEN_SESSION_SECRET);
+			const session = configured ? await getSecret(BITWARDEN_SESSION_SECRET) : undefined;
+			return c.json(await getBitwardenStatus({ configured, activeProvider, session }));
+		} catch (e) {
+			const err = e as Error;
+			logger.warn("secrets", "Bitwarden status check failed", { error: err.message });
+			return c.json({ configured: true, connected: false, activeProvider, error: err.message });
+		}
+	});
+
+	app.post("/api/secrets/bitwarden/connect", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
+		try {
+			const body = await readOptionalJsonObject(c);
+			if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+			const session = parseOptionalString(body.session) ?? parseOptionalString(body.token);
+			if (!session) return c.json({ error: "session is required" }, 400);
+			const activate = parseOptionalBoolean(body.activate) ?? false;
+			const folderId = parseOptionalString(body.folderId);
+			const currentActiveProvider = (await getActiveSecretProvider()) === "bitwarden";
+			const status = await getBitwardenStatus({ configured: true, activeProvider: currentActiveProvider, session });
+			if (!status.connected) {
+				return c.json({ error: status.error ?? "Bitwarden session is not connected", ...status, success: false }, 400);
+			}
+			await putSecret(BITWARDEN_SESSION_SECRET, session);
+			if (folderId) await putSecret(BITWARDEN_MANAGED_FOLDER_SECRET, folderId);
+			else deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
+			if (activate) await setActiveSecretProvider("bitwarden");
+			logger.info("secrets", "Connected Bitwarden session", { connected: status.connected, activate });
+			return c.json({ success: true, ...status, activeProvider: activate || currentActiveProvider });
+		} catch (e) {
+			const err = e as Error;
+			logger.error("secrets", "Failed to connect Bitwarden", err);
+			return c.json({ error: err.message }, 400);
+		}
+	});
+
+	app.delete("/api/secrets/bitwarden/connect", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
+		try {
+			const sessionDeleted = deleteSecret(BITWARDEN_SESSION_SECRET);
+			const folderDeleted = deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
+			await setActiveSecretProvider("local");
+			return c.json({
+				success: true,
+				disconnected: true,
+				existed: sessionDeleted || folderDeleted,
+				activeProvider: false,
+			});
+		} catch (e) {
+			const err = e as Error;
+			logger.error("secrets", "Failed to disconnect Bitwarden", err);
+			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.post("/api/secrets/bitwarden/provider", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
+		const body = await readOptionalJsonObject(c);
+		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+		const provider = parseOptionalString(body.provider);
+		if (provider !== "local" && provider !== "bitwarden")
+			return c.json({ error: "provider must be local or bitwarden" }, 400);
+		if (provider === "bitwarden") {
+			if (!hasSecret(BITWARDEN_SESSION_SECRET)) return c.json({ error: "Bitwarden is not connected" }, 400);
+			const session = await getSecret(BITWARDEN_SESSION_SECRET);
+			const status = await getBitwardenStatus({ configured: true, activeProvider: true, session });
+			if (!status.connected) {
+				return c.json({ error: status.error ?? "Bitwarden session is not connected", ...status, success: false }, 400);
+			}
+		}
+		await setActiveSecretProvider(provider);
+		return c.json({ success: true, provider });
+	});
+
+	app.get("/api/secrets/bitwarden/folders", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		if (denied) return denied;
+		try {
+			const session = await getSecret(BITWARDEN_SESSION_SECRET);
+			const folders = await listBitwardenFolders(session);
+			return c.json({ folders, count: folders.length });
+		} catch (e) {
+			const err = e as Error;
+			logger.error("secrets", "Failed to list Bitwarden folders", err);
+			return c.json({ error: err.message }, 400);
+		}
+	});
+
+	app.post("/api/secrets/bitwarden/migrate", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
+		try {
+			const body = await readOptionalJsonObject(c);
+			if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+			const session = await getSecret(BITWARDEN_SESSION_SECRET);
+			const folderId = parseOptionalString(body.folderId);
+			const overwrite = parseOptionalBoolean(body.overwrite) ?? false;
+			const dryRun = parseOptionalBoolean(body.dryRun) ?? true;
+			const deleteLocal = parseOptionalBoolean(body.deleteLocal) ?? false;
+			const localNames = listLocalSecretNames({ includeInternal: false });
+			const result = await migrateLocalSecretsToBitwarden({
+				session,
+				localNames,
+				getLocalSecret: getLocalSecretValue,
+				deleteLocalSecret: deleteLocalSecretForMigration,
+				folderId,
+				overwrite,
+				dryRun,
+				deleteLocal,
+			});
+			return c.json({ success: true, ...result });
+		} catch (e) {
+			const err = e as Error;
+			logger.error("secrets", "Failed to migrate local secrets to Bitwarden", err);
+			return c.json({ error: err.message }, 400);
 		}
 	});
 
@@ -324,12 +465,12 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		}
 	});
 
-	app.delete("/api/secrets/:name", (c) => {
+	app.delete("/api/secrets/:name", async (c) => {
 		const denied = rejectIfCapabilityDenied(c, host, ["secrets:delete"]);
 		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
-			const deleted = deleteSecret(name);
+			const deleted = await deleteSecretFromActiveProvider(name);
 			if (!deleted) return c.json({ error: `Secret '${name}' not found` }, 404);
 			logger.info("secrets", "Secret deleted", { name });
 			return c.json({ success: true, name });

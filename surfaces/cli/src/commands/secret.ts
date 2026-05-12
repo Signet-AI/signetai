@@ -20,6 +20,14 @@ function append(value: string, previous: string[]): string[] {
 	return [...previous, value];
 }
 
+async function readSecretFromStdin(): Promise<string> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of process.stdin) {
+		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+	}
+	return Buffer.concat(chunks).toString("utf-8").trim();
+}
+
 export function registerSecretCommands(program: Command, deps: SecretDeps): void {
 	const secretCmd = program.command("secret").description("Manage encrypted secrets").enablePositionalOptions();
 
@@ -400,6 +408,185 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 				process.exit(1);
 			}
 		});
+
+	const bitwardenCmd = secretCmd.command("bitwarden").alias("bw").description("Manage Bitwarden integration");
+
+	bitwardenCmd
+		.command("connect")
+		.allowExcessArguments(false)
+		.description("Connect Bitwarden using a `bw unlock --raw` session token")
+		.option("--activate", "Use Bitwarden as the active Signet secrets provider after connecting", false)
+		.option("--folder <folderId>", "Folder id for Signet-managed Bitwarden items")
+		.option("--session-stdin", "Read the Bitwarden session token from stdin instead of prompting", false)
+		.action(async (options: { activate: boolean; folder?: string; sessionStdin: boolean }) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const session = options.sessionStdin
+				? await readSecretFromStdin()
+				: await password({ message: "Bitwarden session token (`bw unlock --raw`):", mask: "•" });
+			if (!session) {
+				console.error(chalk.red("  Session token cannot be empty"));
+				process.exit(1);
+			}
+			const spinner = ora("Connecting to Bitwarden...").start();
+			try {
+				const { ok, data } = await deps.secretApiCall("POST", "/api/secrets/bitwarden/connect", {
+					session,
+					activate: options.activate,
+					folderId: options.folder,
+				});
+				if (!ok) {
+					spinner.fail(chalk.red(`Failed: ${readError(data)}`));
+					process.exit(1);
+				}
+				const connected = readBoolean(data, "connected");
+				const active = readBoolean(data, "activeProvider");
+				spinner.succeed(
+					chalk.green(
+						`Bitwarden connected${active ? " and active" : ""}${connected ? "" : " (session saved, status degraded)"}`,
+					),
+				);
+			} catch (err) {
+				spinner.fail(chalk.red(`Error: ${readThrown(err)}`));
+				process.exit(1);
+			}
+		});
+
+	bitwardenCmd
+		.command("status")
+		.description("Show Bitwarden connection and provider status")
+		.action(async () => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			try {
+				const { ok, data } = await deps.secretApiCall("GET", "/api/secrets/bitwarden/status");
+				if (!ok) {
+					console.error(chalk.red(`  Error: ${readError(data)}`));
+					process.exit(1);
+				}
+				const configured = readBoolean(data, "configured");
+				const connected = readBoolean(data, "connected");
+				const active = readBoolean(data, "activeProvider");
+				const error = readString(data, "error");
+				if (!configured) {
+					console.log(chalk.dim("  Bitwarden is not connected."));
+					console.log(
+						chalk.dim("  Run: bw login && bw unlock --raw | signet secret bitwarden connect --session-stdin"),
+					);
+					return;
+				}
+				console.log(
+					connected
+						? chalk.green("  Connected to Bitwarden")
+						: chalk.yellow("  Bitwarden session is configured but not usable."),
+				);
+				console.log(chalk.dim(`  Active provider: ${active ? "bitwarden" : "local"}`));
+				if (error) console.log(chalk.dim(`  ${error}`));
+			} catch (err) {
+				console.error(chalk.red(`  Error: ${readThrown(err)}`));
+				process.exit(1);
+			}
+		});
+
+	bitwardenCmd
+		.command("use <provider>")
+		.description("Switch active Signet secret provider: local or bitwarden")
+		.action(async (provider: string) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			if (provider !== "local" && provider !== "bitwarden") {
+				console.error(chalk.red("  Provider must be 'local' or 'bitwarden'."));
+				process.exit(1);
+			}
+			const { ok, data } = await deps.secretApiCall("POST", "/api/secrets/bitwarden/provider", { provider });
+			if (!ok) {
+				console.error(chalk.red(`  Error: ${readError(data)}`));
+				process.exit(1);
+			}
+			console.log(chalk.green(`  Active secret provider: ${provider}`));
+		});
+
+	bitwardenCmd
+		.command("folders")
+		.description("List Bitwarden folders")
+		.action(async () => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const { ok, data } = await deps.secretApiCall("GET", "/api/secrets/bitwarden/folders");
+			if (!ok) {
+				console.error(chalk.red(`  Error: ${readError(data)}`));
+				process.exit(1);
+			}
+			for (const folder of readFolders(data)) {
+				console.log(`  ${chalk.cyan("◈")} ${folder.name} ${chalk.dim(`(${folder.id})`)}`);
+			}
+		});
+
+	bitwardenCmd
+		.command("migrate")
+		.description("Copy existing local Signet secrets into Bitwarden")
+		.option("--write", "Actually migrate. Without this, Signet performs a dry run", false)
+		.option("--delete-local", "Delete local copies after successful migration", false)
+		.option("--overwrite", "Overwrite existing Bitwarden items with the same name", false)
+		.option("--folder <folderId>", "Bitwarden folder id to place migrated secrets in")
+		.action(async (options: { write: boolean; deleteLocal: boolean; overwrite: boolean; folder?: string }) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			if (options.deleteLocal && !options.write) {
+				console.error(chalk.red("  --delete-local requires --write."));
+				process.exit(1);
+			}
+			if (options.deleteLocal) {
+				const confirmed = await confirm({
+					message: "Delete local Signet copies after migrating to Bitwarden?",
+					default: false,
+				});
+				if (!confirmed) return;
+			}
+			const spinner = ora(
+				options.write ? "Migrating local secrets to Bitwarden..." : "Dry-running Bitwarden migration...",
+			).start();
+			try {
+				const { ok, data } = await deps.secretApiCall("POST", "/api/secrets/bitwarden/migrate", {
+					dryRun: !options.write,
+					deleteLocal: options.deleteLocal,
+					overwrite: options.overwrite,
+					folderId: options.folder,
+				});
+				if (!ok) {
+					spinner.fail(chalk.red(`Failed: ${readError(data)}`));
+					process.exit(1);
+				}
+				const migrated = readNumber(data, "migratedCount") ?? 0;
+				const skipped = readNumber(data, "skippedCount") ?? 0;
+				const errors = readNumber(data, "errorCount") ?? 0;
+				spinner.succeed(
+					chalk.green(
+						`${options.write ? "Migrated" : "Would migrate"} ${migrated} secrets (skipped ${skipped}, errors ${errors})`,
+					),
+				);
+				if (!options.write) console.log(chalk.dim("  Re-run with --write to copy secrets into Bitwarden."));
+			} catch (err) {
+				spinner.fail(chalk.red(`Error: ${readThrown(err)}`));
+				process.exit(1);
+			}
+		});
+
+	bitwardenCmd
+		.command("disconnect")
+		.description("Disconnect Bitwarden and return to the local Signet secret provider")
+		.action(async () => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const confirmed = await confirm({ message: "Disconnect Bitwarden integration?", default: false });
+			if (!confirmed) return;
+			const spinner = ora("Disconnecting Bitwarden...").start();
+			try {
+				const { ok, data } = await deps.secretApiCall("DELETE", "/api/secrets/bitwarden/connect");
+				if (!ok) {
+					spinner.fail(chalk.red(`Failed: ${readError(data)}`));
+					process.exit(1);
+				}
+				spinner.succeed(chalk.green("Bitwarden disconnected; local Signet secrets remain available"));
+			} catch (err) {
+				spinner.fail(chalk.red(`Error: ${readThrown(err)}`));
+				process.exit(1);
+			}
+		});
 }
 
 function readRecord(data: unknown): Record<string, unknown> | null {
@@ -437,6 +624,17 @@ function readStringArray(data: unknown, key: string): string[] {
 
 function readVaults(data: unknown): Array<{ id: string; name: string }> {
 	const value = readRecord(data)?.vaults;
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((item) => {
+		const record = readRecord(item);
+		const id = typeof record?.id === "string" ? record.id : null;
+		const name = typeof record?.name === "string" ? record.name : null;
+		return id && name ? [{ id, name }] : [];
+	});
+}
+
+function readFolders(data: unknown): Array<{ id: string; name: string }> {
+	const value = readRecord(data)?.folders;
 	if (!Array.isArray(value)) return [];
 	return value.flatMap((item) => {
 		const record = readRecord(item);

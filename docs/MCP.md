@@ -449,15 +449,17 @@ are never exposed to agents.
 
 Queue a shell command with secrets injected as environment variables. Output
 is automatically redacted, secret values never appear in results. Bare
-secret names resolve through the local provider, for example
-`OPENAI_API_KEY` is equivalent to `local://OPENAI_API_KEY`.
+secret names resolve through the active Signet secrets provider: local by
+default, or Bitwarden first when Bitwarden is active. Use `local://NAME` to
+force the local encrypted store, `bw://...` to reference a Bitwarden item
+explicitly, or `op://...` for 1Password compatibility references.
 
 **Parameters:**
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `command` | string | yes | Shell command to queue |
-| `secrets` | object | yes | Map of env var name to secret reference (Signet name or `op://...`) |
+| `secrets` | object | yes | Map of env var name to secret reference (Signet name, `bw://...`, or `op://...`) |
 | `timeoutSeconds` | number | no | Max subprocess runtime for the queued job; defaults to 300 seconds, max 1800 |
 
 **Returns:** A queued secret exec job object with `id`, `status`, and `timeoutMs`. Poll with `secret_exec_status` for redacted `stdout`, `stderr`, and `code` after completion. Secret values in output are replaced with `[REDACTED]`.

@@ -2278,7 +2278,7 @@ Returns `404` if the secret does not exist.
 Queue a shell command with multiple secrets injected into the subprocess
 environment. Callers pass a map of env var names to secret references —
 never actual values. References can be Signet secret names or direct
-1Password refs (`op://vault/item/field`). The daemon resolves and injects
+Bitwarden refs (`bw://name/NAME`, `bw://item/ITEM_ID/password`) and 1Password refs (`op://vault/item/field`). The daemon resolves and injects
 all values before spawning.
 
 **Request body**
@@ -2341,6 +2341,30 @@ from the URL path is injected under its own name.
 ```json
 { "code": 0, "stdout": "...", "stderr": "" }
 ```
+
+### GET /api/secrets/bitwarden/status
+
+Return Bitwarden provider status. Bitwarden is opt-in; when it is not connected, existing local Signet secrets remain the active store.
+
+### POST /api/secrets/bitwarden/connect
+
+Validate and store a Bitwarden CLI session token from `bw unlock --raw`. Body: `{ "session": "...", "activate": true, "folderId": "optional-folder-id" }`. If `activate` is true, future Signet secret writes use Bitwarden as the backing store while internal provider metadata remains local. CLI users should pipe the token with `bw unlock --raw | signet secret bitwarden connect --session-stdin` rather than passing it as an argument.
+
+### DELETE /api/secrets/bitwarden/connect
+
+Disconnect Bitwarden, remove the stored session/folder metadata, and switch the active provider back to `local`. Existing local Signet secrets are not deleted.
+
+### POST /api/secrets/bitwarden/provider
+
+Switch active provider with `{ "provider": "local" }` or `{ "provider": "bitwarden" }`. Switching to Bitwarden requires a connected session.
+
+### GET /api/secrets/bitwarden/folders
+
+List Bitwarden folders visible to the connected CLI session.
+
+### POST /api/secrets/bitwarden/migrate
+
+Copy existing local Signet secrets into Bitwarden. Defaults to dry-run: `{ "dryRun": true }`. Pass `{ "dryRun": false, "overwrite": true }` to write. Pass `deleteLocal: true` only when local copies should be removed after successful per-secret migration.
 
 ### GET /api/secrets/1password/status
 

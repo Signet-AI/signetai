@@ -7,8 +7,10 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-12
+- Features: add Bitwarden provider.
 - Bug fixes: register secret exec status in tool inventory; bound and queue secret exec; normalize acpx claude setup alias; add ACPX quick setup; degrade bounded git workspace operations; persist global bin paths; verify public ghcr pulls after publish; add most-used memories parity route.
 - Refactoring: add configurable identity presets.
+- Docs: correct stale documentation claims.
 
 ### 2026-05-11
 - Features: add header images for three new essays; add three new essays on memory architecture and sovereignty.
@@ -35,6 +37,19 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: correct stale documentation claims.
 
 ## Release Ledger
+
+## [0.117.0] - 2026-05-12
+
+Release summary: 1 feature and 1 docs update.
+Tag range: `v0.116.8..v0.117.0`.
+
+### Features
+
+- **secrets**: add Bitwarden provider (#695)
+
+### Docs
+
+- correct stale documentation claims (#698)
 
 ## [0.116.8] - 2026-05-12
 

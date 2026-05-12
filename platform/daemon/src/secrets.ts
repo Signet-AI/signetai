@@ -16,6 +16,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import sodium from "libsodium-wrappers";
+import {
+	BITWARDEN_ACTIVE_PROVIDER_SECRET,
+	BITWARDEN_MANAGED_FOLDER_SECRET,
+	BITWARDEN_SESSION_SECRET,
+	buildBitwardenManagedSecretName,
+	deleteBitwardenSecret,
+	isBitwardenActiveProvider,
+	isBitwardenReference,
+	listBitwardenSecretNames,
+	putBitwardenSecret,
+	readBitwardenReference,
+} from "./bitwarden.js";
 import { logger } from "./logger.js";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, isOnePasswordReference, readOnePasswordReference } from "./onepassword.js";
 import { recordPluginAuditEvent } from "./plugins/audit.js";
@@ -86,6 +98,8 @@ const MAX_SECRET_EXEC_RUNNING_JOBS = 4;
 const MAX_SECRET_EXEC_QUEUED_JOBS = 64;
 const MAX_SECRET_EXEC_RETAINED_JOBS = MAX_SECRET_EXEC_RUNNING_JOBS + MAX_SECRET_EXEC_QUEUED_JOBS + 64;
 
+const BITWARDEN_DELETED_NAMES_SECRET = "BITWARDEN_DELETED_SECRET_NAMES";
+
 const secretExecJobs = new Map<string, SecretExecJob>();
 const pendingSecretExecJobs: string[] = [];
 const secretExecJobRequests = new Map<
@@ -108,14 +122,14 @@ export interface SecretContextV1 {
 export interface SecretDescriptorV1 {
 	readonly name: string;
 	readonly ref: string;
-	readonly providerId: "local";
+	readonly providerId: string;
 	readonly created: string;
 	readonly updated: string;
 }
 
 export interface ResolvedSecretV1 {
 	readonly ref: string;
-	readonly providerId: "local";
+	readonly providerId: string;
 	readonly value: string;
 }
 
@@ -125,8 +139,8 @@ export interface SecretProviderHealthV1 {
 	readonly checkedAt: string;
 }
 
-export interface LocalSecretProviderV1 {
-	readonly id: "local";
+export interface SecretProviderV1 {
+	readonly id: string;
 	list(ctx: SecretContextV1): Promise<readonly SecretDescriptorV1[]>;
 	put(name: string, value: string, ctx: SecretContextV1): Promise<void>;
 	delete(name: string, ctx: SecretContextV1): Promise<boolean>;
@@ -270,7 +284,7 @@ function saveStore(store: SecretsStore): void {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function putSecret(name: string, value: string): Promise<void> {
+async function putLocalSecret(name: string, value: string): Promise<void> {
 	const localName = parseLocalSecretName(name);
 	const store = loadStore();
 	const now = new Date().toISOString();
@@ -286,11 +300,67 @@ export async function putSecret(name: string, value: string): Promise<void> {
 	recordSecretEvent("secret.stored", { name: localName });
 }
 
+export async function putSecret(name: string, value: string): Promise<void> {
+	const localName = parseLocalSecretName(name);
+	if (isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
+		await putLocalSecret(localName, value);
+		return;
+	}
+
+	const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+	let folderId: string | undefined;
+	try {
+		folderId = await getStoredSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
+	} catch {
+		folderId = undefined;
+	}
+	await putBitwardenSecret(localName, value, session, { folderId, overwrite: true });
+	await clearBitwardenDeletedName(localName);
+	recordSecretEvent("secret.stored", { name: localName, providerId: "bitwarden" });
+}
+
 async function getStoredSecret(name: string): Promise<string> {
 	const store = loadStore();
 	const entry = store.secrets[name];
 	if (!entry) throw new Error(`Secret '${name}' not found`);
 	return decrypt(entry.ciphertext);
+}
+
+function canonicalBitwardenDeletedName(name: string): string {
+	return buildBitwardenManagedSecretName(parseLocalSecretName(name));
+}
+
+async function readBitwardenDeletedNames(): Promise<Set<string>> {
+	try {
+		const parsed = JSON.parse(await getStoredSecret(BITWARDEN_DELETED_NAMES_SECRET));
+		return new Set(Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : []);
+	} catch {
+		return new Set();
+	}
+}
+
+async function writeBitwardenDeletedNames(names: Set<string>): Promise<void> {
+	if (names.size === 0) {
+		deleteLocalSecret(BITWARDEN_DELETED_NAMES_SECRET);
+		return;
+	}
+	await putLocalSecret(BITWARDEN_DELETED_NAMES_SECRET, JSON.stringify(Array.from(names).sort()));
+}
+
+async function markBitwardenDeletedName(name: string): Promise<void> {
+	const names = await readBitwardenDeletedNames();
+	names.add(canonicalBitwardenDeletedName(name));
+	await writeBitwardenDeletedNames(names);
+}
+
+async function clearBitwardenDeletedName(name: string): Promise<void> {
+	const names = await readBitwardenDeletedNames();
+	if (!names.delete(canonicalBitwardenDeletedName(name))) return;
+	await writeBitwardenDeletedNames(names);
+}
+
+async function isBitwardenDeletedName(name: string): Promise<boolean> {
+	return (await readBitwardenDeletedNames()).has(canonicalBitwardenDeletedName(name));
 }
 
 export async function getSecret(name: string): Promise<string> {
@@ -299,21 +369,71 @@ export async function getSecret(name: string): Promise<string> {
 		return readOnePasswordReference(name, token);
 	}
 
-	return getStoredSecret(parseLocalSecretName(name));
+	if (isBitwardenReference(name)) {
+		const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+		return readBitwardenReference(name, session);
+	}
+
+	const localName = parseLocalSecretName(name);
+	if (isInternalSecretName(localName)) {
+		return getStoredSecret(localName);
+	}
+	if (await isBitwardenProviderActive()) {
+		try {
+			const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+			return readBitwardenReference(
+				`bw://name/${encodeURIComponent(buildBitwardenManagedSecretName(localName))}`,
+				session,
+			);
+		} catch (error) {
+			if (!hasLocalSecret(localName) || (await isBitwardenDeletedName(localName))) throw error;
+		}
+	}
+
+	return getStoredSecret(localName);
 }
 
-export function hasSecret(name: string): boolean {
+function hasLocalSecret(name: string): boolean {
 	const store = loadStore();
 	return parseLocalSecretName(name) in store.secrets;
 }
 
-export function listSecrets(): string[] {
-	const names = Object.keys(loadStore().secrets).sort((a, b) => a.localeCompare(b));
-	recordSecretEvent("secret.listed", { count: names.length });
-	return names;
+export function hasSecret(name: string): boolean {
+	return hasLocalSecret(name);
 }
 
-export function deleteSecret(name: string): boolean {
+export function listLocalSecretNames(options: { includeInternal?: boolean } = {}): string[] {
+	const names = Object.keys(loadStore().secrets).sort((a, b) => a.localeCompare(b));
+	if (options.includeInternal === true) return names;
+	return names.filter((name) => !isInternalSecretName(name));
+}
+
+export async function listSecrets(): Promise<string[]> {
+	const localNames = listLocalSecretNames({ includeInternal: false });
+	if (!(await isBitwardenProviderActive())) {
+		recordSecretEvent("secret.listed", { count: localNames.length });
+		return localNames;
+	}
+
+	const deletedNames = await readBitwardenDeletedNames();
+	const visibleLocalNames = localNames.filter((name) => !deletedNames.has(canonicalBitwardenDeletedName(name)));
+	try {
+		const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+		const bitwardenNames = await listBitwardenSecretNames(session);
+		const names = Array.from(new Set([...bitwardenNames, ...visibleLocalNames])).sort((a, b) => a.localeCompare(b));
+		recordSecretEvent("secret.listed", { count: names.length, providerId: "bitwarden" });
+		return names;
+	} catch {
+		recordSecretEvent("secret.listed", {
+			count: visibleLocalNames.length,
+			providerId: "local",
+			degradedProviderId: "bitwarden",
+		});
+		return visibleLocalNames;
+	}
+}
+
+function deleteLocalSecret(name: string): boolean {
 	const store = loadStore();
 	const localName = parseLocalSecretName(name);
 	if (!(localName in store.secrets)) return false;
@@ -322,6 +442,73 @@ export function deleteSecret(name: string): boolean {
 	recordSecretEvent("secret.deleted", { name: localName });
 	return true;
 }
+
+export function deleteSecret(name: string): boolean {
+	return deleteLocalSecret(name);
+}
+
+export async function deleteSecretFromActiveProvider(name: string): Promise<boolean> {
+	const explicitLocal = name.startsWith("local://");
+	const localName = parseLocalSecretName(name);
+	if (explicitLocal || isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
+		return deleteLocalSecret(localName);
+	}
+
+	const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+	const deletedFromBitwarden = await deleteBitwardenSecret(localName, session);
+	const localFallbackPreserved = hasLocalSecret(localName);
+	if (deletedFromBitwarden || localFallbackPreserved) {
+		await markBitwardenDeletedName(localName);
+	}
+	if (deletedFromBitwarden) {
+		recordSecretEvent("secret.deleted", {
+			name: localName,
+			providerId: "bitwarden",
+			localFallbackPreserved,
+		});
+	}
+	return deletedFromBitwarden || localFallbackPreserved;
+}
+
+export async function getLocalSecretValue(name: string): Promise<string> {
+	return getStoredSecret(parseLocalSecretName(name));
+}
+
+export function deleteLocalSecretForMigration(name: string): boolean {
+	return deleteLocalSecret(name);
+}
+
+export async function setActiveSecretProvider(provider: "local" | "bitwarden"): Promise<void> {
+	if (provider === "local") {
+		deleteLocalSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET);
+		return;
+	}
+	await putLocalSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET, "bitwarden");
+}
+
+export async function getActiveSecretProvider(): Promise<"local" | "bitwarden"> {
+	return (await isBitwardenProviderActive()) ? "bitwarden" : "local";
+}
+
+async function isBitwardenProviderActive(): Promise<boolean> {
+	try {
+		return isBitwardenActiveProvider(await getStoredSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET));
+	} catch {
+		return false;
+	}
+}
+
+function isInternalSecretName(name: string): boolean {
+	return [
+		ONEPASSWORD_SERVICE_ACCOUNT_SECRET,
+		BITWARDEN_SESSION_SECRET,
+		BITWARDEN_ACTIVE_PROVIDER_SECRET,
+		BITWARDEN_MANAGED_FOLDER_SECRET,
+		BITWARDEN_DELETED_NAMES_SECRET,
+	].includes(name);
+}
+
+export type LocalSecretProviderV1 = SecretProviderV1;
 
 export const localSecretProvider: LocalSecretProviderV1 = {
 	id: "local",
@@ -340,10 +527,10 @@ export const localSecretProvider: LocalSecretProviderV1 = {
 		return descriptors;
 	},
 	async put(name, value, _ctx) {
-		await putSecret(name, value);
+		await putLocalSecret(name, value);
 	},
 	async delete(name, _ctx) {
-		return deleteSecret(name);
+		return deleteLocalSecret(name);
 	},
 	async resolve(ref, _ctx) {
 		const name = parseLocalSecretName(ref);

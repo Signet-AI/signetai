@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	BITWARDEN_ACTIVE_PROVIDER_SECRET,
+	BITWARDEN_SESSION_SECRET,
+	type BitwardenClient,
+	setBitwardenClientFactoryForTests,
+} from "./bitwarden.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index.js";
 import {
 	deleteSecret,
@@ -33,6 +39,7 @@ describe("local secrets provider", () => {
 	afterEach(() => {
 		resetDefaultPluginHostForTests();
 		resetSecretExecJobsForTests();
+		setBitwardenClientFactoryForTests(null);
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
@@ -46,7 +53,7 @@ describe("local secrets provider", () => {
 	test("bare names and local:// references resolve through the same local store", async () => {
 		await putSecret("OPENAI_API_KEY", "sk-test-local");
 
-		expect(listSecrets()).toEqual(["OPENAI_API_KEY"]);
+		expect(await listSecrets()).toEqual(["OPENAI_API_KEY"]);
 		expect(hasSecret("local://OPENAI_API_KEY")).toBe(true);
 		expect(await getSecret("local://OPENAI_API_KEY")).toBe("sk-test-local");
 
@@ -62,7 +69,7 @@ describe("local secrets provider", () => {
 		await putSecret("OPENAI_API_KEY", "sk-test-local");
 		const before = readFileSync(secretsFile(), "utf-8");
 
-		expect(listSecrets()).toEqual(["OPENAI_API_KEY"]);
+		expect(await listSecrets()).toEqual(["OPENAI_API_KEY"]);
 		expect(await localSecretProvider.resolve("local://OPENAI_API_KEY", {})).toMatchObject({
 			ref: "local://OPENAI_API_KEY",
 			providerId: "local",
@@ -226,7 +233,7 @@ describe("local secrets provider", () => {
 		mkdirSync(join(agentsDir, ".secrets"), { recursive: true });
 		writeFileSync(secretsFile(), "not-json", { mode: 0o600 });
 
-		expect(() => listSecrets()).toThrow("Failed to read secrets store");
+		await expect(listSecrets()).rejects.toThrow("Failed to read secrets store");
 		const health = await localSecretProvider.health({});
 		expect(health.status).toBe("unhealthy");
 		expect(readFileSync(secretsFile(), "utf-8")).toBe("not-json");
@@ -259,10 +266,43 @@ describe("local secrets provider", () => {
 		expect(plugin?.stateReason).toContain("Failed to read secrets store");
 	});
 
+	test("active Bitwarden provider resolves bare names with the same canonical name used on write", async () => {
+		const client: BitwardenClient = {
+			async status() {
+				return { status: "unlocked" };
+			},
+			async listFolders() {
+				return [];
+			},
+			async listItems() {
+				return [{ id: "item-1", name: "anthropic_key", folderId: null }];
+			},
+			async getItem(id: string) {
+				expect(id).toBe("item-1");
+				return { id, name: "anthropic_key", folderId: null, login: { username: "signet", password: "sk-bw" } };
+			},
+			async putSecret() {
+				throw new Error("not used");
+			},
+			async deleteSecret() {
+				return false;
+			},
+			async resolveSecret(ref: string) {
+				expect(ref).toBe("bw://name/anthropic_key");
+				return "sk-bw";
+			},
+		};
+		setBitwardenClientFactoryForTests(async () => client);
+		await putSecret(BITWARDEN_SESSION_SECRET, "bw-session");
+		await putSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET, "bitwarden");
+
+		expect(await getSecret("anthropic_key")).toBe("sk-bw");
+	});
+
 	test("delete accepts local:// compatibility references", async () => {
 		await putSecret("GITHUB_TOKEN", "ghp_test");
 		expect(deleteSecret("local://GITHUB_TOKEN")).toBe(true);
-		expect(listSecrets()).toEqual([]);
+		expect(await listSecrets()).toEqual([]);
 	});
 });
 

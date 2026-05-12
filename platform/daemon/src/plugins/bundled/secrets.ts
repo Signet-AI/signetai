@@ -84,6 +84,42 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 			summary: "Import 1Password items into local Signet secrets",
 			requiredCapabilities: ["secrets:providers:configure"],
 		},
+		{
+			method: "GET",
+			path: "/api/secrets/bitwarden/status",
+			summary: "Inspect Bitwarden provider status",
+			requiredCapabilities: ["secrets:providers:list"],
+		},
+		{
+			method: "POST",
+			path: "/api/secrets/bitwarden/connect",
+			summary: "Connect Bitwarden CLI session",
+			requiredCapabilities: ["secrets:providers:configure"],
+		},
+		{
+			method: "DELETE",
+			path: "/api/secrets/bitwarden/connect",
+			summary: "Disconnect Bitwarden provider",
+			requiredCapabilities: ["secrets:providers:configure"],
+		},
+		{
+			method: "POST",
+			path: "/api/secrets/bitwarden/provider",
+			summary: "Switch active secret provider",
+			requiredCapabilities: ["secrets:providers:configure"],
+		},
+		{
+			method: "GET",
+			path: "/api/secrets/bitwarden/folders",
+			summary: "List Bitwarden folders",
+			requiredCapabilities: ["secrets:providers:list"],
+		},
+		{
+			method: "POST",
+			path: "/api/secrets/bitwarden/migrate",
+			summary: "Migrate local Signet secrets into Bitwarden",
+			requiredCapabilities: ["secrets:providers:configure"],
+		},
 	],
 	cliCommands: [
 		{ path: ["secret", "list"], summary: "List secret names", requiredCapabilities: ["cli:command", "secrets:list"] },
@@ -97,6 +133,11 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 		{
 			path: ["secret", "onepassword"],
 			summary: "Manage 1Password compatibility integration",
+			requiredCapabilities: ["cli:command", "secrets:providers:configure"],
+		},
+		{
+			path: ["secret", "bitwarden"],
+			summary: "Manage Bitwarden provider integration",
 			requiredCapabilities: ["cli:command", "secrets:providers:configure"],
 		},
 	],
@@ -118,7 +159,7 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 		{
 			id: "settings.secrets",
 			title: "Secrets",
-			summary: "Manage local encrypted Signet secrets and 1Password compatibility",
+			summary: "Manage local encrypted Signet secrets, Bitwarden, and 1Password compatibility",
 			requiredCapabilities: ["dashboard:panel", "secrets:list"],
 		},
 	],
@@ -140,6 +181,36 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 			name: "connectOnePassword",
 			summary: "Configure 1Password compatibility",
 			requiredCapabilities: ["sdk:client", "secrets:providers:configure"],
+		},
+		{
+			name: "getBitwardenStatus",
+			summary: "Inspect Bitwarden provider status",
+			requiredCapabilities: ["sdk:client", "secrets:providers:list"],
+		},
+		{
+			name: "connectBitwarden",
+			summary: "Connect Bitwarden provider",
+			requiredCapabilities: ["sdk:client", "secrets:providers:configure"],
+		},
+		{
+			name: "migrateSecretsToBitwarden",
+			summary: "Migrate local Signet secrets into Bitwarden",
+			requiredCapabilities: ["sdk:client", "secrets:providers:configure"],
+		},
+		{
+			name: "disconnectBitwarden",
+			summary: "Disconnect Bitwarden provider",
+			requiredCapabilities: ["sdk:client", "secrets:providers:configure"],
+		},
+		{
+			name: "setSecretProvider",
+			summary: "Switch the active secrets provider",
+			requiredCapabilities: ["sdk:client", "secrets:providers:configure"],
+		},
+		{
+			name: "listBitwardenFolders",
+			summary: "List Bitwarden folders available to the connected provider",
+			requiredCapabilities: ["sdk:client", "secrets:providers:list"],
 		},
 	],
 	connectorCapabilities: [
@@ -176,7 +247,8 @@ export const signetSecretsManifest: PluginManifestV1 = {
 	name: "Signet Secrets",
 	version: "1.0.0",
 	publisher: "signetai",
-	description: "Privileged core plugin for encrypted local secrets, compatibility providers, and secret injection.",
+	description:
+		"Privileged core plugin for encrypted local secrets, Bitwarden provider, compatibility providers, and secret injection.",
 	runtime: {
 		language: "typescript",
 		kind: "bundled-module",
