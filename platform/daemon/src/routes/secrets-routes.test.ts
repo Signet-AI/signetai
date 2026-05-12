@@ -7,7 +7,7 @@ import { type BitwardenClient, setBitwardenClientFactoryForTests } from "../bitw
 import { queryPluginAuditEvents } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "../plugins/bundled/secrets.js";
 import { PluginHostV1 } from "../plugins/host.js";
-import { putSecret, resetSecretExecJobsForTests } from "../secrets.js";
+import { getSecret, putSecret, resetSecretExecJobsForTests } from "../secrets.js";
 import { registerSecretRoutes } from "./secrets-routes.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -257,6 +257,14 @@ describe("secrets routes plugin capability enforcement", () => {
 		expect(migrated.status).toBe(200);
 		expect(await migrated.json()).toMatchObject({ success: true, dryRun: false, migratedCount: 1 });
 		expect(items.get("LOCAL_ONLY")).toBe("local-value");
+
+		const deletedMigrated = await app.request("/api/secrets/LOCAL_ONLY", { method: "DELETE" });
+		expect(deletedMigrated.status).toBe(200);
+		expect(items.has("LOCAL_ONLY")).toBe(false);
+		await expect(getSecret("LOCAL_ONLY")).rejects.toThrow();
+		const listedAfterDelete = await app.request("/api/secrets");
+		expect(listedAfterDelete.status).toBe(200);
+		expect(await listedAfterDelete.json()).toMatchObject({ provider: "bitwarden", secrets: ["BW_ONLY"] });
 
 		const reconnected = await app.request("/api/secrets/bitwarden/connect", {
 			method: "POST",

@@ -406,16 +406,23 @@ export function deleteSecret(name: string): boolean {
 }
 
 export async function deleteSecretFromActiveProvider(name: string): Promise<boolean> {
+	const explicitLocal = name.startsWith("local://");
 	const localName = parseLocalSecretName(name);
-	if (!isInternalSecretName(localName) && (await isBitwardenProviderActive())) {
-		const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
-		const deleted = await deleteBitwardenSecret(localName, session);
-		if (deleted) {
-			recordSecretEvent("secret.deleted", { name: localName, providerId: "bitwarden" });
-			return true;
-		}
+	if (explicitLocal || isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
+		return deleteLocalSecret(localName);
 	}
-	return deleteLocalSecret(localName);
+
+	const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+	const deletedFromBitwarden = await deleteBitwardenSecret(localName, session);
+	const deletedFromLocal = deleteLocalSecret(localName);
+	if (deletedFromBitwarden) {
+		recordSecretEvent("secret.deleted", {
+			name: localName,
+			providerId: "bitwarden",
+			deletedLocalFallback: deletedFromLocal,
+		});
+	}
+	return deletedFromBitwarden || deletedFromLocal;
 }
 
 export async function getLocalSecretValue(name: string): Promise<string> {

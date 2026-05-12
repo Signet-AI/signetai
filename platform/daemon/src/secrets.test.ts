@@ -233,7 +233,7 @@ describe("local secrets provider", () => {
 		mkdirSync(join(agentsDir, ".secrets"), { recursive: true });
 		writeFileSync(secretsFile(), "not-json", { mode: 0o600 });
 
-		expect(listSecrets()).rejects.toThrow("Failed to read secrets store");
+		await expect(listSecrets()).rejects.toThrow("Failed to read secrets store");
 		const health = await localSecretProvider.health({});
 		expect(health.status).toBe("unhealthy");
 		expect(readFileSync(secretsFile(), "utf-8")).toBe("not-json");
