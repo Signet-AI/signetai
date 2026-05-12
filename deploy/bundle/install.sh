@@ -213,6 +213,7 @@ WRAPPER
   cat > "${bindir}/signet-daemon" << 'WRAPPER'
 #!/usr/bin/env bash
 SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export SIGNET_DIR
 exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/daemon-js/daemon.js" "$@"
 WRAPPER
   chmod +x "${bindir}/signet-daemon"
@@ -220,6 +221,7 @@ WRAPPER
   cat > "${bindir}/signet-mcp" << 'WRAPPER'
 #!/usr/bin/env bash
 SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export SIGNET_DIR
 exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" mcp "$@"
 WRAPPER
   chmod +x "${bindir}/signet-mcp"

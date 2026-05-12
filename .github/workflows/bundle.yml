@@ -321,6 +321,10 @@ jobs:
           find "node_modules/$SQLITE_VEC_PKG" -name '*.dylib' -o -name '*.so' -o -name '*.dll' 2>/dev/null | while read -r f; do
             cp "$f" "$STAGE/"
           done
+          if [ -z "$(ls -A "$STAGE" 2>/dev/null)" ]; then
+            echo "::error::sqlite-vec native extension not found"
+            exit 1
+          fi
           tar czf "$ARTIFACT_DIR/signet-sqlite-vec-$PLATFORM.tar.gz" -C "$STAGE" .
 
       # ── Content bundles (platform-independent) ──
