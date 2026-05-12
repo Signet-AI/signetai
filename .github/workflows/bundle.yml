@@ -166,16 +166,32 @@ jobs:
       - name: Build core (shared dependency)
         run: bun run build:core
 
-      # ── Node.js runtime (single runtime) ──
+      # ── Node.js runtime (official distribution) ──
 
       - name: Stage Node.js runtime
         run: |
+          NODE_VER="$(node --version | sed 's/^v//')"
+          case "$PLATFORM" in
+            darwin-arm64) NODE_ARCH="darwin-arm64" ;;
+            darwin-x64)   NODE_ARCH="darwin-x64" ;;
+            linux-x64)    NODE_ARCH="linux-x64" ;;
+            linux-arm64)  NODE_ARCH="linux-arm64" ;;
+          esac
+          NODE_TAR="node-v${NODE_VER}-${NODE_ARCH}.tar.gz"
+          curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/${NODE_TAR}" -o "/tmp/${NODE_TAR}"
           STAGE="$ARTIFACT_DIR/signet-node-$PLATFORM"
+          mkdir -p "$STAGE"
+          tar xzf "/tmp/${NODE_TAR}" -C "$STAGE" --strip-components=1
+          # Keep only the bin/node binary
+          mkdir -p "$STAGE/tmpbin"
+          mv "$STAGE/bin/node" "$STAGE/tmpbin/node" 2>/dev/null || true
+          rm -rf "$STAGE/bin" "$STAGE/lib" "$STAGE/include" "$STAGE/share"
           mkdir -p "$STAGE/bin"
-          cp "$(which node)" "$STAGE/bin/node"
+          mv "$STAGE/tmpbin/node" "$STAGE/bin/node"
+          rm -rf "$STAGE/tmpbin"
           chmod +x "$STAGE/bin/node"
           tar czf "$ARTIFACT_DIR/signet-node-$PLATFORM.tar.gz" -C "$STAGE" bin
-          echo "NODE_VERSION=$(node --version)" >> "$GITHUB_ENV"
+          echo "NODE_VERSION=v${NODE_VER}" >> "$GITHUB_ENV"
 
       # ── CLI bundle (target node) ──
 

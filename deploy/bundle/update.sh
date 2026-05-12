@@ -209,6 +209,7 @@ if [ -n "$STAGED" ]; then
       ok "$comp updated"
     else
       err "Failed to install $comp — rolling back"
+      rm -rf "$DEST"
       if [ -d "$OLD" ]; then mv "$OLD" "$DEST"; fi
       rm -rf "$TMPDIR/staged"
       exit 1

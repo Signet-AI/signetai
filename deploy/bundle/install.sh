@@ -123,7 +123,9 @@ sha_verify() {
   local file="$1" expected="$2"
   if [ -z "$SHA256_CMD" ]; then return 0; fi
   if [ -z "$expected" ]; then return 0; fi
-  echo "$expected  $file" | $SHA256_CMD -c --quiet 2>/dev/null
+  local actual
+  actual="$($SHA256_CMD "$file" | awk '{print $1}')"
+  [ "$actual" = "$expected" ]
 }
 
 safe_tar_extract() {
