@@ -1,0 +1,421 @@
+name: Bundle
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "platform/**"
+      - "surfaces/**"
+      - "integrations/**"
+      - "libs/**"
+      - "plugins/**"
+      - "skills/**"
+      - "scripts/**"
+      - ".github/workflows/bundle.yml"
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: "Force rebuild all components"
+        default: false
+        type: boolean
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      cli: ${{ steps.filter.outputs.cli }}
+      daemon: ${{ steps.filter.outputs.daemon }}
+      daemon_rs: ${{ steps.filter.outputs.daemon_rs }}
+      predictor: ${{ steps.filter.outputs.predictor }}
+      dashboard: ${{ steps.filter.outputs.dashboard }}
+      connectors: ${{ steps.filter.outputs.connectors }}
+      opencode_plugin: ${{ steps.filter.outputs.opencode_plugin }}
+      oh_my_pi: ${{ steps.filter.outputs.oh_my_pi }}
+      pi_extension: ${{ steps.filter.outputs.pi_extension }}
+      native: ${{ steps.filter.outputs.native }}
+      skills: ${{ steps.filter.outputs.skills }}
+      templates: ${{ steps.filter.outputs.templates }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+      desktop: ${{ steps.filter.outputs.desktop }}
+      should_build: ${{ steps.should_build.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            cli:
+              - "surfaces/cli/**"
+              - "platform/core/**"
+            daemon:
+              - "platform/daemon/**"
+              - "platform/core/**"
+            daemon_rs:
+              - "platform/daemon-rs/**"
+            predictor:
+              - "packages/predictor/**"
+            dashboard:
+              - "surfaces/dashboard/**"
+            connectors:
+              - "libs/connector-base/**"
+              - "integrations/*/connector/**"
+              - "platform/core/**"
+            opencode_plugin:
+              - "integrations/opencode/plugin/**"
+              - "platform/core/**"
+            oh_my_pi:
+              - "integrations/oh-my-pi/extension/**"
+              - "platform/core/**"
+            pi_extension:
+              - "integrations/pi/extension/**"
+              - "platform/core/**"
+            native:
+              - "platform/native/**"
+            skills:
+              - "skills/**"
+            templates:
+              - "surfaces/cli/templates/**"
+              - "dist/signetai/templates/**"
+            workflows:
+              - ".github/workflows/bundle.yml"
+            desktop:
+              - "surfaces/desktop/**"
+              - "surfaces/tray/**"
+              - "surfaces/dashboard/**"
+              - "platform/daemon/**"
+              - "platform/core/**"
+
+      - name: Check if anything changed
+        id: should_build
+        run: |
+          FORCE="${{ github.event.inputs.force_rebuild }}"
+          if [ "$FORCE" = "true" ]; then
+            echo "result=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHANGED="${{ steps.filter.outputs.cli }}${{ steps.filter.outputs.daemon }}${{ steps.filter.outputs.daemon_rs }}${{ steps.filter.outputs.predictor }}${{ steps.filter.outputs.dashboard }}${{ steps.filter.outputs.connectors }}${{ steps.filter.outputs.opencode_plugin }}${{ steps.filter.outputs.oh_my_pi }}${{ steps.filter.outputs.pi_extension }}${{ steps.filter.outputs.native }}${{ steps.filter.outputs.skills }}${{ steps.filter.outputs.templates }}${{ steps.filter.outputs.workflows }}"
+          if echo "$CHANGED" | grep -q "true"; then
+            echo "result=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            platform: darwin-arm64
+            rust_target: aarch64-apple-darwin
+          - runner: macos-latest
+            platform: darwin-x64
+            rust_target: x86_64-apple-darwin
+          - runner: ubuntu-latest
+            platform: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      RUST_TARGET: ${{ matrix.rust_target }}
+      ARTIFACT_DIR: /tmp/signet-bundle-artifacts
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux dependencies
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Create artifact directory
+        run: mkdir -p "$ARTIFACT_DIR"
+
+      - name: Install JS dependencies
+        run: bun install
+
+      - name: Build core (shared dependency)
+        run: bun run build:core
+
+      # ── Bun runtime (single runtime — no Node.js needed) ──
+
+      - name: Stage Bun runtime
+        run: |
+          BUN_BIN="$(which bun)"
+          BUN_VERSION="$(bun --version)"
+          STAGE="$ARTIFACT_DIR/signet-bun-$PLATFORM"
+          mkdir -p "$STAGE"
+          cp "$BUN_BIN" "$STAGE/bun"
+          chmod +x "$STAGE/bun"
+          tar czf "$ARTIFACT_DIR/signet-bun-$PLATFORM.tar.gz" -C "$STAGE" bun
+          echo "BUN_VERSION=$BUN_VERSION" >> "$GITHUB_ENV"
+
+      # ── CLI bundle (target bun, not node) ──
+
+      - name: Build CLI bundle
+        if: needs.detect-changes.outputs.cli == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          bun run build:connector-base
+          cd surfaces/cli
+          bun build ./src/cli.ts --outfile ./dist/cli.js --target bun
+          tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js
+
+      # ── Daemon JS bundle ──
+
+      - name: Build daemon JS bundle
+        if: needs.detect-changes.outputs.daemon == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          cd platform/daemon
+          bun run build
+          tar czf "$ARTIFACT_DIR/signet-daemon-js.tar.gz" -C dist .
+
+      # ── Rust binaries ──
+
+      - name: Build Rust daemon
+        if: needs.detect-changes.outputs.daemon_rs == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          cargo build --release --target "$RUST_TARGET" -p signet-daemon
+          STAGE="$ARTIFACT_DIR/signet-daemon-rs-$PLATFORM"
+          mkdir -p "$STAGE"
+          cp "platform/daemon-rs/target/$RUST_TARGET/release/signet-daemon" "$STAGE/signet-daemon"
+          chmod +x "$STAGE/signet-daemon"
+          tar czf "$ARTIFACT_DIR/signet-daemon-rs-$PLATFORM.tar.gz" -C "$STAGE" signet-daemon
+
+      - name: Build predictor
+        if: needs.detect-changes.outputs.predictor == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          cargo build --release --target "$RUST_TARGET" -p predictor
+          STAGE="$ARTIFACT_DIR/signet-predictor-$PLATFORM"
+          mkdir -p "$STAGE"
+          cp "packages/predictor/target/$RUST_TARGET/release/signet-predictor" "$STAGE/signet-predictor"
+          chmod +x "$STAGE/signet-predictor"
+          tar czf "$ARTIFACT_DIR/signet-predictor-$PLATFORM.tar.gz" -C "$STAGE" signet-predictor
+
+      # ── Dashboard ──
+
+      - name: Build dashboard
+        if: needs.detect-changes.outputs.dashboard == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          cd surfaces/dashboard
+          bun install
+          bun run build
+          tar czf "$ARTIFACT_DIR/signet-dashboard.tar.gz" -C build .
+
+      # ── Connectors ──
+
+      - name: Build connectors
+        if: needs.detect-changes.outputs.connectors == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          bun run build:connector-base
+          bun run build:deps
+          STAGE="$ARTIFACT_DIR/signet-connectors"
+          mkdir -p "$STAGE"
+          for pkg in integrations/*/connector/dist libs/connector-base/dist; do
+            name="$(basename "$(dirname "$pkg")")"
+            mkdir -p "$STAGE/$name"
+            cp -r "$pkg"/* "$STAGE/$name/" 2>/dev/null || true
+          done
+          tar czf "$ARTIFACT_DIR/signet-connectors.tar.gz" -C "$STAGE" .
+
+      # ── Plugins ──
+
+      - name: Build OpenCode plugin
+        if: needs.detect-changes.outputs.opencode_plugin == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          bun run build:opencode-plugin
+          STAGE="$ARTIFACT_DIR/signet-plugin-opencode"
+          mkdir -p "$STAGE"
+          cp integrations/opencode/plugin/dist/signet.mjs "$STAGE/"
+          tar czf "$ARTIFACT_DIR/signet-plugin-opencode.tar.gz" -C "$STAGE" .
+
+      - name: Build Oh My Pi extension
+        if: needs.detect-changes.outputs.oh_my_pi == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          bun run build:oh-my-pi-extension
+          STAGE="$ARTIFACT_DIR/signet-plugin-oh-my-pi"
+          mkdir -p "$STAGE"
+          cp integrations/oh-my-pi/extension/dist/signet-oh-my-pi.mjs "$STAGE/"
+          tar czf "$ARTIFACT_DIR/signet-plugin-oh-my-pi.tar.gz" -C "$STAGE" .
+
+      - name: Build Pi extension
+        if: needs.detect-changes.outputs.pi_extension == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          bun run build:pi-extension
+          STAGE="$ARTIFACT_DIR/signet-plugin-pi"
+          mkdir -p "$STAGE"
+          cp integrations/pi/extension/dist/*.mjs "$STAGE/" 2>/dev/null || true
+          tar czf "$ARTIFACT_DIR/signet-plugin-pi.tar.gz" -C "$STAGE" .
+
+      # ── Native modules ──
+
+      - name: Build native module
+        if: needs.detect-changes.outputs.native == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          cd platform/native
+          napi build --release --platform
+          STAGE="$ARTIFACT_DIR/signet-native-$PLATFORM"
+          mkdir -p "$STAGE"
+          cp *.node "$STAGE/" 2>/dev/null || true
+          tar czf "$ARTIFACT_DIR/signet-native-$PLATFORM.tar.gz" -C "$STAGE" .
+
+      # ── onnxruntime (required — embeddings depend on it) ──
+
+      - name: Stage onnxruntime-node native binaries
+        run: |
+          STAGE="$ARTIFACT_DIR/signet-onnxruntime-$PLATFORM"
+          mkdir -p "$STAGE"
+          ONNX_DIR="$(find node_modules/onnxruntime-node -maxdepth 1 -type d -name 'napi-v*' | head -1)"
+          if [ -n "$ONNX_DIR" ]; then
+            cp -r "$ONNX_DIR"/* "$STAGE/" 2>/dev/null || true
+          else
+            cp -r node_modules/onnxruntime-node/napi-v*/napi-v*/* "$STAGE/" 2>/dev/null || true
+          fi
+          if [ -z "$(ls -A "$STAGE" 2>/dev/null)" ]; then
+            echo "::warning::onnxruntime native binaries not found in node_modules"
+            # Fallback: download from npm
+            ONNX_VERSION="$(jq -r '.dependencies["onnxruntime-node"] // "1.21.0"' package.json)"
+            npm pack "onnxruntime-node@$ONNX_VERSION" --pack-destination "$ARTIFACT_DIR" 2>/dev/null || true
+            tar xzf "$ARTIFACT_DIR"/onnxruntime-node-*.tgz -C "$STAGE" --strip-components=1 2>/dev/null || true
+          fi
+          tar czf "$ARTIFACT_DIR/signet-onnxruntime-$PLATFORM.tar.gz" -C "$STAGE" .
+
+      # ── sqlite-vec native ──
+
+      - name: Stage sqlite-vec native extension
+        run: |
+          STAGE="$ARTIFACT_DIR/signet-sqlite-vec-$PLATFORM"
+          mkdir -p "$STAGE"
+          case "$PLATFORM" in
+            darwin-arm64) SQLITE_VEC_PKG="sqlite-vec-darwin-arm64" ;;
+            darwin-x64)   SQLITE_VEC_PKG="sqlite-vec-darwin-x64" ;;
+            linux-x64)    SQLITE_VEC_PKG="sqlite-vec-linux-x64" ;;
+            linux-arm64)  SQLITE_VEC_PKG="sqlite-vec-linux-arm64" ;;
+          esac
+          find "node_modules/$SQLITE_VEC_PKG" -name '*.dylib' -o -name '*.so' -o -name '*.dll' 2>/dev/null | while read -r f; do
+            cp "$f" "$STAGE/"
+          done
+          tar czf "$ARTIFACT_DIR/signet-sqlite-vec-$PLATFORM.tar.gz" -C "$STAGE" .
+
+      # ── Content bundles (platform-independent) ──
+
+      - name: Package skills
+        if: needs.detect-changes.outputs.skills == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          tar czf "$ARTIFACT_DIR/signet-skills.tar.gz" -C skills .
+
+      - name: Package templates
+        if: needs.detect-changes.outputs.templates == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          tar czf "$ARTIFACT_DIR/signet-templates.tar.gz" -C surfaces/cli/templates .
+
+      # ── CI workflow bundle (independently updateable) ──
+
+      - name: Bundle CI workflows
+        if: needs.detect-changes.outputs.workflows == 'true' || github.event.inputs.force_rebuild == 'true'
+        run: |
+          STAGE="$ARTIFACT_DIR/signet-workflows"
+          mkdir -p "$STAGE"
+          cp .github/workflows/bundle.yml "$STAGE/"
+          tar czf "$ARTIFACT_DIR/signet-workflows.tar.gz" -C "$STAGE" .
+
+      # ── Electron desktop app (macOS DMG) ──
+
+      - name: Build Electron desktop app
+        if: startsWith(github.ref, 'refs/heads/main') && matrix.platform != 'linux-x64'
+        run: |
+          cd surfaces/desktop
+          bun install
+          bun run build:core
+          bun run build:tray
+          bun run build:daemon
+          bun run stage:runtime
+          bun run build:main
+          npx electron-builder --mac dmg --arm64 --publish never
+          mkdir -p "$ARTIFACT_DIR"
+          cp release/*.dmg "$ARTIFACT_DIR/" 2>/dev/null || true
+          cp release/*.zip "$ARTIFACT_DIR/" 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Checksums and manifest ──
+
+      - name: Generate checksums
+        run: |
+          cd "$ARTIFACT_DIR"
+          for f in *.tar.gz; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - name: Generate manifest
+        run: |
+          VERSION="$(jq -r '.version' package.json)"
+          bun deploy/bundle/scripts/generate-manifest.ts \
+            "$VERSION" "$PLATFORM" "$ARTIFACT_DIR" \
+            > "$ARTIFACT_DIR/manifest-$PLATFORM.json"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.platform }}
+          path: ${{ env.ARTIFACT_DIR }}/*
+
+  release:
+    needs: [detect-changes, build]
+    if: needs.detect-changes.outputs.should_build == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/all-artifacts
+          pattern: bundle-*
+
+      - name: Find or create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="bundle-latest"
+          REPO="${{ github.repository }}"
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" --title "Latest Bundle" --notes "Auto-updated bundle artifacts" --prerelease
+          fi
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="bundle-latest"
+          REPO="${{ github.repository }}"
+          find /tmp/all-artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name 'manifest-*.json' \) | while read -r f; do
+            gh release upload "$TAG" "$f" --repo "$REPO" --clobber
+          done
+
+      - name: Upload installer to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="bundle-latest"
+          REPO="${{ github.repository }}"
+          gh release upload "$TAG" deploy/bundle/install.sh --repo "$REPO" --clobber
