@@ -1181,6 +1181,29 @@ memory:
     }
 
     #[test]
+    fn predictor_pipeline_legacy_block_remains_manifest_compatible() {
+        let manifest = parse_manifest_result(
+            r#"
+agent:
+  name: default
+memory:
+  pipelineV2:
+    predictorPipeline:
+      agentFeedback: false
+      trainingTelemetry: true
+"#,
+        )
+        .expect("legacy predictorPipeline should remain accepted");
+        let pipeline = manifest
+            .memory
+            .expect("memory config")
+            .pipeline_v2
+            .expect("pipelineV2 config");
+        assert!(!pipeline.predictor_pipeline.agent_feedback);
+        assert!(pipeline.predictor_pipeline.training_telemetry);
+    }
+
+    #[test]
     fn startup_fail_fast_scopes_to_command_provider_manifest_errors() {
         let extraction_command_raw: serde_yml::Value = serde_yml::from_str(
             r#"
@@ -1322,7 +1345,10 @@ pub struct PipelineV2Config {
     pub feedback: FeedbackConfig,
     pub significance: Option<SignificanceConfig>,
     pub predictor: Option<PredictorConfig>,
-    // pub predictor_pipeline: PredictorPipelineConfig, // hard-deprecated in 0.112.0
+    /// Legacy `pipelineV2.predictorPipeline` block. The runtime no longer
+    /// consumes these toggles, but the parser must keep accepting and
+    /// round-tripping them so older documented manifests do not fall back.
+    pub predictor_pipeline: PredictorPipelineConfig,
     pub model_registry: ModelRegistryConfig,
 }
 
