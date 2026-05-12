@@ -284,7 +284,7 @@ async function finish(): Promise<void> {
 						<span>FIRST_RUN_SEQUENCE</span>
 						<span class="header-coordinate">AGENT_BOOTSTRAP / 04</span>
 					</div>
-					<h2 id="onboarding-title">Bring this agent online</h2>
+					<h2 id="onboarding-title">Initialize Signet</h2>
 					<p class="lede">Set identity, harness sync, and memory extraction. Everything can change later.</p>
 				</div>
 				<button class="icon-button sig-switch" type="button" aria-label="Dismiss onboarding" onclick={dismiss}>×</button>
@@ -459,20 +459,6 @@ async function finish(): Promise<void> {
 						</div>
 					</section>
 
-					<section class="setup-panel next-panel">
-						<div class="section-head">
-							<span class="step">04</span>
-							<div>
-								<h3>Continue</h3>
-								<p>Save the basics, then move into the thing that makes memory useful: source connection.</p>
-							</div>
-						</div>
-						<div class="choice-row next-row">
-							<button type="button" class="choice-pill sig-switch" class:choice-pill-active={afterSaveTab === "sources"} onclick={() => { afterSaveTab = "sources"; }}>Connect sources</button>
-							<button type="button" class="choice-pill sig-switch" class:choice-pill-active={afterSaveTab === "settings"} onclick={() => { afterSaveTab = "settings"; }}>Review settings</button>
-							<button type="button" class="choice-pill sig-switch" class:choice-pill-active={afterSaveTab === "stay"} onclick={() => { afterSaveTab = "stay"; }}>Stay here</button>
-						</div>
-					</section>
 				</main>
 			</div>
 
@@ -648,7 +634,7 @@ async function finish(): Promise<void> {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 12px 34px;
+		padding: 9px 30px;
 		border-right: 1px solid var(--sig-border);
 		background: var(--sig-surface);
 	}
@@ -658,7 +644,7 @@ async function finish(): Promise<void> {
 		place-items: center;
 		width: auto;
 		min-width: 82px;
-		height: 22px;
+		height: 20px;
 		padding: 0 8px;
 		border: 1px solid var(--sig-border);
 		font-family: var(--font-mono, monospace);
@@ -687,8 +673,8 @@ async function finish(): Promise<void> {
 	.onboarding-body {
 		display: grid;
 		grid-template-columns: 1fr;
-		gap: 18px;
-		padding: 18px 18px 28px;
+		gap: 14px;
+		padding: 14px 16px 16px;
 		overflow: auto;
 		background:
 			radial-gradient(circle at 22% 18%, var(--sig-highlight-dim), transparent 28%),
@@ -698,7 +684,7 @@ async function finish(): Promise<void> {
 	.setup-main {
 		display: grid;
 		grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
-		gap: 18px;
+		gap: 14px;
 		align-items: start;
 	}
 
@@ -707,7 +693,7 @@ async function finish(): Promise<void> {
 		border: 1px solid var(--sig-border-strong);
 		border-radius: var(--sig-radius);
 		background: color-mix(in srgb, var(--sig-surface), transparent 5%);
-		padding: 16px;
+		padding: 14px;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 3px rgba(0, 0, 0, 0.28);
 		overflow: hidden;
 	}
@@ -775,8 +761,7 @@ async function finish(): Promise<void> {
 		word-break: break-word;
 	}
 
-	.identity-panel,
-	.next-panel {
+	.identity-panel {
 		grid-column: 1;
 	}
 
@@ -790,7 +775,7 @@ async function finish(): Promise<void> {
 		display: flex;
 		gap: 12px;
 		align-items: flex-start;
-		margin-bottom: 14px;
+		margin-bottom: 11px;
 	}
 
 	.step {
@@ -849,7 +834,7 @@ async function finish(): Promise<void> {
 	}
 
 	:global(.onboarding-textarea) {
-		min-height: 74px !important;
+		min-height: 56px !important;
 		resize: vertical;
 	}
 
@@ -861,7 +846,7 @@ async function finish(): Promise<void> {
 	}
 
 	.harness-list {
-		max-height: 268px;
+		max-height: 198px;
 		overflow: auto;
 		padding-right: 2px;
 	}
@@ -942,16 +927,20 @@ async function finish(): Promise<void> {
 
 	.provider-card {
 		position: relative;
-		min-height: 78px;
-		padding: 12px;
+		min-height: 64px;
+		padding: 10px 12px;
 		text-align: left;
 		color: var(--sig-text);
 		cursor: pointer;
 	}
 
+	.provider-card small {
+		display: none;
+	}
+
 	.provider-card strong {
 		display: block;
-		margin: 7px 0 6px;
+		margin: 6px 0 0;
 		font-family: var(--font-display, monospace);
 		font-size: 13px;
 		letter-spacing: 0.08em;
@@ -1044,20 +1033,12 @@ async function finish(): Promise<void> {
 		cursor: pointer;
 	}
 
-	.next-panel {
-		background: color-mix(in srgb, var(--sig-surface), var(--sig-success) 4%);
-	}
-
-	.next-row .choice-pill:first-child {
-		border-color: color-mix(in srgb, var(--sig-success), var(--sig-border-strong) 35%);
-	}
-
 	.onboarding-actions {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
-		padding: 16px 22px;
+		padding: 12px 18px;
 		background: var(--sig-surface);
 	}
 
@@ -1082,8 +1063,7 @@ async function finish(): Promise<void> {
 		}
 
 		.identity-panel,
-		.memory-panel,
-		.next-panel {
+		.memory-panel {
 			grid-column: auto;
 			grid-row: auto;
 		}
