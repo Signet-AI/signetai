@@ -142,6 +142,7 @@ export function defaultAcpxDashboardAgent(agentConfig: unknown): AcpxDashboardAg
 	const target = toRecord(toRecord(inference?.targets)?.["background-acpx"]);
 	const acpx = toRecord(target?.acpx);
 	const configured = acpx?.agent;
+	if (configured === "claude") return "claude-code";
 	if (configured === "claude-code" || configured === "opencode" || configured === "codex") return configured;
 	const harnesses = toRecord(agentConfig)?.harnesses;
 	if (Array.isArray(harnesses)) {
@@ -154,6 +155,10 @@ export function defaultAcpxDashboardAgent(agentConfig: unknown): AcpxDashboardAg
 
 export function defaultAcpxDashboardModel(agent: AcpxDashboardAgent): string {
 	return ACPX_DASHBOARD_AGENT_OPTIONS.find((option) => option.value === agent)?.model ?? "gpt-5-codex-mini";
+}
+
+function acpxCommandAgent(agent: AcpxDashboardAgent): string {
+	return agent === "claude-code" ? "claude" : agent;
 }
 
 export function applyAcpxDashboardSetup(
@@ -181,7 +186,7 @@ export function applyAcpxDashboardSetup(
 	targets["background-acpx"] = {
 		executor: "acpx",
 		acpx: {
-			agent: options.agent,
+			agent: acpxCommandAgent(options.agent),
 			package: "acpx@0.7.0",
 			version: "0.7.0",
 			mode: "exec",

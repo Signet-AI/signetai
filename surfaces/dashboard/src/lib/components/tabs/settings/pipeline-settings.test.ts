@@ -140,6 +140,21 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 		expect(defaultAcpxDashboardAgent(agent)).toBe("opencode");
 	});
 
+	it("maps ACPX's Claude command back to the Claude Code dashboard option", () => {
+		const agent = {
+			harnesses: ["codex"],
+			inference: {
+				targets: {
+					"background-acpx": {
+						acpx: { agent: "claude" },
+					},
+				},
+			},
+		};
+
+		expect(defaultAcpxDashboardAgent(agent)).toBe("claude-code");
+	});
+
 	it("applies a one-click ACPX background setup for extraction, synthesis, and routing", () => {
 		const agent: Record<string, unknown> = {
 			harnesses: ["claude-code"],
@@ -180,7 +195,7 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 				"background-acpx": {
 					executor: "acpx",
 					acpx: {
-						agent: "claude-code",
+						agent: "claude",
 						package: "acpx@0.7.0",
 						permissions: "deny-all",
 						hooks: "disabled",
