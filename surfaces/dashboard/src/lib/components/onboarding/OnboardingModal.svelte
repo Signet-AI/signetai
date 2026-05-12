@@ -120,6 +120,7 @@ let endpoint = $state("");
 let selectedHarness = $state("");
 let selectedHarnesses = $state<string[]>([]);
 let synthesisEnabled = $state(true);
+let showAdvancedProviders = $state(false);
 // biome-ignore lint/style/useConst: Svelte state is mutated by onboarding buttons.
 let afterSaveTab = $state<TabId | "stay" | "sources">("sources");
 let forceOpen = false;
@@ -384,24 +385,32 @@ async function finish(): Promise<void> {
 							<p class="provider-group-title">Recommended routes</p>
 							{#each PROVIDERS as option (option.value)}
 								{#if option.value === "acpx" || option.value === "ollama" || option.value === "codex" || option.value === "claude-code"}
-									<button type="button" class="provider-card sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)}>
+									<button type="button" class="provider-card sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)} aria-pressed={provider === option.value}>
 										<span class="provider-mode">{option.mode}</span>
+										{#if provider === option.value}<span class="selected-badge">selected</span>{/if}
 										<strong>{option.label}</strong>
 										<small>{option.detail}</small>
 									</button>
 								{/if}
 							{/each}
 
-							<p class="provider-group-title provider-group-title-secondary">Other routes</p>
-							{#each PROVIDERS as option (option.value)}
-								{#if option.value !== "acpx" && option.value !== "ollama" && option.value !== "codex" && option.value !== "claude-code"}
-									<button type="button" class="provider-card provider-card-compact sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)}>
-										<span class="provider-mode">{option.mode}</span>
-										<strong>{option.label}</strong>
-										<small>{option.detail}</small>
-									</button>
-								{/if}
-							{/each}
+							<button type="button" class="advanced-toggle sig-switch" onclick={() => { showAdvancedProviders = !showAdvancedProviders; }} aria-expanded={showAdvancedProviders}>
+								<span>{showAdvancedProviders ? "Hide advanced routes" : "Show advanced routes"}</span>
+							</button>
+
+							{#if showAdvancedProviders}
+								<p class="provider-group-title provider-group-title-secondary">Advanced routes</p>
+								{#each PROVIDERS as option (option.value)}
+									{#if option.value !== "acpx" && option.value !== "ollama" && option.value !== "codex" && option.value !== "claude-code"}
+										<button type="button" class="provider-card provider-card-compact sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)} aria-pressed={provider === option.value}>
+											<span class="provider-mode">{option.mode}</span>
+											{#if provider === option.value}<span class="selected-badge">selected</span>{/if}
+											<strong>{option.label}</strong>
+											<small>{option.detail}</small>
+										</button>
+									{/if}
+								{/each}
+							{/if}
 						</div>
 
 						<div class="provider-detail">
@@ -468,10 +477,12 @@ async function finish(): Promise<void> {
 			</div>
 
 			<footer class="onboarding-actions sig-panel-footer">
-				<Button variant="ghost" type="button" onclick={openSettings}>Open full settings</Button>
+				<div class="secondary-actions">
+					<Button variant="ghost" type="button" onclick={openSettings}>Open full settings</Button>
+					<Button variant="ghost" type="button" onclick={dismiss}>Skip for now</Button>
+				</div>
 				<div class="action-cluster">
-					<Button variant="outline" type="button" onclick={dismiss}>Skip</Button>
-					<Button type="button" onclick={finish} disabled={saving}>{saving ? "Saving…" : "Save and continue"}</Button>
+					<Button type="button" onclick={finish} disabled={saving}>{saving ? "Saving…" : afterSaveTab === "sources" ? "Continue to sources" : "Save setup"}</Button>
 				</div>
 			</footer>
 		</div>
@@ -930,6 +941,7 @@ async function finish(): Promise<void> {
 	}
 
 	.provider-card {
+		position: relative;
 		min-height: 78px;
 		padding: 12px;
 		text-align: left;
@@ -955,6 +967,30 @@ async function finish(): Promise<void> {
 
 	.provider-mode {
 		color: var(--sig-highlight-text);
+	}
+
+	.selected-badge {
+		position: absolute;
+		top: 9px;
+		right: 10px;
+		font-family: var(--font-mono, monospace);
+		font-size: 9px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--sig-highlight-text);
+	}
+
+	.advanced-toggle {
+		grid-column: 1 / -1;
+		justify-content: center;
+		min-height: 36px;
+		padding: 8px 12px;
+		font-family: var(--font-mono, monospace);
+		font-size: 11px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sig-text);
+		cursor: pointer;
 	}
 
 	.detail-banner {
@@ -1025,9 +1061,11 @@ async function finish(): Promise<void> {
 		background: var(--sig-surface);
 	}
 
-	.action-cluster {
+	.action-cluster,
+	.secondary-actions {
 		display: flex;
 		gap: 10px;
+		align-items: center;
 	}
 
 	@media (max-width: 980px) {
@@ -1056,8 +1094,34 @@ async function finish(): Promise<void> {
 			padding: 8px;
 		}
 
+		.onboarding-modal {
+			max-height: calc(100dvh - 16px);
+		}
+
 		.onboarding-header {
-			padding: 22px 18px 18px;
+			padding: 18px 16px 16px;
+			gap: 12px;
+		}
+
+		.onboarding-header::after {
+			display: none;
+		}
+
+		h2 {
+			font-size: 24px;
+			line-height: 1;
+			letter-spacing: 0.04em;
+		}
+
+		.lede {
+			font-size: 13px;
+			line-height: 1.35;
+		}
+
+		.icon-button {
+			width: 42px;
+			height: 42px;
+			flex: 0 0 auto;
 		}
 
 		.header-coordinate,
@@ -1067,16 +1131,38 @@ async function finish(): Promise<void> {
 		}
 
 		.onboarding-body {
-			padding: 10px;
+			padding: 12px 12px 18px;
+		}
+
+		.setup-panel {
+			padding: 14px;
+		}
+
+		.harness-list {
+			max-height: 242px;
+		}
+
+		.provider-card {
+			min-height: 72px;
+		}
+
+		.provider-card small,
+		.harness-main small,
+		.section-head p,
+		.detail-banner p {
+			font-size: 12px;
+			line-height: 1.35;
 		}
 
 		.onboarding-actions {
 			align-items: stretch;
 			flex-direction: column;
+			padding: 12px;
 		}
 
-		.action-cluster {
-			justify-content: flex-end;
+		.action-cluster,
+		.secondary-actions {
+			justify-content: space-between;
 		}
 	}
 </style>
