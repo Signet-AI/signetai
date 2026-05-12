@@ -117,11 +117,14 @@ impl TestServer {
         conn.execute_batch(
             "INSERT INTO memories (id, type, content, confidence, importance, tags, who, project, created_at, updated_at, updated_by)
              VALUES ('mem-signet-context', 'fact', 'Signet has portable AI memory with source-backed provenance.', 1.0, 0.9, 'signet', 'test', 'signet', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'contract-replay');
+             INSERT INTO memories (id, type, content, confidence, importance, tags, who, project, created_at, updated_at, updated_by, agent_id)
+             VALUES ('mem-other-agent-signet', 'fact', 'Other agent private Signet context must not leak.', 1.0, 1.0, 'signet', 'test', 'signet', '2026-01-01T00:00:01Z', '2026-01-01T00:00:01Z', 'contract-replay', 'other-agent');
              INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
              VALUES ('entity-signet', 'Signet', 'signet', 'project', 'Portable AI memory and identity substrate', 'default', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
              VALUES ('entity-provenance', 'Provenance', 'provenance', 'concept', 'Source-backed evidence tracking', 'default', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES ('mem-signet-context', 'entity-signet');
+             INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES ('mem-other-agent-signet', 'entity-signet');
              INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
              VALUES ('aspect-signet-identity', 'entity-signet', 'default', 'identity', 'identity', 0.95, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO entity_attributes (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
@@ -910,6 +913,21 @@ async fn marketplace_reviews_native_roundtrip() {
     assert_eq!(body["success"], true);
     assert_eq!(body["config"]["enabled"], true);
     assert_eq!(body["config"]["endpointUrl"], "https://example.com/reviews");
+
+    let resp = server
+        .patch(
+            "/api/marketplace/reviews/config",
+            json!({"endpointUrl": "http://127.0.0.1:1/reviews"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "endpointUrl must use https");
+
+    let resp = server.get("/api/marketplace/reviews/config").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["endpointUrl"], "https://example.com/reviews");
 
     let marketplace_dir = server._tmpdir.path().join("marketplace");
     let mut entries: Vec<String> = std::fs::read_dir(&marketplace_dir)

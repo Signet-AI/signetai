@@ -526,11 +526,14 @@ pub async fn expand(
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.content FROM memory_entity_mentions mem
                  JOIN memories m ON m.id = mem.memory_id
-                 WHERE mem.entity_id = ?1 AND COALESCE(m.is_deleted, 0) = 0
+                 WHERE mem.entity_id = ?1
+                   AND m.agent_id = ?2
+                   AND COALESCE(m.visibility, 'global') != 'archived'
+                   AND COALESCE(m.is_deleted, 0) = 0
                  ORDER BY m.importance DESC, m.created_at DESC LIMIT 50",
             )?;
             let rows = stmt
-                .query_map(rusqlite::params![entity_id], |row| {
+                .query_map(rusqlite::params![entity_id, agent_id], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;

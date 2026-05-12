@@ -171,6 +171,54 @@ fn write_config(state: &AppState, config: &ReviewsSyncConfig) -> Result<(), Stri
     atomic_write_json(&path, &raw)
 }
 
+fn validate_endpoint_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("endpointUrl must not be empty".to_string());
+    }
+    let url = reqwest::Url::parse(trimmed)
+        .map_err(|_| "endpointUrl must be a valid HTTPS URL".to_string())?;
+    if url.scheme() != "https" {
+        return Err("endpointUrl must use https".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("endpointUrl must not include credentials".to_string());
+    }
+    if url.fragment().is_some() {
+        return Err("endpointUrl must not include a fragment".to_string());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "endpointUrl must include a host".to_string())?;
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return Err("endpointUrl must not target localhost".to_string());
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(ip) => {
+                if ip.is_private()
+                    || ip.is_loopback()
+                    || ip.is_link_local()
+                    || ip.is_unspecified()
+                    || ip.is_broadcast()
+                {
+                    return Err(
+                        "endpointUrl must not target a private or local address".to_string()
+                    );
+                }
+            }
+            std::net::IpAddr::V6(ip) => {
+                if ip.is_loopback() || ip.is_unspecified() {
+                    return Err(
+                        "endpointUrl must not target a private or local address".to_string()
+                    );
+                }
+            }
+        }
+    }
+    Ok(url.to_string())
+}
+
 fn parse_target_type(value: Option<String>) -> Option<String> {
     match value.as_deref() {
         Some("skill") => Some("skill".to_string()),
@@ -357,12 +405,23 @@ pub async fn patch_config(
     Json(body): Json<PatchConfigBody>,
 ) -> impl IntoResponse {
     let current = read_config(&state);
+    let endpoint_url = if let Some(endpoint_url) = body.endpoint_url.as_deref() {
+        match validate_endpoint_url(endpoint_url) {
+            Ok(url) => url,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": error})),
+                );
+            }
+        }
+    } else {
+        current.endpoint_url
+    };
+
     let next = ReviewsSyncConfig {
         enabled: body.enabled.unwrap_or(current.enabled),
-        endpoint_url: body
-            .endpoint_url
-            .map(|s| s.trim().to_string())
-            .unwrap_or(current.endpoint_url),
+        endpoint_url,
         last_sync_at: current.last_sync_at,
         last_sync_error: current.last_sync_error,
     };
