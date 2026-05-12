@@ -189,15 +189,9 @@ jobs:
           STAGE="$ARTIFACT_DIR/signet-node-$PLATFORM"
           mkdir -p "$STAGE"
           tar xzf "/tmp/${NODE_TAR}" -C "$STAGE" --strip-components=1
-          # Keep only the bin/node binary
-          mkdir -p "$STAGE/tmpbin"
-          mv "$STAGE/bin/node" "$STAGE/tmpbin/node" 2>/dev/null || true
-          rm -rf "$STAGE/bin" "$STAGE/lib" "$STAGE/include" "$STAGE/share"
-          mkdir -p "$STAGE/bin"
-          mv "$STAGE/tmpbin/node" "$STAGE/bin/node"
-          rm -rf "$STAGE/tmpbin"
-          chmod +x "$STAGE/bin/node"
-          tar czf "$ARTIFACT_DIR/signet-node-$PLATFORM.tar.gz" -C "$STAGE" bin
+          # Remove dev headers and docs; keep bin/ and lib/ for runtime
+          rm -rf "$STAGE/include" "$STAGE/share" "$STAGE/README.md" "$STAGE/LICENSE" "$STAGE/CHANGELOG.md"
+          tar czf "$ARTIFACT_DIR/signet-node-$PLATFORM.tar.gz" -C "$STAGE" .
           echo "NODE_VERSION=v${NODE_VER}" >> "$GITHUB_ENV"
 
       # ── CLI bundle (target node) ──

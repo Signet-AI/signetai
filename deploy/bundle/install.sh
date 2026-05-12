@@ -410,12 +410,30 @@ done
 
 STAGING="$SIGNET_INSTALL_DIR/runtime/staging"
 if [ -d "$STAGING" ]; then
+  MOVED=""
   for dir in "$STAGING"/*/; do
     [ -d "$dir" ] || continue
     comp_name="$(basename "$dir")"
-    rm -rf "$SIGNET_INSTALL_DIR/runtime/$comp_name"
-    mv "$dir" "$SIGNET_INSTALL_DIR/runtime/$comp_name"
-    touch "$SIGNET_INSTALL_DIR/runtime/$comp_name/.complete"
+    DEST="$SIGNET_INSTALL_DIR/runtime/$comp_name"
+    OLD="${DEST}.old"
+    if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
+    if mv "$dir" "$DEST" 2>/dev/null; then
+      rm -rf "$OLD"
+      touch "$DEST/.complete"
+      MOVED="$MOVED $comp_name"
+    else
+      err "Failed to promote $comp_name — rolling back"
+      rm -rf "$DEST"
+      if [ -d "$OLD" ]; then mv "$OLD" "$DEST"; fi
+      for prev in $MOVED; do
+        PDEST="$SIGNET_INSTALL_DIR/runtime/$prev"
+        POLD="${PDEST}.old"
+        if [ -d "$PDEST" ]; then mv "$PDEST" "$POLD"; fi
+        if [ -d "$POLD" ]; then mv "$POLD" "$PDEST"; fi
+      done
+      rm -rf "$STAGING"
+      exit 1
+    fi
   done
   rm -rf "$STAGING"
 fi
