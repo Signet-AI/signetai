@@ -42,7 +42,7 @@ detect_platform() {
 PLATFORM="$(detect_platform)"
 LOCAL_MANIFEST="$SIGNET_INSTALL_DIR/manifest.json"
 TMPDIR="$(mktemp -d)"
-LOCKFILE="$SIGNET_INSTALL_DIR/.update.lock"
+LOCKFILE="$SIGNET_INSTALL_DIR/.lock"
 trap 'rm -rf "$TMPDIR"; rm -rf "$LOCKFILE"' EXIT
 
 mkdir -p "$SIGNET_INSTALL_DIR"

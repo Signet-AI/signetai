@@ -92,7 +92,7 @@ fi
 DOWNLOAD_BASE="https://github.com/${SIGNET_REPO}/releases/download/${SIGNET_RELEASE_TAG}"
 
 tmpdir=""
-LOCKFILE="$SIGNET_INSTALL_DIR/.install.lock"
+LOCKFILE="$SIGNET_INSTALL_DIR/.lock"
 cleanup() {
   if [ -n "$tmpdir" ] && [ -d "$tmpdir" ]; then
     rm -rf "$tmpdir"
