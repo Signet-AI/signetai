@@ -434,7 +434,7 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
 
     conn.execute_batch(
         "UPDATE connectors
-            SET settings_json = COALESCE(NULLIF(settings_json, ''), NULLIF(config_json, ''), '{}')
+            SET settings_json = COALESCE(NULLIF(NULLIF(settings_json, ''), '{}'), NULLIF(config_json, ''), '{}')
           WHERE 1 = 1;",
     )?;
 
@@ -859,6 +859,38 @@ fn repair_bogus_version(conn: &Connection) -> Result<(), CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backfills_connector_settings_from_config_json_when_default_empty_object_exists() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        run(&conn).expect("initial migrations run");
+        conn.execute(
+            r#"INSERT INTO connectors (id, provider, display_name, config_json, created_at, updated_at)
+             VALUES ('obsidian-main', 'obsidian', 'Obsidian', '{"vault":"/tmp/vault"}', datetime('now'), datetime('now'))"#,
+            [],
+        )
+        .expect("insert TS-style connector");
+
+        let before: String = conn
+            .query_row(
+                "SELECT settings_json FROM connectors WHERE id = 'obsidian-main'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read default settings_json");
+        assert_eq!(before, "{}");
+
+        run(&conn).expect("rerun migrations backfills settings_json");
+
+        let after: String = conn
+            .query_row(
+                "SELECT settings_json FROM connectors WHERE id = 'obsidian-main'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read backfilled settings_json");
+        assert_eq!(after, r#"{"vault":"/tmp/vault"}"#);
+    }
 
     #[test]
     fn reconciles_rust_only_tables_when_versions_already_applied() {
