@@ -438,9 +438,17 @@ function buildDreamingPrompt(
 	agentsDir: string,
 	maxTokens: number,
 ): string {
-	const identity = renderIdentityBlock(agentsDir, resolveStartupIdentityFiles(agentsDir));
+	const startupEntries = resolveStartupIdentityFiles(agentsDir);
+	const startupMemoryEntry = startupEntries.find((entry) => entry.path.split(/[\\/]/).pop() === "MEMORY.md");
+	const identity = renderIdentityBlock(
+		agentsDir,
+		startupEntries.filter((entry) => entry !== startupMemoryEntry),
+	);
 	const dreamingPrompt = renderIdentityBlock(agentsDir, resolveSpecialIdentityFiles(agentsDir, "dreaming"));
-	const memoryMd = readIdentityFile(agentsDir, { path: "MEMORY.md", role: "working_memory", budget: 10_000 });
+	const memoryMd = readIdentityFile(
+		agentsDir,
+		startupMemoryEntry ?? { path: "MEMORY.md", role: "working_memory", budget: 10_000 },
+	);
 
 	// Build graph snapshot
 	const entityMap = new Map(graph.entities.map((e) => [e.id, e]));

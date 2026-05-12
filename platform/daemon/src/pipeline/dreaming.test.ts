@@ -241,6 +241,28 @@ describe("dreaming", () => {
 			}
 		});
 
+		it("keeps startup MEMORY.md in the working_memory block without duplicating identity", async () => {
+			seedEntity(db, "ent-1", "Signet", "project");
+			const dir = withTempIdentity({
+				"agent.yaml":
+					"identity:\n  preset: openclaw\n  startup:\n    load:\n      - path: AGENTS.md\n        role: startup_rules\n      - path: MEMORY.md\n        role: working_memory\n  special:\n    - path: DREAMING.md\n      kind: dreaming\n      role: dreaming_prompt\n",
+				"AGENTS.md": "Startup rules are loaded normally.",
+				"MEMORY.md": "Memory appears exactly once.",
+				"DREAMING.md": "Dreaming-specific reflection instructions.",
+			});
+			try {
+				const generate = async (prompt: string) => {
+					expect(prompt.match(/Memory appears exactly once\./g)?.length).toBe(1);
+					expect(prompt).toContain("<working_memory>\nMemory appears exactly once.\n</working_memory>");
+					return JSON.stringify({ mutations: [], summary: "Prompt inspected" });
+				};
+
+				await runDreamingPass(accessor, generate, defaultCfg(), dir, AGENT, "compact");
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
 		it("applies create_entity mutations", async () => {
 			seedSummary(db, "s-1", "User started working on a Rust project called Nexus", 500);
 
