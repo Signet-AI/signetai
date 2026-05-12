@@ -14,6 +14,15 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 
+fn parse_connector_settings(settings_str: &str) -> serde_json::Value {
+    let value: serde_json::Value =
+        serde_json::from_str(settings_str).unwrap_or(serde_json::json!({}));
+    value
+        .get("settings")
+        .and_then(|settings| settings.as_object().map(|_| settings.clone()))
+        .unwrap_or(value)
+}
+
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
@@ -43,8 +52,7 @@ pub async fn list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             let rows: Vec<serde_json::Value> = stmt
                 .query_map([], |r| {
                     let settings_str: String = r.get::<_, String>(3).unwrap_or_else(|_| "{}".into());
-                    let settings: serde_json::Value =
-                        serde_json::from_str(&settings_str).unwrap_or(serde_json::json!({}));
+                    let settings = parse_connector_settings(&settings_str);
                     Ok(serde_json::json!({
                         "id": r.get::<_, String>(0)?,
                         "provider": r.get::<_, String>(1)?,
@@ -137,8 +145,7 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
                 [&id],
                 |r| {
                     let settings_str: String = r.get::<_, String>(3).unwrap_or_else(|_| "{}".into());
-                    let settings: serde_json::Value =
-                        serde_json::from_str(&settings_str).unwrap_or(serde_json::json!({}));
+                    let settings = parse_connector_settings(&settings_str);
                     Ok(serde_json::json!({
                         "id": r.get::<_, String>(0)?,
                         "provider": r.get::<_, String>(1)?,

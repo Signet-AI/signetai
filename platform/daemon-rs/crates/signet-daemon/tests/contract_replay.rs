@@ -188,6 +188,22 @@ impl TestServer {
         .expect("seed memory search telemetry");
     }
 
+    fn seed_ts_style_connector_with_nested_settings(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            r#"INSERT INTO connectors
+               (id, provider, display_name, config_json, settings_json, enabled, status, created_at, updated_at)
+               VALUES
+               ('connector-ts-full-config', 'obsidian', 'Obsidian',
+                '{"id":"connector-ts-full-config","provider":"obsidian","settings":{"vault":"/tmp/vault","indexHidden":true},"enabled":true}',
+                '{"id":"connector-ts-full-config","provider":"obsidian","settings":{"vault":"/tmp/vault","indexHidden":true},"enabled":true}',
+                1, 'idle', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"#,
+            [],
+        )
+        .expect("seed TS-style connector config");
+    }
+
     fn seed_plugin_audit_fixture(&self) {
         let dir = self._tmpdir.path().join(".daemon/plugins");
         std::fs::create_dir_all(&dir).expect("plugin audit dir");
@@ -588,6 +604,28 @@ async fn connectors_list() {
     let server = TestServer::start().await;
     let resp = server.get("/api/connectors").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn connectors_unwrap_ts_style_config_settings() {
+    let server = TestServer::start().await;
+    server.seed_ts_style_connector_with_nested_settings();
+
+    let resp = server.get("/api/connectors").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["connectors"][0]["settings"]["vault"], "/tmp/vault");
+    assert_eq!(body["connectors"][0]["settings"]["indexHidden"], true);
+    assert!(body["connectors"][0]["settings"].get("settings").is_none());
+
+    let resp = server.get("/api/connectors/connector-ts-full-config").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["settings"]["vault"], "/tmp/vault");
+    assert_eq!(body["settings"]["indexHidden"], true);
+    assert!(body["settings"].get("settings").is_none());
 }
 
 #[tokio::test]
