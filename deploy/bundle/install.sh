@@ -286,6 +286,8 @@ main() {
   fetch_manifest
   echo ""
 
+  mkdir -p "$SIGNET_INSTALL_DIR/runtime"
+
   printf "${BOLD}  Downloading components...${NC}\n"
   echo ""
 

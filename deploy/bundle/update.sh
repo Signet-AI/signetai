@@ -135,8 +135,19 @@ for comp in $COMPONENTS; do
     FAILED=$((FAILED + 1))
     continue
   fi
-  rm -rf "$DEST"
-  mv "$STAGE" "$DEST"
+  mkdir -p "$SIGNET_INSTALL_DIR/runtime"
+  OLD="$DEST-old"
+  if [ -d "$DEST" ]; then
+    mv "$DEST" "$OLD"
+  fi
+  if ! mv "$STAGE" "$DEST" 2>/dev/null; then
+    err "Failed to install $comp"
+    if [ -d "$OLD" ]; then mv "$OLD" "$DEST"; fi
+    rm -rf "$STAGE"
+    FAILED=$((FAILED + 1))
+    continue
+  fi
+  rm -rf "$OLD"
   UPDATED=$((UPDATED + 1))
 
   jq --arg comp "$comp" --arg sha "$REMOTE_SHA" '.components[$comp].sha256 = $sha' "$LOCAL_MANIFEST" > "${TMPDIR}/manifest-updated.json" && mv "${TMPDIR}/manifest-updated.json" "$LOCAL_MANIFEST"
