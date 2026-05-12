@@ -210,6 +210,27 @@ fetch_manifest() {
   ok "Manifest fetched"
 }
 
+# POSIX-safe JSON value extraction (no jq/node/python required)
+# Handles: .version, .components."name".sha256, .components."name".url
+json_value() {
+  local key="$1" file="${2:-${tmpdir}/manifest.json}"
+  # .version -> extract top-level "version": "..."
+  if [ "$key" = ".version" ]; then
+    sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -1
+    return
+  fi
+  # .components."NAME".FIELD -> extract from components block
+  local name field
+  name="$(echo "$key" | sed 's/\.components\.\\"//;s/\\"\.//' | cut -d'.' -f1)"
+  field="$(echo "$key" | sed 's/.*\.//' | tr -d '"')"
+  awk -v name="\"$name\"" -v field="\"$field\"" '
+    $0 ~ name ":" { found=1 }
+    found && $0 ~ field ":" {
+      gsub(/^[^:]*:[[:space:]]*"/, ""); gsub(/".*/, ""); print; exit
+    }
+  ' "$file"
+}
+
 get_manifest_value() {
   local key="$1"
   if command -v jq >/dev/null 2>&1; then
@@ -222,6 +243,8 @@ get_manifest_value() {
       let v=d; for(const p of parts) v=v?.[p];
       if(v!==undefined) process.stdout.write(String(v));
     " 2>/dev/null || true
+  else
+    json_value "$key" "${tmpdir}/manifest.json"
   fi
 }
 
@@ -353,6 +376,8 @@ main() {
     sha=""
     if command -v jq >/dev/null 2>&1; then
       sha="$(jq -r ".components.\"${name}\".sha256 // \"\"" "${tmpdir}/manifest.json" 2>/dev/null || true)"
+    else
+      sha="$(json_value ".components.\"${name}\".sha256" "${tmpdir}/manifest.json")"
     fi
 
     if [ -z "$sha" ]; then
