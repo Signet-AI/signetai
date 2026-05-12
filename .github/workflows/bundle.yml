@@ -294,16 +294,15 @@ jobs:
         run: |
           STAGE="$ARTIFACT_DIR/signet-onnxruntime-$PLATFORM"
           mkdir -p "$STAGE"
-          ONNX_DIR="$(find node_modules/onnxruntime-node -maxdepth 1 -type d -name 'napi-v*' | head -1)"
+          ONNX_DIR="$(find platform/daemon/dist/node_modules/onnxruntime-node -maxdepth 1 -type d -name 'napi-v*' | head -1)"
           if [ -n "$ONNX_DIR" ]; then
             cp -r "$ONNX_DIR"/* "$STAGE/" 2>/dev/null || true
           else
-            cp -r node_modules/onnxruntime-node/napi-v*/napi-v*/* "$STAGE/" 2>/dev/null || true
+            cp -r platform/daemon/dist/node_modules/onnxruntime-node/napi-v*/napi-v*/* "$STAGE/" 2>/dev/null || true
           fi
           if [ -z "$(ls -A "$STAGE" 2>/dev/null)" ]; then
-            echo "::warning::onnxruntime native binaries not found in node_modules"
-            # Fallback: download from npm
-            ONNX_VERSION="$(jq -r '.dependencies["onnxruntime-node"] // "1.21.0"' package.json)"
+            echo "::warning::onnxruntime native binaries not found in daemon bundle"
+            ONNX_VERSION="$(jq -r '.dependencies["onnxruntime-node"] // "1.21.0"' platform/daemon/package.json)"
             npm pack "onnxruntime-node@$ONNX_VERSION" --pack-destination "$ARTIFACT_DIR" 2>/dev/null || true
             tar xzf "$ARTIFACT_DIR"/onnxruntime-node-*.tgz -C "$STAGE" --strip-components=1 2>/dev/null || true
           fi
@@ -321,7 +320,7 @@ jobs:
             linux-x64)    SQLITE_VEC_PKG="sqlite-vec-linux-x64" ;;
             linux-arm64)  SQLITE_VEC_PKG="sqlite-vec-linux-arm64" ;;
           esac
-          find "node_modules/$SQLITE_VEC_PKG" \( -name '*.dylib' -o -name '*.so' -o -name '*.dll' \) 2>/dev/null | while read -r f; do
+          find "platform/daemon/dist/node_modules/$SQLITE_VEC_PKG" \( -name '*.dylib' -o -name '*.so' -o -name '*.dll' \) 2>/dev/null | while read -r f; do
             cp "$f" "$STAGE/"
           done
           if [ -z "$(ls -A "$STAGE" 2>/dev/null)" ]; then
