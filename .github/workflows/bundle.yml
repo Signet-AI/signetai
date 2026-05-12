@@ -380,9 +380,8 @@ jobs:
       - name: Generate manifest
         run: |
           VERSION="$(jq -r '.version' package.json)"
-          RELEASE_TAG="bundle-${VERSION}"
           bun deploy/bundle/scripts/generate-manifest.ts \
-            "$VERSION" "$PLATFORM" "$ARTIFACT_DIR" "$RELEASE_TAG" \
+            "$VERSION" "$PLATFORM" "$ARTIFACT_DIR" \
             > "$ARTIFACT_DIR/manifest-$PLATFORM.json"
 
       - name: Upload artifacts

@@ -13,16 +13,15 @@ import { join } from "node:path";
 
 const PLATFORM_SUFFIXES = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
 
-const [version, platform, artifactDir, tag] = process.argv.slice(2);
+const [version, platform, artifactDir] = process.argv.slice(2);
 
 if (!version || !platform || !artifactDir) {
-	console.error("Usage: generate-manifest.ts <version> <platform> <artifact_dir> [tag]");
+	console.error("Usage: generate-manifest.ts <version> <platform> <artifact_dir>");
 	process.exit(1);
 }
 
 const RELEASE_REPO = "Signet-AI/signetai";
-const TAG = tag || "bundle-latest";
-const BASE_URL = `https://github.com/${RELEASE_REPO}/releases/download/${TAG}`;
+const BASE_URL = `https://github.com/${RELEASE_REPO}/releases/download/bundle-latest`;
 
 interface Component {
 	url: string;

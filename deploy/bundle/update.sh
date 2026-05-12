@@ -67,12 +67,20 @@ fi
 
 safe_tar_extract() {
   local archive="$1" dest="$2"
-  if tar tf "$archive" 2>/dev/null | grep -qE '^(\.\./|/)'; then
-    err "Archive contains unsafe paths (absolute or parent traversal)"
+  local unsafe
+  unsafe="$(tar tf "$archive" 2>/dev/null | while read -r entry; do
+    case "$entry" in
+      ../*|*/../*|*/..|..) echo "$entry" ;;
+      /*) echo "$entry" ;;
+    esac
+  done)"
+  if [ -n "$unsafe" ]; then
+    err "Archive contains unsafe paths:"
+    echo "$unsafe"
     return 1
   fi
   mkdir -p "$dest"
-  tar xzf "$archive" -C "$dest" --strip-components=0
+  tar xzf "$archive" -C "$dest"
 }
 
 # Compare versions
