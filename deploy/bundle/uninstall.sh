@@ -41,6 +41,15 @@ done
 
 # Remove installation
 if [ -d "$SIGNET_INSTALL_DIR" ]; then
+  if [ ! -f "$SIGNET_INSTALL_DIR/manifest.json" ] && [ ! -d "$SIGNET_INSTALL_DIR/bin" ]; then
+    echo "Error: $SIGNET_INSTALL_DIR does not appear to be a Signet installation (no manifest.json or bin/)"
+    echo "Refusing to remove. Set SIGNET_INSTALL_DIR to the correct path."
+    exit 1
+  fi
+  if [ "$SIGNET_INSTALL_DIR" = "/" ] || [ "$SIGNET_INSTALL_DIR" = "$HOME" ] || [ -z "$SIGNET_INSTALL_DIR" ]; then
+    echo "Error: install dir is a dangerous path ($SIGNET_INSTALL_DIR). Refusing to remove."
+    exit 1
+  fi
   info "Removing $SIGNET_INSTALL_DIR..."
   rm -rf "$SIGNET_INSTALL_DIR"
   ok "Installation removed"
@@ -49,6 +58,10 @@ fi
 # Optionally purge user data
 if [ "$PURGE" = "--purge" ]; then
   AGENTS_DIR="${SIGNET_PATH:-$HOME/.agents}"
+  if [ "$AGENTS_DIR" = "/" ] || [ -z "$AGENTS_DIR" ]; then
+    echo "Error: agents dir is a dangerous path ($AGENTS_DIR). Refusing to purge."
+    exit 1
+  fi
   if [ -d "$AGENTS_DIR" ]; then
     warn "Purging user data at $AGENTS_DIR..."
     rm -rf "$AGENTS_DIR"

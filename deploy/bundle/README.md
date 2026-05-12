@@ -22,10 +22,10 @@ No need to install Node.js or anything else manually.
 
 ```bash
 # Skip daemon start
-SIGNET_NO_START=1 curl -fsSL https://signetai.sh/install.sh | bash
+curl -fsSL https://signetai.sh/install.sh | SIGNET_NO_START=1 bash
 
 # Skip setup wizard
-SIGNET_NO_SETUP=1 curl -fsSL https://signetai.sh/install.sh | bash
+curl -fsSL https://signetai.sh/install.sh | SIGNET_NO_SETUP=1 bash
 
 # Custom install location
 SIGNET_INSTALL_DIR=/opt/signet curl -fsSL https://signetai.sh/install.sh | bash
