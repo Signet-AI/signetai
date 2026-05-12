@@ -193,6 +193,9 @@ fn validate_endpoint_url(raw: &str) -> Result<String, String> {
     if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
         return Err("endpointUrl must not target localhost".to_string());
     }
+    if !host.eq_ignore_ascii_case("reviews.signetai.sh") {
+        return Err("endpointUrl host must be reviews.signetai.sh".to_string());
+    }
     let parsed_ip = host
         .trim_start_matches('[')
         .trim_end_matches(']')

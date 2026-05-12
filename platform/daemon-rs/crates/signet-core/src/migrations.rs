@@ -257,19 +257,9 @@ static MIGRATIONS: &[Migration] = &[
         name: "task-agent-scope",
         sql: include_str!("sql/039-task-agent-scope.sql"),
     },
-    Migration {
-        version: 40,
-        name: "memory-search-telemetry",
-        sql: include_str!("sql/040-memory-search-telemetry.sql"),
-    },
-    Migration {
-        version: 41,
-        name: "ontology-proposals",
-        sql: include_str!("sql/041-ontology-proposals.sql"),
-    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 41;
+pub const LATEST_SCHEMA_VERSION: u32 = 39;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {

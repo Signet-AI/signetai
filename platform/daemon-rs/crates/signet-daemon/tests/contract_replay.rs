@@ -905,14 +905,17 @@ async fn marketplace_reviews_native_roundtrip() {
     let resp = server
         .patch(
             "/api/marketplace/reviews/config",
-            json!({"enabled": true, "endpointUrl": "https://example.com/reviews"}),
+            json!({"enabled": true, "endpointUrl": "https://reviews.signetai.sh/reviews"}),
         )
         .await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["success"], true);
     assert_eq!(body["config"]["enabled"], true);
-    assert_eq!(body["config"]["endpointUrl"], "https://example.com/reviews");
+    assert_eq!(
+        body["config"]["endpointUrl"],
+        "https://reviews.signetai.sh/reviews"
+    );
 
     let resp = server
         .patch(
@@ -934,13 +937,13 @@ async fn marketplace_reviews_native_roundtrip() {
     let body = server.json(resp).await;
     assert_eq!(
         body["error"],
-        "endpointUrl must not target a private or local address"
+        "endpointUrl host must be reviews.signetai.sh"
     );
 
     let resp = server.get("/api/marketplace/reviews/config").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["endpointUrl"], "https://example.com/reviews");
+    assert_eq!(body["endpointUrl"], "https://reviews.signetai.sh/reviews");
 
     let marketplace_dir = server._tmpdir.path().join("marketplace");
     let mut entries: Vec<String> = std::fs::read_dir(&marketplace_dir)
