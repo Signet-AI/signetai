@@ -125,5 +125,7 @@ describe("Bitwarden secrets provider", () => {
 		expect(source).not.toContain('["edit", "item", existing.id, encoded.trim()]');
 		expect(source).toContain('runBw(["create", "item"], { input: encoded.trim(), session: this.session })');
 		expect(source).toContain('runBw(["edit", "item", existing.id], { input: encoded.trim(), session: this.session })');
+		expect(source).toContain("password: readOptionalString(login.password)");
+		expect(source).toContain("value: readOptionalString(field.value)");
 	});
 });

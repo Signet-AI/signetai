@@ -390,14 +390,16 @@ function toItemDetails(value: unknown): BitwardenItemDetails {
 	const fields = Array.isArray(obj.fields)
 		? obj.fields.map(toRecord).map((field) => ({
 				name: readString(field.name),
-				value: readString(field.value),
+				value: readOptionalString(field.value),
 				type: readNumber(field.type),
 			}))
 		: null;
 	return {
 		...summary,
-		login: login ? { username: readString(login.username), password: readString(login.password) } : undefined,
-		notes: readString(obj.notes) ?? null,
+		login: login
+			? { username: readOptionalString(login.username), password: readOptionalString(login.password) }
+			: undefined,
+		notes: readOptionalString(obj.notes) ?? null,
 		fields,
 	};
 }
@@ -413,6 +415,10 @@ function toRecordOrUndefined(value: unknown): Record<string, unknown> | undefine
 
 function readString(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readOptionalString(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
 }
 
 function readNumber(value: unknown): number | undefined {
