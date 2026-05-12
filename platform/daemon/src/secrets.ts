@@ -98,6 +98,8 @@ const MAX_SECRET_EXEC_RUNNING_JOBS = 4;
 const MAX_SECRET_EXEC_QUEUED_JOBS = 64;
 const MAX_SECRET_EXEC_RETAINED_JOBS = MAX_SECRET_EXEC_RUNNING_JOBS + MAX_SECRET_EXEC_QUEUED_JOBS + 64;
 
+const BITWARDEN_DELETED_NAMES_SECRET = "BITWARDEN_DELETED_SECRET_NAMES";
+
 const secretExecJobs = new Map<string, SecretExecJob>();
 const pendingSecretExecJobs: string[] = [];
 const secretExecJobRequests = new Map<
@@ -313,6 +315,7 @@ export async function putSecret(name: string, value: string): Promise<void> {
 		folderId = undefined;
 	}
 	await putBitwardenSecret(localName, value, session, { folderId, overwrite: true });
+	await clearBitwardenDeletedName(localName);
 	recordSecretEvent("secret.stored", { name: localName, providerId: "bitwarden" });
 }
 
@@ -321,6 +324,43 @@ async function getStoredSecret(name: string): Promise<string> {
 	const entry = store.secrets[name];
 	if (!entry) throw new Error(`Secret '${name}' not found`);
 	return decrypt(entry.ciphertext);
+}
+
+function canonicalBitwardenDeletedName(name: string): string {
+	return buildBitwardenManagedSecretName(parseLocalSecretName(name));
+}
+
+async function readBitwardenDeletedNames(): Promise<Set<string>> {
+	try {
+		const parsed = JSON.parse(await getStoredSecret(BITWARDEN_DELETED_NAMES_SECRET));
+		return new Set(Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : []);
+	} catch {
+		return new Set();
+	}
+}
+
+async function writeBitwardenDeletedNames(names: Set<string>): Promise<void> {
+	if (names.size === 0) {
+		deleteLocalSecret(BITWARDEN_DELETED_NAMES_SECRET);
+		return;
+	}
+	await putLocalSecret(BITWARDEN_DELETED_NAMES_SECRET, JSON.stringify(Array.from(names).sort()));
+}
+
+async function markBitwardenDeletedName(name: string): Promise<void> {
+	const names = await readBitwardenDeletedNames();
+	names.add(canonicalBitwardenDeletedName(name));
+	await writeBitwardenDeletedNames(names);
+}
+
+async function clearBitwardenDeletedName(name: string): Promise<void> {
+	const names = await readBitwardenDeletedNames();
+	if (!names.delete(canonicalBitwardenDeletedName(name))) return;
+	await writeBitwardenDeletedNames(names);
+}
+
+async function isBitwardenDeletedName(name: string): Promise<boolean> {
+	return (await readBitwardenDeletedNames()).has(canonicalBitwardenDeletedName(name));
 }
 
 export async function getSecret(name: string): Promise<string> {
@@ -346,7 +386,7 @@ export async function getSecret(name: string): Promise<string> {
 				session,
 			);
 		} catch (error) {
-			if (!hasLocalSecret(localName)) throw error;
+			if (!hasLocalSecret(localName) || (await isBitwardenDeletedName(localName))) throw error;
 		}
 	}
 
@@ -375,19 +415,21 @@ export async function listSecrets(): Promise<string[]> {
 		return localNames;
 	}
 
+	const deletedNames = await readBitwardenDeletedNames();
+	const visibleLocalNames = localNames.filter((name) => !deletedNames.has(canonicalBitwardenDeletedName(name)));
 	try {
 		const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
 		const bitwardenNames = await listBitwardenSecretNames(session);
-		const names = Array.from(new Set([...bitwardenNames, ...localNames])).sort((a, b) => a.localeCompare(b));
+		const names = Array.from(new Set([...bitwardenNames, ...visibleLocalNames])).sort((a, b) => a.localeCompare(b));
 		recordSecretEvent("secret.listed", { count: names.length, providerId: "bitwarden" });
 		return names;
 	} catch {
 		recordSecretEvent("secret.listed", {
-			count: localNames.length,
+			count: visibleLocalNames.length,
 			providerId: "local",
 			degradedProviderId: "bitwarden",
 		});
-		return localNames;
+		return visibleLocalNames;
 	}
 }
 
@@ -414,15 +456,18 @@ export async function deleteSecretFromActiveProvider(name: string): Promise<bool
 
 	const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
 	const deletedFromBitwarden = await deleteBitwardenSecret(localName, session);
-	const deletedFromLocal = deleteLocalSecret(localName);
+	const localFallbackPreserved = hasLocalSecret(localName);
+	if (deletedFromBitwarden || localFallbackPreserved) {
+		await markBitwardenDeletedName(localName);
+	}
 	if (deletedFromBitwarden) {
 		recordSecretEvent("secret.deleted", {
 			name: localName,
 			providerId: "bitwarden",
-			deletedLocalFallback: deletedFromLocal,
+			localFallbackPreserved,
 		});
 	}
-	return deletedFromBitwarden || deletedFromLocal;
+	return deletedFromBitwarden || localFallbackPreserved;
 }
 
 export async function getLocalSecretValue(name: string): Promise<string> {
@@ -459,6 +504,7 @@ function isInternalSecretName(name: string): boolean {
 		BITWARDEN_SESSION_SECRET,
 		BITWARDEN_ACTIVE_PROVIDER_SECRET,
 		BITWARDEN_MANAGED_FOLDER_SECRET,
+		BITWARDEN_DELETED_NAMES_SECRET,
 	].includes(name);
 }
 
