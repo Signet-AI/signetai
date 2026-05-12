@@ -94,7 +94,7 @@ jobs:
             echo "result=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          CHANGED="${{ steps.filter.outputs.cli }}${{ steps.filter.outputs.daemon }}${{ steps.filter.outputs.daemon_rs }}${{ steps.filter.outputs.predictor }}${{ steps.filter.outputs.dashboard }}${{ steps.filter.outputs.connectors }}${{ steps.filter.outputs.opencode_plugin }}${{ steps.filter.outputs.oh_my_pi }}${{ steps.filter.outputs.pi_extension }}${{ steps.filter.outputs.native }}${{ steps.filter.outputs.skills }}${{ steps.filter.outputs.templates }}${{ steps.filter.outputs.workflows }}"
+          CHANGED="${{ steps.filter.outputs.cli }}${{ steps.filter.outputs.daemon }}${{ steps.filter.outputs.daemon_rs }}${{ steps.filter.outputs.predictor }}${{ steps.filter.outputs.dashboard }}${{ steps.filter.outputs.connectors }}${{ steps.filter.outputs.opencode_plugin }}${{ steps.filter.outputs.oh_my_pi }}${{ steps.filter.outputs.pi_extension }}${{ steps.filter.outputs.native }}${{ steps.filter.outputs.skills }}${{ steps.filter.outputs.templates }}${{ steps.filter.outputs.workflows }}${{ steps.filter.outputs.desktop }}"
           if echo "$CHANGED" | grep -q "true"; then
             echo "result=true" >> "$GITHUB_OUTPUT"
           else
@@ -421,4 +421,4 @@ jobs:
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
-          gh release upload "$TAG" deploy/bundle/install.sh --repo "$REPO" --clobber
+          gh release upload "$TAG" deploy/bundle/install.sh deploy/bundle/uninstall.sh deploy/bundle/update.sh --repo "$REPO" --clobber

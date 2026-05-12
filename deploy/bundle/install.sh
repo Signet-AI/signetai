@@ -231,6 +231,9 @@ WRAPPER
     ln -sf "$SIGNET_INSTALL_DIR/runtime/predictor/signet-predictor" "${bindir}/signet-predictor"
   fi
 
+  curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/signet-uninstall" 2>/dev/null && chmod +x "${bindir}/signet-uninstall" || warn "Could not download uninstaller"
+  curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/signet-update" 2>/dev/null && chmod +x "${bindir}/signet-update" || warn "Could not download updater"
+
   ok "Wrapper scripts created"
 }
 
