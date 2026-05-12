@@ -924,6 +924,19 @@ async fn marketplace_reviews_native_roundtrip() {
     let body = server.json(resp).await;
     assert_eq!(body["error"], "endpointUrl must use https");
 
+    let resp = server
+        .patch(
+            "/api/marketplace/reviews/config",
+            json!({"endpointUrl": "https://[fc00::1]/reviews"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body["error"],
+        "endpointUrl must not target a private or local address"
+    );
+
     let resp = server.get("/api/marketplace/reviews/config").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;

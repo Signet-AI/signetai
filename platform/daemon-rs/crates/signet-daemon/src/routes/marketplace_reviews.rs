@@ -193,7 +193,12 @@ fn validate_endpoint_url(raw: &str) -> Result<String, String> {
     if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
         return Err("endpointUrl must not target localhost".to_string());
     }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+    let parsed_ip = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+        .ok();
+    if let Some(ip) = parsed_ip {
         match ip {
             std::net::IpAddr::V4(ip) => {
                 if ip.is_private()
@@ -208,7 +213,11 @@ fn validate_endpoint_url(raw: &str) -> Result<String, String> {
                 }
             }
             std::net::IpAddr::V6(ip) => {
-                if ip.is_loopback() || ip.is_unspecified() {
+                if ip.is_loopback()
+                    || ip.is_unspecified()
+                    || ip.is_unique_local()
+                    || ip.is_unicast_link_local()
+                {
                     return Err(
                         "endpointUrl must not target a private or local address".to_string()
                     );
