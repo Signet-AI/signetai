@@ -275,145 +275,203 @@ async function finish(): Promise<void> {
 
 {#if open}
 	<div class="onboarding-backdrop" role="presentation">
-		<div class="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title" tabindex="-1">
-			<header class="onboarding-header">
-				<div>
-					<p class="eyebrow">Dashboard onboarding</p>
+		<div class="onboarding-modal sig-panel" role="dialog" aria-modal="true" aria-labelledby="onboarding-title" tabindex="-1">
+			<header class="onboarding-header sig-panel-header">
+				<div class="header-copy">
+					<div class="header-kicker">
+						<span class="signal-dot"></span>
+						<span>FIRST_RUN_SEQUENCE</span>
+						<span class="header-coordinate">AGENT_BOOTSTRAP / 04</span>
+					</div>
 					<h2 id="onboarding-title">Bring this agent online</h2>
-					<p class="lede">Name the agent, choose the harnesses it should sync into, and wire the memory pipeline to something real.</p>
+					<p class="lede">Set identity, harness sync, and memory extraction. Everything can change later.</p>
 				</div>
-				<button class="icon-button" type="button" aria-label="Dismiss onboarding" onclick={dismiss}>×</button>
+				<button class="icon-button sig-switch" type="button" aria-label="Dismiss onboarding" onclick={dismiss}>×</button>
 			</header>
 
-			<div class="onboarding-body">
-				<section class="setup-panel identity-panel">
-					<div class="section-head">
-						<span class="step">01</span>
-						<div>
-							<h3>Identity</h3>
-							<p>What should harnesses call this agent?</p>
-						</div>
-					</div>
-					<div class="field-grid">
-						<label class="field">
-							<span>Name</span>
-							<Input bind:value={agentName} placeholder="Dot" />
-						</label>
-						<label class="field field-wide">
-							<span>Description</span>
-							<Textarea rows={3} bind:value={agentDescription} placeholder="A portable memory agent for..." />
-						</label>
-					</div>
-				</section>
-
-				<section class="setup-panel">
-					<div class="section-head">
-						<span class="step">02</span>
-						<div>
-							<h3>Harnesses</h3>
-							<p>Loaded from the daemon. Pick every surface Signet should keep configured.</p>
-						</div>
-					</div>
-					<div class="harness-list">
-						{#each harnessOptions as h (h.id)}
-							<label class="harness-row" class:harness-row-active={selectedHarnesses.includes(h.id)}>
-								<Checkbox checked={selectedHarnesses.includes(h.id)} onCheckedChange={(checked) => toggleHarness(h.id, checked)} />
-								<span class="status-dot" class:status-dot-installed={h.meta?.exists}></span>
-								<span class="harness-main">
-									<strong>{h.id}</strong>
-									<small>{h.meta?.path ?? "known harness"}</small>
-								</span>
-								<span class="harness-state">{h.meta?.exists ? "installed" : "not found"}</span>
-							</label>
-						{/each}
-					</div>
-				</section>
-
-				<section class="setup-panel setup-panel-wide">
-					<div class="section-head">
-						<span class="step">03</span>
-						<div>
-							<h3>Memory engine</h3>
-							<p>Choose the extraction provider. Provider-specific fields appear below.</p>
-						</div>
-					</div>
-
-					<div class="provider-grid">
-						{#each PROVIDERS as option (option.value)}
-							<button type="button" class="provider-card" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)}>
-								<span>{option.label}</span>
-								<small>{option.detail}</small>
-							</button>
-						{/each}
-					</div>
-
-					<div class="provider-detail">
-						<div class="detail-banner">
-							<span>{providerOption.mode}</span>
-							<p>{providerOption.detail}</p>
-						</div>
-
-						{#if provider === "acpx"}
-							<div class="field field-wide">
-								<span>ACPX harness</span>
-								<div class="choice-row">
-									{#each selectedHarnesses as h (h)}
-										<button type="button" class="choice-pill" class:choice-pill-active={selectedHarness === h} onclick={() => { selectedHarness = h; }}>{h}</button>
-									{/each}
-									{#if selectedHarnesses.length === 0}<small>Select at least one harness above.</small>{/if}
-								</div>
-							</div>
-						{/if}
-
-						<div class="field-grid">
-							<label class="field">
-								<span>Model</span>
-								<Input bind:value={model} placeholder="model id" disabled={provider === "none"} />
-							</label>
-							{#if needsEndpoint}
-								<label class="field">
-									<span>Endpoint URL</span>
-									<Input bind:value={endpoint} placeholder={providerOption.endpointPlaceholder ?? "https://..."} />
-								</label>
-							{/if}
-						</div>
-
-						{#if selectedProviderModels.length > 0 && provider !== "none"}
-							<div class="choice-row">
-								{#each selectedProviderModels as preset (preset)}
-									<button type="button" class="choice-pill" class:choice-pill-active={model === preset} onclick={() => { model = preset; }}>{preset}</button>
-								{/each}
-							</div>
-						{/if}
-
-						<label class="inline-toggle">
-							<Checkbox checked={synthesisEnabled} onCheckedChange={(checked) => { synthesisEnabled = !!checked; }} />
-							<span>Use the same provider for session synthesis</span>
-						</label>
-					</div>
-				</section>
-
-				<section class="setup-panel setup-panel-wide next-panel">
-					<div class="section-head">
-						<span class="step">04</span>
-						<div>
-							<h3>Next step</h3>
-							<p>After saving, continue to the surface that actually brings context in.</p>
-						</div>
-					</div>
-					<div class="choice-row">
-						<button type="button" class="choice-pill" class:choice-pill-active={afterSaveTab === "sources"} onclick={() => { afterSaveTab = "sources"; }}>Connect sources</button>
-						<button type="button" class="choice-pill" class:choice-pill-active={afterSaveTab === "settings"} onclick={() => { afterSaveTab = "settings"; }}>Review settings</button>
-						<button type="button" class="choice-pill" class:choice-pill-active={afterSaveTab === "stay"} onclick={() => { afterSaveTab = "stay"; }}>Stay here</button>
-					</div>
-				</section>
+			<div class="progress-rail" aria-hidden="true">
+				<span class="progress-node progress-node-active">01 Identity</span>
+				<span class="progress-line"></span>
+				<span class="progress-node progress-node-active">02 Harness</span>
+				<span class="progress-line"></span>
+				<span class="progress-node progress-node-active">03 Memory</span>
+				<span class="progress-line progress-line-muted"></span>
+				<span class="progress-node">04 Sources</span>
 			</div>
 
-			<footer class="onboarding-actions">
+			<div class="onboarding-body">
+				<aside class="setup-summary setup-panel" aria-hidden="true">
+					<div class="summary-readout">
+						<span class="summary-label">ACTIVE PROFILE</span>
+						<strong>{agentName.trim() || "My Agent"}</strong>
+						<p>{agentDescription.trim() || "Personal AI assistant"}</p>
+					</div>
+					<div class="summary-grid">
+						<div>
+							<span>provider</span>
+							<strong>{providerOption.label}</strong>
+						</div>
+						<div>
+							<span>model</span>
+							<strong>{provider === "none" ? "disabled" : model}</strong>
+						</div>
+						<div>
+							<span>harnesses</span>
+							<strong>{selectedHarnesses.length || 0} selected</strong>
+						</div>
+						<div>
+							<span>next</span>
+							<strong>{afterSaveTab === "sources" ? "sources" : afterSaveTab === "settings" ? "settings" : "dashboard"}</strong>
+						</div>
+					</div>
+					<p class="summary-note">Recommended: keep the default harness, choose the extraction backend you already trust, then connect sources.</p>
+				</aside>
+
+				<main class="setup-main">
+					<section class="setup-panel identity-panel">
+						<div class="section-head">
+							<span class="step">01</span>
+							<div>
+								<h3>Identity</h3>
+								<p>Give the agent a recognizable name before syncing it into tools.</p>
+							</div>
+						</div>
+						<div class="field-grid">
+							<label class="field">
+								<span>Name</span>
+								<Input class="onboarding-input" bind:value={agentName} placeholder="Dot" />
+							</label>
+							<label class="field field-wide">
+								<span>Description</span>
+								<Textarea class="onboarding-input onboarding-textarea" rows={2} bind:value={agentDescription} placeholder="A portable memory agent for..." />
+							</label>
+						</div>
+					</section>
+
+					<section class="setup-panel">
+						<div class="section-head">
+							<span class="step">02</span>
+							<div>
+								<h3>Harness sync</h3>
+								<p>Choose where Signet should maintain this identity. Installed harnesses are ready now.</p>
+							</div>
+						</div>
+						<div class="harness-list">
+							{#each harnessOptions as h (h.id)}
+								<label class="harness-row sig-switch" class:harness-row-active={selectedHarnesses.includes(h.id)}>
+									<Checkbox checked={selectedHarnesses.includes(h.id)} onCheckedChange={(checked) => toggleHarness(h.id, checked)} />
+									<span class="status-dot" class:status-dot-installed={h.meta?.exists}></span>
+									<span class="harness-main">
+										<strong>{h.id}</strong>
+										<small>{h.meta?.path ?? "known harness"}</small>
+									</span>
+									<span class="harness-state">{h.meta?.exists ? "installed" : "not found"}</span>
+								</label>
+							{/each}
+						</div>
+					</section>
+
+					<section class="setup-panel memory-panel">
+						<div class="section-head">
+							<span class="step">03</span>
+							<div>
+								<h3>Memory engine</h3>
+								<p>Pick the extraction path. The common choices are first; advanced routes stay available without dominating the flow.</p>
+							</div>
+						</div>
+
+						<div class="provider-grid">
+							<p class="provider-group-title">Recommended routes</p>
+							{#each PROVIDERS as option (option.value)}
+								{#if option.value === "acpx" || option.value === "ollama" || option.value === "codex" || option.value === "claude-code"}
+									<button type="button" class="provider-card sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)}>
+										<span class="provider-mode">{option.mode}</span>
+										<strong>{option.label}</strong>
+										<small>{option.detail}</small>
+									</button>
+								{/if}
+							{/each}
+
+							<p class="provider-group-title provider-group-title-secondary">Other routes</p>
+							{#each PROVIDERS as option (option.value)}
+								{#if option.value !== "acpx" && option.value !== "ollama" && option.value !== "codex" && option.value !== "claude-code"}
+									<button type="button" class="provider-card provider-card-compact sig-switch" class:provider-card-active={provider === option.value} onclick={() => chooseProvider(option.value)}>
+										<span class="provider-mode">{option.mode}</span>
+										<strong>{option.label}</strong>
+										<small>{option.detail}</small>
+									</button>
+								{/if}
+							{/each}
+						</div>
+
+						<div class="provider-detail">
+							<div class="detail-banner">
+								<span>{providerOption.mode}</span>
+								<p>{providerOption.detail}</p>
+							</div>
+
+							{#if provider === "acpx"}
+								<div class="field field-wide">
+									<span>ACPX harness</span>
+									<div class="choice-row">
+										{#each selectedHarnesses as h (h)}
+											<button type="button" class="choice-pill sig-switch" class:choice-pill-active={selectedHarness === h} onclick={() => { selectedHarness = h; }}>{h}</button>
+										{/each}
+										{#if selectedHarnesses.length === 0}<small class="empty-hint">Select at least one harness above.</small>{/if}
+									</div>
+								</div>
+							{/if}
+
+							<div class="field-grid">
+								<label class="field">
+									<span>Model</span>
+									<Input class="onboarding-input" bind:value={model} placeholder="model id" disabled={provider === "none"} />
+								</label>
+								{#if needsEndpoint}
+									<label class="field">
+										<span>Endpoint URL</span>
+										<Input class="onboarding-input" bind:value={endpoint} placeholder={providerOption.endpointPlaceholder ?? "https://..."} />
+									</label>
+								{/if}
+							</div>
+
+							{#if selectedProviderModels.length > 0 && provider !== "none"}
+								<div class="choice-row preset-row" aria-label="Model presets">
+									{#each selectedProviderModels as preset (preset)}
+										<button type="button" class="choice-pill sig-switch" class:choice-pill-active={model === preset} onclick={() => { model = preset; }}>{preset}</button>
+									{/each}
+								</div>
+							{/if}
+
+							<label class="inline-toggle sig-switch">
+								<Checkbox checked={synthesisEnabled} onCheckedChange={(checked) => { synthesisEnabled = !!checked; }} />
+								<span>Use the same provider for session synthesis</span>
+							</label>
+						</div>
+					</section>
+
+					<section class="setup-panel next-panel">
+						<div class="section-head">
+							<span class="step">04</span>
+							<div>
+								<h3>Continue</h3>
+								<p>Save the basics, then move into the thing that makes memory useful: source connection.</p>
+							</div>
+						</div>
+						<div class="choice-row next-row">
+							<button type="button" class="choice-pill sig-switch" class:choice-pill-active={afterSaveTab === "sources"} onclick={() => { afterSaveTab = "sources"; }}>Connect sources</button>
+							<button type="button" class="choice-pill sig-switch" class:choice-pill-active={afterSaveTab === "settings"} onclick={() => { afterSaveTab = "settings"; }}>Review settings</button>
+							<button type="button" class="choice-pill sig-switch" class:choice-pill-active={afterSaveTab === "stay"} onclick={() => { afterSaveTab = "stay"; }}>Stay here</button>
+						</div>
+					</section>
+				</main>
+			</div>
+
+			<footer class="onboarding-actions sig-panel-footer">
 				<Button variant="ghost" type="button" onclick={openSettings}>Open full settings</Button>
 				<div class="action-cluster">
 					<Button variant="outline" type="button" onclick={dismiss}>Skip</Button>
-					<Button type="button" onclick={finish} disabled={saving}>{saving ? "Saving…" : "Save onboarding"}</Button>
+					<Button type="button" onclick={finish} disabled={saving}>{saving ? "Saving…" : "Save and continue"}</Button>
 				</div>
 			</footer>
 		</div>
@@ -427,122 +485,318 @@ async function finish(): Promise<void> {
 		z-index: 90;
 		display: grid;
 		place-items: center;
-		padding: 22px;
-		background: color-mix(in srgb, var(--sig-bg), transparent 18%);
-		backdrop-filter: blur(2px);
+		padding: 24px;
+		background:
+			radial-gradient(circle at 52% 16%, color-mix(in srgb, var(--sig-highlight), transparent 84%), transparent 32%),
+			color-mix(in srgb, var(--sig-bg), transparent 10%);
+		backdrop-filter: blur(5px) saturate(0.95);
 	}
 
 	.onboarding-modal {
-		width: min(1040px, 100%);
-		max-height: min(880px, calc(100vh - 44px));
+		position: relative;
+		width: min(1060px, 100%);
+		max-height: min(900px, calc(100vh - 48px));
 		display: flex;
 		flex-direction: column;
-		border: 1px solid var(--sig-border-strong);
 		background: var(--sig-bg);
-		box-shadow: 0 0 0 1px var(--sig-bg), 0 20px 70px rgba(0, 0, 0, 0.55);
 		overflow: hidden;
 	}
 
+	.onboarding-modal::before,
+	.onboarding-modal::after {
+		content: "";
+		position: absolute;
+		z-index: 2;
+		pointer-events: none;
+		width: 24px;
+		height: 24px;
+		border-color: var(--sig-border-strong);
+		border-style: solid;
+		opacity: 0.45;
+	}
+
+	.onboarding-modal::before {
+		top: 10px;
+		left: 10px;
+		border-width: 1px 0 0 1px;
+	}
+
+	.onboarding-modal::after {
+		right: 10px;
+		bottom: 10px;
+		border-width: 0 1px 1px 0;
+	}
+
 	.onboarding-header {
+		position: relative;
 		display: flex;
 		align-items: flex-start;
 		justify-content: space-between;
-		gap: 18px;
-		padding: 20px 22px 18px;
-		border-bottom: 1px solid var(--sig-border-strong);
-		background: linear-gradient(90deg, color-mix(in srgb, var(--sig-surface-raised), var(--sig-highlight) 4%), var(--sig-bg));
+		gap: 24px;
+		padding: 20px 30px 18px;
+		background:
+			linear-gradient(var(--sig-grid-line) 1px, transparent 1px),
+			linear-gradient(90deg, var(--sig-grid-line) 1px, transparent 1px),
+			linear-gradient(135deg, color-mix(in srgb, var(--sig-surface-raised), var(--sig-highlight) 8%), var(--sig-bg) 64%);
+		background-size: 28px 28px, 28px 28px, auto;
+		overflow: hidden;
 	}
 
-	.eyebrow,
+	.onboarding-header::after {
+		content: "SIGNET / MEMORY / IDENTITY";
+		position: absolute;
+		right: 72px;
+		bottom: -15px;
+		font-family: var(--font-display, monospace);
+		font-size: clamp(24px, 5vw, 58px);
+		letter-spacing: 0.1em;
+		color: var(--sig-text-bright);
+		opacity: 0.022;
+		white-space: nowrap;
+		pointer-events: none;
+	}
+
+	.header-copy {
+		position: relative;
+		z-index: 1;
+		max-width: 760px;
+	}
+
+	.header-kicker,
 	.field > span,
 	.step,
-	.harness-state {
+	.harness-state,
+	.provider-mode,
+	.summary-label,
+	.summary-grid span {
 		font-family: var(--font-mono, monospace);
 		font-size: 10px;
-		letter-spacing: 0.13em;
+		letter-spacing: 0.1em;
 		text-transform: uppercase;
-		color: var(--sig-highlight);
+		color: var(--sig-text-muted);
 	}
 
-	.eyebrow,
+	.header-kicker {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		margin-bottom: 10px;
+		color: var(--sig-highlight-text);
+	}
+
+	.signal-dot {
+		width: 7px;
+		height: 7px;
+		border: 1px solid var(--sig-success);
+		background: var(--sig-success);
+		box-shadow: 0 0 10px color-mix(in srgb, var(--sig-success), transparent 28%);
+	}
+
+	.header-coordinate {
+		color: var(--sig-text-muted);
+	}
+
 	h2,
 	.lede,
 	h3,
-	.section-head p {
+	.section-head p,
+	.summary-readout p {
 		margin: 0;
 	}
 
 	h2 {
-		margin-top: 4px;
-		font-family: var(--font-display, var(--font-heading, inherit));
-		font-size: clamp(28px, 4vw, 44px);
-		line-height: 0.95;
-		letter-spacing: -0.04em;
+		font-family: var(--font-display, monospace);
+		font-size: clamp(24px, 3.4vw, 38px);
+		line-height: 0.94;
+		letter-spacing: 0.06em;
 		color: var(--sig-text-bright);
 		text-transform: uppercase;
+		text-wrap: balance;
 	}
 
 	.lede {
-		max-width: 680px;
+		max-width: 650px;
 		margin-top: 10px;
 		font-size: 14px;
-		line-height: 1.5;
+		line-height: 1.45;
 		color: var(--sig-text);
 	}
 
 	.icon-button {
-		width: 38px;
-		height: 38px;
-		border: 1px solid var(--sig-border-strong);
-		background: var(--sig-surface-raised);
+		position: relative;
+		z-index: 3;
+		width: 40px;
+		height: 40px;
 		color: var(--sig-text);
-		font-size: 22px;
+		font-size: 24px;
+		line-height: 1;
 		cursor: pointer;
+	}
+
+	.progress-rail {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 12px 34px;
+		border-right: 1px solid var(--sig-border);
+		background: var(--sig-surface);
+	}
+
+	.progress-node {
+		display: grid;
+		place-items: center;
+		width: auto;
+		min-width: 82px;
+		height: 22px;
+		padding: 0 8px;
+		border: 1px solid var(--sig-border);
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		color: var(--sig-text-muted);
+		background: var(--sig-bg);
+	}
+
+	.progress-node-active {
+		border-color: var(--sig-highlight-dim);
+		color: var(--sig-highlight-text);
+		background: var(--sig-highlight-muted);
+	}
+
+	.progress-line {
+		flex: 1;
+		height: 1px;
+		background: linear-gradient(90deg, var(--sig-highlight), var(--sig-border-strong));
+		opacity: 0.55;
+	}
+
+	.progress-line-muted {
+		background: var(--sig-border);
 	}
 
 	.onboarding-body {
 		display: grid;
-		grid-template-columns: minmax(260px, 0.9fr) minmax(380px, 1.4fr);
-		gap: 12px;
-		padding: 14px;
+		grid-template-columns: 1fr;
+		gap: 18px;
+		padding: 18px 18px 28px;
 		overflow: auto;
+		background:
+			radial-gradient(circle at 22% 18%, var(--sig-highlight-dim), transparent 28%),
+			var(--sig-bg);
+	}
+
+	.setup-main {
+		display: grid;
+		grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+		gap: 18px;
+		align-items: start;
 	}
 
 	.setup-panel {
+		position: relative;
+		border: 1px solid var(--sig-border-strong);
+		border-radius: var(--sig-radius);
+		background: color-mix(in srgb, var(--sig-surface), transparent 5%);
+		padding: 16px;
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 3px rgba(0, 0, 0, 0.28);
+		overflow: hidden;
+	}
+
+	.setup-panel::before {
+		content: "";
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+		background: linear-gradient(135deg, rgba(255, 255, 255, 0.035), transparent 42%);
+	}
+
+	.setup-summary {
+		display: none;
+	}
+
+	.summary-readout {
+		position: relative;
+		padding-right: 16px;
+		border-right: 1px solid var(--sig-border);
+	}
+
+	.summary-readout strong {
+		display: block;
+		margin-top: 8px;
+		font-family: var(--font-display, monospace);
+		font-size: 26px;
+		line-height: 1;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--sig-text-bright);
+	}
+
+	.summary-readout p,
+	.summary-note {
+		margin-top: 10px;
+		font-size: 13px;
+		line-height: 1.45;
+		color: var(--sig-text-muted);
+	}
+
+	.summary-grid {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
 		border: 1px solid var(--sig-border);
-		background: var(--sig-surface);
-		padding: 14px;
+		background: var(--sig-bg);
 	}
 
-	.setup-panel-wide {
+	.summary-grid div {
+		padding: 10px 11px;
+		border-right: 1px solid var(--sig-border);
+	}
+
+	.summary-grid div:last-child {
+		border-right: 0;
+	}
+
+	.summary-grid strong {
+		display: block;
+		margin-top: 4px;
+		font-family: var(--font-mono, monospace);
+		font-size: 15px;
+		line-height: 1.1;
+		color: var(--sig-text-bright);
+		word-break: break-word;
+	}
+
+	.identity-panel,
+	.next-panel {
+		grid-column: 1;
+	}
+
+	.memory-panel {
 		grid-column: 2;
-	}
-
-	.identity-panel {
-		grid-row: span 1;
+		grid-row: 1 / span 3;
 	}
 
 	.section-head {
+		position: relative;
 		display: flex;
-		gap: 11px;
+		gap: 12px;
 		align-items: flex-start;
-		margin-bottom: 12px;
+		margin-bottom: 14px;
 	}
 
 	.step {
 		display: inline-grid;
 		place-items: center;
-		width: 30px;
-		height: 30px;
+		width: 32px;
+		height: 32px;
 		border: 1px solid var(--sig-border-strong);
 		background: var(--sig-bg);
 		color: var(--sig-text-bright);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 	}
 
 	h3 {
-		font-family: var(--font-display, inherit);
-		font-size: 18px;
-		letter-spacing: 0.02em;
+		font-family: var(--font-display, monospace);
+		font-size: 14px;
+		letter-spacing: 0.09em;
 		color: var(--sig-text-bright);
 		text-transform: uppercase;
 	}
@@ -550,9 +804,10 @@ async function finish(): Promise<void> {
 	.section-head p,
 	.provider-card small,
 	.harness-main small,
-	.detail-banner p {
+	.detail-banner p,
+	.empty-hint {
 		font-size: 12px;
-		line-height: 1.4;
+		line-height: 1.35;
 		color: var(--sig-text-muted);
 	}
 
@@ -566,18 +821,38 @@ async function finish(): Promise<void> {
 	.harness-main {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 7px;
 	}
 
 	.field-wide {
 		grid-column: 1 / -1;
 	}
 
+	:global(.onboarding-input) {
+		border-radius: var(--sig-radius) !important;
+		border-color: var(--sig-border-strong) !important;
+		background: color-mix(in srgb, var(--sig-bg), transparent 6%) !important;
+		color: var(--sig-text-bright) !important;
+		font-family: var(--font-mono, monospace) !important;
+		box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.28) !important;
+	}
+
+	:global(.onboarding-textarea) {
+		min-height: 74px !important;
+		resize: vertical;
+	}
+
 	.harness-list,
 	.provider-detail {
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
+		gap: 9px;
+	}
+
+	.harness-list {
+		max-height: 268px;
+		overflow: auto;
+		padding-right: 2px;
 	}
 
 	.harness-row {
@@ -585,14 +860,13 @@ async function finish(): Promise<void> {
 		align-items: center;
 		gap: 10px;
 		padding: 10px;
-		border: 1px solid var(--sig-border);
-		background: var(--sig-bg);
 		cursor: pointer;
 	}
 
 	.harness-row-active {
-		border-color: var(--sig-border-strong);
-		background: color-mix(in srgb, var(--sig-surface-raised), var(--sig-highlight) 5%);
+		border-color: var(--sig-highlight-dim);
+		background: var(--sig-highlight-muted);
+		box-shadow: inset 3px 0 0 var(--sig-highlight), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 	}
 
 	.status-dot {
@@ -600,11 +874,13 @@ async function finish(): Promise<void> {
 		height: 8px;
 		border: 1px solid var(--sig-text-muted);
 		background: transparent;
+		flex: 0 0 auto;
 	}
 
 	.status-dot-installed {
 		border-color: var(--sig-success);
 		background: var(--sig-success);
+		box-shadow: 0 0 8px color-mix(in srgb, var(--sig-success), transparent 40%);
 	}
 
 	.harness-main {
@@ -625,34 +901,60 @@ async function finish(): Promise<void> {
 
 	.provider-grid {
 		display: grid;
-		grid-template-columns: repeat(5, minmax(0, 1fr));
-		gap: 8px;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 9px;
 		margin-bottom: 12px;
 	}
 
+	.provider-group-title {
+		grid-column: 1 / -1;
+		margin: 2px 0 -2px;
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		letter-spacing: 0.11em;
+		text-transform: uppercase;
+		color: var(--sig-highlight-text);
+	}
+
+	.provider-group-title-secondary {
+		margin-top: 8px;
+		color: var(--sig-text-muted);
+	}
+
+	.provider-card-compact {
+		min-height: 72px;
+	}
+
+	.provider-card-compact small {
+		display: none;
+	}
+
 	.provider-card {
-		min-height: 92px;
-		padding: 10px;
+		min-height: 78px;
+		padding: 12px;
 		text-align: left;
-		border: 1px solid var(--sig-border);
-		background: var(--sig-bg);
 		color: var(--sig-text);
 		cursor: pointer;
 	}
 
-	.provider-card span {
+	.provider-card strong {
 		display: block;
-		margin-bottom: 7px;
-		font-family: var(--font-display, inherit);
+		margin: 7px 0 6px;
+		font-family: var(--font-display, monospace);
 		font-size: 13px;
+		letter-spacing: 0.08em;
 		text-transform: uppercase;
 		color: var(--sig-text-bright);
 	}
 
 	.provider-card-active {
 		border-color: var(--sig-highlight);
-		background: color-mix(in srgb, var(--sig-bg), var(--sig-highlight) 9%);
-		box-shadow: inset 3px 0 0 var(--sig-highlight);
+		background: color-mix(in srgb, var(--sig-surface-raised), var(--sig-highlight) 10%);
+		box-shadow: var(--sig-glow-highlight), inset 3px 0 0 var(--sig-highlight), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+	}
+
+	.provider-mode {
+		color: var(--sig-highlight-text);
 	}
 
 	.detail-banner {
@@ -661,14 +963,15 @@ async function finish(): Promise<void> {
 		align-items: center;
 		padding: 10px 12px;
 		border: 1px solid var(--sig-border-strong);
-		background: var(--sig-surface-raised);
+		border-radius: var(--sig-radius);
+		background: var(--sig-bg);
 	}
 
 	.detail-banner span {
 		font-family: var(--font-mono, monospace);
 		font-size: 10px;
 		text-transform: uppercase;
-		color: var(--sig-highlight);
+		color: var(--sig-highlight-text);
 	}
 
 	.choice-row {
@@ -677,32 +980,40 @@ async function finish(): Promise<void> {
 		gap: 8px;
 	}
 
+	.preset-row {
+		padding-top: 2px;
+	}
+
 	.choice-pill {
-		border: 1px solid var(--sig-border);
-		background: var(--sig-bg);
-		color: var(--sig-text);
 		padding: 7px 10px;
 		font-family: var(--font-mono, monospace);
-		font-size: 11px;
+		font-size: 12px;
+		color: var(--sig-text);
 		cursor: pointer;
 	}
 
 	.choice-pill-active {
 		border-color: var(--sig-highlight);
 		color: var(--sig-text-bright);
-		background: color-mix(in srgb, var(--sig-bg), var(--sig-highlight) 8%);
+		background: var(--sig-highlight-muted);
 	}
 
 	.inline-toggle {
 		display: flex;
 		align-items: center;
 		gap: 9px;
+		padding: 10px;
 		font-size: 12px;
 		color: var(--sig-text);
+		cursor: pointer;
 	}
 
 	.next-panel {
-		background: color-mix(in srgb, var(--sig-surface), var(--sig-highlight) 3%);
+		background: color-mix(in srgb, var(--sig-surface), var(--sig-success) 4%);
+	}
+
+	.next-row .choice-pill:first-child {
+		border-color: color-mix(in srgb, var(--sig-success), var(--sig-border-strong) 35%);
 	}
 
 	.onboarding-actions {
@@ -710,8 +1021,7 @@ async function finish(): Promise<void> {
 		align-items: center;
 		justify-content: space-between;
 		gap: 12px;
-		padding: 14px;
-		border-top: 1px solid var(--sig-border-strong);
+		padding: 16px 22px;
 		background: var(--sig-surface);
 	}
 
@@ -720,15 +1030,53 @@ async function finish(): Promise<void> {
 		gap: 10px;
 	}
 
-	@media (max-width: 900px) {
+	@media (max-width: 980px) {
 		.onboarding-body,
+		.setup-main,
 		.field-grid,
 		.provider-grid {
 			grid-template-columns: 1fr;
 		}
 
-		.setup-panel-wide {
+		.setup-summary {
+			position: relative;
+			min-height: auto;
+		}
+
+		.identity-panel,
+		.memory-panel,
+		.next-panel {
 			grid-column: auto;
+			grid-row: auto;
+		}
+	}
+
+	@media (max-width: 620px) {
+		.onboarding-backdrop {
+			padding: 8px;
+		}
+
+		.onboarding-header {
+			padding: 22px 18px 18px;
+		}
+
+		.header-coordinate,
+		.progress-rail,
+		.setup-summary {
+			display: none;
+		}
+
+		.onboarding-body {
+			padding: 10px;
+		}
+
+		.onboarding-actions {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.action-cluster {
+			justify-content: flex-end;
 		}
 	}
 </style>
