@@ -161,10 +161,10 @@ get_manifest_value() {
   fi
 }
 
-# ── Component list (Bun-only, no Node.js) ──
+# ── Component list (Node.js runtime) ──
 
 COMPONENTS=(
-  "bun:signet-bun-${PLATFORM}"
+  "node:signet-node-${PLATFORM}"
   "cli:signet-cli"
   "daemon-js:signet-daemon-js"
   "daemon-rs:signet-daemon-rs-${PLATFORM}"
@@ -192,38 +192,38 @@ generate_wrappers() {
 SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export SIGNET_DIR
 
-SIGNET_BUN="$SIGNET_DIR/runtime/bun/bun"
+SIGNET_NODE="$SIGNET_DIR/runtime/node/bin/node"
 SIGNET_CLI="$SIGNET_DIR/runtime/cli/cli.js"
 SIGNET_DAEMON="$SIGNET_DIR/runtime/daemon-js/daemon.js"
 
 case "${1:-}" in
   start)
-    exec "$SIGNET_BUN" "$SIGNET_DAEMON" "$@"
+    exec "$SIGNET_NODE" "$SIGNET_DAEMON" "$@"
     ;;
   daemon)
     case "${2:-}" in
       start|restart)
-        exec "$SIGNET_BUN" "$SIGNET_DAEMON" "$@"
+        exec "$SIGNET_NODE" "$SIGNET_DAEMON" "$@"
         ;;
     esac
     ;;
 esac
 
-exec "$SIGNET_BUN" "$SIGNET_CLI" "$@"
+exec "$SIGNET_NODE" "$SIGNET_CLI" "$@"
 WRAPPER
   chmod +x "${bindir}/signet"
 
   cat > "${bindir}/signet-daemon" << 'WRAPPER'
 #!/usr/bin/env bash
 SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-exec "$SIGNET_DIR/runtime/bun/bun" "$SIGNET_DIR/runtime/daemon-js/daemon.js" "$@"
+exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/daemon-js/daemon.js" "$@"
 WRAPPER
   chmod +x "${bindir}/signet-daemon"
 
   cat > "${bindir}/signet-mcp" << 'WRAPPER'
 #!/usr/bin/env bash
 SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-exec "$SIGNET_DIR/runtime/bun/bun" "$SIGNET_DIR/runtime/cli/cli.js" mcp "$@"
+exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" mcp "$@"
 WRAPPER
   chmod +x "${bindir}/signet-mcp"
 
@@ -293,7 +293,7 @@ main() {
   printf "${BOLD}  Downloading components...${NC}\n"
   echo ""
 
-  REQUIRED_COMPONENTS="bun cli daemon-js"
+  REQUIRED_COMPONENTS="node cli daemon-js"
 
   for entry in "${COMPONENTS[@]}"; do
     name="${entry%%:*}"

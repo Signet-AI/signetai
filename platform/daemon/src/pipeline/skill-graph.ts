@@ -9,6 +9,7 @@
  * - Entity extraction from the SKILL.md body
  */
 
+import { createHash } from "node:crypto";
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "../db-helpers";
 import { logger } from "../logger";
@@ -105,7 +106,7 @@ export function skillEmbeddingHash(entityId: string, fm: SkillFrontmatter): stri
 }
 
 function contentHash(text: string): string {
-	const h = new Bun.CryptoHasher("sha256");
+	const h = createHash("sha256");
 	h.update(text);
 	return h.digest("hex").slice(0, 16);
 }

@@ -11,12 +11,12 @@ curl -fsSL https://signetai.sh/install.sh | bash
 ## What This Does
 
 1. Detects your platform (macOS ARM64/x64, Linux ARM64/x64)
-2. Downloads pre-built components (Bun, Node.js, CLI, daemon, dashboard, skills)
+2. Downloads pre-built components (Node.js, CLI, daemon, dashboard, skills)
 3. Installs to `~/.signet/`
 4. Adds `signet` to your PATH
 5. Runs setup wizard and starts the daemon
 
-No need to install Bun, Node.js, or anything else manually.
+No need to install Node.js or anything else manually.
 
 ## Install Options
 
@@ -37,7 +37,7 @@ SIGNET_NO_PATH=1 curl -fsSL https://signetai.sh/install.sh | bash
 ## Uninstall
 
 ```bash
-bash ~/.signet/deploy/bundle/uninstall.sh
+~/.signet/bin/signet-uninstall
 ```
 
 Add `--purge` to also remove user data at `~/.agents/`.
@@ -45,7 +45,7 @@ Add `--purge` to also remove user data at `~/.agents/`.
 ## Update
 
 ```bash
-signet update
+~/.signet/bin/signet-update
 ```
 
 Downloads only the components that changed since your last install.
@@ -60,8 +60,7 @@ per-component for incremental updates.
 
 | Component | Description | Platform-Specific |
 |-----------|-------------|-------------------|
-| `bun` | Bun runtime (for daemon) | Yes |
-| `node` | Node.js runtime (for CLI) | Yes |
+| `node` | Node.js runtime | Yes |
 | `cli` | CLI command bundle | No |
 | `daemon-js` | Daemon JS bundle | No |
 | `daemon-rs` | Rust daemon binary | Yes |
@@ -70,7 +69,10 @@ per-component for incremental updates.
 | `connectors` | Harness integration bundles | No |
 | `plugin-opencode` | OpenCode plugin | No |
 | `plugin-oh-my-pi` | Oh My Pi extension | No |
+| `plugin-pi` | Pi extension | No |
 | `native` | NAPI native module | Yes |
+| `onnxruntime` | ONNX Runtime native binaries | Yes |
+| `sqlite-vec` | SQLite vector extension | Yes |
 | `skills` | Built-in skills | No |
 | `templates` | Config templates | No |
 
@@ -81,9 +83,10 @@ per-component for incremental updates.
 ├── bin/
 │   ├── signet           # Main CLI wrapper
 │   ├── signet-daemon    # Daemon wrapper
-│   └── signet-mcp       # MCP wrapper
+│   ├── signet-mcp       # MCP wrapper
+│   ├── signet-uninstall # Uninstaller
+│   └── signet-update    # Incremental updater
 ├── runtime/
-│   ├── bun/bun
 │   ├── node/bin/node
 │   ├── cli/cli.js
 │   ├── daemon-js/

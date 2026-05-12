@@ -40,6 +40,7 @@
     "@huggingface/transformers": "^3.4.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@signet/core": "workspace:*",
+    "better-sqlite3": "^11.0.0",
     "chokidar": "^4.0.0",
     "graphology": "^0.26.0",
     "graphology-communities-louvain": "^2.0.2",
@@ -59,7 +60,9 @@
     "@signet/native": "workspace:*"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/libsodium-wrappers": "^0.8.2",
-    "@types/yauzl": "^2.10.3"
+    "@types/yauzl": "^2.10.3",
+    "esbuild": "^0.25.0"
   }
 }

@@ -158,18 +158,16 @@ jobs:
       - name: Build core (shared dependency)
         run: bun run build:core
 
-      # ── Bun runtime (single runtime — no Node.js needed) ──
+      # ── Node.js runtime (single runtime) ──
 
-      - name: Stage Bun runtime
+      - name: Stage Node.js runtime
         run: |
-          BUN_BIN="$(which bun)"
-          BUN_VERSION="$(bun --version)"
-          STAGE="$ARTIFACT_DIR/signet-bun-$PLATFORM"
-          mkdir -p "$STAGE"
-          cp "$BUN_BIN" "$STAGE/bun"
-          chmod +x "$STAGE/bun"
-          tar czf "$ARTIFACT_DIR/signet-bun-$PLATFORM.tar.gz" -C "$STAGE" bun
-          echo "BUN_VERSION=$BUN_VERSION" >> "$GITHUB_ENV"
+          STAGE="$ARTIFACT_DIR/signet-node-$PLATFORM"
+          mkdir -p "$STAGE/bin"
+          cp "$(which node)" "$STAGE/bin/node"
+          chmod +x "$STAGE/bin/node"
+          tar czf "$ARTIFACT_DIR/signet-node-$PLATFORM.tar.gz" -C "$STAGE" bin
+          echo "NODE_VERSION=$(node --version)" >> "$GITHUB_ENV"
 
       # ── CLI bundle (target bun, not node) ──
 
@@ -178,7 +176,7 @@ jobs:
         run: |
           bun run build:connector-base
           cd surfaces/cli
-          bun build ./src/cli.ts --outfile ./dist/cli.js --target bun
+          bun build ./src/cli.ts --outfile ./dist/cli.js --target node
           tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js
 
       # ── Daemon JS bundle ──

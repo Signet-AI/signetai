@@ -6,7 +6,6 @@
  * opened on demand (SQLite WAL mode allows concurrent readers).
  */
 
-import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -20,6 +19,24 @@ import {
 	recreateMemoriesFts,
 	runMigrations,
 } from "@signet/core";
+
+const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
+
+type SqliteDatabase = import("bun:sqlite").Database;
+
+let Database: new (path: string, opts?: Record<string, unknown>) => SqliteDatabase;
+
+if (isBun) {
+	// eslint-disable-next-line @typescript-eslint/no-require-imports
+	const mod = require("bun:sqlite");
+	Database = mod.Database;
+} else {
+	// eslint-disable-next-line @typescript-eslint/no-require-imports
+	Database = require("better-sqlite3");
+}
+
+type SQLQueryBindings = import("bun:sqlite").SQLQueryBindings;
+type Statement = import("bun:sqlite").Statement;
 
 const HOMEBREW_SQLITE_PATHS = [
 	"/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
@@ -265,7 +282,13 @@ export function resolveSqliteRuntimeConfig(opts?: {
 
 	const env = opts?.env ?? process.env;
 	const exists = opts?.exists ?? existsSync;
-	const set = opts?.set ?? ((path: string) => Database.setCustomSQLite(path));
+	const set =
+		opts?.set ??
+		((path: string) => {
+			if (typeof (Database as Record<string, unknown>).setCustomSQLite === "function") {
+				(Database as { setCustomSQLite(p: string): void }).setCustomSQLite(path);
+			}
+		});
 	const agentsDir = opts?.agentsDir ?? resolveSqliteAgentsDir({ env });
 	const envPath = env.SIGNET_SQLITE_PATH;
 	if (envPath && !exists(envPath)) {

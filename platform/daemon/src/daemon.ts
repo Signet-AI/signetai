@@ -9,6 +9,7 @@ import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFile as readFileAsync } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -65,13 +66,13 @@ import {
 	MEMORY_DB,
 	PID_FILE,
 	PORT,
+	type RuntimeProviderName,
+	type RuntimeSynthesisProviderName,
 	analyticsCollector,
 	authConfig,
 	bindAbort,
 	invalidateDiagnosticsCache,
 	providerRuntimeResolution,
-	type RuntimeProviderName,
-	type RuntimeSynthesisProviderName,
 	providerTracker,
 	readEnvTrimmed,
 	reloadAuthState,
@@ -169,7 +170,6 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 	return connectors.filter((cn) => cn.status !== "error").length;
 }
 
-
 // ============================================================================
 // Hono App
 // ============================================================================
@@ -250,7 +250,7 @@ async function syncHarnessConfigs() {
 	if (!existsSync(agentsMdPath)) return;
 	const activeHarnesses = new Set(loadConfiguredHarnesses(AGENTS_DIR));
 
-	const rawContent = await Bun.file(agentsMdPath).text();
+	const rawContent = await readFileAsync(agentsMdPath, "utf8");
 	const content = stripSignetBlock(rawContent);
 
 	const buildHeader = (targetName: string) => {
@@ -294,7 +294,7 @@ ${fileList}
 				const identityPath = join(AGENTS_DIR, name);
 				if (!existsSync(identityPath)) return "";
 				try {
-					const fileContent = (await Bun.file(identityPath).text()).trim();
+					const fileContent = (await readFileAsync(identityPath, "utf8")).trim();
 					if (!fileContent) return "";
 					const header = name.replace(".md", "");
 					return `\n## ${header}\n\n${fileContent}`;
@@ -857,7 +857,6 @@ async function stopPipelineRuntime(): Promise<void> {
 		} catch {}
 		shadowProcess = null;
 	}
-
 
 	if (embeddingTrackerHandle) {
 		try {

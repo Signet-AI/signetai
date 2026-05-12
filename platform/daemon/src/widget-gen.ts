@@ -7,13 +7,13 @@
  * and produces body-only HTML that uses the bridge API.
  */
 
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createEvent, eventBus } from "./event-bus";
+import { getWidgetProvider } from "./llm";
 import { logger } from "./logger";
 import { loadProbeResult } from "./mcp-probe";
-import { getWidgetProvider } from "./llm";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -305,7 +305,7 @@ export async function generateWidgetHtml(serverId: string): Promise<string> {
 
 	// Write to disk
 	ensureWidgetDir();
-	await Bun.write(widgetPath(serverId), html);
+	writeFileSync(widgetPath(serverId), html);
 
 	logger.info("widget", `Widget generated for ${serverId}`, {
 		size: html.length,
