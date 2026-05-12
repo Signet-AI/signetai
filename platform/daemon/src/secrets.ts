@@ -82,8 +82,23 @@ const MAX_SECRET_EXEC_TIMEOUT_MS = 30 * 60_000;
 const MIN_SECRET_EXEC_TIMEOUT_MS = 1_000;
 const DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 const SECRET_EXEC_JOB_TTL_MS = 60 * 60_000;
+const MAX_SECRET_EXEC_RUNNING_JOBS = 4;
+const MAX_SECRET_EXEC_QUEUED_JOBS = 64;
 
 const secretExecJobs = new Map<string, SecretExecJob>();
+const pendingSecretExecJobs: string[] = [];
+const secretExecJobRequests = new Map<
+	string,
+	{ command: string; secretRefs: Record<string, string>; options: SecretExecOptions }
+>();
+let runningSecretExecJobs = 0;
+
+export class SecretExecQueueFullError extends Error {
+	constructor() {
+		super("secret exec queue is full");
+		this.name = "SecretExecQueueFullError";
+	}
+}
 
 export interface SecretContextV1 {
 	readonly agentId?: string;
@@ -411,6 +426,28 @@ export async function execWithSecrets(
 		return out;
 	}
 
+	function createStreamingRedactor(): { push: (text: string) => string; finish: () => string } {
+		const longestSecret = Math.max(0, ...secretValues.filter((value) => value.length > 3).map((value) => value.length));
+		const overlap = Math.max(0, longestSecret * 2);
+		let pending = "";
+		return {
+			push(text: string): string {
+				if (overlap === 0) return text;
+				pending += text;
+				if (pending.length <= overlap) return "";
+				const emitLength = pending.length - overlap;
+				const emit = pending.slice(0, emitLength);
+				pending = pending.slice(emitLength);
+				return redact(emit);
+			},
+			finish(): string {
+				const emit = pending;
+				pending = "";
+				return redact(emit);
+			},
+		};
+	}
+
 	recordSecretEvent("secret.exec_started", {
 		secretCount: Object.keys(secretRefs).length,
 		envVars: Object.keys(secretRefs),
@@ -418,12 +455,16 @@ export async function execWithSecrets(
 	});
 
 	return new Promise((resolve, reject) => {
+		const useProcessGroup = process.platform !== "win32";
 		const proc = spawn(cmd[0], cmd.slice(1), {
+			detached: useProcessGroup,
 			env: { ...process.env, ...resolved },
 			stdio: "pipe",
 			windowsHide: true,
 		});
 
+		const stdoutRedactor = createStreamingRedactor();
+		const stderrRedactor = createStreamingRedactor();
 		let stdout = "";
 		let stderr = "";
 		let stdoutBytes = 0;
@@ -433,24 +474,41 @@ export async function execWithSecrets(
 		let settled = false;
 		let timedOut = false;
 
+		function killSpawnedProcess(signal: NodeJS.Signals): void {
+			if (!proc.pid) return;
+			try {
+				if (useProcessGroup) process.kill(-proc.pid, signal);
+				else proc.kill(signal);
+			} catch {
+				try {
+					proc.kill(signal);
+				} catch {
+					// Already gone.
+				}
+			}
+		}
+
 		const timer = setTimeout(() => {
 			timedOut = true;
-			proc.kill("SIGTERM");
+			killSpawnedProcess("SIGTERM");
 			setTimeout(() => {
-				if (!settled && proc.exitCode === null) proc.kill("SIGKILL");
+				if (!settled && proc.exitCode === null) killSpawnedProcess("SIGKILL");
 			}, 2_000).unref();
 		}, timeoutMs);
 		timer.unref();
 
-		function appendOutput(
+		function appendRedactedOutput(
 			current: string,
 			bytes: number,
-			chunk: Buffer,
+			text: string,
 			stream: "stdout" | "stderr",
 		): [string, number] {
+			const chunk = Buffer.from(text);
 			if (bytes >= maxOutputBytes) {
-				if (stream === "stdout") stdoutTruncated = true;
-				else stderrTruncated = true;
+				if (chunk.length > 0) {
+					if (stream === "stdout") stdoutTruncated = true;
+					else stderrTruncated = true;
+				}
 				return [current, bytes + chunk.length];
 			}
 			const remaining = maxOutputBytes - bytes;
@@ -469,10 +527,10 @@ export async function execWithSecrets(
 		}
 
 		proc.stdout?.on("data", (d: Buffer) => {
-			[stdout, stdoutBytes] = appendOutput(stdout, stdoutBytes, d, "stdout");
+			[stdout, stdoutBytes] = appendRedactedOutput(stdout, stdoutBytes, stdoutRedactor.push(d.toString()), "stdout");
 		});
 		proc.stderr?.on("data", (d: Buffer) => {
-			[stderr, stderrBytes] = appendOutput(stderr, stderrBytes, d, "stderr");
+			[stderr, stderrBytes] = appendRedactedOutput(stderr, stderrBytes, stderrRedactor.push(d.toString()), "stderr");
 		});
 
 		proc.on("close", (code) => {
@@ -481,6 +539,8 @@ export async function execWithSecrets(
 			clearTimeout(timer);
 			zeroResolved();
 			const finalCode = timedOut ? 124 : (code ?? 1);
+			[stdout, stdoutBytes] = appendRedactedOutput(stdout, stdoutBytes, stdoutRedactor.finish(), "stdout");
+			[stderr, stderrBytes] = appendRedactedOutput(stderr, stderrBytes, stderrRedactor.finish(), "stderr");
 			if (stdoutTruncated) stdout += "\n[signet secret exec: stdout truncated]\n";
 			if (stderrTruncated) stderr += "\n[signet secret exec: stderr truncated]\n";
 			if (timedOut) stderr += `\n[signet secret exec: timed out after ${timeoutMs}ms]\n`;
@@ -492,8 +552,8 @@ export async function execWithSecrets(
 			});
 
 			resolve({
-				stdout: redact(stdout),
-				stderr: redact(stderr),
+				stdout,
+				stderr,
 				code: finalCode,
 				...(timedOut ? { timedOut: true } : {}),
 			});
@@ -520,6 +580,9 @@ export function startSecretExecJob(
 	options: SecretExecOptions = {},
 ): SecretExecJob {
 	pruneSecretExecJobs();
+	if (pendingSecretExecJobs.length >= MAX_SECRET_EXEC_QUEUED_JOBS) {
+		throw new SecretExecQueueFullError();
+	}
 	const timeoutMs = normalizeSecretExecTimeoutMs(options.timeoutMs);
 	const job: SecretExecJob = {
 		id: randomUUID(),
@@ -528,22 +591,42 @@ export function startSecretExecJob(
 		timeoutMs,
 	};
 	secretExecJobs.set(job.id, job);
-
-	void (async () => {
-		job.status = "running";
-		job.startedAt = new Date().toISOString();
-		try {
-			job.result = await execWithSecrets(command, secretRefs, { ...options, timeoutMs });
-			job.status = "completed";
-		} catch (err) {
-			job.status = "failed";
-			job.error = err instanceof Error ? err.message : String(err);
-		} finally {
-			job.completedAt = new Date().toISOString();
-		}
-	})();
+	secretExecJobRequests.set(job.id, { command, secretRefs: { ...secretRefs }, options: { ...options, timeoutMs } });
+	pendingSecretExecJobs.push(job.id);
+	drainSecretExecQueue();
 
 	return { ...job };
+}
+
+function drainSecretExecQueue(): void {
+	while (runningSecretExecJobs < MAX_SECRET_EXEC_RUNNING_JOBS && pendingSecretExecJobs.length > 0) {
+		const jobId = pendingSecretExecJobs.shift();
+		if (!jobId) return;
+		const job = secretExecJobs.get(jobId);
+		const request = secretExecJobRequests.get(jobId);
+		if (!job || !request || job.status !== "queued") {
+			secretExecJobRequests.delete(jobId);
+			continue;
+		}
+
+		runningSecretExecJobs += 1;
+		void (async () => {
+			job.status = "running";
+			job.startedAt = new Date().toISOString();
+			try {
+				job.result = await execWithSecrets(request.command, request.secretRefs, request.options);
+				job.status = "completed";
+			} catch (err) {
+				job.status = "failed";
+				job.error = err instanceof Error ? err.message : String(err);
+			} finally {
+				job.completedAt = new Date().toISOString();
+				secretExecJobRequests.delete(jobId);
+				runningSecretExecJobs = Math.max(0, runningSecretExecJobs - 1);
+				drainSecretExecQueue();
+			}
+		})();
+	}
 }
 
 export function getSecretExecJob(id: string): SecretExecJob | undefined {
@@ -554,6 +637,9 @@ export function getSecretExecJob(id: string): SecretExecJob | undefined {
 
 export function resetSecretExecJobsForTests(): void {
 	secretExecJobs.clear();
+	secretExecJobRequests.clear();
+	pendingSecretExecJobs.length = 0;
+	runningSecretExecJobs = 0;
 }
 
 export function normalizeSecretExecTimeoutMs(value: unknown): number {
@@ -571,6 +657,7 @@ function pruneSecretExecJobs(now = Date.now()): void {
 		const timestamp = Date.parse(job.completedAt ?? job.createdAt);
 		if (Number.isFinite(timestamp) && now - timestamp > SECRET_EXEC_JOB_TTL_MS) {
 			secretExecJobs.delete(id);
+			secretExecJobRequests.delete(id);
 		}
 	}
 }

@@ -121,6 +121,46 @@ describe("local secrets provider", () => {
 		expect(result.stderr).toContain("timed out");
 	});
 
+	test("execWithSecrets redacts before output truncation can leak secret prefixes", async () => {
+		await putSecret("OPENAI_API_KEY", "sk-partial-secret");
+		const script = join(agentsDir, "partial-secret.mjs");
+		writeFileSync(script, `process.stdout.write(${JSON.stringify("A".repeat(1020))} + process.env.OPENAI_API_KEY);\n`);
+
+		const result = await execWithSecrets(
+			`bun ${script}`,
+			{ OPENAI_API_KEY: "OPENAI_API_KEY" },
+			{ timeoutMs: 1000, maxOutputBytes: 1024 },
+		);
+
+		expect(result.code).toBe(0);
+		expect(result.stdout).not.toContain("sk-");
+		expect(result.stdout).not.toContain("sk-partial-secret");
+		expect(result.stdout).toContain("stdout truncated");
+	});
+
+	test("execWithSecrets kills subprocess children on timeout", async () => {
+		await putSecret("OPENAI_API_KEY", "sk-child-timeout");
+		const marker = join(agentsDir, "child-survived.txt");
+		const child = join(agentsDir, "timeout-child.mjs");
+		const parent = join(agentsDir, "timeout-parent.mjs");
+		writeFileSync(child, `setTimeout(() => Bun.write(${JSON.stringify(marker)}, process.env.OPENAI_API_KEY), 1200);\n`);
+		writeFileSync(
+			parent,
+			[
+				'import { spawn } from "node:child_process";',
+				`spawn(process.execPath, [${JSON.stringify(child)}], { env: process.env, stdio: "ignore" });`,
+				"setTimeout(() => {}, 5000);",
+			].join("\n"),
+		);
+
+		const result = await execWithSecrets(`bun ${parent}`, { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 200 });
+		await new Promise((resolve) => setTimeout(resolve, 1400));
+
+		expect(result.code).toBe(124);
+		expect(result.timedOut).toBe(true);
+		expect(existsSync(marker)).toBe(false);
+	});
+
 	test("startSecretExecJob returns immediately and completes in the background", async () => {
 		await putSecret("OPENAI_API_KEY", "sk-background");
 		const script = join(agentsDir, "background-secret.mjs");
@@ -142,6 +182,21 @@ describe("local secrets provider", () => {
 		expect(finished?.result?.code).toBe(0);
 		expect(finished?.result?.stdout).toBe("[REDACTED]");
 		expect(finished?.result?.stdout).not.toContain("sk-background");
+	});
+
+	test("startSecretExecJob limits concurrently running jobs", async () => {
+		await putSecret("OPENAI_API_KEY", "sk-queued");
+		const script = join(agentsDir, "queued-secret.mjs");
+		writeFileSync(script, "setTimeout(() => process.stdout.write(process.env.OPENAI_API_KEY), 200);\n");
+
+		const jobs = Array.from({ length: 6 }, () =>
+			startSecretExecJob(`bun ${script}`, { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 }),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		const statuses = jobs.map((job) => getSecretExecJob(job.id)?.status);
+
+		expect(statuses.filter((status) => status === "running")).toHaveLength(4);
+		expect(statuses.filter((status) => status === "queued")).toHaveLength(2);
 	});
 
 	test("corrupt stores fail clearly and are not overwritten by list or health checks", async () => {

@@ -2301,6 +2301,9 @@ for the redacted result.
 
 Timed-out commands are terminated by the daemon and finish with code `124` and
 `timedOut: true` in the polled job result.
+The secret exec queue is bounded; saturated queues return `429`. Output is
+redacted before truncation, and timeout cleanup targets the subprocess process
+group where the platform supports it.
 
 **Queued response (`202`)**
 

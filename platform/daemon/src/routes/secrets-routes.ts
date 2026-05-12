@@ -6,6 +6,7 @@ import { recordPluginAuditEvent } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index.js";
 import type { PluginHostV1 } from "../plugins/index.js";
 import {
+	SecretExecQueueFullError,
 	deleteSecret,
 	getSecret,
 	getSecretExecJob,
@@ -249,7 +250,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		} catch (e) {
 			const err = e as Error;
 			logger.error("secrets", "exec_with_secrets failed", err);
-			return c.json({ error: err.message }, 500);
+			return c.json({ error: err.message }, err instanceof SecretExecQueueFullError ? 429 : 500);
 		}
 	});
 
@@ -284,7 +285,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		} catch (e) {
 			const err = e as Error;
 			logger.error("secrets", "exec_with_secrets failed", err, { name });
-			return c.json({ error: err.message }, 500);
+			return c.json({ error: err.message }, err instanceof SecretExecQueueFullError ? 429 : 500);
 		}
 	});
 

@@ -228,7 +228,7 @@ export function registerSecretCommands(program: Command, deps: SecretDeps): void
 				}
 				const status = readString(data, "status") ?? "unknown";
 				console.log(`Status: ${status}`);
-				const result = readRecord(data, "result");
+				const result = readRecord(readRecord(data)?.result);
 				if (result) {
 					const stdout = readString(result, "stdout");
 					const stderr = readString(result, "stderr");

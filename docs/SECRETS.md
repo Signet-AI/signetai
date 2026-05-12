@@ -212,6 +212,8 @@ stored Signet secret name or a 1Password `op://...` reference. The daemon:
 Secret exec is always queued; there is no synchronous request mode. This keeps
 large jobs such as SSH/rsync transfers from tying daemon request handling to
 subprocess lifetime. Pass optional `"timeoutMs"` to bound the background job.
+The daemon also bounds the secret exec worker pool and pending queue, terminates
+the subprocess process group on timeout, and redacts output before truncating it.
 
 **Queued response:**
 
