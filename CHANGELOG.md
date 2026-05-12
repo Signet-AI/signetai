@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-05-12
 - Features: add Bitwarden provider.
-- Bug fixes: register secret exec status in tool inventory; bound and queue secret exec; normalize acpx claude setup alias; add ACPX quick setup; degrade bounded git workspace operations; persist global bin paths; verify public ghcr pulls after publish; add most-used memories parity route.
+- Bug fixes: add HOME to launchd daemon plist env; register secret exec status in tool inventory; bound and queue secret exec; normalize acpx claude setup alias; add ACPX quick setup; degrade bounded git workspace operations; persist global bin paths; verify public ghcr pulls after publish; add most-used memories parity route.
 - Refactoring: add configurable identity presets.
 - Docs: correct stale documentation claims.
 
@@ -37,6 +37,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: correct stale documentation claims.
 
 ## Release Ledger
+
+## [0.117.1] - 2026-05-12
+
+Release summary: 1 bug fix.
+Tag range: `v0.117.0..v0.117.1`.
+
+### Bug Fixes
+
+- **cli**: add HOME to launchd daemon plist env (#700)
 
 ## [0.117.0] - 2026-05-12
 
