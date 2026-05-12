@@ -52,9 +52,9 @@ Downloads only the components that changed since your last install.
 
 ## Architecture
 
-Each component is built as an independent `tar.gz` by CI. When source files change,
-only the affected component is rebuilt. The manifest tracks versions and checksums
-per-component for incremental updates.
+Each component is built as an independent `tar.gz` by CI. The manifest
+tracks versions and checksums per-component so the updater only downloads
+what changed since the last install.
 
 ### Components
 

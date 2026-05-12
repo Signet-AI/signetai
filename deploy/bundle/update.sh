@@ -42,7 +42,19 @@ detect_platform() {
 PLATFORM="$(detect_platform)"
 LOCAL_MANIFEST="$SIGNET_INSTALL_DIR/manifest.json"
 TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+LOCKFILE="$SIGNET_INSTALL_DIR/.update.lock"
+trap 'rm -rf "$TMPDIR"; rm -f "$LOCKFILE"' EXIT
+
+if [ -f "$LOCKFILE" ]; then
+  LOCK_AGE="$(($(date +%s) - $(stat -f %m "$LOCKFILE" 2>/dev/null || stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0)))"
+  if [ "$LOCK_AGE" -lt 300 ]; then
+    err "Another update or install is already running (lock is ${LOCK_AGE}s old)"
+    exit 1
+  fi
+  warn "Stale lock found (${LOCK_AGE}s old) — removing"
+  rm -f "$LOCKFILE"
+fi
+echo "$$" > "$LOCKFILE"
 
 SHA256_CMD=""
 if command -v sha256sum >/dev/null 2>&1; then
