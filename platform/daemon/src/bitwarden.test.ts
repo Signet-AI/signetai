@@ -112,7 +112,7 @@ describe("Bitwarden secrets provider", () => {
 		expect(result.skippedCount).toBe(1);
 		expect(readCount).toBe(0);
 	});
-	test("Bitwarden CLI writes do not pass session tokens or secret-bearing payloads through argv", () => {
+	test("Bitwarden CLI writes use stdin-supported create/edit payloads and keep secrets out of argv", () => {
 		const source = readFileSync(new URL("./bitwarden.ts", import.meta.url), "utf8");
 		expect(source).not.toContain('"--session"');
 		expect(source).not.toContain('["create", "item", encoded.trim()]');

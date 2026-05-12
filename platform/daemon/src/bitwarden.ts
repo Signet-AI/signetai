@@ -294,6 +294,8 @@ class BwCliClient implements BitwardenClient {
 			notes: item.notes ?? "Managed by Signet secrets",
 		};
 		const encoded = await runBw(["encode"], { input: JSON.stringify(updated), session: this.session });
+		// Bitwarden CLI vault commands declare encodedJson as optional for create/edit and read it from
+		// stdin when omitted. Keep secret-bearing item payloads off argv and write them to stdin instead.
 		if (existing) {
 			return toItemDetails(
 				parseJson(await runBw(["edit", "item", existing.id], { input: encoded.trim(), session: this.session })),
