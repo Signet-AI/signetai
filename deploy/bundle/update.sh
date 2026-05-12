@@ -85,6 +85,7 @@ curl -fsSL "${DOWNLOAD_BASE}/manifest-${PLATFORM}.json" -o "$REMOTE_MANIFEST" ||
 
 if ! command -v jq >/dev/null 2>&1; then
   warn "jq not found — performing full reinstall"
+  rm -rf "$LOCKFILE"
   curl -fsSL "${DOWNLOAD_BASE}/install.sh" | SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash
   exit $?
 fi
@@ -136,6 +137,12 @@ fi
 # Download changed components
 COMPONENTS="$(jq -r '.components | keys[]' "$REMOTE_MANIFEST")"
 STAGED=""
+
+# Clean stale .old dirs from any previous failed update
+find "$SIGNET_INSTALL_DIR/runtime" -maxdepth 1 -name '*.old' -type d 2>/dev/null | while read -r olddir; do
+  warn "Cleaning stale backup: $(basename "$olddir")"
+  rm -rf "$olddir"
+done
 UPDATED=0
 FAILED=0
 
@@ -199,21 +206,42 @@ fi
 
 if [ -n "$STAGED" ]; then
   mkdir -p "$SIGNET_INSTALL_DIR/runtime"
+  PROMOTED=""
+  # Stage 1: Move old components aside (keep backups for rollback)
   for comp in $STAGED; do
     DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
     OLD="${DEST}.old"
     if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
+  done
+  # Stage 2: Promote staged components
+  for comp in $STAGED; do
+    DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
     if mv "$TMPDIR/staged/$comp" "$DEST" 2>/dev/null; then
+      OLD="${DEST}.old"
       rm -rf "$OLD"
       touch "$DEST/.complete"
       ok "$comp updated"
+      PROMOTED="$PROMOTED $comp"
     else
-      err "Failed to install $comp — rolling back"
+      err "Failed to install $comp"
       rm -rf "$DEST"
-      if [ -d "$OLD" ]; then mv "$OLD" "$DEST"; fi
+      # Roll back all components that already succeeded
+      for prev in $PROMOTED; do
+        PDEST="$SIGNET_INSTALL_DIR/runtime/$prev"
+        rm -rf "$PDEST"
+      done
+      # Restore all .old backups (promoted + failed)
+      for comp2 in $STAGED; do
+        OLD2="$SIGNET_INSTALL_DIR/runtime/$comp2.old"
+        DEST2="$SIGNET_INSTALL_DIR/runtime/$comp2"
+        if [ -d "$OLD2" ]; then mv "$OLD2" "$DEST2"; fi
+      done
       rm -rf "$TMPDIR/staged"
+      err "Update failed — all components rolled back"
       exit 1
     fi
+  done
+fi
   done
 fi
 
