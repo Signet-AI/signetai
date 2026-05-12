@@ -233,7 +233,11 @@ jobs:
           STAGE="$ARTIFACT_DIR/signet-connectors"
           mkdir -p "$STAGE"
           for pkg in integrations/*/connector/dist libs/connector-base/dist; do
-            name="$(basename "$(dirname "$pkg")")"
+            if [ "$pkg" = "libs/connector-base/dist" ]; then
+              name="connector-base"
+            else
+              name="$(basename "$(dirname "$(dirname "$pkg")")")"
+            fi
             mkdir -p "$STAGE/$name"
             cp -r "$pkg"/* "$STAGE/$name/" 2>/dev/null || true
           done
