@@ -68,7 +68,12 @@ interface DiscoveredFile {
 }
 
 async function* walkDir(dir: string, rootPath: string, ignorePatterns: readonly string[]): AsyncGenerator<string> {
-	const entries = readdirSync(dir, { withFileTypes: true });
+	let entries: ReturnType<typeof readdirSync>;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return;
+	}
 	for (const entry of entries) {
 		if (entry.name.startsWith(".")) continue;
 		if (ignorePatterns.includes(entry.name)) continue;

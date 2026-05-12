@@ -131,6 +131,11 @@ download() {
   }
 
   if [ -n "$sha" ]; then
+    if [ -z "$SHA256_CMD" ]; then
+      err "No checksum tool available — cannot verify $name"
+      rm -f "$tmp"
+      return 1
+    fi
     if ! sha_verify "$tmp" "$sha"; then
       err "Checksum mismatch for $name"
       rm -f "$tmp"
