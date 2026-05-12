@@ -15,7 +15,7 @@
     },
     "dist/signetai": {
       "name": "signetai",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "bin": {
         "signet": "bin/signet.js",
         "signet-mcp": "dist/mcp-stdio.js",
@@ -46,7 +46,7 @@
     },
     "integrations/claude-code/connector": {
       "name": "@signet/connector-claude-code",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -58,7 +58,7 @@
     },
     "integrations/codex/connector": {
       "name": "@signet/connector-codex",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -70,7 +70,7 @@
     },
     "integrations/forge/connector": {
       "name": "@signet/connector-forge",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -82,7 +82,7 @@
     },
     "integrations/gemini/connector": {
       "name": "@signet/connector-gemini",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -94,7 +94,7 @@
     },
     "integrations/hermes-agent/connector": {
       "name": "@signet/connector-hermes-agent",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -106,7 +106,7 @@
     },
     "integrations/oh-my-pi/connector": {
       "name": "@signet/connector-oh-my-pi",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -118,7 +118,7 @@
     },
     "integrations/oh-my-pi/extension": {
       "name": "@signet/oh-my-pi-extension",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@oh-my-pi/pi-coding-agent": "^13.16.4",
         "@signet/core": "workspace:*",
@@ -132,7 +132,7 @@
     },
     "integrations/openclaw/connector": {
       "name": "@signet/connector-openclaw",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -145,7 +145,7 @@
     },
     "integrations/openclaw/memory-adapter": {
       "name": "@signetai/signet-memory-openclaw",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@sinclair/typebox": "0.34.47",
       },
@@ -160,7 +160,7 @@
     },
     "integrations/opencode/connector": {
       "name": "@signet/connector-opencode",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -172,7 +172,7 @@
     },
     "integrations/opencode/plugin": {
       "name": "@signet/opencode-plugin",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -182,7 +182,7 @@
     },
     "integrations/pi/connector": {
       "name": "@signet/connector-pi",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/connector-base": "workspace:*",
         "@signet/core": "workspace:*",
@@ -194,7 +194,7 @@
     },
     "integrations/pi/extension": {
       "name": "@signet/pi-extension",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@mariozechner/pi-coding-agent": "^0.54.1",
         "@signet/core": "workspace:*",
@@ -209,14 +209,14 @@
     },
     "integrations/pi/extension-base": {
       "name": "@signet/pi-extension-base",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
     },
     "libs/connector-base": {
       "name": "@signet/connector-base",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/core": "workspace:*",
       },
@@ -230,7 +230,7 @@
     },
     "libs/sdk": {
       "name": "@signet/sdk",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "devDependencies": {
         "@types/react": "^19.0.0",
         "react": "^19.0.0",
@@ -269,7 +269,7 @@
     },
     "platform/core": {
       "name": "@signet/core",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "sqlite-vec": "^0.1.7-alpha.2",
         "yaml": "^2.6.0",
@@ -291,7 +291,7 @@
     },
     "platform/daemon": {
       "name": "@signet/daemon",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "bin": {
         "signet-daemon": "./dist/daemon.js",
         "signet-mcp": "./dist/mcp-stdio.js",
@@ -327,14 +327,14 @@
     },
     "platform/native": {
       "name": "@signet/native",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "devDependencies": {
         "@napi-rs/cli": "^3.5.1",
       },
     },
     "surfaces/browser-extension": {
       "name": "@signet/extension",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "devDependencies": {
         "@types/chrome": "^0.0.287",
         "typescript": "^5.7.0",
@@ -342,7 +342,7 @@
     },
     "surfaces/cli": {
       "name": "@signet/cli",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "bin": "./dist/cli.js",
       "dependencies": {
         "@inquirer/prompts": "^7.0.0",
@@ -413,7 +413,7 @@
     },
     "surfaces/desktop": {
       "name": "@signet/desktop",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "dependencies": {
         "@signet/tray": "workspace:*",
         "electron-updater": "^6.8.3",
@@ -427,7 +427,7 @@
     },
     "surfaces/tray": {
       "name": "@signet/tray",
-      "version": "0.116.2",
+      "version": "0.116.3",
       "devDependencies": {
         "typescript": "^5.7.0",
       },
