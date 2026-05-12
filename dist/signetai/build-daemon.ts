@@ -5,7 +5,7 @@
 
 import { build } from "esbuild";
 
-const EXTERNAL = ["better-sqlite3", "@1password/sdk", "onnxruntime-node", "@huggingface/transformers"];
+const EXTERNAL = ["better-sqlite3", "bun:sqlite", "@1password/sdk", "onnxruntime-node", "@huggingface/transformers"];
 
 const ALIAS: Record<string, string> = {
 	sharp: "../../platform/daemon/src/shims/sharp.ts",
