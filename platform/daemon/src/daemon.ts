@@ -136,6 +136,7 @@ import { mountOsAgentRoutes } from "./routes/os-agent.js";
 import { mountOsChatRoutes } from "./routes/os-chat.js";
 import { registerPipelineRoutes } from "./routes/pipeline-routes.js";
 import { registerPluginRoutes } from "./routes/plugins-routes.js";
+import { registerReflectionRoutes } from "./routes/reflection-routes.js";
 import { registerRepairRoutes } from "./routes/repair-routes.js";
 import { registerSecretRoutes } from "./routes/secrets-routes.js";
 import { registerSessionRoutes } from "./routes/session-routes.js";
@@ -195,6 +196,7 @@ registerSecretRoutes(app);
 registerSessionRoutes(app, { gitConfig, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync });
 registerSourcesRoutes(app);
 registerPipelineRoutes(app);
+registerReflectionRoutes(app);
 registerTelemetryRoutes(app);
 registerMiscRoutes(app);
 app.use("/api/inference", async (c, next) => {

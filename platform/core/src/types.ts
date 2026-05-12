@@ -368,6 +368,7 @@ export interface PipelineV2Config {
 	readonly writeGate?: PipelineWriteGateConfig;
 	readonly modelRegistry: PipelineModelRegistryConfig;
 	readonly hints?: PipelineHintsConfig;
+	readonly reflections: PipelineReflectionsConfig;
 }
 
 export interface ModelRegistryEntry {
@@ -460,6 +461,17 @@ export interface PipelineHintsConfig {
 	readonly timeout: number;
 	readonly maxTokens: number;
 	readonly poll: number;
+}
+
+export interface PipelineReflectionsConfig {
+	readonly enabled: boolean;
+	readonly model: string;
+	readonly timeout: number;
+	readonly maxTokens: number;
+	readonly schedule: string;
+	readonly timeWindowHours: number;
+	readonly maxMemories: number;
+	readonly maxSummaries: number;
 }
 
 export interface DreamingConfig {

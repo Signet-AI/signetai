@@ -2890,6 +2890,54 @@ export async function getDiagnostics(): Promise<DiagnosticsReport | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Daily Reflections
+// ---------------------------------------------------------------------------
+
+export interface DailyReflection {
+	id: string;
+	date: string;
+	summary: string;
+	patterns: string[];
+	question: string | null;
+	answer: string | null;
+	answerMemoryId: string | null;
+	createdAt: string;
+	answeredAt: string | null;
+}
+
+export interface TodayReflectionResponse {
+	reflection: DailyReflection | null;
+}
+
+export async function getTodayReflection(): Promise<TodayReflectionResponse> {
+	try {
+		const res = await fetch(`${API_BASE}/api/reflections/today`);
+		if (!res.ok) return { reflection: null };
+		return (await res.json()) as TodayReflectionResponse;
+	} catch {
+		return { reflection: null };
+	}
+}
+
+export async function answerReflection(
+	id: string,
+	answer: string,
+): Promise<{ success: boolean; memoryId?: string; error?: string }> {
+	try {
+		const res = await fetch(`${API_BASE}/api/reflections/${id}/answer`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ answer: answer.trim() }),
+		});
+		const data = await res.json();
+		if (!res.ok) return { success: false, error: data.error ?? "Request failed" };
+		return data as { success: boolean; memoryId?: string };
+	} catch {
+		return { success: false, error: "Network error" };
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Home greeting (falls back gracefully)
 // ---------------------------------------------------------------------------
 
