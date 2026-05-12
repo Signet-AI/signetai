@@ -355,14 +355,14 @@ function readField(item: BitwardenItemDetails, field: string): string {
 	const normalized = field.toLowerCase();
 	if (normalized === "password") {
 		const value = item.login?.password;
-		if (value) return value;
+		if (typeof value === "string") return value;
 	}
 	if (normalized === "username") {
 		const value = item.login?.username;
-		if (value) return value;
+		if (typeof value === "string") return value;
 	}
 	const custom = item.fields?.find((entry) => entry.name?.toLowerCase() === normalized)?.value;
-	if (custom) return custom;
+	if (typeof custom === "string") return custom;
 	throw new Error(`Bitwarden item '${item.name}' does not contain field '${field}'`);
 }
 

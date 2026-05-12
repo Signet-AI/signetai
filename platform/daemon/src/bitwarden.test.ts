@@ -51,7 +51,7 @@ function mockClient(): BitwardenClient {
 				: Array.from(items.values()).find(
 						(entry) => entry.name === decodeURIComponent(ref.split("/")[3] ?? ref.slice("bw://".length)),
 					);
-			if (!item?.login?.password) throw new Error("missing password");
+			if (typeof item?.login?.password !== "string") throw new Error("missing password");
 			return item.login.password;
 		},
 	};
@@ -72,6 +72,12 @@ describe("Bitwarden secrets provider", () => {
 		await client.putSecret("OPENAI_API_KEY", "sk-bw", { overwrite: true });
 		const value = await readBitwardenReference("bw://name/OPENAI_API_KEY", "session", async () => client);
 		expect(value).toBe("sk-bw");
+	});
+
+	test("round-trips empty Bitwarden secret values", async () => {
+		const client = mockClient();
+		await client.putSecret("EMPTY_SECRET", "", { overwrite: true });
+		expect(await readBitwardenReference("bw://name/EMPTY_SECRET", "session", async () => client)).toBe("");
 	});
 
 	test("migrates local Signet secrets into Bitwarden without deleting local copies by default", async () => {

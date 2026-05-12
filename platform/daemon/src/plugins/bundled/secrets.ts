@@ -197,6 +197,21 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 			summary: "Migrate local Signet secrets into Bitwarden",
 			requiredCapabilities: ["sdk:client", "secrets:providers:configure"],
 		},
+		{
+			name: "disconnectBitwarden",
+			summary: "Disconnect Bitwarden provider",
+			requiredCapabilities: ["sdk:client", "secrets:providers:configure"],
+		},
+		{
+			name: "setSecretProvider",
+			summary: "Switch the active secrets provider",
+			requiredCapabilities: ["sdk:client", "secrets:providers:configure"],
+		},
+		{
+			name: "listBitwardenFolders",
+			summary: "List Bitwarden folders available to the connected provider",
+			requiredCapabilities: ["sdk:client", "secrets:providers:list"],
+		},
 	],
 	connectorCapabilities: [
 		{
