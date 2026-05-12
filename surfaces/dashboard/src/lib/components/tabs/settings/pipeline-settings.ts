@@ -169,9 +169,6 @@ export function applyAcpxDashboardSetup(
 	pipeline.semanticContradictionEnabled = true;
 	pipeline.graphEnabled = true;
 	pipeline.rerankerEnabled = true;
-	pipeline.autonomousEnabled = true;
-	pipeline.allowUpdateDelete = true;
-	pipeline.maintenanceMode = "execute";
 	pipeline.synthesis = {
 		enabled: true,
 		provider: "acpx",
@@ -180,7 +177,6 @@ export function applyAcpxDashboardSetup(
 	};
 
 	const inference = ensureRecord(agentConfig, "inference");
-	inference.defaultPolicy = "background-acpx";
 	const targets = ensureRecord(inference, "targets");
 	targets["background-acpx"] = {
 		executor: "acpx",

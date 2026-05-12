@@ -144,6 +144,7 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 		const agent: Record<string, unknown> = {
 			harnesses: ["claude-code"],
 			inference: {
+				defaultPolicy: "custom-local",
 				targets: {
 					"custom-local": { executor: "ollama" },
 				},
@@ -165,8 +166,15 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 				},
 			},
 		});
+		expect((agent.memory as { pipelineV2: Record<string, unknown> }).pipelineV2).not.toHaveProperty(
+			"autonomousEnabled",
+		);
+		expect((agent.memory as { pipelineV2: Record<string, unknown> }).pipelineV2).not.toHaveProperty(
+			"allowUpdateDelete",
+		);
+		expect((agent.memory as { pipelineV2: Record<string, unknown> }).pipelineV2).not.toHaveProperty("maintenanceMode");
 		expect(agent.inference).toMatchObject({
-			defaultPolicy: "background-acpx",
+			defaultPolicy: "custom-local",
 			targets: {
 				"custom-local": { executor: "ollama" },
 				"background-acpx": {
