@@ -205,7 +205,15 @@ jobs:
           bun run build
           mkdir -p dist/node_modules
           echo '{"type":"module"}' > dist/package.json
-          npm install --prefix dist --no-save --no-package-lock better-sqlite3 onnxruntime-node sqlite-vec
+          # Install platform-specific sqlite-vec native alongside JS deps
+          SQLITE_VEC_NATIVE=""
+          case "$PLATFORM" in
+            darwin-arm64) SQLITE_VEC_NATIVE="sqlite-vec-darwin-arm64" ;;
+            darwin-x64)   SQLITE_VEC_NATIVE="sqlite-vec-darwin-x64" ;;
+            linux-x64)    SQLITE_VEC_NATIVE="sqlite-vec-linux-x64" ;;
+            linux-arm64)  SQLITE_VEC_NATIVE="sqlite-vec-linux-arm64" ;;
+          esac
+          npm install --prefix dist --no-save --no-package-lock better-sqlite3 onnxruntime-node sqlite-vec "$SQLITE_VEC_NATIVE"
           tar czf "$ARTIFACT_DIR/signet-daemon-js-$PLATFORM.tar.gz" -C dist .
 
       # ── Rust binaries ──
