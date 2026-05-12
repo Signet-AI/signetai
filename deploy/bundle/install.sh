@@ -92,12 +92,31 @@ fi
 DOWNLOAD_BASE="https://github.com/${SIGNET_REPO}/releases/download/${SIGNET_RELEASE_TAG}"
 
 tmpdir=""
+LOCKFILE="$SIGNET_INSTALL_DIR/.install.lock"
 cleanup() {
   if [ -n "$tmpdir" ] && [ -d "$tmpdir" ]; then
     rm -rf "$tmpdir"
   fi
+  rm -rf "$LOCKFILE"
 }
 trap cleanup EXIT
+
+mkdir -p "$SIGNET_INSTALL_DIR"
+if ! mkdir "$LOCKFILE" 2>/dev/null; then
+  LOCK_AGE="$(($(date +%s) - $(stat -f %m "$LOCKFILE" 2>/dev/null || stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0)))"
+  if [ "$LOCK_AGE" -lt 300 ]; then
+    err "Another install or update is already running (lock is ${LOCK_AGE}s old)"
+    exit 1
+  fi
+  warn "Stale lock found (${LOCK_AGE}s old) — removing"
+  rm -rf "$LOCKFILE"
+  if ! mkdir "$LOCKFILE" 2>/dev/null; then
+    err "Failed to acquire lock after clearing stale lock"
+    exit 1
+  fi
+fi
+echo "$$" > "$LOCKFILE/pid"
+
 tmpdir="$(mktemp -d)"
 
 sha_verify() {
