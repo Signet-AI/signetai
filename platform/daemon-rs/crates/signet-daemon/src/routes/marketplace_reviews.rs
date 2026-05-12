@@ -108,6 +108,9 @@ fn read_reviews(state: &AppState) -> Vec<MarketplaceReview> {
 
 fn write_reviews(state: &AppState, reviews: &[MarketplaceReview]) -> Result<(), String> {
     let path = reviews_path(state).map_err(|e| e.to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let raw = serde_json::to_string_pretty(reviews).map_err(|e| e.to_string())?;
     std::fs::write(path, raw).map_err(|e| e.to_string())
 }
@@ -125,6 +128,9 @@ fn read_config(state: &AppState) -> ReviewsSyncConfig {
 
 fn write_config(state: &AppState, config: &ReviewsSyncConfig) -> Result<(), String> {
     let path = config_path(state).map_err(|e| e.to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let raw = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
     std::fs::write(path, raw).map_err(|e| e.to_string())
 }

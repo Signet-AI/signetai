@@ -25,22 +25,38 @@ fn checksum(version: u32, name: &str) -> String {
     format!("{:x}", h as u32)
 }
 
-/// Helper: add a column only if it doesn't already exist.
-fn add_column_if_missing(conn: &Connection, table: &str, column: &str, typedef: &str) {
+/// Helper: add a required column only if it doesn't already exist.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    typedef: &str,
+) -> Result<(), CoreError> {
     let has_col: bool = conn
         .prepare(&format!("PRAGMA table_info(\"{table}\")"))
         .and_then(|mut stmt| {
             let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
             let names: Vec<String> = rows.filter_map(|r| r.ok()).collect();
             Ok(names.iter().any(|n| n == column))
-        })
-        .unwrap_or(false);
+        })?;
 
     if !has_col {
         let sql = format!("ALTER TABLE \"{table}\" ADD COLUMN \"{column}\" {typedef}");
-        if let Err(e) = conn.execute_batch(&sql) {
-            warn!(%table, %column, err = %e, "failed to add column");
-        }
+        conn.execute_batch(&sql).map_err(|err| {
+            error!(%table, %column, %typedef, err = %err, "failed to add required migration column");
+            CoreError::from(err)
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Historical per-migration compatibility shims are best-effort because some
+/// older SQL files can legitimately skip the target table. Required runtime
+/// parity repair uses `add_column_if_missing` directly and fails startup.
+fn add_column_if_missing_best_effort(conn: &Connection, table: &str, column: &str, typedef: &str) {
+    if let Err(err) = add_column_if_missing(conn, table, column, typedef) {
+        warn!(%table, %column, %typedef, err = %err, "skipping optional migration column repair");
     }
 }
 
@@ -369,45 +385,45 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
 /// absent in fresh or TS-created databases whose historical migrations stamped
 /// versions before Rust learned about the extra columns.
 fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError> {
-    add_column_if_missing(conn, "entities", "mentions", "INTEGER NOT NULL DEFAULT 0");
-    add_column_if_missing(conn, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0");
-    add_column_if_missing(conn, "entities", "pinned_at", "TEXT");
-    add_column_if_missing(conn, "entities", "updated_at", "TEXT");
+    add_column_if_missing(conn, "entities", "mentions", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(conn, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(conn, "entities", "pinned_at", "TEXT")?;
+    add_column_if_missing(conn, "entities", "updated_at", "TEXT")?;
 
     add_column_if_missing(
         conn,
         "connectors",
         "settings_json",
         "TEXT NOT NULL DEFAULT '{}'",
-    );
-    add_column_if_missing(conn, "connectors", "enabled", "INTEGER NOT NULL DEFAULT 1");
+    )?;
+    add_column_if_missing(conn, "connectors", "enabled", "INTEGER NOT NULL DEFAULT 1")?;
 
-    add_column_if_missing(conn, "entity_attributes", "proposal_id", "TEXT");
-    add_column_if_missing(conn, "entity_attributes", "group_key", "TEXT");
-    add_column_if_missing(conn, "entity_attributes", "claim_key", "TEXT");
-    add_column_if_missing(conn, "entity_attributes", "source_id", "TEXT");
-    add_column_if_missing(conn, "entity_attributes", "source_kind", "TEXT");
-    add_column_if_missing(conn, "entity_attributes", "source_path", "TEXT");
-    add_column_if_missing(conn, "entity_attributes", "source_root", "TEXT");
+    add_column_if_missing(conn, "entity_attributes", "proposal_id", "TEXT")?;
+    add_column_if_missing(conn, "entity_attributes", "group_key", "TEXT")?;
+    add_column_if_missing(conn, "entity_attributes", "claim_key", "TEXT")?;
+    add_column_if_missing(conn, "entity_attributes", "source_id", "TEXT")?;
+    add_column_if_missing(conn, "entity_attributes", "source_kind", "TEXT")?;
+    add_column_if_missing(conn, "entity_attributes", "source_path", "TEXT")?;
+    add_column_if_missing(conn, "entity_attributes", "source_root", "TEXT")?;
     add_column_if_missing(
         conn,
         "entity_attributes",
         "proposal_evidence",
         "TEXT NOT NULL DEFAULT '[]'",
-    );
-    add_column_if_missing(conn, "entity_dependencies", "proposal_id", "TEXT");
-    add_column_if_missing(conn, "entity_dependencies", "confidence", "REAL");
-    add_column_if_missing(conn, "entity_dependencies", "reason", "TEXT");
-    add_column_if_missing(conn, "entity_dependencies", "source_id", "TEXT");
-    add_column_if_missing(conn, "entity_dependencies", "source_kind", "TEXT");
-    add_column_if_missing(conn, "entity_dependencies", "source_path", "TEXT");
-    add_column_if_missing(conn, "entity_dependencies", "source_root", "TEXT");
+    )?;
+    add_column_if_missing(conn, "entity_dependencies", "proposal_id", "TEXT")?;
+    add_column_if_missing(conn, "entity_dependencies", "confidence", "REAL")?;
+    add_column_if_missing(conn, "entity_dependencies", "reason", "TEXT")?;
+    add_column_if_missing(conn, "entity_dependencies", "source_id", "TEXT")?;
+    add_column_if_missing(conn, "entity_dependencies", "source_kind", "TEXT")?;
+    add_column_if_missing(conn, "entity_dependencies", "source_path", "TEXT")?;
+    add_column_if_missing(conn, "entity_dependencies", "source_root", "TEXT")?;
     add_column_if_missing(
         conn,
         "entity_dependencies",
         "proposal_evidence",
         "TEXT NOT NULL DEFAULT '[]'",
-    );
+    )?;
 
     conn.execute_batch(
         "UPDATE connectors
@@ -440,7 +456,7 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
                 ("memories", "update_count", "INTEGER DEFAULT 0"),
                 ("memories", "runtime_path", "TEXT"),
             ] {
-                add_column_if_missing(conn, col.0, col.1, col.2);
+                add_column_if_missing_best_effort(conn, col.0, col.1, col.2);
             }
             // Indexes on programmatically-added columns
             conn.execute_batch(
@@ -450,43 +466,53 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
             )?;
         }
         4 => {
-            add_column_if_missing(conn, "memory_history", "actor_type", "TEXT");
-            add_column_if_missing(conn, "memory_history", "session_id", "TEXT");
-            add_column_if_missing(conn, "memory_history", "request_id", "TEXT");
+            add_column_if_missing_best_effort(conn, "memory_history", "actor_type", "TEXT");
+            add_column_if_missing_best_effort(conn, "memory_history", "session_id", "TEXT");
+            add_column_if_missing_best_effort(conn, "memory_history", "request_id", "TEXT");
         }
         5 => {
-            add_column_if_missing(conn, "entities", "canonical_name", "TEXT");
-            add_column_if_missing(conn, "relations", "mentions", "INTEGER DEFAULT 1");
-            add_column_if_missing(conn, "relations", "confidence", "REAL DEFAULT 0.5");
-            add_column_if_missing(conn, "relations", "updated_at", "TEXT");
-            add_column_if_missing(conn, "memory_entity_mentions", "mention_text", "TEXT");
-            add_column_if_missing(conn, "memory_entity_mentions", "confidence", "REAL");
-            add_column_if_missing(conn, "memory_entity_mentions", "created_at", "TEXT");
+            add_column_if_missing_best_effort(conn, "entities", "canonical_name", "TEXT");
+            add_column_if_missing_best_effort(conn, "relations", "mentions", "INTEGER DEFAULT 1");
+            add_column_if_missing_best_effort(conn, "relations", "confidence", "REAL DEFAULT 0.5");
+            add_column_if_missing_best_effort(conn, "relations", "updated_at", "TEXT");
+            add_column_if_missing_best_effort(
+                conn,
+                "memory_entity_mentions",
+                "mention_text",
+                "TEXT",
+            );
+            add_column_if_missing_best_effort(conn, "memory_entity_mentions", "confidence", "REAL");
+            add_column_if_missing_best_effort(conn, "memory_entity_mentions", "created_at", "TEXT");
             conn.execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_entities_canonical_name ON entities(canonical_name);",
             )?;
         }
         6 => {
-            add_column_if_missing(conn, "memories", "idempotency_key", "TEXT");
+            add_column_if_missing_best_effort(conn, "memories", "idempotency_key", "TEXT");
             conn.execute_batch(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_idempotency_key
                      ON memories(idempotency_key) WHERE idempotency_key IS NOT NULL;",
             )?;
         }
         7 => {
-            add_column_if_missing(conn, "memory_jobs", "document_id", "TEXT");
+            add_column_if_missing_best_effort(conn, "memory_jobs", "document_id", "TEXT");
         }
         13 => {
-            add_column_if_missing(conn, "memories", "source_path", "TEXT");
-            add_column_if_missing(conn, "memories", "source_section", "TEXT");
+            add_column_if_missing_best_effort(conn, "memories", "source_path", "TEXT");
+            add_column_if_missing_best_effort(conn, "memories", "source_section", "TEXT");
         }
         15 => {
-            add_column_if_missing(conn, "session_scores", "confidence", "REAL");
-            add_column_if_missing(conn, "session_scores", "continuity_reasoning", "TEXT");
+            add_column_if_missing_best_effort(conn, "session_scores", "confidence", "REAL");
+            add_column_if_missing_best_effort(
+                conn,
+                "session_scores",
+                "continuity_reasoning",
+                "TEXT",
+            );
         }
         17 => {
-            add_column_if_missing(conn, "scheduled_tasks", "skill_name", "TEXT");
-            add_column_if_missing(
+            add_column_if_missing_best_effort(conn, "scheduled_tasks", "skill_name", "TEXT");
+            add_column_if_missing_best_effort(
                 conn,
                 "scheduled_tasks",
                 "skill_mode",
@@ -494,41 +520,66 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
             );
         }
         19 => {
-            add_column_if_missing(
+            add_column_if_missing_best_effort(
                 conn,
                 "entities",
                 "agent_id",
                 "TEXT NOT NULL DEFAULT 'default'",
             );
-            add_column_if_missing(conn, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0");
-            add_column_if_missing(conn, "entities", "pinned_at", "TEXT");
-            add_column_if_missing(conn, "entities", "embedding", "BLOB");
+            add_column_if_missing_best_effort(
+                conn,
+                "entities",
+                "pinned",
+                "INTEGER NOT NULL DEFAULT 0",
+            );
+            add_column_if_missing_best_effort(conn, "entities", "pinned_at", "TEXT");
+            add_column_if_missing_best_effort(conn, "entities", "embedding", "BLOB");
             conn.execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_entities_agent ON entities(agent_id);",
             )?;
         }
         20 => {
-            add_column_if_missing(conn, "session_memories", "entity_slot", "INTEGER");
-            add_column_if_missing(conn, "session_memories", "aspect_slot", "INTEGER");
-            add_column_if_missing(
+            add_column_if_missing_best_effort(conn, "session_memories", "entity_slot", "INTEGER");
+            add_column_if_missing_best_effort(conn, "session_memories", "aspect_slot", "INTEGER");
+            add_column_if_missing_best_effort(
                 conn,
                 "session_memories",
                 "is_constraint",
                 "INTEGER NOT NULL DEFAULT 0",
             );
-            add_column_if_missing(conn, "session_memories", "structural_density", "INTEGER");
+            add_column_if_missing_best_effort(
+                conn,
+                "session_memories",
+                "structural_density",
+                "INTEGER",
+            );
         }
         21 => {
-            add_column_if_missing(conn, "session_checkpoints", "focal_entity_ids", "TEXT");
-            add_column_if_missing(conn, "session_checkpoints", "focal_entity_names", "TEXT");
-            add_column_if_missing(conn, "session_checkpoints", "active_aspect_ids", "TEXT");
-            add_column_if_missing(
+            add_column_if_missing_best_effort(
+                conn,
+                "session_checkpoints",
+                "focal_entity_ids",
+                "TEXT",
+            );
+            add_column_if_missing_best_effort(
+                conn,
+                "session_checkpoints",
+                "focal_entity_names",
+                "TEXT",
+            );
+            add_column_if_missing_best_effort(
+                conn,
+                "session_checkpoints",
+                "active_aspect_ids",
+                "TEXT",
+            );
+            add_column_if_missing_best_effort(
                 conn,
                 "session_checkpoints",
                 "surfaced_constraint_count",
                 "INTEGER",
             );
-            add_column_if_missing(
+            add_column_if_missing_best_effort(
                 conn,
                 "session_checkpoints",
                 "traversal_memory_count",
@@ -536,48 +587,68 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
             );
         }
         22 => {
-            add_column_if_missing(conn, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0");
-            add_column_if_missing(conn, "entities", "pinned_at", "TEXT");
+            add_column_if_missing_best_effort(
+                conn,
+                "entities",
+                "pinned",
+                "INTEGER NOT NULL DEFAULT 0",
+            );
+            add_column_if_missing_best_effort(conn, "entities", "pinned_at", "TEXT");
         }
         23 => {
-            add_column_if_missing(conn, "session_memories", "predictor_rank", "INTEGER");
+            add_column_if_missing_best_effort(
+                conn,
+                "session_memories",
+                "predictor_rank",
+                "INTEGER",
+            );
         }
         24 => {
-            add_column_if_missing(
+            add_column_if_missing_best_effort(
                 conn,
                 "predictor_comparisons",
                 "scorer_confidence",
                 "REAL NOT NULL DEFAULT 0",
             );
-            add_column_if_missing(
+            add_column_if_missing_best_effort(
                 conn,
                 "predictor_comparisons",
                 "success_rate",
                 "REAL NOT NULL DEFAULT 0.5",
             );
-            add_column_if_missing(
+            add_column_if_missing_best_effort(
                 conn,
                 "predictor_comparisons",
                 "predictor_top_ids",
                 "TEXT NOT NULL DEFAULT '[]'",
             );
-            add_column_if_missing(
+            add_column_if_missing_best_effort(
                 conn,
                 "predictor_comparisons",
                 "baseline_top_ids",
                 "TEXT NOT NULL DEFAULT '[]'",
             );
-            add_column_if_missing(
+            add_column_if_missing_best_effort(
                 conn,
                 "predictor_comparisons",
                 "relevance_scores",
                 "TEXT NOT NULL DEFAULT '{}'",
             );
-            add_column_if_missing(conn, "predictor_comparisons", "fts_overlap_score", "REAL");
+            add_column_if_missing_best_effort(
+                conn,
+                "predictor_comparisons",
+                "fts_overlap_score",
+                "REAL",
+            );
         }
         25 => {
-            add_column_if_missing(conn, "session_memories", "agent_relevance_score", "REAL");
-            add_column_if_missing(
+            add_column_if_missing_best_effort(
+                conn,
+                "session_memories",
+                "agent_relevance_score",
+                "REAL",
+            );
+            add_column_if_missing_best_effort(
                 conn,
                 "session_memories",
                 "agent_feedback_count",
@@ -585,11 +656,11 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
             );
         }
         30 => {
-            add_column_if_missing(conn, "memory_jobs", "document_id", "TEXT");
+            add_column_if_missing_best_effort(conn, "memory_jobs", "document_id", "TEXT");
         }
         31 => {
-            add_column_if_missing(conn, "entity_dependencies", "reason", "TEXT");
-            add_column_if_missing(conn, "entities", "last_synthesized_at", "TEXT");
+            add_column_if_missing_best_effort(conn, "entity_dependencies", "reason", "TEXT");
+            add_column_if_missing_best_effort(conn, "entities", "last_synthesized_at", "TEXT");
         }
         34 => {
             // Rebuild session_transcripts with compound (session_key, agent_id) PK.
@@ -655,9 +726,9 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
         // NOT re-execute this arm — the session_summaries work was applied
         // when they upgraded to v35 and is idempotent via IF NOT EXISTS guards.
         35 => {
-            add_column_if_missing(conn, "session_summaries", "source_type", "TEXT");
-            add_column_if_missing(conn, "session_summaries", "source_ref", "TEXT");
-            add_column_if_missing(conn, "session_summaries", "meta_json", "TEXT");
+            add_column_if_missing_best_effort(conn, "session_summaries", "source_type", "TEXT");
+            add_column_if_missing_best_effort(conn, "session_summaries", "source_ref", "TEXT");
+            add_column_if_missing_best_effort(conn, "session_summaries", "meta_json", "TEXT");
             conn.execute_batch(
                 "UPDATE session_summaries
                     SET source_type = CASE
@@ -700,7 +771,7 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
                     "TEXT NOT NULL DEFAULT 'default'",
                 ),
             ] {
-                add_column_if_missing(conn, col.0, col.1, col.2);
+                add_column_if_missing_best_effort(conn, col.0, col.1, col.2);
             }
             conn.execute_batch(
                 "UPDATE summary_jobs
@@ -724,19 +795,19 @@ fn run_migration_sql(conn: &Connection, m: &Migration) -> Result<(), CoreError> 
 
     // Cross-daemon parity: keep scoped memory columns/indexes aligned.
     if m.version >= 2 {
-        add_column_if_missing(
+        add_column_if_missing_best_effort(
             conn,
             "memories",
             "agent_id",
             "TEXT NOT NULL DEFAULT 'default'",
         );
-        add_column_if_missing(
+        add_column_if_missing_best_effort(
             conn,
             "memories",
             "visibility",
             "TEXT NOT NULL DEFAULT 'global'",
         );
-        add_column_if_missing(conn, "memories", "scope", "TEXT");
+        add_column_if_missing_best_effort(conn, "memories", "scope", "TEXT");
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_memories_agent_visibility_scope
                 ON memories(agent_id, visibility, scope);
