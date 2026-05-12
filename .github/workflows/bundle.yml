@@ -342,7 +342,7 @@ jobs:
       # ── Electron desktop app (macOS DMG) ──
 
       - name: Build Electron desktop app
-        if: startsWith(github.ref, 'refs/heads/main') && matrix.platform != 'linux-x64'
+        if: startsWith(github.ref, 'refs/heads/main') && startsWith(matrix.platform, 'darwin-')
         run: |
           cd surfaces/desktop
           bun install
