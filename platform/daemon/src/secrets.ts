@@ -581,6 +581,7 @@ export function startSecretExecJob(
 	options: SecretExecOptions = {},
 ): SecretExecJob {
 	pruneSecretExecJobs();
+	evictRetainedSecretExecResults();
 	if (
 		secretExecJobs.size >= MAX_SECRET_EXEC_RETAINED_JOBS ||
 		pendingSecretExecJobs.length >= MAX_SECRET_EXEC_QUEUED_JOBS
@@ -663,6 +664,23 @@ function pruneSecretExecJobs(now = Date.now()): void {
 			secretExecJobs.delete(id);
 			secretExecJobRequests.delete(id);
 		}
+	}
+}
+
+function evictRetainedSecretExecResults(): void {
+	if (secretExecJobs.size < MAX_SECRET_EXEC_RETAINED_JOBS) return;
+	const evictable = Array.from(secretExecJobs.entries())
+		.filter(([, job]) => job.status === "completed" || job.status === "failed")
+		.sort(([, a], [, b]) => {
+			const aTime = Date.parse(a.completedAt ?? a.createdAt);
+			const bTime = Date.parse(b.completedAt ?? b.createdAt);
+			return aTime - bTime;
+		});
+
+	for (const [jobId] of evictable) {
+		if (secretExecJobs.size < MAX_SECRET_EXEC_RETAINED_JOBS) return;
+		secretExecJobs.delete(jobId);
+		secretExecJobRequests.delete(jobId);
 	}
 }
 

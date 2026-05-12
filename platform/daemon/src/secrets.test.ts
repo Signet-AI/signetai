@@ -203,7 +203,7 @@ describe("local secrets provider", () => {
 		expect(statuses.filter((status) => status === "queued")).toHaveLength(2);
 	});
 
-	test("startSecretExecJob caps retained completed job results", async () => {
+	test("startSecretExecJob evicts retained completed job results instead of blocking new work", async () => {
 		await putSecret("OPENAI_API_KEY", "sk-retained");
 		const jobs = Array.from({ length: 64 }, () =>
 			startSecretExecJob("bun --version", { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 }),
@@ -215,9 +215,10 @@ describe("local secrets provider", () => {
 		}
 
 		expect(jobs.every((job) => getSecretExecJob(job.id)?.status === "completed")).toBe(true);
-		expect(() =>
-			startSecretExecJob("bun --version", { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 }),
-		).toThrow("secret exec queue is full");
+		const next = startSecretExecJob("bun --version", { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 });
+
+		expect(["queued", "running"]).toContain(next.status);
+		expect(jobs.some((job) => !getSecretExecJob(job.id))).toBe(true);
 	});
 
 	test("corrupt stores fail clearly and are not overwritten by list or health checks", async () => {
