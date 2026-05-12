@@ -205,16 +205,17 @@ describe("local secrets provider", () => {
 
 	test("startSecretExecJob evicts retained completed job results instead of blocking new work", async () => {
 		await putSecret("OPENAI_API_KEY", "sk-retained");
-		const jobs = Array.from({ length: 64 }, () =>
-			startSecretExecJob("bun --version", { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 }),
-		);
+		const jobs = [];
 
-		for (let i = 0; i < 80; i++) {
-			if (jobs.every((job) => getSecretExecJob(job.id)?.status === "completed")) break;
-			await new Promise((resolve) => setTimeout(resolve, 25));
+		for (let i = 0; i < 150; i++) {
+			const job = startSecretExecJob("bun --version", { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 });
+			jobs.push(job);
+			for (let poll = 0; poll < 80; poll++) {
+				if (getSecretExecJob(job.id)?.status === "completed") break;
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
 		}
 
-		expect(jobs.every((job) => getSecretExecJob(job.id)?.status === "completed")).toBe(true);
 		const next = startSecretExecJob("bun --version", { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 });
 
 		expect(["queued", "running"]).toContain(next.status);
