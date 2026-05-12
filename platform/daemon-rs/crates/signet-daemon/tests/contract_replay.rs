@@ -1509,6 +1509,27 @@ async fn ontology_native_proposal_lifecycle() {
 
     let resp = server
         .post(
+            &format!("/api/ontology/proposals/{claim_id}/apply"),
+            json!({"actor": "replay"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 409);
+    let conflict = server.json(resp).await;
+    assert_eq!(conflict["error"], "Proposal is applied, not pending");
+    let attr_count_after_retry: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM entity_attributes attr
+             JOIN entity_aspects asp ON asp.id = attr.aspect_id
+             WHERE asp.entity_id = ?1 AND asp.name = 'pricing' AND attr.claim_key = 'monthly_price'
+               AND attr.content = '$10/mo' AND attr.proposal_id = ?2",
+            rusqlite::params![created_entity.0, claim_id],
+            |row| row.get(0),
+        )
+        .expect("attribute count after retry");
+    assert_eq!(attr_count_after_retry, 1);
+
+    let resp = server
+        .post(
             "/api/ontology/proposals/batch",
             json!({
                 "proposals": [{

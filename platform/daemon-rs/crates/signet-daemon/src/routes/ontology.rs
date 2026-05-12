@@ -683,7 +683,7 @@ async fn transition(
             return Ok(JsonValue::Null);
         };
         if row.status != "pending" {
-            return Ok(JsonValue::Null);
+            return Ok(json!({"error":"not_pending", "status": row.status}));
         }
         let ts = now();
         let result_json = if status == "applied" {
@@ -707,10 +707,23 @@ async fn transition(
         Ok::<JsonValue, CoreError>(row_to_value(updated))
     }).await;
     match result {
+        Ok(proposal)
+            if proposal.get("error").and_then(|value| value.as_str()) == Some("not_pending") =>
+        {
+            let current = proposal
+                .get("status")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            (
+                StatusCode::CONFLICT,
+                Json(json!({"error": format!("Proposal is {current}, not pending")})),
+            )
+                .into_response()
+        }
         Ok(proposal) if !proposal.is_null() => (StatusCode::OK, Json(proposal)).into_response(),
         Ok(_) => (
             StatusCode::NOT_FOUND,
-            Json(json!({"error":"Proposal not found or not pending"})),
+            Json(json!({"error":"Proposal not found"})),
         )
             .into_response(),
         Err(error) => (
