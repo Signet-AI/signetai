@@ -12,6 +12,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSimpleYaml } from "@signet/core";
@@ -437,6 +438,15 @@ function xmlEscape(value: string): string {
 
 export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
 
+function currentLaunchdDomain(): string {
+	const uid = typeof process.getuid === "function" ? process.getuid() : null;
+	return uid === null ? "user" : `gui/${uid}`;
+}
+
+export function launchdDaemonPlistPath(_agentsDir: string, home: string = homedir()): string {
+	return join(home, "Library", "LaunchAgents", `${LAUNCHD_DAEMON_LABEL}.plist`);
+}
+
 export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string {
 	const label = input.label ?? LAUNCHD_DAEMON_LABEL;
 	const env = {
@@ -473,7 +483,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
-	<false/>
+	<true/>
 	<key>StandardOutPath</key>
 	<string>/dev/null</string>
 	<key>StandardErrorPath</key>
@@ -486,9 +496,11 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 }
 
 export function buildLaunchdDaemonStartArgs(plistPath: string): string[] {
-	const uid = typeof process.getuid === "function" ? process.getuid() : null;
-	const domain = uid === null ? "user" : `gui/${uid}`;
-	return ["bootstrap", domain, plistPath];
+	return ["bootstrap", currentLaunchdDomain(), plistPath];
+}
+
+export function buildLaunchdDaemonStopArgs(label: string = LAUNCHD_DAEMON_LABEL): string[] {
+	return ["bootout", `${currentLaunchdDomain()}/${label}`];
 }
 
 export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "status" | "signal" | "error">): boolean {
@@ -597,7 +609,8 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 			}
 		}
 	} else if (process.platform === "darwin") {
-		const plistPath = join(daemonDir, `${LAUNCHD_DAEMON_LABEL}.plist`);
+		const plistPath = launchdDaemonPlistPath(agentsDir);
+		mkdirSync(dirname(plistPath), { recursive: true });
 		writeFileSync(
 			plistPath,
 			buildLaunchdDaemonPlist({
@@ -609,6 +622,12 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 				startupLogPath,
 			}),
 		);
+		const bootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(), {
+			stdio: ["ignore", "ignore", stderrTarget],
+			windowsHide: true,
+			env: daemonEnv,
+			timeout: 5000,
+		});
 		const bootstrap = spawnSync("launchctl", buildLaunchdDaemonStartArgs(plistPath), {
 			stdio: ["ignore", "ignore", stderrTarget],
 			windowsHide: true,
@@ -617,8 +636,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		});
 		startedByServiceManager = didLaunchdDaemonStart(bootstrap);
 		if (!startedByServiceManager) {
-			const uid = typeof process.getuid === "function" ? process.getuid() : null;
-			const target = `${uid === null ? "user" : `gui/${uid}`}/${LAUNCHD_DAEMON_LABEL}`;
+			const target = buildLaunchdDaemonStopArgs()[1];
 			const kickstart = spawnSync("launchctl", ["kickstart", "-k", target], {
 				stdio: ["ignore", "ignore", stderrTarget],
 				windowsHide: true,
@@ -630,7 +648,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 				try {
 					appendFileSync(
 						startupLogPath,
-						`[launchd fallback] bootstrapStatus=${bootstrap.status ?? "null"} kickstartStatus=${kickstart.status ?? "null"} bootstrapError=${bootstrap.error?.message ?? ""} kickstartError=${kickstart.error?.message ?? ""}
+						`[launchd fallback] bootoutStatus=${bootout.status ?? "null"} bootstrapStatus=${bootstrap.status ?? "null"} kickstartStatus=${kickstart.status ?? "null"} bootoutError=${bootout.error?.message ?? ""} bootstrapError=${bootstrap.error?.message ?? ""} kickstartError=${kickstart.error?.message ?? ""}
 `,
 					);
 				} catch {
@@ -700,6 +718,14 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 }
 
 export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
+	if (process.platform === "darwin") {
+		spawnSync("launchctl", buildLaunchdDaemonStopArgs(), {
+			stdio: "ignore",
+			windowsHide: true,
+			timeout: 5000,
+		});
+	}
+
 	const pids = new Set<number>();
 	const managed = readManagedDaemonPid(agentsDir);
 	if (managed !== null) {

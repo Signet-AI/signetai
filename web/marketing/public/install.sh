@@ -40,9 +40,19 @@ persist_path_dir() {
   mkdir -p "$(dirname "$shell_rc")"
   if ! grep -Fq "$bin_dir" "$shell_rc" 2>/dev/null; then
     if [ "$(basename "$shell_rc")" = "config.fish" ]; then
-      printf '\nfish_add_path %s\n' "$bin_dir" >> "$shell_rc"
+      # string escape returns fish-safe source text, not raw data.
+      local escaped
+      if command -v fish >/dev/null 2>&1; then
+        escaped="$(fish -c 'string escape -- $argv[1]' "$bin_dir")"
+        printf '\nfish_add_path -- %s\n' "$escaped" >> "$shell_rc"
+      else
+        warn "fish shell detected but fish is not executable; add $bin_dir to PATH manually"
+        return 0
+      fi
     else
-      printf '\nexport PATH="%s:$PATH"\n' "$bin_dir" >> "$shell_rc"
+      # Bash's %q emits shell-safe source text; zsh accepts the same quoting forms.
+      printf -v escaped '%q' "$bin_dir"
+      printf '\nexport PATH=%s:"$PATH"\n' "$escaped" >> "$shell_rc"
     fi
     info "${DIM}Added $bin_dir to $shell_rc${RESET}"
   fi

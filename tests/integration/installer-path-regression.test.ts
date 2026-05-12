@@ -14,8 +14,10 @@ describe("installer PATH persistence regression guard", () => {
 		expect(unixInstaller).toContain('persist_path_dir "$BUN_INSTALL/bin"');
 		expect(unixInstaller).toContain("npm_global_bin");
 		expect(unixInstaller).toContain('persist_path_dir "$NPM_GLOBAL_BIN"');
-		expect(unixInstaller).toContain("fish_add_path");
-		expect(unixInstaller).toContain('export PATH="%s:$PATH"');
+		expect(unixInstaller).toContain("string escape -- $argv[1]");
+		expect(unixInstaller).toContain("fish_add_path -- %s");
+		expect(unixInstaller).toContain("printf -v escaped '%q'");
+		expect(unixInstaller).toContain('export PATH=%s:"$PATH"');
 	});
 
 	it("persists Bun and npm global bins to the Windows user PATH", () => {

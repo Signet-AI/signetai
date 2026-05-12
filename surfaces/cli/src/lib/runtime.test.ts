@@ -5,10 +5,12 @@ import { join } from "node:path";
 import {
 	buildLaunchdDaemonPlist,
 	buildLaunchdDaemonStartArgs,
+	buildLaunchdDaemonStopArgs,
 	buildSystemdDaemonStartArgs,
 	didLaunchdDaemonStart,
 	didSystemdDaemonStart,
 	getDaemonStatus,
+	launchdDaemonPlistPath,
 	readManagedDaemonPid,
 } from "./runtime.js";
 
@@ -71,7 +73,7 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<key>RunAtLoad</key>");
 		expect(plist).toContain("<true/>");
 		expect(plist).toContain("<key>KeepAlive</key>");
-		expect(plist).toContain("<false/>");
+		expect(plist).toMatch(/<key>KeepAlive<\/key>\s*<true\/>/);
 		expect(plist).toContain("<key>StandardErrorPath</key>");
 		expect(plist).toContain("<string>/Users/user/.agents/.daemon/logs/startup.log</string>");
 	});
@@ -97,11 +99,24 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(strings[0]).toMatch(/^\//);
 	});
 
+	it("uses a persistent user LaunchAgent path", () => {
+		expect(launchdDaemonPlistPath("/Users/user/.agents", "/Users/user")).toBe(
+			"/Users/user/Library/LaunchAgents/ai.signet.daemon.plist",
+		);
+	});
+
 	it("uses launchctl bootstrap against the current user launchd domain", () => {
-		const args = buildLaunchdDaemonStartArgs("/Users/user/.agents/.daemon/ai.signet.daemon.plist");
+		const args = buildLaunchdDaemonStartArgs("/Users/user/Library/LaunchAgents/ai.signet.daemon.plist");
 		expect(args[0]).toBe("bootstrap");
 		expect(args[1]).toStartWith("gui/");
-		expect(args[2]).toBe("/Users/user/.agents/.daemon/ai.signet.daemon.plist");
+		expect(args[2]).toBe("/Users/user/Library/LaunchAgents/ai.signet.daemon.plist");
+	});
+
+	it("uses launchctl bootout against the current user launchd service", () => {
+		const args = buildLaunchdDaemonStopArgs();
+		expect(args[0]).toBe("bootout");
+		expect(args[1]).toStartWith("gui/");
+		expect(args[1]).toEndWith("/ai.signet.daemon");
 	});
 });
 
