@@ -353,6 +353,35 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(existsSync(join(basePath, "SOUL.md"))).toBe(false);
 	});
 
+	it("writes custom identity preset with concrete files for every referenced path", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-custom-identity-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+
+		const freshDetection: SetupDetection = {
+			...fakeDetection(basePath),
+			agentsDir: false,
+			memoryDb: false,
+		};
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => freshDetection),
+		});
+
+		await setupWizard({ nonInteractive: true, identityPreset: "custom", skipGit: true }, deps);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("preset: custom");
+		for (const name of ["AGENTS.md", "DREAMING.md"]) {
+			expect(agentYaml).toContain(`path: ${name}`);
+			expect(existsSync(join(basePath, name))).toBe(true);
+		}
+		expect(existsSync(join(basePath, "SOUL.md"))).toBe(false);
+	});
+
 	it("writes every openclaw special-session file referenced by the identity preset", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-openclaw-identity-"));
 		const basePath = join(root, "agents");
