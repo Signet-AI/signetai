@@ -174,6 +174,7 @@ describe("secrets routes plugin capability enforcement", () => {
 
 	test("Bitwarden routes connect, activate, write through, migrate, and disconnect without losing local fallback", async () => {
 		const items = new Map<string, string>();
+		const writeFolders = new Map<string, string | undefined>();
 		const folders = [{ id: "folder-1", name: "Signet" }];
 		const makeClient = async (_session: string): Promise<BitwardenClient> => ({
 			async status() {
@@ -189,9 +190,10 @@ describe("secrets routes plugin capability enforcement", () => {
 				const name = id.replace(/^item-/, "");
 				return { id, name, login: { password: items.get(name) ?? null } };
 			},
-			async putSecret(name: string, value: string) {
+			async putSecret(name: string, value: string, options?: { readonly folderId?: string }) {
 				items.set(name, value);
-				return { id: `item-${name}`, name, login: { password: value } };
+				writeFolders.set(name, options?.folderId);
+				return { id: `item-${name}`, name, folderId: options?.folderId, login: { password: value } };
 			},
 			async deleteSecret(name: string) {
 				return items.delete(name);
@@ -233,6 +235,7 @@ describe("secrets routes plugin capability enforcement", () => {
 		});
 		expect(storedInBitwarden.status).toBe(200);
 		expect(items.get("BW_ONLY")).toBe("bw-value");
+		expect(writeFolders.get("BW_ONLY")).toBe("folder-1");
 
 		const listed = await app.request("/api/secrets");
 		expect(listed.status).toBe(200);
@@ -254,6 +257,20 @@ describe("secrets routes plugin capability enforcement", () => {
 		expect(migrated.status).toBe(200);
 		expect(await migrated.json()).toMatchObject({ success: true, dryRun: false, migratedCount: 1 });
 		expect(items.get("LOCAL_ONLY")).toBe("local-value");
+
+		const reconnected = await app.request("/api/secrets/bitwarden/connect", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ session: "bw-session-2", activate: true }),
+		});
+		expect(reconnected.status).toBe(200);
+		const storedAfterReconnect = await app.request("/api/secrets/BW_NO_FOLDER", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ value: "bw-no-folder" }),
+		});
+		expect(storedAfterReconnect.status).toBe(200);
+		expect(writeFolders.get("BW_NO_FOLDER")).toBeUndefined();
 
 		const foldersRes = await app.request("/api/secrets/bitwarden/folders");
 		expect(foldersRes.status).toBe(200);

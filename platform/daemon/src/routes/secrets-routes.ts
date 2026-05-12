@@ -139,6 +139,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			}
 			await putSecret(BITWARDEN_SESSION_SECRET, session);
 			if (folderId) await putSecret(BITWARDEN_MANAGED_FOLDER_SECRET, folderId);
+			else deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
 			if (activate) await setActiveSecretProvider("bitwarden");
 			logger.info("secrets", "Connected Bitwarden session", { connected: status.connected, activate });
 			return c.json({ success: true, ...status });
