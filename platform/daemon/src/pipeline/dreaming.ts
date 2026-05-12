@@ -445,10 +445,7 @@ function buildDreamingPrompt(
 		startupEntries.filter((entry) => entry !== startupMemoryEntry),
 	);
 	const dreamingPrompt = renderIdentityBlock(agentsDir, resolveSpecialIdentityFiles(agentsDir, "dreaming"));
-	const memoryMd = readIdentityFile(
-		agentsDir,
-		startupMemoryEntry ?? { path: "MEMORY.md", role: "working_memory", budget: 10_000 },
-	);
+	const memoryMd = startupMemoryEntry ? readIdentityFile(agentsDir, startupMemoryEntry) : "";
 
 	// Build graph snapshot
 	const entityMap = new Map(graph.entities.map((e) => [e.id, e]));

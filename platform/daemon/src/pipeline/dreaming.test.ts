@@ -223,6 +223,7 @@ describe("dreaming", () => {
 				"agent.yaml":
 					"identity:\n  preset: minimal\n  startup:\n    load:\n      - path: AGENTS.md\n        role: startup_rules\n        budget: 12000\n  special:\n    - path: DREAMING.md\n      kind: dreaming\n      role: dreaming_prompt\n      budget: 4000\n",
 				"AGENTS.md": "Startup rules are loaded normally.",
+				"MEMORY.md": "Minimal preset memory should not be injected implicitly.",
 				"SOUL.md": "Soul should not be loaded by the minimal startup preset.",
 				"DREAMING.md": "Dreaming-specific reflection instructions.",
 			});
@@ -232,6 +233,7 @@ describe("dreaming", () => {
 					expect(prompt).toContain("Dreaming-specific reflection instructions.");
 					expect(prompt).toContain("<dreaming_prompt>");
 					expect(prompt).not.toContain("Soul should not be loaded");
+					expect(prompt).not.toContain("Minimal preset memory should not be injected implicitly.");
 					return JSON.stringify({ mutations: [], summary: "Prompt inspected" });
 				};
 
