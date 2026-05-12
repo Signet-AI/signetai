@@ -187,7 +187,7 @@ jobs:
           cd platform/daemon
           bun run build
           mkdir -p dist/node_modules
-          cp -r ../../node_modules/better-sqlite3 dist/node_modules/
+          npm install --prefix dist --no-save --no-package-lock better-sqlite3
           tar czf "$ARTIFACT_DIR/signet-daemon-js.tar.gz" -C dist .
 
       # ── Rust binaries ──

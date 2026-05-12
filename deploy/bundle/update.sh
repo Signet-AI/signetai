@@ -94,6 +94,7 @@ fi
 # Download changed components
 COMPONENTS="$(jq -r '.components | keys[]' "$REMOTE_MANIFEST")"
 UPDATED=0
+FAILED=0
 
 for comp in $COMPONENTS; do
   LOCAL_SHA="$(jq -r ".components.\"$comp\".sha256 // \"\"" "$LOCAL_MANIFEST" 2>/dev/null || echo "")"
@@ -109,6 +110,7 @@ for comp in $COMPONENTS; do
 
   curl -fsSL "$REMOTE_URL" -o "$TMPDIR/$FILENAME" || {
     warn "Failed to download $comp"
+    FAILED=$((FAILED + 1))
     continue
   }
 
@@ -119,6 +121,7 @@ for comp in $COMPONENTS; do
     elif [ "$ACTUAL_SHA" != "$REMOTE_SHA" ]; then
       err "Checksum mismatch for $comp (expected $REMOTE_SHA, got $ACTUAL_SHA)"
       rm -f "$TMPDIR/$FILENAME"
+      FAILED=$((FAILED + 1))
       continue
     fi
   fi
@@ -128,11 +131,17 @@ for comp in $COMPONENTS; do
   mkdir -p "$DEST"
   tar xzf "$TMPDIR/$FILENAME" -C "$DEST"
   UPDATED=$((UPDATED + 1))
+
+  jq --arg comp "$comp" --arg sha "$REMOTE_SHA" '.components[$comp].sha256 = $sha' "$LOCAL_MANIFEST" > "${TMPDIR}/manifest-updated.json" && mv "${TMPDIR}/manifest-updated.json" "$LOCAL_MANIFEST"
   ok "$comp updated"
 done
 
-# Save new manifest
-cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"
+if [ "$FAILED" -gt 0 ]; then
+  echo ""
+  err "$FAILED component(s) failed — manifest NOT advanced for failed components"
+  err "Re-run the updater to retry"
+fi
+
 echo "$REMOTE_VERSION" > "$SIGNET_INSTALL_DIR/VERSION"
 
 echo ""
