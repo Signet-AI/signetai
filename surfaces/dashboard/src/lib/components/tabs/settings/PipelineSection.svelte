@@ -22,6 +22,7 @@ import {
 	type AcpxDashboardAgent,
 	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	applyAcpxDashboardSetup,
+	applyRecommendedPipelineSetup,
 	defaultAcpxDashboardAgent,
 	defaultAcpxDashboardModel,
 	hasExplicitSynthesisConfig,
@@ -327,35 +328,11 @@ function extractionModelLabel(): string {
 	return preset ? preset.label : model;
 }
 
-let acpxAgent = $state<AcpxDashboardAgent>("codex");
-let acpxModel = $state(defaultAcpxDashboardModel("codex"));
-
-$effect(() => {
-	const nextAgent = defaultAcpxDashboardAgent(st.agent);
-	acpxAgent = nextAgent;
-	const current =
-		st.aStr(["memory", "pipelineV2", "extractionProvider"]) === "acpx"
-			? st.aStr(["memory", "pipelineV2", "extractionModel"])
-			: "";
-	acpxModel = current || defaultAcpxDashboardModel(nextAgent);
-});
-
-function acpxAgentLabel(): string {
-	return ACPX_DASHBOARD_AGENT_OPTIONS.find((option) => option.value === acpxAgent)?.label ?? acpxAgent;
-}
-
-function setAcpxAgent(value: string | undefined): void {
-	if (value !== "codex" && value !== "claude-code" && value !== "opencode") return;
-	acpxAgent = value;
-	acpxModel = defaultAcpxDashboardModel(value);
-}
-
-function setAcpxModel(e: Event): void {
-	acpxModel = (e.currentTarget as HTMLInputElement).value;
-}
-
-function applyAcpxQuickSetup(): void {
-	applyAcpxDashboardSetup(st.agent, { agent: acpxAgent, model: acpxModel });
+function applyRecommendedSetup(): void {
+	const currentProvider = extractionProvider();
+	const provider: PipelineProviderChoice = isKnownProvider(currentProvider) ? currentProvider : "acpx";
+	const model = extractionModel() || defaultModelForProvider(provider);
+	applyRecommendedPipelineSetup(st.agent, { provider, model });
 	st.agent = { ...st.agent };
 }
 
@@ -378,46 +355,20 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 {#if st.agentFile}
 	<FormSection description="V2 memory pipeline. Runs LLM-based fact extraction on incoming memories, then decides whether to write, update, or skip. Lives under memory.pipelineV2 in agent.yaml.">
 		<div class="rounded-lg border border-[var(--sig-border-strong)] bg-[color-mix(in_srgb,var(--sig-bg),var(--sig-highlight)_4%)] p-3">
-			<div class="flex flex-col gap-3">
-				<div class="flex items-start justify-between gap-3">
-					<div class="flex flex-col gap-1">
-						<span class="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--sig-highlight)]">ACPX quick setup</span>
-						<span class="text-[12px] leading-snug text-[var(--sig-text)]">Configure background extraction and session synthesis through ACPX with the guarded defaults Signet expects.</span>
-					</div>
-					<button
-						type="button"
-						class="shrink-0 rounded-md border border-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),transparent_88%)] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--sig-highlight)] transition-colors hover:bg-[color-mix(in_srgb,var(--sig-highlight),transparent_80%)]"
-						onclick={applyAcpxQuickSetup}
-					>
-						Use ACPX defaults
-					</button>
+			<div class="flex items-start justify-between gap-3">
+				<div class="flex flex-col gap-1">
+					<span class="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--sig-highlight)]">Pipeline setup</span>
+					<span class="text-[12px] leading-snug text-[var(--sig-text)]">Configure extraction and session synthesis through the unified provider settings below. Provider routing stays with the shared LLM configuration instead of dashboard-specific inference wiring.</span>
 				</div>
-
-				<div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-					<div class="flex flex-col gap-1.5">
-						<span class="font-mono text-[9px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)]">Agent adapter</span>
-						<Select.Root type="single" value={acpxAgent} onValueChange={setAcpxAgent}>
-							<Select.Trigger class={selectTriggerClass}>{acpxAgentLabel()}</Select.Trigger>
-							<Select.Content class={selectContentClass}>
-								{#each ACPX_DASHBOARD_AGENT_OPTIONS as option (option.value)}
-									<Select.Item class={selectItemClass} value={option.value} label={option.label} />
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-					<div class="flex flex-col gap-1.5">
-						<span class="font-mono text-[9px] uppercase tracking-[0.1em] text-[var(--sig-text-muted)]">Model</span>
-						<Input value={acpxModel} oninput={setAcpxModel} placeholder="model passed through ACPX" />
-					</div>
-				</div>
-
-				<div class="grid gap-2 text-[9px] uppercase tracking-[0.08em] text-[var(--sig-text-muted)] md:grid-cols-3">
-					<span>npx acpx@0.7.0</span>
-					<span>permissions: deny-all</span>
-					<span>hooks: disabled</span>
-				</div>
-				<span class="text-[9px] uppercase tracking-wider text-[var(--sig-warning)]">Writes memory.pipelineV2 plus a background-acpx inference route for memory extraction and session synthesis. Save settings after applying.</span>
+				<button
+					type="button"
+					class="shrink-0 rounded-md border border-[var(--sig-highlight)] bg-[color-mix(in_srgb,var(--sig-highlight),transparent_88%)] px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--sig-highlight)] transition-colors hover:bg-[color-mix(in_srgb,var(--sig-highlight),transparent_80%)]"
+					onclick={applyRecommendedSetup}
+				>
+					Use recommended defaults
+				</button>
 			</div>
+			<span class="mt-2 block text-[9px] uppercase tracking-wider text-[var(--sig-warning)]">Writes memory.pipelineV2 extraction and synthesis provider settings only. Save settings after applying.</span>
 		</div>
 
 		<FormField label={PIPELINE_CORE_BOOLS[0].key} description={PIPELINE_CORE_BOOLS[0].desc}>

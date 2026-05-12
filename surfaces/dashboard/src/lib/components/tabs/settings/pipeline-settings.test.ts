@@ -5,6 +5,7 @@ import {
 	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	applyAcpxDashboardSetup,
 	defaultAcpxDashboardAgent,
+	applyRecommendedPipelineSetup,
 	hasExplicitSynthesisConfig,
 	hasExplicitSynthesisProvider,
 	resolveExtractionEndpoint,
@@ -181,7 +182,6 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 
 	it("applies a one-click ACPX background setup for extraction, synthesis, and routing", () => {
 		const agent: Record<string, unknown> = {
-			harnesses: ["claude-code"],
 			inference: {
 				defaultPolicy: "custom-local",
 				targets: {
@@ -190,7 +190,7 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 			},
 		};
 
-		applyAcpxDashboardSetup(agent, { agent: "claude-code" });
+		applyRecommendedPipelineSetup(agent, { provider: "acpx", model: "gpt-5-codex-mini" });
 
 		expect(agent.memory).toMatchObject({
 			pipelineV2: {
@@ -212,7 +212,7 @@ describe("pipeline-settings ACPX dashboard setup", () => {
 			"allowUpdateDelete",
 		);
 		expect((agent.memory as { pipelineV2: Record<string, unknown> }).pipelineV2).not.toHaveProperty("maintenanceMode");
-		expect(agent.inference).toMatchObject({
+		expect(agent.inference).toEqual({
 			defaultPolicy: "custom-local",
 			targets: {
 				"custom-local": { executor: "ollama" },

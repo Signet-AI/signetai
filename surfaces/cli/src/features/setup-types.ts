@@ -30,7 +30,8 @@ export interface SetupWizardOptions {
 	disableSignetSecrets?: boolean;
 	withGraphiq?: boolean;
 	disableGraphiq?: boolean;
-	identityPreset?: string;
+		identityPreset?: string;
+		setupMode?: string;
 }
 
 export interface SetupDeps {

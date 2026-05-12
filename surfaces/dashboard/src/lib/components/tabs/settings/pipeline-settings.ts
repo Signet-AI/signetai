@@ -175,22 +175,23 @@ function acpxCommandAgent(agent: AcpxDashboardAgent): string {
 	return agent === "claude-code" ? "claude" : agent;
 }
 
-export function applyAcpxDashboardSetup(
+export function applyRecommendedPipelineSetup(
 	agentConfig: Record<string, unknown>,
-	options: { readonly agent: AcpxDashboardAgent; readonly model?: string },
+	options: { readonly provider?: PipelineProviderChoice; readonly model?: string; readonly agent?: AcpxDashboardAgent } = {},
 ): void {
-	const model = options.model?.trim() || defaultAcpxDashboardModel(options.agent);
+	const provider = options.provider ?? "acpx";
+	const model = options.model?.trim() || defaultPipelineModel(provider);
 	const memory = ensureRecord(agentConfig, "memory");
 	const pipeline = ensureRecord(memory, "pipelineV2");
-	pipeline.enabled = true;
-	pipeline.extractionProvider = "acpx";
+	pipeline.enabled = provider !== "none";
+	pipeline.extractionProvider = provider;
 	pipeline.extractionModel = model;
-	pipeline.semanticContradictionEnabled = true;
-	pipeline.graphEnabled = true;
-	pipeline.rerankerEnabled = true;
+	pipeline.semanticContradictionEnabled = provider !== "none";
+	pipeline.graphEnabled = provider !== "none";
+	pipeline.rerankerEnabled = provider !== "none";
 	pipeline.synthesis = {
-		enabled: true,
-		provider: "acpx",
+		enabled: provider !== "none",
+		provider,
 		model,
 		timeout: 120000,
 	};

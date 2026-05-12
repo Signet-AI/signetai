@@ -24,6 +24,7 @@ interface SetupOptions {
 	disableSignetSecrets?: boolean;
 	withGraphiq?: boolean;
 	disableGraphiq?: boolean;
+	setupMode?: string;
 }
 
 interface PathOptions {
@@ -69,9 +70,11 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 
 	program
 		.command("setup")
+		.allowExcessArguments(false)
 		.description("Setup wizard (interactive by default)")
 		.option("-p, --path <path>", "Base path for agent files")
 		.option("--non-interactive", "Run setup without prompts")
+		.option("--setup-mode <mode>", "Interactive setup surface (terminal, dashboard)")
 		.option("--name <name>", "Agent name (non-interactive mode)")
 		.option("--description <description>", "Agent description (non-interactive mode)")
 		.option(
@@ -92,7 +95,7 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--embedding-model <model>", "Embedding model in non-interactive mode")
 		.option(
 			"--extraction-provider <provider>",
-			"Extraction provider in non-interactive mode (claude-code, codex, llama-cpp, ollama, opencode, openrouter, openai-compatible, none)",
+			"Extraction provider in non-interactive mode (acpx, claude-code, codex, llama-cpp, ollama, opencode, openrouter, openai-compatible, none)",
 		)
 		.option("--extraction-model <model>", "Extraction model in non-interactive mode")
 		.option("--extraction-endpoint <url>", "OpenAI-compatible extraction endpoint in non-interactive mode")

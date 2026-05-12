@@ -25,6 +25,50 @@ describe("registerAppCommands", () => {
 		expect(calls).toEqual([[]]);
 	});
 
+	test("passes setup mode to the setup wizard", async () => {
+		const calls: unknown[] = [];
+		const program = new Command();
+
+		registerAppCommands(program, {
+			collectListOption: (value, previous) => [...previous, value],
+			configureAgent: async () => {},
+			launchDashboard: async () => {},
+			migrateSchema: async () => {},
+			setupWizard: async (options) => {
+				calls.push(options);
+			},
+			showDoctor: async () => {},
+			showStatus: async () => {},
+			syncTemplates: async () => {},
+		});
+
+		await program.parseAsync(["node", "test", "setup", "--setup-mode", "dashboard"]);
+
+		expect(calls).toEqual([expect.objectContaining({ setupMode: "dashboard" })]);
+	});
+
+	test("rejects malformed setup option tokens as excess arguments", async () => {
+		const calls: unknown[] = [];
+		const program = new Command();
+		program.exitOverride();
+
+		registerAppCommands(program, {
+			collectListOption: (value, previous) => [...previous, value],
+			configureAgent: async () => {},
+			launchDashboard: async () => {},
+			migrateSchema: async () => {},
+			setupWizard: async (options) => {
+				calls.push(options);
+			},
+			showDoctor: async () => {},
+			showStatus: async () => {},
+			syncTemplates: async () => {},
+		});
+
+		await expect(program.parseAsync(["node", "test", "setup", " --setup-mode", "dashboard"])).rejects.toThrow();
+		expect(calls).toEqual([]);
+	});
+
 	test("routes doctor target into doctor options", async () => {
 		const calls: unknown[] = [];
 		const program = new Command();
