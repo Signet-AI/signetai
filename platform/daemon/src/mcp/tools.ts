@@ -164,6 +164,7 @@ const BASE_TOOL_NAMES = new Set<string>([
 	"agent_message_inbox",
 	"secret_list",
 	"secret_exec",
+	"secret_exec_status",
 	"mcp_server_list",
 	"mcp_server_call",
 	"mcp_server_search",

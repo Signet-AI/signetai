@@ -241,6 +241,7 @@ describe("createMcpServer", () => {
 		expect(names).toContain("mcp_server_policy_set");
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
+		expect(names).toContain("secret_exec_status");
 		expect(names).toContain("session_bypass");
 		for (const name of GRAPHIQ_TOOL_NAMES) {
 			expect(names).toContain(name);
@@ -248,7 +249,7 @@ describe("createMcpServer", () => {
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(52);
+		expect(names.length).toBe(53);
 	});
 
 	it("registers generic code tools when GraphIQ has an active project", async () => {

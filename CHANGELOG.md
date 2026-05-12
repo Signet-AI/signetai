@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-12
-- Bug fixes: bound and queue secret exec; normalize acpx claude setup alias; add ACPX quick setup; degrade bounded git workspace operations; persist global bin paths; verify public ghcr pulls after publish; add most-used memories parity route.
+- Bug fixes: register secret exec status in tool inventory; bound and queue secret exec; normalize acpx claude setup alias; add ACPX quick setup; degrade bounded git workspace operations; persist global bin paths; verify public ghcr pulls after publish; add most-used memories parity route.
 - Refactoring: add configurable identity presets.
 
 ### 2026-05-11
@@ -35,6 +35,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: correct stale documentation claims.
 
 ## Release Ledger
+
+## [0.116.8] - 2026-05-12
+
+Release summary: 1 bug fix.
+Tag range: `v0.116.7..v0.116.8`.
+
+### Bug Fixes
+
+- **mcp**: register secret exec status in tool inventory (#697)
 
 ## [0.116.7] - 2026-05-12
 
