@@ -180,7 +180,7 @@ export async function getBitwardenStatus(options: {
 		const [status, folders] = await Promise.all([client.status(), client.listFolders()]);
 		return {
 			configured: true,
-			connected: status.status === undefined || status.status === "unlocked",
+			connected: status.status === "unlocked",
 			activeProvider: options.activeProvider,
 			userEmail: status.userEmail,
 			serverUrl: status.serverUrl,

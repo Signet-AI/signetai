@@ -294,7 +294,9 @@ describe("secrets routes plugin capability enforcement", () => {
 		setBitwardenClientFactoryForTests(
 			async (session: string): Promise<BitwardenClient> => ({
 				async status() {
-					return session === "good" ? { status: "unlocked" } : { status: "locked" };
+					if (session === "good") return { status: "unlocked" };
+					if (session === "unknown") return {};
+					return { status: "locked" };
 				},
 				async listFolders() {
 					return [];
@@ -325,6 +327,14 @@ describe("secrets routes plugin capability enforcement", () => {
 		});
 		expect(rejected.status).toBe(400);
 		expect(await rejected.json()).toMatchObject({ success: false, connected: false, activeProvider: false });
+
+		const rejectedUnknown = await app.request("/api/secrets/bitwarden/connect", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ session: "unknown", activate: true }),
+		});
+		expect(rejectedUnknown.status).toBe(400);
+		expect(await rejectedUnknown.json()).toMatchObject({ success: false, connected: false, activeProvider: false });
 
 		const status = await app.request("/api/secrets/bitwarden/status");
 		expect(status.status).toBe(200);
