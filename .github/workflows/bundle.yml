@@ -169,10 +169,9 @@ jobs:
           tar czf "$ARTIFACT_DIR/signet-node-$PLATFORM.tar.gz" -C "$STAGE" bin
           echo "NODE_VERSION=$(node --version)" >> "$GITHUB_ENV"
 
-      # ── CLI bundle (target bun, not node) ──
+      # ── CLI bundle (target node) ──
 
       - name: Build CLI bundle
-        if: needs.detect-changes.outputs.cli == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           bun run build:connector-base
           cd surfaces/cli
@@ -182,7 +181,6 @@ jobs:
       # ── Daemon JS bundle ──
 
       - name: Build daemon JS bundle
-        if: needs.detect-changes.outputs.daemon == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           cd platform/daemon
           bun run build
@@ -191,7 +189,6 @@ jobs:
       # ── Rust binaries ──
 
       - name: Build Rust daemon
-        if: needs.detect-changes.outputs.daemon_rs == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           cargo build --release --target "$RUST_TARGET" -p signet-daemon
           STAGE="$ARTIFACT_DIR/signet-daemon-rs-$PLATFORM"
@@ -201,7 +198,6 @@ jobs:
           tar czf "$ARTIFACT_DIR/signet-daemon-rs-$PLATFORM.tar.gz" -C "$STAGE" signet-daemon
 
       - name: Build predictor
-        if: needs.detect-changes.outputs.predictor == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           cargo build --release --target "$RUST_TARGET" -p predictor
           STAGE="$ARTIFACT_DIR/signet-predictor-$PLATFORM"
@@ -213,7 +209,6 @@ jobs:
       # ── Dashboard ──
 
       - name: Build dashboard
-        if: needs.detect-changes.outputs.dashboard == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           cd surfaces/dashboard
           bun install
@@ -223,7 +218,6 @@ jobs:
       # ── Connectors ──
 
       - name: Build connectors
-        if: needs.detect-changes.outputs.connectors == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           bun run build:connector-base
           bun run build:deps
@@ -239,7 +233,6 @@ jobs:
       # ── Plugins ──
 
       - name: Build OpenCode plugin
-        if: needs.detect-changes.outputs.opencode_plugin == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           bun run build:opencode-plugin
           STAGE="$ARTIFACT_DIR/signet-plugin-opencode"
@@ -248,7 +241,6 @@ jobs:
           tar czf "$ARTIFACT_DIR/signet-plugin-opencode.tar.gz" -C "$STAGE" .
 
       - name: Build Oh My Pi extension
-        if: needs.detect-changes.outputs.oh_my_pi == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           bun run build:oh-my-pi-extension
           STAGE="$ARTIFACT_DIR/signet-plugin-oh-my-pi"
@@ -257,7 +249,6 @@ jobs:
           tar czf "$ARTIFACT_DIR/signet-plugin-oh-my-pi.tar.gz" -C "$STAGE" .
 
       - name: Build Pi extension
-        if: needs.detect-changes.outputs.pi_extension == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           bun run build:pi-extension
           STAGE="$ARTIFACT_DIR/signet-plugin-pi"
@@ -268,7 +259,6 @@ jobs:
       # ── Native modules ──
 
       - name: Build native module
-        if: needs.detect-changes.outputs.native == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           cd platform/native
           napi build --release --platform
@@ -318,19 +308,16 @@ jobs:
       # ── Content bundles (platform-independent) ──
 
       - name: Package skills
-        if: needs.detect-changes.outputs.skills == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           tar czf "$ARTIFACT_DIR/signet-skills.tar.gz" -C skills .
 
       - name: Package templates
-        if: needs.detect-changes.outputs.templates == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           tar czf "$ARTIFACT_DIR/signet-templates.tar.gz" -C surfaces/cli/templates .
 
       # ── CI workflow bundle (independently updateable) ──
 
       - name: Bundle CI workflows
-        if: needs.detect-changes.outputs.workflows == 'true' || github.event.inputs.force_rebuild == 'true'
         run: |
           STAGE="$ARTIFACT_DIR/signet-workflows"
           mkdir -p "$STAGE"

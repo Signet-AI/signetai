@@ -33,7 +33,7 @@ let ok = true;
 for (const { entrypoint, outfile } of targets) {
 	try {
 		const aliasEntries = Object.entries(ALIAS).map(([k, v]) => [k, v]);
-		const result = await build({
+		await build({
 			entryPoints: [entrypoint],
 			bundle: true,
 			outfile,
