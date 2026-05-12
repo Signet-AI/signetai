@@ -31,8 +31,9 @@ if (isBun) {
 	const mod = require("bun:sqlite");
 	Database = mod.Database;
 } else {
+	const { createRequire } = await import("node:module");
 	// eslint-disable-next-line @typescript-eslint/no-require-imports
-	Database = require("better-sqlite3");
+	Database = createRequire(import.meta.url)("better-sqlite3");
 }
 
 type SQLQueryBindings = import("bun:sqlite").SQLQueryBindings;
