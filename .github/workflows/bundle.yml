@@ -449,20 +449,26 @@ jobs:
             gh release create "$TAG" --repo "$REPO" --title "Latest Bundle" --notes "Auto-updated bundle artifacts" --prerelease
           fi
 
-      - name: Upload to release
+      - name: Upload artifacts to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
-          find /tmp/all-artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name 'manifest-*.json' -o -name '*.dmg' -o -name '*.zip' \) | while read -r f; do
+          # Upload tarballs and checksums first
+          find /tmp/all-artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.dmg' -o -name '*.zip' \) | while read -r f; do
             gh release upload "$TAG" "$f" --repo "$REPO" --clobber
           done
 
-      - name: Upload installer to release
+      - name: Upload manifests and installer scripts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
+          # Upload manifests AFTER all artifacts so installers never see
+          # a manifest that references missing files
+          find /tmp/all-artifacts -type f -name 'manifest-*.json' | while read -r f; do
+            gh release upload "$TAG" "$f" --repo "$REPO" --clobber
+          done
           gh release upload "$TAG" deploy/bundle/install.sh deploy/bundle/uninstall.sh deploy/bundle/update.sh --repo "$REPO" --clobber
