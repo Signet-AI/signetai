@@ -149,8 +149,6 @@ for comp in $COMPONENTS; do
   fi
   rm -rf "$OLD"
   UPDATED=$((UPDATED + 1))
-
-  jq --arg comp "$comp" --arg sha "$REMOTE_SHA" '.components[$comp].sha256 = $sha' "$LOCAL_MANIFEST" > "${TMPDIR}/manifest-updated.json" && mv "${TMPDIR}/manifest-updated.json" "$LOCAL_MANIFEST"
   ok "$comp updated"
 done
 
@@ -161,6 +159,7 @@ if [ "$FAILED" -gt 0 ]; then
   exit 1
 fi
 
+cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"
 echo "$REMOTE_VERSION" > "$SIGNET_INSTALL_DIR/VERSION"
 
 echo ""

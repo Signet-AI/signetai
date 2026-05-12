@@ -328,7 +328,7 @@ main() {
   generate_wrappers
   setup_path
 
-  VERSION_VAL="$(jq -r '.version' "$SIGNET_INSTALL_DIR/manifest.json" 2>/dev/null || echo "unknown")"
+  VERSION_VAL="$(get_manifest_value '.version' 2>/dev/null || echo "unknown")"
   echo "$VERSION_VAL" > "$SIGNET_INSTALL_DIR/VERSION"
 
   echo ""

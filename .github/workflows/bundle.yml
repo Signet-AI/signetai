@@ -277,7 +277,11 @@ jobs:
           napi build --release --platform
           STAGE="$ARTIFACT_DIR/signet-native-$PLATFORM"
           mkdir -p "$STAGE"
-          cp *.node "$STAGE/" 2>/dev/null || true
+          cp *.node "$STAGE/"
+          if [ -z "$(ls "$STAGE"/*.node 2>/dev/null)" ]; then
+            echo "::error::Native build produced no .node files"
+            exit 1
+          fi
           tar czf "$ARTIFACT_DIR/signet-native-$PLATFORM.tar.gz" -C "$STAGE" .
 
       # ── onnxruntime (required — embeddings depend on it) ──
