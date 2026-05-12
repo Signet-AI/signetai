@@ -203,6 +203,23 @@ describe("local secrets provider", () => {
 		expect(statuses.filter((status) => status === "queued")).toHaveLength(2);
 	});
 
+	test("startSecretExecJob caps retained completed job results", async () => {
+		await putSecret("OPENAI_API_KEY", "sk-retained");
+		const jobs = Array.from({ length: 64 }, () =>
+			startSecretExecJob("bun --version", { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 }),
+		);
+
+		for (let i = 0; i < 80; i++) {
+			if (jobs.every((job) => getSecretExecJob(job.id)?.status === "completed")) break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+
+		expect(jobs.every((job) => getSecretExecJob(job.id)?.status === "completed")).toBe(true);
+		expect(() =>
+			startSecretExecJob("bun --version", { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 1000 }),
+		).toThrow("secret exec queue is full");
+	});
+
 	test("corrupt stores fail clearly and are not overwritten by list or health checks", async () => {
 		mkdirSync(join(agentsDir, ".secrets"), { recursive: true });
 		writeFileSync(secretsFile(), "not-json", { mode: 0o600 });

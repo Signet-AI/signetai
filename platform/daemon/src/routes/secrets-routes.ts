@@ -286,6 +286,7 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 
 			const secretRefs: Record<string, string> = body.secrets === undefined ? { [name]: name } : body.secrets;
 			if (
+				!secretRefs ||
 				typeof secretRefs !== "object" ||
 				Array.isArray(secretRefs) ||
 				Object.keys(secretRefs).length === 0 ||

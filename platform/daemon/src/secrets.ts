@@ -84,6 +84,7 @@ const DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 const SECRET_EXEC_JOB_TTL_MS = 60 * 60_000;
 const MAX_SECRET_EXEC_RUNNING_JOBS = 4;
 const MAX_SECRET_EXEC_QUEUED_JOBS = 64;
+const MAX_SECRET_EXEC_RETAINED_JOBS = 64;
 
 const secretExecJobs = new Map<string, SecretExecJob>();
 const pendingSecretExecJobs: string[] = [];
@@ -580,7 +581,10 @@ export function startSecretExecJob(
 	options: SecretExecOptions = {},
 ): SecretExecJob {
 	pruneSecretExecJobs();
-	if (pendingSecretExecJobs.length >= MAX_SECRET_EXEC_QUEUED_JOBS) {
+	if (
+		secretExecJobs.size >= MAX_SECRET_EXEC_RETAINED_JOBS ||
+		pendingSecretExecJobs.length >= MAX_SECRET_EXEC_QUEUED_JOBS
+	) {
 		throw new SecretExecQueueFullError();
 	}
 	const timeoutMs = normalizeSecretExecTimeoutMs(options.timeoutMs);
