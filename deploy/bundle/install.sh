@@ -190,7 +190,6 @@ download() {
     return 1
   fi
   local stage_dir="$SIGNET_INSTALL_DIR/runtime/staging/$name"
-  mkdir -p "$stage_dir"
   rm -rf "$stage_dir"
   mv "$tmp_extract" "$stage_dir"
   rm -f "$tmp"
@@ -215,8 +214,14 @@ get_manifest_value() {
   local key="$1"
   if command -v jq >/dev/null 2>&1; then
     jq -r "$key" "${tmpdir}/manifest.json" 2>/dev/null
-  else
-    python3 -c "import json,sys; d=json.load(open('${tmpdir}/manifest.json')); print($key)" 2>/dev/null || true
+  elif [ -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
+    "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e "
+      const fs=require('fs');
+      const d=JSON.parse(fs.readFileSync('${tmpdir}/manifest.json','utf8'));
+      const parts='${key}'.split('.').filter(Boolean);
+      let v=d; for(const p of parts) v=v?.[p];
+      if(v!==undefined) process.stdout.write(String(v));
+    " 2>/dev/null || true
   fi
 }
 
@@ -351,15 +356,14 @@ main() {
     fi
 
     if [ -z "$sha" ]; then
-      sha_url="${DOWNLOAD_BASE}/${filename}.sha256"
-      sha="$(curl -fsSL "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
-    fi
-
-    if [ -z "$sha" ]; then
       case " $REQUIRED_COMPONENTS " in
         *" $name "*)
-          err "Required component '$name' has no checksum — refusing unverified download"
+          err "Required component '$name' has no checksum in manifest — aborting"
           exit 1
+          ;;
+        *)
+          warn "'$name' has no checksum — skipping"
+          continue
           ;;
       esac
     fi

@@ -315,7 +315,7 @@ jobs:
       - name: Build native module
         run: |
           cd platform/native
-          napi build --release --platform
+          bun run build
           STAGE="$ARTIFACT_DIR/signet-native-$PLATFORM"
           mkdir -p "$STAGE"
           cp *.node "$STAGE/"
