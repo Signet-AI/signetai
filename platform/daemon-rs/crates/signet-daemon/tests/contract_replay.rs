@@ -954,6 +954,51 @@ async fn marketplace_reviews_preserve_concurrent_file_writes() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn marketplace_reviews_reject_invalid_storage_and_rating_without_overwrite() {
+    let server = TestServer::start().await;
+    let marketplace_dir = server._tmpdir.path().join("marketplace");
+    std::fs::create_dir_all(&marketplace_dir).expect("create marketplace dir");
+    let reviews_path = marketplace_dir.join("reviews.json");
+    std::fs::write(&reviews_path, "not valid json").expect("write malformed reviews ledger");
+
+    let resp = server
+        .post(
+            "/api/marketplace/reviews",
+            json!({
+                "targetType": "skill",
+                "targetId": "skills.sh/corrupt",
+                "displayName": "avery",
+                "rating": 5,
+                "title": "Great",
+                "body": "Should not overwrite malformed data"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 500);
+    assert_eq!(
+        std::fs::read_to_string(&reviews_path).expect("read malformed reviews ledger"),
+        "not valid json"
+    );
+
+    std::fs::write(&reviews_path, "[]").expect("reset reviews ledger");
+    let resp = server
+        .post(
+            "/api/marketplace/reviews",
+            json!({
+                "targetType": "skill",
+                "targetId": "skills.sh/rating",
+                "displayName": "avery",
+                "rating": 0.6,
+                "title": "Invalid",
+                "body": "Raw rating below one must be rejected"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn existing_documented_routes_remain_mounted() {
     let server = TestServer::start().await;
 

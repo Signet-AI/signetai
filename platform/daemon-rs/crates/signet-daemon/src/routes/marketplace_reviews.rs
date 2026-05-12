@@ -95,14 +95,14 @@ fn config_path(state: &AppState) -> std::io::Result<std::path::PathBuf> {
     )
 }
 
-fn read_reviews(state: &AppState) -> Vec<MarketplaceReview> {
-    let Ok(path) = reviews_path(state) else {
-        return Vec::new();
-    };
+fn read_reviews(state: &AppState) -> Result<Vec<MarketplaceReview>, String> {
+    let path = reviews_path(state).map_err(|e| e.to_string())?;
     // lgtm[rust/path-injection] reviews_path resolves a constant file under the canonical Signet workspace root via workspace_paths::child_file.
     match std::fs::read_to_string(path) {
-        Ok(raw) => serde_json::from_str::<Vec<MarketplaceReview>>(&raw).unwrap_or_default(),
-        Err(_) => Vec::new(),
+        Ok(raw) => serde_json::from_str::<Vec<MarketplaceReview>>(&raw)
+            .map_err(|e| format!("failed to parse reviews.json: {e}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("failed to read reviews.json: {e}")),
     }
 }
 
@@ -150,12 +150,11 @@ fn parse_text(value: Option<String>) -> Option<String> {
 }
 
 fn parse_rating(value: Option<f64>) -> Option<i64> {
-    let rounded = value?.round();
-    if (1.0..=5.0).contains(&rounded) {
-        Some(rounded as i64)
-    } else {
-        None
+    let raw = value?;
+    if !(1.0..=5.0).contains(&raw) {
+        return None;
     }
+    Some(raw.round() as i64)
 }
 
 fn page_limit(raw: Option<usize>) -> usize {
@@ -174,13 +173,21 @@ fn avg_rating(reviews: &[MarketplaceReview]) -> f64 {
 pub async fn list(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListReviewsQuery>,
-) -> Json<serde_json::Value> {
+) -> impl IntoResponse {
     let target_type = parse_target_type(query.target_type);
     let target_id = parse_text(query.id);
     let limit = page_limit(query.limit);
     let offset = query.offset.unwrap_or(0);
 
-    let mut reviews = read_reviews(&state);
+    let mut reviews = match read_reviews(&state) {
+        Ok(reviews) => reviews,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            );
+        }
+    };
     reviews.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     let filtered: Vec<MarketplaceReview> = reviews
         .into_iter()
@@ -196,13 +203,16 @@ pub async fn list(
         .collect();
     let page: Vec<MarketplaceReview> = filtered.iter().skip(offset).take(limit).cloned().collect();
 
-    Json(serde_json::json!({
-        "reviews": page,
-        "total": filtered.len(),
-        "limit": limit,
-        "offset": offset,
-        "summary": {"count": filtered.len(), "avgRating": avg_rating(&filtered)}
-    }))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "reviews": page,
+            "total": filtered.len(),
+            "limit": limit,
+            "offset": offset,
+            "summary": {"count": filtered.len(), "avgRating": avg_rating(&filtered)}
+        })),
+    )
 }
 
 /// POST /api/marketplace/reviews
@@ -260,7 +270,15 @@ pub async fn create(
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    let mut reviews = read_reviews(&state);
+    let mut reviews = match read_reviews(&state) {
+        Ok(reviews) => reviews,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            );
+        }
+    };
     reviews.insert(0, review.clone());
     if let Err(e) = write_reviews(&state, &reviews) {
         return (
@@ -279,6 +297,7 @@ pub async fn create(
 pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let config = read_config(&state);
     let pending = read_reviews(&state)
+        .unwrap_or_default()
         .iter()
         .filter(|item| {
             item.synced_at
