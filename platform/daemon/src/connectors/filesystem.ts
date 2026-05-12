@@ -106,7 +106,13 @@ function globToRegex(pattern: string): RegExp {
 		.replace(/\/\{\{GLOBSTAR\}\}/g, "(?:/.*)?")
 		.replace(/\{\{GLOBSTAR\}\}\//g, "(?:.*/)?")
 		.replace(/\{\{GLOBSTAR\}\}/g, ".*");
-	return new RegExp(`^${normalized}$`, "i");
+	const anchored = `^${normalized}$`;
+	// Patterns without path separators or globstars match at any depth
+	// (mirrors Bun.Glob behavior: *.md matches notes/a.md)
+	if (!pattern.includes("/") && !pattern.includes("{{GLOBSTAR}}")) {
+		return new RegExp(`(?:^|/)${normalized}$`, "i");
+	}
+	return new RegExp(anchored, "i");
 }
 
 async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
@@ -390,8 +396,18 @@ class FilesystemConnector implements ConnectorRuntime {
 	}
 
 	async replay(resourceId: string): Promise<SyncResult> {
-		// resourceId is the relative path from listResources
-		const absolutePath = join(resolve(this.settings.rootPath), resourceId);
+		const resolvedRoot = resolve(this.settings.rootPath);
+		const absolutePath = resolve(resolvedRoot, resourceId);
+		const rel = relative(resolvedRoot, absolutePath);
+		if (!rel || rel.startsWith("..") || resolve(rel) === rel) {
+			return {
+				documentsAdded: 0,
+				documentsUpdated: 0,
+				documentsRemoved: 0,
+				errors: [{ resourceId, message: "Path escapes connector root", retryable: false }],
+				cursor: { lastSyncAt: new Date().toISOString() },
+			};
+		}
 
 		let fileStat: Awaited<ReturnType<typeof stat>>;
 		try {
