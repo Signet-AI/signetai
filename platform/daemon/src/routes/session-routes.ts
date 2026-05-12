@@ -347,23 +347,57 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 	// Git Sync API
 
 	app.get("/api/git/status", async (c) => {
-		const status = await getGitStatus();
-		return c.json(status);
+		try {
+			const status = await getGitStatus();
+			return c.json(status);
+		} catch (error) {
+			return c.json(
+				{
+					isRepo: false,
+					hasCredentials: false,
+					autoSync: gc.autoSync,
+					degraded: true,
+					degradedReason: `Git status unavailable: ${error instanceof Error ? error.message : String(error)}`,
+				},
+				200,
+			);
+		}
 	});
 
 	app.post("/api/git/pull", async (c) => {
-		const result = await gitPull();
-		return c.json(result);
+		try {
+			const result = await gitPull();
+			return c.json(result);
+		} catch (error) {
+			return c.json({
+				success: false,
+				message: `Git pull unavailable: ${error instanceof Error ? error.message : String(error)}`,
+			});
+		}
 	});
 
 	app.post("/api/git/push", async (c) => {
-		const result = await gitPush();
-		return c.json(result);
+		try {
+			const result = await gitPush();
+			return c.json(result);
+		} catch (error) {
+			return c.json({
+				success: false,
+				message: `Git push unavailable: ${error instanceof Error ? error.message : String(error)}`,
+			});
+		}
 	});
 
 	app.post("/api/git/sync", async (c) => {
-		const result = await gitSync();
-		return c.json(result);
+		try {
+			const result = await gitSync();
+			return c.json(result);
+		} catch (error) {
+			return c.json({
+				success: false,
+				message: `Git sync unavailable: ${error instanceof Error ? error.message : String(error)}`,
+			});
+		}
 	});
 
 	app.get("/api/git/config", (c) => {

@@ -3,7 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitConfig, loadGitConfig } from "./git-config";
-import { getAutoCommitQueueStateForTests, scheduleAutoCommit, stopGitSyncTimer } from "./git-sync";
+import {
+	getAutoCommitQueueStateForTests,
+	getGitStatus,
+	resetGitHealthForTests,
+	scheduleAutoCommit,
+	setGitCommandRunnerForTests,
+	setGitRepoProbeForTests,
+	stopGitSyncTimer,
+} from "./git-sync";
 import { type GitConfig, applyGitConfigPatch } from "./session-routes";
 
 describe("loadGitConfig", () => {
@@ -63,6 +71,61 @@ describe("applyGitConfigPatch", () => {
 
 		expect(cfg.autoCommit).toBe(true);
 		expect(cfg.autoSync).toBe(true);
+	});
+});
+
+describe("getGitStatus", () => {
+	it("degrades instead of throwing when workspace status times out", async () => {
+		resetGitHealthForTests();
+		setGitRepoProbeForTests(() => true);
+		setGitCommandRunnerForTests(async (_cmd, args) => {
+			if (args[0] === "remote") return { code: 1, stdout: "", stderr: "no remote" };
+			if (args[0] === "rev-parse") return { code: 0, stdout: "main\n", stderr: "" };
+			if (args[0] === "status") return { code: 124, stdout: "", stderr: "", timedOut: true };
+			return { code: 0, stdout: "0\n", stderr: "" };
+		});
+
+		try {
+			const status = await getGitStatus();
+			expect(status.isRepo).toBe(true);
+			expect(status.branch).toBe("main");
+			expect(status.degraded).toBe(true);
+			expect(status.degradedReason).toContain("Workspace status timed out");
+			expect(status.uncommittedChanges).toBeUndefined();
+		} finally {
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+		}
+	});
+
+	it("opens a cheap degraded circuit after repeated git status failures", async () => {
+		resetGitHealthForTests();
+		setGitRepoProbeForTests(() => true);
+		let calls = 0;
+		setGitCommandRunnerForTests(async (_cmd, args) => {
+			calls += 1;
+			if (args[0] === "remote") return { code: 1, stdout: "", stderr: "no remote" };
+			if (args[0] === "rev-parse") return { code: 0, stdout: "main\n", stderr: "" };
+			if (args[0] === "status") return { code: 124, stdout: "", stderr: "", timedOut: true };
+			return { code: 0, stdout: "0\n", stderr: "" };
+		});
+
+		try {
+			await getGitStatus();
+			await getGitStatus();
+			await getGitStatus();
+			const callsBeforeCircuit = calls;
+
+			const status = await getGitStatus();
+			expect(status.degraded).toBe(true);
+			expect(status.degradedReason).toContain("temporarily disabled");
+			expect(calls).toBe(callsBeforeCircuit);
+		} finally {
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+		}
 	});
 });
 
