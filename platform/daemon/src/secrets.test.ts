@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	BITWARDEN_ACTIVE_PROVIDER_SECRET,
+	BITWARDEN_SESSION_SECRET,
+	type BitwardenClient,
+	setBitwardenClientFactoryForTests,
+} from "./bitwarden.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index.js";
 import {
 	deleteSecret,
@@ -33,6 +39,7 @@ describe("local secrets provider", () => {
 	afterEach(() => {
 		resetDefaultPluginHostForTests();
 		resetSecretExecJobsForTests();
+		setBitwardenClientFactoryForTests(null);
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
@@ -257,6 +264,39 @@ describe("local secrets provider", () => {
 		expect(plugin?.state).toBe("degraded");
 		expect(plugin?.health?.status).toBe("unhealthy");
 		expect(plugin?.stateReason).toContain("Failed to read secrets store");
+	});
+
+	test("active Bitwarden provider resolves bare names with the same canonical name used on write", async () => {
+		const client: BitwardenClient = {
+			async status() {
+				return { status: "unlocked" };
+			},
+			async listFolders() {
+				return [];
+			},
+			async listItems() {
+				return [{ id: "item-1", name: "ANTHROPIC_KEY", folderId: null }];
+			},
+			async getItem(id: string) {
+				expect(id).toBe("item-1");
+				return { id, name: "ANTHROPIC_KEY", folderId: null, login: { username: "signet", password: "sk-bw" } };
+			},
+			async putSecret() {
+				throw new Error("not used");
+			},
+			async deleteSecret() {
+				return false;
+			},
+			async resolveSecret(ref: string) {
+				expect(ref).toBe("bw://name/ANTHROPIC_KEY");
+				return "sk-bw";
+			},
+		};
+		setBitwardenClientFactoryForTests(async () => client);
+		await putSecret(BITWARDEN_SESSION_SECRET, "bw-session");
+		await putSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET, "bitwarden");
+
+		expect(await getSecret("anthropic_key")).toBe("sk-bw");
 	});
 
 	test("delete accepts local:// compatibility references", async () => {

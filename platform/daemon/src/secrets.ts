@@ -20,6 +20,7 @@ import {
 	BITWARDEN_ACTIVE_PROVIDER_SECRET,
 	BITWARDEN_MANAGED_FOLDER_SECRET,
 	BITWARDEN_SESSION_SECRET,
+	buildBitwardenManagedSecretName,
 	deleteBitwardenSecret,
 	isBitwardenActiveProvider,
 	isBitwardenReference,
@@ -340,7 +341,10 @@ export async function getSecret(name: string): Promise<string> {
 	if (await isBitwardenProviderActive()) {
 		try {
 			const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
-			return readBitwardenReference(`bw://name/${encodeURIComponent(localName)}`, session);
+			return readBitwardenReference(
+				`bw://name/${encodeURIComponent(buildBitwardenManagedSecretName(localName))}`,
+				session,
+			);
 		} catch (error) {
 			if (!hasLocalSecret(localName)) throw error;
 		}
