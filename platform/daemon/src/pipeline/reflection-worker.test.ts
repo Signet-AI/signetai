@@ -7,7 +7,12 @@ import type { LlmProvider, PipelineReflectionsConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import { txIngestEnvelope } from "../transactions";
-import { generateDailyBriefInsights, nextReflectionDelayMs, startReflectionWorker } from "./reflection-worker";
+import {
+	collectReflectionContext,
+	generateDailyBriefInsights,
+	nextReflectionDelayMs,
+	startReflectionWorker,
+} from "./reflection-worker";
 
 let dir: string;
 const previousSignetPath = process.env.SIGNET_PATH;
@@ -35,21 +40,29 @@ function provider(text: string): LlmProvider {
 	};
 }
 
-function seedMemory(agentId: string): string {
-	const now = new Date().toISOString();
+function seedMemory(
+	agentId: string,
+	opts: {
+		readonly content?: string;
+		readonly createdAt?: string;
+		readonly pinned?: number;
+		readonly hash?: string;
+	} = {},
+): string {
+	const now = opts.createdAt ?? new Date().toISOString();
 	const id = randomUUID();
 	getDbAccessor().withWriteTx((db) => {
 		txIngestEnvelope(db, {
 			id,
-			content: "The reflection worker needs durable persistence.",
-			contentHash: `worker-test-${agentId}`,
+			content: opts.content ?? "The reflection worker needs durable persistence.",
+			contentHash: opts.hash ?? `worker-test-${agentId}`,
 			who: "tester",
 			why: "test-seed",
 			project: null,
 			importance: 0.5,
 			type: "fact",
 			tags: "test",
-			pinned: 0,
+			pinned: opts.pinned ?? 0,
 			sourceType: "test",
 			sourceId: "reflection-worker.test",
 			agentId,
@@ -109,6 +122,23 @@ describe("reflection worker", () => {
 		}
 
 		expect(existsSync(join(dir, ".daemon", "last-reflection.default.json"))).toBe(false);
+	});
+
+	it("collects recent source context and only lets pinned old memories bypass the cutoff", () => {
+		const old = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+		const recentId = seedMemory("default", { content: "Recent source", hash: "recent-source" });
+		const pinnedId = seedMemory("default", {
+			content: "Pinned durable source",
+			createdAt: old,
+			pinned: 1,
+			hash: "pinned-source",
+		});
+		seedMemory("default", { content: "Stale unpinned source", createdAt: old, hash: "stale-source" });
+
+		const context = collectReflectionContext("default", config);
+
+		expect(context.memories.map((m) => m.id)).toEqual([pinnedId, recentId]);
+		expect(context.memories.map((m) => m.content)).not.toContain("Stale unpinned source");
 	});
 
 	it("persists generated brief insights", async () => {

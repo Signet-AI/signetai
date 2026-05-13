@@ -251,16 +251,17 @@ export function collectReflectionContext(
 ): ReflectionSourceContext {
 	const maxMemories = Math.max(config.maxMemories, 24);
 	const maxSummaries = Math.max(config.maxSummaries, 12);
+	const cutoff = new Date(Date.now() - Math.max(config.timeWindowHours, 1) * 60 * 60 * 1000).toISOString();
 	const dbAccessor = deps.getDbAccessor();
 
 	const memories = dbAccessor.withReadDb((db) => {
 		const rows = db
 			.prepare(
 				`SELECT id, content, type, tags, created_at FROM memories
-             WHERE agent_id = ? AND is_deleted = 0
-             ORDER BY pinned DESC, importance DESC, created_at DESC LIMIT ?`,
+				 WHERE agent_id = ? AND is_deleted = 0 AND (created_at >= ? OR pinned = 1)
+				 ORDER BY pinned DESC, importance DESC, created_at DESC LIMIT ?`,
 			)
-			.all(agentId, maxMemories) as {
+			.all(agentId, cutoff, maxMemories) as {
 			id: string;
 			content: string;
 			type: string;
@@ -280,10 +281,10 @@ export function collectReflectionContext(
 		const rows = db
 			.prepare(
 				`SELECT id, content, created_at, latest_at, session_key FROM session_summaries
-             WHERE agent_id = ?
-             ORDER BY COALESCE(latest_at, created_at) DESC LIMIT ?`,
+				 WHERE agent_id = ? AND COALESCE(latest_at, created_at) >= ?
+				 ORDER BY COALESCE(latest_at, created_at) DESC LIMIT ?`,
 			)
-			.all(agentId, maxSummaries) as {
+			.all(agentId, cutoff, maxSummaries) as {
 			id: string;
 			content: string;
 			created_at: string;
@@ -303,10 +304,10 @@ export function collectReflectionContext(
 		const rows = db
 			.prepare(
 				`SELECT session_key, content, project, created_at FROM session_transcripts
-             WHERE agent_id = ?
-             ORDER BY created_at DESC LIMIT 4`,
+				 WHERE agent_id = ? AND COALESCE(updated_at, created_at) >= ?
+				 ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 4`,
 			)
-			.all(agentId) as { session_key: string; content: string; project: string | null; created_at: string }[];
+			.all(agentId, cutoff) as { session_key: string; content: string; project: string | null; created_at: string }[];
 		return rows.map((r) => ({
 			sessionKey: r.session_key,
 			content: r.content,
@@ -319,13 +320,14 @@ export function collectReflectionContext(
 		const attributes = db
 			.prepare(
 				`SELECT e.name AS entity, e.entity_type AS kind, ea.name AS aspect, attr.content AS content, attr.updated_at AS updated_at
-             FROM entity_attributes attr
-             LEFT JOIN entity_aspects ea ON ea.id = attr.aspect_id
-             LEFT JOIN entities e ON e.id = ea.entity_id
-             WHERE attr.agent_id = ? AND attr.status = 'active' AND e.name IS NOT NULL
-             ORDER BY attr.importance DESC, attr.updated_at DESC LIMIT 28`,
+				 FROM entity_attributes attr
+				 LEFT JOIN entity_aspects ea ON ea.id = attr.aspect_id
+				 LEFT JOIN entities e ON e.id = ea.entity_id
+				 WHERE attr.agent_id = ? AND attr.status = 'active' AND e.name IS NOT NULL
+				   AND COALESCE(attr.updated_at, attr.created_at) >= ?
+				 ORDER BY attr.importance DESC, attr.updated_at DESC LIMIT 28`,
 			)
-			.all(agentId) as {
+			.all(agentId, cutoff) as {
 			entity: string;
 			kind: string;
 			aspect: string | null;
