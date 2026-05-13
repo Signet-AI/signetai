@@ -14,9 +14,9 @@ import type {
 } from "$lib/api";
 import { API_BASE, getConnectors, getContinuityLatest, getDiagnostics, getPipelineStatus } from "$lib/api";
 import AgentHeader from "$lib/components/home/AgentHeader.svelte";
+import DailyReflection from "$lib/components/home/DailyReflection.svelte";
 import KnowledgeBaseMap from "$lib/components/home/KnowledgeBaseMap.svelte";
 import PinnedEntityCluster from "$lib/components/home/PinnedEntityCluster.svelte";
-import DailyReflection from "$lib/components/home/DailyReflection.svelte";
 import { onMount } from "svelte";
 
 interface Props {
@@ -75,7 +75,7 @@ onMount(async () => {
 		<KnowledgeBaseMap />
 	</div>
 	<div class="area-insights">
-		<DailyReflection />
+		<DailyReflection {agentId} />
 	</div>
 	<div class="area-sidebar">
 		<PinnedEntityCluster {memories} />

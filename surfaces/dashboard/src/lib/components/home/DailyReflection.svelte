@@ -1,18 +1,26 @@
 <script lang="ts">
 import type { DailyReflection } from "$lib/api";
-import { getTodayReflection, answerReflection } from "$lib/api";
+import { answerReflection, getTodayReflection } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import { onMount } from "svelte";
 
+interface Props {
+	agentId: string;
+}
+
+const { agentId }: Props = $props();
+
 let reflection = $state<DailyReflection | null>(null);
 let loading = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:value mutates state declared with let.
 let answerText = $state("");
 let submitting = $state(false);
 let answered = $state(false);
+// biome-ignore lint/style/useConst: Svelte event handlers reassign state declared with let.
 let showAnswer = $state(false);
 
 onMount(async () => {
-	const data = await getTodayReflection();
+	const data = await getTodayReflection(agentId);
 	reflection = data.reflection;
 	loading = false;
 	if (reflection?.answer) answered = true;
@@ -21,7 +29,7 @@ onMount(async () => {
 async function handleAnswer(): Promise<void> {
 	if (!reflection || !answerText.trim()) return;
 	submitting = true;
-	const result = await answerReflection(reflection.id, answerText);
+	const result = await answerReflection(reflection.id, answerText, agentId);
 	submitting = false;
 	if (result.success) {
 		answered = true;

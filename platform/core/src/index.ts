@@ -53,6 +53,7 @@ export type {
 	PipelineGraphConfig,
 	PipelineTraversalConfig,
 	PipelineRerankerConfig,
+	PipelineReflectionsConfig,
 	PipelineAutonomousConfig,
 	PipelineRepairConfig,
 	PipelineDocumentsConfig,

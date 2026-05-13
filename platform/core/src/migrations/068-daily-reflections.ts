@@ -24,7 +24,7 @@ export function up(db: MigrationDb): void {
 			answered_at      TEXT
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_daily_reflections_agent_date
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_reflections_agent_date
 			ON daily_reflections(agent_id, date);
 	`);
 }

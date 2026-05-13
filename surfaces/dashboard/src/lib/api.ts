@@ -2909,9 +2909,13 @@ export interface TodayReflectionResponse {
 	reflection: DailyReflection | null;
 }
 
-export async function getTodayReflection(): Promise<TodayReflectionResponse> {
+function agentQuery(agentId?: string): string {
+	return agentId && agentId !== "default" ? `?agentId=${encodeURIComponent(agentId)}` : "";
+}
+
+export async function getTodayReflection(agentId?: string): Promise<TodayReflectionResponse> {
 	try {
-		const res = await fetch(`${API_BASE}/api/reflections/today`);
+		const res = await fetch(`${API_BASE}/api/reflections/today${agentQuery(agentId)}`);
 		if (!res.ok) return { reflection: null };
 		return (await res.json()) as TodayReflectionResponse;
 	} catch {
@@ -2922,9 +2926,10 @@ export async function getTodayReflection(): Promise<TodayReflectionResponse> {
 export async function answerReflection(
 	id: string,
 	answer: string,
+	agentId?: string,
 ): Promise<{ success: boolean; memoryId?: string; error?: string }> {
 	try {
-		const res = await fetch(`${API_BASE}/api/reflections/${id}/answer`, {
+		const res = await fetch(`${API_BASE}/api/reflections/${id}/answer${agentQuery(agentId)}`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ answer: answer.trim() }),

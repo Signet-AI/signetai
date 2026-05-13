@@ -1,14 +1,30 @@
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Hono } from "hono";
+import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
-import {
-	buildReflectionPrompt,
-	parseReflectionResponse,
-} from "../pipeline/reflection-worker";
-import { loadPipelineConfig } from "../memory-config";
+import { loadMemoryConfig } from "../memory-config";
+import { buildReflectionPrompt, parseReflectionResponse } from "../pipeline/reflection-worker";
 import { txIngestEnvelope } from "../transactions";
+import { authConfig } from "./state";
+
+const DEFAULT_REFLECTION_LIMIT = 30;
+const MAX_REFLECTION_LIMIT = 100;
+const MAX_REFLECTION_ANSWER_CHARS = 10_000;
+
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
+
+function parseReflectionLimit(raw: string | undefined): number {
+	if (raw === undefined) return DEFAULT_REFLECTION_LIMIT;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_REFLECTION_LIMIT;
+	return Math.min(parsed, MAX_REFLECTION_LIMIT);
+}
 
 interface ReflectionRow {
 	id: string;
@@ -41,17 +57,28 @@ function formatReflection(r: ReflectionRow) {
 }
 
 export function registerReflectionRoutes(app: Hono): void {
+	app.use("/api/reflections", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/reflections/*", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/reflections/generate", async (c, next) => {
+		return requirePermission("admin", authConfig)(c, next);
+	});
+	app.use("/api/reflections/:id/answer", async (c, next) => {
+		return requirePermission("modify", authConfig)(c, next);
+	});
+
 	app.get("/api/reflections/today", (c) => {
 		const agentId = c.req.query("agentId") ?? "default";
 		const date = new Date().toISOString().slice(0, 10);
 
 		try {
 			const row = getDbAccessor().withReadDb((db) => {
-				return db
-					.prepare(
-						"SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ?",
-					)
-					.get(agentId, date) as ReflectionRow | undefined;
+				return db.prepare("SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ?").get(agentId, date) as
+					| ReflectionRow
+					| undefined;
 			});
 
 			if (!row) {
@@ -60,16 +87,14 @@ export function registerReflectionRoutes(app: Hono): void {
 
 			return c.json({ reflection: formatReflection(row) });
 		} catch (e) {
-			logger.error("reflections", "Failed to fetch today's reflection", {
-				error: e instanceof Error ? e.message : String(e),
-			});
+			logger.error("reflections", "Failed to fetch today's reflection", e instanceof Error ? e : undefined);
 			return c.json({ error: "Failed to fetch reflection" }, 500);
 		}
 	});
 
 	app.get("/api/reflections", (c) => {
 		const agentId = c.req.query("agentId") ?? "default";
-		const limit = Math.min(Number(c.req.query("limit")) || 30, 100);
+		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
 			const rows = getDbAccessor().withReadDb((db) => {
@@ -87,9 +112,7 @@ export function registerReflectionRoutes(app: Hono): void {
 
 			return c.json({ reflections: rows.map(formatReflection) });
 		} catch (e) {
-			logger.error("reflections", "Failed to list reflections", {
-				error: e instanceof Error ? e.message : String(e),
-			});
+			logger.error("reflections", "Failed to list reflections", e instanceof Error ? e : undefined);
 			return c.json({ error: "Failed to list reflections" }, 500);
 		}
 	});
@@ -99,15 +122,15 @@ export function registerReflectionRoutes(app: Hono): void {
 		const date = new Date().toISOString().slice(0, 10);
 
 		const existing = getDbAccessor().withReadDb((db) => {
-			return db
-				.prepare("SELECT id FROM daily_reflections WHERE agent_id = ? AND date = ?")
-				.get(agentId, date) as { id: string } | undefined;
+			return db.prepare("SELECT id FROM daily_reflections WHERE agent_id = ? AND date = ?").get(agentId, date) as
+				| { id: string }
+				| undefined;
 		});
 		if (existing) {
 			return c.json({ error: "Reflection already exists for today" }, 409);
 		}
 
-		const pipelineCfg = loadPipelineConfig();
+		const pipelineCfg = loadMemoryConfig(getAgentsDir()).pipelineV2;
 		const cfg = pipelineCfg.reflections;
 		if (!cfg?.enabled) {
 			return c.json({ error: "Reflections are disabled in pipeline config" }, 400);
@@ -116,18 +139,22 @@ export function registerReflectionRoutes(app: Hono): void {
 		const cutoff = new Date(Date.now() - cfg.timeWindowHours * 60 * 60 * 1000).toISOString();
 
 		const memories = getDbAccessor().withReadDb((db) => {
-			return (db
-				.prepare(
-					`SELECT content, type, tags, created_at FROM memories
+			return (
+				db
+					.prepare(
+						`SELECT id, content, type, tags, created_at FROM memories
              WHERE agent_id = ? AND created_at >= ? AND is_deleted = 0
              ORDER BY created_at DESC LIMIT ?`,
-				)
-				.all(agentId, cutoff, cfg.maxMemories) as {
-				content: string;
-				type: string;
-				tags: string;
-				created_at: string;
-			}[]).map((r) => ({
+					)
+					.all(agentId, cutoff, cfg.maxMemories) as {
+					id: string;
+					content: string;
+					type: string;
+					tags: string;
+					created_at: string;
+				}[]
+			).map((r) => ({
+				id: r.id,
 				content: r.content,
 				type: r.type,
 				tags: r.tags ?? "",
@@ -136,16 +163,19 @@ export function registerReflectionRoutes(app: Hono): void {
 		});
 
 		const summaries = getDbAccessor().withReadDb((db) => {
-			return (db
-				.prepare(
-					`SELECT content, created_at FROM session_summaries
+			return (
+				db
+					.prepare(
+						`SELECT id, content, created_at FROM session_summaries
              WHERE agent_id = ? AND created_at >= ?
              ORDER BY created_at DESC LIMIT ?`,
-				)
-				.all(agentId, cutoff, cfg.maxSummaries) as {
-				content: string;
-				created_at: string;
-			}[]).map((r) => ({ content: r.content, createdAt: r.created_at }));
+					)
+					.all(agentId, cutoff, cfg.maxSummaries) as {
+					id: string;
+					content: string;
+					created_at: string;
+				}[]
+			).map((r) => ({ id: r.id, content: r.content, createdAt: r.created_at }));
 		});
 
 		if (memories.length === 0 && summaries.length === 0) {
@@ -161,9 +191,7 @@ export function registerReflectionRoutes(app: Hono): void {
 				maxTokens: cfg.maxTokens,
 			});
 		} catch (e) {
-			logger.error("reflections", "Manual generation failed", {
-				error: e instanceof Error ? e.message : String(e),
-			});
+			logger.error("reflections", "Manual generation failed", e instanceof Error ? e : undefined);
 			return c.json({ error: "LLM generation failed" }, 500);
 		}
 
@@ -171,29 +199,38 @@ export function registerReflectionRoutes(app: Hono): void {
 		const id = randomUUID();
 		const now = new Date().toISOString();
 
-		getDbAccessor().withWriteTx((db) => {
-			db.exec(
-				`INSERT INTO daily_reflections (id, agent_id, date, summary, patterns, question, memory_ids, summary_ids, model, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id,
-				agentId,
-				date,
-				summary,
-				JSON.stringify(patterns),
-				question ?? null,
-				JSON.stringify(memories.map((m) => m.content.slice(0, 40))),
-				JSON.stringify(summaries.map((s) => s.createdAt)),
-				cfg.model,
-				now,
-			);
-		});
+		try {
+			getDbAccessor().withWriteTx((db) => {
+				db.prepare(
+					`INSERT INTO daily_reflections
+					 (id, agent_id, date, summary, patterns, question, memory_ids, summary_ids, model, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				).run(
+					id,
+					agentId,
+					date,
+					summary,
+					JSON.stringify(patterns),
+					question ?? null,
+					JSON.stringify(memories.map((m) => m.id)),
+					JSON.stringify(summaries.map((s) => s.id)),
+					cfg.model,
+					now,
+				);
+			});
+		} catch (e) {
+			const message = e instanceof Error ? e.message : String(e);
+			if (message.toLowerCase().includes("unique") && message.includes("daily_reflections")) {
+				return c.json({ error: "Reflection already exists for today" }, 409);
+			}
+			logger.error("reflections", "Failed to persist manual reflection", e instanceof Error ? e : undefined);
+			return c.json({ error: "Failed to persist reflection" }, 500);
+		}
 
 		logger.info("reflections", "Manually generated daily reflection", { id, agentId, date });
 
 		const row = getDbAccessor().withReadDb((db) => {
-			return db
-				.prepare("SELECT * FROM daily_reflections WHERE id = ?")
-				.get(id) as ReflectionRow;
+			return db.prepare("SELECT * FROM daily_reflections WHERE id = ?").get(id) as ReflectionRow;
 		});
 
 		return c.json({ reflection: formatReflection(row) });
@@ -214,11 +251,16 @@ export function registerReflectionRoutes(app: Hono): void {
 			return c.json({ error: "answer is required" }, 400);
 		}
 
+		const answer = body.answer.trim();
+		if (answer.length > MAX_REFLECTION_ANSWER_CHARS) {
+			return c.json({ error: `answer exceeds ${MAX_REFLECTION_ANSWER_CHARS} characters` }, 413);
+		}
+
 		try {
 			const existing = getDbAccessor().withReadDb((db) => {
-				return db
-					.prepare("SELECT * FROM daily_reflections WHERE id = ? AND agent_id = ?")
-					.get(id, agentId) as ReflectionRow | undefined;
+				return db.prepare("SELECT * FROM daily_reflections WHERE id = ? AND agent_id = ?").get(id, agentId) as
+					| ReflectionRow
+					| undefined;
 			});
 
 			if (!existing) {
@@ -231,21 +273,22 @@ export function registerReflectionRoutes(app: Hono): void {
 			const now = new Date().toISOString();
 			const memoryId = randomUUID();
 
+			let claimed = false;
 			getDbAccessor().withWriteTx((db) => {
-				db.exec(
-					`UPDATE daily_reflections
-           SET answer = ?, answer_memory_id = ?, answered_at = ?
-           WHERE id = ? AND agent_id = ?`,
-					body.answer.trim(),
-					memoryId,
-					now,
-					id,
-					agentId,
-				);
+				const result = db
+					.prepare(
+						`UPDATE daily_reflections
+						 SET answer = ?, answer_memory_id = ?, answered_at = ?
+						 WHERE id = ? AND agent_id = ? AND answer IS NULL`,
+					)
+					.run(answer, memoryId, now, id, agentId);
+
+				if (result.changes === 0) return;
+				claimed = true;
 
 				txIngestEnvelope(db, {
 					id: memoryId,
-					content: body.answer.trim(),
+					content: answer,
 					contentHash: `reflection-a-${id}`,
 					who: agentId,
 					why: "daily-reflection-answer",
@@ -256,17 +299,20 @@ export function registerReflectionRoutes(app: Hono): void {
 					pinned: 0,
 					sourceType: "reflection-answer",
 					sourceId: id,
+					agentId,
 					createdAt: now,
 				});
 			});
+
+			if (!claimed) {
+				return c.json({ error: "Already answered" }, 409);
+			}
 
 			logger.info("reflections", "Reflection answered", { id, agentId, memoryId });
 
 			return c.json({ success: true, memoryId });
 		} catch (e) {
-			logger.error("reflections", "Failed to save answer", {
-				error: e instanceof Error ? e.message : String(e),
-			});
+			logger.error("reflections", "Failed to save answer", e instanceof Error ? e : undefined);
 			return c.json({ error: "Failed to save answer" }, 500);
 		}
 	});

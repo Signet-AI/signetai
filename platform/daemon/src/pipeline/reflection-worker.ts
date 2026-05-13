@@ -21,7 +21,8 @@ const DEFAULT_DEPS: ReflectionDeps = {
 };
 
 const POLL_INTERVAL_MS = 300_000;
-const STARTUP_DELAY_MS = 60_000;
+const MINUTE_MS = 60_000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
 
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
@@ -55,8 +56,36 @@ function writeLastReflectionTime(agentId: string, date: string): void {
 	}
 }
 
-function todayDate(): string {
-	return new Date().toISOString().slice(0, 10);
+function todayDate(now = new Date()): string {
+	return now.toISOString().slice(0, 10);
+}
+
+function isDailyReflectionUniqueConflict(e: unknown): boolean {
+	const message = e instanceof Error ? e.message : String(e);
+	return message.toLowerCase().includes("unique") && message.includes("daily_reflections");
+}
+
+function scheduledTimeFor(schedule: string, now = new Date()): Date | null {
+	const parts = schedule.trim().split(/\s+/);
+	if (parts.length !== 5 || parts[2] !== "*" || parts[3] !== "*" || parts[4] !== "*") return null;
+	const minute = Number(parts[0]);
+	const hour = Number(parts[1]);
+	if (!Number.isInteger(minute) || !Number.isInteger(hour) || minute < 0 || minute > 59 || hour < 0 || hour > 23) {
+		return null;
+	}
+	const scheduled = new Date(now);
+	scheduled.setHours(hour, minute, 0, 0);
+	return scheduled;
+}
+
+export function nextReflectionDelayMs(schedule: string, lastDate: string | null, now = new Date()): number {
+	const scheduled = scheduledTimeFor(schedule, now);
+	if (!scheduled) return POLL_INTERVAL_MS;
+
+	const date = todayDate(now);
+	if (lastDate === date) return Math.max(0, scheduled.getTime() + DAY_MS - now.getTime());
+	if (now.getTime() < scheduled.getTime()) return Math.max(0, scheduled.getTime() - now.getTime());
+	return POLL_INTERVAL_MS;
 }
 
 export function buildReflectionPrompt(
@@ -92,9 +121,7 @@ export function buildReflectionPrompt(
 	return lines.join("\n");
 }
 
-export function parseReflectionResponse(
-	text: string,
-): { summary: string; patterns: string[]; question?: string } {
+export function parseReflectionResponse(text: string): { summary: string; patterns: string[]; question?: string } {
 	const summary = text.match(/SUMMARY:\s*(.+?)(?:\n|$)/)?.[1]?.trim() ?? text.slice(0, 500);
 	const patternsRaw = text.match(/PATTERNS:\s*(.+?)(?:\n|$)/)?.[1]?.trim() ?? "";
 	const patterns = patternsRaw
@@ -109,7 +136,7 @@ export function parseReflectionResponse(
 export interface ReflectionWorkerHandle {
 	stop(): void;
 	readonly running: boolean;
-	triggerNow(): Promise<void>;
+	triggerNow(agentId?: string): Promise<void>;
 }
 
 export function startReflectionWorker(
@@ -124,29 +151,34 @@ export function startReflectionWorker(
 	async function runReflection(agentId: string): Promise<void> {
 		const date = todayDate();
 		const existing = deps.getDbAccessor().withReadDb((db) => {
-			const row = db
-				.prepare("SELECT id FROM daily_reflections WHERE agent_id = ? AND date = ?")
-				.get(agentId, date) as { id: string } | undefined;
+			const row = db.prepare("SELECT id FROM daily_reflections WHERE agent_id = ? AND date = ?").get(agentId, date) as
+				| { id: string }
+				| undefined;
 			return row?.id ?? null;
 		});
-		if (existing) return;
+		if (existing) {
+			writeLastReflectionTime(agentId, date);
+			return;
+		}
 
 		const cutoff = new Date(Date.now() - config.timeWindowHours * 60 * 60 * 1000).toISOString();
 
 		const memories = deps.getDbAccessor().withReadDb((db) => {
 			const rows = db
 				.prepare(
-					`SELECT content, type, tags, created_at FROM memories
+					`SELECT id, content, type, tags, created_at FROM memories
            WHERE agent_id = ? AND created_at >= ? AND is_deleted = 0
            ORDER BY created_at DESC LIMIT ?`,
 				)
 				.all(agentId, cutoff, config.maxMemories) as {
+				id: string;
 				content: string;
 				type: string;
 				tags: string;
 				created_at: string;
 			}[];
 			return rows.map((r) => ({
+				id: r.id,
 				content: r.content,
 				type: r.type,
 				tags: r.tags ?? "",
@@ -157,20 +189,20 @@ export function startReflectionWorker(
 		const summaries = deps.getDbAccessor().withReadDb((db) => {
 			const rows = db
 				.prepare(
-					`SELECT content, created_at FROM session_summaries
+					`SELECT id, content, created_at FROM session_summaries
            WHERE agent_id = ? AND created_at >= ?
            ORDER BY created_at DESC LIMIT ?`,
 				)
 				.all(agentId, cutoff, config.maxSummaries) as {
+				id: string;
 				content: string;
 				created_at: string;
 			}[];
-			return rows.map((r) => ({ content: r.content, createdAt: r.created_at }));
+			return rows.map((r) => ({ id: r.id, content: r.content, createdAt: r.created_at }));
 		});
 
 		if (memories.length === 0 && summaries.length === 0) {
 			deps.logger.debug("reflections", "No memories or summaries to reflect on", { agentId, date });
-			writeLastReflectionTime(agentId, date);
 			return;
 		}
 
@@ -194,45 +226,55 @@ export function startReflectionWorker(
 		const { summary, patterns, question } = parseReflectionResponse(raw);
 
 		const id = randomUUID();
-		const memoryIds = JSON.stringify(memories.map((m) => m.content.slice(0, 40)));
-		const summaryIds = JSON.stringify(summaries.map((s) => s.createdAt));
+		const memoryIds = JSON.stringify(memories.map((m) => m.id));
+		const summaryIds = JSON.stringify(summaries.map((s) => s.id));
 		const now = new Date().toISOString();
 
-		deps.getDbAccessor().withWriteTx((db) => {
-			db.exec(
-				`INSERT INTO daily_reflections (id, agent_id, date, summary, patterns, question, memory_ids, summary_ids, model, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id,
-				agentId,
-				date,
-				summary,
-				JSON.stringify(patterns),
-				question ?? null,
-				memoryIds,
-				summaryIds,
-				config.model,
-				now,
-			);
-		});
-
-		if (question) {
+		try {
 			deps.getDbAccessor().withWriteTx((db) => {
-				txIngestEnvelope(db, {
-					id: randomUUID(),
-					content: `Daily reflection question: ${question}`,
-					contentHash: `reflection-q-${id}`,
-					who: "system",
-					why: "daily-reflection-question",
-					project: null,
-					importance: 0.5,
-					type: "reflection",
-					tags: "reflection,unanswered",
-					pinned: 0,
-					sourceType: "reflection-question",
-					sourceId: id,
-					createdAt: now,
-				});
+				db.prepare(
+					`INSERT INTO daily_reflections
+					 (id, agent_id, date, summary, patterns, question, memory_ids, summary_ids, model, created_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				).run(
+					id,
+					agentId,
+					date,
+					summary,
+					JSON.stringify(patterns),
+					question ?? null,
+					memoryIds,
+					summaryIds,
+					config.model,
+					now,
+				);
+
+				if (question) {
+					txIngestEnvelope(db, {
+						id: randomUUID(),
+						content: `Daily reflection question: ${question}`,
+						contentHash: `reflection-q-${id}`,
+						who: "system",
+						why: "daily-reflection-question",
+						project: null,
+						importance: 0.5,
+						type: "reflection",
+						tags: "reflection,unanswered",
+						pinned: 0,
+						sourceType: "reflection-question",
+						sourceId: id,
+						agentId,
+						createdAt: now,
+					});
+				}
 			});
+		} catch (e) {
+			if (isDailyReflectionUniqueConflict(e)) {
+				deps.logger.debug("reflections", "Reflection already generated before worker insert", { agentId, date });
+				writeLastReflectionTime(agentId, date);
+				return;
+			}
+			throw e;
 		}
 
 		writeLastReflectionTime(agentId, date);
@@ -245,19 +287,48 @@ export function startReflectionWorker(
 		});
 	}
 
+	function listActiveAgentIds(): string[] {
+		const cutoff = new Date(Date.now() - config.timeWindowHours * 60 * 60 * 1000).toISOString();
+		const rows = deps.getDbAccessor().withReadDb((db) => {
+			return db
+				.prepare(
+					`SELECT DISTINCT agent_id FROM memories
+					 WHERE created_at >= ? AND is_deleted = 0
+					 UNION
+					 SELECT DISTINCT agent_id FROM session_summaries
+					 WHERE created_at >= ?`,
+				)
+				.all(cutoff, cutoff) as { agent_id: string | null }[];
+		});
+		const agentIds = rows.map((row) => row.agent_id).filter((agentId): agentId is string => !!agentId);
+		return agentIds.length > 0 ? agentIds : ["default"];
+	}
+
+	async function runDueAgents(): Promise<void> {
+		const date = todayDate();
+		for (const agentId of listActiveAgentIds()) {
+			const lastDate = readLastReflectionTime(agentId);
+			if (lastDate !== date && nextReflectionDelayMs(config.schedule, lastDate) === POLL_INTERVAL_MS) {
+				await runReflection(agentId);
+			}
+		}
+	}
+
+	function nextWorkerDelayMs(): number {
+		return Math.min(
+			...listActiveAgentIds().map((agentId) => nextReflectionDelayMs(config.schedule, readLastReflectionTime(agentId))),
+		);
+	}
+
 	async function tick(): Promise<void> {
 		if (stopped || generating) return;
 		generating = true;
 		try {
-			const date = todayDate();
-			const lastDate = readLastReflectionTime("default");
-			if (lastDate !== date) {
-				await runReflection("default");
-			}
+			await runDueAgents();
 		} finally {
 			generating = false;
 			if (!stopped) {
-				timer = setTimeout(tick, POLL_INTERVAL_MS);
+				timer = setTimeout(tick, nextWorkerDelayMs());
 			}
 		}
 	}
@@ -265,7 +336,7 @@ export function startReflectionWorker(
 	function start(): void {
 		if (running) return;
 		running = true;
-		timer = setTimeout(tick, STARTUP_DELAY_MS);
+		timer = setTimeout(tick, nextWorkerDelayMs());
 	}
 
 	function stop(): void {
@@ -284,8 +355,12 @@ export function startReflectionWorker(
 		get running() {
 			return running;
 		},
-		async triggerNow() {
-			await runReflection("default");
+		async triggerNow(agentId?: string) {
+			if (agentId) {
+				await runReflection(agentId);
+				return;
+			}
+			await runDueAgents();
 		},
 	};
 }
