@@ -82,7 +82,7 @@ export interface SetupInferenceConfig {
 	readonly workloads: Record<string, unknown>;
 }
 
-type SetupAcpxAgent = "codex" | "claude" | "opencode";
+export type SetupAcpxAgent = "codex" | "claude" | "opencode";
 
 function toAcpxAgent(provider: Extract<HarnessChoice, "codex" | "claude-code" | "opencode">): SetupAcpxAgent {
 	return provider === "claude-code" ? "claude" : provider;
@@ -101,6 +101,24 @@ function selectAcpxAgent(
 	return "codex";
 }
 
+export function defaultAcpxModelForAgent(agent: SetupAcpxAgent): string {
+	switch (agent) {
+		case "claude":
+			return defaultPipelineModel("claude-code");
+		case "opencode":
+			return defaultPipelineModel("opencode");
+		case "codex":
+			return defaultPipelineModel("codex");
+	}
+}
+
+export function defaultAcpxModel(
+	harnesses: readonly string[] = [],
+	availableProviders: readonly ExtractionProviderChoice[] = [],
+): string {
+	return defaultAcpxModelForAgent(selectAcpxAgent(harnesses, availableProviders));
+}
+
 export function buildSetupInference(
 	provider: ExtractionProviderChoice,
 	model?: string,
@@ -109,7 +127,8 @@ export function buildSetupInference(
 	acpxBin?: string,
 ): SetupInferenceConfig | undefined {
 	if (provider !== "acpx" || !acpxBin) return undefined;
-	const resolved = model?.trim() || defaultExtractionModel(provider);
+	const agent = selectAcpxAgent(harnesses, availableProviders);
+	const resolved = model?.trim() || defaultAcpxModelForAgent(agent);
 	const targetRef = "background-acpx/default";
 	return {
 		defaultPolicy: "background-acpx",
@@ -117,7 +136,7 @@ export function buildSetupInference(
 			"background-acpx": {
 				executor: "acpx",
 				acpx: {
-					agent: selectAcpxAgent(harnesses, availableProviders),
+					agent,
 					bin: acpxBin,
 					package: "acpx@0.7.0",
 					version: "0.7.0",

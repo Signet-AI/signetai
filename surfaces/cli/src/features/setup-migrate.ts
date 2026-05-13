@@ -28,6 +28,7 @@ import {
 	applySetupInferenceRoute,
 	buildSetupInference,
 	buildSetupPipeline,
+	defaultAcpxModel,
 	defaultExtractionModel,
 } from "./setup-pipeline.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
@@ -230,15 +231,17 @@ export async function runExistingSetupWizard(
 		}
 
 		if (options?.extractionProvider) {
+			const model =
+				options.extractionModel ||
+				(options.extractionProvider === "acpx"
+					? defaultAcpxModel(detectedHarnesses, options.availableExtractionProviders)
+					: defaultExtractionModel(options.extractionProvider));
 			const memory = readRecord(config.memory);
-			memory.pipelineV2 = buildSetupPipeline(
-				options.extractionProvider,
-				options.extractionModel || defaultExtractionModel(options.extractionProvider),
-			);
+			memory.pipelineV2 = buildSetupPipeline(options.extractionProvider, model);
 			config.memory = memory;
 			const inference = buildSetupInference(
 				options.extractionProvider,
-				options.extractionModel || defaultExtractionModel(options.extractionProvider),
+				model,
 				detectedHarnesses,
 				options.availableExtractionProviders,
 				options.acpxBin,

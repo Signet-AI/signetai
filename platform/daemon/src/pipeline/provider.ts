@@ -2746,7 +2746,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		ollamaFallbackMaxContextTokens,
 	};
 
-	// Parse "provider/model" format (e.g. "anthropic/claude-haiku-4-5-20251001")
+	// Parse "provider/model" format (e.g. "google/gemini-2.5-flash")
 	const slashIdx = cfg.model.indexOf("/");
 	const providerID = slashIdx > 0 ? cfg.model.slice(0, slashIdx) : "anthropic";
 	const modelID = slashIdx > 0 ? cfg.model.slice(slashIdx + 1) : cfg.model;

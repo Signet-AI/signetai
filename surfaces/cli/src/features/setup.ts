@@ -21,7 +21,7 @@ import { managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
-import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
+import { EXTRACTION_SAFETY_WARNING, defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
 import {
@@ -843,7 +843,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				deps.normalizeStringValue(options.extractionModel) ||
 				deps.normalizeStringValue(existingPipeline.extractionModel) ||
 				deps.normalizeStringValue(existingExtraction.model) ||
-				defaultExtractionModel("acpx");
+				defaultAcpxModel(harnesses, availableToolExtractionProviders);
 		} else {
 			console.log();
 			extractionModel = await select({
