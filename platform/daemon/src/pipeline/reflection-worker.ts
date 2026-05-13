@@ -6,7 +6,6 @@ import type { PipelineReflectionsConfig } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
 import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
-import { txIngestEnvelope } from "../transactions";
 
 type ReflectionDeps = {
 	readonly getDbAccessor: typeof getDbAccessor;
@@ -60,11 +59,6 @@ function todayDate(now = new Date()): string {
 	return now.toISOString().slice(0, 10);
 }
 
-function isDailyReflectionUniqueConflict(e: unknown): boolean {
-	const message = e instanceof Error ? e.message : String(e);
-	return message.toLowerCase().includes("unique") && message.includes("daily_reflections");
-}
-
 function scheduledTimeFor(schedule: string, now = new Date()): Date | null {
 	const parts = schedule.trim().split(/\s+/);
 	if (parts.length !== 5 || parts[2] !== "*" || parts[3] !== "*" || parts[4] !== "*") return null;
@@ -88,33 +82,98 @@ export function nextReflectionDelayMs(schedule: string, lastDate: string | null,
 	return POLL_INTERVAL_MS;
 }
 
-export function buildReflectionPrompt(
-	memories: { content: string; type: string; tags: string; createdAt: string }[],
-	summaries: { content: string; createdAt: string }[],
-): string {
+type ReflectionMemory = { id?: string; content: string; type: string; tags: string; createdAt: string };
+type ReflectionSummary = {
+	id?: string;
+	content: string;
+	createdAt: string;
+	latestAt?: string | null;
+	sessionKey?: string | null;
+};
+type ReflectionTranscript = { sessionKey: string; content: string; createdAt: string; project?: string | null };
+type ReflectionGraphFact = { entity: string; kind: string; detail: string; updatedAt?: string | null };
+type ExistingReflection = { id: string; question: string | null; summary: string; createdAt: string };
+
+export type DailyBriefInsight = {
+	readonly summary: string;
+	readonly question?: string;
+	readonly patterns: string[];
+};
+
+export type ReflectionSourceContext = {
+	readonly memories: ReflectionMemory[];
+	readonly summaries: ReflectionSummary[];
+	readonly transcripts: ReflectionTranscript[];
+	readonly graphFacts: ReflectionGraphFact[];
+	readonly existingReflections: ExistingReflection[];
+};
+
+function normalizeInsight(text: string): string {
+	return text
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim()
+		.replace(/\s+/g, " ");
+}
+
+function trimLine(text: string, max = 260): string {
+	const single = text.replace(/\s+/g, " ").trim();
+	return single.length > max ? `${single.slice(0, max - 1).trim()}…` : single;
+}
+
+export function buildReflectionPrompt(context: ReflectionSourceContext, count = 3): string {
 	const lines: string[] = [
-		"You are a thoughtful assistant reviewing the last 24 hours of activity.",
-		"Your task is to produce a daily reflection in the following format:",
+		"You are Signet's Daily Brief generator.",
+		"Reason over recent transcripts, memory, and the knowledge graph like a helpful assistant searching its memory for what is unclear or worth resolving.",
+		"Generate fresh, concrete, non-redundant insights for the dashboard. Do not write a daily report. Do not summarize the last 24 hours.",
+		`Return exactly ${count} items. Each item should be one short useful question or observation, ideally one sentence and never more than two.`,
+		"Prefer open loops, contradictions, unresolved decisions, repeated blockers, or connections the user has not explicitly closed.",
+		"Avoid repeating existing brief items. Avoid generic productivity advice.",
 		"",
-		"SUMMARY: <2-3 sentence narrative of what the user worked on>",
-		"PATTERNS: <comma-separated list of themes or patterns noticed>",
-		"QUESTION: <optional - a specific question that only makes sense because you were watching. If nothing worth asking, omit this line>",
+		"Output only lines in this format:",
+		"INSIGHT: <short useful question or insight>",
+		"FOCUS: <2-5 comma-separated concrete tags>",
 		"",
-		"Keep the summary concrete and specific. The question should be about something the user",
-		"might want to act on or think about. If nothing stands out, just provide the summary.",
-		"",
-		"Recent memories:",
 	];
 
-	for (const m of memories) {
-		const date = m.createdAt.slice(0, 10);
-		lines.push(`  [${date}] (${m.type}) ${m.tags ? `[${m.tags}] ` : ""}${m.content}`);
+	if (context.existingReflections.length > 0) {
+		lines.push("Existing brief items to avoid repeating:");
+		for (const r of context.existingReflections.slice(0, 12)) {
+			lines.push(`  [${r.createdAt.slice(0, 10)}] ${trimLine(r.question ?? r.summary, 220)}`);
+		}
+		lines.push("");
 	}
 
-	if (summaries.length > 0) {
-		lines.push("", "Recent session summaries:");
-		for (const s of summaries) {
-			lines.push(`  [${s.createdAt.slice(0, 10)}] ${s.content.slice(0, 500)}`);
+	if (context.transcripts.length > 0) {
+		lines.push("Recent transcript excerpts:");
+		for (const t of context.transcripts) {
+			const project = t.project ? ` project=${t.project}` : "";
+			lines.push(`  [${t.createdAt.slice(0, 10)}${project}] ${trimLine(t.content, 900)}`);
+		}
+		lines.push("");
+	}
+
+	if (context.summaries.length > 0) {
+		lines.push("Recent session summaries:");
+		for (const s of context.summaries) {
+			lines.push(`  [${s.createdAt.slice(0, 10)}] ${trimLine(s.content, 650)}`);
+		}
+		lines.push("");
+	}
+
+	if (context.memories.length > 0) {
+		lines.push("Relevant memories:");
+		for (const m of context.memories) {
+			const date = m.createdAt.slice(0, 10);
+			lines.push(`  [${date}] (${m.type}) ${m.tags ? `[${m.tags}] ` : ""}${trimLine(m.content, 500)}`);
+		}
+		lines.push("");
+	}
+
+	if (context.graphFacts.length > 0) {
+		lines.push("Knowledge graph facts:");
+		for (const g of context.graphFacts) {
+			lines.push(`  ${g.entity} (${g.kind}): ${trimLine(g.detail, 360)}`);
 		}
 	}
 
@@ -122,6 +181,8 @@ export function buildReflectionPrompt(
 }
 
 export function parseReflectionResponse(text: string): { summary: string; patterns: string[]; question?: string } {
+	const insight = parseDailyBriefInsights(text, 1)[0];
+	if (insight) return { summary: insight.summary, patterns: insight.patterns, question: insight.question };
 	const summary = text.match(/SUMMARY:\s*(.+?)(?:\n|$)/)?.[1]?.trim() ?? text.slice(0, 500);
 	const patternsRaw = text.match(/PATTERNS:\s*(.+?)(?:\n|$)/)?.[1]?.trim() ?? "";
 	const patterns = patternsRaw
@@ -131,6 +192,237 @@ export function parseReflectionResponse(text: string): { summary: string; patter
 	const question = text.match(/QUESTION:\s*(.+?)(?:\n|$)/)?.[1]?.trim();
 
 	return { summary, patterns, question };
+}
+
+export function parseDailyBriefInsights(text: string, limit = 3): DailyBriefInsight[] {
+	const insights: DailyBriefInsight[] = [];
+	let pending: string | null = null;
+	let patterns: string[] = [];
+
+	function flush(): void {
+		if (!pending) return;
+		const summary = trimLine(pending, 420);
+		insights.push({ summary, question: summary.includes("?") ? summary : undefined, patterns });
+		pending = null;
+		patterns = [];
+	}
+
+	for (const rawLine of text.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		const insight = line.match(/^(?:[-*]\s*)?(?:INSIGHT|QUESTION|BRIEF)\s*:\s*(.+)$/i)?.[1];
+		if (insight) {
+			flush();
+			pending = insight.trim();
+			continue;
+		}
+		const focus = line.match(/^(?:FOCUS|PATTERNS|TAGS)\s*:\s*(.+)$/i)?.[1];
+		if (focus && pending) {
+			patterns = focus
+				.split(",")
+				.map((p) => p.trim())
+				.filter(Boolean)
+				.slice(0, 5);
+		}
+	}
+	flush();
+
+	if (insights.length === 0) {
+		const fallback = trimLine(text, 420);
+		if (fallback)
+			insights.push({ summary: fallback, question: fallback.includes("?") ? fallback : undefined, patterns: [] });
+	}
+
+	const seen = new Set<string>();
+	return insights
+		.filter((item) => {
+			const key = normalizeInsight(item.question ?? item.summary);
+			if (!key || seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		})
+		.slice(0, limit);
+}
+
+export function collectReflectionContext(
+	agentId: string,
+	config: PipelineReflectionsConfig,
+	deps: Pick<ReflectionDeps, "getDbAccessor"> = DEFAULT_DEPS,
+): ReflectionSourceContext {
+	const maxMemories = Math.max(config.maxMemories, 24);
+	const maxSummaries = Math.max(config.maxSummaries, 12);
+	const cutoff = new Date(Date.now() - Math.max(config.timeWindowHours, 1) * 60 * 60 * 1000).toISOString();
+	const dbAccessor = deps.getDbAccessor();
+
+	const memories = dbAccessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT id, content, type, tags, created_at FROM memories
+				 WHERE agent_id = ? AND is_deleted = 0 AND (created_at >= ? OR pinned = 1)
+				 ORDER BY pinned DESC, importance DESC, created_at DESC LIMIT ?`,
+			)
+			.all(agentId, cutoff, maxMemories) as {
+			id: string;
+			content: string;
+			type: string;
+			tags: string | null;
+			created_at: string;
+		}[];
+		return rows.map((r) => ({
+			id: r.id,
+			content: r.content,
+			type: r.type,
+			tags: r.tags ?? "",
+			createdAt: r.created_at,
+		}));
+	});
+
+	const summaries = dbAccessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT id, content, created_at, latest_at, session_key FROM session_summaries
+				 WHERE agent_id = ? AND COALESCE(latest_at, created_at) >= ?
+				 ORDER BY COALESCE(latest_at, created_at) DESC LIMIT ?`,
+			)
+			.all(agentId, cutoff, maxSummaries) as {
+			id: string;
+			content: string;
+			created_at: string;
+			latest_at: string | null;
+			session_key: string | null;
+		}[];
+		return rows.map((r) => ({
+			id: r.id,
+			content: r.content,
+			createdAt: r.created_at,
+			latestAt: r.latest_at,
+			sessionKey: r.session_key,
+		}));
+	});
+
+	const transcripts = dbAccessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT session_key, content, project, created_at FROM session_transcripts
+				 WHERE agent_id = ? AND COALESCE(updated_at, created_at) >= ?
+				 ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 4`,
+			)
+			.all(agentId, cutoff) as { session_key: string; content: string; project: string | null; created_at: string }[];
+		return rows.map((r) => ({
+			sessionKey: r.session_key,
+			content: r.content,
+			project: r.project,
+			createdAt: r.created_at,
+		}));
+	});
+
+	const graphFacts = dbAccessor.withReadDb((db) => {
+		const attributes = db
+			.prepare(
+				`SELECT e.name AS entity, e.entity_type AS kind, ea.name AS aspect, attr.content AS content, attr.updated_at AS updated_at
+				 FROM entity_attributes attr
+				 LEFT JOIN entity_aspects ea ON ea.id = attr.aspect_id
+				 LEFT JOIN entities e ON e.id = ea.entity_id
+				 WHERE attr.agent_id = ? AND attr.status = 'active' AND e.name IS NOT NULL
+				   AND COALESCE(attr.updated_at, attr.created_at) >= ?
+				 ORDER BY attr.importance DESC, attr.updated_at DESC LIMIT 28`,
+			)
+			.all(agentId, cutoff) as {
+			entity: string;
+			kind: string;
+			aspect: string | null;
+			content: string;
+			updated_at: string | null;
+		}[];
+		return attributes.map((r) => ({
+			entity: r.entity,
+			kind: r.kind,
+			detail: `${r.aspect ? `${r.aspect}: ` : ""}${r.content}`,
+			updatedAt: r.updated_at,
+		}));
+	});
+
+	const existingReflections = dbAccessor.withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT id, question, summary, created_at FROM daily_reflections
+             WHERE agent_id = ?
+             ORDER BY created_at DESC LIMIT 24`,
+			)
+			.all(agentId) as { id: string; question: string | null; summary: string; created_at: string }[];
+		return rows.map((r) => ({ id: r.id, question: r.question, summary: r.summary, createdAt: r.created_at }));
+	});
+
+	return { memories, summaries, transcripts, graphFacts, existingReflections };
+}
+
+export async function generateDailyBriefInsights(
+	agentId: string,
+	config: PipelineReflectionsConfig,
+	count = 3,
+	deps: ReflectionDeps = DEFAULT_DEPS,
+): Promise<string[]> {
+	const context = collectReflectionContext(agentId, config, deps);
+	if (
+		context.memories.length === 0 &&
+		context.summaries.length === 0 &&
+		context.transcripts.length === 0 &&
+		context.graphFacts.length === 0
+	) {
+		return [];
+	}
+
+	const prompt = buildReflectionPrompt(context, count);
+	const provider = deps.getInferenceProvider("default");
+	const raw = await provider.generate(prompt, { timeoutMs: config.timeout, maxTokens: config.maxTokens });
+	const existing = new Set(
+		context.existingReflections.map((r) => normalizeInsight(r.question ?? r.summary)).filter(Boolean),
+	);
+	const insights = parseDailyBriefInsights(raw, Math.max(count * 2, count))
+		.filter((insight) => {
+			const key = normalizeInsight(insight.question ?? insight.summary);
+			if (!key || existing.has(key)) return false;
+			existing.add(key);
+			return true;
+		})
+		.slice(0, count);
+
+	if (insights.length === 0) return [];
+
+	const now = new Date().toISOString();
+	const date = todayDate();
+	const memoryIds = JSON.stringify(context.memories.map((m) => m.id).filter(Boolean));
+	const summaryIds = JSON.stringify(context.summaries.map((s) => s.id).filter(Boolean));
+	const ids: string[] = [];
+
+	deps.getDbAccessor().withWriteTx((db) => {
+		for (const insight of insights) {
+			const id = randomUUID();
+			const contentKey = normalizeInsight(insight.question ?? insight.summary);
+			const result = db
+				.prepare(
+					`INSERT OR IGNORE INTO daily_reflections
+				 (id, agent_id, date, summary, patterns, question, content_key, memory_ids, summary_ids, model, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				)
+				.run(
+					id,
+					agentId,
+					date,
+					insight.summary,
+					JSON.stringify(insight.patterns),
+					insight.question ?? null,
+					contentKey,
+					memoryIds,
+					summaryIds,
+					config.model,
+					now,
+				);
+			if (result.changes > 0) ids.push(id);
+		}
+	});
+
+	return ids;
 }
 
 export interface ReflectionWorkerHandle {
@@ -149,142 +441,20 @@ export function startReflectionWorker(
 	let generating = false;
 
 	async function runReflection(agentId: string): Promise<void> {
-		const date = todayDate();
-		const existing = deps.getDbAccessor().withReadDb((db) => {
-			const row = db.prepare("SELECT id FROM daily_reflections WHERE agent_id = ? AND date = ?").get(agentId, date) as
-				| { id: string }
-				| undefined;
-			return row?.id ?? null;
-		});
-		if (existing) {
-			writeLastReflectionTime(agentId, date);
-			return;
-		}
-
-		const cutoff = new Date(Date.now() - config.timeWindowHours * 60 * 60 * 1000).toISOString();
-
-		const memories = deps.getDbAccessor().withReadDb((db) => {
-			const rows = db
-				.prepare(
-					`SELECT id, content, type, tags, created_at FROM memories
-           WHERE agent_id = ? AND created_at >= ? AND is_deleted = 0
-           ORDER BY created_at DESC LIMIT ?`,
-				)
-				.all(agentId, cutoff, config.maxMemories) as {
-				id: string;
-				content: string;
-				type: string;
-				tags: string;
-				created_at: string;
-			}[];
-			return rows.map((r) => ({
-				id: r.id,
-				content: r.content,
-				type: r.type,
-				tags: r.tags ?? "",
-				createdAt: r.created_at,
-			}));
-		});
-
-		const summaries = deps.getDbAccessor().withReadDb((db) => {
-			const rows = db
-				.prepare(
-					`SELECT id, content, created_at FROM session_summaries
-           WHERE agent_id = ? AND created_at >= ?
-           ORDER BY created_at DESC LIMIT ?`,
-				)
-				.all(agentId, cutoff, config.maxSummaries) as {
-				id: string;
-				content: string;
-				created_at: string;
-			}[];
-			return rows.map((r) => ({ id: r.id, content: r.content, createdAt: r.created_at }));
-		});
-
-		if (memories.length === 0 && summaries.length === 0) {
-			deps.logger.debug("reflections", "No memories or summaries to reflect on", { agentId, date });
-			return;
-		}
-
-		const prompt = buildReflectionPrompt(memories, summaries);
-
-		let raw: string;
 		try {
-			const provider = deps.getInferenceProvider("default");
-			raw = await provider.generate(prompt, {
-				timeoutMs: config.timeout,
-				maxTokens: config.maxTokens,
-			});
+			const ids = await generateDailyBriefInsights(agentId, config, 1, deps);
+			if (ids.length === 0) {
+				deps.logger.debug("reflections", "No source material or fresh insight to reflect on", { agentId });
+				return;
+			}
+			writeLastReflectionTime(agentId, todayDate());
+			deps.logger.info("reflections", "Generated daily brief insight", { agentId, count: ids.length });
 		} catch (e) {
 			deps.logger.warn("reflections", "Generation failed", {
 				error: e instanceof Error ? e.message : String(e),
 				agentId,
 			});
-			return;
 		}
-
-		const { summary, patterns, question } = parseReflectionResponse(raw);
-
-		const id = randomUUID();
-		const memoryIds = JSON.stringify(memories.map((m) => m.id));
-		const summaryIds = JSON.stringify(summaries.map((s) => s.id));
-		const now = new Date().toISOString();
-
-		try {
-			deps.getDbAccessor().withWriteTx((db) => {
-				db.prepare(
-					`INSERT INTO daily_reflections
-					 (id, agent_id, date, summary, patterns, question, memory_ids, summary_ids, model, created_at)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				).run(
-					id,
-					agentId,
-					date,
-					summary,
-					JSON.stringify(patterns),
-					question ?? null,
-					memoryIds,
-					summaryIds,
-					config.model,
-					now,
-				);
-
-				if (question) {
-					txIngestEnvelope(db, {
-						id: randomUUID(),
-						content: `Daily reflection question: ${question}`,
-						contentHash: `reflection-q-${id}`,
-						who: "system",
-						why: "daily-reflection-question",
-						project: null,
-						importance: 0.5,
-						type: "reflection",
-						tags: "reflection,unanswered",
-						pinned: 0,
-						sourceType: "reflection-question",
-						sourceId: id,
-						agentId,
-						createdAt: now,
-					});
-				}
-			});
-		} catch (e) {
-			if (isDailyReflectionUniqueConflict(e)) {
-				deps.logger.debug("reflections", "Reflection already generated before worker insert", { agentId, date });
-				writeLastReflectionTime(agentId, date);
-				return;
-			}
-			throw e;
-		}
-
-		writeLastReflectionTime(agentId, date);
-
-		deps.logger.info("reflections", "Generated daily reflection", {
-			agentId,
-			date,
-			hasQuestion: !!question,
-			patterns: patterns.length,
-		});
 	}
 
 	function listActiveAgentIds(): string[] {

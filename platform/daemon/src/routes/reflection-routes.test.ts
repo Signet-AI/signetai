@@ -49,23 +49,19 @@ function seedMemory(agentId: string, content = "Built daily reflections."): stri
 	return id;
 }
 
-function seedReflection(id: string, agentId: string, date = "2026-05-12"): void {
+function seedReflection(
+	id: string,
+	agentId: string,
+	date = "2026-05-12",
+	summary = "Reflection summary",
+	createdAt = new Date().toISOString(),
+): void {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO daily_reflections
 			 (id, agent_id, date, summary, patterns, question, memory_ids, summary_ids, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			id,
-			agentId,
-			date,
-			"Reflection summary",
-			JSON.stringify(["testing"]),
-			"What did we learn?",
-			"[]",
-			"[]",
-			new Date().toISOString(),
-		);
+		).run(id, agentId, date, summary, JSON.stringify(["testing"]), "What did we learn?", "[]", "[]", createdAt);
 	});
 }
 
@@ -117,8 +113,8 @@ describe("reflection routes", () => {
 		const res = await app().request("/api/reflections/generate?agentId=agent-a", { method: "POST" });
 		expect(res.status).toBe(200);
 		const body = await res.json();
-		expect(body.reflection.summary).toBe("We fixed reflections.");
-		expect(body.reflection.patterns).toEqual(["persistence", "scoping"]);
+		expect(body.reflection.summary).toBe("Keep it?");
+		expect(body.reflection.patterns).toEqual([]);
 
 		const row = getDbAccessor().withReadDb(
 			(db) =>
@@ -131,6 +127,20 @@ describe("reflection routes", () => {
 				},
 		);
 		expect(row).toEqual({ agent_id: "agent-a", model: "test-model", memory_ids: JSON.stringify([memoryId]) });
+	});
+
+	it("returns all same-day brief items from the today endpoint", async () => {
+		seedReflection("older", "agent-today", "2026-05-13", "Older insight", "2026-05-13T08:00:00.000Z");
+		seedReflection("newer", "agent-today", "2026-05-13", "Newer insight", "2026-05-13T09:00:00.000Z");
+
+		const res = await app().request("/api/reflections/today?agentId=agent-today&limit=10");
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.reflection.summary).toBe("Newer insight");
+		expect(body.reflections.map((reflection: { summary: string }) => reflection.summary)).toEqual([
+			"Newer insight",
+			"Older insight",
+		]);
 	});
 
 	it("defaults invalid list limits instead of allowing unlimited history", async () => {

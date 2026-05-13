@@ -7,7 +7,12 @@ import type { LlmProvider, PipelineReflectionsConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import { txIngestEnvelope } from "../transactions";
-import { nextReflectionDelayMs, startReflectionWorker } from "./reflection-worker";
+import {
+	collectReflectionContext,
+	generateDailyBriefInsights,
+	nextReflectionDelayMs,
+	startReflectionWorker,
+} from "./reflection-worker";
 
 let dir: string;
 const previousSignetPath = process.env.SIGNET_PATH;
@@ -35,21 +40,29 @@ function provider(text: string): LlmProvider {
 	};
 }
 
-function seedMemory(agentId: string): string {
-	const now = new Date().toISOString();
+function seedMemory(
+	agentId: string,
+	opts: {
+		readonly content?: string;
+		readonly createdAt?: string;
+		readonly pinned?: number;
+		readonly hash?: string;
+	} = {},
+): string {
+	const now = opts.createdAt ?? new Date().toISOString();
 	const id = randomUUID();
 	getDbAccessor().withWriteTx((db) => {
 		txIngestEnvelope(db, {
 			id,
-			content: "The reflection worker needs durable persistence.",
-			contentHash: `worker-test-${agentId}`,
+			content: opts.content ?? "The reflection worker needs durable persistence.",
+			contentHash: opts.hash ?? `worker-test-${agentId}`,
 			who: "tester",
 			why: "test-seed",
 			project: null,
 			importance: 0.5,
 			type: "fact",
 			tags: "test",
-			pinned: 0,
+			pinned: opts.pinned ?? 0,
 			sourceType: "test",
 			sourceId: "reflection-worker.test",
 			agentId,
@@ -111,7 +124,24 @@ describe("reflection worker", () => {
 		expect(existsSync(join(dir, ".daemon", "last-reflection.default.json"))).toBe(false);
 	});
 
-	it("persists generated reflections and scoped question memories", async () => {
+	it("collects recent source context and only lets pinned old memories bypass the cutoff", () => {
+		const old = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+		const recentId = seedMemory("default", { content: "Recent source", hash: "recent-source" });
+		const pinnedId = seedMemory("default", {
+			content: "Pinned durable source",
+			createdAt: old,
+			pinned: 1,
+			hash: "pinned-source",
+		});
+		seedMemory("default", { content: "Stale unpinned source", createdAt: old, hash: "stale-source" });
+
+		const context = collectReflectionContext("default", config);
+
+		expect(context.memories.map((m) => m.id)).toEqual([pinnedId, recentId]);
+		expect(context.memories.map((m) => m.content)).not.toContain("Stale unpinned source");
+	});
+
+	it("persists generated brief insights", async () => {
 		const memoryId = seedMemory("default");
 		const worker = startReflectionWorker(config, {
 			getDbAccessor,
@@ -135,42 +165,28 @@ describe("reflection worker", () => {
 				},
 		);
 		expect(reflection).toEqual({
-			summary: "Worker persisted.",
+			summary: "Should we keep it?",
 			model: "test-model",
 			memory_ids: JSON.stringify([memoryId]),
 		});
 
-		const question = getDbAccessor().withReadDb(
+		const questionCount = getDbAccessor().withReadDb(
 			(db) =>
-				db.prepare("SELECT content, agent_id FROM memories WHERE source_type = ?").get("reflection-question") as {
-					content: string;
-					agent_id: string;
-				},
+				(
+					db.prepare("SELECT COUNT(*) AS count FROM memories WHERE source_type = ?").get("reflection-question") as {
+						count: number;
+					}
+				).count,
 		);
-		expect(question).toEqual({
-			content: "Daily reflection question: Should we keep it?",
-			agent_id: "default",
-		});
+		expect(questionCount).toBe(0);
 	});
 
-	it("skips question ingestion when another writer wins the daily insert race", async () => {
+	it("allows multiple same-day insights but de-duplicates repeated brief text", async () => {
 		seedMemory("default");
-		let inserted = false;
+		seedReflection("default");
 		const worker = startReflectionWorker(config, {
 			getDbAccessor,
-			getInferenceProvider: () => ({
-				name: "racing-provider",
-				async available(): Promise<boolean> {
-					return true;
-				},
-				async generate(): Promise<string> {
-					if (!inserted) {
-						seedReflection("default");
-						inserted = true;
-					}
-					return "SUMMARY: Lost race.\nPATTERNS: race\nQUESTION: Should not ingest?";
-				},
-			}),
+			getInferenceProvider: () => provider("INSIGHT: Existing reflection\nFOCUS: duplicate"),
 			logger,
 		});
 
@@ -193,7 +209,52 @@ describe("reflection worker", () => {
 			).count,
 		}));
 		expect(counts).toEqual({ questions: 0, reflections: 1 });
-		expect(existsSync(join(dir, ".daemon", "last-reflection.default.json"))).toBe(true);
+	});
+
+	it("deduplicates concurrent dashboard-open generations at insert time", async () => {
+		seedMemory("default");
+		let waiting = 0;
+		let release: (() => void) | null = null;
+		const barrier = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const raceProvider: LlmProvider = {
+			name: "race-provider",
+			async available(): Promise<boolean> {
+				return true;
+			},
+			async generate(): Promise<string> {
+				waiting += 1;
+				if (waiting === 2) release?.();
+				await barrier;
+				return "INSIGHT: Should this duplicate be inserted once?\nFOCUS: race, dedupe";
+			},
+		};
+		await Promise.all([
+			generateDailyBriefInsights("default", config, 1, {
+				getDbAccessor,
+				getInferenceProvider: () => raceProvider,
+				logger,
+			}),
+			generateDailyBriefInsights("default", config, 1, {
+				getDbAccessor,
+				getInferenceProvider: () => raceProvider,
+				logger,
+			}),
+		]);
+
+		const rows = getDbAccessor().withReadDb((db) => {
+			return db.prepare("SELECT summary, content_key FROM daily_reflections WHERE agent_id = ?").all("default") as {
+				summary: string;
+				content_key: string;
+			}[];
+		});
+		expect(rows).toEqual([
+			{
+				summary: "Should this duplicate be inserted once?",
+				content_key: "should this duplicate be inserted once",
+			},
+		]);
 	});
 
 	it("scheduled trigger reflects every active agent instead of hardcoding default", async () => {
