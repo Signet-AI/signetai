@@ -538,7 +538,7 @@ database — useful for testing, but memories will not persist. Set it to
 `false` for production operation.
 
 Cost warning: the intended extraction setups are Claude Code on Haiku,
-Codex CLI on GPT Mini with a Pro/Max subscription, or local Ollama.
+Codex CLI on gpt-5.4-mini with a Pro/Max subscription, or local Ollama.
 Remote API extraction can create extreme fees quickly if left running in
 the background.
 

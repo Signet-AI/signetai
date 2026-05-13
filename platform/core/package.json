@@ -14,13 +14,17 @@
     "./pipeline-providers": {
       "import": "./dist/pipeline-providers.js",
       "types": "./dist/pipeline-providers.d.ts"
+    },
+    "./llm-model-catalog": {
+      "import": "./dist/llm-model-catalog.js",
+      "types": "./dist/llm-model-catalog.d.ts"
     }
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target node --external better-sqlite3 && bun build ./src/pipeline-providers.ts --outdir ./dist --target browser && bun run build:types",
+    "build": "bun build ./src/index.ts ./src/pipeline-providers.ts ./src/llm-model-catalog.ts --outdir ./dist --target node --external better-sqlite3 && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "bun --watch src/index.ts",
     "test": "bun test",

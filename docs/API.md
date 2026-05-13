@@ -141,7 +141,7 @@ silent fallback or hard-blocked extraction after boot.
     },
     "extraction": {
       "provider": "llama-cpp",
-      "model": "qwen3.5:4b"
+      "model": "qwen3:4b"
     }
   },
   "pipeline": {

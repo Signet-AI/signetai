@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { LlmProvider, PipelineProviderChoice, SynthesisProviderChoice } from "@signet/core";
-import { isPipelineProvider, isSynthesisProvider } from "@signet/core";
+import { defaultPipelineModel, isPipelineProvider, isSynthesisProvider } from "@signet/core";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
@@ -159,7 +159,7 @@ export function createRuntimeProvider(opts: RuntimeProviderFactoryOptions): LlmP
 	if (opts.effectiveProvider === "openrouter") {
 		if (!opts.openRouterApiKey) return null;
 		return createOpenRouterProvider({
-			model: model || "openai/gpt-4o-mini",
+			model: model || defaultPipelineModel("openrouter"),
 			apiKey: opts.openRouterApiKey,
 			baseUrl: opts.openRouterBaseUrl,
 			referer: opts.openRouterReferer,
@@ -169,7 +169,7 @@ export function createRuntimeProvider(opts: RuntimeProviderFactoryOptions): LlmP
 	}
 	if (opts.effectiveProvider === "opencode") {
 		return createOpenCodeProvider({
-			model: model || "anthropic/claude-haiku-4-5-20251001",
+			model: model || defaultPipelineModel("opencode"),
 			baseUrl: opts.openCodeBaseUrl,
 			ollamaFallbackBaseUrl: opts.ollamaFallbackBaseUrl,
 			ollamaFallbackMaxContextTokens: opts.ollamaFallbackMaxContextTokens,
@@ -178,13 +178,13 @@ export function createRuntimeProvider(opts: RuntimeProviderFactoryOptions): LlmP
 	}
 	if (opts.effectiveProvider === "claude-code") {
 		return createClaudeCodeProvider({
-			model: model || "haiku",
+			model: model || defaultPipelineModel("claude-code"),
 			defaultTimeoutMs: opts.timeoutMs,
 		});
 	}
 	if (opts.effectiveProvider === "codex") {
 		return createCodexProvider({
-			model: model || "gpt-5-codex-mini",
+			model: model || defaultPipelineModel("codex"),
 			defaultTimeoutMs: opts.timeoutMs,
 		});
 	}

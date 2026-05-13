@@ -12,9 +12,7 @@ import type {
 	AgentPresenceUpdateResponse,
 	AspectAttributesResponse,
 	CompactionCompleteResponse,
-	ComparisonsByEntityResponse,
-	ComparisonsByProjectResponse,
-	ComparisonsListResponse,
+
 	ConnectorCreateResponse,
 	ConnectorDeleteResponse,
 	ConnectorHealthResponse,
@@ -50,9 +48,7 @@ import type {
 	SynthesisCompleteResponse,
 	SynthesisConfigResponse,
 	SynthesisRequestResponse,
-	TrainPredictorResponse,
-	TrainingPairsCountResponse,
-	TrainingRunsResponse,
+
 	TraversalStatusResponse,
 	UnpinEntityResponse,
 	// Analytics
@@ -746,31 +742,6 @@ export class SignetClientP2 {
 
 	// --- Predictor (retired) ---
 
-<<<<<<< HEAD
-	/**
-	 * @example
-	 * const status = await client.getPredictorStatus();
-	 */
-// PREDICTOR_DEPRECATED: predictor was archived in 0.112.0
-	async getPredictorStatus(): Promise<never> {
-		throw new Error("Predictor is hard-deprecated.");
-	}
-
-	async getComparisonsByProject(_project: string): Promise<never> {
-		throw new Error("Predictor is hard-deprecated.");
-	}
-
-	async getComparisonsByEntity(_entityId: string): Promise<never> {
-		throw new Error("Predictor is hard-deprecated.");
-	}
-
-	async listComparisons(_opts?: any): Promise<never> {
-		throw new Error("Predictor is hard-deprecated.");
-	}
-
-	async listTrainingRuns(_opts?: any): Promise<never> {
-		throw new Error("Predictor is hard-deprecated.");
-=======
 	private predictorDeprecated(): never {
 		throw new Error(
 			"Signet predictor APIs were removed in v0.112. Use memory search telemetry and pipeline diagnostics instead.",
@@ -783,12 +754,12 @@ export class SignetClientP2 {
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
-	async getComparisonsByProject(_project: string): Promise<ComparisonsByProjectResponse> {
+	async getComparisonsByProject(_project: string): Promise<never> {
 		this.predictorDeprecated();
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
-	async getComparisonsByEntity(_entityId: string): Promise<ComparisonsByEntityResponse> {
+	async getComparisonsByEntity(_entityId: string): Promise<never> {
 		this.predictorDeprecated();
 	}
 
@@ -797,7 +768,7 @@ export class SignetClientP2 {
 		readonly limit?: number;
 		readonly offset?: number;
 		readonly agentId?: string;
-	}): Promise<ComparisonsListResponse> {
+	}): Promise<never> {
 		this.predictorDeprecated();
 	}
 
@@ -805,20 +776,19 @@ export class SignetClientP2 {
 	async listTrainingRuns(_opts?: {
 		readonly agentId?: string;
 		readonly limit?: number;
-	}): Promise<TrainingRunsResponse> {
+	}): Promise<never> {
 		this.predictorDeprecated();
->>>>>>> origin/main
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
-	async getTrainingPairsCount(): Promise<TrainingPairsCountResponse> {
+	async getTrainingPairsCount(): Promise<never> {
 		this.predictorDeprecated();
 	}
 
 	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async trainPredictor(_opts?: {
 		readonly force?: boolean;
-	}): Promise<TrainPredictorResponse> {
+	}): Promise<never> {
 		this.predictorDeprecated();
 	}
 }

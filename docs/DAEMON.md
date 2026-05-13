@@ -103,7 +103,7 @@ by `startPipeline()` / `stopPipeline()`. Four workers run in parallel:
 **Extraction worker** (`worker.ts`) polls the `memory_jobs` queue for
 pending extraction jobs. Each job runs the conversation through the
 configured extraction provider (default `llama-cpp` with model
-`qwen3.5:4b`), then passes the result to the decision stage which
+`qwen3:4b`), then passes the result to the decision stage which
 decides whether to write, update, or skip. The provider and decision
 stages run outside write locks to keep contention low.
 

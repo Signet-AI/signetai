@@ -17,7 +17,7 @@ describe("pipeline-settings synthesis resolution", () => {
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
-					extractionModel: "qwen3.5:4b",
+					extractionModel: "qwen3:4b",
 					extractionEndpoint: "http://127.0.0.1:11434",
 					extractionTimeout: 75000,
 				},
@@ -26,7 +26,7 @@ describe("pipeline-settings synthesis resolution", () => {
 
 		expect(hasExplicitSynthesisConfig(agent)).toBe(false);
 		expect(resolveSynthesisProvider(agent)).toBe("ollama");
-		expect(resolveSynthesisModel(agent)).toBe("qwen3.5:4b");
+		expect(resolveSynthesisModel(agent)).toBe("qwen3:4b");
 		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:11434");
 		expect(resolveSynthesisTimeout(agent)).toBe(75000);
 		expect(resolveSynthesisEnabled(agent)).toBe(true);
@@ -37,7 +37,7 @@ describe("pipeline-settings synthesis resolution", () => {
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
-					extractionModel: "qwen3.5:4b",
+					extractionModel: "qwen3:4b",
 					extractionEndpoint: "http://127.0.0.1:11434",
 					extractionTimeout: 75000,
 					synthesis: {
@@ -50,7 +50,7 @@ describe("pipeline-settings synthesis resolution", () => {
 		expect(hasExplicitSynthesisConfig(agent)).toBe(true);
 		expect(hasExplicitSynthesisProvider(agent)).toBe(false);
 		expect(resolveSynthesisProvider(agent)).toBe("ollama");
-		expect(resolveSynthesisModel(agent)).toBe("qwen3.5:4b");
+		expect(resolveSynthesisModel(agent)).toBe("qwen3:4b");
 		expect(resolveSynthesisEndpoint(agent)).toBe("http://127.0.0.1:11434");
 		expect(resolveSynthesisTimeout(agent)).toBe(75000);
 		expect(resolveSynthesisEnabled(agent)).toBe(true);
@@ -61,7 +61,7 @@ describe("pipeline-settings synthesis resolution", () => {
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
-					extractionModel: "qwen3.5:4b",
+					extractionModel: "qwen3:4b",
 					synthesis: {
 						provider: "claude-code",
 						model: "haiku",
@@ -94,7 +94,7 @@ describe("pipeline-settings synthesis resolution", () => {
 
 		expect(hasExplicitSynthesisProvider(agent)).toBe(true);
 		expect(resolveSynthesisProvider(agent)).toBe("codex");
-		expect(resolveSynthesisModel(agent)).toBe("gpt-5-codex-mini");
+		expect(resolveSynthesisModel(agent)).toBe("gpt-5.4-mini");
 		expect(resolveSynthesisEnabled(agent)).toBe(true);
 	});
 

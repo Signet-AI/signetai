@@ -142,7 +142,7 @@ printf '  acpx answer  \\n'
 		try {
 			const provider = createAcpxProvider({
 				agent: "codex",
-				model: "gpt-5-codex-mini",
+				model: "gpt-5.4-mini",
 				bin,
 				permissions: "deny-all",
 				hooks: "disabled",
@@ -511,9 +511,9 @@ describe("createClaudeCodeProvider", () => {
 describe("createCodexProvider", () => {
 	afterEach(() => restoreSpawn());
 
-	it("uses the default model (gpt-5-codex-mini) when none is supplied", () => {
+	it("uses the default model (gpt-5.4-mini) when none is supplied", () => {
 		const provider = createCodexProvider();
-		expect(provider.name).toBe("codex:gpt-5-codex-mini");
+		expect(provider.name).toBe("codex:gpt-5.4-mini");
 	});
 
 	it("returns a provider with the correct name", () => {
@@ -748,14 +748,13 @@ describe("createOpenCodeProvider", () => {
 	afterEach(() => restoreFetch());
 
 	it("returns a provider with the correct name", () => {
-		const provider = createOpenCodeProvider({ model: "anthropic/claude-haiku-4-5-20251001" });
-		expect(provider.name).toBe("opencode:anthropic/claude-haiku-4-5-20251001");
+		const provider = createOpenCodeProvider({ model: "google/gemini-2.5-flash" });
+		expect(provider.name).toBe("opencode:google/gemini-2.5-flash");
 	});
 
 	it("uses the default model when none is supplied", () => {
 		const provider = createOpenCodeProvider();
-		expect(provider.name).toContain("opencode:");
-		expect(provider.name).toContain("anthropic/");
+		expect(provider.name).toBe("opencode:google/gemini-2.5-flash");
 	});
 
 	it("generate() extracts text from parts array", async () => {
@@ -2551,7 +2550,7 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 			}
 			// Ollama availability check
 			if (url.includes("/api/tags")) {
-				return Response.json({ models: [{ name: "qwen3.5:4b" }] });
+				return Response.json({ models: [{ name: "qwen3:4b" }] });
 			}
 			// Ollama fallback generate
 			if (url.includes("/api/generate")) {
@@ -2579,7 +2578,7 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 				baseUrl: "http://localhost:9999",
 				enableOllamaFallback: true,
 				ollamaFallbackBaseUrl: "http://localhost:11434",
-				ollamaFallbackModel: "qwen3.5:4b",
+				ollamaFallbackModel: "qwen3:4b",
 				defaultTimeoutMs: 3000,
 			}),
 		);
@@ -2620,7 +2619,7 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 				});
 			}
 			if (url.includes("/api/tags")) {
-				return Response.json({ models: [{ name: "qwen3.5:4b" }] });
+				return Response.json({ models: [{ name: "qwen3:4b" }] });
 			}
 			if (url.includes("/api/generate")) {
 				ollamaFetchStartedAt = performance.now();
@@ -2659,7 +2658,7 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 			baseUrl: "http://localhost:9999",
 			enableOllamaFallback: true,
 			ollamaFallbackBaseUrl: "http://localhost:11434",
-			ollamaFallbackModel: "qwen3.5:4b",
+			ollamaFallbackModel: "qwen3:4b",
 			defaultTimeoutMs: 3000,
 		});
 

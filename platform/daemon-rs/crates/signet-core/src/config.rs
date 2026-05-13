@@ -521,7 +521,7 @@ fn default_pipeline_model(provider: &str) -> &'static str {
         "none" => "",
         "command" => "",
         "claude-code" | "anthropic" => "haiku",
-        "codex" => "gpt-5-codex-mini",
+        "codex" => "gpt-5.4-mini",
         "opencode" => "anthropic/claude-haiku-4-5-20251001",
         "openrouter" => "openai/gpt-4o-mini",
         _ => "qwen3:4b",
@@ -681,7 +681,7 @@ memory:
   pipelineV2:
     extraction:
       provider: ollama
-      model: qwen3.5:4b
+      model: qwen3:4b
 "#,
         )
         .expect("parse manifest");
@@ -692,9 +692,9 @@ memory:
             .expect("pipeline config");
 
         assert_eq!(pipeline.extraction.provider, "ollama");
-        assert_eq!(pipeline.extraction.model, "qwen3.5:4b");
+        assert_eq!(pipeline.extraction.model, "qwen3:4b");
         assert_eq!(pipeline.synthesis.provider, "ollama");
-        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
+        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
         assert_eq!(pipeline.synthesis.timeout, pipeline.extraction.timeout);
     }
 
@@ -706,7 +706,7 @@ memory:
   pipelineV2:
     extraction:
       provider: ollama
-      model: qwen3.5:4b
+      model: qwen3:4b
       endpoint: http://127.0.0.1:11434
       timeout: 75000
     synthesis:
@@ -721,7 +721,7 @@ memory:
             .expect("pipeline config");
 
         assert_eq!(pipeline.synthesis.provider, "ollama");
-        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
+        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
         assert_eq!(
             pipeline.synthesis.endpoint.as_deref(),
             Some("http://127.0.0.1:11434")
@@ -780,7 +780,7 @@ memory:
   pipelineV2:
     extraction:
       provider: ollama
-      model: qwen3.5:4b
+      model: qwen3:4b
     synthesis:
       provider: codex
 "#,
@@ -793,7 +793,7 @@ memory:
             .expect("pipeline config");
 
         assert_eq!(pipeline.synthesis.provider, "codex");
-        assert_eq!(pipeline.synthesis.model, "gpt-5-codex-mini");
+        assert_eq!(pipeline.synthesis.model, "gpt-5.4-mini");
     }
 
     #[test]
@@ -857,7 +857,7 @@ memory:
   pipelineV2:
     extraction:
       provider: ollama
-      model: qwen3.5:4b
+      model: qwen3:4b
     synthesis:
       provider: command
 "#,
@@ -1344,16 +1344,8 @@ impl Default for PipelineV2Config {
             structural: StructuralConfig::default(),
             feedback: FeedbackConfig::default(),
             significance: Some(SignificanceConfig::default()),
-<<<<<<< HEAD
             predictor: Some(PredictorConfig::default()),
             // predictor_pipeline: PredictorPipelineConfig::default(), // hard-deprecated in 0.112.0
-=======
-            predictor: None,
-            predictor_pipeline: PredictorPipelineConfig {
-                agent_feedback: false,
-                training_telemetry: false,
-            },
->>>>>>> origin/main
             model_registry: ModelRegistryConfig::default(),
         }
     }

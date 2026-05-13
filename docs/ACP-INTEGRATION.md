@@ -82,7 +82,7 @@ inference:
         terminal: false       # passes --no-terminal
       models:
         default:
-          model: gpt-5-codex-mini
+          model: gpt-5.4-mini
           reasoning: medium
           toolUse: true
 
@@ -112,7 +112,7 @@ to:
 npx -y acpx@0.7.0 \
   --format quiet \
   --timeout 120 \
-  --model gpt-5-codex-mini \
+  --model gpt-5.4-mini \
   --deny-all \
   --no-terminal \
   codex exec --file -
@@ -137,7 +137,7 @@ inference:
         maxCapturedEvents: 200
       models:
         default:
-          model: gpt-5-codex-mini
+          model: gpt-5.4-mini
 ```
 
 With `format: json`, the daemon reads ACPX stdout as newline-delimited JSON

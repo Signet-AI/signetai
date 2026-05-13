@@ -2,7 +2,7 @@ import { defaultPipelineModel } from "@signet/core";
 import type { ExtractionProviderChoice, HarnessChoice } from "./setup-shared.js";
 
 export const EXTRACTION_SAFETY_WARNING =
-	"Extraction is intended for Claude Code (Haiku), Codex CLI (GPT Mini) on a Pro/Max subscription, or local llama.cpp (qwen3.5:4b+) / Ollama (qwen3:4b+) models. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
+	"Extraction is intended for Claude Code (haiku), Codex CLI (gpt-5.4-mini) on a Pro/Max subscription, or local llama.cpp / Ollama with qwen3:4b or larger. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
 
 export interface SetupPipelineConfig {
 	readonly enabled: boolean;
@@ -31,7 +31,6 @@ export interface SetupPipelineConfig {
 }
 
 export function defaultExtractionModel(provider: ExtractionProviderChoice): string {
-	if (provider === "acpx") return "gpt-5-codex-mini";
 	return defaultPipelineModel(provider);
 }
 

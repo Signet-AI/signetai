@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -134,6 +134,55 @@ inference:
       policy: auto
 `,
 	);
+}
+
+function writeAcpxInferenceFixture(root: string): { readonly argsPath: string; readonly promptPath: string } {
+	mkdirSync(join(root, "memory"), { recursive: true });
+	const bin = join(root, "fake-acpx.sh");
+	const argsPath = join(root, "acpx-args.txt");
+	const promptPath = join(root, "acpx-prompt.txt");
+	writeFileSync(
+		bin,
+		`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+cat > ${JSON.stringify(promptPath)}
+printf 'acpx:%s\n' "$(cat ${JSON.stringify(promptPath)})"
+`,
+	);
+	chmodSync(bin, 0o755);
+	writeFileSync(
+		join(root, "agent.yaml"),
+		`memory:
+  pipelineV2:
+    extraction:
+      provider: none
+inference:
+  defaultPolicy: background-acpx
+  targets:
+    background-acpx:
+      executor: acpx
+      acpx:
+        agent: codex
+        bin: ${bin}
+        permissions: deny-all
+        hooks: disabled
+        terminal: false
+      models:
+        default:
+          model: gpt-5.4-mini
+          reasoning: medium
+          toolUse: true
+  policies:
+    background-acpx:
+      mode: strict
+      defaultTargets:
+        - background-acpx/default
+  workloads:
+    default:
+      policy: background-acpx
+`,
+	);
+	return { argsPath, promptPath };
 }
 
 function writeAccountFallbackRoutingFixture(
@@ -696,6 +745,42 @@ describe("inference route hardening", () => {
 			};
 			expect(body.text).toBe("cli:bring your own cli");
 			expect(body.decision?.targetRef).toBe("localCli/default");
+		} finally {
+			resetInferenceRouterForTests();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("executes ACPX targets through the inference execute endpoint", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-acpx-"));
+		const fixture = writeAcpxInferenceFixture(root);
+		try {
+			const { app, secret } = createInferenceTestApp(root);
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+			const res = await app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ prompt: "through acpx", operation: "default" }),
+				}),
+			);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				readonly text?: string;
+				readonly decision?: { readonly targetRef?: string };
+			};
+			expect(body.text).toBe("acpx:through acpx");
+			expect(body.decision?.targetRef).toBe("background-acpx/default");
+			expect(readFileSync(fixture.promptPath, "utf-8")).toBe("through acpx");
+			const args = readFileSync(fixture.argsPath, "utf-8").trim().split("\n");
+			expect(args).toContain("--model");
+			expect(args[args.indexOf("--model") + 1]).toBe("gpt-5.4-mini");
+			expect(args).toContain("--deny-all");
+			expect(args).toContain("--no-terminal");
+			expect(args.slice(-4)).toEqual(["codex", "exec", "--file", "-"]);
 		} finally {
 			resetInferenceRouterForTests();
 			rmSync(root, { recursive: true, force: true });

@@ -76,7 +76,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		provider: "llama-cpp",
 		fallbackProvider: "llama-cpp",
 		allowRemoteProviders: true,
-		model: "qwen3.5:4b",
+		model: defaultPipelineModel("llama-cpp"),
 		strength: "low",
 		endpoint: undefined,
 		timeout: DEFAULT_PIPELINE_TIMEOUT_MS,

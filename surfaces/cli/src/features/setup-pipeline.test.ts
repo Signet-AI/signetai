@@ -7,8 +7,8 @@ import {
 } from "./setup-pipeline";
 
 describe("defaultExtractionModel", () => {
-	it("prefers the cheap codex mini model", () => {
-		expect(defaultExtractionModel("codex")).toBe("gpt-5-codex-mini");
+	it("uses the checked Codex CLI model default", () => {
+		expect(defaultExtractionModel("codex")).toBe("gpt-5.4-mini");
 	});
 
 	it("uses qwen3:4b as the ollama floor", () => {
@@ -58,10 +58,10 @@ describe("buildSetupPipeline", () => {
 	});
 
 	it("copies the selected extraction provider into explicit synthesis config", () => {
-		expect(buildSetupPipeline("ollama", "qwen3.5:4b").synthesis).toEqual({
+		expect(buildSetupPipeline("ollama", "qwen3:4b").synthesis).toEqual({
 			enabled: true,
 			provider: "ollama",
-			model: "qwen3.5:4b",
+			model: "qwen3:4b",
 			timeout: 120000,
 		});
 	});
@@ -69,7 +69,7 @@ describe("buildSetupPipeline", () => {
 
 describe("buildSetupInference", () => {
 	it("writes ACPX as explicit inference routing with the selected harness agent", () => {
-		const inference = buildSetupInference("acpx", "gpt-5-codex-mini", ["opencode", "codex"], [], "/usr/local/bin/bunx");
+		const inference = buildSetupInference("acpx", "google/gemini-2.5-flash", ["opencode", "codex"], [], "/usr/local/bin/bunx");
 		expect(inference?.targets["background-acpx"]).toMatchObject({
 			executor: "acpx",
 			acpx: {
