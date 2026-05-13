@@ -6,7 +6,7 @@
  * Also provides bonus aspect/kind classification when available.
  */
 
-import { DEPENDENCY_TYPES, type DependencyType } from "@signet/core";
+import { DEPENDENCY_DESCRIPTIONS, DEPENDENCY_TYPES, type DependencyType } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { upsertAspect, upsertDependency } from "../knowledge-graph";
 import { logger } from "../logger";
@@ -61,29 +61,7 @@ const VALID_DEP_TYPES = new Set<string>(DEPENDENCY_TYPES);
 // One-line descriptions to steer the LLM toward consistent type selection.
 // Included in the extraction prompt so the model disambiguates similar pairs
 // (e.g. uses vs depends_on, informs vs teaches, precedes vs follows).
-export const DEP_DESCRIPTIONS: Record<DependencyType, string> = {
-	uses: "actively calls or consumes at runtime",
-	requires: "cannot function without (hard prerequisite)",
-	owned_by: "maintained or governed by",
-	blocks: "prevents progress of",
-	informs: "sends data or signals to",
-	built: "was created or constructed by",
-	depends_on: "needs but does not directly call (soft dependency)",
-	related_to: "associated loosely, no directional dependency",
-	learned_from: "acquired knowledge from",
-	teaches: "transfers knowledge to",
-	knows: "is aware of or references",
-	assumes: "presupposes as true without verifying",
-	contradicts: "conflicts with or negates",
-	supersedes: "replaces or obsoletes",
-	part_of: "is a component or subset of",
-	precedes: "must happen before (temporal)",
-	follows: "happens after (temporal)",
-	triggers: "causes to start or execute",
-	impacts: "change here affects (blast radius)",
-	produces: "generates as output",
-	consumes: "takes as input",
-};
+export const DEP_DESCRIPTIONS = DEPENDENCY_DESCRIPTIONS;
 
 // ---------------------------------------------------------------------------
 // Job leasing

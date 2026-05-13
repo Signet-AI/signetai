@@ -768,6 +768,41 @@ export const DEPENDENCY_TYPES = [
 ] as const;
 export type DependencyType = (typeof DEPENDENCY_TYPES)[number];
 
+export const DEPENDENCY_DESCRIPTIONS: Record<DependencyType, string> = {
+	uses: "actively calls or consumes at runtime",
+	requires: "cannot function without (hard prerequisite)",
+	owned_by: "is maintained or governed by",
+	owns: "maintains or governs",
+	blocks: "prevents progress of",
+	informs: "sends data or signals to",
+	maintains: "keeps operational or up to date",
+	implements: "provides the concrete behavior for",
+	built: "was created or constructed by",
+	depends_on: "needs but does not directly call (soft dependency)",
+	related_to: "associated loosely, no directional dependency",
+	learned_from: "acquired knowledge from",
+	teaches: "transfers knowledge to",
+	knows: "is aware of or references",
+	assumes: "presupposes as true without verifying",
+	supports_claim: "provides evidence for a claim",
+	authored_by: "was written or created by",
+	links_to: "references or hyperlinks to",
+	contains: "has as a nested child or member",
+	contains_note: "includes a note or document",
+	contradicts: "conflicts with or negates",
+	supersedes: "replaces or obsoletes",
+	part_of: "is a component or subset of",
+	produced_artifact: "created a durable file, build, or output artifact",
+	precedes: "must happen before (temporal)",
+	follows: "happens after (temporal)",
+	triggers: "causes to start or execute",
+	may_execute: "is allowed or able to run",
+	requires_approval_from: "needs approval from before proceeding",
+	impacts: "change here affects (blast radius)",
+	produces: "generates as output",
+	consumes: "takes as input",
+};
+
 export const TASK_STATUSES = ["open", "in_progress", "blocked", "done", "cancelled"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
