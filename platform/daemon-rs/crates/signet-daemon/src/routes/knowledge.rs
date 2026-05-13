@@ -14,6 +14,12 @@ use signet_services::graph;
 use crate::auth::middleware::{authenticate_headers, resolve_scoped_agent};
 use crate::state::AppState;
 
+fn escape_like(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/knowledge/entities
 // ---------------------------------------------------------------------------
@@ -648,34 +654,50 @@ pub async fn expand_session(
                     |row| row.get(0),
                 )
                 .optional()?;
-            let Some(_entity_id) = entity_id else {
+            let Some(entity_id) = entity_id else {
                 return Ok(serde_json::json!({"entityName": entity_name, "summaries": [], "total": 0}));
             };
 
-            let mut sql = "SELECT DISTINCT ss.id, ss.session_key, ss.content, ss.project, ss.latest_at
-                 FROM session_summaries ss
-                 WHERE ss.agent_id = ?1 AND ss.kind = 'session'
-                   AND COALESCE(ss.source_type, 'summary') = 'summary'
-                   AND ss.content LIKE ?2".to_string();
-            if session_id.is_some() {
-                sql.push_str(" AND ss.session_key = ?3");
-            }
-            sql.push_str(" ORDER BY ss.latest_at DESC LIMIT ?");
-
-            let like = format!("%{entity_name}%");
-            let mut stmt = conn.prepare(&sql)?;
-            let summaries = if let Some(session_id) = session_id.as_ref() {
-                stmt.query_map(rusqlite::params![agent_id, like, session_id, max_results as i64], |row| {
-                    Ok(serde_json::json!({
-                        "id": row.get::<_, String>(0)?,
-                        "sessionKey": row.get::<_, String>(1)?,
-                        "summary": row.get::<_, String>(2)?,
-                        "project": row.get::<_, Option<String>>(3)?,
-                        "latestAt": row.get::<_, String>(4)?,
-                    }))
-                })?.collect::<Result<Vec<_>, _>>()?
+            let use_text_fallback = entity_name.chars().count() >= 4;
+            let fallback_clause = if use_text_fallback {
+                " OR ss.content LIKE ? ESCAPE '\\'"
             } else {
-                stmt.query_map(rusqlite::params![agent_id, like, max_results as i64], |row| {
+                ""
+            };
+            let mut sql = format!(
+                "SELECT DISTINCT ss.id, ss.session_key, ss.content, ss.project, ss.latest_at
+                 FROM session_summaries ss
+                 WHERE ss.agent_id = ? AND ss.kind = 'session'
+                   AND COALESCE(ss.source_type, 'summary') = 'summary'"
+            );
+            let mut args = vec![rusqlite::types::Value::Text(agent_id)];
+            if let Some(session_id) = session_id.as_ref() {
+                sql.push_str(" AND ss.session_key = ?");
+                args.push(rusqlite::types::Value::Text(session_id.clone()));
+            }
+            sql.push_str(&format!(
+                " AND (
+                     EXISTS (
+                       SELECT 1
+                       FROM session_summary_memories ssm
+                       JOIN memory_entity_mentions mem ON mem.memory_id = ssm.memory_id
+                       WHERE ssm.summary_id = ss.id AND mem.entity_id = ?
+                     ){fallback_clause}
+                   )
+                   ORDER BY ss.latest_at DESC LIMIT ?"
+            ));
+            args.push(rusqlite::types::Value::Text(entity_id));
+            if use_text_fallback {
+                args.push(rusqlite::types::Value::Text(format!(
+                    "%{}%",
+                    escape_like(&entity_name)
+                )));
+            }
+            args.push(rusqlite::types::Value::Integer(max_results as i64));
+
+            let mut stmt = conn.prepare(&sql)?;
+            let summaries = stmt
+                .query_map(rusqlite::params_from_iter(args.iter()), |row| {
                     Ok(serde_json::json!({
                         "id": row.get::<_, String>(0)?,
                         "sessionKey": row.get::<_, String>(1)?,
@@ -683,8 +705,8 @@ pub async fn expand_session(
                         "project": row.get::<_, Option<String>>(3)?,
                         "latestAt": row.get::<_, String>(4)?,
                     }))
-                })?.collect::<Result<Vec<_>, _>>()?
-            };
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(serde_json::json!({"entityName": entity_name, "total": summaries.len(), "summaries": summaries}))
         })
         .await;

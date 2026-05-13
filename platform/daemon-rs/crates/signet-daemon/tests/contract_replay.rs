@@ -142,6 +142,8 @@ impl TestServer {
              VALUES ('entity-signet', 'Signet', 'signet', 'project', 'Portable AI memory and identity substrate', 'default', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
              VALUES ('entity-provenance', 'Provenance', 'provenance', 'concept', 'Source-backed evidence tracking', 'default', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO entities (id, name, canonical_name, entity_type, description, agent_id, mentions, created_at, updated_at)
+             VALUES ('entity-percent', '%', '%', 'concept', 'Literal wildcard entity', 'default', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES ('mem-signet-context', 'entity-signet');
              INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES ('mem-other-agent-signet', 'entity-signet');
              INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
@@ -978,6 +980,14 @@ async fn knowledge_expand_native_graph_data() {
     assert_eq!(body["entityName"], "Signet");
     assert_eq!(body["total"], 1);
     assert_eq!(body["summaries"][0]["sessionKey"], "session-signet-expand");
+
+    let resp = server
+        .post("/api/knowledge/expand/session", json!({"entityName": "%"}))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["entityName"], "%");
+    assert_eq!(body["total"], 0);
 }
 
 #[tokio::test]
