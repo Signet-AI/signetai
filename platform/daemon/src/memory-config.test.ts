@@ -442,13 +442,13 @@ describe("loadPipelineConfig", () => {
 				pipelineV2: {
 					synthesis: {
 						provider: "codex",
-						model: "gpt-5-codex-mini",
+						model: "gpt-5.4-mini",
 					},
 				},
 			},
 		});
 		expect(result.synthesis.provider).toBe("codex");
-		expect(result.synthesis.model).toBe("gpt-5-codex-mini");
+		expect(result.synthesis.model).toBe("gpt-5.4-mini");
 	});
 
 	it("flat provider without flat model uses provider default", () => {
@@ -466,7 +466,7 @@ describe("loadPipelineConfig", () => {
 
 		// Flat provider wins — model must NOT bleed from nested config
 		expect(result.extraction.provider).toBe("codex");
-		expect(result.extraction.model).toBe("gpt-5-codex-mini");
+		expect(result.extraction.model).toBe("gpt-5.4-mini");
 	});
 
 	it("defaults missing synthesis to the resolved extraction provider and model", () => {
@@ -474,14 +474,14 @@ describe("loadPipelineConfig", () => {
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
-					extractionModel: "qwen3.5:4b",
+					extractionModel: "qwen3:4b",
 					extractionEndpoint: "http://127.0.0.1:11434",
 				},
 			},
 		});
 
 		expect(result.synthesis.provider).toBe("ollama");
-		expect(result.synthesis.model).toBe("qwen3.5:4b");
+		expect(result.synthesis.model).toBe("qwen3:4b");
 		expect(result.synthesis.endpoint).toBe("http://127.0.0.1:11434");
 		expect(result.synthesis.timeout).toBe(result.extraction.timeout);
 	});
@@ -520,7 +520,7 @@ describe("loadPipelineConfig", () => {
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
-					extractionModel: "qwen3.5:4b",
+					extractionModel: "qwen3:4b",
 					extractionEndpoint: "http://127.0.0.1:11434",
 					extractionTimeout: 75000,
 					synthesis: {
@@ -531,7 +531,7 @@ describe("loadPipelineConfig", () => {
 		});
 
 		expect(result.synthesis.provider).toBe("ollama");
-		expect(result.synthesis.model).toBe("qwen3.5:4b");
+		expect(result.synthesis.model).toBe("qwen3:4b");
 		expect(result.synthesis.endpoint).toBe("http://127.0.0.1:11434");
 		expect(result.synthesis.timeout).toBe(75000);
 	});
@@ -541,7 +541,7 @@ describe("loadPipelineConfig", () => {
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
-					extractionModel: "qwen3.5:4b",
+					extractionModel: "qwen3:4b",
 					extractionEndpoint: "http://127.0.0.1:11434",
 					synthesis: {
 						model: "qwen3:8b",
@@ -561,7 +561,7 @@ describe("loadPipelineConfig", () => {
 			memory: {
 				pipelineV2: {
 					extractionProvider: "ollama",
-					extractionModel: "qwen3.5:4b",
+					extractionModel: "qwen3:4b",
 					synthesis: {
 						provider: "claude-code",
 						model: "haiku",
@@ -572,7 +572,7 @@ describe("loadPipelineConfig", () => {
 		});
 
 		expect(result.extraction.provider).toBe("ollama");
-		expect(result.extraction.model).toBe("qwen3.5:4b");
+		expect(result.extraction.model).toBe("qwen3:4b");
 		expect(result.synthesis.provider).toBe("claude-code");
 		expect(result.synthesis.model).toBe("haiku");
 		expect(result.synthesis.timeout).toBe(180000);

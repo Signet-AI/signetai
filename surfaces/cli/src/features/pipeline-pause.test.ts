@@ -73,11 +73,11 @@ describe("pipeline pause config", () => {
 				"  pipelineV2:",
 				"    extraction:",
 				"      provider: ollama",
-				"      model: qwen3.5:4b",
+				"      model: qwen3:4b",
 				"      endpoint: http://127.0.0.1:11434",
 				"    synthesis:",
 				"      provider: ollama",
-				"      model: qwen3.5:4b",
+				"      model: qwen3:4b",
 				"      endpoint: http://127.0.0.1:11434/",
 				"",
 			].join("\n"),
@@ -88,7 +88,7 @@ describe("pipeline pause config", () => {
 		expect(targets).toEqual([
 			{
 				label: "extraction",
-				model: "qwen3.5:4b",
+				model: "qwen3:4b",
 				baseUrl: "http://127.0.0.1:11434",
 			},
 			{
@@ -133,7 +133,7 @@ describe("pipeline pause config", () => {
 				"  pipelineV2:",
 				"    extraction:",
 				"      provider: ollama",
-				"      model: qwen3.5:4b",
+				"      model: qwen3:4b",
 				"      endpoint: http://0.0.0.0:11434",
 				"",
 			].join("\n"),
@@ -144,7 +144,7 @@ describe("pipeline pause config", () => {
 		expect(targets).toEqual([
 			{
 				label: "extraction",
-				model: "qwen3.5:4b",
+				model: "qwen3:4b",
 				baseUrl: "http://127.0.0.1:11434",
 			},
 		]);
@@ -154,7 +154,7 @@ describe("pipeline pause config", () => {
 		const dir = makeTempDir("signet-pipeline-pause-release-");
 		writeFileSync(
 			join(dir, "agent.yaml"),
-			["memory:", "  pipelineV2:", "    extraction:", "      provider: ollama", "      model: qwen3.5:4b", ""].join(
+			["memory:", "  pipelineV2:", "    extraction:", "      provider: ollama", "      model: qwen3:4b", ""].join(
 				"\n",
 			),
 		);
@@ -171,7 +171,7 @@ describe("pipeline pause config", () => {
 		expect(results).toEqual([
 			{
 				label: "extraction",
-				model: "qwen3.5:4b",
+				model: "qwen3:4b",
 				baseUrl: "http://127.0.0.1:11434",
 				ok: true,
 			},
@@ -180,7 +180,7 @@ describe("pipeline pause config", () => {
 			{
 				url: "http://127.0.0.1:11434/api/generate",
 				body: JSON.stringify({
-					model: "qwen3.5:4b",
+					model: "qwen3:4b",
 					keep_alive: 0,
 				}),
 			},

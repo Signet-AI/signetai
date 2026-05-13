@@ -520,9 +520,10 @@ fn default_pipeline_model(provider: &str) -> &'static str {
     match provider {
         "none" => "",
         "command" => "",
-        "claude-code" | "anthropic" => "haiku",
-        "codex" => "gpt-5-codex-mini",
-        "opencode" => "anthropic/claude-haiku-4-5-20251001",
+        "claude-code" => "haiku",
+        "anthropic" => "claude-3-5-haiku-20241022",
+        "codex" => "gpt-5.4-mini",
+        "opencode" => "google/gemini-2.5-flash",
         "openrouter" => "openai/gpt-4o-mini",
         _ => "qwen3:4b",
     }
@@ -682,7 +683,7 @@ memory:
   pipelineV2:
     extraction:
       provider: ollama
-      model: qwen3.5:4b
+      model: qwen3:4b
 "#,
         )
         .expect("parse manifest");
@@ -693,9 +694,9 @@ memory:
             .expect("pipeline config");
 
         assert_eq!(pipeline.extraction.provider, "ollama");
-        assert_eq!(pipeline.extraction.model, "qwen3.5:4b");
+        assert_eq!(pipeline.extraction.model, "qwen3:4b");
         assert_eq!(pipeline.synthesis.provider, "ollama");
-        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
+        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
         assert_eq!(pipeline.synthesis.timeout, pipeline.extraction.timeout);
     }
 
@@ -707,7 +708,7 @@ memory:
   pipelineV2:
     extraction:
       provider: ollama
-      model: qwen3.5:4b
+      model: qwen3:4b
       endpoint: http://127.0.0.1:11434
       timeout: 75000
     synthesis:
@@ -722,7 +723,7 @@ memory:
             .expect("pipeline config");
 
         assert_eq!(pipeline.synthesis.provider, "ollama");
-        assert_eq!(pipeline.synthesis.model, "qwen3.5:4b");
+        assert_eq!(pipeline.synthesis.model, "qwen3:4b");
         assert_eq!(
             pipeline.synthesis.endpoint.as_deref(),
             Some("http://127.0.0.1:11434")
@@ -775,26 +776,34 @@ memory:
 
     #[test]
     fn explicit_synthesis_provider_uses_provider_default_model() {
-        let manifest = parse_manifest(
-            r#"
+        let cases = [
+            ("codex", "gpt-5.4-mini"),
+            ("opencode", "google/gemini-2.5-flash"),
+            ("anthropic", "claude-3-5-haiku-20241022"),
+        ];
+
+        for (provider, expected_model) in cases {
+            let manifest = parse_manifest(&format!(
+                r#"
 memory:
   pipelineV2:
     extraction:
       provider: ollama
-      model: qwen3.5:4b
+      model: qwen3:4b
     synthesis:
-      provider: codex
+      provider: {provider}
 "#,
-        )
-        .expect("parse manifest");
+            ))
+            .expect("parse manifest");
 
-        let pipeline = manifest
-            .memory
-            .and_then(|memory| memory.pipeline_v2)
-            .expect("pipeline config");
+            let pipeline = manifest
+                .memory
+                .and_then(|memory| memory.pipeline_v2)
+                .expect("pipeline config");
 
-        assert_eq!(pipeline.synthesis.provider, "codex");
-        assert_eq!(pipeline.synthesis.model, "gpt-5-codex-mini");
+            assert_eq!(pipeline.synthesis.provider, provider);
+            assert_eq!(pipeline.synthesis.model, expected_model);
+        }
     }
 
     #[test]
@@ -858,7 +867,7 @@ memory:
   pipelineV2:
     extraction:
       provider: ollama
-      model: qwen3.5:4b
+      model: qwen3:4b
     synthesis:
       provider: command
 "#,
@@ -1313,7 +1322,7 @@ pub struct PipelineV2Config {
     pub feedback: FeedbackConfig,
     pub significance: Option<SignificanceConfig>,
     pub predictor: Option<PredictorConfig>,
-    pub predictor_pipeline: PredictorPipelineConfig,
+    // pub predictor_pipeline: PredictorPipelineConfig, // hard-deprecated in 0.112.0
     pub model_registry: ModelRegistryConfig,
 }
 
@@ -1346,10 +1355,7 @@ impl Default for PipelineV2Config {
             feedback: FeedbackConfig::default(),
             significance: Some(SignificanceConfig::default()),
             predictor: None,
-            predictor_pipeline: PredictorPipelineConfig {
-                agent_feedback: false,
-                training_telemetry: false,
-            },
+            // predictor_pipeline: PredictorPipelineConfig::default(), // hard-deprecated in 0.112.0
             model_registry: ModelRegistryConfig::default(),
         }
     }

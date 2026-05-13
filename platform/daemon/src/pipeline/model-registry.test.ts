@@ -1,50 +1,44 @@
 import { describe, expect, it } from "bun:test";
 import type { ModelRegistryEntry } from "@signet/core";
-import { markDeprecatedVersions } from "./model-registry";
+import { getAvailableModels, getModelsByProvider, getRegistryStatus, markDeprecatedVersions, refreshRegistry } from "./model-registry";
 
-describe("markDeprecatedVersions", () => {
-	it("marks older same-family models as deprecated", () => {
+describe("static model registry", () => {
+	it("preserves entries instead of synthesizing deprecation from model names", () => {
 		const entries: ModelRegistryEntry[] = [
-			{ id: "claude-opus-4.0", provider: "anthropic", label: "Claude Opus 4.0", tier: "high", deprecated: false },
-			{ id: "claude-opus-4.6", provider: "anthropic", label: "Claude Opus 4.6", tier: "high", deprecated: false },
+			{ id: "provider/known-older", provider: "checked-provider", label: "Known older", tier: "mid", deprecated: false },
+			{ id: "provider/known-newer", provider: "checked-provider", label: "Known newer", tier: "high", deprecated: false },
 		];
 		const result = markDeprecatedVersions(entries);
-		expect(result.find((e) => e.id === "claude-opus-4.0")?.deprecated).toBe(true);
-		expect(result.find((e) => e.id === "claude-opus-4.6")?.deprecated).toBe(false);
+		expect(result).toEqual(entries);
+		expect(result).not.toBe(entries);
 	});
 
-	it("does not mark unrelated models as deprecated", () => {
-		const entries: ModelRegistryEntry[] = [
-			{ id: "claude-opus-4.6", provider: "anthropic", label: "Claude Opus 4.6", tier: "high", deprecated: false },
-			{ id: "claude-sonnet-4.0", provider: "anthropic", label: "Claude Sonnet 4.0", tier: "mid", deprecated: false },
-		];
-		const result = markDeprecatedVersions(entries);
-		expect(result.every((e) => !e.deprecated)).toBe(true);
+	it("exposes checked ACPX passthrough presets without invented Codex names", () => {
+		const acpx = getAvailableModels("acpx").map((model) => model.id);
+		expect(acpx).toContain("gpt-5.4-mini");
+		expect(acpx).toContain("haiku");
+		expect(acpx).toContain("google/gemini-2.5-flash");
+		expect(acpx).not.toContain("gpt-5-codex");
+		expect(acpx).not.toContain("gpt-5-codex-mini");
 	});
 
-	it("handles empty and single-entry arrays", () => {
-		expect(markDeprecatedVersions([])).toEqual([]);
-		const single: ModelRegistryEntry[] = [{ id: "claude-opus-4.0", provider: "anthropic", label: "Opus 4", tier: "high", deprecated: false }];
-		const result = markDeprecatedVersions(single);
-		expect(result[0].deprecated).toBe(false);
+	it("groups checked catalog entries by provider", () => {
+		const byProvider = getModelsByProvider();
+		expect(byProvider.codex.map((model) => model.id)).toEqual([
+			"gpt-5.4-mini",
+			"gpt-5.4",
+			"gpt-5.5",
+			"gpt-5.3-codex",
+			"gpt-5.3-codex-spark",
+			"gpt-5.2",
+		]);
+		expect(byProvider.acpx.map((model) => model.id)).toContain("gpt-5.4-mini");
 	});
 
-	it("deprecates older OpenRouter-style provider/model IDs within same family", () => {
-		const entries: ModelRegistryEntry[] = [
-			{ id: "anthropic/claude-opus-4.0", provider: "openrouter", label: "Claude Opus 4", tier: "high", deprecated: false },
-			{ id: "anthropic/claude-opus-4.6", provider: "openrouter", label: "Claude Opus 4.6", tier: "high", deprecated: false },
-		];
-		const result = markDeprecatedVersions(entries);
-		expect(result.find((e) => e.id === "anthropic/claude-opus-4.0")?.deprecated).toBe(true);
-		expect(result.find((e) => e.id === "anthropic/claude-opus-4.6")?.deprecated).toBe(false);
-	});
-
-	it("does not cross-deprecate models from different providers with similar suffixes", () => {
-		const entries: ModelRegistryEntry[] = [
-			{ id: "anthropic/claude-opus-4.6", provider: "openrouter", label: "Anthropic Opus", tier: "high", deprecated: false },
-			{ id: "some-provider/claude-opus-4.0", provider: "openrouter", label: "Other Opus", tier: "mid", deprecated: false },
-		];
-		const result = markDeprecatedVersions(entries);
-		expect(result.every((e) => !e.deprecated)).toBe(true);
+	it("keeps refresh API-compatible without changing the static catalog", async () => {
+		const before = getModelsByProvider();
+		await refreshRegistry();
+		expect(getModelsByProvider()).toEqual(before);
+		expect(getRegistryStatus().initialized).toBe(true);
 	});
 });

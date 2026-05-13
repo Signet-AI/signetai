@@ -141,10 +141,10 @@ describe("resolveTaskModel", () => {
 
 			writeFileSync(
 				configPath,
-				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.4-codex"].join("\n"),
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.4"].join("\n"),
 			);
 
-			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.4-codex");
+			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.4");
 			expect(resolveTaskModel("claude-code", agentsDir)).toBe("haiku");
 		} finally {
 			rmSync(agentsDir, { recursive: true, force: true });
@@ -166,14 +166,14 @@ describe("resolveTaskModel", () => {
 
 			writeFileSync(
 				configPath,
-				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.4-codex"].join(
+				["memory:", "  pipelineV2:", "    extraction:", "      provider: codex", "      model: gpt-5.4"].join(
 					"\n",
 				),
 			);
 
 			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.3-codex");
 			clearTaskModelCache();
-			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.4-codex");
+			expect(resolveTaskModel("codex", agentsDir)).toBe("gpt-5.4");
 		} finally {
 			rmSync(agentsDir, { recursive: true, force: true });
 		}

@@ -204,7 +204,7 @@ Non-interactive behavior:
 
 Extraction safety note:
 
-- intended usage is `claude-code` on Haiku, `codex` on GPT Mini with a
+- intended usage is `claude-code` on Haiku, `codex` on gpt-5.4-mini with a
   Pro/Max subscription, or local `ollama` with at least `qwen3:4b`
 - with `--deployment-type vps`, setup avoids defaulting to local `ollama`
   extraction and prefers non-local providers

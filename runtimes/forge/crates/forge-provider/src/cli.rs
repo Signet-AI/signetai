@@ -172,7 +172,7 @@ impl Provider for CliProvider {
         if self.model.is_empty() {
             match self.cli_kind {
                 CliKind::Claude => "claude-sonnet-4-6",
-                CliKind::Codex => "gpt-5.4",
+                CliKind::Codex => "gpt-5.4-mini",
                 CliKind::Gemini => "gemini-2.5-flash",
             }
         } else {
@@ -705,7 +705,7 @@ pub async fn detect_cli_tools() -> Vec<(CliKind, String)> {
 pub fn default_model_for_cli(kind: CliKind) -> &'static str {
     match kind {
         CliKind::Claude => "claude-sonnet-4-6",
-        CliKind::Codex => "gpt-5.4",
+        CliKind::Codex => "gpt-5.4-mini",
         CliKind::Gemini => "gemini-2.5-flash",
     }
 }

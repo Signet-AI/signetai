@@ -674,7 +674,7 @@ pub fn default_model_for_provider(provider: &str) -> &'static str {
     match provider {
         "anthropic" | "claude-cli" => "claude-sonnet-4-6",
         "openai" => "gpt-4o",
-        "codex-cli" => "gpt-5.4",
+        "codex-cli" => "gpt-5.4-mini",
         "gemini" | "google" | "gemini-cli" => "gemini-2.5-flash",
         "groq" => "llama-3.3-70b-versatile",
         "ollama" => "qwen3:4b",

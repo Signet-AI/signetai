@@ -537,7 +537,7 @@ Two implementations are shipped:
 
 **LlamaCppProvider** calls the llama.cpp server via its OpenAI-compatible
 `POST /v1/chat/completions` endpoint. The default base URL is
-`http://localhost:8080` and the default model is `qwen3.5:4b`. No
+`http://localhost:8080` and the default model is `qwen3:4b`. No
 authentication is required. The `available` check uses a 3-second timeout
 against `GET /v1/models`.
 
@@ -1038,7 +1038,7 @@ telemetryEnabled                    false
 
 Extraction safety note:
 
-- intended usage is Claude Code on Haiku, Codex CLI on GPT Mini with a
+- intended usage is Claude Code on Haiku, Codex CLI on gpt-5.4-mini with a
   Pro/Max subscription, or local Ollama with at least `qwen3:4b`
 - set `provider: none` on a VPS if you do not want background
   extraction
@@ -1048,7 +1048,7 @@ Extraction safety note:
 ```yaml
 extraction:
   provider: llama-cpp            # "none" | "llama-cpp" | "ollama" | "claude-code" | "codex" | "opencode" | "anthropic" | "openrouter" | "command"
-  model: qwen3.5:4b
+  model: qwen3:4b
   timeout: 90000                 # ms, range 5000–300000
   minConfidence: 0.7             # fraction 0.0–1.0
   structuredOutput: true         # send JSON schema in format field; set false for providers that reject it (e.g. GitHub Copilot)
@@ -1211,7 +1211,7 @@ memory:
     semanticContradictionEnabled: true
     extraction:
       provider: llama-cpp
-      model: qwen3.5:4b
+      model: qwen3:4b
     graph:
       enabled: true
     autonomous:

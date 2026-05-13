@@ -2,7 +2,7 @@ import { defaultPipelineModel } from "@signet/core";
 import type { ExtractionProviderChoice, HarnessChoice } from "./setup-shared.js";
 
 export const EXTRACTION_SAFETY_WARNING =
-	"Extraction is intended for Claude Code (Haiku), Codex CLI (GPT Mini) on a Pro/Max subscription, or local llama.cpp (qwen3.5:4b+) / Ollama (qwen3:4b+) models. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
+	"Extraction is intended for Claude Code (haiku), Codex CLI (gpt-5.4-mini) on a Pro/Max subscription, or local llama.cpp / Ollama with qwen3:4b or larger. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
 
 export interface SetupPipelineConfig {
 	readonly enabled: boolean;
@@ -30,13 +30,14 @@ export interface SetupPipelineConfig {
 	};
 }
 
-export function defaultExtractionModel(provider: ExtractionProviderChoice): string {
-	if (provider === "acpx") return "gpt-5-codex-mini";
+type DirectExtractionProviderChoice = Exclude<ExtractionProviderChoice, "acpx">;
+
+export function defaultExtractionModel(provider: DirectExtractionProviderChoice): string {
 	return defaultPipelineModel(provider);
 }
 
 export function buildSetupPipeline(provider: ExtractionProviderChoice, model?: string): SetupPipelineConfig {
-	const resolved = model?.trim() || defaultExtractionModel(provider);
+	const resolved = model?.trim() || (provider === "acpx" ? "" : defaultExtractionModel(provider));
 	if (provider === "none") {
 		return {
 			enabled: false,
@@ -83,7 +84,7 @@ export interface SetupInferenceConfig {
 	readonly workloads: Record<string, unknown>;
 }
 
-type SetupAcpxAgent = "codex" | "claude" | "opencode";
+export type SetupAcpxAgent = "codex" | "claude" | "opencode";
 
 function toAcpxAgent(provider: Extract<HarnessChoice, "codex" | "claude-code" | "opencode">): SetupAcpxAgent {
 	return provider === "claude-code" ? "claude" : provider;
@@ -102,6 +103,24 @@ function selectAcpxAgent(
 	return "codex";
 }
 
+export function defaultAcpxModelForAgent(agent: SetupAcpxAgent): string {
+	switch (agent) {
+		case "claude":
+			return defaultPipelineModel("claude-code");
+		case "opencode":
+			return defaultPipelineModel("opencode");
+		case "codex":
+			return defaultPipelineModel("codex");
+	}
+}
+
+export function defaultAcpxModel(
+	harnesses: readonly string[] = [],
+	availableProviders: readonly ExtractionProviderChoice[] = [],
+): string {
+	return defaultAcpxModelForAgent(selectAcpxAgent(harnesses, availableProviders));
+}
+
 export function buildSetupInference(
 	provider: ExtractionProviderChoice,
 	model?: string,
@@ -110,7 +129,8 @@ export function buildSetupInference(
 	acpxBin?: string,
 ): SetupInferenceConfig | undefined {
 	if (provider !== "acpx" || !acpxBin) return undefined;
-	const resolved = model?.trim() || defaultExtractionModel(provider);
+	const agent = selectAcpxAgent(harnesses, availableProviders);
+	const resolved = model?.trim() || defaultAcpxModelForAgent(agent);
 	const targetRef = "background-acpx/default";
 	return {
 		defaultPolicy: "background-acpx",
@@ -118,7 +138,7 @@ export function buildSetupInference(
 			"background-acpx": {
 				executor: "acpx",
 				acpx: {
-					agent: selectAcpxAgent(harnesses, availableProviders),
+					agent,
 					bin: acpxBin,
 					package: "acpx@0.7.0",
 					version: "0.7.0",

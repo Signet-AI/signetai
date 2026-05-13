@@ -139,7 +139,7 @@ printf '  acpx answer  \\n'
 		try {
 			const provider = createAcpxProvider({
 				agent: "codex",
-				model: "gpt-5-codex-mini",
+				model: "gpt-5.4-mini",
 				bin,
 				permissions: "deny-all",
 				hooks: "disabled",
@@ -627,9 +627,9 @@ describe("createClaudeCodeProvider", () => {
 describe("createCodexProvider", () => {
 	afterEach(() => restoreSpawn());
 
-	it("uses the default model (gpt-5-codex-mini) when none is supplied", () => {
+	it("uses the default model (gpt-5.4-mini) when none is supplied", () => {
 		const provider = createCodexProvider();
-		expect(provider.name).toBe("codex:gpt-5-codex-mini");
+		expect(provider.name).toBe("codex:gpt-5.4-mini");
 	});
 
 	it("returns a provider with the correct name", () => {
@@ -864,14 +864,13 @@ describe("createOpenCodeProvider", () => {
 	afterEach(() => restoreFetch());
 
 	it("returns a provider with the correct name", () => {
-		const provider = createOpenCodeProvider({ model: "anthropic/claude-haiku-4-5-20251001" });
-		expect(provider.name).toBe("opencode:anthropic/claude-haiku-4-5-20251001");
+		const provider = createOpenCodeProvider({ model: "google/gemini-2.5-flash" });
+		expect(provider.name).toBe("opencode:google/gemini-2.5-flash");
 	});
 
 	it("uses the default model when none is supplied", () => {
 		const provider = createOpenCodeProvider();
-		expect(provider.name).toContain("opencode:");
-		expect(provider.name).toContain("anthropic/");
+		expect(provider.name).toBe("opencode:google/gemini-2.5-flash");
 	});
 
 	it("generate() extracts text from parts array", async () => {
@@ -2678,51 +2677,51 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 		const N = 4; // matches DEFAULT_MAX_LLM_CONCURRENCY
 		let postCount = 0;
 
-		mockFetch(
-			withParentSession(async (url, init) => {
-				// Session creation
-				if (url.includes("/session") && !url.includes("/message")) {
-					return Response.json({
-						id: `ses_deadlock_${postCount}`,
-						slug: "test",
-						projectID: "p",
-						directory: "/tmp",
-						title: "test",
-						version: "1",
-					});
-				}
-				// Ollama availability check
-				if (url.includes("/api/tags")) {
-					return Response.json({ models: [{ name: "qwen3.5:4b" }] });
-				}
-				// Ollama fallback generate
-				if (url.includes("/api/generate")) {
-					await new Promise((r) => setTimeout(r, 20));
-					return Response.json({
-						response: JSON.stringify({ result: "fallback-ok" }),
-						prompt_eval_count: 10,
-						eval_count: 5,
-					});
-				}
-				// OpenCode message POST — always return malformed (empty body)
-				if (init?.method === "POST" && url.includes("/message")) {
-					postCount++;
-					return new Response("", {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					});
-				}
-				// GET polls — empty array to trigger malformed path
-				return Response.json([]);
-			}),
-		);
+
+		mockFetch(withParentSession(async (url, init) => {
+			// Session creation
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_deadlock_${postCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			// Ollama availability check
+			if (url.includes("/api/tags")) {
+				return Response.json({ models: [{ name: "qwen3:4b" }] });
+			}
+			// Ollama fallback generate
+			if (url.includes("/api/generate")) {
+				await new Promise((r) => setTimeout(r, 20));
+				return Response.json({
+					response: JSON.stringify({ result: "fallback-ok" }),
+					prompt_eval_count: 10,
+					eval_count: 5,
+				});
+			}
+			// OpenCode message POST — always return malformed (empty body)
+			if (init?.method === "POST" && url.includes("/message")) {
+				postCount++;
+				return new Response("", {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			// GET polls — empty array to trigger malformed path
+			return Response.json([]);
+		}));
+
 
 		const providers = Array.from({ length: N }, () =>
 			createOpenCodeProvider({
 				baseUrl: "http://localhost:9999",
 				enableOllamaFallback: true,
 				ollamaFallbackBaseUrl: "http://localhost:11434",
-				ollamaFallbackModel: "qwen3.5:4b",
+				ollamaFallbackModel: "qwen3:4b",
 				defaultTimeoutMs: 3000,
 			}),
 		);
@@ -2764,7 +2763,7 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 					});
 				}
 				if (url.includes("/api/tags")) {
-					return Response.json({ models: [{ name: "qwen3.5:4b" }] });
+					return Response.json({ models: [{ name: "qwen3:4b" }] });
 				}
 				if (url.includes("/api/generate")) {
 					ollamaFetchStartedAt = performance.now();
@@ -2804,7 +2803,7 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 			baseUrl: "http://localhost:9999",
 			enableOllamaFallback: true,
 			ollamaFallbackBaseUrl: "http://localhost:11434",
-			ollamaFallbackModel: "qwen3.5:4b",
+			ollamaFallbackModel: "qwen3:4b",
 			defaultTimeoutMs: 3000,
 		});
 

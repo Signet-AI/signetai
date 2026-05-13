@@ -2232,7 +2232,7 @@ mod tests {
     #[test]
     fn resolve_runtime_extraction_model_drops_non_ollama_model_on_fallback() {
         assert_eq!(
-            resolve_runtime_extraction_model("ollama", "codex", "gpt-5-codex-mini"),
+            resolve_runtime_extraction_model("ollama", "codex", "gpt-5.4-mini"),
             "qwen3:4b"
         );
     }
@@ -2240,12 +2240,12 @@ mod tests {
     #[test]
     fn resolve_runtime_extraction_model_keeps_model_when_provider_matches() {
         assert_eq!(
-            resolve_runtime_extraction_model("ollama", "ollama", "qwen3.5:4b"),
-            "qwen3.5:4b"
+            resolve_runtime_extraction_model("ollama", "ollama", "qwen3:4b"),
+            "qwen3:4b"
         );
         assert_eq!(
-            resolve_runtime_extraction_model("codex", "codex", "gpt-5-codex-mini"),
-            "gpt-5-codex-mini"
+            resolve_runtime_extraction_model("codex", "codex", "gpt-5.4-mini"),
+            "gpt-5.4-mini"
         );
     }
 

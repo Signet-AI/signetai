@@ -196,7 +196,7 @@ describe("inference config + decision engine", () => {
 						},
 						models: {
 							default: {
-								model: "gpt-5-codex-mini",
+								model: "gpt-5.4-mini",
 								toolUse: true,
 							},
 						},
@@ -239,7 +239,7 @@ describe("inference config + decision engine", () => {
 						},
 						models: {
 							default: {
-								model: "gpt-5-codex-mini",
+								model: "gpt-5.4-mini",
 								toolUse: true,
 							},
 						},
@@ -281,7 +281,7 @@ describe("inference config + decision engine", () => {
 					background: {
 						executor: "acpx",
 						acpx: { agent: "codex", terminal: false },
-						models: { default: { model: "gpt-5-codex-mini" } },
+						models: { default: { model: "gpt-5.4-mini" } },
 					},
 				},
 			},
@@ -303,7 +303,7 @@ describe("inference config + decision engine", () => {
 							captureEvents: true,
 							maxCapturedEvents: 128,
 						},
-						models: { default: { model: "gpt-5-codex-mini" } },
+						models: { default: { model: "gpt-5.4-mini" } },
 					},
 				},
 			},
@@ -340,14 +340,14 @@ describe("inference config + decision engine", () => {
 		const acpxLegacy = compileLegacyRoutingConfig({
 			extraction: {
 				provider: "acpx",
-				model: "gpt-5-codex-mini",
+				model: "gpt-5.4-mini",
 				endpoint: undefined,
 				command: undefined,
 			},
 			synthesis: {
 				enabled: true,
 				provider: "acpx",
-				model: "gpt-5-codex-mini",
+				model: "gpt-5.4-mini",
 				endpoint: undefined,
 			},
 		});

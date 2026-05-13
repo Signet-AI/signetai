@@ -14,6 +14,7 @@ import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
+	defaultPipelineModel,
 	type LlmGenerateResult,
 	type LlmProvider,
 	type LlmUsage,
@@ -1662,7 +1663,9 @@ export function createLlamaCppProvider(config?: Partial<LlamaCppProviderConfig>)
 		maxContextTokens: normalizePositiveInt(config?.maxContextTokens),
 	};
 	const model =
-		typeof config?.model === "string" && config.model.trim().length > 0 ? config.model.trim() : "qwen3.5:4b";
+		typeof config?.model === "string" && config.model.trim().length > 0
+			? config.model.trim()
+			: defaultPipelineModel("llama-cpp");
 
 	async function callLlamaCpp(
 		prompt: string,
@@ -1920,7 +1923,7 @@ export interface AnthropicProviderConfig {
 }
 
 const DEFAULT_ANTHROPIC_CONFIG: AnthropicProviderConfig = {
-	model: "claude-haiku-4-5-20251001",
+	model: defaultPipelineModel("anthropic"),
 	apiKey: "",
 	baseUrl: "https://api.anthropic.com",
 	defaultTimeoutMs: 60000,
@@ -1932,9 +1935,9 @@ const ANTHROPIC_API_VERSION = "2023-06-01";
 /** Map short model aliases to full Anthropic model IDs. */
 function resolveAnthropicModel(model: string): string {
 	const aliases: Record<string, string> = {
-		haiku: "claude-haiku-4-5-20251001",
-		sonnet: "claude-sonnet-4-5-20250514",
-		opus: "claude-opus-4-5-20250514",
+		haiku: defaultPipelineModel("anthropic"),
+		sonnet: "claude-sonnet-4-20250514",
+		opus: "claude-opus-4-20250514",
 	};
 	return aliases[model] ?? model;
 }
@@ -2270,7 +2273,7 @@ export interface CodexProviderConfig {
 }
 
 const DEFAULT_CODEX_CONFIG: CodexProviderConfig = {
-	model: "gpt-5-codex-mini",
+	model: defaultPipelineModel("codex"),
 	defaultTimeoutMs: 60000,
 	workingDirectory: homedir(),
 };
@@ -2449,7 +2452,7 @@ export interface OpenCodeProviderConfig {
 
 const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
 	baseUrl: "http://127.0.0.1:4096",
-	model: "anthropic/claude-haiku-4-5-20251001",
+	model: defaultPipelineModel("opencode"),
 	defaultTimeoutMs: 60000,
 	agent: OPENCODE_PIPELINE_AGENT,
 	enableOllamaFallback: false,
@@ -2743,7 +2746,7 @@ export function createOpenCodeProvider(config?: Partial<OpenCodeProviderConfig>)
 		ollamaFallbackMaxContextTokens,
 	};
 
-	// Parse "provider/model" format (e.g. "anthropic/claude-haiku-4-5-20251001")
+	// Parse "provider/model" format (e.g. "google/gemini-2.5-flash")
 	const slashIdx = cfg.model.indexOf("/");
 	const providerID = slashIdx > 0 ? cfg.model.slice(0, slashIdx) : "anthropic";
 	const modelID = slashIdx > 0 ? cfg.model.slice(slashIdx + 1) : cfg.model;

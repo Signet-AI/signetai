@@ -100,6 +100,13 @@ export {
 	isSynthesisProvider,
 } from "./pipeline-providers";
 export type { PipelineProviderChoice, SynthesisProviderChoice } from "./pipeline-providers";
+export {
+	MODEL_DEFAULTS,
+	PIPELINE_MODEL_CATALOG,
+	modelDefaultForProvider,
+	modelPresetsForProvider,
+} from "./llm-model-catalog";
+export type { ModelCatalogProvider, PipelineModelPreset } from "./llm-model-catalog";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory } from "./memory";

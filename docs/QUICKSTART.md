@@ -161,7 +161,7 @@ setup with `--create-local-backup` again or configure `origin`.
 
 Extraction safety note:
 
-- intended usage is Claude Code on Haiku, Codex CLI on GPT Mini with a
+- intended usage is Claude Code on Haiku, Codex CLI on gpt-5.4-mini with a
   Pro/Max subscription, or local Ollama with at least `qwen3:4b`
 - with `--deployment-type vps`, setup prefers non-local extraction defaults
   from selected harnesses when those tools are available locally, then other
@@ -307,7 +307,7 @@ across all your AI tools. The core features:
 - **[[pipeline|Memory pipeline]]** — conversations are processed automatically by
   Pipeline V2, which extracts meaningful facts and decisions using a
   configured extraction backend. The safe intended setups are Claude
-  Code on Haiku, Codex on GPT Mini, or local Ollama with at least
+  Code on Haiku, Codex on gpt-5.4-mini, or local Ollama with at least
   `qwen3:4b`. Set the extraction provider to `none` if you want Signet
   without background extraction. Memories accumulate over time and are
   recalled in future sessions.
