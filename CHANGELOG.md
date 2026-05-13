@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-05-13
 - Features: daily reflections with dashboard card.
-- Bug fixes: generate Daily Brief on dashboard open; keep dependency descriptions in sync; isolate ollama setup validation tests.
+- Bug fixes: support latest memory provider lifecycle; generate Daily Brief on dashboard open; keep dependency descriptions in sync; isolate ollama setup validation tests.
 
 ### 2026-05-12
 - Features: add Bitwarden provider.
@@ -37,6 +37,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: refine ontology artifact model; add north star ontology.
 
 ## Release Ledger
+
+## [0.118.2] - 2026-05-13
+
+Release summary: 1 bug fix.
+Tag range: `v0.118.1..v0.118.2`.
+
+### Bug Fixes
+
+- **hermes**: support latest memory provider lifecycle (#705)
 
 ## [0.118.1] - 2026-05-13
 

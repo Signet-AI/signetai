@@ -312,6 +312,8 @@ class SignetClient:
         memory_type: str = "",
         pinned: Optional[bool] = None,
         project: str = "",
+        source_type: str = "",
+        source_id: str = "",
         hints: Optional[List[str]] = None,
         transcript: str = "",
         structured: Optional[Dict[str, Any]] = None,
@@ -333,6 +335,10 @@ class SignetClient:
             body["pinned"] = pinned
         if project:
             body["project"] = project
+        if source_type:
+            body["sourceType"] = source_type
+        if source_id:
+            body["sourceId"] = source_id
         if hints:
             body["hints"] = hints
         if transcript:
