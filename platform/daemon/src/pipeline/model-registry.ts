@@ -11,7 +11,7 @@ function toEntry(provider: string, preset: PipelineModelPreset): ModelRegistryEn
 }
 
 function catalogEntries(provider: string): ModelRegistryEntry[] {
-	const presets = provider in PIPELINE_MODEL_CATALOG
+	const presets = Object.prototype.hasOwnProperty.call(PIPELINE_MODEL_CATALOG, provider)
 		? PIPELINE_MODEL_CATALOG[provider as keyof typeof PIPELINE_MODEL_CATALOG]
 		: [];
 	return presets.map((preset) => toEntry(provider, preset));

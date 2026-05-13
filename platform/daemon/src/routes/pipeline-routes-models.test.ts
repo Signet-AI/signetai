@@ -43,4 +43,12 @@ describe("pipeline model routes", () => {
 		]);
 		expect(body.acpx.map((model) => model.id)).toContain("gpt-5.4-mini");
 	});
+
+	it("returns an empty list for inherited provider names", async () => {
+		const app = makeApp();
+		const res = await app.request("/api/pipeline/models?provider=constructor");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { models: Array<{ id: string }> };
+		expect(body.models).toEqual([]);
+	});
 });
