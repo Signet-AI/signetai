@@ -7,7 +7,16 @@
  */
 
 import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	statSync,
+	statfsSync,
+	unlinkSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
@@ -382,7 +391,8 @@ const MAX_MIGRATION_BACKUPS = 5;
 interface MigrationBackupDeps {
 	readonly copyFileSync: (source: string, destination: string) => void;
 	readonly readdirSync: (path: string) => string[];
-	readonly statSync: (path: string) => { readonly mtimeMs: number };
+	readonly statSync: (path: string) => { readonly mtimeMs: number; readonly size?: number };
+	readonly statfsSync?: (path: string) => { readonly bavail: number; readonly bsize: number };
 	readonly unlinkSync: (path: string) => void;
 	readonly now: () => number;
 	readonly log: (message: string) => void;
@@ -392,6 +402,7 @@ const migrationBackupDeps: MigrationBackupDeps = {
 	copyFileSync,
 	readdirSync,
 	statSync,
+	statfsSync,
 	unlinkSync,
 	now: Date.now,
 	log: console.log,
@@ -408,7 +419,7 @@ function isMissingPathError(err: unknown): boolean {
 function migrationBackups(
 	dbPath: string,
 	deps: MigrationBackupDeps,
-): Array<{ readonly name: string; readonly mtime: number }> {
+): Array<{ readonly name: string; readonly mtime: number; readonly size: number }> {
 	const dir = dirname(dbPath);
 	const base = basename(dbPath);
 	return deps
@@ -416,7 +427,8 @@ function migrationBackups(
 		.filter((f) => f.startsWith(`${base}.bak-v`))
 		.flatMap((f) => {
 			try {
-				return [{ name: f, mtime: deps.statSync(join(dir, f)).mtimeMs }];
+				const stat = deps.statSync(join(dir, f));
+				return [{ name: f, mtime: stat.mtimeMs, size: stat.size ?? 0 }];
 			} catch (err) {
 				if (isMissingPathError(err)) return [];
 				throw err;
@@ -431,6 +443,50 @@ function pruneMigrationBackups(dbPath: string, keep: number, deps: MigrationBack
 		try {
 			deps.unlinkSync(join(dir, old.name));
 			deps.log(`[db-accessor] Pruned old backup: ${old.name}`);
+		} catch {
+			// Best effort.
+		}
+	}
+}
+
+function availableBytes(path: string, deps: MigrationBackupDeps): number | null {
+	if (!deps.statfsSync) return null;
+	try {
+		const stat = deps.statfsSync(path);
+		return stat.bavail * stat.bsize;
+	} catch {
+		return null;
+	}
+}
+
+function fileSize(path: string, deps: MigrationBackupDeps): number | null {
+	try {
+		const size = deps.statSync(path).size;
+		return typeof size === "number" && Number.isFinite(size) && size >= 0 ? size : null;
+	} catch {
+		return null;
+	}
+}
+
+function pruneMigrationBackupsForHeadroom(
+	dbPath: string,
+	requiredBytes: number,
+	minimumRetainedBackups: number,
+	deps: MigrationBackupDeps,
+): void {
+	const dir = dirname(dbPath);
+	let free = availableBytes(dir, deps);
+	if (free === null || free >= requiredBytes) return;
+
+	const backups = migrationBackups(dbPath, deps);
+	let retained = backups.length;
+	for (const old of [...backups].reverse()) {
+		if (free >= requiredBytes || retained <= minimumRetainedBackups) break;
+		try {
+			deps.unlinkSync(join(dir, old.name));
+			retained -= 1;
+			free = availableBytes(dir, deps) ?? free + old.size;
+			deps.log(`[db-accessor] Pruned old backup for migration headroom: ${old.name}`);
 		} catch {
 			// Best effort.
 		}
@@ -456,10 +512,14 @@ export function backupBeforeMigration(
 		// Non-fatal — backup still useful even with WAL.
 	}
 
-	// Make room for the incoming backup first. Otherwise a user with exactly
-	// MAX_MIGRATION_BACKUPS retained backups needs space for an extra full DB
-	// copy before retention can help, which can brick daemon startup on ENOSPC.
+	// Make room for the incoming backup first. Otherwise retention only helps
+	// after copy succeeds, which can brick daemon startup on ENOSPC when older
+	// database-sized backups are present but still below the retention cap.
 	pruneMigrationBackups(dbPath, MAX_MIGRATION_BACKUPS - 1, deps);
+	const requiredBytes = fileSize(dbPath, deps);
+	if (requiredBytes !== null) {
+		pruneMigrationBackupsForHeadroom(dbPath, requiredBytes, 1, deps);
+	}
 
 	const timestamp = deps.now();
 	const backupDest = `${dbPath}.bak-v${schemaVersion}-${timestamp}`;
