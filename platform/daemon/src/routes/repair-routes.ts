@@ -18,6 +18,7 @@ import {
 	getDedupStats,
 	getEmbeddingGapStats,
 	pruneChunkGroupEntities,
+	pruneGenericEntities,
 	pruneSingletonExtractedEntities,
 	reclassifyEntities,
 	reembedMissingMemories,
@@ -258,6 +259,28 @@ export function registerRepairRoutes(app: Hono): void {
 			batchSize,
 			dryRun,
 			maxMentions,
+		});
+		return c.json(result, repairHttpStatus(result));
+	});
+
+	app.post("/api/repair/prune-generic-entities", async (c) => {
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const ctx = resolveRepairContext(c);
+		let batchSize = 100;
+		let dryRun = true;
+		let agentId = c.req.query("agent_id") ?? "default";
+		try {
+			const body = await c.req.json();
+			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
+			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
+			if (typeof body?.agentId === "string" && body.agentId.trim()) agentId = body.agentId.trim();
+		} catch {
+			// no body or invalid JSON — use defaults
+		}
+		const result = pruneGenericEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+			batchSize,
+			dryRun,
+			agentId,
 		});
 		return c.json(result, repairHttpStatus(result));
 	});

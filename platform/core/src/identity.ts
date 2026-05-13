@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { listOhMyPiAgentDirCandidates, resolveOhMyPiAgentDir } from "./oh-my-pi";
 import { listPiAgentDirCandidates, resolvePiAgentDir } from "./pi";
+import { parseSimpleYaml } from "./yaml";
 
 const FORGE_BINARY_NAME = "forge";
 const SIGNET_FORGE_PRIMARY_MARKER = "Signet's native AI terminal";
@@ -60,6 +61,12 @@ export function resolveAgentBasePath(agentName: string, workspaceDir: string): s
 /**
  * Specification for an identity file
  */
+export type IdentityPresetName = "minimal" | "hermes" | "openclaw" | "custom";
+
+export type IdentityFileContext = "startup" | "session";
+
+export type IdentitySessionKind = "dreaming" | "heartbeat" | "bootstrap";
+
 export interface IdentityFileSpec {
 	/** Relative path from the base directory */
 	path: string;
@@ -67,6 +74,28 @@ export interface IdentityFileSpec {
 	description: string;
 	/** Whether this file is optional */
 	optional?: boolean;
+	/** Whether this file is loaded during normal startup or only in a special session */
+	context?: IdentityFileContext;
+	/** Special session kind when context is "session" */
+	session?: IdentitySessionKind;
+}
+
+export interface IdentityContextFileEntry {
+	path: string;
+	role?: string;
+	budget?: number;
+	enabled?: boolean;
+}
+
+export interface IdentitySpecialFileEntry extends IdentityContextFileEntry {
+	kind: IdentitySessionKind;
+}
+
+export interface IdentityPresetSpec {
+	name: IdentityPresetName;
+	description: string;
+	startup: IdentityContextFileEntry[];
+	special: IdentitySpecialFileEntry[];
 }
 
 /**
@@ -124,8 +153,10 @@ export const IDENTITY_FILES: Record<string, IdentityFileSpec> = {
 	},
 	heartbeat: {
 		path: "HEARTBEAT.md",
-		description: "Current working state, focus, and blockers",
+		description: "Heartbeat prompt used only for heartbeat/background check sessions",
 		optional: true,
+		context: "session",
+		session: "heartbeat",
 	},
 	memory: {
 		path: "MEMORY.md",
@@ -141,6 +172,55 @@ export const IDENTITY_FILES: Record<string, IdentityFileSpec> = {
 		path: "BOOTSTRAP.md",
 		description: "Setup ritual (typically deleted after first run)",
 		optional: true,
+		context: "session",
+		session: "bootstrap",
+	},
+	dreaming: {
+		path: "DREAMING.md",
+		description: "Dreaming/reflection prompt used only for dreaming sessions",
+		optional: true,
+		context: "session",
+		session: "dreaming",
+	},
+};
+
+export const IDENTITY_PRESETS: Record<IdentityPresetName, IdentityPresetSpec> = {
+	minimal: {
+		name: "minimal",
+		description: "AGENTS.md only for normal startup, plus DREAMING.md for dreaming sessions.",
+		startup: [{ path: "AGENTS.md", role: "operating_instructions", budget: 12_000 }],
+		special: [{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 }],
+	},
+	hermes: {
+		name: "hermes",
+		description: "Hermes-style SOUL.md primary identity with project-context discovery handled by Hermes.",
+		startup: [
+			{ path: "SOUL.md", role: "primary_identity", budget: 4_000 },
+			{ path: "AGENTS.md", role: "project_context", budget: 12_000 },
+		],
+		special: [{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 }],
+	},
+	openclaw: {
+		name: "openclaw",
+		description: "OpenClaw-style rich identity stack for character-forward agents.",
+		startup: [
+			{ path: "AGENTS.md", role: "operating_instructions", budget: 12_000 },
+			{ path: "SOUL.md", role: "persona", budget: 4_000 },
+			{ path: "IDENTITY.md", role: "agent_identity", budget: 2_000 },
+			{ path: "USER.md", role: "user_profile", budget: 6_000 },
+			{ path: "MEMORY.md", role: "working_memory", budget: 10_000 },
+		],
+		special: [
+			{ path: "HEARTBEAT.md", kind: "heartbeat", role: "heartbeat_prompt", budget: 4_000 },
+			{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 },
+			{ path: "BOOTSTRAP.md", kind: "bootstrap", role: "bootstrap_prompt", budget: 4_000 },
+		],
+	},
+	custom: {
+		name: "custom",
+		description: "User-selected startup files and explicit order.",
+		startup: [{ path: "AGENTS.md", role: "operating_instructions", budget: 12_000 }],
+		special: [{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 }],
 	},
 };
 
@@ -608,6 +688,101 @@ const STATIC_BUDGETS: ReadonlyArray<{ file: string; header: string; budget: numb
 	{ file: "MEMORY.md", header: "Working Memory", budget: 10_000 },
 ];
 
+const STATIC_HEADER_BY_FILE: Record<string, string> = {
+	"AGENTS.md": "Agent Instructions",
+	"SOUL.md": "Soul",
+	"IDENTITY.md": "Identity",
+	"USER.md": "About Your User",
+	"MEMORY.md": "Working Memory",
+};
+
+function isSafeRelativeIdentityPath(path: string): boolean {
+	const trimmed = path.trim();
+	if (!trimmed) return false;
+	if (trimmed.startsWith("/") || trimmed.startsWith("~")) return false;
+	return !trimmed.split(/[\\/]/).includes("..");
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function readIdentityEntry(value: unknown): IdentityContextFileEntry | null {
+	if (typeof value === "string") {
+		return isSafeRelativeIdentityPath(value) ? { path: value } : null;
+	}
+	const record = readRecord(value);
+	const path = typeof record.path === "string" ? record.path.trim() : "";
+	if (!isSafeRelativeIdentityPath(path)) return null;
+	if (record.enabled === false) return null;
+	const role = typeof record.role === "string" ? record.role : undefined;
+	const rawBudget =
+		typeof record.budget === "number" ? record.budget : Number.parseInt(String(record.budget ?? ""), 10);
+	const budget = Number.isFinite(rawBudget) && rawBudget > 0 ? Math.floor(rawBudget) : undefined;
+	return { path, role, budget };
+}
+
+function readIdentityEntryList(value: unknown): IdentityContextFileEntry[] {
+	if (!Array.isArray(value)) return [];
+	return value.map(readIdentityEntry).filter((entry): entry is IdentityContextFileEntry => entry !== null);
+}
+
+function readSpecialIdentityEntry(value: unknown): IdentitySpecialFileEntry | null {
+	const record = readRecord(value);
+	const kind = typeof record.kind === "string" ? record.kind : "";
+	if (kind !== "dreaming" && kind !== "heartbeat" && kind !== "bootstrap") return null;
+	const entry = readIdentityEntry(value);
+	if (!entry) return null;
+	return { ...entry, kind };
+}
+
+function readSpecialIdentityEntryList(value: unknown): IdentitySpecialFileEntry[] {
+	if (!Array.isArray(value)) return [];
+	return value.map(readSpecialIdentityEntry).filter((entry): entry is IdentitySpecialFileEntry => entry !== null);
+}
+
+function identityHeaderFor(path: string, role?: string): string {
+	const filename = path.split(/[\\/]/).pop() ?? path;
+	return STATIC_HEADER_BY_FILE[filename] ?? role ?? filename.replace(/\.md$/i, "");
+}
+
+export function resolveStartupIdentityFiles(agentsDir: string): IdentityContextFileEntry[] {
+	const agentYaml = join(agentsDir, "agent.yaml");
+	if (!existsSync(agentYaml)) return STATIC_BUDGETS.map(({ file, budget }) => ({ path: file, budget }));
+	try {
+		const config = parseSimpleYaml(readFileSync(agentYaml, "utf-8"));
+		const identity = readRecord(config.identity);
+		const startup = readRecord(identity.startup);
+		const configured = readIdentityEntryList(startup.load);
+		if (configured.length > 0) return configured;
+		const presetName = typeof identity.preset === "string" ? identity.preset : "";
+		const preset = IDENTITY_PRESETS[presetName as IdentityPresetName];
+		if (preset) return preset.startup;
+	} catch {
+		// Fall back to legacy static identity order.
+	}
+	return STATIC_BUDGETS.map(({ file, budget }) => ({ path: file, budget }));
+}
+
+export function resolveSpecialIdentityFiles(agentsDir: string, kind: IdentitySessionKind): IdentitySpecialFileEntry[] {
+	const agentYaml = join(agentsDir, "agent.yaml");
+	if (!existsSync(agentYaml)) {
+		return IDENTITY_PRESETS.minimal.special.filter((entry) => entry.kind === kind);
+	}
+	try {
+		const config = parseSimpleYaml(readFileSync(agentYaml, "utf-8"));
+		const identity = readRecord(config.identity);
+		const configured = readSpecialIdentityEntryList(identity.special).filter((entry) => entry.kind === kind);
+		if (configured.length > 0) return configured;
+		const presetName = typeof identity.preset === "string" ? identity.preset : "";
+		const preset = IDENTITY_PRESETS[presetName as IdentityPresetName];
+		if (preset) return preset.special.filter((entry) => entry.kind === kind);
+	} catch {
+		// Fall back to the minimal special-session prompt set.
+	}
+	return IDENTITY_PRESETS.minimal.special.filter((entry) => entry.kind === kind);
+}
+
 export const STATIC_IDENTITY_OFFLINE_STATUS = "[signet: daemon offline — running with static identity]";
 export const STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS =
 	"[signet: daemon session-start timed out — running with static identity]";
@@ -639,14 +814,15 @@ export function readStaticIdentity(agentsDir: string, status = STATIC_IDENTITY_O
 
 	const parts: string[] = [];
 
-	for (const { file, header, budget } of STATIC_BUDGETS) {
-		const path = join(agentsDir, file);
+	for (const entry of resolveStartupIdentityFiles(agentsDir)) {
+		const path = join(agentsDir, entry.path);
 		if (!existsSync(path)) continue;
 		try {
 			const raw = readFileSync(path, "utf-8").trim();
 			if (!raw) continue;
+			const budget = entry.budget ?? STATIC_BUDGETS.find((candidate) => candidate.file === entry.path)?.budget ?? 4_000;
 			const content = raw.length <= budget ? raw : `${raw.slice(0, budget)}\n[truncated]`;
-			parts.push(`## ${header}\n\n${content}`);
+			parts.push(`## ${identityHeaderFor(entry.path, entry.role)}\n\n${content}`);
 		} catch {
 			// skip unreadable files
 		}

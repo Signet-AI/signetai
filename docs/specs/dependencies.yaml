@@ -167,6 +167,8 @@ specs:
     success_criteria:
       - "Memory retrieval returns structurally related context, not just embedding-similar fragments"
       - "Entity graph traversal produces richer context than flat embedding search alone"
+      - "Extraction creates only concrete identity-bearing semantic objects as entities, with events first-class for time-aware recall"
+      - "Pronouns, metadata roles, headings, discourse fragments, prompt scaffolding, and abstract claim/policy/action slots are rejected or pruned instead of becoming entities"
     decision: null
 
   - id: knowledge-architecture-navigation
@@ -1194,6 +1196,7 @@ specs:
       - "Arch package metadata (PKGBUILD and .SRCINFO) is generated from release AppImage + checksum"
       - "Arch CI validates generated PKGBUILD by building a .pkg.tar.* artifact in an Arch Linux environment"
       - "Desktop release jobs resolve a signing mode (official or self-signed) before publish"
+      - "Desktop releases publish electron-updater metadata and app artifacts so packaged installs can self-update"
       - "The supported source-build path is exposed through `signet desktop build` and `signet desktop install`"
     decision: null
 
@@ -1329,6 +1332,7 @@ specs:
       - "Stale or junk attributes are pruned without manual intervention"
       - "Users without large-model access fall back to the existing extraction pipeline with no degradation"
       - "Token spend per dreaming pass is bounded and configurable"
+      - "Dreaming uses DREAMING.md as its special-session prompt file instead of loading that prompt during ordinary startup context"
       - "Dreaming passes run as full sessions with transcript capture and self-improvement loop (Phase 2)"
       - "Pipeline V2 extraction is gated off when dreaming is enabled (Phase 2)"
     decision: null

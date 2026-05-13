@@ -1,9 +1,19 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitConfig, loadGitConfig } from "./git-config";
-import { getAutoCommitQueueStateForTests, scheduleAutoCommit, stopGitSyncTimer } from "./git-sync";
+import {
+	getAutoCommitQueueStateForTests,
+	getGitStatus,
+	gitAutoCommitForTests,
+	resetGitHealthForTests,
+	scheduleAutoCommit,
+	setGitCommandRunnerForTests,
+	setGitRepoProbeForTests,
+	stopGitSyncTimer,
+	toRelativeGitPathForTests,
+} from "./git-sync";
 import { type GitConfig, applyGitConfigPatch } from "./session-routes";
 
 describe("loadGitConfig", () => {
@@ -66,6 +76,61 @@ describe("applyGitConfigPatch", () => {
 	});
 });
 
+describe("getGitStatus", () => {
+	it("degrades instead of throwing when workspace status times out", async () => {
+		resetGitHealthForTests();
+		setGitRepoProbeForTests(() => true);
+		setGitCommandRunnerForTests(async (_cmd, args) => {
+			if (args[0] === "remote") return { code: 1, stdout: "", stderr: "no remote" };
+			if (args[0] === "rev-parse") return { code: 0, stdout: "main\n", stderr: "" };
+			if (args[0] === "status") return { code: 124, stdout: "", stderr: "", timedOut: true };
+			return { code: 0, stdout: "0\n", stderr: "" };
+		});
+
+		try {
+			const status = await getGitStatus();
+			expect(status.isRepo).toBe(true);
+			expect(status.branch).toBe("main");
+			expect(status.degraded).toBe(true);
+			expect(status.degradedReason).toContain("Workspace status timed out");
+			expect(status.uncommittedChanges).toBeUndefined();
+		} finally {
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+		}
+	});
+
+	it("opens a cheap degraded circuit after repeated git status failures", async () => {
+		resetGitHealthForTests();
+		setGitRepoProbeForTests(() => true);
+		let calls = 0;
+		setGitCommandRunnerForTests(async (_cmd, args) => {
+			calls += 1;
+			if (args[0] === "remote") return { code: 1, stdout: "", stderr: "no remote" };
+			if (args[0] === "rev-parse") return { code: 0, stdout: "main\n", stderr: "" };
+			if (args[0] === "status") return { code: 124, stdout: "", stderr: "", timedOut: true };
+			return { code: 0, stdout: "0\n", stderr: "" };
+		});
+
+		try {
+			await getGitStatus();
+			await getGitStatus();
+			await getGitStatus();
+			const callsBeforeCircuit = calls;
+
+			const status = await getGitStatus();
+			expect(status.degraded).toBe(true);
+			expect(status.degradedReason).toContain("temporarily disabled");
+			expect(calls).toBe(callsBeforeCircuit);
+		} finally {
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+		}
+	});
+});
+
 describe("scheduleAutoCommit", () => {
 	it("does not queue background commits when autoCommit is disabled", async () => {
 		const previous = gitConfig.autoCommit;
@@ -88,6 +153,57 @@ describe("scheduleAutoCommit", () => {
 		} finally {
 			gitConfig.autoCommit = previous;
 			await stopGitSyncTimer();
+		}
+	});
+});
+
+describe("git auto-commit scoping", () => {
+	it("normalizes equivalent watcher paths before converting them to git pathspecs", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-git-paths-"));
+		const link = `${root}-link`;
+		try {
+			mkdirSync(join(root, "nested"));
+			writeFileSync(join(root, "nested", "AGENTS.md"), "identity");
+			symlinkSync(root, link, "dir");
+
+			expect(toRelativeGitPathForTests(root, join(root, "nested", "..", "nested", "AGENTS.md"))).toBe(
+				"nested/AGENTS.md",
+			);
+			expect(toRelativeGitPathForTests(root, join(link, "nested", "AGENTS.md"))).toBe("nested/AGENTS.md");
+			expect(toRelativeGitPathForTests(root, join(root, "..", "outside.md"))).toBeNull();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(link, { recursive: true, force: true });
+		}
+	});
+
+	it("commits only queued auto-commit pathspecs instead of the whole index", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-git-autocommit-"));
+		const previous = gitConfig.autoCommit;
+		const calls: string[][] = [];
+		try {
+			gitConfig.autoCommit = true;
+			mkdirSync(join(root, ".git"));
+			writeFileSync(join(root, "AGENTS.md"), "identity");
+			setGitRepoProbeForTests(() => true);
+			setGitCommandRunnerForTests(async (_cmd, args) => {
+				calls.push(args);
+				if (args[0] === "status") return { code: 0, stdout: "M AGENTS.md\n", stderr: "" };
+				return { code: 0, stdout: "", stderr: "" };
+			});
+
+			await gitAutoCommitForTests(root, [join(root, "AGENTS.md")]);
+
+			const commit = calls.find((args) => args[0] === "commit");
+			expect(commit).toBeDefined();
+			expect(commit).toContain("--");
+			expect(commit?.slice((commit?.indexOf("--") ?? -1) + 1)).toEqual(["AGENTS.md"]);
+		} finally {
+			gitConfig.autoCommit = previous;
+			setGitCommandRunnerForTests(null);
+			setGitRepoProbeForTests(null);
+			resetGitHealthForTests();
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 });

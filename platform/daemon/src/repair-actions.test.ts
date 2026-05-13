@@ -19,6 +19,7 @@ import {
 	deduplicateMemories,
 	getDedupStats,
 	getEmbeddingGapStats,
+	pruneGenericEntities,
 	reembedMissingMemories,
 	releaseStaleLeases,
 	requeueDeadJobs,
@@ -299,6 +300,78 @@ describe("checkRepairGate", () => {
 		const cfg = { ...TEST_CFG, autonomous: { ...TEST_CFG.autonomous, enabled: false } };
 		const result = checkRepairGate(cfg, CTX_OPERATOR, limiter, "a", 0, 100);
 		expect(result.allowed).toBe(true);
+	});
+});
+
+describe("pruneGenericEntities", () => {
+	it("dry-runs and deletes generic entities without touching pinned or concrete entities", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const limiter = createRateLimiter();
+		const now = new Date().toISOString();
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, 'default', ?, ?, ?, ?)`,
+			);
+			insert.run("ent-sender", "Sender", "sender", "person", 174, 0, now, now);
+			insert.run("ent-signet", "Signet", "signet", "project", 5, 0, now, now);
+			insert.run("ent-pinned", "Summary", "summary", "document", 3, 1, now, now);
+			insert.run("ent-skill", "Skill Creator", "skill creator", "skill", 1, 0, now, now);
+			db.prepare(
+				`INSERT INTO skill_meta
+				 (entity_id, agent_id, source, installed_at, fs_path)
+				 VALUES (?, 'default', 'signet', ?, ?)`,
+			).run("ent-skill", now, "/skills/skill-creator/SKILL.md");
+
+			const dryRun = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: true });
+			expect(dryRun.success).toBe(true);
+			expect(dryRun.affected).toBe(1);
+			expect(dryRun.message).toContain("Sender");
+
+			const result = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, { dryRun: false });
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(1);
+
+			const remaining = db.prepare("SELECT name FROM entities ORDER BY name").all() as Array<{ name: string }>;
+			expect(remaining.map((row) => row.name)).toEqual(["Signet", "Skill Creator", "Summary"]);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("continues scanning past recent valid entities to find older generic rows", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const limiter = createRateLimiter();
+		const recent = "2026-05-11T18:00:00.000Z";
+		const old = "2026-05-01T18:00:00.000Z";
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, 'default', ?, 0, ?, ?)`,
+			);
+			for (let i = 0; i < 510; i += 1) {
+				insert.run(`ent-project-${i}`, `Project ${i}`, `project ${i}`, "project", 1, recent, recent);
+			}
+			insert.run("ent-sender-old", "Sender", "sender", "person", 12, old, old);
+
+			const dryRun = pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: true,
+				batchSize: 1,
+			});
+			expect(dryRun.success).toBe(true);
+			expect(dryRun.affected).toBe(1);
+			expect(dryRun.message).toContain("Sender");
+		} finally {
+			db.close();
+		}
 	});
 });
 

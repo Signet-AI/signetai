@@ -6,8 +6,29 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-13
+- Features: daily reflections with dashboard card.
+- Bug fixes: keep dependency descriptions in sync; isolate ollama setup validation tests.
+
+### 2026-05-12
+- Features: add Bitwarden provider.
+- Bug fixes: add HOME to launchd daemon plist env; register secret exec status in tool inventory; bound and queue secret exec; normalize acpx claude setup alias; add ACPX quick setup; degrade bounded git workspace operations; persist global bin paths; verify public ghcr pulls after publish; add most-used memories parity route.
+- Refactoring: add configurable identity presets.
+- Docs: correct stale documentation claims.
+
+### 2026-05-11
+- Features: add header images for three new essays; add three new essays on memory architecture and sovereignty.
+- Bug fixes: enforce concrete semantic objects; refresh stale web content index; replace placeholder images with original vault artwork; prebuild tray before typecheck; disable electron-builder auto publish.
+
+### 2026-05-10
+- Bug fixes: sync source before install; add embeddings status parity route; add packaged app updates; match feature flag response shape.
+
+### 2026-05-09
+- Bug fixes: hide deleted rows from list endpoint; add auth whoami parity route; disable embeddings in mutation api route tests; add batch memory forget route parity; isolate background acpx summaries; use claude connector for Claude Code.
+
 ### 2026-05-08
-- Features: add proposal maintenance loop; split stable and nightly channels.
+- Features: capture ACPX JSON events; add proposal maintenance loop; split stable and nightly channels.
+- Bug fixes: restore knowledge graph mentions schema; bound ontology constellation graph reads; avoid resumed summary artifact collisions; stream logs without EventSource; align release commits with version sync; match connector list schema; keep dev workspace links local; prune migration backups before copy; catch release version sync regression; harden recent regression surfaces.
 - Docs: update ACPX integration architecture.
 
 ### 2026-05-07
@@ -15,28 +36,328 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: gate npm publish on daemon release assets; dedupe resumed session-start hooks; stabilize Obsidian source sync; index Obsidian sources asynchronously; harden recall authorization.
 - Docs: refine ontology artifact model; add north star ontology.
 
-### 2026-05-06
-- Bug fixes: wrap launchd plist runtime in /bin/bash to avoid macOS AMFI exec failure; install ClawHub skills from dashboard; respect active harnesses during sync; classify body-read timeouts correctly in daemon clients.
-- Docs: correct stale documentation claims.
-
-### 2026-05-04
-- Features: dual-mode daemon — attach if running, bundled fallback.
-- Bug fixes: harden startup ownership and background git defaults; keep bundled sdk out of publish deps; surface Obsidian indexing status; resolve session-end timeout under concurrent load.
-- Performance: speed up memory recall.
-
-### 2026-05-03
-- Features: add read-only Obsidian knowledge sources.
-- Performance: enable threadedExtraction by default and fix build.
-- Docs: correct stale documentation claims.
-
-### 2026-05-02
-- Bug fixes: align exposed memory tools with harness guidance; sanitize generated hints; pass remember hints through; guide recall query shape.
-
-### 2026-05-01
-- Bug fixes: include Hermes plugin in signetai package; harden connector install and diagnostics.
-- Docs: correct stale documentation claims; add nyashkn contributor.
-
 ## Release Ledger
+
+## [0.118.0] - 2026-05-13
+
+Release summary: 1 feature.
+Tag range: `v0.117.3..v0.118.0`.
+
+### Features
+
+- **daemon**: daily reflections with dashboard card (#699)
+
+## [0.117.3] - 2026-05-13
+
+Release summary: 1 bug fix.
+Tag range: `v0.117.2..v0.117.3`.
+
+### Bug Fixes
+
+- **pipeline**: keep dependency descriptions in sync (#702)
+
+## [0.117.2] - 2026-05-13
+
+Release summary: 1 bug fix.
+Tag range: `v0.117.1..v0.117.2`.
+
+### Bug Fixes
+
+- **cli**: isolate ollama setup validation tests (#701)
+
+## [0.117.1] - 2026-05-12
+
+Release summary: 1 bug fix.
+Tag range: `v0.117.0..v0.117.1`.
+
+### Bug Fixes
+
+- **cli**: add HOME to launchd daemon plist env (#700)
+
+## [0.117.0] - 2026-05-12
+
+Release summary: 1 feature and 1 docs update.
+Tag range: `v0.116.8..v0.117.0`.
+
+### Features
+
+- **secrets**: add Bitwarden provider (#695)
+
+### Docs
+
+- correct stale documentation claims (#698)
+
+## [0.116.8] - 2026-05-12
+
+Release summary: 1 bug fix.
+Tag range: `v0.116.7..v0.116.8`.
+
+### Bug Fixes
+
+- **mcp**: register secret exec status in tool inventory (#697)
+
+## [0.116.7] - 2026-05-12
+
+Release summary: 1 refactor.
+Tag range: `v0.116.6..v0.116.7`.
+
+### Refactoring
+
+- **identity**: add configurable identity presets (#689)
+
+## [0.116.6] - 2026-05-12
+
+Release summary: 1 bug fix.
+Tag range: `v0.116.5..v0.116.6`.
+
+### Bug Fixes
+
+- **secrets**: bound and queue secret exec (#692)
+
+## [0.116.5] - 2026-05-12
+
+Release summary: 1 bug fix.
+Tag range: `v0.116.4..v0.116.5`.
+
+### Bug Fixes
+
+- **dashboard**: normalize acpx claude setup alias (#694)
+
+## [0.116.4] - 2026-05-12
+
+Release summary: 1 bug fix.
+Tag range: `v0.116.3..v0.116.4`.
+
+### Bug Fixes
+
+- **dashboard**: add ACPX quick setup (#688)
+
+## [0.116.3] - 2026-05-12
+
+Release summary: 1 bug fix.
+Tag range: `v0.116.2..v0.116.3`.
+
+### Bug Fixes
+
+- **daemon**: degrade bounded git workspace operations
+
+## [0.116.2] - 2026-05-12
+
+Release summary: 1 bug fix.
+Tag range: `v0.116.1..v0.116.2`.
+
+### Bug Fixes
+
+- **install**: persist global bin paths (#685)
+
+## [0.116.1] - 2026-05-12
+
+Release summary: 2 bug fixes.
+Tag range: `v0.116.0..v0.116.1`.
+
+### Bug Fixes
+
+- **docker**: verify public ghcr pulls after publish (#683)
+- **daemon-rs**: add most-used memories parity route (#682)
+
+## [0.116.0] - 2026-05-11
+
+Release summary: 2 features and 3 bug fixes.
+Tag range: `v0.115.19..v0.116.0`.
+
+### Features
+
+- **blog**: add header images for three new essays (#680)
+- **blog**: add three new essays on memory architecture and sovereignty (#678)
+
+### Bug Fixes
+
+- **ontology**: enforce concrete semantic objects (#684)
+- refresh stale web content index (#679)
+- **blog**: replace placeholder images with original vault artwork (#681)
+
+## [0.115.19] - 2026-05-11
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.18..v0.115.19`.
+
+### Bug Fixes
+
+- **desktop**: prebuild tray before typecheck (#677)
+
+## [0.115.18] - 2026-05-11
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.17..v0.115.18`.
+
+### Bug Fixes
+
+- **desktop**: disable electron-builder auto publish (#676)
+
+## [0.115.17] - 2026-05-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.16..v0.115.17`.
+
+### Bug Fixes
+
+- **desktop**: sync source before install (#675)
+
+## [0.115.16] - 2026-05-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.15..v0.115.16`.
+
+### Bug Fixes
+
+- **daemon-rs**: add embeddings status parity route (#674)
+
+## [0.115.15] - 2026-05-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.14..v0.115.15`.
+
+### Bug Fixes
+
+- **desktop**: add packaged app updates (#673)
+
+## [0.115.14] - 2026-05-10
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.13..v0.115.14`.
+
+### Bug Fixes
+
+- **daemon-rs**: match feature flag response shape (#672)
+
+## [0.115.13] - 2026-05-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.12..v0.115.13`.
+
+### Bug Fixes
+
+- **memory**: hide deleted rows from list endpoint (#671)
+
+## [0.115.12] - 2026-05-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.11..v0.115.12`.
+
+### Bug Fixes
+
+- **daemon-rs**: add auth whoami parity route (#670)
+
+## [0.115.11] - 2026-05-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.10..v0.115.11`.
+
+### Bug Fixes
+
+- **test**: disable embeddings in mutation api route tests (#669)
+
+## [0.115.10] - 2026-05-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.9..v0.115.10`.
+
+### Bug Fixes
+
+- **daemon-rs**: add batch memory forget route parity (#666)
+
+## [0.115.9] - 2026-05-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.8..v0.115.9`.
+
+### Bug Fixes
+
+- **pipeline**: isolate background acpx summaries (#668)
+
+## [0.115.8] - 2026-05-09
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.7..v0.115.8`.
+
+### Bug Fixes
+
+- **acpx**: use claude connector for Claude Code
+
+## [0.115.7] - 2026-05-08
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.6..v0.115.7`.
+
+### Bug Fixes
+
+- **daemon-rs**: restore knowledge graph mentions schema
+
+## [0.115.6] - 2026-05-08
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.5..v0.115.6`.
+
+### Bug Fixes
+
+- **daemon**: bound ontology constellation graph reads (#662)
+
+## [0.115.5] - 2026-05-08
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.4..v0.115.5`.
+
+### Bug Fixes
+
+- **hooks**: avoid resumed summary artifact collisions (#661)
+
+## [0.115.4] - 2026-05-08
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.3..v0.115.4`.
+
+### Bug Fixes
+
+- **cli**: stream logs without EventSource (#660)
+
+## [0.115.3] - 2026-05-08
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.2..v0.115.3`.
+
+### Bug Fixes
+
+- **release**: align release commits with version sync (#657)
+
+## [0.115.2] - 2026-05-08
+
+Release summary: 4 bug fixes.
+Tag range: `v0.115.1..v0.115.2`.
+
+### Bug Fixes
+
+- **daemon-rs**: match connector list schema (#655)
+- **release**: keep dev workspace links local (#654)
+- **daemon**: prune migration backups before copy (#653)
+- catch release version sync regression (#652)
+
+## [0.115.1] - 2026-05-08
+
+Release summary: 1 bug fix.
+Tag range: `v0.115.0..v0.115.1`.
+
+### Bug Fixes
+
+- **stability**: harden recent regression surfaces (#651)
+
+## [0.115.0] - 2026-05-08
+
+Release summary: 1 feature.
+Tag range: `v0.114.0..v0.115.0`.
+
+### Features
+
+- **inference**: capture ACPX JSON events (#649)
 
 ## [0.114.0] - 2026-05-08
 

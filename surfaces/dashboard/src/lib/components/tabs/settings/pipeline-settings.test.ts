@@ -2,6 +2,8 @@
 import { describe, expect, it } from "bun:test";
 import { DEFAULT_PIPELINE_TIMEOUT_MS } from "@signet/core/pipeline-providers";
 import {
+	applyAcpxDashboardSetup,
+	defaultAcpxDashboardAgent,
 	hasExplicitSynthesisConfig,
 	hasExplicitSynthesisProvider,
 	resolveSynthesisEnabled,
@@ -119,5 +121,102 @@ describe("pipeline-settings synthesis resolution", () => {
 
 		expect(resolveSynthesisProvider(agent)).toBe("none");
 		expect(resolveSynthesisEnabled(agent)).toBe(false);
+	});
+});
+
+describe("pipeline-settings ACPX dashboard setup", () => {
+	it("detects the preferred ACPX agent from generated inference config before harnesses", () => {
+		const agent = {
+			harnesses: ["claude-code"],
+			inference: {
+				targets: {
+					"background-acpx": {
+						acpx: { agent: "opencode" },
+					},
+				},
+			},
+		};
+
+		expect(defaultAcpxDashboardAgent(agent)).toBe("opencode");
+	});
+
+	it("maps ACPX's Claude command back to the Claude Code dashboard option", () => {
+		const agent = {
+			harnesses: ["codex"],
+			inference: {
+				targets: {
+					"background-acpx": {
+						acpx: { agent: "claude" },
+					},
+				},
+			},
+		};
+
+		expect(defaultAcpxDashboardAgent(agent)).toBe("claude-code");
+	});
+
+	it("applies a one-click ACPX background setup for extraction, synthesis, and routing", () => {
+		const agent: Record<string, unknown> = {
+			harnesses: ["claude-code"],
+			inference: {
+				defaultPolicy: "custom-local",
+				targets: {
+					"custom-local": { executor: "ollama" },
+				},
+			},
+		};
+
+		applyAcpxDashboardSetup(agent, { agent: "claude-code" });
+
+		expect(agent.memory).toMatchObject({
+			pipelineV2: {
+				enabled: true,
+				extractionProvider: "acpx",
+				extractionModel: "haiku",
+				synthesis: {
+					enabled: true,
+					provider: "acpx",
+					model: "haiku",
+					timeout: 120000,
+				},
+			},
+		});
+		expect((agent.memory as { pipelineV2: Record<string, unknown> }).pipelineV2).not.toHaveProperty(
+			"autonomousEnabled",
+		);
+		expect((agent.memory as { pipelineV2: Record<string, unknown> }).pipelineV2).not.toHaveProperty(
+			"allowUpdateDelete",
+		);
+		expect((agent.memory as { pipelineV2: Record<string, unknown> }).pipelineV2).not.toHaveProperty("maintenanceMode");
+		expect(agent.inference).toMatchObject({
+			defaultPolicy: "custom-local",
+			targets: {
+				"custom-local": { executor: "ollama" },
+				"background-acpx": {
+					executor: "acpx",
+					acpx: {
+						agent: "claude",
+						package: "acpx@0.7.0",
+						permissions: "deny-all",
+						hooks: "disabled",
+					},
+					models: {
+						default: {
+							model: "haiku",
+						},
+					},
+				},
+			},
+			policies: {
+				"background-acpx": {
+					mode: "automatic",
+					defaultTargets: ["background-acpx/default"],
+				},
+			},
+			workloads: {
+				memoryExtraction: { target: "background-acpx/default", taskClass: "memory_extraction" },
+				sessionSynthesis: { target: "background-acpx/default", taskClass: "session_synthesis" },
+			},
+		});
 	});
 });

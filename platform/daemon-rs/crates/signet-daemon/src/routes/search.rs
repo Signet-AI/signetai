@@ -622,3 +622,43 @@ pub async fn embeddings_stats(State(state): State<Arc<AppState>>) -> Json<serde_
 
     Json(stats)
 }
+
+pub async fn embeddings_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let cfg = state
+        .config
+        .manifest
+        .embedding
+        .clone()
+        .unwrap_or_default();
+    let base_url = resolve_embedding_base_url(&cfg.provider, cfg.base_url.as_deref());
+    let mut status = serde_json::json!({
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "base_url": base_url,
+        "available": false,
+        "checkedAt": chrono::Utc::now().to_rfc3339(),
+    });
+
+    if cfg.provider == "none" {
+        status["error"] = serde_json::json!(
+            "Embedding provider set to 'none' — vector search disabled"
+        );
+    } else if state.embedding.read().await.is_some() {
+        status["available"] = serde_json::json!(true);
+        status["dimensions"] = serde_json::json!(cfg.dimensions);
+    } else {
+        status["error"] = serde_json::json!("Embedding provider unavailable");
+    }
+
+    status["tracker"] = serde_json::Value::Null;
+    Json(status)
+}
+
+fn resolve_embedding_base_url(provider: &str, configured: Option<&str>) -> String {
+    let trimmed = configured.map(str::trim).filter(|value| !value.is_empty());
+    match provider {
+        "openai" => trimmed.unwrap_or("https://api.openai.com/v1").to_string(),
+        "llama-cpp" => trimmed.unwrap_or("http://localhost:8080").to_string(),
+        _ => trimmed.unwrap_or("http://localhost:11434").to_string(),
+    }
+}

@@ -379,40 +379,107 @@ export function isVectorRuntimeUsable(): boolean {
 
 const MAX_MIGRATION_BACKUPS = 5;
 
+interface MigrationBackupDeps {
+	readonly copyFileSync: (source: string, destination: string) => void;
+	readonly readdirSync: (path: string) => string[];
+	readonly statSync: (path: string) => { readonly mtimeMs: number };
+	readonly unlinkSync: (path: string) => void;
+	readonly now: () => number;
+	readonly log: (message: string) => void;
+}
+
+const migrationBackupDeps: MigrationBackupDeps = {
+	copyFileSync,
+	readdirSync,
+	statSync,
+	unlinkSync,
+	now: Date.now,
+	log: console.log,
+};
+
+function readErrorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
+}
+
+function isMissingPathError(err: unknown): boolean {
+	return err instanceof Error && "code" in err && (err.code === "ENOENT" || err.code === "ENOTDIR");
+}
+
+function migrationBackups(
+	dbPath: string,
+	deps: MigrationBackupDeps,
+): Array<{ readonly name: string; readonly mtime: number }> {
+	const dir = dirname(dbPath);
+	const base = basename(dbPath);
+	return deps
+		.readdirSync(dir)
+		.filter((f) => f.startsWith(`${base}.bak-v`))
+		.flatMap((f) => {
+			try {
+				return [{ name: f, mtime: deps.statSync(join(dir, f)).mtimeMs }];
+			} catch (err) {
+				if (isMissingPathError(err)) return [];
+				throw err;
+			}
+		})
+		.sort((a, b) => b.mtime - a.mtime);
+}
+
+function pruneMigrationBackups(dbPath: string, keep: number, deps: MigrationBackupDeps): void {
+	const dir = dirname(dbPath);
+	for (const old of migrationBackups(dbPath, deps).slice(Math.max(0, keep))) {
+		try {
+			deps.unlinkSync(join(dir, old.name));
+			deps.log(`[db-accessor] Pruned old backup: ${old.name}`);
+		} catch {
+			// Best effort.
+		}
+	}
+}
+
 /**
  * Back up the database file before running migrations.
  * Flushes WAL first, then copies the main file. Prunes old
- * backups beyond MAX_MIGRATION_BACKUPS (oldest by mtime).
+ * backups before copying so a full backup set does not require
+ * temporary disk headroom for one extra database-sized file.
  */
-function backupBeforeMigration(db: Database, dbPath: string, schemaVersion: number): void {
-	// Flush WAL so the .db file is self-contained
+export function backupBeforeMigration(
+	db: { exec(sql: string): unknown },
+	dbPath: string,
+	schemaVersion: number,
+	deps: MigrationBackupDeps = migrationBackupDeps,
+): void {
+	// Flush WAL so the .db file is self-contained.
 	try {
 		db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 	} catch {
-		// Non-fatal — backup still useful even with WAL
+		// Non-fatal — backup still useful even with WAL.
 	}
 
-	const timestamp = Date.now();
+	// Make room for the incoming backup first. Otherwise a user with exactly
+	// MAX_MIGRATION_BACKUPS retained backups needs space for an extra full DB
+	// copy before retention can help, which can brick daemon startup on ENOSPC.
+	pruneMigrationBackups(dbPath, MAX_MIGRATION_BACKUPS - 1, deps);
+
+	const timestamp = deps.now();
 	const backupDest = `${dbPath}.bak-v${schemaVersion}-${timestamp}`;
-	copyFileSync(dbPath, backupDest);
-	console.log(`[db-accessor] Pre-migration backup: ${backupDest}`);
-
-	// Prune old backups
-	const dir = dirname(dbPath);
-	const base = basename(dbPath);
-	const backups = readdirSync(dir)
-		.filter((f) => f.startsWith(`${base}.bak-v`))
-		.map((f) => ({ name: f, mtime: statSync(join(dir, f)).mtimeMs }))
-		.sort((a, b) => b.mtime - a.mtime);
-
-	for (const old of backups.slice(MAX_MIGRATION_BACKUPS)) {
+	try {
+		deps.copyFileSync(dbPath, backupDest);
+	} catch (err) {
 		try {
-			unlinkSync(join(dir, old.name));
-			console.log(`[db-accessor] Pruned old backup: ${old.name}`);
+			deps.unlinkSync(backupDest);
 		} catch {
-			// Best effort
+			// Best effort cleanup for partial copy files.
 		}
+		throw new Error(
+			`Failed to create pre-migration backup at ${backupDest}. ` +
+				`Free disk space and retry; the database was not migrated. Cause: ${readErrorMessage(err)}`,
+		);
 	}
+	deps.log(`[db-accessor] Pre-migration backup: ${backupDest}`);
+
+	// Final retention pass in case another process wrote backups concurrently.
+	pruneMigrationBackups(dbPath, MAX_MIGRATION_BACKUPS, deps);
 }
 
 /**

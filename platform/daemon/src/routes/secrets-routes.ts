@@ -1,11 +1,34 @@
 import type { Context, Hono } from "hono";
 import { requirePermission } from "../auth";
+import {
+	BITWARDEN_MANAGED_FOLDER_SECRET,
+	BITWARDEN_SESSION_SECRET,
+	getBitwardenStatus,
+	listBitwardenFolders,
+	migrateLocalSecretsToBitwarden,
+} from "../bitwarden.js";
 import { logger } from "../logger.js";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, importOnePasswordSecrets, listOnePasswordVaults } from "../onepassword.js";
 import { recordPluginAuditEvent } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index.js";
 import type { PluginHostV1 } from "../plugins/index.js";
-import { deleteSecret, execWithSecrets, getSecret, hasSecret, listSecrets, putSecret } from "../secrets.js";
+import {
+	SecretExecQueueFullError,
+	deleteLocalSecretForMigration,
+	deleteSecret,
+	deleteSecretFromActiveProvider,
+	getActiveSecretProvider,
+	getLocalSecretValue,
+	getSecret,
+	getSecretExecJob,
+	hasSecret,
+	listLocalSecretNames,
+	listSecrets,
+	normalizeSecretExecTimeoutMs,
+	putSecret,
+	setActiveSecretProvider,
+	startSecretExecJob,
+} from "../secrets.js";
 import { authConfig } from "./state.js";
 
 function parseOptionalString(value: unknown): string | undefined {
@@ -72,15 +95,143 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		return requirePermission("admin", authConfig)(c, next);
 	});
 
-	app.get("/api/secrets", (c) => {
+	app.get("/api/secrets", async (c) => {
 		const denied = rejectIfCapabilityDenied(c, host, ["secrets:list"]);
 		if (denied) return denied;
 		try {
-			const names = listSecrets();
-			return c.json({ secrets: names });
+			const names = await listSecrets();
+			const provider = await getActiveSecretProvider();
+			return c.json({ secrets: names, provider });
 		} catch (e) {
 			logger.error("secrets", "Failed to list secrets", e as Error);
 			return c.json({ error: "Failed to list secrets" }, 500);
+		}
+	});
+
+	app.get("/api/secrets/bitwarden/status", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		if (denied) return denied;
+		const activeProvider = (await getActiveSecretProvider()) === "bitwarden";
+		try {
+			const configured = hasSecret(BITWARDEN_SESSION_SECRET);
+			const session = configured ? await getSecret(BITWARDEN_SESSION_SECRET) : undefined;
+			return c.json(await getBitwardenStatus({ configured, activeProvider, session }));
+		} catch (e) {
+			const err = e as Error;
+			logger.warn("secrets", "Bitwarden status check failed", { error: err.message });
+			return c.json({ configured: true, connected: false, activeProvider, error: err.message });
+		}
+	});
+
+	app.post("/api/secrets/bitwarden/connect", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
+		try {
+			const body = await readOptionalJsonObject(c);
+			if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+			const session = parseOptionalString(body.session) ?? parseOptionalString(body.token);
+			if (!session) return c.json({ error: "session is required" }, 400);
+			const activate = parseOptionalBoolean(body.activate) ?? false;
+			const folderId = parseOptionalString(body.folderId);
+			const currentActiveProvider = (await getActiveSecretProvider()) === "bitwarden";
+			const status = await getBitwardenStatus({ configured: true, activeProvider: currentActiveProvider, session });
+			if (!status.connected) {
+				return c.json({ error: status.error ?? "Bitwarden session is not connected", ...status, success: false }, 400);
+			}
+			await putSecret(BITWARDEN_SESSION_SECRET, session);
+			if (folderId) await putSecret(BITWARDEN_MANAGED_FOLDER_SECRET, folderId);
+			else deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
+			if (activate) await setActiveSecretProvider("bitwarden");
+			logger.info("secrets", "Connected Bitwarden session", { connected: status.connected, activate });
+			return c.json({ success: true, ...status, activeProvider: activate || currentActiveProvider });
+		} catch (e) {
+			const err = e as Error;
+			logger.error("secrets", "Failed to connect Bitwarden", err);
+			return c.json({ error: err.message }, 400);
+		}
+	});
+
+	app.delete("/api/secrets/bitwarden/connect", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
+		try {
+			const sessionDeleted = deleteSecret(BITWARDEN_SESSION_SECRET);
+			const folderDeleted = deleteSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
+			await setActiveSecretProvider("local");
+			return c.json({
+				success: true,
+				disconnected: true,
+				existed: sessionDeleted || folderDeleted,
+				activeProvider: false,
+			});
+		} catch (e) {
+			const err = e as Error;
+			logger.error("secrets", "Failed to disconnect Bitwarden", err);
+			return c.json({ error: err.message }, 500);
+		}
+	});
+
+	app.post("/api/secrets/bitwarden/provider", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
+		const body = await readOptionalJsonObject(c);
+		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+		const provider = parseOptionalString(body.provider);
+		if (provider !== "local" && provider !== "bitwarden")
+			return c.json({ error: "provider must be local or bitwarden" }, 400);
+		if (provider === "bitwarden") {
+			if (!hasSecret(BITWARDEN_SESSION_SECRET)) return c.json({ error: "Bitwarden is not connected" }, 400);
+			const session = await getSecret(BITWARDEN_SESSION_SECRET);
+			const status = await getBitwardenStatus({ configured: true, activeProvider: true, session });
+			if (!status.connected) {
+				return c.json({ error: status.error ?? "Bitwarden session is not connected", ...status, success: false }, 400);
+			}
+		}
+		await setActiveSecretProvider(provider);
+		return c.json({ success: true, provider });
+	});
+
+	app.get("/api/secrets/bitwarden/folders", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:list"]);
+		if (denied) return denied;
+		try {
+			const session = await getSecret(BITWARDEN_SESSION_SECRET);
+			const folders = await listBitwardenFolders(session);
+			return c.json({ folders, count: folders.length });
+		} catch (e) {
+			const err = e as Error;
+			logger.error("secrets", "Failed to list Bitwarden folders", err);
+			return c.json({ error: err.message }, 400);
+		}
+	});
+
+	app.post("/api/secrets/bitwarden/migrate", async (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:providers:configure"]);
+		if (denied) return denied;
+		try {
+			const body = await readOptionalJsonObject(c);
+			if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+			const session = await getSecret(BITWARDEN_SESSION_SECRET);
+			const folderId = parseOptionalString(body.folderId);
+			const overwrite = parseOptionalBoolean(body.overwrite) ?? false;
+			const dryRun = parseOptionalBoolean(body.dryRun) ?? true;
+			const deleteLocal = parseOptionalBoolean(body.deleteLocal) ?? false;
+			const localNames = listLocalSecretNames({ includeInternal: false });
+			const result = await migrateLocalSecretsToBitwarden({
+				session,
+				localNames,
+				getLocalSecret: getLocalSecretValue,
+				deleteLocalSecret: deleteLocalSecretForMigration,
+				folderId,
+				overwrite,
+				dryRun,
+				deleteLocal,
+			});
+			return c.json({ success: true, ...result });
+		} catch (e) {
+			const err = e as Error;
+			logger.error("secrets", "Failed to migrate local secrets to Bitwarden", err);
+			return c.json({ error: err.message }, 400);
 		}
 	});
 
@@ -219,26 +370,44 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			const body = (await c.req.json()) as {
 				command?: string;
 				secrets?: Record<string, string>;
+				timeoutMs?: number;
 			};
 
-			if (!body.command) {
+			if (typeof body.command !== "string" || body.command.trim().length === 0) {
 				return c.json({ error: "command is required" }, 400);
 			}
-			if (!body.secrets || Object.keys(body.secrets).length === 0) {
-				return c.json({ error: "secrets map is required" }, 400);
+			const secrets = body.secrets;
+			if (
+				!secrets ||
+				typeof secrets !== "object" ||
+				Array.isArray(secrets) ||
+				Object.keys(secrets).length === 0 ||
+				Object.values(secrets).some((value) => typeof value !== "string" || value.trim().length === 0)
+			) {
+				return c.json({ error: "non-empty secrets map is required" }, 400);
 			}
 
-			const result = await execWithSecrets(body.command, body.secrets);
-			logger.info("secrets", "exec_with_secrets completed", {
-				secretCount: Object.keys(body.secrets).length,
-				code: result.code,
+			const timeoutMs = normalizeSecretExecTimeoutMs(body.timeoutMs);
+			const job = startSecretExecJob(body.command, secrets, { timeoutMs });
+			logger.info("secrets", "exec_with_secrets queued", {
+				jobId: job.id,
+				secretCount: Object.keys(secrets).length,
+				timeoutMs,
 			});
-			return c.json(result);
+			return c.json(job, 202);
 		} catch (e) {
 			const err = e as Error;
 			logger.error("secrets", "exec_with_secrets failed", err);
-			return c.json({ error: err.message }, 500);
+			return c.json({ error: err.message }, err instanceof SecretExecQueueFullError ? 429 : 500);
 		}
+	});
+
+	app.get("/api/secrets/exec/:jobId", (c) => {
+		const denied = rejectIfCapabilityDenied(c, host, ["secrets:exec"]);
+		if (denied) return denied;
+		const job = getSecretExecJob(c.req.param("jobId"));
+		if (!job) return c.json({ error: "secret exec job not found" }, 404);
+		return c.json(job);
 	});
 
 	app.post("/api/secrets/:name/exec", async (c) => {
@@ -249,24 +418,31 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 			const body = (await c.req.json()) as {
 				command?: string;
 				secrets?: Record<string, string>;
+				timeoutMs?: number;
 			};
 
-			if (!body.command) {
+			if (typeof body.command !== "string" || body.command.trim().length === 0) {
 				return c.json({ error: "command is required" }, 400);
 			}
 
-			const secretRefs: Record<string, string> = body.secrets ?? { [name]: name };
-
-			const result = await execWithSecrets(body.command, secretRefs);
-			logger.info("secrets", "exec_with_secrets completed", {
-				name,
-				code: result.code,
-			});
-			return c.json(result);
+			const secretRefs: Record<string, string> = body.secrets === undefined ? { [name]: name } : body.secrets;
+			if (
+				!secretRefs ||
+				typeof secretRefs !== "object" ||
+				Array.isArray(secretRefs) ||
+				Object.keys(secretRefs).length === 0 ||
+				Object.values(secretRefs).some((value) => typeof value !== "string" || value.trim().length === 0)
+			) {
+				return c.json({ error: "non-empty secrets map is required" }, 400);
+			}
+			const timeoutMs = normalizeSecretExecTimeoutMs(body.timeoutMs);
+			const job = startSecretExecJob(body.command, secretRefs, { timeoutMs });
+			logger.info("secrets", "exec_with_secrets queued", { name, jobId: job.id, timeoutMs });
+			return c.json(job, 202);
 		} catch (e) {
 			const err = e as Error;
 			logger.error("secrets", "exec_with_secrets failed", err, { name });
-			return c.json({ error: err.message }, 500);
+			return c.json({ error: err.message }, err instanceof SecretExecQueueFullError ? 429 : 500);
 		}
 	});
 
@@ -289,12 +465,12 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		}
 	});
 
-	app.delete("/api/secrets/:name", (c) => {
+	app.delete("/api/secrets/:name", async (c) => {
 		const denied = rejectIfCapabilityDenied(c, host, ["secrets:delete"]);
 		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
-			const deleted = deleteSecret(name);
+			const deleted = await deleteSecretFromActiveProvider(name);
 			if (!deleted) return c.json({ error: `Secret '${name}' not found` }, 404);
 			logger.info("secrets", "Secret deleted", { name });
 			return c.json({ success: true, name });

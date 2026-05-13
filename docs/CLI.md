@@ -109,12 +109,17 @@ Use explicit commands for interactive flows:
 ---
 
 Builds the official Electron desktop app from an existing Signet source
-checkout. The command never clones over local work; run it from the repo root,
-set `SIGNET_SOURCE_DIR`, or pass `--repo <path>`.
+checkout. Without `--repo` or `SIGNET_SOURCE_DIR`, the command first syncs the
+managed workspace checkout at `<workspace>/signetai`, ignoring generated desktop
+build artifacts such as `surfaces/desktop/release/` so stale local artifacts do
+not block fast-forward pulls. Explicit source paths are left under user
+control; set `SIGNET_SOURCE_DIR` or pass `--repo <path>`. To build the checkout
+you are currently in, run `signet desktop install --repo .`.
 
 ```bash
 signet desktop build
 signet desktop install
+signet desktop install --repo .
 signet desktop install --repo ~/signet/signetai
 signet desktop install --skip-build
 ```
@@ -140,6 +145,7 @@ signet setup --path /custom/path
 signet setup --non-interactive \
   --name "My Agent" \
   --harness claude-code \
+  --identity-preset minimal \
   --deployment-type vps \
   --embedding-provider native
 ```
@@ -154,6 +160,7 @@ Options:
 | `--description <description>` | Agent description in non-interactive mode |
 | `--deployment-type <type>` | Deployment context (`local`, `vps`, `server`) used for interactive guidance and non-interactive inferred defaults |
 | `--harness <harness>` | Repeatable/comma-separated harness list (`claude-code`, `opencode`, `openclaw`, `hermes-agent`, `oh-my-pi`, `pi`, `codex`, `forge`) |
+| `--identity-preset <preset>` | Identity/context preset (`minimal`, `hermes`, `openclaw`, `custom`); controls startup-loaded files and special prompt files like `DREAMING.md` |
 | `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) |
 | `--embedding-model <model>` | Non-interactive embedding model |
 | `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) |
@@ -173,7 +180,10 @@ Non-interactive behavior:
 
 - setup method: create new identity (no GitHub import)
 - provider flags are optional; setup infers defaults from `--deployment-type`
-  when omitted
+- `--identity-preset` defaults to `minimal` for new workspaces
+- the Minimal preset creates `AGENTS.md` for startup context and `DREAMING.md`
+  for dreaming sessions; `DREAMING.md` is not loaded into normal startup context
+- hooks/connectors are configured for requested harnesses
 - with `--deployment-type vps`, setup prefers non-local extraction defaults
   from selected harnesses when those tools are available locally, then other
   detected tooling (`claude-code`, `codex`, `opencode`), and falls back to

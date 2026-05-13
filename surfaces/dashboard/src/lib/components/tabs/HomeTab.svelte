@@ -14,9 +14,9 @@ import type {
 } from "$lib/api";
 import { API_BASE, getConnectors, getContinuityLatest, getDiagnostics, getPipelineStatus } from "$lib/api";
 import AgentHeader from "$lib/components/home/AgentHeader.svelte";
+import DailyReflection from "$lib/components/home/DailyReflection.svelte";
 import KnowledgeBaseMap from "$lib/components/home/KnowledgeBaseMap.svelte";
 import PinnedEntityCluster from "$lib/components/home/PinnedEntityCluster.svelte";
-import SuggestedInsights from "$lib/components/home/SuggestedInsights.svelte";
 import { onMount } from "svelte";
 
 interface Props {
@@ -75,7 +75,7 @@ onMount(async () => {
 		<KnowledgeBaseMap />
 	</div>
 	<div class="area-insights">
-		<SuggestedInsights {memories} />
+		<DailyReflection {agentId} />
 	</div>
 	<div class="area-sidebar">
 		<PinnedEntityCluster {memories} />
@@ -90,8 +90,8 @@ onMount(async () => {
 		grid-template-rows: auto minmax(auto, max-content) 1fr;
 		grid-template-areas:
 			"banner     banner"
-			"spotlights sidebar"
-			"insights   sidebar";
+			"insights   sidebar"
+			"spotlights sidebar";
 		gap: var(--space-sm);
 		flex: 1;
 		min-height: 0;

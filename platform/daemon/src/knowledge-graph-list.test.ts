@@ -13,7 +13,12 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { getKnowledgeEntityDetail, getKnowledgeStats, listKnowledgeEntities } from "./knowledge-graph";
+import {
+	getKnowledgeEntityDetail,
+	getKnowledgeGraphForConstellation,
+	getKnowledgeStats,
+	listKnowledgeEntities,
+} from "./knowledge-graph";
 
 function makeDbPath(): string {
 	const dir = join(tmpdir(), `signet-kg-list-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -243,6 +248,40 @@ describe("listKnowledgeEntities (issue #515)", () => {
 
 		expect(mainScope.map((r) => r.entity.id)).toEqual(["e-main"]);
 		expect(defaultScope.map((r) => r.entity.id)).toEqual(["e-def"]);
+	});
+
+	test("builds a bounded constellation graph without loading every graph row", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		seedEntity("e-hub", "Hub", { mentions: 10 });
+		seedEntity("e-leaf", "Leaf", { mentions: 9 });
+		seedEntity("e-hidden", "Hidden", { mentions: 0 });
+		seedAspect("asp-hub-a", "e-hub", "alpha");
+		seedAspect("asp-hub-b", "e-hub", "beta");
+		seedAspect("asp-hub-c", "e-hub", "gamma");
+		seedAspect("asp-hub-d", "e-hub", "delta");
+		seedAspect("asp-hidden", "e-hidden", "hidden");
+		seedAttribute("attr-hub-a-1", "asp-hub-a", { content: "important alpha", memoryId: "mem-a" });
+		seedAttribute("attr-hub-a-2", "asp-hub-a", { content: "less important alpha" });
+		seedAttribute("attr-hub-a-3", "asp-hub-a", { content: "third alpha" });
+		seedAttribute("attr-hub-a-4", "asp-hub-a", { content: "fourth alpha" });
+		seedAttribute("attr-hidden", "asp-hidden", { content: "hidden attr" });
+		seedDependency("dep-visible", "e-hub", "e-leaf", { strength: 0.9 });
+		seedDependency("dep-hidden", "e-hub", "e-hidden", { strength: 0.8 });
+
+		const graph = getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
+			limit: 2,
+			maxAspectsPerEntity: 1,
+			maxAttributesPerAspect: 1,
+			dependencyLimit: 10,
+		});
+
+		expect(graph.entities.map((entity) => entity.id)).toEqual(["e-hub", "e-leaf"]);
+		expect(graph.entities[0].aspects.map((aspect) => aspect.id)).toEqual(["asp-hub-a"]);
+		expect(graph.entities[0].aspects[0].attributes.map((attr) => attr.id)).toEqual(["attr-hub-a-1"]);
+		expect(graph.dependencies.map((dependency) => dependency.sourceEntityId)).toEqual(["e-hub"]);
+		expect(graph.dependencies.map((dependency) => dependency.targetEntityId)).toEqual(["e-leaf"]);
 	});
 });
 

@@ -447,20 +447,22 @@ are never exposed to agents.
 
 ### secret_exec
 
-Run a shell command with secrets injected as environment variables. Output
+Queue a shell command with secrets injected as environment variables. Output
 is automatically redacted, secret values never appear in results. Bare
-secret names resolve through the local provider, for example
-`OPENAI_API_KEY` is equivalent to `local://OPENAI_API_KEY`.
+secret names resolve through the active Signet secrets provider: local by
+default, or Bitwarden first when Bitwarden is active. Use `local://NAME` to
+force the local encrypted store, `bw://...` to reference a Bitwarden item
+explicitly, or `op://...` for 1Password compatibility references.
 
 **Parameters:**
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `command` | string | yes | Shell command to execute |
-| `secrets` | object | yes | Map of env var name to secret reference (Signet name or `op://...`) |
+| `command` | string | yes | Shell command to queue |
+| `secrets` | object | yes | Map of env var name to secret reference (Signet name, `bw://...`, or `op://...`) |
+| `timeoutSeconds` | number | no | Max subprocess runtime for the queued job; defaults to 300 seconds, max 1800 |
 
-**Returns:** Object with `stdout`, `stderr`, and `code` (exit code).
-Secret values in output are replaced with `[REDACTED]`.
+**Returns:** A queued secret exec job object with `id`, `status`, and `timeoutMs`. Poll with `secret_exec_status` for redacted `stdout`, `stderr`, and `code` after completion. Secret values in output are replaced with `[REDACTED]`.
 
 **Example:**
 
@@ -473,7 +475,21 @@ Secret values in output are replaced with `[REDACTED]`.
 }
 ```
 
-**Daemon endpoint:** `POST /api/secrets/exec` (30s timeout)
+**Daemon endpoint:** `POST /api/secrets/exec` (always queued; 5 minute default job timeout)
+
+### secret_exec_status
+
+Poll a queued `secret_exec` job and retrieve redacted output when it finishes.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `jobId` | string | yes | Job id returned by `secret_exec` |
+
+**Returns:** The secret exec job status. Completed jobs include redacted `stdout`, `stderr`, `code`, and `timedOut` when applicable.
+
+**Daemon endpoint:** `GET /api/secrets/exec/:jobId`
 
 ### Optional GraphIQ Code Tools
 
@@ -651,8 +667,7 @@ requests to the daemon API with these headers:
 - `x-signet-actor: mcp-server` — identifies the calling actor
 - `x-signet-actor-type: harness` — actor type classification
 
-The default request timeout is 10 seconds, except for `secret_exec` which
-uses 30 seconds to allow for longer-running commands.
+The default request timeout is 10 seconds. `secret_exec` returns quickly because it only queues daemon-owned work; poll with `secret_exec_status` to retrieve redacted output after completion.
 
 Errors are returned as MCP error results with `isError: true` and a
 human-readable message.

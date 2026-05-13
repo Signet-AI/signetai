@@ -9,14 +9,15 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use signet_core::db::Priority;
 use signet_services::session::SessionTracker;
 use signet_services::transactions;
 
-use crate::auth::middleware::{authenticate_headers, require_scope_guard};
-use crate::auth::types::TokenScope;
+use crate::auth::middleware::{authenticate_headers, require_permission_guard, require_scope_guard};
+use crate::auth::types::{Permission, TokenScope};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -206,6 +207,44 @@ fn guard_write_scope(
         user: None,
     };
     require_scope_guard(&auth, &target, state.auth_mode, is_loopback(peer))
+}
+
+fn guard_forget_scope(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: &SocketAddr,
+    agent_ids: &[String],
+) -> Result<(), Box<axum::response::Response>> {
+    let is_local = is_loopback(peer);
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )?;
+    require_permission_guard(&auth, Permission::Forget, state.auth_mode, is_local)?;
+
+    let targets = if agent_ids.is_empty() {
+        vec!["default".to_string()]
+    } else {
+        agent_ids
+            .iter()
+            .fold(Vec::new(), |mut acc, agent| {
+                if !acc.contains(agent) {
+                    acc.push(agent.clone());
+                }
+                acc
+            })
+    };
+    for agent_id in targets {
+        let target = TokenScope {
+            project: None,
+            agent: Some(agent_id),
+            user: None,
+        };
+        require_scope_guard(&auth, &target, state.auth_mode, is_local)?;
+    }
+    Ok(())
 }
 
 fn dead_letter_blocked_extraction_memory(
@@ -479,9 +518,25 @@ mod tests {
     use crate::state::ExtractionRuntimeState;
 
     use super::{
-        RememberBody, dead_letter_blocked_extraction_memory, normalize_scope, parse_remember_tags,
-        parse_visibility, remember, resolve_remember_agent, require_session_scope_for_write,
+        ForgetBatchBody, RememberBody, dead_letter_blocked_extraction_memory, guard_forget_scope,
+        normalize_scope, parse_remember_tags, parse_visibility, remember, resolve_remember_agent,
+        require_session_scope_for_write,
     };
+
+    #[test]
+    fn forget_batch_body_accepts_camel_case_confirm_token() {
+        let body: ForgetBatchBody = serde_json::from_value(json!({
+            "mode": "execute",
+            "ids": ["mem-1"],
+            "reason": "operator request",
+            "confirmToken": "preview-token",
+            "ifVersion": 7,
+        }))
+        .unwrap();
+
+        assert_eq!(body.confirm_token.as_deref(), Some("preview-token"));
+        assert_eq!(body.if_version, Some(json!(7)));
+    }
 
     #[test]
     fn remember_tags_accepts_comma_separated_strings() {
@@ -526,6 +581,19 @@ mod tests {
     fn resolve_remember_agent_inherits_session_scope_when_missing() {
         let agent = resolve_remember_agent(None, Some("agent:agent-a:sess-1")).unwrap();
         assert_eq!(agent, "agent-a");
+    }
+
+    #[tokio::test]
+    async fn batch_forget_guard_requires_authentication_in_team_mode() {
+        let (state, _dir) = build_test_state_with_auth(AuthMode::Team, Some(vec![7; 32])).await;
+        let err = guard_forget_scope(
+            state.as_ref(),
+            &HeaderMap::new(),
+            &SocketAddr::from(([203, 0, 113, 10], 3850)),
+            &["default".to_string()],
+        )
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
@@ -813,6 +881,13 @@ mod tests {
     }
 
     async fn build_test_state() -> (Arc<crate::state::AppState>, tempfile::TempDir) {
+        build_test_state_with_auth(AuthMode::Local, None).await
+    }
+
+    async fn build_test_state_with_auth(
+        auth_mode: AuthMode,
+        auth_secret: Option<Vec<u8>>,
+    ) -> (Arc<crate::state::AppState>, tempfile::TempDir) {
         let dir = tempdir().expect("tempdir");
         let db = dir.path().join("memory").join("memories.db");
         std::fs::create_dir_all(db.parent().expect("db parent")).expect("create memory dir");
@@ -880,8 +955,8 @@ mod tests {
                 None,
                 None, // llm provider
                 None,
-                AuthMode::Local,
-                None,
+                auth_mode,
+                auth_secret,
                 AuthRateLimiter::from_rules(&rules),
                 AuthRateLimiter::from_rules(&rules),
             )),
@@ -1320,6 +1395,351 @@ pub struct PatchFields {
 }
 
 const MAX_MUTATION_BATCH: usize = 100;
+
+const FORGET_CONFIRM_THRESHOLD: usize = 25;
+
+#[derive(Deserialize)]
+pub struct ForgetBatchBody {
+    pub mode: Option<String>,
+    pub ids: Option<Value>,
+    pub limit: Option<Value>,
+    pub reason: Option<String>,
+    pub force: Option<Value>,
+    #[serde(alias = "confirmToken")]
+    pub confirm_token: Option<String>,
+    #[serde(alias = "ifVersion")]
+    pub if_version: Option<Value>,
+}
+
+#[derive(Clone)]
+struct ForgetCandidate {
+    id: String,
+    pinned: bool,
+    version: i64,
+    score: f64,
+}
+
+fn parse_positive_limit(value: Option<&Value>) -> Result<usize, &'static str> {
+    let Some(value) = value else {
+        return Ok(20);
+    };
+    let Some(raw) = value.as_u64() else {
+        return Err("limit must be a positive integer");
+    };
+    if raw == 0 {
+        return Err("limit must be a positive integer");
+    }
+    Ok((raw as usize).clamp(1, MAX_MUTATION_BATCH))
+}
+
+fn parse_forget_ids(value: Option<&Value>) -> Result<Vec<String>, &'static str> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let Some(values) = value.as_array() else {
+        return Err("ids must be an array of strings");
+    };
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .ok_or("ids must contain non-empty strings")
+        })
+        .collect()
+}
+
+fn parse_optional_bool(value: Option<&Value>) -> Result<bool, &'static str> {
+    let Some(value) = value else {
+        return Ok(false);
+    };
+    value.as_bool().ok_or("force must be a boolean")
+}
+
+fn dedupe_forget_ids(ids: Vec<String>, limit: usize) -> Vec<String> {
+    ids.into_iter()
+        .fold(Vec::new(), |mut acc, id| {
+            if !acc.contains(&id) {
+                acc.push(id);
+            }
+            acc
+        })
+        .into_iter()
+        .take(limit)
+        .collect()
+}
+
+fn build_forget_confirm_token(ids: &[String]) -> String {
+    let mut deduped = ids.to_vec();
+    deduped.sort();
+    deduped.dedup();
+    let canonical = deduped.join("|");
+    let digest = Sha256::digest(canonical.as_bytes());
+    format!("{digest:x}").chars().take(32).collect()
+}
+
+fn forget_result_json(id: String, result: transactions::ForgetResult) -> serde_json::Value {
+    match result {
+        transactions::ForgetResult::Deleted { new_version } => serde_json::json!({
+            "id": id,
+            "status": "deleted",
+            "newVersion": new_version,
+        }),
+        transactions::ForgetResult::NotFound => {
+            serde_json::json!({"id": id, "status": "not_found"})
+        }
+        transactions::ForgetResult::AlreadyDeleted => {
+            serde_json::json!({"id": id, "status": "already_deleted"})
+        }
+        transactions::ForgetResult::VersionConflict { current } => serde_json::json!({
+            "id": id,
+            "status": "version_mismatch",
+            "currentVersion": current,
+        }),
+        transactions::ForgetResult::PinnedRequiresForce => {
+            serde_json::json!({"id": id, "status": "pinned"})
+        }
+        transactions::ForgetResult::AutonomousForceDenied => {
+            serde_json::json!({"id": id, "status": "autonomous_force_denied"})
+        }
+    }
+}
+
+pub async fn forget_batch(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Result<Json<ForgetBatchBody>, axum::extract::rejection::JsonRejection>,
+) -> axum::response::Response {
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid JSON body"})),
+            )
+                .into_response();
+        }
+    };
+
+    let mode = body.mode.as_deref().unwrap_or("preview");
+    if mode != "preview" && mode != "execute" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "mode must be preview or execute"})),
+        )
+            .into_response();
+    }
+
+    let limit = match parse_positive_limit(body.limit.as_ref()) {
+        Ok(limit) => limit,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response();
+        }
+    };
+    let ids = match parse_forget_ids(body.ids.as_ref()) {
+        Ok(ids) => ids,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response();
+        }
+    };
+    if ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "query, ids, or at least one filter (type/tags/who/source_type/since/until) is required",
+            })),
+        )
+            .into_response();
+    }
+
+    let requested_ids = dedupe_forget_ids(ids, limit);
+    let candidates_result = state
+        .pool
+        .read({
+            let ids = requested_ids.clone();
+            move |conn| {
+                if ids.is_empty() {
+                    return Ok((Vec::new(), Vec::new()));
+                }
+
+                let placeholders = std::iter::repeat_n("?", ids.len())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sql = format!(
+                    "SELECT id, pinned, version FROM memories WHERE is_deleted = 0 AND id IN ({placeholders})"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+                        Ok(ForgetCandidate {
+                            id: row.get(0)?,
+                            pinned: row.get::<_, i64>(1)? != 0,
+                            version: row.get(2)?,
+                            score: 0.0,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                let agent_sql = format!(
+                    "SELECT DISTINCT COALESCE(NULLIF(agent_id, ''), 'default') FROM memories WHERE id IN ({placeholders})"
+                );
+                let mut agent_stmt = conn.prepare(&agent_sql)?;
+                let agent_ids = agent_stmt
+                    .query_map(rusqlite::params_from_iter(ids.iter()), |row| row.get(0))?
+                    .collect::<Result<Vec<String>, _>>()?;
+                let candidates = ids
+                    .into_iter()
+                    .filter_map(|id| rows.iter().find(|row| row.id == id).cloned())
+                    .collect();
+                Ok((candidates, agent_ids))
+            }
+        })
+        .await;
+
+    let (candidates, agent_ids) = match candidates_result {
+        Ok(lookup) => lookup,
+        Err(err) => {
+            warn!(err = %err, "forget preview failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Forget preview failed"})),
+            )
+                .into_response();
+        }
+    };
+    if let Err(resp) = guard_forget_scope(state.as_ref(), &headers, &peer, &agent_ids) {
+        return *resp;
+    }
+    let candidate_ids = candidates
+        .iter()
+        .map(|candidate| candidate.id.clone())
+        .collect::<Vec<_>>();
+    let confirm_token = build_forget_confirm_token(&candidate_ids);
+    let requires_confirm = candidate_ids.len() > FORGET_CONFIRM_THRESHOLD;
+
+    if mode == "preview" {
+        return Json(serde_json::json!({
+            "mode": "preview",
+            "count": candidates.len(),
+            "requiresConfirm": requires_confirm,
+            "confirmToken": confirm_token,
+            "candidates": candidates.iter().map(|candidate| serde_json::json!({
+                "id": candidate.id,
+                "score": candidate.score,
+                "pinned": candidate.pinned,
+                "version": candidate.version,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response();
+    }
+
+    let Some(reason) = body
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "reason is required for execute mode"})),
+        )
+        .into_response();
+    };
+    let force = match parse_optional_bool(body.force.as_ref()) {
+        Ok(force) => force,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error})),
+            )
+                .into_response();
+        }
+    };
+    if body.if_version.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "if_version is not supported for batch forget; use DELETE /api/memory/:id for version-guarded deletes",
+            })),
+        )
+            .into_response();
+    }
+    if requires_confirm
+        && body
+            .confirm_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|token| *token == confirm_token)
+            .is_none()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "confirmToken is required for large forget operations; run preview first",
+                "requiresConfirm": true,
+                "confirmToken": confirm_token,
+                "count": candidates.len(),
+            })),
+        )
+            .into_response();
+    }
+    if let Some(resp) = check_mutations_frozen(&state) {
+        return resp;
+    }
+
+    let reason = reason.to_string();
+    let result = state
+        .pool
+        .write(Priority::High, move |conn| {
+            let results = requested_ids
+                .into_iter()
+                .map(|id| {
+                    transactions::forget(
+                        conn,
+                        &transactions::ForgetInput {
+                            id: &id,
+                            force,
+                            if_version: None,
+                            actor: "api",
+                            reason: Some(&reason),
+                            actor_type: None,
+                        },
+                    )
+                    .map(|result| forget_result_json(id, result))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(serde_json::json!({
+                "mode": "execute",
+                "requested": results.len(),
+                "deleted": results.iter().filter(|result| result["status"] == "deleted").count(),
+                "results": results,
+            }))
+        })
+        .await;
+
+    match result {
+        Ok(body) => Json(body).into_response(),
+        Err(err) => {
+            warn!(err = %err, "forget batch failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Forget failed"})),
+            )
+                .into_response()
+        }
+    }
+}
 
 pub async fn modify_batch(
     State(state): State<Arc<AppState>>,

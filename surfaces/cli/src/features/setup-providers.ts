@@ -22,7 +22,10 @@ export async function promptOpenAIEmbeddingModel(): Promise<{ provider: "openai"
 
 export async function validateOllamaModelNonInteractive(
 	model: string,
-	opts?: { readonly hasOllamaCommand?: boolean },
+	opts?: {
+		readonly hasOllamaCommand?: boolean;
+		readonly pullModel?: (model: string) => Promise<boolean>;
+	},
 ): Promise<{
 	readonly available: boolean;
 	readonly modelInstalled: boolean;
@@ -48,7 +51,7 @@ export async function validateOllamaModelNonInteractive(
 
 	if (!hasOllamaModel(service.models, model)) {
 		console.log(chalk.yellow(`  Model '${model}' not found locally. Attempting to pull...`));
-		const pulled = await pullOllamaModel(model);
+		const pulled = await (opts?.pullModel ?? pullOllamaModel)(model);
 		if (!pulled) {
 			return {
 				available: true,

@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 
 import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const REFERENCE_FILE = "dist/signetai/package.json";
 const EXCLUDED_FILES = new Set(["surfaces/dashboard/package.json"]);
@@ -19,6 +20,7 @@ const FORGE_MANIFEST_FILES = [
 	"surfaces/cli/templates/forge/manifest.json",
 	"dist/signetai/templates/forge/manifest.json",
 ];
+const PUBLISH_RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
 
 function parseSemver(version: string): [number, number, number] {
 	const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -73,7 +75,7 @@ function listTargetPackageFiles(): string[] {
 		.filter((file) => !EXCLUDED_FILES.has(file));
 }
 
-function updateFileVersion(filePath: string, targetVersion: string): boolean {
+function updateFileVersion(filePath: string, targetVersion: string, checkOnly: boolean): boolean {
 	const raw = readFileSync(filePath, "utf8");
 	const versionPattern = /("version"\s*:\s*")([^"]+)(")/;
 	if (!versionPattern.test(raw)) {
@@ -85,7 +87,9 @@ function updateFileVersion(filePath: string, targetVersion: string): boolean {
 		return false;
 	}
 
-	writeFileSync(filePath, next);
+	if (!checkOnly) {
+		writeFileSync(filePath, next);
+	}
 	return true;
 }
 
@@ -108,12 +112,77 @@ function readCargoVersion(filePath: string): string | null {
 	return match ? match[1] : null;
 }
 
+function readCargoPackageName(filePath: string): string | null {
+	const raw = readFileSync(filePath, "utf8");
+	const match = raw.match(/\[package\][^\[]*name\s*=\s*"([^"]+)"/s);
+	return match ? match[1] : null;
+}
+
+function findNearestCargoLock(filePath: string): string | null {
+	let dir = dirname(filePath);
+	while (dir !== "." && dir !== "/") {
+		const lockFile = join(dir, "Cargo.lock");
+		if (existsSync(lockFile)) return lockFile;
+		dir = dirname(dir);
+	}
+	return null;
+}
+
+function findNearestWorkspaceVersion(filePath: string): string | null {
+	let dir = dirname(filePath);
+	while (dir !== "." && dir !== "/") {
+		const cargoFile = join(dir, "Cargo.toml");
+		if (existsSync(cargoFile)) {
+			const raw = readFileSync(cargoFile, "utf8");
+			const match = raw.match(/\[workspace\.package\][^\[]*version\s*=\s*"([^"]+)"/s);
+			if (match) return match[1];
+		}
+		dir = dirname(dir);
+	}
+	return null;
+}
+
+export function findCargoLockPackageVersion(raw: string, packageName: string): string | null {
+	const packages = raw.split(/\n\[\[package\]\]\n/);
+	for (const block of packages) {
+		const name = block.match(/(?:^|\n)name\s*=\s*"([^"]+)"/);
+		if (name?.[1] !== packageName) continue;
+		const version = block.match(/(?:^|\n)version\s*=\s*"([^"]+)"/);
+		return version?.[1] ?? null;
+	}
+	return null;
+}
+
+export function collectCargoLockMismatches(cargoFiles: readonly string[], targetVersion: string): string[] {
+	const mismatches: string[] = [];
+	for (const file of cargoFiles) {
+		const raw = readFileSync(file, "utf8");
+		const name = readCargoPackageName(file);
+		if (!name) continue;
+
+		const expected = usesWorkspaceVersion(raw) ? findNearestWorkspaceVersion(file) : readCargoVersion(file);
+		if (expected !== targetVersion) continue;
+
+		const lockFile = findNearestCargoLock(file);
+		if (!lockFile) {
+			mismatches.push(`${file} (${name}) has no Cargo.lock`);
+			continue;
+		}
+
+		const lockVersion = findCargoLockPackageVersion(readFileSync(lockFile, "utf8"), name);
+		if (lockVersion !== targetVersion) {
+			mismatches.push(`${lockFile} package ${name} (${lockVersion ?? "missing"})`);
+		}
+	}
+	return mismatches;
+}
+
 function usesWorkspaceVersion(raw: string): boolean {
 	// Only match version.workspace inside [package], not in dependency tables
 	return /\[package\][^\[]*version\.workspace\s*=\s*true/s.test(raw);
 }
 
-function updateCargoVersion(filePath: string, targetVersion: string): boolean {
+function updateCargoVersion(filePath: string, targetVersion: string, checkOnly: boolean): boolean {
 	const raw = readFileSync(filePath, "utf8");
 	// Crates that inherit version from workspace root — nothing to update
 	if (usesWorkspaceVersion(raw)) return false;
@@ -128,7 +197,9 @@ function updateCargoVersion(filePath: string, targetVersion: string): boolean {
 		return false;
 	}
 
-	writeFileSync(filePath, next);
+	if (!checkOnly) {
+		writeFileSync(filePath, next);
+	}
 	return true;
 }
 
@@ -147,7 +218,20 @@ function regenerateCargoLock(cargoFile: string): void {
 	}
 }
 
-function resolveWorkspaceProtocols(files: readonly string[], version: string): string[] {
+function resolveWorkspaceSpec(spec: string, version: string): string {
+	switch (spec) {
+		case "workspace:*":
+			return version;
+		case "workspace:^":
+			return `^${version}`;
+		case "workspace:~":
+			return `~${version}`;
+		default:
+			return spec;
+	}
+}
+
+export function resolveWorkspaceProtocols(files: readonly string[], version: string, checkOnly: boolean): string[] {
 	const patched: string[] = [];
 	for (const file of files) {
 		const raw = readFileSync(file, "utf8");
@@ -155,13 +239,26 @@ function resolveWorkspaceProtocols(files: readonly string[], version: string): s
 		// Only resolve for packages that will be published
 		if (!pkg.publishConfig || pkg.private) continue;
 
-		let changed = raw;
-		// Replace workspace: protocols with resolved versions
-		changed = changed.replace(/"workspace:\*"/g, `"${version}"`);
-		changed = changed.replace(/"workspace:\^"/g, `"^${version}"`);
-		changed = changed.replace(/"workspace:~"/g, `"~${version}"`);
-		if (changed !== raw) {
-			writeFileSync(file, changed);
+		let changed = false;
+		// Replace workspace: protocols only in runtime dependency fields. Dev-only
+		// workspace links must stay local so the nightly release can run bun install
+		// before the newly bumped internal packages have been published.
+		for (const field of PUBLISH_RUNTIME_DEPENDENCY_FIELDS) {
+			const deps = pkg[field];
+			if (!deps || typeof deps !== "object" || Array.isArray(deps)) continue;
+			for (const [name, spec] of Object.entries(deps as Record<string, unknown>)) {
+				if (typeof spec !== "string") continue;
+				const resolved = resolveWorkspaceSpec(spec, version);
+				if (resolved !== spec) {
+					(deps as Record<string, unknown>)[name] = resolved;
+					changed = true;
+				}
+			}
+		}
+		if (changed) {
+			if (!checkOnly) {
+				writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
+			}
 			patched.push(file);
 		}
 	}
@@ -177,13 +274,19 @@ function getArg(name: string): string | null {
 	return process.argv[index + 1] ?? null;
 }
 
-function syncForgeManifestCopies(): string[] {
+function hasFlag(name: string): boolean {
+	return process.argv.includes(name);
+}
+
+function syncForgeManifestCopies(checkOnly: boolean): string[] {
 	const source = readFileSync(FORGE_VERSION_FILE, "utf8");
 	const updated: string[] = [];
 	for (const file of FORGE_MANIFEST_FILES) {
 		const raw = readFileSync(file, "utf8");
 		if (raw === source) continue;
-		writeFileSync(file, source);
+		if (!checkOnly) {
+			writeFileSync(file, source);
+		}
 		updated.push(file);
 	}
 	return updated;
@@ -191,6 +294,10 @@ function syncForgeManifestCopies(): string[] {
 
 function main() {
 	const explicitVersion = getArg("--to");
+	const checkOnly = hasFlag("--check");
+	if (explicitVersion && checkOnly) {
+		throw new Error("Use either --to or --check, not both");
+	}
 	if (explicitVersion) {
 		parseSemver(explicitVersion);
 	}
@@ -211,7 +318,7 @@ function main() {
 
 	const updated: string[] = [];
 	for (const file of packageFiles) {
-		if (updateFileVersion(file, targetVersion)) {
+		if (updateFileVersion(file, targetVersion, checkOnly)) {
 			updated.push(file);
 		}
 	}
@@ -234,15 +341,17 @@ function main() {
 
 	// Resolve workspace: protocols in publishable packages so npm publish
 	// ships real version strings instead of "workspace:*".
-	const resolved = resolveWorkspaceProtocols(packageFiles, targetVersion);
+	const resolved = resolveWorkspaceProtocols(packageFiles, targetVersion, checkOnly);
 
 	// Sync Cargo.toml files under platform/ and runtimes/
 	const cargoUpdated: string[] = [];
 	const cargoFiles = listCargoFiles();
 	for (const file of cargoFiles) {
-		if (updateCargoVersion(file, targetVersion)) {
+		if (updateCargoVersion(file, targetVersion, checkOnly)) {
 			cargoUpdated.push(file);
-			regenerateCargoLock(file);
+			if (!checkOnly) {
+				regenerateCargoLock(file);
+			}
 		}
 	}
 
@@ -260,9 +369,46 @@ function main() {
 		throw new Error(`Cargo version sync failed. Mismatches:\n- ${cargoMismatches.join("\n- ")}`);
 	}
 
-	const forgeManifestUpdated = syncForgeManifestCopies();
+	let cargoLockMismatches = collectCargoLockMismatches(cargoFiles, targetVersion);
+	if (!checkOnly && cargoLockMismatches.length > 0) {
+		for (const file of cargoFiles) {
+			regenerateCargoLock(file);
+		}
+		cargoLockMismatches = collectCargoLockMismatches(cargoFiles, targetVersion);
+	}
+	if (!checkOnly && cargoLockMismatches.length > 0) {
+		throw new Error(`Cargo.lock version sync failed. Mismatches:\n- ${cargoLockMismatches.join("\n- ")}`);
+	}
 
-	if (updated.length === 0 && cargoUpdated.length === 0 && resolved.length === 0 && forgeManifestUpdated.length === 0) {
+	const forgeManifestUpdated = syncForgeManifestCopies(checkOnly);
+
+	if (
+		checkOnly &&
+		(updated.length > 0 ||
+			cargoUpdated.length > 0 ||
+			cargoLockMismatches.length > 0 ||
+			resolved.length > 0 ||
+			forgeManifestUpdated.length > 0)
+	) {
+		const drift = [
+			...updated.map((file) => `package version: ${file}`),
+			...cargoUpdated.map((file) => `Cargo version: ${file}`),
+			...cargoLockMismatches.map((file) => `Cargo.lock version: ${file}`),
+			...resolved.map((file) => `workspace protocol: ${file}`),
+			...forgeManifestUpdated.map((file) => `Forge manifest copy: ${file}`),
+		];
+		throw new Error(
+			`Version sync drift detected at ${targetVersion}:\n- ${drift.join("\n- ")}\n\nRun bun scripts/version-sync.ts before merging.`,
+		);
+	}
+
+	if (
+		updated.length === 0 &&
+		cargoUpdated.length === 0 &&
+		cargoLockMismatches.length === 0 &&
+		resolved.length === 0 &&
+		forgeManifestUpdated.length === 0
+	) {
 		console.log(`All versions already aligned at ${targetVersion}.`);
 		return;
 	}

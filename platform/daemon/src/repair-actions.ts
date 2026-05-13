@@ -23,6 +23,7 @@ import {
 	vectorToBlob,
 } from "./db-helpers";
 import { type UnembeddedRow, countUnembeddedMemories, listUnembeddedMemories } from "./embedding-coverage";
+import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import type { PipelineV2Config } from "./memory-config";
@@ -1400,7 +1401,19 @@ async function findSemanticDuplicates(
 // Reclassify extracted entities via LLM
 // ---------------------------------------------------------------------------
 
-const VALID_ENTITY_TYPES = new Set(["person", "project", "system", "tool", "concept", "skill", "task"]);
+const VALID_ENTITY_TYPES = new Set([
+	"person",
+	"organization",
+	"project",
+	"product",
+	"system",
+	"tool",
+	"artifact",
+	"document",
+	"source",
+	"place",
+	"event",
+]);
 
 const DEFAULT_RECLASSIFY_BATCH = 20;
 const MIN_RECLASSIFY_BATCH = 5;
@@ -1493,7 +1506,7 @@ export async function reclassifyEntities(
 
 	const entityList = entities.map((e, idx) => `${idx + 1}. ${e.canonical_name ?? e.name}`).join("\n");
 
-	const prompt = `Classify each entity into one of these types: person, project, system, tool, concept, skill, task
+	const prompt = `Classify each entity into one of these concrete identity-bearing types: person, organization, project, product, system, tool, artifact, document, source, place, event
 
 Entities:
 ${entityList}
@@ -1748,6 +1761,129 @@ export function pruneSingletonExtractedEntities(
 		affected,
 		message: `deleted ${affected} singleton extracted entities`,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// pruneGenericEntities
+// ---------------------------------------------------------------------------
+
+interface GenericEntityCandidate {
+	readonly id: string;
+	readonly name: string;
+	readonly entity_type: string;
+	reason?: string;
+}
+
+function deleteEntityGraphRows(db: WriteDb, ids: readonly string[]): void {
+	if (ids.length === 0) return;
+	const placeholders = ids.map(() => "?").join(",");
+	const aspectIds = db
+		.prepare(`SELECT id FROM entity_aspects WHERE entity_id IN (${placeholders})`)
+		.all(...ids) as Array<{ id: string }>;
+	if (aspectIds.length > 0) {
+		const aspectPlaceholders = aspectIds.map(() => "?").join(",");
+		db.prepare(`DELETE FROM entity_attributes WHERE aspect_id IN (${aspectPlaceholders})`).run(
+			...aspectIds.map((row) => row.id),
+		);
+	}
+	db.prepare(`DELETE FROM memory_entity_mentions WHERE entity_id IN (${placeholders})`).run(...ids);
+	db.prepare(
+		`DELETE FROM relations WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
+	).run(...ids, ...ids);
+	db.prepare(
+		`DELETE FROM entity_dependencies WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
+	).run(...ids, ...ids);
+	db.prepare(`DELETE FROM entity_aspects WHERE entity_id IN (${placeholders})`).run(...ids);
+	db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids);
+}
+
+/**
+ * Delete concrete-ontology violations such as pronouns, metadata labels,
+ * headings, discourse fragments, and non-concrete extraction types. Defaults
+ * to dry-run at the route layer so operators can inspect candidates first.
+ */
+export function pruneGenericEntities(
+	accessor: DbAccessor,
+	cfg: PipelineV2Config,
+	ctx: RepairContext,
+	limiter: RateLimiter,
+	options?: { batchSize?: number; dryRun?: boolean; agentId?: string },
+): RepairResult {
+	const action = "pruneGenericEntities";
+	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 10);
+	if (!gate.allowed) {
+		return { action, success: false, affected: 0, message: gate.reason ?? "denied" };
+	}
+
+	const batchSize = Math.max(1, Math.min(Math.floor(options?.batchSize ?? 100), 500));
+	const agentId = options?.agentId ?? "default";
+	const candidates = accessor.withReadDb((db) => {
+		const candidates: GenericEntityCandidate[] = [];
+		const pageSize = Math.max(batchSize * 10, 500);
+		let offset = 0;
+		const selectPage = db.prepare(
+			`SELECT e.id, e.name, e.entity_type
+			 FROM entities e
+			 WHERE e.agent_id = ?
+			   AND COALESCE(e.pinned, 0) = 0
+			   AND e.entity_type NOT IN ('skill')
+			   AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
+			 ORDER BY e.updated_at DESC
+			 LIMIT ? OFFSET ?`,
+		);
+
+		for (;;) {
+			const rows = selectPage.all(agentId, pageSize, offset) as GenericEntityCandidate[];
+			if (rows.length === 0) break;
+			for (const row of rows) {
+				const quality = classifyEntityQuality(row.name, row.entity_type);
+				if (!quality.ok) {
+					candidates.push({ ...row, reason: quality.reason });
+					if (candidates.length >= batchSize) return candidates;
+				}
+			}
+			offset += rows.length;
+		}
+		return candidates;
+	});
+
+	if (options?.dryRun ?? true) {
+		const preview = candidates
+			.slice(0, 10)
+			.map((row) => `${row.name} (${row.reason ?? "invalid"})`)
+			.join(", ");
+		return {
+			action,
+			success: true,
+			affected: candidates.length,
+			message: `dry-run: would delete ${candidates.length} generic/non-concrete entities${preview ? `: ${preview}` : ""}`,
+		};
+	}
+
+	if (candidates.length === 0) {
+		return { action, success: true, affected: 0, message: "no generic/non-concrete entities found" };
+	}
+
+	const affected = accessor.withWriteTx((db) => {
+		const ids = candidates.map((row) => row.id);
+		deleteEntityGraphRows(db, ids);
+		writeRepairAudit(
+			db,
+			action,
+			ctx,
+			ids.length,
+			`deleted ${ids.length} generic/non-concrete entities for agent ${agentId}`,
+		);
+		return ids.length;
+	});
+
+	limiter.record(action);
+	logger.info("pipeline", "repair: pruned generic/non-concrete entities", {
+		affected,
+		agentId,
+		actor: ctx.actor,
+	});
+	return { action, success: true, affected, message: `deleted ${affected} generic/non-concrete entities` };
 }
 
 // ---------------------------------------------------------------------------

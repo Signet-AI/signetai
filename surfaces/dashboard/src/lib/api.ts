@@ -2767,7 +2767,7 @@ export interface ConstellationGraph {
 
 export async function getConstellationOverlay(agentId: string): Promise<ConstellationGraph | null> {
 	try {
-		const path = `${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(agentId)}`;
+		const path = `${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(agentId)}&limit=150&max_aspects_per_entity=6&max_attributes_per_aspect=4&dependency_limit=500`;
 		const res = await fetch(path);
 		if (!res.ok) return null;
 		return (await res.json()) as ConstellationGraph;
@@ -2886,6 +2886,59 @@ export async function getDiagnostics(): Promise<DiagnosticsReport | null> {
 		return (await res.json()) as DiagnosticsReport;
 	} catch {
 		return null;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Daily Reflections
+// ---------------------------------------------------------------------------
+
+export interface DailyReflection {
+	id: string;
+	date: string;
+	summary: string;
+	patterns: string[];
+	question: string | null;
+	answer: string | null;
+	answerMemoryId: string | null;
+	createdAt: string;
+	answeredAt: string | null;
+}
+
+export interface TodayReflectionResponse {
+	reflection: DailyReflection | null;
+}
+
+function agentQuery(agentId?: string): string {
+	return agentId && agentId !== "default" ? `?agentId=${encodeURIComponent(agentId)}` : "";
+}
+
+export async function getTodayReflection(agentId?: string): Promise<TodayReflectionResponse> {
+	try {
+		const res = await fetch(`${API_BASE}/api/reflections/today${agentQuery(agentId)}`);
+		if (!res.ok) return { reflection: null };
+		return (await res.json()) as TodayReflectionResponse;
+	} catch {
+		return { reflection: null };
+	}
+}
+
+export async function answerReflection(
+	id: string,
+	answer: string,
+	agentId?: string,
+): Promise<{ success: boolean; memoryId?: string; error?: string }> {
+	try {
+		const res = await fetch(`${API_BASE}/api/reflections/${id}/answer${agentQuery(agentId)}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ answer: answer.trim() }),
+		});
+		const data = await res.json();
+		if (!res.ok) return { success: false, error: data.error ?? "Request failed" };
+		return data as { success: boolean; memoryId?: string };
+	} catch {
+		return { success: false, error: "Network error" };
 	}
 }
 

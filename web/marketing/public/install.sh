@@ -17,6 +17,57 @@ warn()  { printf "  ${YELLOW}⚠ %b${RESET}\n" "$1"; }
 error() { printf "  ${RED}✗ %b${RESET}\n" "$1"; }
 ok()    { printf "  ${GREEN}✓ %b${RESET}\n" "$1"; }
 
+# Persist a bin directory for future shells when an installer places tools there.
+persist_path_dir() {
+  local bin_dir="$1"
+  [ -n "$bin_dir" ] || return 0
+  case ":$PATH:" in
+    *":$bin_dir:"*) ;;
+    *) export PATH="$bin_dir:$PATH" ;;
+  esac
+
+  local shell_rc=""
+  case "$(basename "${SHELL:-bash}")" in
+    zsh)  shell_rc="$HOME/.zshrc" ;;
+    fish) shell_rc="$HOME/.config/fish/config.fish" ;;
+    *)    shell_rc="$HOME/.bashrc" ;;
+  esac
+
+  if [ -z "$shell_rc" ]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$shell_rc")"
+  if ! grep -Fq "$bin_dir" "$shell_rc" 2>/dev/null; then
+    if [ "$(basename "$shell_rc")" = "config.fish" ]; then
+      # string escape returns fish-safe source text, not raw data.
+      local escaped
+      if command -v fish >/dev/null 2>&1; then
+        escaped="$(fish -c 'string escape -- $argv[1]' "$bin_dir")"
+        printf '\nfish_add_path -- %s\n' "$escaped" >> "$shell_rc"
+      else
+        warn "fish shell detected but fish is not executable; add $bin_dir to PATH manually"
+        return 0
+      fi
+    else
+      # Bash's %q emits shell-safe source text; zsh accepts the same quoting forms.
+      printf -v escaped '%q' "$bin_dir"
+      printf '\nexport PATH=%s:"$PATH"\n' "$escaped" >> "$shell_rc"
+    fi
+    info "${DIM}Added $bin_dir to $shell_rc${RESET}"
+  fi
+}
+
+npm_global_bin() {
+  local prefix
+  prefix="$(npm config get prefix 2>/dev/null || echo "")"
+  [ -n "$prefix" ] || return 0
+  case "$prefix" in
+    */bin) printf '%s\n' "$prefix" ;;
+    *)     printf '%s/bin\n' "$prefix" ;;
+  esac
+}
+
 # --- Banner ---
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -57,6 +108,8 @@ if command -v bun >/dev/null 2>&1; then
   BUN_VERSION="$(bun --version 2>/dev/null || echo "unknown")"
   ok "Bun: v$BUN_VERSION"
   HAS_BUN=true
+  BUN_BIN="$(dirname "$(command -v bun)")"
+  persist_path_dir "$BUN_BIN"
 fi
 
 # --- Check for node 18+ ---
@@ -95,7 +148,7 @@ if [ "$HAS_BUN" = false ]; then
   # Source bun env so it's available in this session
   BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
   if [ -f "$BUN_INSTALL/bin/bun" ]; then
-    export PATH="$BUN_INSTALL/bin:$PATH"
+    persist_path_dir "$BUN_INSTALL/bin"
   fi
 
   if command -v bun >/dev/null 2>&1; then
@@ -127,9 +180,10 @@ if [ "$HAS_BUN" = true ]; then
           info "Fixing to ~/.npm-global to avoid permission issues..."
           mkdir -p "$HOME/.npm-global"
           npm config set prefix "$HOME/.npm-global"
-          export PATH="$HOME/.npm-global/bin:$PATH"
           ;;
       esac
+      NPM_GLOBAL_BIN="$(npm_global_bin)"
+      persist_path_dir "$NPM_GLOBAL_BIN"
       if ! npm install -g signetai; then
         error "npm install also failed"
         exit 1
@@ -146,19 +200,10 @@ elif [ "$HAS_NODE" = true ]; then
       info "Fixing to ~/.npm-global to avoid permission issues..."
       mkdir -p "$HOME/.npm-global"
       npm config set prefix "$HOME/.npm-global"
-      export PATH="$HOME/.npm-global/bin:$PATH"
-      # Persist PATH fix
-      SHELL_RC=""
-      case "$(basename "${SHELL:-bash}")" in
-        zsh)  SHELL_RC="$HOME/.zshrc" ;;
-        *)    SHELL_RC="$HOME/.bashrc" ;;
-      esac
-      if [ -n "$SHELL_RC" ] && ! grep -q '.npm-global' "$SHELL_RC" 2>/dev/null; then
-        printf '\nexport PATH="$HOME/.npm-global/bin:$PATH"\n' >> "$SHELL_RC"
-        info "${DIM}Added PATH to $SHELL_RC${RESET}"
-      fi
       ;;
   esac
+  NPM_GLOBAL_BIN="$(npm_global_bin)"
+  persist_path_dir "$NPM_GLOBAL_BIN"
   if ! npm install -g signetai; then
     error "npm install failed"
     exit 1

@@ -87,11 +87,23 @@ describe("buildSetupInference", () => {
 		});
 	});
 
-	it("selects ACPX agent from detected providers when no harness was selected", () => {
-		const inference = buildSetupInference("acpx", "haiku", [], ["acpx", "claude-code"], "/usr/local/bin/bunx");
-		expect(inference?.targets["background-acpx"]).toMatchObject({
+	it("maps Claude Code harness/provider selection to ACPX's claude connector", () => {
+		const fromHarness = buildSetupInference("acpx", "haiku", ["claude-code"], ["acpx"], "/usr/local/bin/bunx");
+		expect(fromHarness?.targets["background-acpx"]).toMatchObject({
 			executor: "acpx",
-			acpx: { agent: "claude-code" },
+			acpx: { agent: "claude" },
+		});
+
+		const fromDetectedProvider = buildSetupInference(
+			"acpx",
+			"haiku",
+			[],
+			["acpx", "claude-code"],
+			"/usr/local/bin/bunx",
+		);
+		expect(fromDetectedProvider?.targets["background-acpx"]).toMatchObject({
+			executor: "acpx",
+			acpx: { agent: "claude" },
 		});
 	});
 	it("does not emit ACPX routing without a resolved launcher", () => {

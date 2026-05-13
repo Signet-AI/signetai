@@ -11,10 +11,23 @@
  */
 
 import { execSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import sodium from "libsodium-wrappers";
+import {
+	BITWARDEN_ACTIVE_PROVIDER_SECRET,
+	BITWARDEN_MANAGED_FOLDER_SECRET,
+	BITWARDEN_SESSION_SECRET,
+	buildBitwardenManagedSecretName,
+	deleteBitwardenSecret,
+	isBitwardenActiveProvider,
+	isBitwardenReference,
+	listBitwardenSecretNames,
+	putBitwardenSecret,
+	readBitwardenReference,
+} from "./bitwarden.js";
 import { logger } from "./logger.js";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, isOnePasswordReference, readOnePasswordReference } from "./onepassword.js";
 import { recordPluginAuditEvent } from "./plugins/audit.js";
@@ -55,6 +68,51 @@ export interface ExecResult {
 	stdout: string;
 	stderr: string;
 	code: number;
+	timedOut?: boolean;
+}
+
+export interface SecretExecOptions {
+	timeoutMs?: number;
+	maxOutputBytes?: number;
+}
+
+export type SecretExecJobStatus = "queued" | "running" | "completed" | "failed";
+
+export interface SecretExecJob {
+	id: string;
+	status: SecretExecJobStatus;
+	createdAt: string;
+	startedAt?: string;
+	completedAt?: string;
+	timeoutMs: number;
+	result?: ExecResult;
+	error?: string;
+}
+
+const DEFAULT_SECRET_EXEC_TIMEOUT_MS = 5 * 60_000;
+const MAX_SECRET_EXEC_TIMEOUT_MS = 30 * 60_000;
+const MIN_SECRET_EXEC_TIMEOUT_MS = 1_000;
+const DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
+const SECRET_EXEC_JOB_TTL_MS = 60 * 60_000;
+const MAX_SECRET_EXEC_RUNNING_JOBS = 4;
+const MAX_SECRET_EXEC_QUEUED_JOBS = 64;
+const MAX_SECRET_EXEC_RETAINED_JOBS = MAX_SECRET_EXEC_RUNNING_JOBS + MAX_SECRET_EXEC_QUEUED_JOBS + 64;
+
+const BITWARDEN_DELETED_NAMES_SECRET = "BITWARDEN_DELETED_SECRET_NAMES";
+
+const secretExecJobs = new Map<string, SecretExecJob>();
+const pendingSecretExecJobs: string[] = [];
+const secretExecJobRequests = new Map<
+	string,
+	{ command: string; secretRefs: Record<string, string>; options: SecretExecOptions }
+>();
+let runningSecretExecJobs = 0;
+
+export class SecretExecQueueFullError extends Error {
+	constructor() {
+		super("secret exec queue is full");
+		this.name = "SecretExecQueueFullError";
+	}
 }
 
 export interface SecretContextV1 {
@@ -64,14 +122,14 @@ export interface SecretContextV1 {
 export interface SecretDescriptorV1 {
 	readonly name: string;
 	readonly ref: string;
-	readonly providerId: "local";
+	readonly providerId: string;
 	readonly created: string;
 	readonly updated: string;
 }
 
 export interface ResolvedSecretV1 {
 	readonly ref: string;
-	readonly providerId: "local";
+	readonly providerId: string;
 	readonly value: string;
 }
 
@@ -81,8 +139,8 @@ export interface SecretProviderHealthV1 {
 	readonly checkedAt: string;
 }
 
-export interface LocalSecretProviderV1 {
-	readonly id: "local";
+export interface SecretProviderV1 {
+	readonly id: string;
 	list(ctx: SecretContextV1): Promise<readonly SecretDescriptorV1[]>;
 	put(name: string, value: string, ctx: SecretContextV1): Promise<void>;
 	delete(name: string, ctx: SecretContextV1): Promise<boolean>;
@@ -226,7 +284,7 @@ function saveStore(store: SecretsStore): void {
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function putSecret(name: string, value: string): Promise<void> {
+async function putLocalSecret(name: string, value: string): Promise<void> {
 	const localName = parseLocalSecretName(name);
 	const store = loadStore();
 	const now = new Date().toISOString();
@@ -242,11 +300,67 @@ export async function putSecret(name: string, value: string): Promise<void> {
 	recordSecretEvent("secret.stored", { name: localName });
 }
 
+export async function putSecret(name: string, value: string): Promise<void> {
+	const localName = parseLocalSecretName(name);
+	if (isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
+		await putLocalSecret(localName, value);
+		return;
+	}
+
+	const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+	let folderId: string | undefined;
+	try {
+		folderId = await getStoredSecret(BITWARDEN_MANAGED_FOLDER_SECRET);
+	} catch {
+		folderId = undefined;
+	}
+	await putBitwardenSecret(localName, value, session, { folderId, overwrite: true });
+	await clearBitwardenDeletedName(localName);
+	recordSecretEvent("secret.stored", { name: localName, providerId: "bitwarden" });
+}
+
 async function getStoredSecret(name: string): Promise<string> {
 	const store = loadStore();
 	const entry = store.secrets[name];
 	if (!entry) throw new Error(`Secret '${name}' not found`);
 	return decrypt(entry.ciphertext);
+}
+
+function canonicalBitwardenDeletedName(name: string): string {
+	return buildBitwardenManagedSecretName(parseLocalSecretName(name));
+}
+
+async function readBitwardenDeletedNames(): Promise<Set<string>> {
+	try {
+		const parsed = JSON.parse(await getStoredSecret(BITWARDEN_DELETED_NAMES_SECRET));
+		return new Set(Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : []);
+	} catch {
+		return new Set();
+	}
+}
+
+async function writeBitwardenDeletedNames(names: Set<string>): Promise<void> {
+	if (names.size === 0) {
+		deleteLocalSecret(BITWARDEN_DELETED_NAMES_SECRET);
+		return;
+	}
+	await putLocalSecret(BITWARDEN_DELETED_NAMES_SECRET, JSON.stringify(Array.from(names).sort()));
+}
+
+async function markBitwardenDeletedName(name: string): Promise<void> {
+	const names = await readBitwardenDeletedNames();
+	names.add(canonicalBitwardenDeletedName(name));
+	await writeBitwardenDeletedNames(names);
+}
+
+async function clearBitwardenDeletedName(name: string): Promise<void> {
+	const names = await readBitwardenDeletedNames();
+	if (!names.delete(canonicalBitwardenDeletedName(name))) return;
+	await writeBitwardenDeletedNames(names);
+}
+
+async function isBitwardenDeletedName(name: string): Promise<boolean> {
+	return (await readBitwardenDeletedNames()).has(canonicalBitwardenDeletedName(name));
 }
 
 export async function getSecret(name: string): Promise<string> {
@@ -255,21 +369,71 @@ export async function getSecret(name: string): Promise<string> {
 		return readOnePasswordReference(name, token);
 	}
 
-	return getStoredSecret(parseLocalSecretName(name));
+	if (isBitwardenReference(name)) {
+		const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+		return readBitwardenReference(name, session);
+	}
+
+	const localName = parseLocalSecretName(name);
+	if (isInternalSecretName(localName)) {
+		return getStoredSecret(localName);
+	}
+	if (await isBitwardenProviderActive()) {
+		try {
+			const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+			return readBitwardenReference(
+				`bw://name/${encodeURIComponent(buildBitwardenManagedSecretName(localName))}`,
+				session,
+			);
+		} catch (error) {
+			if (!hasLocalSecret(localName) || (await isBitwardenDeletedName(localName))) throw error;
+		}
+	}
+
+	return getStoredSecret(localName);
 }
 
-export function hasSecret(name: string): boolean {
+function hasLocalSecret(name: string): boolean {
 	const store = loadStore();
 	return parseLocalSecretName(name) in store.secrets;
 }
 
-export function listSecrets(): string[] {
-	const names = Object.keys(loadStore().secrets).sort((a, b) => a.localeCompare(b));
-	recordSecretEvent("secret.listed", { count: names.length });
-	return names;
+export function hasSecret(name: string): boolean {
+	return hasLocalSecret(name);
 }
 
-export function deleteSecret(name: string): boolean {
+export function listLocalSecretNames(options: { includeInternal?: boolean } = {}): string[] {
+	const names = Object.keys(loadStore().secrets).sort((a, b) => a.localeCompare(b));
+	if (options.includeInternal === true) return names;
+	return names.filter((name) => !isInternalSecretName(name));
+}
+
+export async function listSecrets(): Promise<string[]> {
+	const localNames = listLocalSecretNames({ includeInternal: false });
+	if (!(await isBitwardenProviderActive())) {
+		recordSecretEvent("secret.listed", { count: localNames.length });
+		return localNames;
+	}
+
+	const deletedNames = await readBitwardenDeletedNames();
+	const visibleLocalNames = localNames.filter((name) => !deletedNames.has(canonicalBitwardenDeletedName(name)));
+	try {
+		const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+		const bitwardenNames = await listBitwardenSecretNames(session);
+		const names = Array.from(new Set([...bitwardenNames, ...visibleLocalNames])).sort((a, b) => a.localeCompare(b));
+		recordSecretEvent("secret.listed", { count: names.length, providerId: "bitwarden" });
+		return names;
+	} catch {
+		recordSecretEvent("secret.listed", {
+			count: visibleLocalNames.length,
+			providerId: "local",
+			degradedProviderId: "bitwarden",
+		});
+		return visibleLocalNames;
+	}
+}
+
+function deleteLocalSecret(name: string): boolean {
 	const store = loadStore();
 	const localName = parseLocalSecretName(name);
 	if (!(localName in store.secrets)) return false;
@@ -278,6 +442,73 @@ export function deleteSecret(name: string): boolean {
 	recordSecretEvent("secret.deleted", { name: localName });
 	return true;
 }
+
+export function deleteSecret(name: string): boolean {
+	return deleteLocalSecret(name);
+}
+
+export async function deleteSecretFromActiveProvider(name: string): Promise<boolean> {
+	const explicitLocal = name.startsWith("local://");
+	const localName = parseLocalSecretName(name);
+	if (explicitLocal || isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
+		return deleteLocalSecret(localName);
+	}
+
+	const session = await getStoredSecret(BITWARDEN_SESSION_SECRET);
+	const deletedFromBitwarden = await deleteBitwardenSecret(localName, session);
+	const localFallbackPreserved = hasLocalSecret(localName);
+	if (deletedFromBitwarden || localFallbackPreserved) {
+		await markBitwardenDeletedName(localName);
+	}
+	if (deletedFromBitwarden) {
+		recordSecretEvent("secret.deleted", {
+			name: localName,
+			providerId: "bitwarden",
+			localFallbackPreserved,
+		});
+	}
+	return deletedFromBitwarden || localFallbackPreserved;
+}
+
+export async function getLocalSecretValue(name: string): Promise<string> {
+	return getStoredSecret(parseLocalSecretName(name));
+}
+
+export function deleteLocalSecretForMigration(name: string): boolean {
+	return deleteLocalSecret(name);
+}
+
+export async function setActiveSecretProvider(provider: "local" | "bitwarden"): Promise<void> {
+	if (provider === "local") {
+		deleteLocalSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET);
+		return;
+	}
+	await putLocalSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET, "bitwarden");
+}
+
+export async function getActiveSecretProvider(): Promise<"local" | "bitwarden"> {
+	return (await isBitwardenProviderActive()) ? "bitwarden" : "local";
+}
+
+async function isBitwardenProviderActive(): Promise<boolean> {
+	try {
+		return isBitwardenActiveProvider(await getStoredSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET));
+	} catch {
+		return false;
+	}
+}
+
+function isInternalSecretName(name: string): boolean {
+	return [
+		ONEPASSWORD_SERVICE_ACCOUNT_SECRET,
+		BITWARDEN_SESSION_SECRET,
+		BITWARDEN_ACTIVE_PROVIDER_SECRET,
+		BITWARDEN_MANAGED_FOLDER_SECRET,
+		BITWARDEN_DELETED_NAMES_SECRET,
+	].includes(name);
+}
+
+export type LocalSecretProviderV1 = SecretProviderV1;
 
 export const localSecretProvider: LocalSecretProviderV1 = {
 	id: "local",
@@ -296,10 +527,10 @@ export const localSecretProvider: LocalSecretProviderV1 = {
 		return descriptors;
 	},
 	async put(name, value, _ctx) {
-		await putSecret(name, value);
+		await putLocalSecret(name, value);
 	},
 	async delete(name, _ctx) {
-		return deleteSecret(name);
+		return deleteLocalSecret(name);
 	},
 	async resolve(ref, _ctx) {
 		const name = parseLocalSecretName(ref);
@@ -343,7 +574,11 @@ const SHELL_META = /[;&|`$(){}[\]<>!\\]/;
  * @param command  Command string to execute (parsed as argv, no shell)
  * @param secretRefs  Map of env var name → secret name, e.g. { OPENAI_API_KEY: "OPENAI_API_KEY" }
  */
-export async function execWithSecrets(command: string, secretRefs: Record<string, string>): Promise<ExecResult> {
+export async function execWithSecrets(
+	command: string,
+	secretRefs: Record<string, string>,
+	options: SecretExecOptions = {},
+): Promise<ExecResult> {
 	if (SHELL_META.test(command)) {
 		return { stdout: "", stderr: "command contains disallowed shell metacharacters", code: 1 };
 	}
@@ -354,6 +589,8 @@ export async function execWithSecrets(command: string, secretRefs: Record<string
 		return { stdout: "", stderr: "empty command", code: 1 };
 	}
 	const cmd = argv.map((a) => a.replace(/^["']|["']$/g, ""));
+	const timeoutMs = normalizeSecretExecTimeoutMs(options.timeoutMs);
+	const maxOutputBytes = normalizeSecretExecMaxOutputBytes(options.maxOutputBytes);
 
 	// Resolve all secret values up front so we can redact them from output
 	const resolved: Record<string, string> = {};
@@ -377,50 +614,144 @@ export async function execWithSecrets(command: string, secretRefs: Record<string
 		return out;
 	}
 
+	function createStreamingRedactor(): { push: (text: string) => string; finish: () => string } {
+		const longestSecret = Math.max(0, ...secretValues.filter((value) => value.length > 3).map((value) => value.length));
+		const overlap = Math.max(0, longestSecret * 2);
+		let pending = "";
+		return {
+			push(text: string): string {
+				if (overlap === 0) return text;
+				pending += text;
+				if (pending.length <= overlap) return "";
+				const emitLength = pending.length - overlap;
+				const emit = pending.slice(0, emitLength);
+				pending = pending.slice(emitLength);
+				return redact(emit);
+			},
+			finish(): string {
+				const emit = pending;
+				pending = "";
+				return redact(emit);
+			},
+		};
+	}
+
 	recordSecretEvent("secret.exec_started", {
 		secretCount: Object.keys(secretRefs).length,
 		envVars: Object.keys(secretRefs),
+		timeoutMs,
 	});
 
 	return new Promise((resolve, reject) => {
+		const useProcessGroup = process.platform !== "win32";
 		const proc = spawn(cmd[0], cmd.slice(1), {
+			detached: useProcessGroup,
 			env: { ...process.env, ...resolved },
 			stdio: "pipe",
 			windowsHide: true,
 		});
 
+		const stdoutRedactor = createStreamingRedactor();
+		const stderrRedactor = createStreamingRedactor();
 		let stdout = "";
 		let stderr = "";
+		let stdoutBytes = 0;
+		let stderrBytes = 0;
+		let stdoutTruncated = false;
+		let stderrTruncated = false;
+		let settled = false;
+		let timedOut = false;
 
-		proc.stdout?.on("data", (d) => {
-			stdout += d.toString();
-		});
-		proc.stderr?.on("data", (d) => {
-			stderr += d.toString();
-		});
+		function killSpawnedProcess(signal: NodeJS.Signals): void {
+			if (!proc.pid) return;
+			try {
+				if (useProcessGroup) process.kill(-proc.pid, signal);
+				else proc.kill(signal);
+			} catch {
+				try {
+					proc.kill(signal);
+				} catch {
+					// Already gone.
+				}
+			}
+		}
 
-		proc.on("close", (code) => {
-			// Zero out resolved values from memory (best-effort in JS)
+		const timer = setTimeout(() => {
+			timedOut = true;
+			killSpawnedProcess("SIGTERM");
+			setTimeout(() => {
+				if (!settled && proc.exitCode === null) killSpawnedProcess("SIGKILL");
+			}, 2_000).unref();
+		}, timeoutMs);
+		timer.unref();
+
+		function appendRedactedOutput(
+			current: string,
+			bytes: number,
+			text: string,
+			stream: "stdout" | "stderr",
+		): [string, number] {
+			const chunk = Buffer.from(text);
+			if (bytes >= maxOutputBytes) {
+				if (chunk.length > 0) {
+					if (stream === "stdout") stdoutTruncated = true;
+					else stderrTruncated = true;
+				}
+				return [current, bytes + chunk.length];
+			}
+			const remaining = maxOutputBytes - bytes;
+			const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+			if (chunk.length > remaining) {
+				if (stream === "stdout") stdoutTruncated = true;
+				else stderrTruncated = true;
+			}
+			return [current + slice.toString(), bytes + chunk.length];
+		}
+
+		function zeroResolved(): void {
 			for (const key of Object.keys(resolved)) {
 				resolved[key] = "";
 			}
+		}
+
+		proc.stdout?.on("data", (d: Buffer) => {
+			[stdout, stdoutBytes] = appendRedactedOutput(stdout, stdoutBytes, stdoutRedactor.push(d.toString()), "stdout");
+		});
+		proc.stderr?.on("data", (d: Buffer) => {
+			[stderr, stderrBytes] = appendRedactedOutput(stderr, stderrBytes, stderrRedactor.push(d.toString()), "stderr");
+		});
+
+		proc.on("close", (code) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			zeroResolved();
+			const finalCode = timedOut ? 124 : (code ?? 1);
+			[stdout, stdoutBytes] = appendRedactedOutput(stdout, stdoutBytes, stdoutRedactor.finish(), "stdout");
+			[stderr, stderrBytes] = appendRedactedOutput(stderr, stderrBytes, stderrRedactor.finish(), "stderr");
+			if (stdoutTruncated) stdout += "\n[signet secret exec: stdout truncated]\n";
+			if (stderrTruncated) stderr += "\n[signet secret exec: stderr truncated]\n";
+			if (timedOut) stderr += `\n[signet secret exec: timed out after ${timeoutMs}ms]\n`;
 
 			recordSecretEvent("secret.exec_completed", {
-				code: code ?? 1,
+				code: finalCode,
 				secretCount: secretValues.length,
+				timedOut,
 			});
 
 			resolve({
-				stdout: redact(stdout),
-				stderr: redact(stderr),
-				code: code ?? 1,
+				stdout,
+				stderr,
+				code: finalCode,
+				...(timedOut ? { timedOut: true } : {}),
 			});
 		});
 
 		proc.on("error", (err) => {
-			for (const key of Object.keys(resolved)) {
-				resolved[key] = "";
-			}
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			zeroResolved();
 			recordSecretEvent("secret.exec_completed", {
 				code: 1,
 				secretCount: secretValues.length,
@@ -429,6 +760,115 @@ export async function execWithSecrets(command: string, secretRefs: Record<string
 			reject(err);
 		});
 	});
+}
+
+export function startSecretExecJob(
+	command: string,
+	secretRefs: Record<string, string>,
+	options: SecretExecOptions = {},
+): SecretExecJob {
+	pruneSecretExecJobs();
+	evictRetainedSecretExecResults();
+	if (
+		secretExecJobs.size >= MAX_SECRET_EXEC_RETAINED_JOBS ||
+		pendingSecretExecJobs.length >= MAX_SECRET_EXEC_QUEUED_JOBS
+	) {
+		throw new SecretExecQueueFullError();
+	}
+	const timeoutMs = normalizeSecretExecTimeoutMs(options.timeoutMs);
+	const job: SecretExecJob = {
+		id: randomUUID(),
+		status: "queued",
+		createdAt: new Date().toISOString(),
+		timeoutMs,
+	};
+	secretExecJobs.set(job.id, job);
+	secretExecJobRequests.set(job.id, { command, secretRefs: { ...secretRefs }, options: { ...options, timeoutMs } });
+	pendingSecretExecJobs.push(job.id);
+	drainSecretExecQueue();
+
+	return { ...job };
+}
+
+function drainSecretExecQueue(): void {
+	while (runningSecretExecJobs < MAX_SECRET_EXEC_RUNNING_JOBS && pendingSecretExecJobs.length > 0) {
+		const jobId = pendingSecretExecJobs.shift();
+		if (!jobId) return;
+		const job = secretExecJobs.get(jobId);
+		const request = secretExecJobRequests.get(jobId);
+		if (!job || !request || job.status !== "queued") {
+			secretExecJobRequests.delete(jobId);
+			continue;
+		}
+
+		runningSecretExecJobs += 1;
+		void (async () => {
+			job.status = "running";
+			job.startedAt = new Date().toISOString();
+			try {
+				job.result = await execWithSecrets(request.command, request.secretRefs, request.options);
+				job.status = "completed";
+			} catch (err) {
+				job.status = "failed";
+				job.error = err instanceof Error ? err.message : String(err);
+			} finally {
+				job.completedAt = new Date().toISOString();
+				secretExecJobRequests.delete(jobId);
+				runningSecretExecJobs = Math.max(0, runningSecretExecJobs - 1);
+				drainSecretExecQueue();
+			}
+		})();
+	}
+}
+
+export function getSecretExecJob(id: string): SecretExecJob | undefined {
+	pruneSecretExecJobs();
+	const job = secretExecJobs.get(id);
+	return job ? { ...job, result: job.result ? { ...job.result } : undefined } : undefined;
+}
+
+export function resetSecretExecJobsForTests(): void {
+	secretExecJobs.clear();
+	secretExecJobRequests.clear();
+	pendingSecretExecJobs.length = 0;
+	runningSecretExecJobs = 0;
+}
+
+export function normalizeSecretExecTimeoutMs(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_SECRET_EXEC_TIMEOUT_MS;
+	return Math.min(MAX_SECRET_EXEC_TIMEOUT_MS, Math.max(MIN_SECRET_EXEC_TIMEOUT_MS, Math.trunc(value)));
+}
+
+function normalizeSecretExecMaxOutputBytes(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES;
+	return Math.min(DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES, Math.max(1024, Math.trunc(value)));
+}
+
+function pruneSecretExecJobs(now = Date.now()): void {
+	for (const [id, job] of secretExecJobs) {
+		const timestamp = Date.parse(job.completedAt ?? job.createdAt);
+		if (Number.isFinite(timestamp) && now - timestamp > SECRET_EXEC_JOB_TTL_MS) {
+			secretExecJobs.delete(id);
+			secretExecJobRequests.delete(id);
+		}
+	}
+}
+
+function evictRetainedSecretExecResults(): void {
+	if (secretExecJobs.size < MAX_SECRET_EXEC_RETAINED_JOBS) return;
+	const evictable = Array.from(secretExecJobs.entries())
+		.filter(([, job]) => job.status === "completed" || job.status === "failed")
+		.sort(([, a], [, b]) => {
+			const aTime = Date.parse(a.completedAt ?? a.createdAt);
+			const bTime = Date.parse(b.completedAt ?? b.createdAt);
+			return aTime - bTime;
+		});
+
+	for (const [jobId] of evictable) {
+		if (secretExecJobs.size < MAX_SECRET_EXEC_RETAINED_JOBS) return;
+		secretExecJobs.delete(jobId);
+		secretExecJobRequests.delete(jobId);
+	}
 }
 
 // ---------------------------------------------------------------------------

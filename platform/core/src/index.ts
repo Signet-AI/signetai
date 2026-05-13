@@ -15,6 +15,7 @@ export {
 	ENTITY_TYPES,
 	ATTRIBUTE_KINDS,
 	ATTRIBUTE_STATUSES,
+	DEPENDENCY_DESCRIPTIONS,
 	DEPENDENCY_TYPES,
 	TASK_STATUSES,
 	ONTOLOGY_PROPOSAL_STATUSES,
@@ -52,6 +53,7 @@ export type {
 	PipelineGraphConfig,
 	PipelineTraversalConfig,
 	PipelineRerankerConfig,
+	PipelineReflectionsConfig,
 	PipelineAutonomousConfig,
 	PipelineRepairConfig,
 	PipelineDocumentsConfig,
@@ -257,6 +259,7 @@ export type { MigrationDb, Migration } from "./migrations/index";
 // Identity file management
 export {
 	IDENTITY_FILES,
+	IDENTITY_PRESETS,
 	REQUIRED_IDENTITY_KEYS,
 	OPTIONAL_IDENTITY_KEYS,
 	detectExistingSetup,
@@ -269,6 +272,8 @@ export {
 	getMissingIdentityFiles,
 	summarizeIdentity,
 	readStaticIdentity,
+	resolveSpecialIdentityFiles,
+	resolveStartupIdentityFiles,
 	resolveSessionStartTimeoutMs,
 	resolvePromptSubmitTimeoutMs,
 	STATIC_IDENTITY_OFFLINE_STATUS,
@@ -282,6 +287,12 @@ export {
 } from "./identity";
 export type {
 	IdentityFileSpec,
+	IdentityPresetName,
+	IdentityFileContext,
+	IdentitySessionKind,
+	IdentityContextFileEntry,
+	IdentitySpecialFileEntry,
+	IdentityPresetSpec,
 	IdentityFile,
 	IdentityMap,
 	SetupDetection,

@@ -104,6 +104,21 @@ describe("migration framework", () => {
 		expect(uniqueVersions.size).toBe(migrations.length);
 	});
 
+	test("daily reflections are unique per agent and date", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const insert = db.prepare(
+			`INSERT INTO daily_reflections (id, agent_id, date, summary)
+			 VALUES (?, ?, ?, ?)`,
+		);
+
+		insert.run("reflection-1", "agent-a", "2026-05-13", "First");
+		expect(() => insert.run("reflection-2", "agent-a", "2026-05-13", "Duplicate")).toThrow();
+		expect(() => insert.run("reflection-3", "agent-b", "2026-05-13", "Different agent")).not.toThrow();
+		expect(() => insert.run("reflection-4", "agent-a", "2026-05-14", "Different date")).not.toThrow();
+	});
+
 	test("all expected tables exist after migration", () => {
 		db = createFreshDb();
 		runMigrations(db);
@@ -160,7 +175,6 @@ describe("migration framework", () => {
 		const attributeColumns = db.query("PRAGMA table_info(entity_attributes)").all() as Array<{ name: string }>;
 		expect(attributeColumns.map((col) => col.name)).toContain("claim_key");
 		expect(attributeColumns.map((col) => col.name)).toContain("group_key");
-
 
 		// v50 tables (dependency audit)
 		expect(tableNames).toContain("entity_dependency_history");

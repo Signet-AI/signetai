@@ -11,7 +11,12 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { DreamingConfig } from "@signet/core";
+import {
+	type DreamingConfig,
+	type IdentityContextFileEntry,
+	resolveSpecialIdentityFiles,
+	resolveStartupIdentityFiles,
+} from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { logger } from "../logger";
 import { countTokens } from "./tokenizer";
@@ -404,13 +409,26 @@ function warnIfTruncated(
 // Prompt construction
 // ---------------------------------------------------------------------------
 
-function readIdentityFile(dir: string, name: string): string {
+function readIdentityFile(dir: string, entry: IdentityContextFileEntry): string {
 	try {
-		return readFileSync(join(dir, name), "utf-8").trim();
+		const raw = readFileSync(join(dir, entry.path), "utf-8").trim();
+		if (!raw) return "";
+		const budget = entry.budget ?? 4_000;
+		return raw.length <= budget ? raw : `${raw.slice(0, budget)}\n[truncated]`;
 	} catch (err) {
-		logger.warn("dreaming", "Could not read identity file", { name, error: String(err) });
+		logger.warn("dreaming", "Could not read identity file", { name: entry.path, error: String(err) });
 		return "";
 	}
+}
+
+function renderIdentityBlock(dir: string, entries: readonly IdentityContextFileEntry[]): string {
+	return entries
+		.map((entry) => {
+			const content = readIdentityFile(dir, entry);
+			return content ? `## ${entry.role ?? entry.path}\n\n${content}` : "";
+		})
+		.filter((s) => s.length > 0)
+		.join("\n\n---\n\n");
 }
 
 function buildDreamingPrompt(
@@ -420,16 +438,14 @@ function buildDreamingPrompt(
 	agentsDir: string,
 	maxTokens: number,
 ): string {
-	const identity = [
-		readIdentityFile(agentsDir, "AGENTS.md"),
-		readIdentityFile(agentsDir, "SOUL.md"),
-		readIdentityFile(agentsDir, "IDENTITY.md"),
-		readIdentityFile(agentsDir, "USER.md"),
-	]
-		.filter((s) => s.length > 0)
-		.join("\n\n---\n\n");
-
-	const memoryMd = readIdentityFile(agentsDir, "MEMORY.md");
+	const startupEntries = resolveStartupIdentityFiles(agentsDir);
+	const startupMemoryEntry = startupEntries.find((entry) => entry.path.split(/[\\/]/).pop() === "MEMORY.md");
+	const identity = renderIdentityBlock(
+		agentsDir,
+		startupEntries.filter((entry) => entry !== startupMemoryEntry),
+	);
+	const dreamingPrompt = renderIdentityBlock(agentsDir, resolveSpecialIdentityFiles(agentsDir, "dreaming"));
+	const memoryMd = startupMemoryEntry ? readIdentityFile(agentsDir, startupMemoryEntry) : "";
 
 	// Build graph snapshot
 	const entityMap = new Map(graph.entities.map((e) => [e.id, e]));
@@ -513,7 +529,7 @@ ${identity}
 ${memoryMd}
 </working_memory>
 
-<task>
+${dreamingPrompt ? `<dreaming_prompt>\n${dreamingPrompt}\n</dreaming_prompt>\n\n` : ""}<task>
 You are taking time to reflect on ${mode === "compact" ? "your knowledge graph" : "your recent sessions"} and consolidate your memory.
 
 ${modeInstructions}

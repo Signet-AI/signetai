@@ -24,7 +24,7 @@ function mockProvider(responses: string[]): LlmProvider {
 }
 
 // Inputs must be >= MIN_FACT_LENGTH (80) chars to pass the early-return guard.
-const INPUT = "User prefers dark mode and uses vim keybindings in their VS Code development environment";
+const INPUT = "Nicholai prefers dark mode and uses vim keybindings in their VS Code development environment";
 const INPUT_GENERIC = "Some content that is long enough to pass the extraction input gate and be processed fully";
 
 const VALID_RESPONSE = JSON.stringify({
@@ -35,16 +35,18 @@ const VALID_RESPONSE = JSON.stringify({
 			confidence: 0.9,
 		},
 		{
-			content: "User uses vim keybindings in VS Code and has customized their keybinding configuration extensively",
+			content: "Nicholai uses vim keybindings in VS Code and has customized their keybinding configuration extensively",
 			type: "preference",
 			confidence: 0.85,
 		},
 	],
 	entities: [
 		{
-			source: "User",
-			relationship: "prefers",
-			target: "dark mode",
+			source: "Nicholai",
+			source_type: "person",
+			relationship: "uses",
+			target: "VS Code",
+			target_type: "tool",
 			confidence: 0.9,
 		},
 	],
@@ -84,9 +86,9 @@ describe("extractFactsAndEntities", () => {
 		expect(result.facts[0].type).toBe("preference");
 		expect(result.facts[0].confidence).toBe(0.9);
 		expect(result.entities).toHaveLength(1);
-		expect(result.entities[0].source).toBe("User");
-		expect(result.entities[0].relationship).toBe("prefers");
-		expect(result.entities[0].target).toBe("dark mode");
+		expect(result.entities[0].source).toBe("Nicholai");
+		expect(result.entities[0].relationship).toBe("uses");
+		expect(result.entities[0].target).toBe("VS Code");
 		expect(result.warnings).toHaveLength(0);
 	});
 
@@ -125,10 +127,10 @@ ${VALID_RESPONSE}
 	it("parses JSON with trailing commas from fallback model", async () => {
 		const trailingCommaResponse = `{
 		  "facts": [
-		    {"content": "User prefers dark mode for their terminal, editor, and all development tool interfaces in daily work", "type": "preference", "confidence": 0.9,},
+		    {"content": "Nicholai prefers dark mode for their terminal, editor, and all development tool interfaces in daily work", "type": "preference", "confidence": 0.9,},
 		  ],
 		  "entities": [
-		    {"source": "User", "relationship": "prefers", "target": "dark mode", "confidence": 0.9,},
+		    {"source": "Nicholai", "source_type": "person", "relationship": "uses", "target": "VS Code", "target_type": "tool", "confidence": 0.9,},
 		  ],
 		}`;
 		const provider = mockProvider([trailingCommaResponse]);
@@ -225,9 +227,11 @@ ${VALID_RESPONSE}
 			],
 			entities: [
 				{
-					source: "User",
+					source: "Nicholai",
+					source_type: "person",
 					relationship: "uses",
-					target: "vim",
+					target: "VS Code",
+					target_type: "tool",
 					confidence: 2.0,
 				},
 			],
@@ -282,6 +286,51 @@ ${VALID_RESPONSE}
 		expect(result.warnings.some((w) => w.includes("too short"))).toBe(true);
 	});
 
+	it("keeps timestamped events but rejects prompt scaffolding as entities", async () => {
+		const response = JSON.stringify({
+			facts: [
+				{
+					content:
+						"The Signet Daily Digest published on 2026-05-10 summarized the desktop updater work and sources page delivery",
+					type: "fact",
+					confidence: 0.88,
+				},
+			],
+			entities: [
+				{
+					source: "Signet Daily Digest — 2026-05-10",
+					source_type: "event",
+					relationship: "summarized",
+					target: "Signet Desktop",
+					target_type: "product",
+					confidence: 0.85,
+				},
+				{
+					source: "Sender",
+					source_type: "person",
+					relationship: "said",
+					target: "Summary",
+					target_type: "document",
+					confidence: 0.8,
+				},
+				{
+					source: "We're",
+					relationship: "working_on",
+					target: "Current Work",
+					confidence: 0.8,
+				},
+			],
+		});
+		const provider = mockProvider([response]);
+		const result = await extractFactsAndEntities(INPUT_GENERIC, provider);
+
+		expect(result.entities).toHaveLength(1);
+		expect(result.entities[0].source).toBe("Signet Daily Digest — 2026-05-10");
+		expect(result.entities[0].sourceType).toBe("event");
+		expect(result.warnings.some((warning) => warning.includes("Sender"))).toBe(true);
+		expect(result.warnings.some((warning) => warning.includes("We're"))).toBe(true);
+	});
+
 	it("rejects entities with missing source or target", async () => {
 		const response = JSON.stringify({
 			facts: [],
@@ -295,14 +344,14 @@ ${VALID_RESPONSE}
 				},
 				// missing target
 				{
-					source: "User",
+					source: "Nicholai",
 					relationship: "prefers",
 					target: "",
 					confidence: 0.8,
 				},
 				// valid entity
 				{
-					source: "User",
+					source: "Nicholai",
 					relationship: "likes",
 					target: "coffee",
 					confidence: 0.9,

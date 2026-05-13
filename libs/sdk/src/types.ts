@@ -716,12 +716,29 @@ export interface TaskCreatePayload {
 
 export interface SecretListResponse {
 	readonly secrets: readonly string[];
+	readonly provider?: "local" | "bitwarden";
 }
 
 export interface SecretExecResult {
 	readonly stdout: string;
 	readonly stderr: string;
 	readonly code: number;
+	readonly timedOut?: boolean;
+}
+
+export interface SecretExecOptions {
+	readonly timeoutMs?: number;
+}
+
+export interface SecretExecJob {
+	readonly id: string;
+	readonly status: "queued" | "running" | "completed" | "failed";
+	readonly createdAt: string;
+	readonly startedAt?: string;
+	readonly completedAt?: string;
+	readonly timeoutMs: number;
+	readonly result?: SecretExecResult;
+	readonly error?: string;
 }
 
 export interface OnePasswordStatus {
@@ -745,6 +762,36 @@ export interface OnePasswordImportResult {
 	readonly itemsScanned: number;
 	readonly importedCount: number;
 	readonly errorCount: number;
+}
+
+export interface BitwardenStatus {
+	readonly configured: boolean;
+	readonly connected: boolean;
+	readonly activeProvider: boolean;
+	readonly userEmail?: string;
+	readonly serverUrl?: string;
+	readonly folders?: readonly { readonly id: string; readonly name: string }[];
+	readonly error?: string;
+}
+
+export interface BitwardenConnectResult extends BitwardenStatus {
+	readonly success: boolean;
+}
+
+export interface BitwardenMigrationResult {
+	readonly success: boolean;
+	readonly dryRun: boolean;
+	readonly deleteLocal: boolean;
+	readonly migratedCount: number;
+	readonly skippedCount: number;
+	readonly deletedLocalCount: number;
+	readonly errorCount: number;
+	readonly results: readonly {
+		readonly name: string;
+		readonly action: "migrated" | "skipped" | "deleted-local";
+		readonly itemId?: string;
+		readonly error?: string;
+	}[];
 }
 
 export type PluginLifecycleState = "installed" | "blocked" | "active" | "degraded" | "disabled";

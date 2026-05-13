@@ -109,16 +109,25 @@ is the primary retrieval floor.
 
 ### 5.1 Entity type taxonomy
 
-Extend `entities.entity_type` usage to the canonical set:
+Extend `entities.entity_type` usage to the concrete, identity-bearing set:
 
 - `person`
+- `organization`
 - `project`
+- `product`
 - `system`
 - `tool`
-- `concept`
-- `skill`
-- `task`
-- `unknown` (fallback)
+- `artifact`
+- `document`
+- `source`
+- `place`
+- `event`
+
+Events are first-class entities when they represent real happenings with time,
+provenance, participants, a target object, or an event type. Abstract concepts,
+claim slots, policies, actions, workflows, tasks, and prompt roles are not
+entity types in the extraction path; they live as aspects, attributes, claims,
+relations, proposal records, or operational task metadata.
 
 ### 5.2 Backfill: `agent_id` on `entities`
 

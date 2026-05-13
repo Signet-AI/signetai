@@ -1662,6 +1662,11 @@ export function getEntityHealth(
 			args.push(since);
 		}
 
+		const predictorComparisonsExists = db
+			.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'predictor_comparisons'")
+			.get();
+		if (!predictorComparisonsExists) return [];
+
 		const rows = db
 			.prepare(
 				`SELECT
@@ -1803,26 +1808,46 @@ export interface ConstellationGraph {
 	readonly dependencies: readonly ConstellationDependency[];
 }
 
-export function getKnowledgeGraphForConstellation(accessor: DbAccessor, agentId: string): ConstellationGraph {
+export interface ConstellationGraphOptions {
+	readonly limit?: number;
+	readonly maxAspectsPerEntity?: number;
+	readonly maxAttributesPerAspect?: number;
+	readonly dependencyLimit?: number;
+}
+
+function boundedInteger(value: number | undefined, fallback: number, min: number, max: number): number {
+	return Number.isFinite(value) ? Math.min(Math.max(Math.trunc(value as number), min), max) : fallback;
+}
+
+function placeholders(count: number): string {
+	return Array.from({ length: count }, () => "?").join(", ");
+}
+
+export function getKnowledgeGraphForConstellation(
+	accessor: DbAccessor,
+	agentId: string,
+	options: ConstellationGraphOptions = {},
+): ConstellationGraph {
+	const limit = boundedInteger(options.limit, 150, 1, 300);
+	const maxAspectsPerEntity = boundedInteger(options.maxAspectsPerEntity, 6, 1, 25);
+	const maxAttributesPerAspect = boundedInteger(options.maxAttributesPerAspect, 4, 1, 20);
+	const dependencyLimit = boundedInteger(options.dependencyLimit, 500, 1, 2000);
+
 	return accessor.withReadDb((db) => {
-		// 1. Fetch filtered entities: mentions > 0 OR pinned OR has aspects, LIMIT 500
+		// Keep the dashboard read path bounded. The previous implementation loaded
+		// every aspect, active attribute, and dependency for the agent, then filtered
+		// in JS. Large real workspaces can turn a simple Ontology tab visit into an
+		// event-loop/RSS spike big enough for systemd to SIGKILL the daemon.
 		const entityRows = db
 			.prepare(
 				`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned
 				 FROM entities e
 				 WHERE e.agent_id = ?
-				   AND (
-				     e.mentions > 0
-				     OR e.pinned = 1
-				     OR EXISTS (
-				       SELECT 1 FROM entity_aspects asp
-				       WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
-				     )
-				   )
+				   AND (e.mentions > 0 OR e.pinned = 1)
 				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC
-				 LIMIT 500`,
+				 LIMIT ?`,
 			)
-			.all(agentId) as Array<Record<string, unknown>>;
+			.all(agentId, limit) as Array<Record<string, unknown>>;
 
 		const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
 
@@ -1830,16 +1855,21 @@ export function getKnowledgeGraphForConstellation(accessor: DbAccessor, agentId:
 			return { entities: [], dependencies: [] };
 		}
 
-		// 2. Batch-fetch aspects for those entity IDs
 		const entityIdSet = new Set(entityIds);
+		const entityIdPlaceholders = placeholders(entityIds.length);
 		const aspectRows = db
 			.prepare(
 				`SELECT id, entity_id, name, weight
-				 FROM entity_aspects
-				 WHERE agent_id = ?
-				 ORDER BY weight DESC, name ASC`,
+				 FROM (
+				   SELECT id, entity_id, name, weight,
+				          ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY weight DESC, name ASC) AS rn
+				   FROM entity_aspects
+				   WHERE agent_id = ? AND entity_id IN (${entityIdPlaceholders})
+				 ) ranked_aspects
+				 WHERE rn <= ?
+				 ORDER BY entity_id ASC, weight DESC, name ASC`,
 			)
-			.all(agentId) as Array<Record<string, unknown>>;
+			.all(agentId, ...entityIds, maxAspectsPerEntity) as Array<Record<string, unknown>>;
 
 		const aspectsByEntity = new Map<
 			string,
@@ -1849,14 +1879,15 @@ export function getKnowledgeGraphForConstellation(accessor: DbAccessor, agentId:
 				weight: number;
 			}>
 		>();
-		const aspectIdSet = new Set<string>();
+		const aspectIds: string[] = [];
 
 		for (const row of aspectRows) {
 			const entityId = row.entity_id as string;
 			if (!entityIdSet.has(entityId)) continue;
-			const aspectId = row.id as string;
-			aspectIdSet.add(aspectId);
 			const bucket = aspectsByEntity.get(entityId) ?? [];
+			if (bucket.length >= maxAspectsPerEntity) continue;
+			const aspectId = row.id as string;
+			aspectIds.push(aspectId);
 			bucket.push({
 				id: aspectId,
 				name: row.name as string,
@@ -1865,32 +1896,40 @@ export function getKnowledgeGraphForConstellation(accessor: DbAccessor, agentId:
 			aspectsByEntity.set(entityId, bucket);
 		}
 
-		// 3. Batch-fetch active attributes for those aspect IDs
-		const attrRows = db
-			.prepare(
-				`SELECT id, aspect_id, content, kind, importance, memory_id
-				 FROM entity_attributes
-				 WHERE agent_id = ? AND status = 'active'
-				 ORDER BY importance DESC`,
-			)
-			.all(agentId) as Array<Record<string, unknown>>;
-
 		const attrsByAspect = new Map<string, ConstellationAttribute[]>();
-		for (const row of attrRows) {
-			const aspectId = row.aspect_id as string;
-			if (!aspectIdSet.has(aspectId)) continue;
-			const bucket = attrsByAspect.get(aspectId) ?? [];
-			bucket.push({
-				id: row.id as string,
-				content: row.content as string,
-				kind: row.kind as "attribute" | "constraint",
-				importance: Number(row.importance ?? 0.5),
-				memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
-			});
-			attrsByAspect.set(aspectId, bucket);
+		if (aspectIds.length > 0) {
+			const aspectIdSet = new Set(aspectIds);
+			const aspectIdPlaceholders = placeholders(aspectIds.length);
+			const attrRows = db
+				.prepare(
+					`SELECT id, aspect_id, content, kind, importance, memory_id
+					 FROM (
+					   SELECT id, aspect_id, content, kind, importance, memory_id,
+					          ROW_NUMBER() OVER (PARTITION BY aspect_id ORDER BY importance DESC, id ASC) AS rn
+					   FROM entity_attributes
+					   WHERE agent_id = ? AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
+					 ) ranked_attributes
+					 WHERE rn <= ?
+					 ORDER BY aspect_id ASC, importance DESC`,
+				)
+				.all(agentId, ...aspectIds, maxAttributesPerAspect) as Array<Record<string, unknown>>;
+
+			for (const row of attrRows) {
+				const aspectId = row.aspect_id as string;
+				if (!aspectIdSet.has(aspectId)) continue;
+				const bucket = attrsByAspect.get(aspectId) ?? [];
+				if (bucket.length >= maxAttributesPerAspect) continue;
+				bucket.push({
+					id: row.id as string,
+					content: row.content as string,
+					kind: row.kind as "attribute" | "constraint",
+					importance: Number(row.importance ?? 0.5),
+					memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
+				});
+				attrsByAspect.set(aspectId, bucket);
+			}
 		}
 
-		// Assemble entities with nested aspects and attributes
 		const entities: ConstellationEntity[] = entityRows.map((row) => {
 			const eid = row.id as string;
 			const aspects: ConstellationAspect[] = (aspectsByEntity.get(eid) ?? []).map((asp) => ({
@@ -1909,25 +1948,24 @@ export function getKnowledgeGraphForConstellation(accessor: DbAccessor, agentId:
 			};
 		});
 
-		// 4. Fetch dependencies where both source and target are in the entity set
 		const depRows = db
 			.prepare(
 				`SELECT source_entity_id, target_entity_id, dependency_type, strength
 				 FROM entity_dependencies
-				 WHERE agent_id = ?`,
+				 WHERE agent_id = ?
+				   AND source_entity_id IN (${entityIdPlaceholders})
+				   AND target_entity_id IN (${entityIdPlaceholders})
+				 ORDER BY strength DESC
+				 LIMIT ?`,
 			)
-			.all(agentId) as Array<Record<string, unknown>>;
+			.all(agentId, ...entityIds, ...entityIds, dependencyLimit) as Array<Record<string, unknown>>;
 
-		const dependencies: ConstellationDependency[] = depRows
-			.filter(
-				(row) => entityIdSet.has(row.source_entity_id as string) && entityIdSet.has(row.target_entity_id as string),
-			)
-			.map((row) => ({
-				sourceEntityId: row.source_entity_id as string,
-				targetEntityId: row.target_entity_id as string,
-				dependencyType: row.dependency_type as string,
-				strength: Number(row.strength ?? 0.5),
-			}));
+		const dependencies: ConstellationDependency[] = depRows.map((row) => ({
+			sourceEntityId: row.source_entity_id as string,
+			targetEntityId: row.target_entity_id as string,
+			dependencyType: row.dependency_type as string,
+			strength: Number(row.strength ?? 0.5),
+		}));
 
 		return { entities, dependencies };
 	});

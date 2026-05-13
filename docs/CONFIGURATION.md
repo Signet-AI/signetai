@@ -25,6 +25,9 @@ All files live in your active Signet workspace.
 |------|---------|
 | `agent.yaml` | Main configuration and manifest |
 | `AGENTS.md` | Agent-managed operating rules and instructions (synced to harnesses) |
+| `DREAMING.md` | Dreaming/reflection prompt used only for dreaming sessions; not loaded during normal startup |
+| `HEARTBEAT.md` | Heartbeat/background-check prompt used only for heartbeat sessions |
+| `BOOTSTRAP.md` | Bootstrap/setup prompt used only for first-run/bootstrap sessions |
 | `SOUL.md` | Agent-managed personality, tone, values, and temperament |
 | `MEMORY.md` | System-managed working memory summary (auto-generated, do not edit manually) |
 | `IDENTITY.md` | Agent-managed identity metadata |
@@ -121,6 +124,19 @@ memory:
     autonomous:
       enabled: true
       maintenanceMode: execute
+
+identity:
+  preset: minimal
+  startup:
+    load:
+      - path: AGENTS.md
+        role: operating_instructions
+        budget: 12000
+  special:
+    - path: DREAMING.md
+      kind: dreaming
+      role: dreaming_prompt
+      budget: 4000
 
 hooks:
   sessionStart:
@@ -252,6 +268,52 @@ importance(t) = base_importance × decay_rate^days_since_access
 ```
 
 Accessing a memory resets the decay timer.
+
+
+### identity
+
+Identity loading is configurable. Presets choose which Markdown files load
+into normal startup context and which files are reserved for special sessions.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `preset` | string | `minimal` | One of `minimal`, `hermes`, `openclaw`, or `custom` |
+| `startup.load` | array | preset-defined | Ordered files loaded into normal startup/static fallback context |
+| `special` | array | preset-defined | Prompt files used only for special sessions, such as dreaming |
+
+Built-in presets:
+
+- `minimal` — startup loads only `AGENTS.md`; `DREAMING.md` is still created
+  and available for dreaming sessions, but is not loaded every turn.
+- `hermes` — startup loads `SOUL.md` then `AGENTS.md`, matching Hermes'
+  current SOUL-primary identity plus project-context convention.
+- `openclaw` — rich startup stack: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`,
+  `USER.md`, and `MEMORY.md`, with `HEARTBEAT.md`, `DREAMING.md`, and
+  `BOOTSTRAP.md` reserved as special-session prompts.
+- `custom` — explicit ordered startup list chosen by the user.
+
+Example custom order:
+
+```yaml
+identity:
+  preset: custom
+  startup:
+    load:
+      - path: USER.md
+        role: user_profile
+        budget: 6000
+      - path: AGENTS.md
+        role: operating_instructions
+        budget: 12000
+  special:
+    - path: DREAMING.md
+      kind: dreaming
+      role: dreaming_prompt
+      budget: 4000
+```
+
+Special session files are not startup context. `DREAMING.md` is the prompt for
+reflection/consolidation runs and costs zero tokens in ordinary sessions.
 
 
 ### memory.synthesis
@@ -401,7 +463,7 @@ subscription-backed CLI session, or gateway.
 | `account` | string | Account id from `inference.accounts` |
 | `endpoint` | string | Optional base URL override |
 | `command` | object | Command executor config with `bin`, optional `args`, `cwd`, and `env` |
-| `agent` | string | For `executor: acpx`, the harness adapter to run, for example `codex`, `claude-code`, or `opencode` |
+| `agent` | string | For `executor: acpx`, the ACPX adapter command to run, for example `codex`, `claude` for Claude Code, or `opencode`. Signet normalizes legacy `claude-code` values to ACPX's `claude` command. |
 | `acpxVersion` / `version` | string | Optional ACPX package version. Defaults to Signet's pinned ACPX version |
 | `mode` | string | Optional ACPX execution mode. Defaults to one-shot exec |
 | `cwd` | string | Optional working directory for harness execution |

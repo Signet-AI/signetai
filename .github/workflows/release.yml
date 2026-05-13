@@ -111,10 +111,11 @@ jobs:
           echo "bump_level=$BUMP" >> $GITHUB_OUTPUT
           rm -f .bump-level
 
-          mapfile -t PACKAGE_FILES < <(git ls-files package.json 'platform/**/package.json' 'surfaces/**/package.json' 'integrations/**/package.json' 'libs/**/package.json' 'dist/**/package.json' | grep -v '^surfaces/dashboard/package.json$')
-          for file in "${PACKAGE_FILES[@]}"; do
-            jq --arg v "$NEW_VERSION" '.version = $v' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
-          done
+          # Keep all release-owned version surfaces aligned. This covers
+          # package.json files, publishable workspace dependency rewrites,
+          # Cargo.toml manifests, Cargo.lock files, and generated manifest
+          # copies so the release commit passes the same guard as PRs.
+          bun scripts/version-sync.ts --to "$NEW_VERSION"
 
           bun scripts/changelog.ts --version "$NEW_VERSION"
 
@@ -122,7 +123,7 @@ jobs:
           # (Docker smoke and consumer builds) stay deterministic.
           bun install
 
-          git add -- "${PACKAGE_FILES[@]}" bun.lock CHANGELOG.md
+          git add -A
           git commit -m "chore: release $NEW_VERSION"
           git tag "v$NEW_VERSION"
 

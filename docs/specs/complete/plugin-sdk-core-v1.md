@@ -445,6 +445,7 @@ GET    /api/secrets
 POST   /api/secrets/:name
 DELETE /api/secrets/:name
 POST   /api/secrets/exec
+GET    /api/secrets/exec/:jobId
 POST   /api/secrets/:name/exec
 GET    /api/secrets/1password/status
 POST   /api/secrets/1password/connect

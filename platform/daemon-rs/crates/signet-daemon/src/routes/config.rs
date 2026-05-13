@@ -187,33 +187,29 @@ pub async fn identity(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
 // ---------------------------------------------------------------------------
 
 pub async fn features(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let pipeline = state
+    let flags = state
         .config
         .manifest
-        .memory
+        .features
         .as_ref()
-        .and_then(|m| m.pipeline_v2.as_ref());
+        .map(|features| {
+            features
+                .iter()
+                .filter_map(|(key, value)| match value {
+                    serde_json::Value::Bool(flag) => {
+                        Some((key.clone(), serde_json::Value::Bool(*flag)))
+                    }
+                    serde_json::Value::String(value) if value == "true" => {
+                        Some((key.clone(), serde_json::Value::Bool(true)))
+                    }
+                    serde_json::Value::String(value) if value == "false" => {
+                        Some((key.clone(), serde_json::Value::Bool(false)))
+                    }
+                    _ => None,
+                })
+                .collect::<serde_json::Map<String, serde_json::Value>>()
+        })
+        .unwrap_or_default();
 
-    let enabled = pipeline.map(|p| p.enabled).unwrap_or(false);
-    let shadow = pipeline.map(|p| p.shadow_mode).unwrap_or(false);
-    let frozen = pipeline.map(|p| p.mutations_frozen).unwrap_or(false);
-    let graph = pipeline.map(|p| p.graph.enabled).unwrap_or(false);
-    let autonomous = pipeline.map(|p| p.autonomous.enabled).unwrap_or(false);
-
-    let embedding = state
-        .config
-        .manifest
-        .embedding
-        .as_ref()
-        .map(|e| e.provider.as_str())
-        .unwrap_or("none");
-
-    Json(serde_json::json!({
-        "pipelineV2": enabled,
-        "shadowMode": shadow,
-        "mutationsFrozen": frozen,
-        "graphEnabled": graph,
-        "autonomousEnabled": autonomous,
-        "embeddingProvider": embedding,
-    }))
+    Json(serde_json::Value::Object(flags))
 }

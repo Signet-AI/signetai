@@ -34,6 +34,18 @@ container:
 - `memory/memories.db`
 - `.daemon/auth-secret`
 
+## Published image
+
+Release tags publish the multi-arch image to GHCR:
+
+```bash
+docker pull ghcr.io/signet-ai/signet:latest
+```
+
+The package must remain public. Release CI verifies anonymous pulls after
+pushing so package visibility regressions do not look green while users see
+`unauthorized`.
+
 ## Upgrade flow
 
 ```bash

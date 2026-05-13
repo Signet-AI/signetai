@@ -983,6 +983,10 @@ export interface AcpxProviderConfig {
 
 const DEFAULT_ACPX_VERSION = "0.7.0";
 
+function normalizeAcpxAgent(agent: string): string {
+	return agent === "claude-code" ? "claude" : agent;
+}
+
 function acpxPermissionArgs(mode: AcpxPermissionMode | undefined): string[] {
 	switch (mode) {
 		case "deny-all":
@@ -1006,9 +1010,23 @@ function acpxEnv(hooks: AcpxHooksMode | undefined): NodeJS.ProcessEnv {
 	return env;
 }
 
-function resolveAcpxCwd(cwd: string | undefined): string | undefined {
-	if (!cwd) return undefined;
-	return isAbsolute(cwd) ? cwd : resolvePath(cwd);
+function getAgentsDir(): string {
+	return process.env.SIGNET_PATH || join(homedir(), ".agents");
+}
+
+function resolveAcpxCwd(cwd: string | undefined, hooks: AcpxHooksMode | undefined): string | undefined {
+	if (cwd) return isAbsolute(cwd) ? cwd : resolvePath(cwd);
+	if (hooks !== "disabled") return undefined;
+	const isolatedCwd = join(getAgentsDir(), ".daemon", "acpx-background");
+	mkdirSync(isolatedCwd, { recursive: true });
+	return isolatedCwd;
+}
+
+function resolveAcpxAllowedTools(
+	config: Pick<AcpxProviderConfig, "allowedTools" | "hooks">,
+): readonly string[] | undefined {
+	if (config.allowedTools !== undefined) return config.allowedTools;
+	return config.hooks === "disabled" ? [] : undefined;
 }
 
 function resolveAcpxFormat(config: Pick<AcpxProviderConfig, "format" | "captureEvents">): AcpxOutputFormat {
@@ -1020,8 +1038,9 @@ function buildAcpxCommand(
 	timeoutMs: number,
 ): { bin: string; args: string[]; cwd?: string } {
 	const bin = config.bin ?? "npx";
-	const cwd = resolveAcpxCwd(config.cwd);
+	const cwd = resolveAcpxCwd(config.cwd, config.hooks);
 	const packageRef = config.package ?? (!config.bin ? `acpx@${config.version ?? DEFAULT_ACPX_VERSION}` : undefined);
+	const allowedTools = resolveAcpxAllowedTools(config);
 	const args: string[] = [];
 	if (packageRef) {
 		if (bin.endsWith("npx") || bin.endsWith("npx.cmd")) args.push("-y");
@@ -1033,9 +1052,9 @@ function buildAcpxCommand(
 	if (config.model) args.push("--model", config.model);
 	args.push(...acpxPermissionArgs(config.permissions));
 	if (config.terminal === "disabled") args.push("--no-terminal");
-	if (config.allowedTools) args.push("--allowed-tools", config.allowedTools.join(","));
+	if (allowedTools) args.push("--allowed-tools", allowedTools.join(","));
 	args.push(...(config.extraArgs ?? []));
-	args.push(config.agent);
+	args.push(normalizeAcpxAgent(config.agent));
 	if ((config.mode ?? "exec") === "session" && config.session) {
 		args.push("-s", config.session);
 	}
@@ -1070,8 +1089,27 @@ function extractAcpxTextCandidate(event: AcpxJsonEvent): string | undefined {
 
 function isAcpxFinalEvent(event: AcpxJsonEvent): boolean {
 	const type = acpxStringField(event, "type")?.toLowerCase();
-	if (type && ["result", "final", "complete", "completed", "done", "response"].includes(type)) return true;
-	return ["result", "response", "final"].some((key) => event[key] !== undefined);
+	if (type !== undefined && ["result", "final", "complete", "completed", "done", "response"].includes(type))
+		return true;
+	const result = event.result;
+	return isJsonRecord(result) && typeof result.stopReason === "string";
+}
+
+function extractAcpxMessageChunk(event: AcpxJsonEvent): string | undefined {
+	if (acpxStringField(event, "method") !== "session/update") return undefined;
+	const params = event.params;
+	if (!isJsonRecord(params)) return undefined;
+	const update = params.update;
+	if (!isJsonRecord(update)) return undefined;
+	const sessionUpdate = acpxStringField(update, "sessionUpdate")?.toLowerCase();
+	if (sessionUpdate !== undefined && !sessionUpdate.includes("message")) return undefined;
+	const content = update.content;
+	if (typeof content === "string" && content.length > 0) return content;
+	if (isJsonRecord(content)) {
+		const text = acpxStringField(content, "text");
+		if (text !== undefined) return text;
+	}
+	return undefined;
 }
 
 function parseAcpxJsonOutput(
@@ -1081,6 +1119,7 @@ function parseAcpxJsonOutput(
 	const maxCapturedEvents = Math.max(0, config.maxCapturedEvents ?? 200);
 	let emittedEvents = 0;
 	let finalText: string | undefined;
+	let streamedText = "";
 	const lines = stdout
 		.split(/\r?\n/)
 		.map((line) => line.trim())
@@ -1099,11 +1138,17 @@ function parseAcpxJsonOutput(
 		if (!isJsonRecord(parsed)) {
 			throw new Error(`${config.agent} via ACPX emitted non-object JSON event on line ${index + 1}`);
 		}
+		const chunk = extractAcpxMessageChunk(parsed);
+		if (chunk !== undefined) streamedText += chunk;
 		if (isAcpxFinalEvent(parsed)) {
 			const candidate = extractAcpxTextCandidate(parsed);
-			if (candidate?.trim()) finalText = candidate;
+			if (candidate?.trim()) {
+				finalText = candidate;
+			} else if (streamedText.trim()) {
+				finalText = streamedText;
+			}
 		}
-		if (emittedEvents < maxCapturedEvents) {
+		if (config.captureEvents === true && emittedEvents < maxCapturedEvents) {
 			emittedEvents += 1;
 			config.onEvent?.(parsed);
 		}

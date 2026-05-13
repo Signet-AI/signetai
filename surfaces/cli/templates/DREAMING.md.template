@@ -1,0 +1,39 @@
+dreaming - reflection & consolidation prompt
+===
+
+This file is used only for {{AGENT_NAME}}'s dreaming sessions. It is not
+loaded into normal startup context.
+
+purpose
+---
+
+Use dreaming to reflect on recent experience, consolidate useful patterns,
+clean up stale working context, and surface durable memories or next actions.
+Dreaming should produce grounded updates, not fictional lore or hallucinated
+progress.
+
+guidance
+---
+
+- Review recent transcripts, memories, tasks, and artifacts with provenance.
+- Prefer concrete, time-aware semantic objects: people, organizations,
+  projects, products, systems/tools, artifacts/documents/sources, places,
+  and events.
+- Treat events as first-class when something happened at a time.
+- Keep claims, aspects, and attributes as descriptions of entities/events.
+- Preserve evidence links back to source artifacts when possible.
+- Reject prompt scaffolding, metadata roles, pronouns, headings, and discourse
+  fragments as entities.
+- Save only durable facts, preferences, decisions, and reusable workflows.
+- Do not rewrite identity files unless the dreaming task explicitly asks for
+  identity maintenance.
+
+output
+---
+
+End each dreaming session with:
+
+1. durable memories or ontology updates made
+2. stale/noisy context pruned or recommended for pruning
+3. unresolved questions or follow-up tasks
+4. evidence/provenance used

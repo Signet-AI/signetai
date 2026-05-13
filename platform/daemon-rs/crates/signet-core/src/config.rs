@@ -563,6 +563,7 @@ pub struct AgentManifest {
     pub home: Option<HomeConfig>,
     pub auth: Option<AuthConfig>,
     pub capabilities: Option<Vec<String>>,
+    pub features: Option<HashMap<String, serde_json::Value>>,
     #[serde(rename = "harnessCompatibility")]
     pub harness_compatibility: Option<Vec<String>>,
     pub hooks: Option<HooksConfig>,
@@ -1344,7 +1345,7 @@ impl Default for PipelineV2Config {
             structural: StructuralConfig::default(),
             feedback: FeedbackConfig::default(),
             significance: Some(SignificanceConfig::default()),
-            predictor: Some(PredictorConfig::default()),
+            predictor: None,
             // predictor_pipeline: PredictorPipelineConfig::default(), // hard-deprecated in 0.112.0
             model_registry: ModelRegistryConfig::default(),
         }

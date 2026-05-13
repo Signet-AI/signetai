@@ -12,7 +12,7 @@ interface Props {
 	onDirtyChange?: (dirty: boolean) => void;
 }
 
-let { configFiles, onDirtyChange }: Props = $props();
+const { configFiles, onDirtyChange }: Props = $props();
 
 const CHAR_BUDGETS: Record<string, number> = {
 	"AGENTS.md": 12000,
@@ -20,6 +20,9 @@ const CHAR_BUDGETS: Record<string, number> = {
 	"USER.md": 6000,
 	"SOUL.md": 4000,
 	"IDENTITY.md": 2000,
+	"DREAMING.md": 4000,
+	"HEARTBEAT.md": 4000,
+	"BOOTSTRAP.md": 4000,
 };
 
 const mdFiles = $derived(configFiles?.filter((f) => f.name.endsWith(".md")) ?? []);
@@ -32,6 +35,7 @@ let savedByFile = $state<Record<string, string>>({});
 let collapsed = $state(false);
 let jumpMenuOpen = $state(false);
 let jumpFilter = $state("");
+// biome-ignore lint/style/useConst: Svelte bind:this writes the DOM node into this reference at runtime.
 let jumpInputRef = $state<HTMLInputElement | null>(null);
 
 const activeFile = $derived(mdFiles.find((f) => f.name === selectedFile));
@@ -95,6 +99,14 @@ function handlePanelKey(e: KeyboardEvent): void {
 		jumpMenuOpen = false;
 		jumpFilter = "";
 	}
+}
+
+function expandPanel(): void {
+	collapsed = false;
+}
+
+function collapsePanel(): void {
+	collapsed = true;
 }
 
 function selectFileWithGuard(name: string): void {
@@ -162,7 +174,7 @@ export function discard(): void {
 		<button
 			type="button"
 			class="collapse-toggle"
-			onclick={() => (collapsed = false)}
+			onclick={expandPanel}
 			title="Open identity panel"
 		>
 			<PanelLeft size={14} />
@@ -218,7 +230,7 @@ export function discard(): void {
 			<button
 				type="button"
 				class="collapse-toggle"
-				onclick={() => (collapsed = true)}
+				onclick={collapsePanel}
 				title="Collapse panel"
 			>
 				<PanelLeftClose size={14} />

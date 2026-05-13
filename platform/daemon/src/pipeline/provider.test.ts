@@ -83,15 +83,8 @@ function withParentSession(
 			return new Response(null, { status: 200 });
 		}
 		// Route parent session creation to a fixed response
-		if (
-			init?.method === "POST" &&
-			url.includes("/session") &&
-			!url.includes("/message")
-		) {
-			const body =
-				typeof init.body === "string"
-					? (JSON.parse(init.body) as Record<string, unknown>)
-					: {};
+		if (init?.method === "POST" && url.includes("/session") && !url.includes("/message")) {
+			const body = typeof init.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
 			if (body.title === "signet-system") {
 				return Response.json({
 					id: "ses_parent",
@@ -129,16 +122,20 @@ describe("createAcpxProvider", () => {
 		const argsPath = join(root, "args.json");
 		const promptPath = join(root, "prompt.txt");
 		const hooksPath = join(root, "hooks.txt");
+		const cwdPath = join(root, "cwd.txt");
 		writeFileSync(
 			bin,
 			`#!/usr/bin/env bash
 printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+printf '%s' "$PWD" > ${JSON.stringify(cwdPath)}
 cat > ${JSON.stringify(promptPath)}
 printf '%s' "\${SIGNET_NO_HOOKS:-}" > ${JSON.stringify(hooksPath)}
 printf '  acpx answer  \\n'
 `,
 		);
 		chmodSync(bin, 0o755);
+		const previousSignetPath = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = root;
 		try {
 			const provider = createAcpxProvider({
 				agent: "codex",
@@ -157,19 +154,55 @@ printf '  acpx answer  \\n'
 			expect(args).toContain("quiet");
 			expect(args).toContain("--deny-all");
 			expect(args).toContain("--no-terminal");
+			expect(args).toContain("--allowed-tools");
+			expect(args[args.indexOf("--allowed-tools") + 1]).toBe("read_file");
 			expect(args).toContain("codex");
 			const agentIndex = args.indexOf("codex");
-			expect(args.slice(agentIndex)).toEqual([
-				"codex",
-				"-s",
-				"background",
-				"exec",
-				"--file",
-				"-",
-			]);
+			expect(args.slice(agentIndex)).toEqual(["codex", "-s", "background", "exec", "--file", "-"]);
 			expect(readFileSync(promptPath, "utf-8")).toBe("hello acpx");
 			expect(readFileSync(hooksPath, "utf-8")).toBe("1");
+			expect(readFileSync(cwdPath, "utf-8")).toBe(join(root, ".daemon", "acpx-background"));
 		} finally {
+			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+			else process.env.SIGNET_PATH = previousSignetPath;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("defaults hook-disabled ACPX background runs to a sterile cwd and empty tool catalog", async () => {
+		const root = join(tmpdir(), `signet-acpx-isolated-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-isolated.sh");
+		const argsPath = join(root, "args.json");
+		const cwdPath = join(root, "cwd.txt");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+printf '%s' "$PWD" > ${JSON.stringify(cwdPath)}
+printf 'ok\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousSignetPath = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = root;
+		try {
+			const provider = createAcpxProvider({
+				agent: "claude",
+				bin,
+				permissions: "deny-all",
+				hooks: "disabled",
+			});
+			await expect(provider.generate("summarize", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args).toContain("--deny-all");
+			expect(args).toContain("--allowed-tools");
+			expect(args[args.indexOf("--allowed-tools") + 1]).toBe("");
+			expect(args.slice(args.indexOf("claude"))).toEqual(["claude", "exec", "--file", "-"]);
+			expect(readFileSync(cwdPath, "utf-8")).toBe(join(root, ".daemon", "acpx-background"));
+		} finally {
+			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+			else process.env.SIGNET_PATH = previousSignetPath;
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
@@ -211,6 +244,64 @@ printf '%s\n' '{"type":"result","text":"final answer"}'
 		}
 	});
 
+	it("uses ACP JSON-RPC message chunks as final text when completion carries only stop metadata", async () => {
+		const root = join(tmpdir(), `signet-acpx-jsonrpc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-jsonrpc.sh");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello "}}}}'
+printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}}'
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const events: unknown[] = [];
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				format: "json",
+				captureEvents: true,
+				onEvent: (event) => events.push(event),
+			});
+
+			await expect(provider.generate("hello json", { timeoutMs: 1000 })).resolves.toBe("hello world");
+			expect(events).toHaveLength(3);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not deliver ACPX JSON events when captureEvents is disabled", async () => {
+		const root = join(tmpdir(), `signet-acpx-events-disabled-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-json-disabled.sh");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' '{"type":"session","session_id":"acpx-session-1"}'
+printf '%s\n' '{"type":"result","text":"final answer"}'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const events: unknown[] = [];
+		try {
+			const provider = createAcpxProvider({
+				agent: "codex",
+				bin,
+				format: "json",
+				captureEvents: false,
+				onEvent: (event) => events.push(event),
+			});
+			await expect(provider.generate("hello json", { timeoutMs: 1000 })).resolves.toBe("final answer");
+			expect(events).toEqual([]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects ACPX JSON output that does not contain a final response", async () => {
 		const root = join(tmpdir(), `signet-acpx-events-empty-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(root, { recursive: true });
@@ -220,6 +311,7 @@ printf '%s\n' '{"type":"result","text":"final answer"}'
 			`#!/usr/bin/env bash
 printf '%s\n' '{"type":"session","session_id":"acpx-session-1"}'
 printf '%s\n' '{"type":"assistant_delta","text":"partial answer"}'
+printf '%s\n' '{"type":"tool_result","result":"file contents are not final"}'
 printf '%s\n' '{"type":"progress","message":"still working"}'
 `,
 		);
@@ -258,6 +350,31 @@ printf 'ok\n'
 		}
 	});
 
+	it("maps the legacy claude-code agent alias to ACPX's claude command", async () => {
+		const root = join(tmpdir(), `signet-acpx-claude-alias-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-bunx.sh");
+		const argsPath = join(root, "args.json");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf '%s\n' "$@" > ${JSON.stringify(argsPath)}
+printf 'ok\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({ agent: "claude-code", bin, package: "acpx@0.7.0", hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const args = readFileSync(argsPath, "utf-8").trim().split("\n");
+			expect(args).toContain("claude");
+			expect(args).not.toContain("claude-code");
+			expect(args.slice(args.indexOf("claude"))).toEqual(["claude", "exec", "--file", "-"]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("normalizes relative ACPX cwd before spawning and forwarding --cwd", async () => {
 		const root = join(tmpdir(), `signet-acpx-cwd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(join(root, "workspace"), { recursive: true });
@@ -288,7 +405,6 @@ printf 'ok\n'
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
-
 });
 
 describe("createOllamaProvider", () => {
@@ -629,12 +745,12 @@ describe("createCodexProvider", () => {
 			expect(capturedEnv?.XDG_CONFIG_HOME).toBe(join(capturedEnv?.HOME ?? "", ".config"));
 		} finally {
 			if (prevHome === undefined) {
-				delete process.env.HOME;
+				Reflect.deleteProperty(process.env, "HOME");
 			} else {
 				process.env.HOME = prevHome;
 			}
 			if (prevCodexHome === undefined) {
-				delete process.env.CODEX_HOME;
+				Reflect.deleteProperty(process.env, "CODEX_HOME");
 			} else {
 				process.env.CODEX_HOME = prevCodexHome;
 			}
@@ -759,22 +875,24 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() extracts text from parts array", async () => {
 		let callCount = 0;
-		mockFetch(withParentSession(async (url) => {
-			callCount++;
-			if (url.includes("/session") && !url.includes("/message")) {
-				// Session creation
-				return Response.json({
-					id: "ses_test",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			// Message
-			return Response.json(openCodeResponse("  extracted fact  "));
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				callCount++;
+				if (url.includes("/session") && !url.includes("/message")) {
+					// Session creation
+					return Response.json({
+						id: "ses_test",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				// Message
+				return Response.json(openCodeResponse("  extracted fact  "));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test prompt");
@@ -784,20 +902,22 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() creates a new child session per call after cleanup", async () => {
 		let sessionCreations = 0;
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				sessionCreations++;
-				return Response.json({
-					id: "ses_reuse",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					sessionCreations++;
+					return Response.json({
+						id: "ses_reuse",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		await provider.generate("prompt 1");
@@ -851,16 +971,12 @@ describe("createOpenCodeProvider", () => {
 		await new Promise((r) => setTimeout(r, 100));
 
 		// Parent session created once, without parentID
-		const parentBody = sessionBodies.find(
-			(b) => b.title === "signet-system",
-		);
+		const parentBody = sessionBodies.find((b) => b.title === "signet-system");
 		expect(parentBody).toBeDefined();
 		expect(parentBody?.parentID).toBeUndefined();
 
 		// Child sessions include parentID pointing to parent
-		const childBodies = sessionBodies.filter(
-			(b) => b.title === "signet-extraction",
-		);
+		const childBodies = sessionBodies.filter((b) => b.title === "signet-extraction");
 		expect(childBodies).toHaveLength(2);
 		for (const b of childBodies) {
 			expect(b.parentID).toBe("ses_parent_qa");
@@ -882,11 +998,7 @@ describe("createOpenCodeProvider", () => {
 			if (init?.method === "DELETE" && url.includes("/session/")) {
 				return new Response(null, { status: 200 });
 			}
-			if (
-				init?.method === "POST" &&
-				url.includes("/session") &&
-				!url.includes("/message")
-			) {
+			if (init?.method === "POST" && url.includes("/session") && !url.includes("/message")) {
 				const body = parseJsonObjectBody(init?.body);
 				sessionBodies.push(body);
 
@@ -932,9 +1044,7 @@ describe("createOpenCodeProvider", () => {
 		expect(result).toBe("ok");
 
 		// The retry attempt must NOT carry parentID
-		const childBodies = sessionBodies.filter(
-			(b) => b.title === "signet-extraction",
-		);
+		const childBodies = sessionBodies.filter((b) => b.title === "signet-extraction");
 		expect(childBodies.length).toBeGreaterThanOrEqual(2);
 		// First attempt had parentID
 		expect(childBodies[0].parentID).toBeDefined();
@@ -949,11 +1059,7 @@ describe("createOpenCodeProvider", () => {
 			if (init?.method === "DELETE" && url.includes("/session/")) {
 				return new Response(null, { status: 200 });
 			}
-			if (
-				init?.method === "POST" &&
-				url.includes("/session") &&
-				!url.includes("/message")
-			) {
+			if (init?.method === "POST" && url.includes("/session") && !url.includes("/message")) {
 				const body = parseJsonObjectBody(init?.body);
 				if (body.title === "signet-system") {
 					return Response.json({
@@ -1006,24 +1112,26 @@ describe("createOpenCodeProvider", () => {
 	it("generate() retries on 404 (expired session)", async () => {
 		let messageAttempts = 0;
 		let sessionCreations = 0;
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				sessionCreations++;
-				return Response.json({
-					id: `ses_${sessionCreations}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			messageAttempts++;
-			if (messageAttempts === 1) {
-				return new Response("session not found", { status: 404 });
-			}
-			return Response.json(openCodeResponse("recovered"));
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					sessionCreations++;
+					return Response.json({
+						id: `ses_${sessionCreations}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				messageAttempts++;
+				if (messageAttempts === 1) {
+					return new Response("session not found", { status: 404 });
+				}
+				return Response.json(openCodeResponse("recovered"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -1032,19 +1140,21 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generateWithUsage() maps tokens and cost from response", async () => {
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_usage",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			return Response.json(openCodeResponse("result", { input: 100, output: 25 }, 0.0042));
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_usage",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				return Response.json(openCodeResponse("result", { input: 100, output: 25 }, 0.0042));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generateWithUsage!("test");
@@ -1056,43 +1166,47 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generate() throws on non-200 non-retryable status", async () => {
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_err",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			return new Response("internal server error", { status: 500 });
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_err",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				return new Response("internal server error", { status: 500 });
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		await expect(provider.generate("test")).rejects.toThrow(/OpenCode HTTP 500/);
 	});
 
 	it("generate() throws a timeout error on slow responses", async () => {
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_slow",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			return new Promise((_resolve, reject) => {
-				const signal = init?.signal;
-				if (signal) {
-					signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_slow",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
 				}
-			});
-		}));
+				return new Promise((_resolve, reject) => {
+					const signal = init?.signal;
+					if (signal) {
+						signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+					}
+				});
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1110,9 +1224,11 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("available() returns false when server is unreachable", async () => {
-		mockFetch(withParentSession(() => {
-			throw new Error("connection refused");
-		}));
+		mockFetch(
+			withParentSession(() => {
+				throw new Error("connection refused");
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.available();
@@ -1121,20 +1237,22 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() sends correct request body with parts format", async () => {
 		let capturedBody: Record<string, unknown> = {};
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_body",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			capturedBody = JSON.parse(init?.body as string);
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_body",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				capturedBody = JSON.parse(init?.body as string);
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1155,20 +1273,22 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() sends signet-pipeline agent in request body", async () => {
 		let capturedBody: Record<string, unknown> = {};
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_agent",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			capturedBody = JSON.parse(init?.body as string);
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_agent",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				capturedBody = JSON.parse(init?.body as string);
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1181,20 +1301,22 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() omits agent when config.agent is empty", async () => {
 		let capturedBody: Record<string, unknown> = {};
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_no_agent",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			capturedBody = JSON.parse(init?.body as string);
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_no_agent",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				capturedBody = JSON.parse(init?.body as string);
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1209,25 +1331,27 @@ describe("createOpenCodeProvider", () => {
 	it("generate() retries without agent on agent-not-found 4xx and stays disabled", async () => {
 		let sessionCount = 0;
 		let lastBody: Record<string, unknown> = {};
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				sessionCount++;
-				return Response.json({
-					id: `ses_agent_fallback_${sessionCount}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			const parsed = JSON.parse(init?.body as string);
-			if (parsed.agent) {
-				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
-			}
-			lastBody = parsed;
-			return Response.json(openCodeResponse("recovered"));
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					sessionCount++;
+					return Response.json({
+						id: `ses_agent_fallback_${sessionCount}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				const parsed = JSON.parse(init?.body as string);
+				if (parsed.agent) {
+					return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
+				}
+				lastBody = parsed;
+				return Response.json(openCodeResponse("recovered"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1245,28 +1369,30 @@ describe("createOpenCodeProvider", () => {
 	it("generate() falls back when agent-rejection 400 arrives after agent already disabled", async () => {
 		let sessionCount = 0;
 		let agentSeen = false;
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				sessionCount++;
-				return Response.json({
-					id: `ses_concurrent_${sessionCount}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			const parsed = JSON.parse(init?.body as string);
-			if (parsed.agent) {
-				agentSeen = true;
-				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
-			}
-			if (!agentSeen) {
-				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
-			}
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					sessionCount++;
+					return Response.json({
+						id: `ses_concurrent_${sessionCount}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				const parsed = JSON.parse(init?.body as string);
+				if (parsed.agent) {
+					agentSeen = true;
+					return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
+				}
+				if (!agentSeen) {
+					return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
+				}
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1281,19 +1407,21 @@ describe("createOpenCodeProvider", () => {
 		sessionCount = 0;
 		agentSeen = false;
 		let threw = false;
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_sibling",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_sibling",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				return new Response(`unknown agent "signet-pipeline"`, { status: 400 });
+			}),
+		);
 		try {
 			await provider.generate("extract sibling");
 		} catch {
@@ -1304,20 +1432,22 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() omits format field when enableStructuredOutput is false", async () => {
 		let capturedBody: Record<string, unknown> = {};
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_no_so",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			capturedBody = JSON.parse(init?.body as string);
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_no_so",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				capturedBody = JSON.parse(init?.body as string);
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1331,26 +1461,28 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generate() joins multiple text parts", async () => {
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_multi",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
 				return Response.json({
-					id: "ses_multi",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
+					info: { role: "assistant", id: "msg_test", sessionID: "ses_multi", cost: 0, tokens: { input: 0, output: 0 } },
+					parts: [
+						{ type: "text", text: "first part", id: "p1", sessionID: "ses_multi", messageID: "msg_test" },
+						{ type: "tool", id: "p2", sessionID: "ses_multi", messageID: "msg_test" },
+						{ type: "text", text: "second part", id: "p3", sessionID: "ses_multi", messageID: "msg_test" },
+					],
 				});
-			}
-			return Response.json({
-				info: { role: "assistant", id: "msg_test", sessionID: "ses_multi", cost: 0, tokens: { input: 0, output: 0 } },
-				parts: [
-					{ type: "text", text: "first part", id: "p1", sessionID: "ses_multi", messageID: "msg_test" },
-					{ type: "tool", id: "p2", sessionID: "ses_multi", messageID: "msg_test" },
-					{ type: "text", text: "second part", id: "p3", sessionID: "ses_multi", messageID: "msg_test" },
-				],
-			});
-		}));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -1360,40 +1492,42 @@ describe("createOpenCodeProvider", () => {
 	it("generate() polls session messages when post response is empty", async () => {
 		let postCalls = 0;
 		let getCalls = 0;
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_poll",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			if (init?.method === "POST") {
-				postCalls++;
-				return new Response("", {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-			getCalls++;
-			if (getCalls === 1) {
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_poll",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				if (init?.method === "POST") {
+					postCalls++;
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				getCalls++;
+				if (getCalls === 1) {
+					return Response.json([
+						{
+							info: { role: "user" },
+							parts: [{ type: "text", text: "pending" }],
+						},
+					]);
+				}
 				return Response.json([
 					{
-						info: { role: "user" },
-						parts: [{ type: "text", text: "pending" }],
+						info: { role: "assistant", tokens: { input: 1, output: 1 } },
+						parts: [{ type: "text", text: "recovered" }],
 					},
 				]);
-			}
-			return Response.json([
-				{
-					info: { role: "assistant", tokens: { input: 1, output: 1 } },
-					parts: [{ type: "text", text: "recovered" }],
-				},
-			]);
-		}));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -1404,31 +1538,33 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() returns fallback JSON when no assistant text appears", async () => {
 		let getCalls = 0;
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_bad",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			if (init?.method === "POST") {
-				return new Response("", {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-			getCalls++;
-			return Response.json([
-				{
-					info: { role: "user" },
-					parts: [{ type: "text", text: "still pending" }],
-				},
-			]);
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_bad",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				if (init?.method === "POST") {
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				getCalls++;
+				return Response.json([
+					{
+						info: { role: "user" },
+						parts: [{ type: "text", text: "still pending" }],
+					},
+				]);
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test", { timeoutMs: 200 });
@@ -1440,46 +1576,48 @@ describe("createOpenCodeProvider", () => {
 		const seenUrls: string[] = [];
 		let fallbackBody: Record<string, unknown> | null = null;
 		let postCount = 0;
-		mockFetch(withParentSession(async (url, init) => {
-			seenUrls.push(url);
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_fallback",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			if (url.includes("/session/ses_fallback/message")) {
-				if (init?.method === "POST") {
-					postCount++;
-					// First POST returns 404 (session gone) to take the short
-					// retry path (line 2370-2385) that reaches tryOllamaFallback
-					// after only one poll cycle instead of three.
-					if (postCount === 1) {
-						return new Response("Not Found", { status: 404 });
-					}
-					// Retry POST returns empty 200 (malformed) so
-					// parsePostResponse → pollForAssistantMessage → null,
-					// which triggers the Ollama fallback.
-					return new Response("", {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
+		mockFetch(
+			withParentSession(async (url, init) => {
+				seenUrls.push(url);
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_fallback",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
 					});
 				}
-				return Response.json([]);
-			}
-			if (url === "http://172.17.0.1:11434/api/tags") {
-				return Response.json({ models: [] });
-			}
-			if (url === "http://172.17.0.1:11434/api/generate") {
-				fallbackBody = parseJsonObjectBody(init?.body);
-				return Response.json({ response: '{"facts":[],"entities":[]}' });
-			}
-			return new Response("unexpected url", { status: 500 });
-		}));
+				if (url.includes("/session/ses_fallback/message")) {
+					if (init?.method === "POST") {
+						postCount++;
+						// First POST returns 404 (session gone) to take the short
+						// retry path (line 2370-2385) that reaches tryOllamaFallback
+						// after only one poll cycle instead of three.
+						if (postCount === 1) {
+							return new Response("Not Found", { status: 404 });
+						}
+						// Retry POST returns empty 200 (malformed) so
+						// parsePostResponse → pollForAssistantMessage → null,
+						// which triggers the Ollama fallback.
+						return new Response("", {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						});
+					}
+					return Response.json([]);
+				}
+				if (url === "http://172.17.0.1:11434/api/tags") {
+					return Response.json({ models: [] });
+				}
+				if (url === "http://172.17.0.1:11434/api/generate") {
+					fallbackBody = parseJsonObjectBody(init?.body);
+					return Response.json({ response: '{"facts":[],"entities":[]}' });
+				}
+				return new Response("unexpected url", { status: 500 });
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1500,36 +1638,38 @@ describe("createOpenCodeProvider", () => {
 	it("generate() does NOT attempt Ollama fallback when enableOllamaFallback is omitted (safe default)", async () => {
 		const seenUrls: string[] = [];
 		let postCount = 0;
-		mockFetch(withParentSession(async (url, init) => {
-			seenUrls.push(url);
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_no_fallback",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			if (url.includes("/session/ses_no_fallback/message")) {
-				if (init?.method === "POST") {
-					postCount++;
-					if (postCount === 1) {
-						return new Response("Not Found", { status: 404 });
-					}
-					return new Response("", {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
+		mockFetch(
+			withParentSession(async (url, init) => {
+				seenUrls.push(url);
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_no_fallback",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
 					});
 				}
-				return Response.json([]);
-			}
-			if (url.includes("11434")) {
-				return Response.json({ models: [] });
-			}
-			return new Response("unexpected url", { status: 500 });
-		}));
+				if (url.includes("/session/ses_no_fallback/message")) {
+					if (init?.method === "POST") {
+						postCount++;
+						if (postCount === 1) {
+							return new Response("Not Found", { status: 404 });
+						}
+						return new Response("", {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						});
+					}
+					return Response.json([]);
+				}
+				if (url.includes("11434")) {
+					return Response.json({ models: [] });
+				}
+				return new Response("unexpected url", { status: 500 });
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1544,29 +1684,33 @@ describe("createOpenCodeProvider", () => {
 	}, 35000);
 
 	it("generate() prefers info.structured over text parts", async () => {
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_structured",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
 				return Response.json({
-					id: "ses_structured",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
+					info: {
+						role: "assistant",
+						id: "msg_s",
+						sessionID: "ses_structured",
+						cost: 0,
+						tokens: { input: 10, output: 5 },
+						structured: { facts: [{ content: "from structured", type: "fact", confidence: 0.9 }], entities: [] },
+					},
+					parts: [
+						{ type: "text", text: "ignore this text", id: "p1", sessionID: "ses_structured", messageID: "msg_s" },
+					],
 				});
-			}
-			return Response.json({
-				info: {
-					role: "assistant",
-					id: "msg_s",
-					sessionID: "ses_structured",
-					cost: 0,
-					tokens: { input: 10, output: 5 },
-					structured: { facts: [{ content: "from structured", type: "fact", confidence: 0.9 }], entities: [] },
-				},
-				parts: [{ type: "text", text: "ignore this text", id: "p1", sessionID: "ses_structured", messageID: "msg_s" }],
-			});
-		}));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -1575,29 +1719,31 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generate() returns info.structured as string when it is a string", async () => {
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_str",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
 				return Response.json({
-					id: "ses_str",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
+					info: {
+						role: "assistant",
+						id: "msg_str",
+						sessionID: "ses_str",
+						cost: 0,
+						tokens: { input: 0, output: 0 },
+						structured: '{"description":"test skill","triggers":["run tests"],"tags":["testing"]}',
+					},
+					parts: [],
 				});
-			}
-			return Response.json({
-				info: {
-					role: "assistant",
-					id: "msg_str",
-					sessionID: "ses_str",
-					cost: 0,
-					tokens: { input: 0, output: 0 },
-					structured: '{"description":"test skill","triggers":["run tests"],"tags":["testing"]}',
-				},
-				parts: [],
-			});
-		}));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const result = await provider.generate("test");
@@ -1607,25 +1753,27 @@ describe("createOpenCodeProvider", () => {
 	it("generate() disables structured output on 422 and retries without format", async () => {
 		let attempts = 0;
 		const bodies: Record<string, unknown>[] = [];
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: `ses_compat_${attempts}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			attempts++;
-			bodies.push(JSON.parse(init?.body as string));
-			if (attempts === 1) {
-				// 422 with "format" JSON key — signals structured output unsupported
-				return new Response('{"issues":[{"path":["format"],"message":"Unrecognized key"}]}', { status: 422 });
-			}
-			return Response.json(openCodeResponse("fallback works"));
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: `ses_compat_${attempts}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				attempts++;
+				bodies.push(JSON.parse(init?.body as string));
+				if (attempts === 1) {
+					// 422 with "format" JSON key — signals structured output unsupported
+					return new Response('{"issues":[{"path":["format"],"message":"Unrecognized key"}]}', { status: 422 });
+				}
+				return Response.json(openCodeResponse("fallback works"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		const first = await provider.generate("test");
@@ -1641,33 +1789,35 @@ describe("createOpenCodeProvider", () => {
 	it("generate() disables structured output after consecutive malformed 200 responses", async () => {
 		let postCount = 0;
 		const postBodies: Record<string, unknown>[] = [];
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: `ses_200err_${postCount}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			if (init?.method === "POST") {
-				postCount++;
-				postBodies.push(JSON.parse(init?.body as string));
-				if (postCount <= 2) {
-					// First two POSTs: 200 with empty body (GitHub Copilot schema rejection pattern)
-					return new Response("", {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: `ses_200err_${postCount}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
 					});
 				}
-				// Third POST (after structured output disabled): succeed
-				return Response.json(openCodeResponse("recovered without format"));
-			}
-			// GET polls: return empty array so poll times out quickly
-			return Response.json([]);
-		}));
+				if (init?.method === "POST") {
+					postCount++;
+					postBodies.push(JSON.parse(init?.body as string));
+					if (postCount <= 2) {
+						// First two POSTs: 200 with empty body (GitHub Copilot schema rejection pattern)
+						return new Response("", {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						});
+					}
+					// Third POST (after structured output disabled): succeed
+					return Response.json(openCodeResponse("recovered without format"));
+				}
+				// GET polls: return empty array so poll times out quickly
+				return Response.json([]);
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1686,24 +1836,26 @@ describe("createOpenCodeProvider", () => {
 
 	it("generate() does not disable structured output on an unrelated 400", async () => {
 		let attempts = 0;
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: `ses_unrelated_${attempts}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			attempts++;
-			if (attempts === 1) {
-				// 400 with "format" word but not a structured-output rejection
-				return new Response('{"error":"Invalid request format: parts array is missing"}', { status: 400 });
-			}
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: `ses_unrelated_${attempts}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				attempts++;
+				if (attempts === 1) {
+					// 400 with "format" word but not a structured-output rejection
+					return new Response('{"error":"Invalid request format: parts array is missing"}', { status: 400 });
+				}
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		// Should throw, not silently disable structured output and retry
@@ -1712,19 +1864,21 @@ describe("createOpenCodeProvider", () => {
 	});
 
 	it("generate() preserves error body on non-format 400", async () => {
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_400",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			return new Response("bad request: missing required field", { status: 400 });
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_400",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				return new Response("bad request: missing required field", { status: 400 });
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		await expect(provider.generate("test")).rejects.toThrow(/bad request: missing required field/);
@@ -1735,19 +1889,21 @@ describe("createOpenCodeProvider", () => {
 		expect(provider.name).toBe("opencode:github-copilot/gpt-4o");
 	});
 	it("generate() refreshes bypass TTL on reused session", async () => {
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: "ses_bypass_refresh",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: "ses_bypass_refresh",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({ baseUrl: "http://localhost:9999" });
 		await provider.generate("prompt 1");
@@ -1771,24 +1927,26 @@ describe("createOpenCodeProvider", () => {
 		let peak = 0;
 		let inflight = 0;
 
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: `ses_conc_${Date.now()}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			inflight++;
-			if (inflight > peak) peak = inflight;
-			// Brief delay to allow other semaphore-gated requests to overlap
-			await new Promise((resolve) => setTimeout(resolve, 50));
-			inflight--;
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: `ses_conc_${Date.now()}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				inflight++;
+				if (inflight > peak) peak = inflight;
+				// Brief delay to allow other semaphore-gated requests to overlap
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				inflight--;
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const N = 8;
 		const providers = Array.from({ length: N }, (_, i) =>
@@ -1805,20 +1963,22 @@ describe("createOpenCodeProvider", () => {
 	it("generate() throws deadline error when semaphore wait exceeds timeout", async () => {
 		const blockers: Array<() => void> = [];
 
-		mockFetch(withParentSession(async (url) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: `ses_deadline_${Date.now()}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			await new Promise<void>((resolve) => blockers.push(resolve));
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: `ses_deadline_${Date.now()}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				await new Promise<void>((resolve) => blockers.push(resolve));
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		// Fill all 4 semaphore slots with blocked requests
 		const fillers = Array.from({ length: 4 }, (_, i) =>
@@ -1844,27 +2004,25 @@ describe("createOpenCodeProvider", () => {
 		const sessionIds: string[] = [];
 		let sessionCounter = 0;
 
-		mockFetch(withParentSession(async (url, init) => {
-			if (
-				init?.method === "POST" &&
-				url.includes("/session") &&
-				!url.includes("/message")
-			) {
-				const id = `ses_race_${++sessionCounter}`;
-				return Response.json({
-					id,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			const match = url.match(/\/session\/([^/]+)\/message/);
-			if (match) sessionIds.push(match[1]);
-			await new Promise((resolve) => setTimeout(resolve, 50));
-			return Response.json(openCodeResponse("ok"));
-		}));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (init?.method === "POST" && url.includes("/session") && !url.includes("/message")) {
+					const id = `ses_race_${++sessionCounter}`;
+					return Response.json({
+						id,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
+				}
+				const match = url.match(/\/session\/([^/]+)\/message/);
+				if (match) sessionIds.push(match[1]);
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				return Response.json(openCodeResponse("ok"));
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1872,13 +2030,8 @@ describe("createOpenCodeProvider", () => {
 		});
 
 		const callA = provider.generate("prompt-a");
-		const callBC = new Promise<void>((resolve) =>
-			setTimeout(resolve, 10),
-		).then(() =>
-			Promise.all([
-				provider.generate("prompt-b"),
-				provider.generate("prompt-c"),
-			]),
+		const callBC = new Promise<void>((resolve) => setTimeout(resolve, 10)).then(() =>
+			Promise.all([provider.generate("prompt-b"), provider.generate("prompt-c")]),
 		);
 
 		const [resultA, resultsBC] = await Promise.all([callA, callBC]);
@@ -1901,58 +2054,53 @@ describe("createOpenCodeProvider", () => {
 		const sessionIds: string[] = [];
 		const pollTargets: string[] = [];
 
-		mockFetch(withParentSession(async (url, init) => {
-			// Child session creation — track IDs
-			if (
-				init?.method === "POST" &&
-				url.includes("/session") &&
-				!url.includes("/message")
-			) {
-				const id = `ses_fmt_${++sessionCounter}`;
-				sessionIds.push(id);
-				return Response.json({
-					id,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-
-			// POST message
-			if (init?.method === "POST" && url.includes("/message")) {
-				const match = url.match(/\/session\/([^/]+)\/message/);
-				const sid = match?.[1] ?? "";
-				if (sid === "ses_fmt_1") {
-					// First session → 422 format rejection
-					return new Response(
-						'{"issues":[{"path":["format"],"message":"Unrecognized key"}]}',
-						{ status: 422 },
-					);
+		mockFetch(
+			withParentSession(async (url, init) => {
+				// Child session creation — track IDs
+				if (init?.method === "POST" && url.includes("/session") && !url.includes("/message")) {
+					const id = `ses_fmt_${++sessionCounter}`;
+					sessionIds.push(id);
+					return Response.json({
+						id,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
+					});
 				}
-				// Retry session → empty body (forces poll fallback)
-				return new Response("", {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
 
-			// GET poll — record which session is being polled
-			if (init?.method === "GET" || (!init?.method && url.includes("/message"))) {
-				const match = url.match(/\/session\/([^/]+)\/message/);
-				if (match) pollTargets.push(match[1]);
-
-				// Only the retry session has the assistant message
-				if (match?.[1] === "ses_fmt_2") {
-					return Response.json([openCodeResponse("polled-from-retry")]);
+				// POST message
+				if (init?.method === "POST" && url.includes("/message")) {
+					const match = url.match(/\/session\/([^/]+)\/message/);
+					const sid = match?.[1] ?? "";
+					if (sid === "ses_fmt_1") {
+						// First session → 422 format rejection
+						return new Response('{"issues":[{"path":["format"],"message":"Unrecognized key"}]}', { status: 422 });
+					}
+					// Retry session → empty body (forces poll fallback)
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
 				}
-				// Original session returns empty — no message here
-				return Response.json([]);
-			}
 
-			return new Response(null, { status: 404 });
-		}));
+				// GET poll — record which session is being polled
+				if (init?.method === "GET" || (!init?.method && url.includes("/message"))) {
+					const match = url.match(/\/session\/([^/]+)\/message/);
+					if (match) pollTargets.push(match[1]);
+
+					// Only the retry session has the assistant message
+					if (match?.[1] === "ses_fmt_2") {
+						return Response.json([openCodeResponse("polled-from-retry")]);
+					}
+					// Original session returns empty — no message here
+					return Response.json([]);
+				}
+
+				return new Response(null, { status: 404 });
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -1980,15 +2128,8 @@ describe("createOpenCodeProvider", () => {
 
 		mockFetch(async (url, init) => {
 			// Parent session
-			if (
-				init?.method === "POST" &&
-				url.includes("/session") &&
-				!url.includes("/message")
-			) {
-				const body =
-					typeof init.body === "string"
-						? (JSON.parse(init.body) as Record<string, unknown>)
-						: {};
+			if (init?.method === "POST" && url.includes("/session") && !url.includes("/message")) {
+				const body = typeof init.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
 				if (body.title === "signet-system") {
 					return Response.json({
 						id: "ses_parent",
@@ -2337,9 +2478,9 @@ describe("awaitSubprocessWithDeadline — success-after-timeout race", () => {
 			return "success-value";
 		};
 
-		await expect(
-			awaitSubprocessWithDeadline(fakeProc, 30, "test", 30, resultFn),
-		).rejects.toBeInstanceOf(SemaphoreTimeoutError);
+		await expect(awaitSubprocessWithDeadline(fakeProc, 30, "test", 30, resultFn)).rejects.toBeInstanceOf(
+			SemaphoreTimeoutError,
+		);
 
 		expect(killed).toBe(true);
 	});
@@ -2355,33 +2496,32 @@ describe("createOpenCodeProvider — session creation vs semaphore ordering", ()
 		const sessionDelayMs = 300;
 		const messageDelayMs = 200;
 
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				await new Promise((r) => setTimeout(r, sessionDelayMs));
-				return Response.json({
-					id: "ses_deadline_test",
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			// LLM call takes 200ms — should hit AbortError if only 100ms remains
-			return new Promise((_resolve, reject) => {
-				const signal = init?.signal;
-				const timer = setTimeout(
-					() => _resolve(Response.json(openCodeResponse("ok"))),
-					messageDelayMs,
-				);
-				if (signal) {
-					signal.addEventListener("abort", () => {
-						clearTimeout(timer);
-						reject(new DOMException("aborted", "AbortError"));
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					await new Promise((r) => setTimeout(r, sessionDelayMs));
+					return Response.json({
+						id: "ses_deadline_test",
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
 					});
 				}
-			});
-		}));
+				// LLM call takes 200ms — should hit AbortError if only 100ms remains
+				return new Promise((_resolve, reject) => {
+					const signal = init?.signal;
+					const timer = setTimeout(() => _resolve(Response.json(openCodeResponse("ok"))), messageDelayMs);
+					if (signal) {
+						signal.addEventListener("abort", () => {
+							clearTimeout(timer);
+							reject(new DOMException("aborted", "AbortError"));
+						});
+					}
+				});
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -2407,41 +2547,42 @@ describe("createOpenCodeProvider — retry session creation respects deadline", 
 		// only ~200ms of the 600ms budget remains after the first round-trip.
 		let sessionCount = 0;
 
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				sessionCount++;
-				if (sessionCount > 1) {
-					// Second session creation is slow
-					await new Promise<void>((resolve, reject) => {
-						const timer = setTimeout(() => resolve(), 500);
-						const signal = init?.signal;
-						if (signal) {
-							signal.addEventListener("abort", () => {
-								clearTimeout(timer);
-								reject(new DOMException("aborted", "AbortError"));
-							});
-						}
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					sessionCount++;
+					if (sessionCount > 1) {
+						// Second session creation is slow
+						await new Promise<void>((resolve, reject) => {
+							const timer = setTimeout(() => resolve(), 500);
+							const signal = init?.signal;
+							if (signal) {
+								signal.addEventListener("abort", () => {
+									clearTimeout(timer);
+									reject(new DOMException("aborted", "AbortError"));
+								});
+							}
+						});
+					}
+					return Response.json({
+						id: `ses_retry_${sessionCount}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
 					});
 				}
-				return Response.json({
-					id: `ses_retry_${sessionCount}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			if (url.includes("/message")) {
-				// First message: 422 with format rejection (takes ~300ms)
-				await new Promise((r) => setTimeout(r, 300));
-				return new Response(
-					JSON.stringify({ issues: [{ path: ["format"], message: "unsupported" }] }),
-					{ status: 422 },
-				);
-			}
-			return new Response("not found", { status: 404 });
-		}));
+				if (url.includes("/message")) {
+					// First message: 422 with format rejection (takes ~300ms)
+					await new Promise((r) => setTimeout(r, 300));
+					return new Response(JSON.stringify({ issues: [{ path: ["format"], message: "unsupported" }] }), {
+						status: 422,
+					});
+				}
+				return new Response("not found", { status: 404 });
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",
@@ -2536,6 +2677,7 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 		const N = 4; // matches DEFAULT_MAX_LLM_CONCURRENCY
 		let postCount = 0;
 
+
 		mockFetch(withParentSession(async (url, init) => {
 			// Session creation
 			if (url.includes("/session") && !url.includes("/message")) {
@@ -2573,6 +2715,7 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 			return Response.json([]);
 		}));
 
+
 		const providers = Array.from({ length: N }, () =>
 			createOpenCodeProvider({
 				baseUrl: "http://localhost:9999",
@@ -2607,52 +2750,54 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 		let ollamaFetchAbortedAt = 0;
 		let postCount = 0;
 
-		mockFetch(withParentSession(async (url, init) => {
-			if (url.includes("/session") && !url.includes("/message")) {
-				return Response.json({
-					id: `ses_deadline_${postCount}`,
-					slug: "test",
-					projectID: "p",
-					directory: "/tmp",
-					title: "test",
-					version: "1",
-				});
-			}
-			if (url.includes("/api/tags")) {
-				return Response.json({ models: [{ name: "qwen3:4b" }] });
-			}
-			if (url.includes("/api/generate")) {
-				ollamaFetchStartedAt = performance.now();
-				try {
-					await new Promise((resolve, reject) => {
-						const t = setTimeout(resolve, 10_000);
-						if (init?.signal) {
-							init.signal.addEventListener("abort", () => {
-								clearTimeout(t);
-								reject(new DOMException("Aborted", "AbortError"));
-							});
-						}
+		mockFetch(
+			withParentSession(async (url, init) => {
+				if (url.includes("/session") && !url.includes("/message")) {
+					return Response.json({
+						id: `ses_deadline_${postCount}`,
+						slug: "test",
+						projectID: "p",
+						directory: "/tmp",
+						title: "test",
+						version: "1",
 					});
-				} catch {
-					ollamaFetchAbortedAt = performance.now();
-					throw new DOMException("Aborted", "AbortError");
 				}
-				return Response.json({
-					response: "should not reach this",
-					prompt_eval_count: 10,
-					eval_count: 5,
-				});
-			}
-			if (init?.method === "POST" && url.includes("/message")) {
-				postCount++;
-				await new Promise((r) => setTimeout(r, 300));
-				return new Response("", {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-			return Response.json([]);
-		}));
+				if (url.includes("/api/tags")) {
+					return Response.json({ models: [{ name: "qwen3:4b" }] });
+				}
+				if (url.includes("/api/generate")) {
+					ollamaFetchStartedAt = performance.now();
+					try {
+						await new Promise((resolve, reject) => {
+							const t = setTimeout(resolve, 10_000);
+							if (init?.signal) {
+								init.signal.addEventListener("abort", () => {
+									clearTimeout(t);
+									reject(new DOMException("Aborted", "AbortError"));
+								});
+							}
+						});
+					} catch {
+						ollamaFetchAbortedAt = performance.now();
+						throw new DOMException("Aborted", "AbortError");
+					}
+					return Response.json({
+						response: "should not reach this",
+						prompt_eval_count: 10,
+						eval_count: 5,
+					});
+				}
+				if (init?.method === "POST" && url.includes("/message")) {
+					postCount++;
+					await new Promise((r) => setTimeout(r, 300));
+					return new Response("", {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				return Response.json([]);
+			}),
+		);
 
 		const provider = createOpenCodeProvider({
 			baseUrl: "http://localhost:9999",

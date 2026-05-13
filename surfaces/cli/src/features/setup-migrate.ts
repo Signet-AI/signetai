@@ -200,13 +200,21 @@ export async function runExistingSetupWizard(
 				min_score: 0.3,
 			},
 			identity: {
-				agents: "AGENTS.md",
-				soul: "SOUL.md",
-				identity: "IDENTITY.md",
-				user: "USER.md",
-				heartbeat: "HEARTBEAT.md",
-				memory: "MEMORY.md",
-				tools: "TOOLS.md",
+				preset: "openclaw",
+				startup: {
+					load: [
+						{ path: "AGENTS.md", role: "operating_instructions", budget: 12000 },
+						{ path: "SOUL.md", role: "persona", budget: 4000 },
+						{ path: "IDENTITY.md", role: "agent_identity", budget: 2000 },
+						{ path: "USER.md", role: "user_profile", budget: 6000 },
+						{ path: "MEMORY.md", role: "working_memory", budget: 10000 },
+					],
+				},
+				special: [
+					{ path: "HEARTBEAT.md", kind: "heartbeat", role: "heartbeat_prompt", budget: 4000 },
+					{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4000 },
+					{ path: "BOOTSTRAP.md", kind: "bootstrap", role: "bootstrap_prompt", budget: 4000 },
+				],
 			},
 		};
 
@@ -270,6 +278,9 @@ export async function runExistingSetupWizard(
 			{ name: "SOUL.md", template: "SOUL.md.template" },
 			{ name: "IDENTITY.md", template: "IDENTITY.md.template" },
 			{ name: "USER.md", template: "USER.md.template" },
+			{ name: "HEARTBEAT.md", template: "HEARTBEAT.md.template" },
+			{ name: "DREAMING.md", template: "DREAMING.md.template" },
+			{ name: "BOOTSTRAP.md", template: "BOOTSTRAP.md.template" },
 		];
 
 		for (const doc of docs) {

@@ -246,6 +246,16 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		maxTokens: 256,
 		poll: 5000,
 	},
+	reflections: {
+		enabled: true,
+		model: "qwen3:4b",
+		timeout: 120000,
+		maxTokens: 4000,
+		schedule: "0 8 * * *",
+		timeWindowHours: 24,
+		maxMemories: 50,
+		maxSummaries: 10,
+	},
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
@@ -419,6 +429,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 	const writeGateRaw = raw.writeGate as Record<string, unknown> | undefined;
 	const modelRegistryRaw = raw.modelRegistry as Record<string, unknown> | undefined;
 	const hintsRaw = raw.hints as Record<string, unknown> | undefined;
+	const reflectionsRaw = raw.reflections as Record<string, unknown> | undefined;
 
 	// Helper: resolve with flat-fallback (non-extraction fields still nested-first)
 	const d = DEFAULT_PIPELINE_V2;
@@ -990,6 +1001,23 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			timeout: clampPositive(hintsRaw?.timeout, 5000, 120000, d.hints?.timeout ?? 60000),
 			maxTokens: clampPositive(hintsRaw?.maxTokens, 64, 1024, d.hints?.maxTokens ?? 256),
 			poll: clampPositive(hintsRaw?.poll, 1000, 60000, d.hints?.poll ?? 5000),
+		},
+
+		reflections: {
+			enabled: resolveBool(reflectionsRaw?.enabled, undefined, d.reflections.enabled),
+			model:
+				typeof reflectionsRaw?.model === "string" && reflectionsRaw.model.trim().length > 0
+					? reflectionsRaw.model
+					: d.reflections.model,
+			timeout: clampPositive(reflectionsRaw?.timeout, 5000, 300000, d.reflections.timeout),
+			maxTokens: clampPositive(reflectionsRaw?.maxTokens, 500, 16000, d.reflections.maxTokens),
+			schedule:
+				typeof reflectionsRaw?.schedule === "string" && reflectionsRaw.schedule.trim().length > 0
+					? reflectionsRaw.schedule
+					: d.reflections.schedule,
+			timeWindowHours: clampPositive(reflectionsRaw?.timeWindowHours, 1, 168, d.reflections.timeWindowHours),
+			maxMemories: clampPositive(reflectionsRaw?.maxMemories, 5, 500, d.reflections.maxMemories),
+			maxSummaries: clampPositive(reflectionsRaw?.maxSummaries, 1, 50, d.reflections.maxSummaries),
 		},
 	};
 }

@@ -187,6 +187,24 @@ async function appendCanonicalLiveTranscriptTurns(params: {
 const sessionStartSeen = new Map<string, number>();
 const SESSION_START_SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+function sessionStartDedupeKey(req: {
+	readonly harness?: string;
+	readonly agentId?: string;
+	readonly project?: string;
+	readonly cwd?: string;
+	readonly sessionKey?: string;
+	readonly sessionId?: string;
+}): string | null {
+	const sessionKey = req.sessionKey || req.sessionId;
+	if (!sessionKey) return null;
+	return [
+		resolveAgentId({ agentId: req.agentId, sessionKey }),
+		req.harness ?? "",
+		req.project ?? req.cwd ?? "",
+		sessionKey,
+	].join("\0");
+}
+
 function pruneSessionStartSeen(now = Date.now()): void {
 	for (const [sessionKey, seenAt] of sessionStartSeen.entries()) {
 		if (now - seenAt > SESSION_START_SEEN_TTL_MS) sessionStartSeen.delete(sessionKey);
@@ -1443,7 +1461,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	// a minimal stub. Identity files / MEMORY.md are already in the context.
 	// Must fire BEFORE initContinuity to avoid resetting accumulated state.
 	pruneSessionStartSeen();
-	if (req.sessionKey && sessionStartSeen.has(req.sessionKey)) {
+	const dedupeKey = sessionStartDedupeKey(req);
+	if (dedupeKey && sessionStartSeen.has(dedupeKey)) {
 		logger.info("hooks", "Session start dedup — returning minimal stub", {
 			harness: req.harness,
 			sessionKey: req.sessionKey,
@@ -1897,7 +1916,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	// Surface available secrets so agents know what's available
 	try {
-		const secretNames = listSecrets();
+		const secretNames = await listSecrets();
 		if (secretNames.length > 0) {
 			injectParts.push("\n## Available Secrets\n");
 			injectParts.push("Use the `secret_exec` MCP tool to run commands with these secrets injected as env vars.\n");
@@ -1947,8 +1966,8 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	});
 
 	// Mark this session as having received the full inject
-	if (req.sessionKey) {
-		sessionStartSeen.set(req.sessionKey, Date.now());
+	if (dedupeKey) {
+		sessionStartSeen.set(dedupeKey, Date.now());
 	}
 
 	return {
@@ -2986,6 +3005,8 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 
 	if (req.reason === "clear") {
 		// Caller intends to discard session context — skip checkpoint, just clean up
+		const dedupeKey = sessionStartDedupeKey(req);
+		if (dedupeKey) sessionStartSeen.delete(dedupeKey);
 		if (sessionKey) sessionStartSeen.delete(sessionKey);
 		clearContinuity(sessionKey);
 		return { memoriesSaved: 0 };
@@ -3070,17 +3091,21 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	// storage must preserve the full canonical transcript.
 	const retainedTranscript = transcript;
 
-	// Derive a stable session identity for artifact paths.  When the
-	// transcript is empty and no explicit sessionId was provided,
-	// deriveSessionEndFallbackId returns a random UUID — making this call
-	// non-idempotent.  This is acceptable because: (a) empty-transcript
-	// sessions skip the transcript artifact write (guard below) and the
-	// summary job (< 500 char guard), so no ghost artifacts accumulate;
-	// (b) very short (1–499 char) transcripts do write a transcript
-	// artifact with a non-deterministic path, but the summary job is
-	// still skipped, limiting blast radius.
-	const sessionId =
-		req.sessionId?.trim() || deriveSessionEndFallbackId(sessionKey, req.transcriptPath, retainedTranscript);
+	// Derive a session-end artifact identity from the stable harness identity
+	// plus transcript path/content. Some harnesses reuse the same sessionId
+	// when a conversation is resumed; raw reuse would make immutable summary
+	// artifacts collide with an earlier close of the same conversation.
+	// `sessionKey` remains the continuity/grouping key, while this sessionId is
+	// the immutable artifact identity for this particular session-end snapshot.
+	// When the transcript is empty, deriveSessionEndFallbackId returns a random
+	// UUID; empty sessions skip summaries and transcript artifacts below, and
+	// very short transcript artifacts intentionally prefer uniqueness over
+	// mutating a prior immutable artifact.
+	const sessionId = deriveSessionEndFallbackId(
+		req.sessionId?.trim() || sessionKey,
+		req.transcriptPath,
+		retainedTranscript,
+	);
 
 	// Lossless retention: keep the live transcript snapshot available to
 	// subsequent hook calls before returning. The heavier canonical JSONL

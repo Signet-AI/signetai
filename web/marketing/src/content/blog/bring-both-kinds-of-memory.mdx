@@ -1,0 +1,108 @@
+---
+title: "Bring Both Kinds of Memory"
+description: "Signet should let you bring both curated knowledge and structured data into one place, then let your agents use whichever form the work requires. The answer is not wiki or database. It is both."
+date: 2026-05-11
+author: "Nicholai"
+tags: ["architecture", "memory", "knowledge"]
+image: /blog/bring-both-kinds-of-memory.png
+draft: false
+---
+
+Signet should let you bring both curated knowledge and structured data into one place, then let your agents use whichever form the work requires.
+
+That sounds simple, but it cuts through one of the more confused arguments in agent memory right now. People keep asking whether the future is markdown wikis or structured databases, whether agents should maintain human-readable notes or query precise tables, whether memory should be a living notebook or a knowledge graph. The answer is yes. Not because tradeoffs are fake, but because different kinds of knowledge deserve different shapes.
+
+A research note is not a customer record. A codebase is not a journal entry. A meeting transcript is not the same thing as the decision that came out of it. Trying to force all of those into one memory model is how you get systems that look elegant in demos and fall apart the moment real work touches them.
+
+The useful question is not, "Should memory be a wiki or a database?" The useful question is, "When should the system do the hard thinking?"
+
+
+## When thinking happens at write time
+
+A wiki is a write-time intelligence system.
+
+When you drop in a source, the agent does not just store it. It reads the source, decides what matters, updates existing pages, adds links, names contradictions, and turns raw material into something you can browse later. The value is not the folder of markdown files by itself. The value is that the system compiled understanding once instead of forcing every future question to rediscover it.
+
+This is why Karpathy's LLM wiki landed so hard. Most people have spent the last few years uploading files into chat windows and asking the model to reason across them. The model does real cognitive work, gives a decent answer, and then throws the work away. Ask a similar question next week and the same thing happens again. It searches, rereads, reconnects, summarizes, forgets.
+
+A maintained wiki changes that loop. The agent becomes a keeper of the thinking system, not just an answer machine. It writes down the synthesis. It keeps the links alive. It notices that this week's paper changes the meaning of last week's note. It gives you a place to wander through your own understanding.
+
+That matters for the kind of work where meaning lives between sources. If you are reading ten papers on agent memory, the value is not just in paper one or paper six. It is in the way paper six changes your reading of paper one. It is in the contradiction between two claims that both seemed true until they sat next to each other. It is in the slow formation of taste.
+
+Obsidian is good at this because it respects the shape of thought. A note can be a source, a summary, a concept, a contradiction, a project hub, or a half-formed question. Wikilinks let ideas touch without needing a rigid schema first. The file stays readable. The graph stays inspectable. Git can show what changed.
+
+That is curated knowledge. It carries judgment. It is not just data about the world. It is a record of how someone is coming to understand the world.
+
+
+## When thinking happens at read time
+
+A structured memory system is different. It does less interpretation when the source arrives and more interpretation when a question is asked.
+
+That is not a weakness. It is the whole point.
+
+If you store a meeting as structured data, you can keep the speaker, timestamp, client, project, decision, action items, confidence, and source link separate. If you store a codebase as a structured graph, an agent can ask which module calls which function, which files changed recently, which symbols connect two features, and which claim came from which source. If you store personal memory as entities, aspects, and attributes, the agent can retrieve a preference without pretending a paragraph summary is the canonical truth.
+
+This kind of memory wins when precision matters. You can filter it, sort it, join it, query it, audit it, and expose it safely to multiple agents at once.
+
+A folder of markdown files can approximate some of that, bless its heart, but there is a point where approximation becomes fiction. "Find every pricing conversation from Q1 involving this client" is not a literary question. "Show which code paths touch this API" is not a vibes question. "Which facts about this person are current, and which were superseded?" is not something you want buried in prose that sounds confident because the sentence is well written.
+
+Structured memory also preserves tension. A wiki can accidentally smooth over a contradiction because prose wants to resolve things. If engineering says a build will take twelve weeks and sales promised eight, the system should not elegantly average that into ten. The gap is the point. A structured store can keep both claims, both sources, both timestamps, and the fact that they conflict.
+
+That is read-time intelligence. The system keeps the substrate faithful, then lets the agent reason from it when the actual question appears.
+
+
+## Why one layer is not enough
+
+The temptation is to pick a side.
+
+Wiki people are right that raw storage is not understanding. If all you have is a pile of transcripts, PDFs, source files, and chat logs, your agent has to rebuild meaning from scratch every time. It burns tokens, misses connections, and repeats work it already did yesterday.
+
+Database people are right that clean summaries are not ground truth. A wiki page can hide what it left out. It can make old understanding look current. It can turn uncertainty into confident prose. It can become a beautiful dashboard that hides the one row you needed to see.
+
+Both failures matter because agents do not only answer questions anymore. They act. They write code, make plans, draft emails, prepare reports, inspect systems, route work, and carry decisions from one environment into another. If the memory layer is too raw, the agent wastes effort. If it is too distilled, the agent inherits yesterday's editorial mistake and builds on it.
+
+This is the reason the no-escape theorem matters beyond the math. Meaning-based retrieval is useful, but it degrades as the corpus grows. Exact records are stable, but inert. The sane architecture keeps an exact substrate and builds semantic or narrative layers over it. One layer preserves what happened. The other helps the agent understand why it matters.
+
+Separately, neither is enough. Together, they stop pretending there is only one shape for knowledge.
+
+
+## What Signet should do
+
+Signet's job is to be the place where these forms meet.
+
+A user should be able to connect an Obsidian vault and have agents treat it as a curated knowledge base, not as a dumb folder of text. The backlinks, project hubs, daily notes, literature notes, people notes, and permanent notes are part of the meaning. They should be indexed, searchable, linkable, and available to agents without stripping away the narrative shape that made the vault useful in the first place.
+
+The same user should be able to connect a codebase and have agents reason over its structure. Not just grep strings. Not just dump files into context. The agent should be able to ask about modules, symbols, call paths, ownership, tests, recent changes, and architectural constraints.
+
+The same user should be able to connect structured databases. Customers, tasks, calendar events, memories, research claims, audit logs, whatever the work requires. Those stores should remain queryable as structured stores. They should not have to be flattened into prose before an agent can use them.
+
+That is the product thesis: Signet lets you bring curated data and structured data to one place, then lets your agents use both.
+
+Not one memory system for every kind of knowledge. One context layer that can hold multiple kinds of knowledge without confusing them.
+
+The important part is provenance. Signet should know the difference between a source and a synthesis, between a claim and a summary, between a code symbol and a note about that symbol, between a human-written project hub and an agent-generated brief. The compiled layer can be useful without becoming the source of truth.
+
+That gives users a better deal than the current split. Today, your curated thinking lives in Obsidian. Your code lives in repositories. Your structured data lives in databases. Your agent memory lives wherever the harness decided to hide it. Every tool gets a partial view, so every agent behaves like a smart stranger standing in the wrong room.
+
+Signet should make the room portable.
+
+The agent should be able to walk into your work with the vault, the database, the codebase, and the memory layer available as different surfaces of the same owned context. It should know when to read the wiki, when to query the database, when to inspect the file, and when to ask for the raw source because the summary is not enough.
+
+That is not a small distinction. It is the difference between memory as a feature and context as infrastructure.
+
+
+## The human still owns the shape
+
+There is one more piece that matters. A system like this should not erase human curation.
+
+The appeal of an Obsidian vault is not that markdown is magical. It is that the human can shape the knowledge. A project hub carries emphasis. A people note carries relational judgment. A permanent note carries a claim someone was willing to stand behind. A daily note carries the mess of what actually happened before it became a clean story.
+
+Agents can help maintain that. They can transcribe, link, index, extract, summarize, and flag contradictions. They can do the bookkeeping humans are bad at maintaining. But they should not quietly replace the user's judgment with a shiny summary and call it memory.
+
+The same is true on the structured side. A database schema is a theory about what matters. If you track source, timestamp, confidence, and supersession, you are saying provenance matters. If you track entities and aspects, you are saying identity and context change over time. If you track code symbols and call edges, you are saying structure matters as much as text.
+
+Signet should respect those theories instead of flattening them.
+
+The goal is not to build one perfect brain in the cloud. The goal is to give agents durable access to the context users already own, in the forms where that context makes sense. Sometimes that form is a note. Sometimes it is a table. Sometimes it is a graph. Sometimes it is a raw file you should not summarize until the question demands it.
+
+The future of agent memory is not choosing between the study guide and the filing cabinet. It is giving the agent both, teaching it which one it is holding, and making sure the user owns the room they live in.

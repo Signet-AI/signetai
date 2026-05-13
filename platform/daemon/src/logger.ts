@@ -48,6 +48,7 @@ export type LogCategory =
 	| "predictor" // Predictive memory scorer
 	| "maintenance" // Autonomous maintenance worker
 	| "retention" // Retention worker (decay + cold archival)
+	| "reflections" // Daily reflection generation and writeback
 	| "summary-condensation" // Session summary DAG condensation
 	| "session-tracker" // Runtime-path session ownership + bypass TTL tracking
 	| "system" // System events

@@ -1,6 +1,6 @@
 {
   "docs/acp-integration": {
-    "title": "ACP Integration",
+    "title": "ACP and ACPX Integration",
     "url": "/docs/acp-integration/",
     "tags": [],
     "links": [],
@@ -57,9 +57,16 @@
     ],
     "collection": "docs"
   },
-  "docs/benchmarks": {
-    "title": "Benchmarks",
-    "url": "/docs/benchmarks/",
+  "docs/benchmarking-progress": {
+    "title": "benchmarking-progress",
+    "url": "/docs/benchmarking-progress/",
+    "tags": [],
+    "links": [],
+    "collection": "docs"
+  },
+  "docs/benchmarking": {
+    "title": "benchmarking",
+    "url": "/docs/benchmarking/",
     "tags": [],
     "links": [],
     "collection": "docs"
@@ -253,6 +260,13 @@
     ],
     "collection": "docs"
   },
+  "docs/north-star-ontology": {
+    "title": "North Star Ontology",
+    "url": "/docs/north-star-ontology/",
+    "tags": [],
+    "links": [],
+    "collection": "docs"
+  },
   "docs/pipeline": {
     "title": "Memory Pipeline",
     "url": "/docs/pipeline/",
@@ -283,6 +297,13 @@
       "docs/dashboard",
       "docs/pipeline"
     ],
+    "collection": "docs"
+  },
+  "docs/release_channels": {
+    "title": "release_channels",
+    "url": "/docs/release_channels/",
+    "tags": [],
+    "links": [],
     "collection": "docs"
   },
   "docs/repo_map": {
@@ -356,6 +377,13 @@
     ],
     "collection": "docs"
   },
+  "docs/sources": {
+    "title": "Sources",
+    "url": "/docs/sources/",
+    "tags": [],
+    "links": [],
+    "collection": "docs"
+  },
   "docs/tray": {
     "title": "Desktop Tray",
     "url": "/docs/tray/",
@@ -369,6 +397,17 @@
     "tags": [],
     "links": [],
     "collection": "docs"
+  },
+  "blog/bring-both-kinds-of-memory": {
+    "title": "Bring Both Kinds of Memory",
+    "url": "/blog/bring-both-kinds-of-memory/",
+    "tags": [
+      "architecture",
+      "memory",
+      "knowledge"
+    ],
+    "links": [],
+    "collection": "blog"
   },
   "blog/introducing-signet": {
     "title": "What Is Signet",
@@ -458,6 +497,18 @@
     ],
     "collection": "blog"
   },
+  "blog/the-obsidian-of-ai-memory-systems": {
+    "title": "The Obsidian of AI Memory Systems",
+    "url": "/blog/the-obsidian-of-ai-memory-systems/",
+    "tags": [
+      "sovereignty",
+      "obsidian",
+      "knowledge",
+      "positioning"
+    ],
+    "links": [],
+    "collection": "blog"
+  },
   "blog/the-os-moment": {
     "title": "The OS Moment",
     "url": "/blog/the-os-moment/",
@@ -467,6 +518,17 @@
       "nemoclaw",
       "positioning",
       "architecture"
+    ],
+    "links": [],
+    "collection": "blog"
+  },
+  "blog/the-source-and-the-synthesis": {
+    "title": "The Source and the Synthesis",
+    "url": "/blog/the-source-and-the-synthesis/",
+    "tags": [
+      "architecture",
+      "memory",
+      "positioning"
     ],
     "links": [],
     "collection": "blog"

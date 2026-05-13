@@ -45,7 +45,7 @@ export function beginSourceIndexJob(sourceId: string, prefix = "source-index"): 
 export function markSourceIndexJobRunning(sourceId: string, jobId: string): SourceIndexJob | undefined {
 	if (!isCurrentSourceIndexJob(sourceId, jobId)) return undefined;
 	const current = sourceIndexJobs.get(sourceId);
-	if (!current) return undefined;
+	if (!current || (current.status !== "queued" && current.status !== "running")) return undefined;
 	const running: SourceIndexJob = {
 		...current,
 		status: "running",

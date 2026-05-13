@@ -54,3 +54,17 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Verify public GHCR latest pull
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          set -euo pipefail
+          tmp_config="$(mktemp -d)"
+          trap 'rm -rf "${tmp_config}"' EXIT
+          if ! DOCKER_CONFIG="${tmp_config}" docker manifest inspect ghcr.io/signet-ai/signet:latest >/tmp/signet-public-manifest.json; then
+            echo "::error::Published ghcr.io/signet-ai/signet:latest is not publicly pullable." >&2
+            echo "The stable Docker image was pushed, but anonymous GHCR pulls cannot retrieve it." >&2
+            echo "Set the GHCR package visibility to public and keep repository inheritance linked:" >&2
+            echo "https://github.com/orgs/Signet-AI/packages/container/package/signet/settings" >&2
+            exit 1
+          fi

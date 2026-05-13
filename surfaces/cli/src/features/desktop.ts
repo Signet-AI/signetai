@@ -16,11 +16,12 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveWorkspaceSourceRepoPath } from "@signet/core";
+import { resolveWorkspaceSourceRepoPath, syncWorkspaceSourceRepo } from "@signet/core";
 import { resolveAgentsDir } from "../lib/workspace.js";
 
 export interface DesktopCommandOptions {
 	readonly repo?: string;
+	readonly skipSourceSync?: boolean;
 }
 
 export interface DesktopInstallOptions extends DesktopCommandOptions {
@@ -46,6 +47,7 @@ interface DesktopCommandContext {
 	readonly home?: string;
 	readonly platform?: NodeJS.Platform;
 	readonly runner?: CommandRunner;
+	readonly syncWorkspaceSourceRepo?: typeof syncWorkspaceSourceRepo;
 }
 
 interface CommandResult {
@@ -103,11 +105,24 @@ function desktopSourceCheckoutCandidates(ctx: Pick<DesktopCommandContext, "cwd" 
 	});
 }
 
+function prepareDesktopSourceCheckout(options: DesktopCommandOptions, ctx: DesktopCommandContext): string {
+	const env = ctx.env ?? process.env;
+	const explicit = options.repo?.trim() || env.SIGNET_SOURCE_DIR?.trim();
+	if (explicit || options.skipSourceSync) return resolveDesktopSourceCheckout(options.repo, ctx);
+
+	const workspace = resolveAgentsDir(env).path;
+	const sync = (ctx.syncWorkspaceSourceRepo ?? syncWorkspaceSourceRepo)(workspace);
+	if (!["cloned", "pulled", "current"].includes(sync.status)) {
+		throw new Error(`Could not update Signet source checkout before desktop build: ${sync.message}`);
+	}
+	return sync.path;
+}
+
 export function buildDesktopFromSource(
 	options: DesktopCommandOptions = {},
 	ctx: DesktopCommandContext = {},
 ): DesktopBuildResult {
-	const repo = resolveDesktopSourceCheckout(options.repo, ctx);
+	const repo = prepareDesktopSourceCheckout(options, ctx);
 	const runner = ctx.runner ?? defaultRunner;
 	const env = ctx.env ?? process.env;
 
@@ -121,10 +136,12 @@ export function installDesktopFromSource(
 	options: DesktopInstallOptions = {},
 	ctx: DesktopCommandContext = {},
 ): DesktopLinuxInstallResult {
-	const repo = resolveDesktopSourceCheckout(options.repo, ctx);
+	const repo = options.skipBuild
+		? resolveDesktopSourceCheckout(options.repo, ctx)
+		: prepareDesktopSourceCheckout(options, ctx);
 	const workspace = resolveAgentsDir(ctx.env ?? process.env).path;
 	if (!options.skipBuild) {
-		buildDesktopFromSource({ repo }, ctx);
+		buildDesktopFromSource({ repo, skipSourceSync: true }, ctx);
 	}
 
 	const platform = ctx.platform ?? process.platform;

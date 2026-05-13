@@ -2275,10 +2275,10 @@ Returns `404` if the secret does not exist.
 
 ### POST /api/secrets/exec
 
-Execute a shell command with multiple secrets injected into the subprocess
+Queue a shell command with multiple secrets injected into the subprocess
 environment. Callers pass a map of env var names to secret references —
 never actual values. References can be Signet secret names or direct
-1Password refs (`op://vault/item/field`). The daemon resolves and injects
+Bitwarden refs (`bw://name/NAME`, `bw://item/ITEM_ID/password`) and 1Password refs (`op://vault/item/field`). The daemon resolves and injects
 all values before spawning.
 
 **Request body**
@@ -2294,13 +2294,27 @@ all values before spawning.
 ```
 
 Both `command` and `secrets` are required. The `secrets` map must contain at
-least one entry.
+least one entry. `timeoutMs` is optional and defaults to 5 minutes; values are
+clamped between 1 second and 30 minutes. Secret exec is always queued and the
+route always returns immediately with HTTP `202`; callers poll the job endpoint
+for the redacted result.
 
-**Response**
+Timed-out commands are terminated by the daemon and finish with code `124` and
+`timedOut: true` in the polled job result.
+The secret exec queue is bounded; saturated queues return `429`. Output is
+redacted before truncation, and timeout cleanup targets the subprocess process
+group where the platform supports it.
+
+**Queued response (`202`)**
 
 ```json
-{ "code": 0, "stdout": "...", "stderr": "" }
+{ "id": "uuid", "status": "queued", "createdAt": "...", "timeoutMs": 300000 }
 ```
+
+### GET /api/secrets/exec/:jobId
+
+Return the in-memory status for a queued secret exec job. Completed jobs
+include the same redacted `result` object as the synchronous response.
 
 ### POST /api/secrets/:name/exec
 
@@ -2327,6 +2341,30 @@ from the URL path is injected under its own name.
 ```json
 { "code": 0, "stdout": "...", "stderr": "" }
 ```
+
+### GET /api/secrets/bitwarden/status
+
+Return Bitwarden provider status. Bitwarden is opt-in; when it is not connected, existing local Signet secrets remain the active store.
+
+### POST /api/secrets/bitwarden/connect
+
+Validate and store a Bitwarden CLI session token from `bw unlock --raw`. Body: `{ "session": "...", "activate": true, "folderId": "optional-folder-id" }`. If `activate` is true, future Signet secret writes use Bitwarden as the backing store while internal provider metadata remains local. CLI users should pipe the token with `bw unlock --raw | signet secret bitwarden connect --session-stdin` rather than passing it as an argument.
+
+### DELETE /api/secrets/bitwarden/connect
+
+Disconnect Bitwarden, remove the stored session/folder metadata, and switch the active provider back to `local`. Existing local Signet secrets are not deleted.
+
+### POST /api/secrets/bitwarden/provider
+
+Switch active provider with `{ "provider": "local" }` or `{ "provider": "bitwarden" }`. Switching to Bitwarden requires a connected session.
+
+### GET /api/secrets/bitwarden/folders
+
+List Bitwarden folders visible to the connected CLI session.
+
+### POST /api/secrets/bitwarden/migrate
+
+Copy existing local Signet secrets into Bitwarden. Defaults to dry-run: `{ "dryRun": true }`. Pass `{ "dryRun": false, "overwrite": true }` to write. Pass `deleteLocal: true` only when local copies should be removed after successful per-secret migration.
 
 ### GET /api/secrets/1password/status
 
@@ -3474,6 +3512,17 @@ signet knowledge attributes Nicholai food restaurants favorite_restaurant --stat
 signet knowledge hygiene
 ```
 
+### GET /api/knowledge/constellation
+
+Return the bounded graph overlay used by the dashboard Ontology constellation.
+Query parameters: `agent_id`, `limit`, `max_aspects_per_entity`,
+`max_attributes_per_aspect`, and `dependency_limit`. The daemon clamps these
+limits so dashboard navigation cannot load the entire knowledge graph into one
+read response.
+
+Defaults: `limit=150`, `max_aspects_per_entity=6`,
+`max_attributes_per_aspect=4`, and `dependency_limit=500`.
+
 ### GET /api/knowledge/hygiene
 
 Return a report-only graph hygiene scan. Query parameters: `agent_id`, `limit`,
@@ -4008,37 +4057,6 @@ same filters as `GET /api/telemetry/memory-search`; `limit` is clamped to
 1-10000.
 
 
-Timeline
---------
-
-Requires `analytics` permission.
-
-### GET /api/timeline/:id
-
-Build a chronological timeline for a memory entity, combining mutation
-history, log events, and errors associated with the given ID.
-
-**Response** — timeline object with ordered events from `buildTimeline()`.
-
-### GET /api/timeline/:id/export
-
-Same as `GET /api/timeline/:id` but wraps the result in an export envelope
-with version and timestamp metadata.
-
-**Response**
-
-```json
-{
-  "meta": {
-    "version": "0.109.x",
-    "exportedAt": "2026-02-21T10:00:00.000Z",
-    "entityId": "uuid"
-  },
-  "timeline": { ... }
-}
-```
-
-
 Logs
 ----
 
@@ -4303,6 +4321,7 @@ silently disappear from the API reference.
 | POST | `/api/repair/reclassify-entities` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/prune-chunk-groups` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/prune-singleton-entities` | platform/daemon/src/routes/repair-routes.ts |
+| POST | `/api/repair/prune-generic-entities` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/structural-backfill` | platform/daemon/src/routes/repair-routes.ts |
 | GET | `/api/repair/cold-stats` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/cluster-entities` | platform/daemon/src/routes/repair-routes.ts |

@@ -109,6 +109,17 @@ describe("knowledge feedback", () => {
 		expect(resolved.entityIds).toEqual(["entity-pinned"]);
 	});
 
+	test("entity health is empty after predictor comparison table retirement", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		getDbAccessor().withWriteTx((db) => {
+			db.exec("DROP TABLE IF EXISTS predictor_comparisons");
+		});
+
+		expect(getEntityHealth(getDbAccessor(), "default")).toEqual([]);
+	});
+
 	test("fts overlap feedback raises aspect weights and decay respects the floor", () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
@@ -174,5 +185,4 @@ describe("knowledge feedback", () => {
 		);
 		expect(afterDecay?.weight).toBe(0.1);
 	});
-
 });

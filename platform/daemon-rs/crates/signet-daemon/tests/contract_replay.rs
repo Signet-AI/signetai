@@ -9,6 +9,7 @@
 //!   cargo test -p signet-daemon --test contract_replay -- --ignored
 
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::json;
@@ -42,6 +43,11 @@ impl Drop for TestServer {
 impl TestServer {
     /// Start a daemon on an ephemeral port with a fresh DB.
     async fn start() -> Self {
+        Self::start_with_agent_yaml(|_| "agent:\n  name: test-agent\n  version: 1\n".to_string())
+            .await
+    }
+
+    async fn start_with_agent_yaml(build_yaml: impl FnOnce(&str) -> String) -> Self {
         let tmpdir = tempfile::tempdir().expect("failed to create tmpdir");
         let port = ephemeral_port();
         let base = format!("http://127.0.0.1:{port}");
@@ -53,11 +59,8 @@ impl TestServer {
         let daemon_dir = tmpdir.path().join(".daemon/logs");
         std::fs::create_dir_all(&daemon_dir).unwrap();
 
-        // Write a minimal agent.yaml
-        let yaml = format!(
-            "agent:\n  name: test-agent\n  version: 1\nhome: {}\n",
-            tmpdir.path().display()
-        );
+        // Write agent.yaml before startup so config-derived routes match TS daemon behavior.
+        let yaml = build_yaml(&tmpdir.path().display().to_string());
         std::fs::write(tmpdir.path().join("agent.yaml"), &yaml).unwrap();
 
         // Spawn daemon in background
@@ -135,6 +138,10 @@ impl TestServer {
     async fn json(&self, resp: reqwest::Response) -> serde_json::Value {
         resp.json().await.expect("failed to parse json")
     }
+
+    fn memory_db_path(&self) -> PathBuf {
+        self._tmpdir.path().join("memory/memories.db")
+    }
 }
 
 fn ephemeral_port() -> u16 {
@@ -195,6 +202,18 @@ async fn status_returns_db_info() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn auth_whoami_matches_typescript_local_shape() {
+    let server = TestServer::start().await;
+    let resp = server.get("/api/auth/whoami").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["authenticated"], false);
+    assert!(body["claims"].is_null());
+    assert_eq!(body["mode"], "local");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn memory_crud() {
     let server = TestServer::start().await;
 
@@ -202,7 +221,14 @@ async fn memory_crud() {
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["total"], 0);
+    assert_eq!(body["stats"]["total"], 0);
+
+    // Dashboard hot-list route should match the TypeScript daemon's
+    // tolerant response shape even when no memories have been accessed yet.
+    let resp = server.get("/api/memories/most-used?limit=bad").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["memories"].as_array().map(Vec::len), Some(0));
 
     // Remember
     let resp = server
@@ -218,9 +244,139 @@ async fn memory_crud() {
     let body = server.json(resp).await;
     assert!(body["id"].is_string() || body["status"].is_string());
 
-    // List should now have >= 1
+    // Batch forget preview should match the TypeScript daemon route shape.
+    let resp = server
+        .post(
+            "/api/memory/forget",
+            json!({
+                "ids": [body["id"].as_str().unwrap_or("")],
+                "mode": "preview"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let forget = server.json(resp).await;
+    assert_eq!(forget["mode"], "preview");
+    assert_eq!(forget["count"], 1);
+    assert_eq!(forget["requiresConfirm"], false);
+    assert!(forget["confirmToken"].is_string());
+    assert_eq!(forget["candidates"].as_array().map(Vec::len), Some(1));
+    assert_eq!(forget["candidates"][0]["id"], body["id"]);
+    assert!(forget["candidates"][0]["score"].is_number());
+    assert!(forget["candidates"][0]["pinned"].is_boolean());
+    assert!(forget["candidates"][0]["version"].is_number());
+
+    let resp = server
+        .post(
+            "/api/memory/forget",
+            json!({
+                "ids": [body["id"].as_str().unwrap_or("")],
+                "mode": "execute",
+                "reason": "contract replay cleanup"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let executed = server.json(resp).await;
+    assert_eq!(executed["mode"], "execute");
+    assert_eq!(executed["requested"], 1);
+    assert_eq!(executed["deleted"], 1);
+    assert_eq!(executed["results"].as_array().map(Vec::len), Some(1));
+    assert_eq!(executed["results"][0]["id"], body["id"]);
+    assert_eq!(executed["results"][0]["status"], "deleted");
+    assert!(executed["results"][0]["newVersion"].is_number());
+
+    let resp = server
+        .post(
+            "/api/memory/forget",
+            json!({
+                "ids": [body["id"].as_str().unwrap_or(""), "missing-memory-id"],
+                "mode": "execute",
+                "reason": "contract replay id status parity"
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let repeated = server.json(resp).await;
+    assert_eq!(repeated["mode"], "execute");
+    assert_eq!(repeated["requested"], 2);
+    assert_eq!(repeated["deleted"], 0);
+    assert_eq!(repeated["results"].as_array().map(Vec::len), Some(2));
+    assert_eq!(repeated["results"][0]["id"], body["id"]);
+    assert_eq!(repeated["results"][0]["status"], "already_deleted");
+    assert_eq!(repeated["results"][1]["id"], "missing-memory-id");
+    assert_eq!(repeated["results"][1]["status"], "not_found");
+
+    // List should still respond after mutation history updates
     let resp = server.get("/api/memories").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn most_used_memories_orders_limits_and_shapes_hot_list() {
+    let server = TestServer::start().await;
+    seed_most_used_memories(&server.memory_db_path());
+
+    let resp = server.get("/api/memories/most-used?limit=2").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let memories = body["memories"].as_array().expect("memories array");
+    assert_eq!(memories.len(), 2);
+
+    assert_eq!(memories[0]["id"], "hot-most-used");
+    assert_eq!(memories[0]["content"], "Most accessed memory");
+    assert_eq!(memories[0]["access_count"], 5);
+    assert_eq!(memories[0]["importance"], 0.2);
+    assert_eq!(memories[0]["type"], "fact");
+    assert_eq!(memories[0]["tags"], "hot,alpha");
+
+    // Same access_count should tie-break by importance descending, matching
+    // the TypeScript daemon's dashboard hot-list SQL contract.
+    assert_eq!(memories[1]["id"], "hot-important-tiebreaker");
+    assert_eq!(memories[1]["access_count"], 3);
+    assert_eq!(memories[1]["importance"], 0.9);
+}
+
+fn seed_most_used_memories(path: &std::path::Path) {
+    let conn = rusqlite::Connection::open(path).expect("open memories db");
+    let now = "2026-05-11T00:00:00Z";
+    for (id, content, hash, access_count, importance, tags) in [
+        (
+            "hot-most-used",
+            "Most accessed memory",
+            "contract-hot-most-used",
+            5_i64,
+            0.2_f64,
+            "hot,alpha",
+        ),
+        (
+            "hot-important-tiebreaker",
+            "Important tiebreaker memory",
+            "contract-hot-important",
+            3_i64,
+            0.9_f64,
+            "hot,beta",
+        ),
+        (
+            "hot-lower-tiebreaker",
+            "Lower tiebreaker memory",
+            "contract-hot-lower",
+            3_i64,
+            0.1_f64,
+            "hot,gamma",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO memories (
+                id, content, normalized_content, content_hash, type, tags,
+                access_count, importance, extraction_status, created_at,
+                updated_at, updated_by
+             ) VALUES (?1, ?2, ?2, ?3, 'fact', ?6, ?4, ?5, 'completed', ?7, ?7, 'contract_replay')",
+            rusqlite::params![id, content, hash, access_count, importance, tags, now],
+        )
+        .expect("seed most-used memory");
+    }
 }
 
 #[tokio::test]
@@ -236,6 +392,30 @@ async fn config_endpoints() {
 
     let resp = server.get("/api/features").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn features_endpoint_returns_agent_yaml_boolean_flags_only() {
+    let server = TestServer::start_with_agent_yaml(|_| {
+        format!(
+            "agent:\n  name: test-agent\n  version: 1\nfeatures:\n  rustDaemon: true\n  betaWidget: false\n  stringTrue: \"true\"\n  stringFalse: \"false\"\n  ignoredNumber: 1\n  ignoredString: yes\n"
+        )
+    })
+    .await;
+
+    let resp = server.get("/api/features").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(
+        body,
+        json!({
+            "rustDaemon": true,
+            "betaWidget": false,
+            "stringTrue": true,
+            "stringFalse": false,
+        })
+    );
 }
 
 #[tokio::test]
@@ -321,7 +501,6 @@ async fn pipeline_endpoints() {
     assert_eq!(body["success"], true);
     assert_eq!(body["paused"], false);
 }
-
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
@@ -421,6 +600,9 @@ async fn connectors_list() {
     let server = TestServer::start().await;
     let resp = server.get("/api/connectors").await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert!(body["connectors"].is_array());
+    assert_eq!(body["count"], body["connectors"].as_array().unwrap().len());
 }
 
 #[tokio::test]
@@ -561,4 +743,31 @@ async fn embeddings_stats() {
     let server = TestServer::start().await;
     let resp = server.get("/api/embeddings").await;
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn embeddings_status_matches_typescript_none_provider_shape() {
+    let server = TestServer::start_with_agent_yaml(|_| {
+        "agent:\n  name: test-agent\n  version: 1\nembedding:\n  provider: none\n  model: nomic-embed-text\n  dimensions: 768\n".to_string()
+    })
+    .await;
+
+    let resp = server.get("/api/embeddings/status").await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["provider"], "none");
+    assert_eq!(body["model"], "nomic-embed-text");
+    assert_eq!(body["base_url"], "http://localhost:11434");
+    assert_eq!(body["available"], false);
+    assert!(
+        body["checkedAt"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(
+        body["error"],
+        "Embedding provider set to 'none' — vector search disabled"
+    );
+    assert!(body["tracker"].is_null());
 }

@@ -134,13 +134,15 @@ This means:
 ### Identity
 
 The dreaming agent is not an anonymous data processor. It is the same
-agent — with full identity context — taking time to reflect on its
-own experiences. It receives the complete identity stack:
+agent taking time to reflect on its own experiences. It receives the
+startup identity/context selected by the active identity preset, then
+receives `DREAMING.md` as the dreaming task prompt. For example:
 
-- `AGENTS.md` — operating instructions
-- `SOUL.md` — personality, values, temperament
-- `IDENTITY.md` — who the agent is
-- `USER.md` — who the user is and how to relate to them
+- Minimal startup: `AGENTS.md`
+- Hermes startup: `SOUL.md`, then `AGENTS.md` / Hermes project context
+- OpenClaw startup: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
+  and `MEMORY.md`
+- Special dreaming prompt: `DREAMING.md` appended only for dreaming sessions
 
 This matters because memory consolidation requires judgment about
 *what matters to this agent and this user*. An isolated worker can't
@@ -190,19 +192,20 @@ the rest.
 
 The dreaming agent receives (via normal session-start hook):
 
-1. **Full identity context** — AGENTS.md, SOUL.md, IDENTITY.md,
-   USER.md, MEMORY.md. The complete identity stack, same as any
-   session. The agent needs to know who it is, what it's been doing,
-   and what the current state of its memory looks like.
+1. **Active startup identity context** — the ordered files selected by
+   `identity.startup.load` in `agent.yaml`. Minimal agents may load only
+   `AGENTS.md`; richer presets can load `SOUL.md`, `IDENTITY.md`,
+   `USER.md`, and `MEMORY.md` according to their configured order.
 2. **Unprocessed session summaries** — all summaries written since the
    last dreaming pass, ordered chronologically. These are the session
    DAG nodes at depth 0 with `kind = "session"`.
 3. **Current entity graph snapshot** — all entities with their aspects
    and attributes, plus relationship edges. This is the agent's view
    of existing long-term memory.
-4. **A brief task prompt** — telling the agent to reflect on the
-   sessions and update the graph. No elaborate instructions — the
-   agent's own identity and judgment handles the rest.
+4. **`DREAMING.md` task prompt** — the special-session prompt telling
+   the agent to reflect on the sessions and update the graph. It is not
+   loaded in normal startup context; it is appended only for dreaming
+   sessions.
 
 ### Self-Improvement Loop
 

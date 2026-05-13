@@ -191,6 +191,7 @@ jobs:
           name: desktop-${{ matrix.os_name }}
           path: |
             surfaces/desktop/release/*.dmg
+            surfaces/desktop/release/*.zip
             surfaces/desktop/release/*.AppImage
             surfaces/desktop/release/*.deb
             surfaces/desktop/release/*.exe
@@ -214,6 +215,7 @@ jobs:
         with:
           files: |
             surfaces/desktop/release/*.dmg
+            surfaces/desktop/release/*.zip
             surfaces/desktop/release/*.AppImage
             surfaces/desktop/release/*.deb
             surfaces/desktop/release/*.exe

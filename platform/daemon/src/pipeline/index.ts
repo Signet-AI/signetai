@@ -15,6 +15,7 @@ import { type DocumentWorkerHandle, startDocumentWorker } from "./document-worke
 import type { DreamingWorkerHandle } from "./dreaming-worker";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
+import { type ReflectionWorkerHandle, startReflectionWorker } from "./reflection-worker";
 import {
 	DEFAULT_RETENTION,
 	type RetentionConfig,
@@ -80,6 +81,7 @@ let structuralDependencyHandle: StructuralDependencyHandle | null = null;
 let dependencySynthesisHandle: DependencySynthesisHandle | null = null;
 let hintsWorkerHandle: HintsWorkerHandle | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
+let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let pendingStartup: Promise<void> | null = null;
 
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
@@ -99,6 +101,7 @@ export function getPipelineWorkerStatus(): Record<string, { running: boolean; st
 		dependencySynthesis: { running: dependencySynthesisHandle !== null },
 		hints: { running: hintsWorkerHandle !== null },
 		dreaming: { running: dreamingWorkerHandle !== null },
+		reflections: { running: reflectionWorkerHandle !== null },
 	};
 }
 
@@ -273,6 +276,11 @@ export function startPipeline(
 		hintsWorkerHandle = startHintsWorker({ accessor, provider, pipelineCfg });
 	}
 
+	// Daily reflections worker — periodic narrative insight generation
+	if (!reflectionWorkerHandle && pipelineCfg.reflections?.enabled) {
+		reflectionWorkerHandle = startReflectionWorker(pipelineCfg.reflections);
+	}
+
 	logger.info("pipeline", "Pipeline started", {
 		mode:
 			pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen && !pipelineCfg.nativeShadowEnabled
@@ -286,6 +294,10 @@ export async function stopPipeline(): Promise<void> {
 	// before checking workerHandle — prevents orphan threads.
 	if (pendingStartup) {
 		await pendingStartup;
+	}
+	if (reflectionWorkerHandle) {
+		reflectionWorkerHandle.stop();
+		reflectionWorkerHandle = null;
 	}
 	if (hintsWorkerHandle) {
 		await hintsWorkerHandle.stop();

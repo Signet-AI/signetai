@@ -1,6 +1,7 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { SIGNET_GIT_PROTECTED_PATHS, mergeSignetGitignoreEntries } from "@signet/core";
 import { logger } from "../logger";
 import { getSecret, hasSecret } from "../secrets.js";
@@ -14,8 +15,39 @@ let lastGitSync: Date | null = null;
 let gitSyncInProgress = false;
 let gitSyncPromise: Promise<unknown> | null = null;
 
+const DEFAULT_GIT_TIMEOUT_MS = 10_000;
+const FETCH_GIT_TIMEOUT_MS = 45_000;
+const MUTATING_GIT_TIMEOUT_MS = 30_000;
+const DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES = 64 * 1024;
+const GIT_FAILURE_CIRCUIT_THRESHOLD = 3;
+const GIT_FAILURE_CIRCUIT_COOLDOWN_MS = 10 * 60 * 1000;
+
+interface CommandResult {
+	stdout: string;
+	stderr: string;
+	code: number;
+	timedOut?: boolean;
+	truncated?: boolean;
+}
+
+interface CommandOptions {
+	input?: string;
+	cwd?: string;
+	timeoutMs?: number;
+	maxOutputBytes?: number;
+}
+
+let consecutiveGitFailures = 0;
+let gitCircuitOpenUntil = 0;
+let lastGitFailureReason: string | undefined;
+
+let gitRepoProbe = (dir: string): boolean => existsSync(join(dir, ".git"));
+
+type CommandRunner = (cmd: string, args: string[], options?: CommandOptions) => Promise<CommandResult>;
+let commandRunner: CommandRunner = runBoundedCommand;
+
 function isGitRepo(dir: string): boolean {
-	return existsSync(join(dir, ".git"));
+	return gitRepoProbe(dir);
 }
 
 interface GitCredentials {
@@ -24,15 +56,53 @@ interface GitCredentials {
 	usePlainGit?: boolean;
 }
 
-async function runCommand(
-	cmd: string,
-	args: string[],
-	options?: { input?: string; cwd?: string },
-): Promise<{ stdout: string; stderr: string; code: number }> {
+function killProcessTree(proc: ChildProcessWithoutNullStreams): void {
+	try {
+		if (process.platform !== "win32" && proc.pid) {
+			process.kill(-proc.pid, "SIGTERM");
+			return;
+		}
+		proc.kill("SIGTERM");
+	} catch {
+		try {
+			proc.kill("SIGKILL");
+		} catch {
+			/* best-effort */
+		}
+	}
+}
+
+async function runBoundedCommand(cmd: string, args: string[], options?: CommandOptions): Promise<CommandResult> {
 	return new Promise((resolve) => {
-		const proc = spawn(cmd, args, { cwd: options?.cwd, stdio: "pipe", windowsHide: true });
+		const timeoutMs = options?.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
+		const maxOutputBytes = options?.maxOutputBytes ?? DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES;
+		const proc = spawn(cmd, args, {
+			cwd: options?.cwd,
+			stdio: "pipe",
+			windowsHide: true,
+			detached: process.platform !== "win32",
+		});
 		let stdout = "";
 		let stderr = "";
+		let stdoutBytes = 0;
+		let stderrBytes = 0;
+		let settled = false;
+		let timedOut = false;
+		let truncated = false;
+
+		const finish = (result: CommandResult) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve(result);
+		};
+
+		const timer = setTimeout(() => {
+			timedOut = true;
+			stderr += `\nCommand timed out after ${timeoutMs}ms`;
+			killProcessTree(proc);
+			finish({ stdout, stderr, code: 124, timedOut, truncated });
+		}, timeoutMs);
 
 		if (options?.input) {
 			proc.stdin?.write(options.input);
@@ -40,18 +110,72 @@ async function runCommand(
 		}
 
 		proc.stdout?.on("data", (d) => {
-			stdout += d.toString();
+			const chunk = d.toString();
+			stdoutBytes += Buffer.byteLength(chunk);
+			if (stdoutBytes <= maxOutputBytes) {
+				stdout += chunk;
+			} else if (!truncated) {
+				truncated = true;
+				stdout += chunk.slice(0, Math.max(0, maxOutputBytes - Buffer.byteLength(stdout)));
+				stderr += `\nCommand output exceeded ${maxOutputBytes} bytes`;
+				killProcessTree(proc);
+				finish({ stdout, stderr, code: 124, timedOut, truncated });
+			}
 		});
 		proc.stderr?.on("data", (d) => {
-			stderr += d.toString();
+			const chunk = d.toString();
+			stderrBytes += Buffer.byteLength(chunk);
+			if (stderrBytes <= maxOutputBytes) {
+				stderr += chunk;
+			} else if (!truncated) {
+				truncated = true;
+				stderr += chunk.slice(0, Math.max(0, maxOutputBytes - Buffer.byteLength(stderr)));
+				stderr += `\nCommand output exceeded ${maxOutputBytes} bytes`;
+				killProcessTree(proc);
+				finish({ stdout, stderr, code: 124, timedOut, truncated });
+			}
 		});
 		proc.on("close", (code) => {
-			resolve({ stdout, stderr, code: code ?? 1 });
+			finish({ stdout, stderr, code: timedOut || truncated ? 124 : (code ?? 1), timedOut, truncated });
 		});
-		proc.on("error", () => {
-			resolve({ stdout: "", stderr: "", code: 1 });
+		proc.on("error", (error) => {
+			finish({ stdout: "", stderr: error.message, code: 1 });
 		});
 	});
+}
+
+async function runCommand(cmd: string, args: string[], options?: CommandOptions): Promise<CommandResult> {
+	return commandRunner(cmd, args, options);
+}
+
+function gitCircuitIsOpen(): boolean {
+	return Date.now() < gitCircuitOpenUntil;
+}
+
+function degradedReason(result: CommandResult, operation: string): string | undefined {
+	if (result.timedOut) return `${operation} timed out`;
+	if (result.truncated) return `${operation} produced too much output`;
+	return undefined;
+}
+
+function recordGitSuccess(): void {
+	consecutiveGitFailures = 0;
+	gitCircuitOpenUntil = 0;
+	lastGitFailureReason = undefined;
+}
+
+function recordGitFailure(reason: string): void {
+	consecutiveGitFailures += 1;
+	lastGitFailureReason = reason;
+	if (consecutiveGitFailures >= GIT_FAILURE_CIRCUIT_THRESHOLD) {
+		gitCircuitOpenUntil = Date.now() + GIT_FAILURE_CIRCUIT_COOLDOWN_MS;
+		logger.warn("git", `Git operations temporarily disabled: ${reason}`);
+	}
+}
+
+function gitCircuitMessage(): string {
+	const suffix = lastGitFailureReason ? ` Last failure: ${lastGitFailureReason}.` : "";
+	return `Git operations are temporarily disabled after repeated failures.${suffix}`;
 }
 
 async function getRemoteUrl(dir: string, remote: string): Promise<string | null> {
@@ -210,24 +334,17 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 	return { method: "none" };
 }
 
-function runGitCommand(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
-	return new Promise((resolve) => {
-		const proc = spawn("git", args, { cwd, stdio: "pipe", windowsHide: true });
-		let stdout = "";
-		let stderr = "";
-		proc.stdout?.on("data", (d) => {
-			stdout += d.toString();
-		});
-		proc.stderr?.on("data", (d) => {
-			stderr += d.toString();
-		});
-		proc.on("close", (code) => {
-			resolve({ code: code ?? 1, stdout, stderr });
-		});
-		proc.on("error", (e) => {
-			resolve({ code: 1, stdout: "", stderr: e.message });
-		});
+function runGitCommand(args: string[], cwd: string, options?: CommandOptions): Promise<CommandResult> {
+	return runCommand("git", args, {
+		cwd,
+		timeoutMs: options?.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
+		maxOutputBytes: options?.maxOutputBytes ?? DEFAULT_COMMAND_OUTPUT_LIMIT_BYTES,
 	});
+}
+
+function failingGitResultMessage(operation: string, result: CommandResult): string {
+	const degraded = degradedReason(result, operation);
+	return degraded ?? `${operation} failed: ${result.stderr || result.stdout || `exit code ${result.code}`}`;
 }
 
 export async function gitPull(): Promise<{
@@ -235,6 +352,9 @@ export async function gitPull(): Promise<{
 	message: string;
 	changes?: number;
 }> {
+	if (gitCircuitIsOpen()) {
+		return { success: false, message: gitCircuitMessage() };
+	}
 	if (!isGitRepo(AGENTS_DIR)) {
 		return { success: false, message: "Not a git repository" };
 	}
@@ -249,12 +369,16 @@ export async function gitPull(): Promise<{
 		};
 	}
 
-	let fetchResult: { code: number; stdout: string; stderr: string };
+	let fetchResult: CommandResult;
 
 	if (creds.usePlainGit) {
-		fetchResult = await runGitCommand(["fetch", gitConfig.remote, gitConfig.branch], AGENTS_DIR);
+		fetchResult = await runGitCommand(["fetch", gitConfig.remote, gitConfig.branch], AGENTS_DIR, {
+			timeoutMs: FETCH_GIT_TIMEOUT_MS,
+		});
 	} else if (creds.authUrl) {
-		fetchResult = await runGitCommand(["fetch", creds.authUrl, gitConfig.branch], AGENTS_DIR);
+		fetchResult = await runGitCommand(["fetch", creds.authUrl, gitConfig.branch], AGENTS_DIR, {
+			timeoutMs: FETCH_GIT_TIMEOUT_MS,
+		});
 	} else {
 		return {
 			success: false,
@@ -263,8 +387,10 @@ export async function gitPull(): Promise<{
 	}
 
 	if (fetchResult.code !== 0) {
-		logger.warn("git", `Fetch failed: ${fetchResult.stderr}`);
-		return { success: false, message: `Fetch failed: ${fetchResult.stderr}` };
+		const message = failingGitResultMessage("Fetch", fetchResult);
+		recordGitFailure(message);
+		logger.warn("git", message);
+		return { success: false, message };
 	}
 
 	const diffResult = await runGitCommand(
@@ -273,41 +399,67 @@ export async function gitPull(): Promise<{
 	);
 
 	const incomingChanges = Number.parseInt(diffResult.stdout.trim(), 10) || 0;
+	if (diffResult.code !== 0) {
+		const message = failingGitResultMessage("Incoming commit count", diffResult);
+		recordGitFailure(message);
+		logger.warn("git", message);
+		return { success: false, message };
+	}
 
 	if (incomingChanges === 0) {
+		recordGitSuccess();
 		return { success: true, message: "Already up to date", changes: 0 };
 	}
 
 	const statusResult = await runGitCommand(["status", "--porcelain"], AGENTS_DIR);
+	if (statusResult.code !== 0) {
+		const message = failingGitResultMessage("Workspace status", statusResult);
+		recordGitFailure(message);
+		logger.warn("git", message);
+		return { success: false, message };
+	}
 	const hasLocalChanges = statusResult.stdout.trim().length > 0;
 
 	let stashed = false;
 	if (hasLocalChanges) {
-		const stashResult = await runGitCommand(["stash", "push", "-m", "signet-auto-stash"], AGENTS_DIR);
+		const stashResult = await runGitCommand(["stash", "push", "-m", "signet-auto-stash"], AGENTS_DIR, {
+			timeoutMs: MUTATING_GIT_TIMEOUT_MS,
+		});
 		if (stashResult.code !== 0) {
-			logger.warn("git", `Stash failed: ${stashResult.stderr}`);
+			const message = failingGitResultMessage("Stash", stashResult);
+			recordGitFailure(message);
+			logger.warn("git", message);
 			return {
 				success: false,
-				message: `Failed to stash local changes: ${stashResult.stderr}`,
+				message: `Failed to stash local changes: ${message}`,
 			};
 		}
 		stashed = true;
 	}
 
-	const pullResult = await runGitCommand(["merge", `${gitConfig.remote}/${gitConfig.branch}`, "--ff-only"], AGENTS_DIR);
+	const pullResult = await runGitCommand(
+		["merge", `${gitConfig.remote}/${gitConfig.branch}`, "--ff-only"],
+		AGENTS_DIR,
+		{
+			timeoutMs: MUTATING_GIT_TIMEOUT_MS,
+		},
+	);
 
 	if (stashed) {
-		const popResult = await runGitCommand(["stash", "pop"], AGENTS_DIR);
+		const popResult = await runGitCommand(["stash", "pop"], AGENTS_DIR, { timeoutMs: MUTATING_GIT_TIMEOUT_MS });
 		if (popResult.code !== 0) {
 			logger.warn("git", `Stash pop failed — local changes preserved in git stash: ${popResult.stderr}`);
 		}
 	}
 
 	if (pullResult.code !== 0) {
-		logger.warn("git", `Pull failed: ${pullResult.stderr}`);
-		return { success: false, message: `Pull failed: ${pullResult.stderr}` };
+		const message = failingGitResultMessage("Pull", pullResult);
+		recordGitFailure(message);
+		logger.warn("git", message);
+		return { success: false, message };
 	}
 
+	recordGitSuccess();
 	logger.git.sync("pull", incomingChanges);
 	return {
 		success: true,
@@ -321,6 +473,9 @@ export async function gitPush(): Promise<{
 	message: string;
 	changes?: number;
 }> {
+	if (gitCircuitIsOpen()) {
+		return { success: false, message: gitCircuitMessage() };
+	}
 	if (!isGitRepo(AGENTS_DIR)) {
 		return { success: false, message: "Not a git repository" };
 	}
@@ -339,19 +494,30 @@ export async function gitPush(): Promise<{
 		["rev-list", "--count", `${gitConfig.remote}/${gitConfig.branch}..HEAD`],
 		AGENTS_DIR,
 	);
+	if (diffResult.code !== 0) {
+		const message = failingGitResultMessage("Outgoing commit count", diffResult);
+		recordGitFailure(message);
+		logger.warn("git", message);
+		return { success: false, message };
+	}
 
 	const outgoingChanges = Number.parseInt(diffResult.stdout.trim(), 10) || 0;
 
 	if (outgoingChanges === 0) {
+		recordGitSuccess();
 		return { success: true, message: "Nothing to push", changes: 0 };
 	}
 
-	let pushResult: { code: number; stdout: string; stderr: string };
+	let pushResult: CommandResult;
 
 	if (creds.usePlainGit) {
-		pushResult = await runGitCommand(["push", gitConfig.remote, `HEAD:${gitConfig.branch}`], AGENTS_DIR);
+		pushResult = await runGitCommand(["push", gitConfig.remote, `HEAD:${gitConfig.branch}`], AGENTS_DIR, {
+			timeoutMs: FETCH_GIT_TIMEOUT_MS,
+		});
 	} else if (creds.authUrl) {
-		pushResult = await runGitCommand(["push", creds.authUrl, `HEAD:${gitConfig.branch}`], AGENTS_DIR);
+		pushResult = await runGitCommand(["push", creds.authUrl, `HEAD:${gitConfig.branch}`], AGENTS_DIR, {
+			timeoutMs: FETCH_GIT_TIMEOUT_MS,
+		});
 	} else {
 		return {
 			success: false,
@@ -360,10 +526,13 @@ export async function gitPush(): Promise<{
 	}
 
 	if (pushResult.code !== 0) {
-		logger.warn("git", `Push failed: ${pushResult.stderr}`);
-		return { success: false, message: `Push failed: ${pushResult.stderr}` };
+		const message = failingGitResultMessage("Push", pushResult);
+		recordGitFailure(message);
+		logger.warn("git", message);
+		return { success: false, message };
 	}
 
+	recordGitSuccess();
 	logger.git.sync("push", outgoingChanges);
 	return {
 		success: true,
@@ -484,17 +653,40 @@ export async function getGitStatus(): Promise<{
 	uncommittedChanges?: number;
 	unpushedCommits?: number;
 	unpulledCommits?: number;
+	degraded?: boolean;
+	degradedReason?: string;
 }> {
 	const isRepo = isGitRepo(AGENTS_DIR);
 	if (!isRepo) return { isRepo, hasCredentials: false, autoSync: gitConfig.autoSync };
+	if (gitCircuitIsOpen()) {
+		return {
+			isRepo,
+			remote: gitConfig.remote,
+			hasCredentials: false,
+			autoSync: gitConfig.autoSync,
+			lastSync: lastGitSync ? lastGitSync.toISOString() : undefined,
+			degraded: true,
+			degradedReason: gitCircuitMessage(),
+		};
+	}
 
-	const creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
+	let degraded: string | undefined;
+
+	let creds: GitCredentials;
+	try {
+		creds = await resolveGitCredentials(AGENTS_DIR, gitConfig.remote);
+	} catch (error) {
+		degraded = `Git credential check failed: ${error instanceof Error ? error.message : String(error)}`;
+		creds = { method: "none" };
+	}
 	const hasCredentials = creds.method !== "none" && creds.method !== "no-remote";
 
 	let branch: string | undefined;
 	const branchResult = await runGitCommand(["rev-parse", "--abbrev-ref", "HEAD"], AGENTS_DIR);
 	if (branchResult.code === 0) {
 		branch = branchResult.stdout.trim();
+	} else {
+		degraded = degraded ?? failingGitResultMessage("Branch lookup", branchResult);
 	}
 
 	let uncommittedChanges: number | undefined;
@@ -504,6 +696,8 @@ export async function getGitStatus(): Promise<{
 			.trim()
 			.split("\n")
 			.filter((l) => l.trim()).length;
+	} else {
+		degraded = degraded ?? failingGitResultMessage("Workspace status", statusResult);
 	}
 
 	let unpushedCommits: number | undefined;
@@ -515,6 +709,8 @@ export async function getGitStatus(): Promise<{
 		);
 		if (unpushedResult.code === 0) {
 			unpushedCommits = Number.parseInt(unpushedResult.stdout.trim(), 10) || 0;
+		} else {
+			degraded = degraded ?? failingGitResultMessage("Outgoing commit count", unpushedResult);
 		}
 
 		const unpulledResult = await runGitCommand(
@@ -523,7 +719,15 @@ export async function getGitStatus(): Promise<{
 		);
 		if (unpulledResult.code === 0) {
 			unpulledCommits = Number.parseInt(unpulledResult.stdout.trim(), 10) || 0;
+		} else {
+			degraded = degraded ?? failingGitResultMessage("Incoming commit count", unpulledResult);
 		}
+	}
+
+	if (degraded) {
+		recordGitFailure(degraded);
+	} else {
+		recordGitSuccess();
 	}
 
 	return {
@@ -537,6 +741,8 @@ export async function getGitStatus(): Promise<{
 		uncommittedChanges,
 		unpushedCommits,
 		unpulledCommits,
+		degraded: Boolean(degraded),
+		degradedReason: degraded,
 	};
 }
 
@@ -554,19 +760,38 @@ function ensureProtectedGitignore(dir: string): void {
 }
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {
-	return new Promise((resolve) => {
-		const proc = spawn("git", ["rm", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], {
-			cwd: dir,
-			stdio: "pipe",
-			windowsHide: true,
-		});
-		proc.on("close", () => resolve());
-		proc.on("error", () => resolve());
+	await runGitCommand(["rm", "--cached", "--ignore-unmatch", "--quiet", "--", ...SIGNET_GIT_PROTECTED_PATHS], dir, {
+		timeoutMs: MUTATING_GIT_TIMEOUT_MS,
 	});
 }
 
 const GIT_AUTOCOMMIT_TIMEOUT_MS = 30_000;
 let autocommitInFlight = false;
+
+function canonicalPathForContainment(path: string): string {
+	const absolute = resolve(path);
+	try {
+		return realpathSync.native(absolute);
+	} catch {
+		const parent = dirname(absolute);
+		if (parent !== absolute && existsSync(parent)) {
+			try {
+				return join(realpathSync.native(parent), basename(absolute));
+			} catch {
+				// Fall through to the normalized absolute path.
+			}
+		}
+		return absolute;
+	}
+}
+
+function toRelativeGitPath(dir: string, path: string): string | null {
+	const canonicalDir = canonicalPathForContainment(dir);
+	const candidate = canonicalPathForContainment(isAbsolute(path) ? path : join(dir, path));
+	const relativePath = relative(canonicalDir, candidate);
+	if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) return null;
+	return relativePath.replace(/\\/g, "/");
+}
 
 async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void> {
 	if (!isGitRepo(dir)) return;
@@ -577,69 +802,49 @@ async function gitAutoCommit(dir: string, changedFiles: string[]): Promise<void>
 		ensureProtectedGitignore(dir);
 		await gitUntrackProtectedFiles(dir);
 
-		const fileList = changedFiles.map((f) => f.replace(`${dir}/`, "")).join(", ");
+		const relativeFiles = Array.from(
+			new Set(changedFiles.map((file) => toRelativeGitPath(dir, file)).filter((file): file is string => Boolean(file))),
+		);
+		const droppedChanges = changedFiles.length - relativeFiles.length;
+		if (droppedChanges > 0) {
+			logger.warn("git", `Dropped ${droppedChanges} auto-commit paths outside the git workspace`);
+		}
+		if (relativeFiles.length === 0) return;
+
+		const fileList = relativeFiles.join(", ");
 		const now = new Date();
 		const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
 		const message = `${timestamp}_auto_${fileList.slice(0, 50)}`;
 
-		let active: ReturnType<typeof spawn> | null = null;
-
-		const work = new Promise<void>((resolve) => {
-			const add = spawn("git", ["add", "-A"], { cwd: dir, stdio: "pipe", windowsHide: true });
-			active = add;
-			add.on("close", (addCode) => {
-				if (addCode !== 0) {
-					logger.warn("git", "Git add failed");
-					resolve();
-					return;
-				}
-				const status = spawn("git", ["status", "--porcelain"], {
-					cwd: dir,
-					stdio: "pipe",
-					windowsHide: true,
-				});
-				active = status;
-				let statusOutput = "";
-				status.stdout?.on("data", (d) => {
-					statusOutput += d.toString();
-				});
-				status.on("close", (statusCode) => {
-					if (statusCode !== 0 || !statusOutput.trim()) {
-						resolve();
-						return;
-					}
-					const commit = spawn("git", ["commit", "-m", message], {
-						cwd: dir,
-						stdio: "pipe",
-						windowsHide: true,
-					});
-					active = commit;
-					commit.on("close", (commitCode) => {
-						if (commitCode === 0) {
-							logger.git.commit(message, changedFiles.length);
-						}
-						resolve();
-					});
-					commit.on("error", () => resolve());
-				});
-				status.on("error", () => resolve());
-			});
-			add.on("error", () => resolve());
+		const addResult = await runGitCommand(["add", "--", ...relativeFiles], dir, {
+			timeoutMs: GIT_AUTOCOMMIT_TIMEOUT_MS,
 		});
+		if (addResult.code !== 0) {
+			logger.warn("git", failingGitResultMessage("Auto-commit add", addResult));
+			recordGitFailure(failingGitResultMessage("Auto-commit add", addResult));
+			return;
+		}
 
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const timeout = new Promise<void>((resolve) => {
-			timer = setTimeout(() => {
-				logger.warn("git", "Auto-commit timed out after 30s");
-				try {
-					active?.kill("SIGTERM");
-				} catch {}
-				resolve();
-			}, GIT_AUTOCOMMIT_TIMEOUT_MS);
+		const statusResult = await runGitCommand(["status", "--porcelain", "--", ...relativeFiles], dir, {
+			timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
 		});
+		if (statusResult.code !== 0) {
+			logger.warn("git", failingGitResultMessage("Auto-commit status", statusResult));
+			recordGitFailure(failingGitResultMessage("Auto-commit status", statusResult));
+			return;
+		}
+		if (!statusResult.stdout.trim()) return;
 
-		await Promise.race([work, timeout]);
-		clearTimeout(timer);
+		const commitResult = await runGitCommand(["commit", "-m", message, "--", ...relativeFiles], dir, {
+			timeoutMs: MUTATING_GIT_TIMEOUT_MS,
+		});
+		if (commitResult.code === 0) {
+			recordGitSuccess();
+			logger.git.commit(message, relativeFiles.length);
+		} else {
+			logger.warn("git", failingGitResultMessage("Auto-commit", commitResult));
+			recordGitFailure(failingGitResultMessage("Auto-commit", commitResult));
+		}
 	} finally {
 		autocommitInFlight = false;
 	}
@@ -669,4 +874,26 @@ export function scheduleAutoCommit(changedPath: string) {
 
 export function getAutoCommitQueueStateForTests(): { pending: boolean; queued: number } {
 	return { pending: commitTimer !== null || commitPending, queued: pendingChanges.length };
+}
+
+export async function gitAutoCommitForTests(dir: string, changedFiles: string[]): Promise<void> {
+	await gitAutoCommit(dir, changedFiles);
+}
+
+export function setGitCommandRunnerForTests(runner: CommandRunner | null): void {
+	commandRunner = runner ?? runBoundedCommand;
+}
+
+export function setGitRepoProbeForTests(probe: ((dir: string) => boolean) | null): void {
+	gitRepoProbe = probe ?? ((dir: string): boolean => existsSync(join(dir, ".git")));
+}
+
+export function toRelativeGitPathForTests(dir: string, path: string): string | null {
+	return toRelativeGitPath(dir, path);
+}
+
+export function resetGitHealthForTests(): void {
+	consecutiveGitFailures = 0;
+	gitCircuitOpenUntil = 0;
+	lastGitFailureReason = undefined;
 }

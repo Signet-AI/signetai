@@ -9,6 +9,9 @@ import { SignetTransport } from "./transport.js";
 import type {
 	BatchModifyItemResult,
 	BatchModifyResponse,
+	BitwardenConnectResult,
+	BitwardenMigrationResult,
+	BitwardenStatus,
 	CheckpointListResponse,
 	ConfigListResponse,
 	ConfigWriteResponse,
@@ -51,6 +54,8 @@ import type {
 	RecallResponse,
 	RecoverResult,
 	RememberResult,
+	SecretExecJob,
+	SecretExecOptions,
 	SecretExecResult,
 	SecretListResponse,
 	SessionInfo,
@@ -968,21 +973,107 @@ export class SignetClient extends SignetClientHelpers {
 	}
 
 	/**
-	 * Execute a command with secrets injected as env vars.
+	 * Queue a command with secrets injected as env vars.
 	 *
 	 * @example
 	 * ```typescript
-	 * const result = await client.execWithSecrets("echo $GREETING", {
-	 *   GREETING: "MY_SECRET"
+	 * const job = await client.execWithSecrets("node ./sync.js", {
+	 *   API_TOKEN: "MY_SECRET"
 	 * });
-	 * console.log(result.stdout, result.code);
+	 * const status = await client.getSecretExecJob(job.id);
 	 * ```
 	 */
-	async execWithSecrets(command: string, secrets: Record<string, string>): Promise<SecretExecResult> {
-		return this.transport.post<SecretExecResult>("/api/secrets/exec", {
+	async execWithSecrets(
+		command: string,
+		secrets: Record<string, string>,
+		options: SecretExecOptions = {},
+	): Promise<SecretExecJob> {
+		return this.transport.post<SecretExecJob>("/api/secrets/exec", {
 			command,
 			secrets,
+			...options,
 		});
+	}
+
+	/**
+	 * Get the status/result for a queued secret exec job.
+	 */
+	async getSecretExecJob(jobId: string): Promise<SecretExecJob> {
+		return this.transport.get<SecretExecJob>(`/api/secrets/exec/${jobId}`);
+	}
+
+	/**
+	 * Get Bitwarden connection/provider status.
+	 */
+	async getBitwardenStatus(): Promise<BitwardenStatus> {
+		return this.transport.get<BitwardenStatus>("/api/secrets/bitwarden/status");
+	}
+
+	/**
+	 * Connect a Bitwarden CLI session token (`bw unlock --raw`).
+	 */
+	async connectBitwarden(
+		session: string,
+		options: { readonly activate?: boolean; readonly folderId?: string } = {},
+	): Promise<BitwardenConnectResult> {
+		return this.transport.post<BitwardenConnectResult>("/api/secrets/bitwarden/connect", {
+			session,
+			...options,
+		});
+	}
+
+	/**
+	 * Disconnect Bitwarden and return to the local Signet provider.
+	 */
+	async disconnectBitwarden(): Promise<{
+		success: boolean;
+		disconnected: boolean;
+		existed: boolean;
+		activeProvider: boolean;
+	}> {
+		return this.transport.del<{ success: boolean; disconnected: boolean; existed: boolean; activeProvider: boolean }>(
+			"/api/secrets/bitwarden/connect",
+		);
+	}
+
+	/**
+	 * Switch active secret provider.
+	 */
+	async setSecretProvider(
+		provider: "local" | "bitwarden",
+	): Promise<{ success: boolean; provider: "local" | "bitwarden" }> {
+		return this.transport.post<{ success: boolean; provider: "local" | "bitwarden" }>(
+			"/api/secrets/bitwarden/provider",
+			{
+				provider,
+			},
+		);
+	}
+
+	/**
+	 * List Bitwarden folders.
+	 */
+	async listBitwardenFolders(): Promise<{
+		folders: readonly { readonly id: string; readonly name: string }[];
+		count: number;
+	}> {
+		return this.transport.get<{ folders: readonly { readonly id: string; readonly name: string }[]; count: number }>(
+			"/api/secrets/bitwarden/folders",
+		);
+	}
+
+	/**
+	 * Copy local Signet secrets into Bitwarden. Defaults to dry-run unless `dryRun: false`.
+	 */
+	async migrateSecretsToBitwarden(
+		opts: {
+			readonly dryRun?: boolean;
+			readonly deleteLocal?: boolean;
+			readonly overwrite?: boolean;
+			readonly folderId?: string;
+		} = {},
+	): Promise<BitwardenMigrationResult> {
+		return this.transport.post<BitwardenMigrationResult>("/api/secrets/bitwarden/migrate", opts);
 	}
 
 	/**
@@ -1261,6 +1352,9 @@ export type {
 	MemorySearchTelemetryResponse,
 	MemorySearchTelemetryResult,
 	ModifyResult,
+	BitwardenConnectResult,
+	BitwardenMigrationResult,
+	BitwardenStatus,
 	OnePasswordConnectResult,
 	OnePasswordImportResult,
 	OnePasswordStatus,
@@ -1291,6 +1385,8 @@ export type {
 	RecallResult,
 	RecoverResult,
 	RememberResult,
+	SecretExecJob,
+	SecretExecOptions,
 	SecretExecResult,
 	SecretListResponse,
 	SessionInfo,
