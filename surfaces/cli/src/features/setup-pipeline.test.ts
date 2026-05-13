@@ -66,6 +66,11 @@ describe("buildSetupPipeline", () => {
 			timeout: 120000,
 		});
 	});
+
+	it("does not invent a generic ACPX model when no harness agent is known", () => {
+		expect(buildSetupPipeline("acpx").extraction.model).toBe("");
+		expect(buildSetupPipeline("acpx").synthesis?.model).toBe("");
+	});
 });
 
 describe("buildSetupInference", () => {

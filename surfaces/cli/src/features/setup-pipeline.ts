@@ -30,12 +30,14 @@ export interface SetupPipelineConfig {
 	};
 }
 
-export function defaultExtractionModel(provider: ExtractionProviderChoice): string {
+type DirectExtractionProviderChoice = Exclude<ExtractionProviderChoice, "acpx">;
+
+export function defaultExtractionModel(provider: DirectExtractionProviderChoice): string {
 	return defaultPipelineModel(provider);
 }
 
 export function buildSetupPipeline(provider: ExtractionProviderChoice, model?: string): SetupPipelineConfig {
-	const resolved = model?.trim() || defaultExtractionModel(provider);
+	const resolved = model?.trim() || (provider === "acpx" ? "" : defaultExtractionModel(provider));
 	if (provider === "none") {
 		return {
 			enabled: false,
