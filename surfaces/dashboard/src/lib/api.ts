@@ -2907,6 +2907,7 @@ export interface DailyReflection {
 
 export interface TodayReflectionResponse {
 	reflection: DailyReflection | null;
+	reflections?: DailyReflection[];
 }
 
 function agentQuery(agentId?: string): string {
@@ -2920,6 +2921,20 @@ export async function getTodayReflection(agentId?: string): Promise<TodayReflect
 		return (await res.json()) as TodayReflectionResponse;
 	} catch {
 		return { reflection: null };
+	}
+}
+
+export async function generateReflection(agentId?: string, count = 3): Promise<TodayReflectionResponse> {
+	try {
+		const suffix = agentQuery(agentId);
+		const separator = suffix ? "&" : "?";
+		const res = await fetch(`${API_BASE}/api/reflections/generate${suffix}${separator}count=${count}`, {
+			method: "POST",
+		});
+		if (!res.ok) return { reflection: null, reflections: [] };
+		return (await res.json()) as TodayReflectionResponse;
+	} catch {
+		return { reflection: null, reflections: [] };
 	}
 }
 

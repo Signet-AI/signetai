@@ -111,7 +111,7 @@ describe("reflection worker", () => {
 		expect(existsSync(join(dir, ".daemon", "last-reflection.default.json"))).toBe(false);
 	});
 
-	it("persists generated reflections and scoped question memories", async () => {
+	it("persists generated brief insights", async () => {
 		const memoryId = seedMemory("default");
 		const worker = startReflectionWorker(config, {
 			getDbAccessor,
@@ -135,42 +135,28 @@ describe("reflection worker", () => {
 				},
 		);
 		expect(reflection).toEqual({
-			summary: "Worker persisted.",
+			summary: "Should we keep it?",
 			model: "test-model",
 			memory_ids: JSON.stringify([memoryId]),
 		});
 
-		const question = getDbAccessor().withReadDb(
+		const questionCount = getDbAccessor().withReadDb(
 			(db) =>
-				db.prepare("SELECT content, agent_id FROM memories WHERE source_type = ?").get("reflection-question") as {
-					content: string;
-					agent_id: string;
-				},
+				(
+					db.prepare("SELECT COUNT(*) AS count FROM memories WHERE source_type = ?").get("reflection-question") as {
+						count: number;
+					}
+				).count,
 		);
-		expect(question).toEqual({
-			content: "Daily reflection question: Should we keep it?",
-			agent_id: "default",
-		});
+		expect(questionCount).toBe(0);
 	});
 
-	it("skips question ingestion when another writer wins the daily insert race", async () => {
+	it("allows multiple same-day insights but de-duplicates repeated brief text", async () => {
 		seedMemory("default");
-		let inserted = false;
+		seedReflection("default");
 		const worker = startReflectionWorker(config, {
 			getDbAccessor,
-			getInferenceProvider: () => ({
-				name: "racing-provider",
-				async available(): Promise<boolean> {
-					return true;
-				},
-				async generate(): Promise<string> {
-					if (!inserted) {
-						seedReflection("default");
-						inserted = true;
-					}
-					return "SUMMARY: Lost race.\nPATTERNS: race\nQUESTION: Should not ingest?";
-				},
-			}),
+			getInferenceProvider: () => provider("INSIGHT: Existing reflection\nFOCUS: duplicate"),
 			logger,
 		});
 
@@ -193,7 +179,6 @@ describe("reflection worker", () => {
 			).count,
 		}));
 		expect(counts).toEqual({ questions: 0, reflections: 1 });
-		expect(existsSync(join(dir, ".daemon", "last-reflection.default.json"))).toBe(true);
 	});
 
 	it("scheduled trigger reflects every active agent instead of hardcoding default", async () => {

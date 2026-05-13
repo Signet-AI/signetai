@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { DailyReflection } from "$lib/api";
-import { answerReflection, getTodayReflection } from "$lib/api";
+import { answerReflection, generateReflection, getTodayReflection } from "$lib/api";
 import { toast } from "$lib/stores/toast.svelte";
 import { onMount } from "svelte";
 
@@ -10,30 +10,41 @@ interface Props {
 
 const { agentId }: Props = $props();
 
-let reflection = $state<DailyReflection | null>(null);
+let reflections = $state<DailyReflection[]>([]);
 let loading = $state(true);
-// biome-ignore lint/style/useConst: Svelte bind:value mutates state declared with let.
 let answerText = $state("");
-let submitting = $state(false);
-let answered = $state(false);
-// biome-ignore lint/style/useConst: Svelte event handlers reassign state declared with let.
-let showAnswer = $state(false);
+let submittingId = $state<string | null>(null);
+let showAnswerId = $state<string | null>(null);
+
+const reflection = $derived(reflections[0] ?? null);
 
 onMount(async () => {
-	const data = await getTodayReflection(agentId);
-	reflection = data.reflection;
+	loading = true;
+	const generated = await generateReflection(agentId, 3);
+	let next = generated.reflections ?? (generated.reflection ? [generated.reflection] : []);
+
+	if (next.length === 0) {
+		const today = await getTodayReflection(agentId);
+		next = today.reflections ?? (today.reflection ? [today.reflection] : []);
+	}
+
+	reflections = next;
 	loading = false;
-	if (reflection?.answer) answered = true;
 });
 
-async function handleAnswer(): Promise<void> {
-	if (!reflection || !answerText.trim()) return;
-	submitting = true;
-	const result = await answerReflection(reflection.id, answerText, agentId);
-	submitting = false;
+async function handleAnswer(item: DailyReflection): Promise<void> {
+	if (!answerText.trim()) return;
+	submittingId = item.id;
+	const result = await answerReflection(item.id, answerText, agentId);
+	submittingId = null;
 	if (result.success) {
-		answered = true;
-		reflection = { ...reflection, answer: answerText, answerMemoryId: result.memoryId ?? null };
+		reflections = reflections.map((reflection) =>
+			reflection.id === item.id
+				? { ...reflection, answer: answerText, answerMemoryId: result.memoryId ?? null }
+				: reflection,
+		);
+		answerText = "";
+		showAnswerId = null;
 		toast("Answer saved as memory", "success");
 	} else {
 		toast(result.error ?? "Failed to save answer", "error");
@@ -43,7 +54,7 @@ async function handleAnswer(): Promise<void> {
 
 <div class="panel sig-panel">
 	<div class="panel-header sig-panel-header">
-		<span class="panel-title">REFLECTION</span>
+		<span class="panel-title">DAILY BRIEF</span>
 		{#if reflection}
 			<span class="panel-date">{reflection.date}</span>
 		{/if}
@@ -56,58 +67,67 @@ async function handleAnswer(): Promise<void> {
 				<span class="loading-line short"></span>
 				<span class="loading-line"></span>
 			</div>
-		{:else if !reflection}
+		{:else if reflections.length === 0}
 			<div class="empty-state">
-				<span>No reflection yet today</span>
-				<span class="empty-hint">Appears after your next scheduled pass</span>
+				<span>No brief yet</span>
+				<span class="empty-hint">No fresh memory signal found</span>
 			</div>
 		{:else}
-			<p class="reflection-summary">{reflection.summary}</p>
+			{#each reflections as item (item.id)}
+				<section class="reflection-item">
+					<p class="reflection-summary">{item.summary}</p>
 
-			{#if reflection.patterns.length > 0}
-				<div class="patterns">
-					{#each reflection.patterns as pattern}
-						<span class="pattern-tag">{pattern}</span>
-					{/each}
-				</div>
-			{/if}
-
-			{#if reflection.question && !answered}
-				<div class="question-block">
-					<span class="question-text">{reflection.question}</span>
-					{#if showAnswer}
-						<textarea
-							class="answer-input"
-							placeholder="Type your reflection..."
-							bind:value={answerText}
-							rows="2"
-						></textarea>
-						<div class="answer-actions">
-							<button
-								class="answer-submit"
-								disabled={!answerText.trim() || submitting}
-								onclick={handleAnswer}
-							>
-								{submitting ? "Saving..." : "Save"}
-							</button>
-							<button class="answer-cancel" onclick={() => (showAnswer = false)}>
-								Cancel
-							</button>
+					{#if item.patterns.length > 0}
+						<div class="patterns">
+							{#each item.patterns as pattern}
+								<span class="pattern-tag">{pattern}</span>
+							{/each}
 						</div>
-					{:else}
-						<button class="answer-prompt" onclick={() => (showAnswer = true)}>
-							Answer
-						</button>
 					{/if}
-				</div>
-			{/if}
 
-			{#if answered && reflection.answer}
-				<div class="answered-block">
-					<span class="answered-label">YOUR ANSWER</span>
-					<p class="answered-text">{reflection.answer}</p>
-				</div>
-			{/if}
+					{#if item.question && !item.answer}
+						<div class="question-block">
+							{#if showAnswerId === item.id}
+								<textarea
+									class="answer-input"
+									placeholder="Type your reflection..."
+									bind:value={answerText}
+									rows="2"
+								></textarea>
+								<div class="answer-actions">
+									<button
+										class="answer-submit"
+										disabled={!answerText.trim() || submittingId === item.id}
+										onclick={() => handleAnswer(item)}
+									>
+										{submittingId === item.id ? "Saving..." : "Save"}
+									</button>
+									<button class="answer-cancel" onclick={() => (showAnswerId = null)}>
+										Cancel
+									</button>
+								</div>
+							{:else}
+								<button
+									class="answer-prompt"
+									onclick={() => {
+										answerText = "";
+										showAnswerId = item.id;
+									}}
+								>
+									Answer
+								</button>
+							{/if}
+						</div>
+					{/if}
+
+					{#if item.answer}
+						<div class="answered-block">
+							<span class="answered-label">YOUR ANSWER</span>
+							<p class="answered-text">{item.answer}</p>
+						</div>
+					{/if}
+				</section>
+			{/each}
 		{/if}
 	</div>
 </div>
@@ -154,6 +174,19 @@ async function handleAnswer(): Promise<void> {
 		gap: var(--space-sm);
 	}
 
+	.reflection-item {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-sm);
+		border-top: 1px solid var(--sig-border);
+		padding-top: var(--space-sm);
+	}
+
+	.reflection-item:first-child {
+		border-top: none;
+		padding-top: 0;
+	}
+
 	.reflection-summary {
 		font-family: var(--font-body);
 		font-size: 13px;
@@ -185,14 +218,6 @@ async function handleAnswer(): Promise<void> {
 		gap: 6px;
 		border-top: 1px solid var(--sig-border);
 		padding-top: var(--space-sm);
-	}
-
-	.question-text {
-		font-family: var(--font-body);
-		font-size: 11px;
-		line-height: 1.5;
-		color: var(--sig-accent);
-		font-style: italic;
 	}
 
 	.answer-prompt {

@@ -104,7 +104,7 @@ describe("migration framework", () => {
 		expect(uniqueVersions.size).toBe(migrations.length);
 	});
 
-	test("daily reflections are unique per agent and date", () => {
+	test("daily reflections allow multiple dashboard-open insights per agent and date", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
@@ -114,7 +114,7 @@ describe("migration framework", () => {
 		);
 
 		insert.run("reflection-1", "agent-a", "2026-05-13", "First");
-		expect(() => insert.run("reflection-2", "agent-a", "2026-05-13", "Duplicate")).toThrow();
+		expect(() => insert.run("reflection-2", "agent-a", "2026-05-13", "Another fresh insight")).not.toThrow();
 		expect(() => insert.run("reflection-3", "agent-b", "2026-05-13", "Different agent")).not.toThrow();
 		expect(() => insert.run("reflection-4", "agent-a", "2026-05-14", "Different date")).not.toThrow();
 	});
