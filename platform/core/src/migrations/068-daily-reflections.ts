@@ -17,6 +17,7 @@ export function up(db: MigrationDb): void {
 			question         TEXT,
 			answer           TEXT,
 			answer_memory_id TEXT,
+			content_key      TEXT,
 			memory_ids       TEXT NOT NULL DEFAULT '[]',
 			summary_ids      TEXT NOT NULL DEFAULT '[]',
 			model            TEXT,
@@ -26,5 +27,9 @@ export function up(db: MigrationDb): void {
 
 		CREATE INDEX IF NOT EXISTS idx_daily_reflections_agent_date
 			ON daily_reflections(agent_id, date, created_at DESC);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_reflections_agent_content_key
+			ON daily_reflections(agent_id, content_key)
+			WHERE content_key IS NOT NULL;
 	`);
 }

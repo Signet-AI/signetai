@@ -9,6 +9,12 @@ import type { MigrationDb } from "./index";
  * more than one row per day.
  */
 export function up(db: MigrationDb): void {
+	const cols = db.prepare("PRAGMA table_info(daily_reflections)").all() as ReadonlyArray<Record<string, unknown>>;
+	const colNames = new Set(cols.flatMap((c) => (typeof c.name === "string" ? [c.name] : [])));
+	if (!colNames.has("content_key")) {
+		db.exec("ALTER TABLE daily_reflections ADD COLUMN content_key TEXT");
+	}
+
 	db.exec(`
 		DROP INDEX IF EXISTS idx_daily_reflections_agent_date;
 
@@ -17,5 +23,9 @@ export function up(db: MigrationDb): void {
 
 		CREATE INDEX IF NOT EXISTS idx_daily_reflections_agent_date
 			ON daily_reflections(agent_id, date, created_at DESC);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_reflections_agent_content_key
+			ON daily_reflections(agent_id, content_key)
+			WHERE content_key IS NOT NULL;
 	`);
 }

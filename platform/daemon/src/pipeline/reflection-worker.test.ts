@@ -7,7 +7,7 @@ import type { LlmProvider, PipelineReflectionsConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import { txIngestEnvelope } from "../transactions";
-import { nextReflectionDelayMs, startReflectionWorker } from "./reflection-worker";
+import { generateDailyBriefInsights, nextReflectionDelayMs, startReflectionWorker } from "./reflection-worker";
 
 let dir: string;
 const previousSignetPath = process.env.SIGNET_PATH;
@@ -179,6 +179,52 @@ describe("reflection worker", () => {
 			).count,
 		}));
 		expect(counts).toEqual({ questions: 0, reflections: 1 });
+	});
+
+	it("deduplicates concurrent dashboard-open generations at insert time", async () => {
+		seedMemory("default");
+		let waiting = 0;
+		let release: (() => void) | null = null;
+		const barrier = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const raceProvider: LlmProvider = {
+			name: "race-provider",
+			async available(): Promise<boolean> {
+				return true;
+			},
+			async generate(): Promise<string> {
+				waiting += 1;
+				if (waiting === 2) release?.();
+				await barrier;
+				return "INSIGHT: Should this duplicate be inserted once?\nFOCUS: race, dedupe";
+			},
+		};
+		await Promise.all([
+			generateDailyBriefInsights("default", config, 1, {
+				getDbAccessor,
+				getInferenceProvider: () => raceProvider,
+				logger,
+			}),
+			generateDailyBriefInsights("default", config, 1, {
+				getDbAccessor,
+				getInferenceProvider: () => raceProvider,
+				logger,
+			}),
+		]);
+
+		const rows = getDbAccessor().withReadDb((db) => {
+			return db.prepare("SELECT summary, content_key FROM daily_reflections WHERE agent_id = ?").all("default") as {
+				summary: string;
+				content_key: string;
+			}[];
+		});
+		expect(rows).toEqual([
+			{
+				summary: "Should this duplicate be inserted once?",
+				content_key: "should this duplicate be inserted once",
+			},
+		]);
 	});
 
 	it("scheduled trigger reflects every active agent instead of hardcoding default", async () => {

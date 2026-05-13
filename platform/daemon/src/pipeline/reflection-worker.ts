@@ -391,28 +391,33 @@ export async function generateDailyBriefInsights(
 	const date = todayDate();
 	const memoryIds = JSON.stringify(context.memories.map((m) => m.id).filter(Boolean));
 	const summaryIds = JSON.stringify(context.summaries.map((s) => s.id).filter(Boolean));
-	const ids = insights.map(() => randomUUID());
+	const ids: string[] = [];
 
 	deps.getDbAccessor().withWriteTx((db) => {
-		insights.forEach((insight, index) => {
-			const id = ids[index];
-			db.prepare(
-				`INSERT INTO daily_reflections
-				 (id, agent_id, date, summary, patterns, question, memory_ids, summary_ids, model, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run(
-				id,
-				agentId,
-				date,
-				insight.summary,
-				JSON.stringify(insight.patterns),
-				insight.question ?? null,
-				memoryIds,
-				summaryIds,
-				config.model,
-				now,
-			);
-		});
+		for (const insight of insights) {
+			const id = randomUUID();
+			const contentKey = normalizeInsight(insight.question ?? insight.summary);
+			const result = db
+				.prepare(
+					`INSERT OR IGNORE INTO daily_reflections
+				 (id, agent_id, date, summary, patterns, question, content_key, memory_ids, summary_ids, model, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				)
+				.run(
+					id,
+					agentId,
+					date,
+					insight.summary,
+					JSON.stringify(insight.patterns),
+					insight.question ?? null,
+					contentKey,
+					memoryIds,
+					summaryIds,
+					config.model,
+					now,
+				);
+			if (result.changes > 0) ids.push(id);
+		}
 	});
 
 	return ids;
