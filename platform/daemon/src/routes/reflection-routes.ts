@@ -79,19 +79,17 @@ export function registerReflectionRoutes(app: Hono): void {
 	app.get("/api/reflections/today", (c) => {
 		const agentId = c.req.query("agentId") ?? "default";
 		const date = new Date().toISOString().slice(0, 10);
+		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
-			const row = getDbAccessor().withReadDb((db) => {
-				return db.prepare("SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ?").get(agentId, date) as
-					| ReflectionRow
-					| undefined;
+			const rows = getDbAccessor().withReadDb((db) => {
+				return db
+					.prepare("SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ? ORDER BY created_at DESC LIMIT ?")
+					.all(agentId, date, limit) as ReflectionRow[];
 			});
 
-			if (!row) {
-				return c.json({ reflection: null });
-			}
-
-			return c.json({ reflection: formatReflection(row) });
+			const reflections = rows.map(formatReflection);
+			return c.json({ reflection: reflections[0] ?? null, reflections });
 		} catch (e) {
 			logger.error("reflections", "Failed to fetch today's reflection", e instanceof Error ? e : undefined);
 			return c.json({ error: "Failed to fetch reflection" }, 500);
