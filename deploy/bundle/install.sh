@@ -450,7 +450,7 @@ main() {
   printf "${BOLD}  Downloading components...${NC}\n"
   echo ""
 
-  REQUIRED_COMPONENTS="node cli daemon-js native"
+  REQUIRED_COMPONENTS="node cli daemon-js dashboard native"
 
   for name in "${COMPONENTS[@]}"; do
     sha=""

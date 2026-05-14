@@ -13,6 +13,7 @@ import { readFile as readFileAsync } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
@@ -1659,7 +1660,7 @@ async function main() {
 	});
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === __filename) {
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(__filename)) {
 	main().catch((err) => {
 		logger.error("daemon", "Fatal error", err);
 		process.exit(1);
