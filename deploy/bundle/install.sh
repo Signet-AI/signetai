@@ -504,19 +504,27 @@ done
 STAGING="$SIGNET_INSTALL_DIR/runtime/staging"
 if [ -d "$STAGING" ]; then
   MOVED=""
+  # Stage 1: Move all old components aside
   for dir in "$STAGING"/*/; do
     [ -d "$dir" ] || continue
     comp_name="$(basename "$dir")"
     DEST="$SIGNET_INSTALL_DIR/runtime/$comp_name"
     OLD="${DEST}.old"
     if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
+    MOVED="$MOVED $comp_name"
+  done
+  # Stage 2: Promote all staged components
+  PROMOTED=""
+  for dir in "$STAGING"/*/; do
+    [ -d "$dir" ] || continue
+    comp_name="$(basename "$dir")"
+    DEST="$SIGNET_INSTALL_DIR/runtime/$comp_name"
     if mv "$dir" "$DEST" 2>/dev/null; then
       touch "$DEST/.complete"
-      MOVED="$MOVED $comp_name"
+      PROMOTED="$PROMOTED $comp_name"
     else
       err "Failed to promote $comp_name — rolling back"
       rm -rf "$DEST"
-      if [ -d "$OLD" ]; then mv "$OLD" "$DEST"; fi
       for prev in $MOVED; do
         PDEST="$SIGNET_INSTALL_DIR/runtime/$prev"
         POLD="${PDEST}.old"

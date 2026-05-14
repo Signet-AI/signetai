@@ -46,8 +46,9 @@ type SqliteDatabase = {
 let Database: new (path: string, opts?: Record<string, unknown>) => SqliteDatabase;
 
 if (isBun) {
+	const { createRequire } = await import("node:module");
 	// eslint-disable-next-line @typescript-eslint/no-require-imports
-	const mod = require("bun:sqlite");
+	const mod = createRequire(import.meta.url)("bun:sqlite");
 	Database = mod.Database;
 } else {
 	const { createRequire } = await import("node:module");
