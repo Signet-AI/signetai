@@ -438,14 +438,28 @@ jobs:
             gh release create "$TAG" --repo "$REPO" --title "Latest Bundle" --notes "Auto-updated bundle artifacts" --prerelease
           fi
 
+      - name: De-duplicate and stage release assets
+        run: |
+          mkdir -p /tmp/release-staging
+          # Copy all artifacts into a flat staging dir, skipping duplicates
+          find /tmp/all-artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.dmg' -o -name '*.zip' -o -name 'manifest-*.json' \) | while read -r f; do
+            base="$(basename "$f")"
+            if [ -f "/tmp/release-staging/$base" ]; then
+              existing="$(sha256sum "/tmp/release-staging/$base" | awk '{print $1}')"
+              current="$(sha256sum "$f" | awk '{print $1}')"
+              if [ "$existing" = "$current" ]; then continue; fi
+              echo "::warning::Duplicate asset $base with different content"
+            fi
+            cp "$f" "/tmp/release-staging/"
+          done
+
       - name: Upload artifacts to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
-          # Upload tarballs and checksums first
-          find /tmp/all-artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.dmg' -o -name '*.zip' \) | while read -r f; do
+          find /tmp/release-staging -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.dmg' -o -name '*.zip' \) | while read -r f; do
             gh release upload "$TAG" "$f" --repo "$REPO" --clobber
           done
 
@@ -455,9 +469,7 @@ jobs:
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
-          # Upload manifests AFTER all artifacts so installers never see
-          # a manifest that references missing files
-          find /tmp/all-artifacts -type f -name 'manifest-*.json' | while read -r f; do
+          find /tmp/release-staging -type f -name 'manifest-*.json' | while read -r f; do
             gh release upload "$TAG" "$f" --repo "$REPO" --clobber
           done
           gh release upload "$TAG" deploy/bundle/install.sh deploy/bundle/uninstall.sh deploy/bundle/update.sh --repo "$REPO" --clobber
