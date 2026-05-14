@@ -358,6 +358,32 @@ setup_path() {
   ok "Added to PATH in $(basename "$shell_rc")"
 }
 
+# ── Entrypoint verification ──
+
+verify_entrypoints() {
+  local missing=0
+  local node_bin="$SIGNET_INSTALL_DIR/runtime/node/bin/node"
+  local cli_js="$SIGNET_INSTALL_DIR/runtime/cli/cli.js"
+  local daemon_js="$SIGNET_INSTALL_DIR/runtime/daemon-js/daemon.js"
+
+  if [ ! -x "$node_bin" ]; then
+    err "Required entrypoint missing: $node_bin"
+    missing=$((missing + 1))
+  fi
+  if [ ! -f "$cli_js" ]; then
+    err "Required entrypoint missing: $cli_js"
+    missing=$((missing + 1))
+  fi
+  if [ ! -f "$daemon_js" ]; then
+    err "Required entrypoint missing: $daemon_js"
+    missing=$((missing + 1))
+  fi
+  if [ "$missing" -gt 0 ]; then
+    err "$missing required entrypoint(s) missing — install is incomplete"
+    exit 1
+  fi
+}
+
 # ── Main ──
 
 main() {
@@ -464,6 +490,9 @@ fi
 
   cp "${tmpdir}/manifest.json" "$SIGNET_INSTALL_DIR/manifest.json"
   echo ""
+
+  # Verify critical entrypoints exist before declaring success
+  verify_entrypoints
 
   generate_wrappers
   setup_path

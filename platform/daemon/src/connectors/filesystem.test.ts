@@ -1,24 +1,5 @@
 import { describe, expect, test } from "bun:test";
-
-function globToRegex(pattern: string): RegExp {
-	const normalized = pattern
-		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
-		.replace(/\*\*/g, "{{GLOBSTAR}}")
-		.replace(/\*/g, "[^/]*")
-		.replace(/\?/g, "[^/]")
-		.replace(/\/\{\{GLOBSTAR\}\}/g, "(?:/.*)?")
-		.replace(/\{\{GLOBSTAR\}\}\//g, "(?:.*/)?")
-		.replace(/\{\{GLOBSTAR\}\}/g, ".*");
-	const anchored = `^${normalized}$`;
-	if (!pattern.includes("/") && !pattern.includes("{{GLOBSTAR}}")) {
-		return new RegExp(`(?:^|/)${normalized}$`, "i");
-	}
-	return new RegExp(anchored, "i");
-}
-
-function matchGlob(pattern: string, path: string): boolean {
-	return globToRegex(pattern).test(path);
-}
+import { globToRegex, matchGlob } from "./filesystem";
 
 describe("globToRegex", () => {
 	test("**/*.md matches root-level files", () => {

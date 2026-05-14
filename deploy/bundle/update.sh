@@ -295,8 +295,6 @@ if [ -n "$STAGED" ]; then
   for comp in $STAGED; do
     DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
     if mv "$TMPDIR/staged/$comp" "$DEST" 2>/dev/null; then
-      OLD="${DEST}.old"
-      rm -rf "$OLD"
       touch "$DEST/.complete"
       ok "$comp updated"
       PROMOTED="$PROMOTED $comp"
@@ -318,6 +316,10 @@ if [ -n "$STAGED" ]; then
       err "Update failed — all components rolled back"
       exit 1
     fi
+  done
+  # All promoted successfully — safe to remove backups
+  for comp in $STAGED; do
+    rm -rf "$SIGNET_INSTALL_DIR/runtime/$comp.old"
   done
 fi
 

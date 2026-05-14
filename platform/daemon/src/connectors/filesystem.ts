@@ -90,12 +90,12 @@ async function* walkDir(
 	}
 }
 
-function matchGlob(pattern: string, path: string): boolean {
+export function matchGlob(pattern: string, path: string): boolean {
 	const regex = globToRegex(pattern);
 	return regex.test(path);
 }
 
-function globToRegex(pattern: string): RegExp {
+export function globToRegex(pattern: string): RegExp {
 	const normalized = pattern
 		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
 		.replace(/\*\*/g, "{{GLOBSTAR}}")
