@@ -406,9 +406,7 @@ jobs:
                 case "$base" in
                   *-darwin-arm64.*|*-darwin-x64.*|*-linux-x64.*|*-linux-arm64.*) continue ;;
                 esac
-                if [ ! -f "$PLAT_DIR/$base" ]; then
-                  cp "$f" "$MERGE_DIR/"
-                fi
+                [ ! -f "$MERGE_DIR/$base" ] && cp "$f" "$MERGE_DIR/"
               done
             fi
             # Copy platform-specific artifacts
