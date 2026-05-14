@@ -207,6 +207,51 @@ printf 'ok\\n'
 		}
 	});
 
+	it("cleans up detached Codex ACP agent processes after successful ACPX exec", async () => {
+		if (process.platform !== "linux") return;
+		const root = join(tmpdir(), `signet-acpx-success-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-daemonizes.sh");
+		const codexAcp = join(root, "codex-acp");
+		const childPidPath = join(root, "child.pid");
+		writeFileSync(
+			codexAcp,
+			`#!/usr/bin/env bash
+sleep 30
+`,
+		);
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+setsid ${JSON.stringify(codexAcp)} >/dev/null 2>&1 < /dev/null &
+printf '%s' "$!" > ${JSON.stringify(childPidPath)}
+printf 'ok\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		chmodSync(codexAcp, 0o755);
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const pid = Number(readFileSync(childPidPath, "utf-8"));
+			expect(pid).toBeGreaterThan(0);
+
+			let alive = true;
+			for (let i = 0; i < 40; i += 1) {
+				try {
+					process.kill(pid, 0);
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				} catch {
+					alive = false;
+					break;
+				}
+			}
+			expect(alive).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("captures ACPX JSON events while preserving the final text provider contract", async () => {
 		const root = join(tmpdir(), `signet-acpx-events-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(root, { recursive: true });
