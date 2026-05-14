@@ -157,15 +157,20 @@ json_value() {
 
 get_manifest_value() {
   local key="$1" file="${2:-$REMOTE_MANIFEST}"
+  local val=""
   if command -v jq >/dev/null 2>&1; then
-    jq -r "$key" "$file" 2>/dev/null
+    val="$(jq -r "$key" "$file" 2>/dev/null)"
+    if [ "$val" = "null" ] || [ -z "$val" ]; then
+      val=""
+    fi
+    printf '%s' "$val"
   elif [ -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
     "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e "
       const fs=require('fs');
       const d=JSON.parse(fs.readFileSync('$file','utf8'));
       const parts='${key}'.split('.').filter(Boolean).map(p=>p.replace(/^\"|\"$/g,''));
       let v=d; for(const p of parts) v=v?.[p];
-      if(v!==undefined) process.stdout.write(String(v));
+      if(v!==undefined && v!==null) process.stdout.write(String(v));
     " 2>/dev/null || true
   else
     json_value "$key" "$file"
