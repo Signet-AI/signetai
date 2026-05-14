@@ -3,19 +3,27 @@
 //! Provides the filesystem-backed skill read/list/delete API that the TS daemon
 //! exposes for dashboard and harness clients.
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path as AxumPath, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{ConnectInfo, Path as AxumPath, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{state::AppState, workspace_paths};
+use crate::{
+    auth::{
+        middleware::{authenticate_headers, require_permission_guard},
+        types::Permission,
+    },
+    state::AppState,
+    workspace_paths,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {
@@ -76,8 +84,13 @@ pub async fn get(
 
 pub async fn delete(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     AxumPath(name): AxumPath<String>,
 ) -> impl IntoResponse {
+    if let Err(resp) = require_admin_mutation(&state, peer, &headers) {
+        return resp;
+    }
     let Ok(name) = validate_skill_name(&name) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -156,7 +169,15 @@ pub async fn browse(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
     Json(json!({"results": results, "count": results.len()}))
 }
 
-pub async fn install(Json(req): Json<InstallRequest>) -> impl IntoResponse {
+pub async fn install(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<InstallRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_admin_mutation(&state, peer, &headers) {
+        return resp;
+    }
     let Some(name) = req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -185,6 +206,23 @@ pub async fn install(Json(req): Json<InstallRequest>) -> impl IntoResponse {
         })),
     )
         .into_response()
+}
+
+fn require_admin_mutation(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    let is_local = peer.ip().is_loopback();
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, Permission::Admin, state.auth_mode, is_local)
+        .map_err(|resp| *resp)
 }
 
 fn skills_dir(state: &AppState) -> std::io::Result<PathBuf> {

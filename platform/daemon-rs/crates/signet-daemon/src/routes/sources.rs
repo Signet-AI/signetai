@@ -5,21 +5,29 @@
 //! handled by the source bridge/pipeline; these routes provide the same CRUD
 //! surface so clients do not care which daemon runtime is serving them.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{ConnectInfo, Path, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::{state::AppState, workspace_paths};
+use crate::{
+    auth::{
+        middleware::{authenticate_headers, require_permission_guard},
+        types::Permission,
+    },
+    state::AppState,
+    workspace_paths,
+};
 
 const DEFAULT_OBSIDIAN_EXCLUDE_GLOBS: &[&str] = &[
     "**/.obsidian/**",
@@ -71,8 +79,13 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
 
 pub async fn add_obsidian(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<AddObsidianSourceRequest>,
 ) -> impl IntoResponse {
+    if let Err(resp) = require_admin_mutation(&state, peer, &headers) {
+        return resp;
+    }
     let Some(raw_root) = req.root.or(req.path).map(|s| s.trim().to_string()) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -157,8 +170,13 @@ pub async fn add_obsidian(
 
 pub async fn delete_source(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(resp) = require_admin_mutation(&state, peer, &headers) {
+        return resp;
+    }
     if id.trim().is_empty() || id.contains("../") || id.contains('/') || id.contains('\\') {
         return (
             StatusCode::BAD_REQUEST,
@@ -183,6 +201,23 @@ pub async fn delete_source(
             .into_response();
     }
     Json(json!({"success": true, "source": source})).into_response()
+}
+
+fn require_admin_mutation(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    let is_local = peer.ip().is_loopback();
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, Permission::Admin, state.auth_mode, is_local)
+        .map_err(|resp| *resp)
 }
 
 fn sources_path(state: &AppState) -> std::io::Result<PathBuf> {

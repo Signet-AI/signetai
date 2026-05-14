@@ -318,6 +318,15 @@ impl TestServer {
             .expect("request failed")
     }
 
+    async fn delete_bearer(&self, path: &str, token: &str) -> reqwest::Response {
+        self.client
+            .delete(format!("{}{path}", self.base))
+            .bearer_auth(token)
+            .send()
+            .await
+            .expect("request failed")
+    }
+
     async fn json(&self, resp: reqwest::Response) -> serde_json::Value {
         resp.json().await.expect("failed to parse json")
     }
@@ -1130,6 +1139,52 @@ async fn marketplace_reviews_native_roundtrip() {
         .collect();
     entries.sort();
     assert_eq!(entries, vec!["reviews-config.json", "reviews.json"]);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn workspace_file_mutations_enforce_team_admin_auth() {
+    let server = TestServer::start_team_auth().await;
+    let agent_token = TestServer::scoped_token("default");
+
+    let resp = server
+        .post(
+            "/api/sources/obsidian",
+            json!({"path": server._tmpdir.path().display().to_string()}),
+        )
+        .await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server
+        .post_bearer(
+            "/api/sources/obsidian",
+            json!({"path": server._tmpdir.path().display().to_string()}),
+            &agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = server.delete("/api/skills/local-test").await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server
+        .delete_bearer("/api/skills/local-test", &agent_token)
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = server
+        .patch("/api/plugins/signet.secrets", json!({"enabled": false}))
+        .await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server
+        .patch_bearer(
+            "/api/plugins/signet.secrets",
+            json!({"enabled": false}),
+            &agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
 }
 
 #[tokio::test]

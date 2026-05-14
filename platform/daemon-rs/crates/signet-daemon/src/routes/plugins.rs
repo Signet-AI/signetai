@@ -4,17 +4,24 @@
 //! built-in `signet.secrets` plugin: registry listing, diagnostics,
 //! enable/disable state, prompt contributions, and durable audit querying.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 
-use crate::{state::AppState, workspace_paths};
+use crate::{
+    auth::{
+        middleware::{authenticate_headers, require_permission_guard},
+        types::Permission,
+    },
+    state::AppState,
+    workspace_paths,
+};
 
 const SIGNET_SECRETS_PLUGIN_ID: &str = "signet.secrets";
 const AUDIT_FILE: &str = "audit-v1.ndjson";
@@ -447,9 +454,14 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
 /// PATCH /api/plugins/:id
 pub async fn patch(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<PatchPluginBody>,
 ) -> impl IntoResponse {
+    if let Err(resp) = require_admin_mutation(&state, peer, &headers) {
+        return resp;
+    }
     if id != SIGNET_SECRETS_PLUGIN_ID {
         return (
             StatusCode::NOT_FOUND,
@@ -478,4 +490,21 @@ pub async fn patch(
         Json(serde_json::json!({"plugin": plugin_record(&state)})),
     )
         .into_response()
+}
+
+fn require_admin_mutation(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    let is_local = peer.ip().is_loopback();
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, Permission::Admin, state.auth_mode, is_local)
+        .map_err(|resp| *resp)
 }
