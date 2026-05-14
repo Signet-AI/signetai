@@ -128,7 +128,7 @@ get_manifest_value() {
     "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e "
       const fs=require('fs');
       const d=JSON.parse(fs.readFileSync('$file','utf8'));
-      const parts='${key}'.split('.').filter(Boolean);
+      const parts='${key}'.split('.').filter(Boolean).map(p=>p.replace(/^\"|\"$/g,''));
       let v=d; for(const p of parts) v=v?.[p];
       if(v!==undefined) process.stdout.write(String(v));
     " 2>/dev/null || true
