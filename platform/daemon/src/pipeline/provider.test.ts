@@ -405,6 +405,52 @@ printf 'ok\n'
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("kills the ACPX process group on timeout so codex grandchildren do not leak", async () => {
+		if (process.platform === "win32") return;
+		const root = join(tmpdir(), `signet-acpx-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-leak.sh");
+		const childPidPath = join(root, "child.pid");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+sleep 30 &
+printf '%s' "$!" > ${JSON.stringify(childPidPath)}
+wait
+`,
+		);
+		chmodSync(bin, 0o755);
+
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hang", { timeoutMs: 50 })).rejects.toThrow("codex via ACPX timeout after 50ms");
+
+			let pid = 0;
+			for (let i = 0; i < 20; i += 1) {
+				if (existsSync(childPidPath)) {
+					pid = Number(readFileSync(childPidPath, "utf-8"));
+					break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			expect(pid).toBeGreaterThan(0);
+
+			let alive = true;
+			for (let i = 0; i < 40; i += 1) {
+				try {
+					process.kill(pid, 0);
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				} catch {
+					alive = false;
+					break;
+				}
+			}
+			expect(alive).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("createOllamaProvider", () => {

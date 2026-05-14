@@ -1112,6 +1112,27 @@ function extractAcpxMessageChunk(event: AcpxJsonEvent): string | undefined {
 	return undefined;
 }
 
+function terminateChildProcessTree(child: ReturnType<typeof nodeSpawn>, signal: NodeJS.Signals = "SIGTERM"): void {
+	const pid = child.pid;
+	if (pid && process.platform !== "win32") {
+		try {
+			process.kill(-pid, signal);
+			return;
+		} catch {
+			// Fall back to killing the direct child below. This can happen if the
+			// process exits before we signal the detached process group.
+		}
+	}
+	child.kill(signal);
+}
+
+function terminateChildProcessTreeWithEscalation(child: ReturnType<typeof nodeSpawn>): void {
+	terminateChildProcessTree(child, "SIGTERM");
+	const escalation = setTimeout(() => terminateChildProcessTree(child, "SIGKILL"), 1000);
+	escalation.unref?.();
+	child.once("close", () => clearTimeout(escalation));
+}
+
 function parseAcpxJsonOutput(
 	stdout: string,
 	config: Pick<AcpxProviderConfig, "agent" | "captureEvents" | "maxCapturedEvents" | "onEvent">,
@@ -1173,6 +1194,7 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 					cwd,
 					env: acpxEnv(config.hooks),
 					stdio: ["pipe", "pipe", "pipe"],
+					detached: process.platform !== "win32",
 					windowsHide: true,
 				});
 				const finish = (fn: () => void): void => {
@@ -1182,7 +1204,7 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 					fn();
 				};
 				const timer = setTimeout(() => {
-					child.kill("SIGTERM");
+					terminateChildProcessTreeWithEscalation(child);
 					finish(() => reject(new Error(`${config.agent} via ACPX timeout after ${timeoutMs}ms`)));
 				}, timeoutMs);
 				child.stdout?.setEncoding("utf8");
