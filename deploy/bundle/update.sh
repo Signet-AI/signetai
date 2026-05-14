@@ -330,6 +330,20 @@ fi
 
 rm -rf "$TMPDIR/staged"
 
+# Remove components present locally but absent from remote manifest
+REMOTE_KEYS="$(manifest_keys "$REMOTE_MANIFEST")"
+if [ -d "$SIGNET_INSTALL_DIR/runtime" ]; then
+  for dir in "$SIGNET_INSTALL_DIR/runtime"/*/; do
+    [ -d "$dir" ] || continue
+    comp_name="$(basename "$dir")"
+    case " $REMOTE_KEYS " in
+      *" $comp_name "*) continue ;;
+    esac
+    warn "Removing obsolete component: $comp_name"
+    rm -rf "$dir"
+  done
+fi
+
 cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"
 echo "$REMOTE_VERSION" > "$SIGNET_INSTALL_DIR/VERSION"
 

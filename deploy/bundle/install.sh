@@ -337,8 +337,29 @@ exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" mcp "$
 WRAPPER
   chmod +x "${bindir}/signet-mcp"
 
-  curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/signet-uninstall" 2>/dev/null && chmod +x "${bindir}/signet-uninstall" || warn "Could not download uninstaller"
-  curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/signet-update" 2>/dev/null && chmod +x "${bindir}/signet-update" || warn "Could not download updater"
+  if curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh" 2>/dev/null; then
+    cat > "${bindir}/signet-uninstall" << WRAPPER
+#!/usr/bin/env bash
+SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export SIGNET_INSTALL_DIR
+exec "\$SIGNET_INSTALL_DIR/bin/_uninstall.sh" "\$@"
+WRAPPER
+    chmod +x "${bindir}/signet-uninstall"
+  else
+    warn "Could not download uninstaller"
+  fi
+
+  if curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh" 2>/dev/null; then
+    cat > "${bindir}/signet-update" << WRAPPER
+#!/usr/bin/env bash
+SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export SIGNET_INSTALL_DIR
+exec "\$SIGNET_INSTALL_DIR/bin/_update.sh" "\$@"
+WRAPPER
+    chmod +x "${bindir}/signet-update"
+  else
+    warn "Could not download updater"
+  fi
 
   ok "Wrapper scripts created"
 }
