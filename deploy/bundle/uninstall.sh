@@ -58,7 +58,7 @@ fi
 # Optionally purge user data
 if [ "$PURGE" = "--purge" ]; then
   AGENTS_DIR="${SIGNET_PATH:-$HOME/.agents}"
-  if [ "$AGENTS_DIR" = "/" ] || [ -z "$AGENTS_DIR" ]; then
+  if [ "$AGENTS_DIR" = "/" ] || [ "$AGENTS_DIR" = "$HOME" ] || [ -z "$AGENTS_DIR" ]; then
     echo "Error: agents dir is a dangerous path ($AGENTS_DIR). Refusing to purge."
     exit 1
   fi
