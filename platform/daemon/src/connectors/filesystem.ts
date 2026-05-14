@@ -122,7 +122,8 @@ async function discoverFiles(settings: FilesystemSettings): Promise<readonly Dis
 	const seen = new Set<string>();
 	const results: DiscoveredFile[] = [];
 
-	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns, "", patterns.some((p) => p.includes("/.")))) {
+	const wantsDot = patterns.some((p) => p.startsWith(".") || p.includes("/."));
+	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns, "", wantsDot)) {
 		const rel = relative(resolvedRoot, absolutePath);
 		if (!rel || rel.startsWith("..")) continue;
 		const matches = patterns.some((p) => matchGlob(p, rel));

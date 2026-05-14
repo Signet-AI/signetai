@@ -198,7 +198,6 @@ download_url() {
     fi
   fi
 
-  rm -f "$dest/.complete"
   info "Downloading $name..."
   curl -fsSL "$url" -o "$tmp" || {
     err "Failed to download $name"

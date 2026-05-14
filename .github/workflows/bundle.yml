@@ -418,6 +418,14 @@ jobs:
               > "$MERGE_DIR/manifest-$PLATFORM.json"
             # Copy manifest back to the artifact dir for upload
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$PLAT_DIR/"
+            # Copy shared artifacts into platform dir so they get uploaded
+            if [ "$PLATFORM" != "linux-x64" ] && [ -d "$SHARED_DIR" ]; then
+              for f in "$MERGE_DIR"/*.tar.gz "$MERGE_DIR"/*.sha256; do
+                [ -f "$f" ] || continue
+                base="$(basename "$f")"
+                [ ! -f "$PLAT_DIR/$base" ] && cp "$f" "$PLAT_DIR/"
+              done
+            fi
           done
 
       - name: Find or create release
