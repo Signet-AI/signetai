@@ -105,8 +105,6 @@ function globToRegex(pattern: string): RegExp {
 		.replace(/\{\{GLOBSTAR\}\}\//g, "(?:.*/)?")
 		.replace(/\{\{GLOBSTAR\}\}/g, ".*");
 	const anchored = `^${normalized}$`;
-	// Patterns without path separators or globstars match at any depth
-	// (mirrors Bun.Glob behavior: *.md matches notes/a.md)
 	if (!pattern.includes("/") && !pattern.includes("{{GLOBSTAR}}")) {
 		return new RegExp(`(?:^|/)${normalized}$`, "i");
 	}
