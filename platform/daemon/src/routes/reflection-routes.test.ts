@@ -130,8 +130,9 @@ describe("reflection routes", () => {
 	});
 
 	it("returns all same-day brief items from the today endpoint", async () => {
-		seedReflection("older", "agent-today", "2026-05-13", "Older insight", "2026-05-13T08:00:00.000Z");
-		seedReflection("newer", "agent-today", "2026-05-13", "Newer insight", "2026-05-13T09:00:00.000Z");
+		const today = new Date().toISOString().slice(0, 10);
+		seedReflection("older", "agent-today", today, "Older insight", `${today}T08:00:00.000Z`);
+		seedReflection("newer", "agent-today", today, "Newer insight", `${today}T09:00:00.000Z`);
 
 		const res = await app().request("/api/reflections/today?agentId=agent-today&limit=10");
 		expect(res.status).toBe(200);

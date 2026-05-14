@@ -1381,7 +1381,7 @@ impl Default for PipelineV2Config {
             feedback: FeedbackConfig::default(),
             significance: Some(SignificanceConfig::default()),
             predictor: None,
-            // predictor_pipeline: PredictorPipelineConfig::default(), // hard-deprecated in 0.112.0
+            predictor_pipeline: PredictorPipelineConfig::default(), // legacy manifest compatibility only; hard-deprecated in 0.112.0
             model_registry: ModelRegistryConfig::default(),
         }
     }
