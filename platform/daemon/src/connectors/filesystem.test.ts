@@ -34,8 +34,8 @@ describe("globToRegex", () => {
 		expect(matchGlob("**/*.md", ".env")).toBe(false);
 	});
 
-	test("exact path pattern", () => {
+	test("exact path pattern only matches root", () => {
 		expect(matchGlob("AGENTS.md", "AGENTS.md")).toBe(true);
-		expect(matchGlob("AGENTS.md", "sub/AGENTS.md")).toBe(true);
+		expect(matchGlob("AGENTS.md", "sub/AGENTS.md")).toBe(false);
 	});
 });
