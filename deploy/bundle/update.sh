@@ -93,19 +93,59 @@ fi
 safe_tar_extract() {
   local archive="$1" dest="$2"
   local unsafe
-  unsafe="$(tar tf "$archive" 2>/dev/null | while read -r entry; do
-    case "$entry" in
-      ../*|*/../*|*/..|..) echo "$entry" ;;
-      /*) echo "$entry" ;;
+  unsafe="$(tar tvf "$archive" 2>/dev/null | while read -r line; do
+    case "$line" in
+      l*|h*|\-*)
+        local entry
+        entry="$(printf '%s' "$line" | sed 's/^.* //')"
+        case "$entry" in
+          ../*|*/../*|*/..|..) echo "$entry" ;;
+          /*) echo "$entry" ;;
+        esac
+        ;;
+      *)
+        local link_target=""
+        case "$line" in
+          *"-> "*)
+            link_target="$(printf '%s' "$line" | sed 's/.*-> //')"
+            entry="$(printf '%s' "$line" | sed 's/^.* //;s/ ->.*//')"
+            ;;
+        esac
+        if [ -n "$link_target" ]; then
+          echo "symlink:$entry -> $link_target"
+        fi
+        ;;
     esac
   done)"
   if [ -n "$unsafe" ]; then
-    err "Archive contains unsafe paths:"
+    err "Archive contains unsafe paths or symlinks:"
     echo "$unsafe"
     return 1
   fi
   mkdir -p "$dest"
   tar xzf "$archive" -C "$dest"
+  local escaped
+  escaped="$(find "$dest" -type l 2>/dev/null | while read -r link; do
+    local target
+    target="$(readlink "$link")"
+    case "$target" in
+      /*) echo "$link -> $target" ;;
+      *)
+        local resolved
+        resolved="$(cd "$(dirname "$link")" && cd "$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")"
+        case "$resolved" in
+          "$dest"/*) ;;
+          *) echo "$link -> $resolved" ;;
+        esac
+        ;;
+    esac
+  done)"
+  if [ -n "$escaped" ]; then
+    err "Extracted archive contains symlinks escaping dest dir:"
+    echo "$escaped"
+    rm -rf "$dest"
+    return 1
+  fi
 }
 
 json_value() {
