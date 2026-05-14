@@ -8,7 +8,8 @@
  */
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import type { AnalyticsCollector } from "../analytics";
 import { logger } from "../logger";
@@ -41,9 +42,10 @@ export interface ExtractionThreadOpts {
 
 export function startExtractionThread(opts: ExtractionThreadOpts): Promise<WorkerHandle> {
 	const { init, analytics, telemetry } = opts;
+	const __dirname = dirname(fileURLToPath(import.meta.url));
 	return new Promise<WorkerHandle>((resolve, reject) => {
-		const bundled = join(import.meta.dir, "extraction-thread.js");
-		const workerPath = existsSync(bundled) ? bundled : join(import.meta.dir, "extraction-thread.ts");
+		const bundled = join(__dirname, "extraction-thread.js");
+		const workerPath = existsSync(bundled) ? bundled : join(__dirname, "extraction-thread.ts");
 		const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init);
 
 		let running = true;

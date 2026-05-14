@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import type { LlmProvider, PipelineProviderChoice, SynthesisProviderChoice } from "@signet/core";
 import { defaultPipelineModel, isPipelineProvider, isSynthesisProvider } from "@signet/core";
+import { which } from "../which";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
@@ -372,7 +373,7 @@ async function preflightCliCommand(
 	bin: "claude" | "codex",
 	extraEnv: Record<string, string>,
 ): Promise<CliPreflightResult> {
-	const resolved = Bun.which(bin);
+	const resolved = which(bin);
 	if (resolved === null) return "missing";
 	try {
 		const exitCode = await new Promise<number>((resolve) => {

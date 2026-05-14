@@ -9,9 +9,11 @@ import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFile as readFileAsync } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
 	type AgentDefinition,
@@ -65,13 +67,13 @@ import {
 	MEMORY_DB,
 	PID_FILE,
 	PORT,
+	type RuntimeProviderName,
+	type RuntimeSynthesisProviderName,
 	analyticsCollector,
 	authConfig,
 	bindAbort,
 	invalidateDiagnosticsCache,
 	providerRuntimeResolution,
-	type RuntimeProviderName,
-	type RuntimeSynthesisProviderName,
 	providerTracker,
 	readEnvTrimmed,
 	reloadAuthState,
@@ -150,6 +152,9 @@ import { isReadyResponse } from "./synthesis-worker-protocol";
 import { initUpdateSystem, startUpdateTimer, stopUpdateTimer } from "./update-system";
 import { createAgentsWatcherIgnoreMatcher } from "./watcher-ignore";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 let httpServer: import("node:net").Server | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let shadowProcess: ChildProcess | null = null;
@@ -169,7 +174,6 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 	// connectors that are registered and not currently errored.
 	return connectors.filter((cn) => cn.status !== "error").length;
 }
-
 
 // ============================================================================
 // Hono App
@@ -252,7 +256,7 @@ async function syncHarnessConfigs() {
 	if (!existsSync(agentsMdPath)) return;
 	const activeHarnesses = new Set(loadConfiguredHarnesses(AGENTS_DIR));
 
-	const rawContent = await Bun.file(agentsMdPath).text();
+	const rawContent = await readFileAsync(agentsMdPath, "utf8");
 	const content = stripSignetBlock(rawContent);
 
 	const buildHeader = (targetName: string) => {
@@ -296,7 +300,7 @@ ${fileList}
 				const identityPath = join(AGENTS_DIR, name);
 				if (!existsSync(identityPath)) return "";
 				try {
-					const fileContent = (await Bun.file(identityPath).text()).trim();
+					const fileContent = (await readFileAsync(identityPath, "utf8")).trim();
 					if (!fileContent) return "";
 					const header = name.replace(".md", "");
 					return `\n## ${header}\n\n${fileContent}`;
@@ -785,7 +789,7 @@ function resolveDaemonBinary(): string | null {
 	const ext = process.platform === "win32" ? ".exe" : "";
 	const arch = process.arch;
 	const plat = process.platform;
-	const monoRoot = join(import.meta.dir, "..", "..", "..");
+	const monoRoot = join(__dirname, "..", "..", "..");
 	const devPaths = [
 		join(monoRoot, "platform", "daemon-rs", "target", "release", `signet-daemon${ext}`),
 		join(monoRoot, "platform", "daemon-rs", "target", "debug", `signet-daemon${ext}`),
@@ -795,7 +799,7 @@ function resolveDaemonBinary(): string | null {
 		if (existsSync(p)) return p;
 	}
 	const name = `signet-daemon-${plat}-${arch}${ext}`;
-	const npmPath = join(import.meta.dir, "..", "bin", name);
+	const npmPath = join(__dirname, "..", "bin", name);
 	if (existsSync(npmPath)) return npmPath;
 	return null;
 }
@@ -859,7 +863,6 @@ async function stopPipelineRuntime(): Promise<void> {
 		} catch {}
 		shadowProcess = null;
 	}
-
 
 	if (embeddingTrackerHandle) {
 		try {
@@ -1296,8 +1299,8 @@ async function main() {
 	startFdPollMonitor();
 
 	const { extensionPath } = getVectorRuntimeStatus();
-	const bundled = join(import.meta.dir, "synthesis-render-worker.js");
-	const workerPath = existsSync(bundled) ? bundled : join(import.meta.dir, "synthesis-render-worker.ts");
+	const bundled = join(__dirname, "synthesis-render-worker.js");
+	const workerPath = existsSync(bundled) ? bundled : join(__dirname, "synthesis-render-worker.ts");
 	let synthWorker: Worker | null = null;
 	try {
 		synthWorker = new Worker(workerPath);
@@ -1656,7 +1659,7 @@ async function main() {
 	});
 }
 
-if (import.meta.main) {
+if (process.argv[1] && resolve(process.argv[1]) === __filename) {
 	main().catch((err) => {
 		logger.error("daemon", "Fatal error", err);
 		process.exit(1);

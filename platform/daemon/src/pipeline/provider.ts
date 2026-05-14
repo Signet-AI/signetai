@@ -25,6 +25,7 @@ import {
 } from "@signet/core";
 import { logger } from "../logger";
 import { bypassSession } from "../session-tracker";
+import { which } from "../which";
 import { trimTrailingSlash } from "./url";
 
 // ---------------------------------------------------------------------------
@@ -539,10 +540,10 @@ const toWebStream = (nodeStream: import("node:stream").Readable): ReadableStream
 	Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
 
 function spawnHidden(cmd: string[], options?: { env?: Record<string, string | undefined> }): SpawnResult {
-	// Resolve the binary via Bun.which() so that .cmd wrappers on Windows
+	// Resolve the binary via which() so that .cmd wrappers on Windows
 	// are found correctly (mirrors scheduler/spawn.ts pattern).
 	const [bin, ...args] = cmd;
-	const resolvedBin = Bun.which(bin);
+	const resolvedBin = which(bin);
 	if (resolvedBin === null) {
 		throw new Error(`spawnHidden: binary "${bin}" not found on PATH`);
 	}
@@ -600,29 +601,31 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		};
 	}
 
-	// Non-Windows: use Bun.spawn directly for reliable I/O.
-	const proc = Bun.spawn([resolvedBin, ...args], {
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
+	// Non-Windows: use node:child_process with piped stdio.
+	const child = nodeSpawn(resolvedBin, args, {
+		stdio: ["ignore", "pipe", "pipe"],
 		env: options?.env ? sanitizedEnv : undefined,
 	});
 
-	if (!proc.stdout || !proc.stderr) {
+	if (!child.stdout || !child.stderr) {
 		throw new Error("spawnHidden: stdout/stderr unexpectedly null despite pipe mode");
 	}
 
+	const exitPromise = new Promise<number>((resolve, reject) => {
+		child.on("exit", (code) => resolve(code ?? 1));
+		child.on("error", (err) => reject(err));
+	});
+
 	return {
-		stdout: proc.stdout,
-		stderr: proc.stderr,
-		exited: proc.exited,
+		stdout: toWebStream(child.stdout),
+		stderr: toWebStream(child.stderr),
+		exited: exitPromise,
 		kill(signal?: string) {
-			const sigMap: Record<string, number | undefined> = { SIGTERM: 15, SIGKILL: 9 };
-			const sigNum = signal ? sigMap[signal] : 15;
-			if (signal && sigNum === undefined) {
-				logger.warn("pipeline", `Unknown signal "${signal}", defaulting to SIGTERM`);
+			if (signal === "SIGKILL") {
+				child.kill("SIGKILL");
+			} else {
+				child.kill("SIGTERM");
 			}
-			proc.kill(sigNum ?? 15);
 		},
 	};
 }
@@ -1312,7 +1315,7 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 		},
 		async available(): Promise<boolean> {
 			const bin = config.bin ?? "npx";
-			return bin.includes("/") || Bun.which(bin) !== null;
+			return bin.includes("/") || which(bin) !== null;
 		},
 	};
 }
@@ -1382,7 +1385,7 @@ export function createCommandLineProvider(config: CommandLineProviderConfig): Ll
 			});
 		},
 		async available(): Promise<boolean> {
-			return config.bin.includes("/") || Bun.which(config.bin) !== null;
+			return config.bin.includes("/") || which(config.bin) !== null;
 		},
 	};
 }
@@ -2560,8 +2563,8 @@ const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
  * then falls back to the well-known install location.
  */
 function resolveOpenCodeBin(): string | null {
-	// Check PATH first (Bun.which works cross-platform)
-	const found = Bun.which("opencode");
+	// Check PATH first (which works cross-platform)
+	const found = which("opencode");
 	if (found) return found;
 
 	// Fall back to ~/.opencode/bin/opencode
@@ -2573,7 +2576,7 @@ function resolveOpenCodeBin(): string | null {
 
 /** Tracked child process so we can kill it on daemon shutdown. */
 let openCodeChild: {
-	readonly process: ReturnType<typeof Bun.spawn>;
+	readonly process: import("node:child_process").ChildProcess;
 	readonly port: number;
 } | null = null;
 
@@ -2609,9 +2612,8 @@ export async function ensureOpenCodeServer(port: number): Promise<boolean> {
 	}
 
 	logger.info("pipeline", "Starting OpenCode server", { port, bin });
-	const child = Bun.spawn([bin, "serve", "--port", String(port)], {
-		stdout: "ignore",
-		stderr: "pipe",
+	const child = nodeSpawn(bin, ["serve", "--port", String(port)], {
+		stdio: ["ignore", "ignore", "pipe"],
 	});
 
 	// Wait up to 8s for the server to become healthy
@@ -2632,7 +2634,7 @@ export async function ensureOpenCodeServer(port: number): Promise<boolean> {
 
 	if (!healthy) {
 		child.kill();
-		const stderr = await new Response(child.stderr).text();
+		const stderr = child.stderr ? await new Response(toWebStream(child.stderr)).text() : "";
 		logger.warn("pipeline", "OpenCode server failed to start", {
 			stderr: stderr.slice(0, 300),
 		});
