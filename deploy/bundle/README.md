@@ -64,7 +64,6 @@ what changed since the last install.
 | `cli` | CLI command bundle | No |
 | `daemon-js` | Daemon JS bundle | No |
 | `daemon-rs` | Rust daemon binary | Yes |
-| `predictor` | Predictive memory scorer | Yes |
 | `dashboard` | Web UI static files | No |
 | `connectors` | Harness integration bundles | No |
 | `plugin-opencode` | OpenCode plugin | No |
@@ -91,7 +90,6 @@ what changed since the last install.
 │   ├── cli/cli.js
 │   ├── daemon-js/
 │   ├── daemon-rs/
-│   ├── predictor/
 │   ├── dashboard/
 │   ├── connectors/
 │   ├── plugins/

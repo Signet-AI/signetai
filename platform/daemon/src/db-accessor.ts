@@ -22,7 +22,19 @@ import {
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 
-type SqliteDatabase = import("bun:sqlite").Database;
+type SqliteStatement = {
+	run(...params: unknown[]): void;
+	get(...params: unknown[]): Record<string, unknown> | undefined;
+	all(...params: unknown[]): Record<string, unknown>[];
+	values(...params: unknown[]): unknown[][];
+	finalize(): void;
+};
+
+type SqliteDatabase = {
+	prepare(sql: string): SqliteStatement;
+	exec(sql: string): void;
+	close(): void;
+};
 
 let Database: new (path: string, opts?: Record<string, unknown>) => SqliteDatabase;
 
@@ -36,8 +48,7 @@ if (isBun) {
 	Database = createRequire(import.meta.url)("better-sqlite3");
 }
 
-type SQLQueryBindings = import("bun:sqlite").SQLQueryBindings;
-type Statement = import("bun:sqlite").Statement;
+type SQLQueryBindings = unknown;
 
 const HOMEBREW_SQLITE_PATHS = [
 	"/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
@@ -67,16 +78,16 @@ interface SqliteRuntimeConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Public interfaces — thin wrappers over the bun:sqlite Database surface
+// Public interfaces — thin wrappers over the Database surface
 // ---------------------------------------------------------------------------
 
 export interface WriteDb {
 	exec(sql: string): void;
-	prepare(sql: string): Statement;
+	prepare(sql: string): SqliteStatement;
 }
 
 export interface ReadDb {
-	prepare(sql: string): Statement;
+	prepare(sql: string): SqliteStatement;
 }
 
 export interface DbAccessor {
@@ -150,7 +161,7 @@ function toMigrationDb(db: Database): {
 	};
 }
 
-export function toFtsSchemaQueryDb(db: { prepare(sql: string): Statement }): {
+export function toFtsSchemaQueryDb(db: { prepare(sql: string): SqliteStatement }): {
 	prepare(sql: string): {
 		get(...args: SQLQueryBindings[]): Record<string, unknown> | undefined;
 	};
