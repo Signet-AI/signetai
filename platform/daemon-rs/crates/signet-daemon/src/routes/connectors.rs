@@ -23,6 +23,43 @@ fn parse_connector_settings(settings_str: &str) -> serde_json::Value {
         .unwrap_or(value)
 }
 
+fn connector_row_json(r: &rusqlite::Row<'_>) -> rusqlite::Result<serde_json::Value> {
+    let id: String = r.get(0)?;
+    let provider: String = r.get(1)?;
+    let display_name: Option<String> = r.get(2)?;
+    let config_json: String = r.get::<_, String>(3).unwrap_or_else(|_| "{}".into());
+    let cursor_json: Option<String> = r.get(4)?;
+    let status: Option<String> = r.get(5)?;
+    let last_sync_at: Option<String> = r.get(6)?;
+    let last_error: Option<String> = r.get(7)?;
+    let created_at: String = r.get(8)?;
+    let updated_at: String = r.get(9)?;
+    let settings_json: String = r
+        .get::<_, String>(10)
+        .unwrap_or_else(|_| config_json.clone());
+    let enabled = r.get::<_, bool>(11).unwrap_or(true);
+    let settings = parse_connector_settings(&settings_json);
+
+    Ok(serde_json::json!({
+        "id": id,
+        "provider": provider,
+        "display_name": display_name,
+        "config_json": config_json,
+        "cursor_json": cursor_json,
+        "status": status,
+        "last_sync_at": last_sync_at,
+        "last_error": last_error,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "settings_json": settings_json,
+        "enabled": enabled,
+        "displayName": display_name,
+        "settings": settings,
+        "createdAt": created_at,
+        "updatedAt": updated_at,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
@@ -46,24 +83,11 @@ pub async fn list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             }
 
             let mut stmt = conn.prepare_cached(
-                "SELECT id, provider, display_name, settings_json, enabled, status, created_at, updated_at
+                "SELECT id, provider, display_name, config_json, cursor_json, status, last_sync_at, last_error, created_at, updated_at, settings_json, enabled
                  FROM connectors ORDER BY created_at DESC",
             )?;
             let rows: Vec<serde_json::Value> = stmt
-                .query_map([], |r| {
-                    let settings_str: String = r.get::<_, String>(3).unwrap_or_else(|_| "{}".into());
-                    let settings = parse_connector_settings(&settings_str);
-                    Ok(serde_json::json!({
-                        "id": r.get::<_, String>(0)?,
-                        "provider": r.get::<_, String>(1)?,
-                        "displayName": r.get::<_, Option<String>>(2)?,
-                        "settings": settings,
-                        "enabled": r.get::<_, bool>(4)?,
-                        "status": r.get::<_, Option<String>>(5)?,
-                        "createdAt": r.get::<_, String>(6)?,
-                        "updatedAt": r.get::<_, String>(7)?,
-                    }))
-                })?
+                .query_map([], connector_row_json)?
                 .filter_map(|r| r.ok())
                 .collect();
 
@@ -105,9 +129,17 @@ pub async fn create(
         .get("settings")
         .cloned()
         .unwrap_or(serde_json::json!({}));
+    let id = uuid::Uuid::new_v4().to_string();
+    let config_json = serde_json::to_string(&serde_json::json!({
+        "id": id,
+        "provider": provider,
+        "displayName": display,
+        "settings": settings,
+        "enabled": true,
+    }))
+    .unwrap_or_else(|_| "{}".into());
     let settings_json = serde_json::to_string(&settings).unwrap_or_else(|_| "{}".into());
 
-    let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
     let result = state
@@ -117,8 +149,8 @@ pub async fn create(
             move |conn| {
                 conn.execute(
                     "INSERT INTO connectors (id, provider, display_name, config_json, settings_json, enabled, status, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?4, 1, 'idle', ?5, ?5)",
-                    rusqlite::params![id, provider, display, settings_json, now],
+                     VALUES (?1, ?2, ?3, ?4, ?5, 1, 'idle', ?6, ?6)",
+                    rusqlite::params![id, provider, display, config_json, settings_json, now],
                 )?;
                 Ok(serde_json::json!({"id": id}))
             }
@@ -140,23 +172,10 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
         .pool
         .read(move |conn| {
             conn.query_row(
-                "SELECT id, provider, display_name, settings_json, enabled, status, created_at, updated_at
+                "SELECT id, provider, display_name, config_json, cursor_json, status, last_sync_at, last_error, created_at, updated_at, settings_json, enabled
                  FROM connectors WHERE id = ?1",
                 [&id],
-                |r| {
-                    let settings_str: String = r.get::<_, String>(3).unwrap_or_else(|_| "{}".into());
-                    let settings = parse_connector_settings(&settings_str);
-                    Ok(serde_json::json!({
-                        "id": r.get::<_, String>(0)?,
-                        "provider": r.get::<_, String>(1)?,
-                        "displayName": r.get::<_, Option<String>>(2)?,
-                        "settings": settings,
-                        "enabled": r.get::<_, bool>(4)?,
-                        "status": r.get::<_, Option<String>>(5)?,
-                        "createdAt": r.get::<_, String>(6)?,
-                        "updatedAt": r.get::<_, String>(7)?,
-                    }))
-                },
+                connector_row_json,
             )
             .map_err(|_| signet_core::CoreError::NotFound("connector".into()))
         })

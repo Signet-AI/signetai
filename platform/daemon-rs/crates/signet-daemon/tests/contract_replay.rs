@@ -651,9 +651,26 @@ async fn connectors_unwrap_ts_style_config_settings() {
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
     assert_eq!(body["count"], 1);
-    assert_eq!(body["connectors"][0]["settings"]["vault"], "/tmp/vault");
-    assert_eq!(body["connectors"][0]["settings"]["indexHidden"], true);
-    assert!(body["connectors"][0]["settings"].get("settings").is_none());
+    let connector = &body["connectors"][0];
+    assert_eq!(connector["settings"]["vault"], "/tmp/vault");
+    assert_eq!(connector["settings"]["indexHidden"], true);
+    assert!(connector["settings"].get("settings").is_none());
+    assert_eq!(connector["display_name"], "Obsidian");
+    assert_eq!(connector["status"], "idle");
+    assert_eq!(
+        connector["config_json"]
+            .as_str()
+            .unwrap()
+            .contains("connector-ts-full-config"),
+        true
+    );
+    assert_eq!(
+        connector["settings_json"]
+            .as_str()
+            .unwrap()
+            .contains("/tmp/vault"),
+        true
+    );
 
     let resp = server.get("/api/connectors/connector-ts-full-config").await;
     assert_eq!(resp.status(), 200);
@@ -661,6 +678,14 @@ async fn connectors_unwrap_ts_style_config_settings() {
     assert_eq!(body["settings"]["vault"], "/tmp/vault");
     assert_eq!(body["settings"]["indexHidden"], true);
     assert!(body["settings"].get("settings").is_none());
+    assert_eq!(body["display_name"], "Obsidian");
+    assert_eq!(
+        body["config_json"]
+            .as_str()
+            .unwrap()
+            .contains("connector-ts-full-config"),
+        true
+    );
 }
 
 #[tokio::test]
