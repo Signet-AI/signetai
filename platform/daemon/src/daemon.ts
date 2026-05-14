@@ -12,7 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync
 import { readFile as readFileAsync } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";

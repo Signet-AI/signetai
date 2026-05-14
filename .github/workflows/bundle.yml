@@ -223,6 +223,9 @@ jobs:
           echo '{"type":"module"}' > dist/package.json
           # Pin versions from package.json for reproducible bundles
           ONNX_VER="$(jq -r '.dependencies["onnxruntime-node"] // "1.21.0"' package.json)"
+          BSQ3_VER="$(jq -r '.dependencies["better-sqlite3"] // "11.0.0"' package.json)"
+          OP_VER="$(jq -r '.dependencies["@1password/sdk"] // "latest"' package.json)"
+          HF_VER="$(jq -r '.dependencies["@huggingface/transformers"] // "latest"' package.json)"
           SQLITE_VEC_VER="0.1.9"
           SQLITE_VEC_NATIVE=""
           case "$PLATFORM" in
@@ -232,12 +235,12 @@ jobs:
             linux-arm64)  SQLITE_VEC_NATIVE="sqlite-vec-linux-arm64@$SQLITE_VEC_VER" ;;
           esac
           npm install --prefix dist --no-save --no-package-lock \
-            "better-sqlite3@^11.0.0" \
+            "better-sqlite3@$BSQ3_VER" \
             "onnxruntime-node@$ONNX_VER" \
             "sqlite-vec@$SQLITE_VEC_VER" \
             "$SQLITE_VEC_NATIVE" \
-            "@1password/sdk" \
-            "@huggingface/transformers"
+            "@1password/sdk@$OP_VER" \
+            "@huggingface/transformers@$HF_VER"
           tar czf "$ARTIFACT_DIR/signet-daemon-js-$PLATFORM.tar.gz" -C dist .
 
       # ── Rust binaries ──
