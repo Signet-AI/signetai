@@ -657,6 +657,100 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain('return json.dumps({"error": "Signet daemon is not connected."})');
 	});
 
+	it("matches latest Hermes memory-provider lifecycle signatures", () => {
+		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
+
+		expect(plugin).toContain("def on_session_switch(");
+		expect(plugin).toContain("new_session_id: str");
+		expect(plugin).toContain('parent_session_id: str = ""');
+		expect(plugin).toContain("reset: bool = False");
+		expect(plugin).toContain("**kwargs: Any");
+		expect(plugin).toContain("self._session_key = new_session_id");
+		expect(plugin).toContain("self._transcript_lines = []");
+		expect(plugin).toContain("metadata: Optional[Dict[str, Any]] = None");
+		expect(plugin).toContain('metadata.get("write_origin", "")');
+		expect(plugin).toContain('metadata.get("tool_call_id", "")');
+		expect(plugin).toContain('source_type="hermes-memory-write" if source_id else ""');
+		expect(plugin).toContain('self._inject_cache = ""');
+		expect(plugin).toContain("self._prefetch_generation += 1");
+	});
+
+	it("accepts latest Hermes lifecycle calls with the daemon offline", () => {
+		const fixture = join(tmpRoot, "python-lifecycle-fixture");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(
+			join(fixture, "agent", "memory_provider.py"),
+			[
+				"class MemoryProvider:",
+				"    def on_session_switch(self, new_session_id, *, parent_session_id='', reset=False, **kwargs): pass",
+				"    def on_memory_write(self, action, target, content, metadata=None): pass",
+				"",
+			].join("\n"),
+		);
+
+		const result = spawnSync(
+			"python",
+			[
+				"-c",
+				[
+					"from plugins.memory.signet import SignetMemoryProvider",
+					"provider = SignetMemoryProvider()",
+					"provider.on_session_switch('new-session', parent_session_id='old-session', reset=True, cwd='/tmp/project')",
+					"provider.on_memory_write('add', 'memory', 'durable fact', metadata={'write_origin': 'assistant_tool'})",
+					"print(provider._session_key)",
+				].join("\n"),
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("new-session");
+	});
+
+	it("uses Hermes memory-write metadata as Signet provenance", () => {
+		const fixture = join(tmpRoot, "python-metadata-fixture");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+
+		const result = spawnSync(
+			"python",
+			[
+				"-c",
+				[
+					"import json",
+					"from plugins.memory.signet import SignetMemoryProvider",
+					"class FakeClient:",
+					"    def __init__(self): self.calls = []",
+					"    def remember(self, content, **kwargs): self.calls.append({'content': content, **kwargs})",
+					"provider = SignetMemoryProvider()",
+					"provider._client = FakeClient()",
+					"provider._project = '/tmp/project'",
+					"provider._session_key = 'session-a'",
+					"provider.on_memory_write('add', 'memory', 'durable fact', metadata={'write_origin': 'assistant_tool', 'execution_context': 'foreground', 'platform': 'cli', 'session_id': 'session-a', 'tool_call_id': 'call-123'})",
+					"provider._client.calls and print(json.dumps(provider._client.calls[0], sort_keys=True))",
+				].join("\n"),
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain('"source_type": "hermes-memory-write"');
+		expect(result.stdout).toContain('"source_id": "call-123"');
+		expect(result.stdout).toContain('"project": "/tmp/project"');
+		expect(result.stdout).toContain('"origin:assistant_tool"');
+		expect(result.stdout).toContain('"context:foreground"');
+		expect(result.stdout).toContain('"platform:cli"');
+		expect(result.stdout).toContain('"session:session-a"');
+	});
+
 	it("registers Signet tools with a Hermes-style memory manager before daemon initialization", () => {
 		const fixture = join(tmpRoot, "python-fixture");
 		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
@@ -807,7 +901,7 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain('"attributes"');
 		expect(plugin).toContain("Prospective recall hints");
 		expect(plugin).toContain('hints = _string_list(store_args.get("hints"))');
-		expect(plugin).toContain('Missing required parameter: hints');
+		expect(plugin).toContain("Missing required parameter: hints");
 		expect(plugin).toContain('transcript=str(store_args.get("transcript", "") or "")');
 		expect(plugin).toContain("structured=structured");
 		expect(client).toContain("hints: Optional[List[str]] = None");

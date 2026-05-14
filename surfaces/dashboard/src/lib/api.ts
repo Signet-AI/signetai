@@ -2890,6 +2890,74 @@ export async function getDiagnostics(): Promise<DiagnosticsReport | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Daily Reflections
+// ---------------------------------------------------------------------------
+
+export interface DailyReflection {
+	id: string;
+	date: string;
+	summary: string;
+	patterns: string[];
+	question: string | null;
+	answer: string | null;
+	answerMemoryId: string | null;
+	createdAt: string;
+	answeredAt: string | null;
+}
+
+export interface TodayReflectionResponse {
+	reflection: DailyReflection | null;
+	reflections?: DailyReflection[];
+}
+
+function agentQuery(agentId?: string): string {
+	return agentId && agentId !== "default" ? `?agentId=${encodeURIComponent(agentId)}` : "";
+}
+
+export async function getTodayReflection(agentId?: string): Promise<TodayReflectionResponse> {
+	try {
+		const res = await fetch(`${API_BASE}/api/reflections/today${agentQuery(agentId)}`);
+		if (!res.ok) return { reflection: null };
+		return (await res.json()) as TodayReflectionResponse;
+	} catch {
+		return { reflection: null };
+	}
+}
+
+export async function generateReflection(agentId?: string, count = 3): Promise<TodayReflectionResponse> {
+	try {
+		const suffix = agentQuery(agentId);
+		const separator = suffix ? "&" : "?";
+		const res = await fetch(`${API_BASE}/api/reflections/generate${suffix}${separator}count=${count}`, {
+			method: "POST",
+		});
+		if (!res.ok) return { reflection: null, reflections: [] };
+		return (await res.json()) as TodayReflectionResponse;
+	} catch {
+		return { reflection: null, reflections: [] };
+	}
+}
+
+export async function answerReflection(
+	id: string,
+	answer: string,
+	agentId?: string,
+): Promise<{ success: boolean; memoryId?: string; error?: string }> {
+	try {
+		const res = await fetch(`${API_BASE}/api/reflections/${id}/answer${agentQuery(agentId)}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ answer: answer.trim() }),
+		});
+		const data = await res.json();
+		if (!res.ok) return { success: false, error: data.error ?? "Request failed" };
+		return data as { success: boolean; memoryId?: string };
+	} catch {
+		return { success: false, error: "Network error" };
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Home greeting (falls back gracefully)
 // ---------------------------------------------------------------------------
 

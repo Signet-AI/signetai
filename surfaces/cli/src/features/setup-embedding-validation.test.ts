@@ -237,10 +237,13 @@ describe("validateOllamaModelNonInteractive", () => {
 		expect(result.error).toBeUndefined();
 	});
 
-	it("returns error when model is missing and ollama reports no models", async () => {
+	it("returns error when model is missing and ollama pull fails", async () => {
 		globalThis.fetch = mock(async () => new Response(JSON.stringify({ models: [] }), { status: 200 }));
 
-		const result = await validateOllamaModelNonInteractive("nomic-embed-text", { hasOllamaCommand: true });
+		const result = await validateOllamaModelNonInteractive("nomic-embed-text", {
+			hasOllamaCommand: true,
+			pullModel: async () => false,
+		});
 		expect(result.available).toBe(true);
 		expect(result.modelInstalled).toBe(false);
 		expect(result.error).toContain("Failed to pull");

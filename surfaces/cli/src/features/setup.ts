@@ -10,6 +10,7 @@ import {
 	NETWORK_MODES,
 	type NetworkMode,
 	disableGraphiqState,
+	modelPresetsForProvider,
 	parseSimpleYaml,
 	readNetworkMode,
 } from "@signet/core";
@@ -20,7 +21,7 @@ import { managedForgeInstallSupportedOnCurrentPlatform } from "./forge.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { runFreshSetup } from "./setup-fresh.js";
 import { runExistingSetupWizard } from "./setup-migrate.js";
-import { EXTRACTION_SAFETY_WARNING, defaultExtractionModel } from "./setup-pipeline.js";
+import { EXTRACTION_SAFETY_WARNING, defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary } from "./setup-protection.js";
 import {
@@ -61,6 +62,10 @@ import {
 	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
 import type { FreshSetupConfig, SetupDeps, SetupWizardOptions } from "./setup-types.js";
+
+function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string; name: string }> {
+	return modelPresetsForProvider(provider).map((preset) => ({ value: preset.value, name: preset.label }));
+}
 
 const IDENTITY_PRESET_CHOICES = ["minimal", "hermes", "openclaw", "custom"] as const;
 
@@ -795,7 +800,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			},
 			{
 				value: "llama-cpp",
-				name: `llama.cpp (local, recommended — qwen3.5:4b minimum)${detectedProvider === "llama-cpp" ? " — detected" : ""}`,
+				name: `llama.cpp (local, recommended — qwen3:4b minimum)${detectedProvider === "llama-cpp" ? " — detected" : ""}`,
 			},
 			{
 				value: "claude-code",
@@ -803,7 +808,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			},
 			{
 				value: "codex",
-				name: `Codex (GPT Mini, recommended if you already have Pro/Max)${detectedProvider === "codex" ? " — detected" : ""}`,
+				name: `Codex (gpt-5.4-mini, recommended if you already have Pro/Max)${detectedProvider === "codex" ? " — detected" : ""}`,
 			},
 			{
 				value: "ollama",
@@ -838,19 +843,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				deps.normalizeStringValue(options.extractionModel) ||
 				deps.normalizeStringValue(existingPipeline.extractionModel) ||
 				deps.normalizeStringValue(existingExtraction.model) ||
-				defaultExtractionModel("acpx");
+				defaultAcpxModel(harnesses, availableToolExtractionProviders);
 		} else {
 			console.log();
 			extractionModel = await select({
 				message: "Which model should ACPX ask the selected harness to use for background inference?",
-				choices: [
-					{ value: "gpt-5-codex-mini", name: "gpt-5-codex-mini (recommended default)" },
-					{ value: "haiku", name: "haiku (Claude Code lightweight)" },
-					{
-						value: "anthropic/claude-haiku-4-5-20251001",
-						name: "anthropic/claude-haiku-4-5 (OpenCode provider/model)",
-					},
-				],
+				choices: modelChoices("acpx"),
 			});
 		}
 	} else if (extractionProvider === "claude-code") {
@@ -864,10 +862,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			console.log();
 			extractionModel = await select({
 				message: "Which Claude model for extraction?",
-				choices: [
-					{ value: "haiku", name: "Haiku (fast, cheap, recommended)" },
-					{ value: "sonnet", name: "Sonnet (better quality, slower)" },
-				],
+				choices: modelChoices("claude-code"),
 			});
 		}
 	} else if (extractionProvider === "codex") {
@@ -881,11 +876,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			console.log();
 			extractionModel = await select({
 				message: "Which Codex model for extraction?",
-				choices: [
-					{ value: "gpt-5-codex-mini", name: "gpt-5-codex-mini (GPT Mini, recommended)" },
-					{ value: "gpt-5.3-codex", name: "gpt-5.3-codex (higher usage)" },
-					{ value: "gpt-5-codex", name: "gpt-5-codex (stable fallback)" },
-				],
+				choices: modelChoices("codex"),
 			});
 		}
 	} else if (extractionProvider === "opencode") {
@@ -894,16 +885,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				deps.normalizeStringValue(options.extractionModel) ||
 				deps.normalizeStringValue(existingPipeline.extractionModel) ||
 				deps.normalizeStringValue(existingExtraction.model) ||
-				"anthropic/claude-haiku-4-5-20251001";
+				defaultExtractionModel("opencode");
 		} else {
 			console.log();
 			extractionModel = await select({
 				message: "Which model for OpenCode extraction? (provider/model format)",
-				choices: [
-					{ value: "anthropic/claude-haiku-4-5-20251001", name: "Claude Haiku (fast, cheap, recommended)" },
-					{ value: "anthropic/claude-sonnet-4-5-20250514", name: "Claude Sonnet (better quality, slower)" },
-					{ value: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash (fast, multimodal)" },
-				],
+				choices: modelChoices("opencode"),
 			});
 		}
 	} else if (extractionProvider === "openrouter") {
@@ -917,12 +904,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			console.log();
 			extractionModel = await select({
 				message: "Which OpenRouter model for extraction? (provider/model format)",
-				choices: [
-					{ value: "openai/gpt-4o-mini", name: "openai/gpt-4o-mini (fast, recommended)" },
-					{ value: "openai/gpt-4o", name: "openai/gpt-4o (higher quality)" },
-					{ value: "anthropic/claude-sonnet-4-6", name: "anthropic/claude-sonnet-4-6 (high quality)" },
-					{ value: "google/gemini-2.5-flash", name: "google/gemini-2.5-flash (balanced)" },
-				],
+				choices: modelChoices("openrouter"),
 			});
 		}
 	} else if (extractionProvider === "ollama") {
@@ -936,11 +918,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			console.log();
 			extractionModel = await select({
 				message: "Which Ollama model for extraction?",
-				choices: [
-					{ value: "qwen3:4b", name: "qwen3:4b (minimum recommended local model)" },
-					{ value: "glm-4.7-flash", name: "glm-4.7-flash (alternative)" },
-					{ value: "llama3", name: "llama3 (general purpose)" },
-				],
+				choices: modelChoices("ollama"),
 			});
 		}
 	}

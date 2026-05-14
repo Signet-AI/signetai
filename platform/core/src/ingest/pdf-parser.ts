@@ -44,10 +44,9 @@ export async function parsePdf(filePath: string): Promise<ParsedDocument> {
 
 	try {
 		// pdf-parse v2 — dynamic import to keep it optional
-		// pdf-parse is an optional peer dependency — suppress TS module resolution
-		// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-		// @ts-expect-error pdf-parse has no type declarations; validated at runtime
-		const mod: unknown = await import("pdf-parse");
+		// pdf-parse is an optional peer dependency.
+		const pdfParseModule = "pdf-parse";
+		const mod: unknown = await import(pdfParseModule);
 		const { PDFParse } = mod as PdfParseModule;
 
 		const buffer = readFileSync(filePath);

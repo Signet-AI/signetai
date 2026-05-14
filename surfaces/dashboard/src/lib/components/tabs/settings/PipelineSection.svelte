@@ -1,5 +1,4 @@
 <script lang="ts">
-import { type ModelRegistryEntry, getModelsByProvider } from "$lib/api";
 import AdvancedSection from "$lib/components/config/AdvancedSection.svelte";
 import FormField from "$lib/components/config/FormField.svelte";
 import FormSection from "$lib/components/config/FormSection.svelte";
@@ -16,6 +15,7 @@ import {
 	PIPELINE_WORKER_NUMS,
 	st,
 } from "$lib/stores/settings.svelte";
+import { modelPresetsForProvider } from "@signet/core/llm-model-catalog";
 import { defaultPipelineModel } from "@signet/core/pipeline-providers";
 import {
 	ACPX_DASHBOARD_AGENT_OPTIONS,
@@ -39,7 +39,7 @@ const selectContentClass =
 const selectItemClass = "font-mono text-[11px] rounded-lg";
 
 const EXTRACTION_SAFETY_TEXT =
-	"intended usage: claude code on haiku, codex cli on gpt mini with a pro/max subscription, or local providers (llama.cpp or ollama) at qwen3.5:4b or larger. remote api extraction can stack up extreme fees fast. set provider to none on a vps if you do not want background extraction.";
+	"intended usage: claude code on haiku, codex cli on gpt-5.4-mini with a pro/max subscription, or local providers (llama.cpp or ollama) at qwen3:4b or larger. remote api extraction can stack up extreme fees fast. set provider to none on a vps if you do not want background extraction.";
 
 const EXTRACTION_PROVIDER_OPTIONS = [
 	{ value: "none", label: "none (disable extraction)" },
@@ -53,86 +53,11 @@ const EXTRACTION_PROVIDER_OPTIONS = [
 	{ value: "openrouter", label: "openrouter" },
 ] as const;
 
-// Hardcoded fallback presets — used when the registry API is unavailable
-const FALLBACK_MODEL_PRESETS: Record<string, Array<{ value: string; label: string }>> = {
-	acpx: ACPX_DASHBOARD_AGENT_OPTIONS.map((option) => ({ value: option.model, label: `${option.label} safe default` })),
-	"llama-cpp": [
-		{ value: "qwen3.5:4b", label: "qwen3.5:4b" },
-		{ value: "qwen3:8b", label: "qwen3:8b" },
-		{ value: "llama-3.1-8b", label: "Llama 3.1 8B" },
-	],
-	ollama: [
-		{ value: "qwen3:4b", label: "qwen3:4b" },
-		{ value: "glm-4.7-flash", label: "glm-4.7-flash" },
-		{ value: "llama3", label: "llama3" },
-	],
-	"claude-code": [
-		{ value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
-		{ value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku" },
-		{ value: "claude-opus-4-6", label: "Claude Opus 4.6" },
-		{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-	],
-	codex: [
-		{ value: "gpt-5-codex-mini", label: "GPT Mini" },
-		{ value: "gpt-5.4", label: "GPT 5.4" },
-		{ value: "gpt-5.3-codex", label: "GPT 5.3 Codex" },
-		{ value: "gpt-5.3-codex-spark", label: "GPT 5.3 Codex Spark" },
-		{ value: "gpt-5-codex", label: "GPT 5 Codex" },
-	],
-	opencode: [
-		{ value: "anthropic/claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-		{ value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-		{ value: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-		{ value: "anthropic/claude-opus-4-6", label: "Claude Opus 4.6" },
-	],
-	anthropic: [
-		{ value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-		{ value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku" },
-		{ value: "claude-opus-4-6", label: "Claude Opus 4.6" },
-		{ value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-	],
-	openrouter: [
-		{ value: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
-		{ value: "anthropic/claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-		{ value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-		{ value: "anthropic/claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-		{ value: "openai/gpt-4o", label: "GPT-4o" },
-	],
-};
-
-// Dynamic model registry — fetched from daemon API
-let dynamicModels = $state<Record<string, ModelRegistryEntry[]>>({});
-let registryLoaded = $state(false);
-
-$effect(() => {
-	// Re-fetch when registry toggle changes
-	const _enabled = st.aBool(["memory", "pipelineV2", "modelRegistry", "enabled"]);
-	void _enabled;
-	let cancelled = false;
-	getModelsByProvider()
-		.then((models) => {
-			if (cancelled) return;
-			if (models && Object.keys(models).length > 0) {
-				dynamicModels = models;
-				registryLoaded = true;
-			}
-		})
-		.catch(() => {
-			// Registry unavailable — fall back to static presets
-		});
-	return () => {
-		cancelled = true;
-	};
-});
-
 function getModelPresets(provider: string): Array<{ value: string; label: string }> {
-	if (registryLoaded && dynamicModels[provider]) {
-		return dynamicModels[provider].map((m) => ({
-			value: m.id,
-			label: m.label,
-		}));
-	}
-	return FALLBACK_MODEL_PRESETS[provider] ?? [];
+	return modelPresetsForProvider(provider).map((preset) => ({
+		value: preset.value,
+		label: preset.label,
+	}));
 }
 
 function pickPreferredModel(provider: string, presets: Array<{ value: string; label: string }>): string {
@@ -150,7 +75,7 @@ function pickPreferredModel(provider: string, presets: Array<{ value: string; la
 		return vals.find((v) => v === "qwen3:4b") ?? vals[0] ?? "";
 	}
 	if (provider === "llama-cpp") {
-		return vals.find((v) => v === "qwen3.5:4b") ?? vals[0] ?? "";
+		return vals.find((v) => v === "qwen3:4b") ?? vals[0] ?? "";
 	}
 	if (provider === "opencode") {
 		return (
@@ -191,13 +116,7 @@ function extractionModelSelectValue(): string {
 }
 
 function isKnownPreset(model: string): boolean {
-	for (const presets of Object.values(dynamicModels)) {
-		if (presets.some((p) => p.id === model)) return true;
-	}
-	for (const presets of Object.values(FALLBACK_MODEL_PRESETS)) {
-		if (presets.some((p) => p.value === model)) return true;
-	}
-	return false;
+	return EXTRACTION_PROVIDER_OPTIONS.some((option) => getModelPresets(option.value).some((preset) => preset.value === model));
 }
 
 function isKnownProvider(provider: string): provider is Parameters<typeof defaultPipelineModel>[0] {
@@ -230,7 +149,7 @@ function modelNeedsCostWarning(provider: string, model: string): boolean {
 	const normalized = model.toLowerCase();
 	if (!normalized) return false;
 	if (provider === "claude-code") return !normalized.includes("haiku");
-	if (provider === "codex") return !normalized.includes("mini");
+	if (provider === "codex") return normalized !== "gpt-5.4-mini";
 	return false;
 }
 
@@ -505,7 +424,7 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 			</div>
 		</FormField>
 
-		<FormField label="Extraction model" description={registryLoaded ? "Models auto-discovered from provider. Switch to custom for any supported model string." : "Choose a provider default or switch to custom. Models will auto-update when the registry connects."}>
+		<FormField label="Extraction model" description="Choose a checked provider or harness model. Switch to custom only when you know the exact model identifier accepted by that provider.">
 			<div class="flex flex-col gap-2">
 				<Select.Root
 					type="single"
@@ -528,11 +447,8 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 				{#if extractionModelSelectValue() === "__custom__" || extractionModelPresets().length === 0}
 					<Input value={st.aStr(["memory", "pipelineV2", "extractionModel"])} oninput={setStr(["memory", "pipelineV2", "extractionModel"])} placeholder="custom model id" />
 				{/if}
-				{#if registryLoaded}
-					<span class="text-[9px] text-[var(--sig-text-muted)] tracking-wider uppercase">auto-discovered from registry</span>
-				{/if}
 				{#if extractionModelNeedsCostWarning()}
-					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">recommended safety default is haiku for claude-code and gpt mini for codex. larger models will burn more money.</span>
+					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">recommended safety default is haiku for claude-code and gpt-5.4-mini for codex. larger models will burn more money.</span>
 				{/if}
 			</div>
 		</FormField>
@@ -595,7 +511,7 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 				{/if}
 
 				{#if synthesisModelNeedsCostWarning()}
-					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">recommended safety default is haiku for claude-code and gpt mini for codex. larger models will burn more money.</span>
+					<span class="text-[9px] text-[var(--sig-danger)] tracking-wider uppercase">recommended safety default is haiku for claude-code and gpt-5.4-mini for codex. larger models will burn more money.</span>
 				{/if}
 
 				<Input value={synthesisEndpoint()} oninput={setStr(["memory", "pipelineV2", "synthesis", "endpoint"])} placeholder="endpoint override (optional)" />
@@ -642,14 +558,6 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 				<Switch checked={st.aBool(["memory", "pipelineV2", key])} onCheckedChange={setBool(["memory", "pipelineV2", key])} />
 			</FormField>
 		{/each}
-
-		<div class="font-mono text-[9px] tracking-[0.08em] uppercase text-[var(--sig-text-muted)] pt-3 pb-1 border-b border-[var(--sig-border)] mb-1">
-			Model Registry
-		</div>
-		<FormField label="modelRegistryEnabled" description="Auto-discover available models from each provider. New models appear without code changes.">
-			<Switch checked={st.aBool(["memory", "pipelineV2", "modelRegistry", "enabled"])} onCheckedChange={setBool(["memory", "pipelineV2", "modelRegistry", "enabled"])} />
-		</FormField>
-
 
 		<AdvancedSection>
 			<FormField label={PIPELINE_CORE_BOOLS[1].key} description={PIPELINE_CORE_BOOLS[1].desc}>

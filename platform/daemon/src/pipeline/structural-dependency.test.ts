@@ -2,7 +2,7 @@
  * Integration tests for structural-dependency type extraction.
  *
  * Validates that the configured Ollama model can reliably
- * produce all 21 dependency types from the extraction prompt format.
+ * produce dependency types from the extraction prompt format.
  * Uses the pipeline's actual stripFences + tryParseJson parsing.
  *
  * Requires: Ollama running locally with the selected model loaded.
@@ -14,7 +14,7 @@
  * affecting all extraction, not specific to these types.
  */
 
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { DEPENDENCY_TYPES } from "@signet/core";
 
 // Uses the actual pipeline parsing — validates that stripFences handles
@@ -173,8 +173,8 @@ const SCENARIOS: readonly Scenario[] = [
 // ---------------------------------------------------------------------------
 
 describe("structural-dependency types", () => {
-	test("DEPENDENCY_TYPES has 21 entries", () => {
-		expect(DEPENDENCY_TYPES).toHaveLength(21);
+	test("every dependency type has exactly one description", () => {
+		expect(Object.keys(DEP_DESCRIPTIONS).sort()).toEqual([...DEPENDENCY_TYPES].sort());
 	});
 
 	test("all types have descriptions", () => {

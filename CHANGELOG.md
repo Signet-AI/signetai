@@ -6,6 +6,13 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-14
+- Bug fixes: surface daemon start journal diagnostics; clean up detached codex acp processes; reap acpx process trees.
+
+### 2026-05-13
+- Features: daily reflections with dashboard card.
+- Bug fixes: prune migration backups for disk headroom; use checked LLM model catalog; support latest memory provider lifecycle; generate Daily Brief on dashboard open; keep dependency descriptions in sync; isolate ollama setup validation tests.
+
 ### 2026-05-12
 - Features: add Bitwarden provider.
 - Bug fixes: add HOME to launchd daemon plist env; register secret exec status in tool inventory; bound and queue secret exec; normalize acpx claude setup alias; add ACPX quick setup; degrade bounded git workspace operations; persist global bin paths; verify public ghcr pulls after publish; add most-used memories parity route.
@@ -27,16 +34,81 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: restore knowledge graph mentions schema; bound ontology constellation graph reads; avoid resumed summary artifact collisions; stream logs without EventSource; align release commits with version sync; match connector list schema; keep dev workspace links local; prune migration backups before copy; catch release version sync regression; harden recent regression surfaces.
 - Docs: update ACPX integration architecture.
 
-### 2026-05-07
-- Features: inherit parent context for sub-agent sessions; add ACPX routing backend.
-- Bug fixes: gate npm publish on daemon release assets; dedupe resumed session-start hooks; stabilize Obsidian source sync; index Obsidian sources asynchronously; harden recall authorization.
-- Docs: refine ontology artifact model; add north star ontology.
-
-### 2026-05-06
-- Bug fixes: wrap launchd plist runtime in /bin/bash to avoid macOS AMFI exec failure; install ClawHub skills from dashboard; respect active harnesses during sync; classify body-read timeouts correctly in daemon clients.
-- Docs: correct stale documentation claims.
-
 ## Release Ledger
+
+## [0.118.5] - 2026-05-14
+
+Release summary: 2 bug fixes.
+Tag range: `v0.118.4..v0.118.5`.
+
+### Bug Fixes
+
+- **cli**: surface daemon start journal diagnostics (#710)
+- **daemon**: clean up detached codex acp processes (#709)
+
+## [0.118.4] - 2026-05-14
+
+Release summary: 1 bug fix.
+Tag range: `v0.118.3..v0.118.4`.
+
+### Bug Fixes
+
+- **pipeline**: reap acpx process trees (#708)
+
+## [0.118.3] - 2026-05-13
+
+Release summary: 2 bug fixes.
+Tag range: `v0.118.2..v0.118.3`.
+
+### Bug Fixes
+
+- **daemon**: prune migration backups for disk headroom (#706)
+- **pipeline**: use checked LLM model catalog (#704)
+
+## [0.118.2] - 2026-05-13
+
+Release summary: 1 bug fix.
+Tag range: `v0.118.1..v0.118.2`.
+
+### Bug Fixes
+
+- **hermes**: support latest memory provider lifecycle (#705)
+
+## [0.118.1] - 2026-05-13
+
+Release summary: 1 bug fix.
+Tag range: `v0.118.0..v0.118.1`.
+
+### Bug Fixes
+
+- **daemon**: generate Daily Brief on dashboard open (#703)
+
+## [0.118.0] - 2026-05-13
+
+Release summary: 1 feature.
+Tag range: `v0.117.3..v0.118.0`.
+
+### Features
+
+- **daemon**: daily reflections with dashboard card (#699)
+
+## [0.117.3] - 2026-05-13
+
+Release summary: 1 bug fix.
+Tag range: `v0.117.2..v0.117.3`.
+
+### Bug Fixes
+
+- **pipeline**: keep dependency descriptions in sync (#702)
+
+## [0.117.2] - 2026-05-13
+
+Release summary: 1 bug fix.
+Tag range: `v0.117.1..v0.117.2`.
+
+### Bug Fixes
+
+- **cli**: isolate ollama setup validation tests (#701)
 
 ## [0.117.1] - 2026-05-12
 

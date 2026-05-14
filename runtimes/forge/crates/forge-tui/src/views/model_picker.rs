@@ -31,7 +31,7 @@ fn codex_curated_models() -> Vec<(&'static str, &'static str, usize)> {
         ("gpt-5.4", "GPT 5.4", 200_000),
         ("gpt-5.3-codex", "GPT 5.3 Codex", 200_000),
         ("gpt-5.3-codex-spark", "GPT 5.3 Codex Spark", 200_000),
-        ("gpt-5-codex", "GPT 5 Codex", 200_000),
+        ("gpt-5.4-mini", "GPT 5.4 mini", 200_000),
         ("codex-mini-latest", "Codex Mini", 200_000),
     ]
 }
@@ -474,8 +474,8 @@ fn fallback_models_for_provider(provider: &str, cli_path: Option<&String>) -> Ve
             },
             ModelEntry {
                 provider: "codex-cli".into(),
-                model: "gpt-5-codex".into(),
-                display_name: "GPT 5 Codex (CLI)".into(),
+                model: "gpt-5.4-mini".into(),
+                display_name: "GPT 5.4 mini (CLI)".into(),
                 context_window: 200_000,
                 cli_path: cli_path.clone(),
             },

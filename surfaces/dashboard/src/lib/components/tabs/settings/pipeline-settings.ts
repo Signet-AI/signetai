@@ -132,9 +132,9 @@ export const ACPX_DASHBOARD_AGENT_OPTIONS: Array<{
 	readonly label: string;
 	readonly model: string;
 }> = [
-	{ value: "codex", label: "Codex CLI", model: "gpt-5-codex-mini" },
-	{ value: "claude-code", label: "Claude Code", model: "claude-haiku-4-5" },
-	{ value: "opencode", label: "OpenCode", model: "anthropic/claude-haiku-4-5-20251001" },
+	{ value: "codex", label: "Codex CLI", model: defaultPipelineModel("codex") },
+	{ value: "claude-code", label: "Claude Code", model: defaultPipelineModel("claude-code") },
+	{ value: "opencode", label: "OpenCode", model: defaultPipelineModel("opencode") },
 ];
 
 export function defaultAcpxDashboardAgent(agentConfig: unknown): AcpxDashboardAgent {
@@ -154,7 +154,7 @@ export function defaultAcpxDashboardAgent(agentConfig: unknown): AcpxDashboardAg
 }
 
 export function defaultAcpxDashboardModel(agent: AcpxDashboardAgent): string {
-	return ACPX_DASHBOARD_AGENT_OPTIONS.find((option) => option.value === agent)?.model ?? "gpt-5-codex-mini";
+	return ACPX_DASHBOARD_AGENT_OPTIONS.find((option) => option.value === agent)?.model ?? defaultPipelineModel("codex");
 }
 
 function acpxCommandAgent(agent: AcpxDashboardAgent): string {

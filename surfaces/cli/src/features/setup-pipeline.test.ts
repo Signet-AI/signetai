@@ -3,12 +3,13 @@ import {
 	applySetupInferenceRoute,
 	buildSetupInference,
 	buildSetupPipeline,
+	defaultAcpxModel,
 	defaultExtractionModel,
 } from "./setup-pipeline";
 
 describe("defaultExtractionModel", () => {
-	it("prefers the cheap codex mini model", () => {
-		expect(defaultExtractionModel("codex")).toBe("gpt-5-codex-mini");
+	it("uses the checked Codex CLI model default", () => {
+		expect(defaultExtractionModel("codex")).toBe("gpt-5.4-mini");
 	});
 
 	it("uses qwen3:4b as the ollama floor", () => {
@@ -58,18 +59,46 @@ describe("buildSetupPipeline", () => {
 	});
 
 	it("copies the selected extraction provider into explicit synthesis config", () => {
-		expect(buildSetupPipeline("ollama", "qwen3.5:4b").synthesis).toEqual({
+		expect(buildSetupPipeline("ollama", "qwen3:4b").synthesis).toEqual({
 			enabled: true,
 			provider: "ollama",
-			model: "qwen3.5:4b",
+			model: "qwen3:4b",
 			timeout: 120000,
 		});
+	});
+
+	it("does not invent a generic ACPX model when no harness agent is known", () => {
+		expect(buildSetupPipeline("acpx").extraction.model).toBe("");
+		expect(buildSetupPipeline("acpx").synthesis?.model).toBe("");
 	});
 });
 
 describe("buildSetupInference", () => {
+	it("defaults ACPX models from the selected harness, not the ACPX provider bucket", () => {
+		expect(defaultAcpxModel(["codex"], ["acpx"])).toBe("gpt-5.4-mini");
+		expect(defaultAcpxModel(["opencode"], ["acpx"])).toBe("google/gemini-2.5-flash");
+		expect(defaultAcpxModel(["claude-code"], ["acpx"])).toBe("haiku");
+
+		expect(
+			buildSetupInference("acpx", undefined, ["codex"], ["acpx"], "/usr/local/bin/bunx")?.targets[
+				"background-acpx"
+			],
+		).toMatchObject({
+			acpx: { agent: "codex" },
+			models: { default: { model: "gpt-5.4-mini" } },
+		});
+		expect(
+			buildSetupInference("acpx", undefined, ["opencode"], ["acpx"], "/usr/local/bin/bunx")?.targets[
+				"background-acpx"
+			],
+		).toMatchObject({
+			acpx: { agent: "opencode" },
+			models: { default: { model: "google/gemini-2.5-flash" } },
+		});
+	});
+
 	it("writes ACPX as explicit inference routing with the selected harness agent", () => {
-		const inference = buildSetupInference("acpx", "gpt-5-codex-mini", ["opencode", "codex"], [], "/usr/local/bin/bunx");
+		const inference = buildSetupInference("acpx", "google/gemini-2.5-flash", ["opencode", "codex"], [], "/usr/local/bin/bunx");
 		expect(inference?.targets["background-acpx"]).toMatchObject({
 			executor: "acpx",
 			acpx: {

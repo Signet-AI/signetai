@@ -113,7 +113,7 @@ memory:
     # Extraction provider and model
     # Safety: on a VPS, set provider: none unless you explicitly want
     # background extraction.
-    # Intended usage: Claude Code on haiku, Codex on GPT Mini with a
+    # Intended usage: Claude Code on haiku, Codex on gpt-5.4-mini with a
     # Pro/Max subscription, or local Ollama at qwen3:4b or larger.
     # Remote API extraction can rack up extreme fees fast.
     extraction:
@@ -147,6 +147,7 @@ memory:
     # Semantic contradiction detection — flags conflicting memory updates
     semanticContradictionEnabled: true
 
+    # Memory relevance configuration removed (hard-deprecated in 0.112.0)
 
 # ============================================================================
 # Hooks Configuration

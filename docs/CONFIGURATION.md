@@ -114,7 +114,7 @@ memory:
     shadowMode: false
     extraction:
       provider: llama-cpp
-      model: qwen3.5:4b
+      model: qwen3:4b
     synthesis:
       enabled: true
       provider: ollama
@@ -495,7 +495,7 @@ inference:
       timeoutMs: 120000
       models:
         mini:
-          model: gpt-5-codex-mini
+          model: gpt-5.4-mini
           reasoning: medium
           toolUse: true
 ```
@@ -604,7 +604,7 @@ memory:
     shadowMode: true        # extract without writing — safe first step
     extraction:
       provider: llama-cpp
-      model: qwen3.5:4b
+      model: qwen3:4b
 ```
 
 
@@ -633,7 +633,7 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `provider` | `"llama-cpp"` | — | `"none"`, `"acpx"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, or `"command"` |
-| `model` | `"qwen3.5:4b"` | — | Model name for the configured provider |
+| `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
 | `structuredOutput` | `true` | — | Send JSON schema in the `format` field of LLM requests. Set `false` when the provider rejects structured output (e.g. GitHub Copilot API). The daemon also auto-detects unsupported providers at runtime and disables this transparently. |
@@ -644,9 +644,9 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 
 For safety, the intended extraction setups are:
 
-- local `llama-cpp` with `qwen3.5:4b` (default)
+- local `llama-cpp` with `qwen3:4b` (default)
 - `claude-code` on a Haiku model
-- `codex` on a GPT Mini model
+- `codex` on a gpt-5.4-mini model
 - local `ollama` with `nemotron-3-nano:4b` (preferred) or `qwen3:4b` (deprecated — Nemotron's superior reasoning makes Qwen3 the weaker choice going forward; expect degraded extraction quality in future updates)
 
 Set `provider: none` to disable extraction entirely, which is the

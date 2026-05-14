@@ -1,3 +1,5 @@
+import { modelDefaultForProvider } from "./llm-model-catalog";
+
 export const OPENCODE_PIPELINE_AGENT = "signet-pipeline";
 
 export const OPENCODE_PIPELINE_SYSTEM_PROMPT =
@@ -25,19 +27,6 @@ export const SYNTHESIS_PROVIDER_CHOICES = PIPELINE_PROVIDER_CHOICES.filter(
 
 export const DEFAULT_PIPELINE_TIMEOUT_MS = 90000;
 
-const MODEL_DEFAULTS = {
-	none: "",
-	acpx: "gpt-5-codex-mini",
-	"llama-cpp": "qwen3.5:4b",
-	ollama: "qwen3:4b",
-	"claude-code": "haiku",
-	codex: "gpt-5-codex-mini",
-	opencode: "anthropic/claude-haiku-4-5-20251001",
-	anthropic: "haiku",
-	openrouter: "openai/gpt-4o-mini",
-	command: "",
-} as const satisfies Record<PipelineProviderChoice, string>;
-
 const PIPELINE_PROVIDER_SET = new Set<string>(PIPELINE_PROVIDER_CHOICES);
 const SYNTHESIS_PROVIDER_SET = new Set<string>(SYNTHESIS_PROVIDER_CHOICES);
 
@@ -50,5 +39,5 @@ export function isSynthesisProvider(value: unknown): value is SynthesisProviderC
 }
 
 export function defaultPipelineModel(provider: PipelineProviderChoice): string {
-	return MODEL_DEFAULTS[provider];
+	return modelDefaultForProvider(provider);
 }

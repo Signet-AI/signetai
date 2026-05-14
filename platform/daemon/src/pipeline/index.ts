@@ -13,8 +13,12 @@ import type { DecisionConfig } from "./decision";
 import { type DependencySynthesisHandle, startDependencySynthesisWorker } from "./dependency-synthesis";
 import { type DocumentWorkerHandle, startDocumentWorker } from "./document-worker";
 import type { DreamingWorkerHandle } from "./dreaming-worker";
+import { startExtractionThread } from "./extraction-thread-handle";
+import type { ExtractionThreadOpts } from "./extraction-thread-handle";
+import type { WorkerInit } from "./extraction-thread-protocol";
 import { type MaintenanceHandle, startMaintenanceWorker } from "./maintenance-worker";
 import { type HintsWorkerHandle, startHintsWorker } from "./prospective-index";
+import type { ReflectionWorkerHandle } from "./reflection-worker";
 import {
 	DEFAULT_RETENTION,
 	type RetentionConfig,
@@ -26,9 +30,6 @@ import { type StructuralDependencyHandle, startStructuralDependencyWorker } from
 import { type SummaryWorkerHandle, startSummaryWorker } from "./summary-worker";
 import { type SynthesisWorkerHandle, startSynthesisWorker } from "./synthesis-worker";
 import { type WorkerHandle, type WorkerProgressStats, type WorkerStats, startWorker } from "./worker";
-import { startExtractionThread } from "./extraction-thread-handle";
-import type { ExtractionThreadOpts } from "./extraction-thread-handle";
-import type { WorkerInit } from "./extraction-thread-protocol";
 
 export { enqueueExtractionJob } from "./worker";
 export type { WorkerStats } from "./worker";
@@ -80,6 +81,7 @@ let structuralDependencyHandle: StructuralDependencyHandle | null = null;
 let dependencySynthesisHandle: DependencySynthesisHandle | null = null;
 let hintsWorkerHandle: HintsWorkerHandle | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
+let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let pendingStartup: Promise<void> | null = null;
 
 /** Snapshot of running state for each worker — used by /api/pipeline/status */
@@ -99,6 +101,7 @@ export function getPipelineWorkerStatus(): Record<string, { running: boolean; st
 		dependencySynthesis: { running: dependencySynthesisHandle !== null },
 		hints: { running: hintsWorkerHandle !== null },
 		dreaming: { running: dreamingWorkerHandle !== null },
+		reflections: { running: reflectionWorkerHandle !== null },
 	};
 }
 
@@ -273,6 +276,10 @@ export function startPipeline(
 		hintsWorkerHandle = startHintsWorker({ accessor, provider, pipelineCfg });
 	}
 
+	// Daily Brief generation is dashboard-open driven. Do not start a
+	// background schedule here; /api/reflections/generate creates fresh,
+	// de-duplicated insights when the dashboard opens.
+
 	logger.info("pipeline", "Pipeline started", {
 		mode:
 			pipelineCfg.enabled && !pipelineCfg.shadowMode && !pipelineCfg.mutationsFrozen && !pipelineCfg.nativeShadowEnabled
@@ -286,6 +293,10 @@ export async function stopPipeline(): Promise<void> {
 	// before checking workerHandle — prevents orphan threads.
 	if (pendingStartup) {
 		await pendingStartup;
+	}
+	if (reflectionWorkerHandle) {
+		reflectionWorkerHandle.stop();
+		reflectionWorkerHandle = null;
 	}
 	if (hintsWorkerHandle) {
 		await hintsWorkerHandle.stop();

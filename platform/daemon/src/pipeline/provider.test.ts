@@ -139,7 +139,7 @@ printf '  acpx answer  \\n'
 		try {
 			const provider = createAcpxProvider({
 				agent: "codex",
-				model: "gpt-5-codex-mini",
+				model: "gpt-5.4-mini",
 				bin,
 				permissions: "deny-all",
 				hooks: "disabled",
@@ -203,6 +203,75 @@ printf 'ok\\n'
 		} finally {
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("cleans up detached Codex ACP agent processes after successful ACPX exec", async () => {
+		if (process.platform !== "linux") return;
+		const root = join(tmpdir(), `signet-acpx-success-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-daemonizes.sh");
+		const codexAcp = join(root, "codex-acp");
+		const childPidPath = join(root, "child.pid");
+		writeFileSync(
+			codexAcp,
+			`#!/usr/bin/env bash
+sleep 30
+`,
+		);
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+setsid ${JSON.stringify(codexAcp)} >/dev/null 2>&1 < /dev/null &
+printf '%s' "$!" > ${JSON.stringify(childPidPath)}
+printf 'ok\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		chmodSync(codexAcp, 0o755);
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			const pid = Number(readFileSync(childPidPath, "utf-8"));
+			expect(pid).toBeGreaterThan(0);
+
+			let alive = true;
+			for (let i = 0; i < 40; i += 1) {
+				try {
+					process.kill(pid, 0);
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				} catch {
+					alive = false;
+					break;
+				}
+			}
+			expect(alive).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("treats an unreadable ACPX proc root as best-effort cleanup", async () => {
+		if (process.platform !== "linux") return;
+		const root = join(tmpdir(), `signet-acpx-missing-proc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-ok.sh");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf 'ok\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		process.env.SIGNET_ACPX_PROC_ROOT = join(root, "missing-proc");
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+		} finally {
+			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
+			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
@@ -402,6 +471,52 @@ printf 'ok\n'
 			expect(readFileSync(pwdPath, "utf-8").trim()).toBe(join(root, "workspace"));
 		} finally {
 			process.chdir(previousCwd);
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("kills the ACPX process group on timeout so codex grandchildren do not leak", async () => {
+		if (process.platform === "win32") return;
+		const root = join(tmpdir(), `signet-acpx-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-leak.sh");
+		const childPidPath = join(root, "child.pid");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+sleep 30 &
+printf '%s' "$!" > ${JSON.stringify(childPidPath)}
+wait
+`,
+		);
+		chmodSync(bin, 0o755);
+
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hang", { timeoutMs: 50 })).rejects.toThrow("codex via ACPX timeout after 50ms");
+
+			let pid = 0;
+			for (let i = 0; i < 20; i += 1) {
+				if (existsSync(childPidPath)) {
+					pid = Number(readFileSync(childPidPath, "utf-8"));
+					break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			expect(pid).toBeGreaterThan(0);
+
+			let alive = true;
+			for (let i = 0; i < 40; i += 1) {
+				try {
+					process.kill(pid, 0);
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				} catch {
+					alive = false;
+					break;
+				}
+			}
+			expect(alive).toBe(false);
+		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
@@ -627,9 +742,9 @@ describe("createClaudeCodeProvider", () => {
 describe("createCodexProvider", () => {
 	afterEach(() => restoreSpawn());
 
-	it("uses the default model (gpt-5-codex-mini) when none is supplied", () => {
+	it("uses the default model (gpt-5.4-mini) when none is supplied", () => {
 		const provider = createCodexProvider();
-		expect(provider.name).toBe("codex:gpt-5-codex-mini");
+		expect(provider.name).toBe("codex:gpt-5.4-mini");
 	});
 
 	it("returns a provider with the correct name", () => {
@@ -864,14 +979,13 @@ describe("createOpenCodeProvider", () => {
 	afterEach(() => restoreFetch());
 
 	it("returns a provider with the correct name", () => {
-		const provider = createOpenCodeProvider({ model: "anthropic/claude-haiku-4-5-20251001" });
-		expect(provider.name).toBe("opencode:anthropic/claude-haiku-4-5-20251001");
+		const provider = createOpenCodeProvider({ model: "google/gemini-2.5-flash" });
+		expect(provider.name).toBe("opencode:google/gemini-2.5-flash");
 	});
 
 	it("uses the default model when none is supplied", () => {
 		const provider = createOpenCodeProvider();
-		expect(provider.name).toContain("opencode:");
-		expect(provider.name).toContain("anthropic/");
+		expect(provider.name).toBe("opencode:google/gemini-2.5-flash");
 	});
 
 	it("generate() extracts text from parts array", async () => {
@@ -2678,51 +2792,51 @@ describe("createOpenCodeProvider — nested semaphore deadlock in fallback", () 
 		const N = 4; // matches DEFAULT_MAX_LLM_CONCURRENCY
 		let postCount = 0;
 
-		mockFetch(
-			withParentSession(async (url, init) => {
-				// Session creation
-				if (url.includes("/session") && !url.includes("/message")) {
-					return Response.json({
-						id: `ses_deadlock_${postCount}`,
-						slug: "test",
-						projectID: "p",
-						directory: "/tmp",
-						title: "test",
-						version: "1",
-					});
-				}
-				// Ollama availability check
-				if (url.includes("/api/tags")) {
-					return Response.json({ models: [{ name: "qwen3.5:4b" }] });
-				}
-				// Ollama fallback generate
-				if (url.includes("/api/generate")) {
-					await new Promise((r) => setTimeout(r, 20));
-					return Response.json({
-						response: JSON.stringify({ result: "fallback-ok" }),
-						prompt_eval_count: 10,
-						eval_count: 5,
-					});
-				}
-				// OpenCode message POST — always return malformed (empty body)
-				if (init?.method === "POST" && url.includes("/message")) {
-					postCount++;
-					return new Response("", {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					});
-				}
-				// GET polls — empty array to trigger malformed path
-				return Response.json([]);
-			}),
-		);
+
+		mockFetch(withParentSession(async (url, init) => {
+			// Session creation
+			if (url.includes("/session") && !url.includes("/message")) {
+				return Response.json({
+					id: `ses_deadlock_${postCount}`,
+					slug: "test",
+					projectID: "p",
+					directory: "/tmp",
+					title: "test",
+					version: "1",
+				});
+			}
+			// Ollama availability check
+			if (url.includes("/api/tags")) {
+				return Response.json({ models: [{ name: "qwen3:4b" }] });
+			}
+			// Ollama fallback generate
+			if (url.includes("/api/generate")) {
+				await new Promise((r) => setTimeout(r, 20));
+				return Response.json({
+					response: JSON.stringify({ result: "fallback-ok" }),
+					prompt_eval_count: 10,
+					eval_count: 5,
+				});
+			}
+			// OpenCode message POST — always return malformed (empty body)
+			if (init?.method === "POST" && url.includes("/message")) {
+				postCount++;
+				return new Response("", {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+			// GET polls — empty array to trigger malformed path
+			return Response.json([]);
+		}));
+
 
 		const providers = Array.from({ length: N }, () =>
 			createOpenCodeProvider({
 				baseUrl: "http://localhost:9999",
 				enableOllamaFallback: true,
 				ollamaFallbackBaseUrl: "http://localhost:11434",
-				ollamaFallbackModel: "qwen3.5:4b",
+				ollamaFallbackModel: "qwen3:4b",
 				defaultTimeoutMs: 3000,
 			}),
 		);
@@ -2764,7 +2878,7 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 					});
 				}
 				if (url.includes("/api/tags")) {
-					return Response.json({ models: [{ name: "qwen3.5:4b" }] });
+					return Response.json({ models: [{ name: "qwen3:4b" }] });
 				}
 				if (url.includes("/api/generate")) {
 					ollamaFetchStartedAt = performance.now();
@@ -2804,7 +2918,7 @@ describe("createOpenCodeProvider — fallback respects remaining deadline", () =
 			baseUrl: "http://localhost:9999",
 			enableOllamaFallback: true,
 			ollamaFallbackBaseUrl: "http://localhost:11434",
-			ollamaFallbackModel: "qwen3.5:4b",
+			ollamaFallbackModel: "qwen3:4b",
 			defaultTimeoutMs: 3000,
 		});
 

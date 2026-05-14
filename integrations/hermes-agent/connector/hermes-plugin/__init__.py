@@ -291,6 +291,7 @@ class SignetMemoryProvider(MemoryProvider):
         self._prefetch_result = ""
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread: Optional[threading.Thread] = None
+        self._prefetch_generation = 0
         self._turn_count = 0
         self._last_user_message = ""
         self._last_assistant_message = ""
@@ -466,6 +467,7 @@ class SignetMemoryProvider(MemoryProvider):
         session_key = self._session_key
         project = self._project
         last_assistant = self._last_assistant_message
+        prefetch_generation = self._prefetch_generation
 
         def _run():
             try:
@@ -488,7 +490,8 @@ class SignetMemoryProvider(MemoryProvider):
                             inject_from_reinit = reinit.get("inject", "")
                             if inject_from_reinit and inject_from_reinit.strip():
                                 with self._prefetch_lock:
-                                    self._prefetch_result = inject_from_reinit
+                                    if prefetch_generation == self._prefetch_generation and session_key == self._session_key:
+                                        self._prefetch_result = inject_from_reinit
                         else:
                             logger.warning(
                                 "Signet re-initialization after daemon restart returned no data; "
@@ -498,7 +501,8 @@ class SignetMemoryProvider(MemoryProvider):
                     inject = result.get("inject", "")
                     if inject and inject.strip():
                         with self._prefetch_lock:
-                            self._prefetch_result = inject
+                            if prefetch_generation == self._prefetch_generation and session_key == self._session_key:
+                                self._prefetch_result = inject
             except Exception as e:
                 logger.debug("Signet prefetch failed: %s", e)
 
@@ -538,20 +542,96 @@ class SignetMemoryProvider(MemoryProvider):
             with self._transcript_lock:
                 self._transcript_lines.append(f"assistant: {assistant_content}")
 
-    def on_memory_write(self, action: str, target: str, content: str) -> None:
+    def on_session_switch(
+        self,
+        new_session_id: str,
+        *,
+        parent_session_id: str = "",
+        reset: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Refresh cached session state when Hermes rotates session_id.
+
+        Hermes Agent keeps memory providers alive across /new, /resume,
+        /branch, and compression. Signet caches the active session key and a
+        transcript buffer, so update the target session and clear stale buffered
+        lines before subsequent writes land in the wrong session.
+        """
+        if not new_session_id:
+            return
+        self._session_key = new_session_id
+        self._session_initialized = False
+        self._turn_count = 0
+        self._last_checkpoint_turn = 0
+        self._last_user_message = ""
+        self._last_assistant_message = ""
+        with self._transcript_lock:
+            self._transcript_lines = []
+        with self._inject_lock:
+            self._inject_cache = ""
+        with self._prefetch_lock:
+            self._prefetch_generation += 1
+            self._prefetch_result = ""
+
+        agent_id = os.environ.get("SIGNET_AGENT_ID", "").strip() or "hermes-agent"
+        self._project = _resolve_agent_workspace(agent_id, kwargs)
+        client = self._client
+        if not client:
+            return
+
+        try:
+            result = client.session_start(
+                self._session_key,
+                project=self._project,
+            )
+            if result:
+                inject = result.get("inject", "")
+                if inject and inject.strip():
+                    with self._inject_lock:
+                        self._inject_cache = inject
+                self._identity = result.get("identity")
+                self._warnings = result.get("warnings", [])
+                self._session_initialized = True
+        except Exception as e:
+            logger.debug("Signet session switch failed: %s", e)
+
+    def on_memory_write(self, action: str, target: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Mirror built-in memory writes to Signet."""
         if action != "add" or not content:
             return
         client = self._client
         if not client:
             return
+        project = self._project
+        metadata = metadata if isinstance(metadata, dict) else {}
+        write_origin = str(metadata.get("write_origin", "") or metadata.get("source", "")).strip()
+        execution_context = str(metadata.get("execution_context", "")).strip()
+        platform = str(metadata.get("platform", "")).strip()
+        source_id = str(metadata.get("tool_call_id", "") or "").strip()
+        session_id = str(metadata.get("session_id", "") or self._session_key).strip()
+
+        def _tag(prefix: str, value: str) -> str:
+            clean = value.replace("\n", " ").replace("\r", " ").strip()
+            return f"{prefix}:{clean[:80]}" if clean else ""
 
         def _write():
             try:
+                tags = ["hermes-builtin", target]
+                for tag in (
+                    _tag("origin", write_origin),
+                    _tag("context", execution_context),
+                    _tag("platform", platform),
+                    _tag("session", session_id),
+                ):
+                    if tag:
+                        tags.append(tag)
                 client.remember(
                     content,
                     importance=0.6,
-                    tags=["hermes-builtin", target],
+                    tags=tags,
+                    project=project,
+                    source_type="hermes-memory-write" if source_id else "",
+                    source_id=source_id,
                 )
             except Exception as e:
                 logger.debug("Signet memory mirror failed: %s", e)

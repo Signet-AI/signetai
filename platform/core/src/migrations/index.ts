@@ -73,6 +73,8 @@ import { up as sourceGraphProvenance } from "./064-source-graph-provenance";
 import { up as sourceEmbeddingAgentScope } from "./065-source-embedding-agent-scope";
 import { up as memorySearchTelemetry } from "./066-memory-search-telemetry";
 import { up as ontologyProposals } from "./067-ontology-proposals";
+import { up as dailyReflections } from "./068-daily-reflections";
+import { up as dailyReflectionsMultipleInsights } from "./069-daily-reflections-multiple-insights";
 
 // -- Public interface consumed by Database.init() --
 
@@ -627,6 +629,22 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "entity_dependencies", column: "proposal_id" },
 				{ table: "entity_dependencies", column: "proposal_evidence" },
 			],
+		},
+	},
+	{
+		version: 68,
+		name: "daily-reflections",
+		up: dailyReflections,
+		artifacts: {
+			tables: ["daily_reflections"],
+		},
+	},
+	{
+		version: 69,
+		name: "daily-reflections-multiple-insights",
+		up: dailyReflectionsMultipleInsights,
+		artifacts: {
+			tables: ["daily_reflections"],
 		},
 	},
 ];

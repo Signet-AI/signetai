@@ -4,9 +4,18 @@ set -euo pipefail
 REPO="aaf2tbz/graphiq"
 INSTALL_DIR="${GRAPHIQ_INSTALL_DIR:-$HOME/.local/bin}"
 TIMEOUT="${GRAPHIQ_INSTALL_TIMEOUT:-120}"
+tmpdir=""
 
 log()  { printf "[graphiq] %s\n" "$*" >&2; }
 die()  { log "$@"; exit 1; }
+
+cleanup_tmpdir() {
+	if [ -n "${tmpdir:-}" ] && [ -d "${tmpdir:-}" ]; then
+		rm -rf "$tmpdir"
+	fi
+}
+
+trap cleanup_tmpdir EXIT
 
 need() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
 
@@ -82,7 +91,7 @@ extract_asset_sha256() {
 
 cmd_install() {
 	need tar
-	local target tag tarball url tmpdir
+	local target tag tarball url
 	target="$(detect_target)"
 	tarball="graphiq-${target}.tar.gz"
 
@@ -115,7 +124,6 @@ cmd_install() {
 
 	mkdir -p "$INSTALL_DIR"
 	tmpdir="$(mktemp -d)"
-	trap 'rm -rf "$tmpdir"' EXIT
 
 	fetch "$url" "${tmpdir}/${tarball}"
 
