@@ -338,6 +338,7 @@ WRAPPER
   chmod +x "${bindir}/signet-mcp"
 
   if curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh" 2>/dev/null; then
+    chmod +x "${bindir}/_uninstall.sh"
     cat > "${bindir}/signet-uninstall" << WRAPPER
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -350,6 +351,7 @@ WRAPPER
   fi
 
   if curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh" 2>/dev/null; then
+    chmod +x "${bindir}/_update.sh"
     cat > "${bindir}/signet-update" << WRAPPER
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"

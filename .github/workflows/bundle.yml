@@ -235,7 +235,9 @@ jobs:
             "better-sqlite3@^11.0.0" \
             "onnxruntime-node@$ONNX_VER" \
             "sqlite-vec@$SQLITE_VEC_VER" \
-            "$SQLITE_VEC_NATIVE"
+            "$SQLITE_VEC_NATIVE" \
+            "@1password/sdk" \
+            "@huggingface/transformers"
           tar czf "$ARTIFACT_DIR/signet-daemon-js-$PLATFORM.tar.gz" -C dist .
 
       # ── Rust binaries ──
