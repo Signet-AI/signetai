@@ -71,6 +71,7 @@ async function* walkDir(
 	dir: string,
 	ignorePatterns: readonly string[],
 	relativePrefix: string = "",
+	dot: boolean = false,
 ): AsyncGenerator<string> {
 	let entries: ReturnType<typeof readdirSync>;
 	try {
@@ -79,11 +80,12 @@ async function* walkDir(
 		return;
 	}
 	for (const entry of entries) {
+		if (!dot && entry.name.startsWith(".")) continue;
 		const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
 		if (ignorePatterns.some((p) => entry.name === p || relativePath === p || relativePath.startsWith(`${p}/`))) continue;
 		const fullPath = join(dir, entry.name);
 		if (entry.isDirectory()) {
-			yield* walkDir(fullPath, ignorePatterns, relativePath);
+			yield* walkDir(fullPath, ignorePatterns, relativePath, dot);
 		} else if (entry.isFile()) {
 			yield fullPath;
 		}
@@ -117,7 +119,7 @@ async function discoverFiles(settings: FilesystemSettings): Promise<readonly Dis
 	const seen = new Set<string>();
 	const results: DiscoveredFile[] = [];
 
-	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns)) {
+	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns, "", patterns.some((p) => p.includes("/.")))) {
 		const rel = relative(resolvedRoot, absolutePath);
 		if (!rel || rel.startsWith("..")) continue;
 		const matches = patterns.some((p) => matchGlob(p, rel));
