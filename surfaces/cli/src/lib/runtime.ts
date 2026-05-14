@@ -384,6 +384,7 @@ export interface DaemonStartArgsInput {
 	readonly host: string;
 	readonly bind: string;
 	readonly startupLogPath: string;
+	readonly unitName?: string;
 }
 
 export type SystemdDaemonStartArgsInput = DaemonStartArgsInput;
@@ -397,7 +398,7 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		"--user",
 		"--quiet",
 		"--collect",
-		`--unit=signet-daemon-${process.pid}`,
+		`--unit=${input.unitName ?? `signet-daemon-${process.pid}`}`,
 		`--property=WorkingDirectory=${process.cwd()}`,
 		"--property=StandardOutput=null",
 		`--property=StandardError=append:${input.startupLogPath}`,
@@ -407,6 +408,83 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		`--setenv=SIGNET_PATH=${input.agentsDir}`,
 		processRuntimeCommand(),
 		input.daemonPath,
+	];
+}
+
+interface DaemonStartDiagnosticsDeps {
+	readonly readFileSync: (path: string, encoding: "utf-8") => string;
+	readonly existsSync: (path: string) => boolean;
+	readonly spawnSync: (
+		command: string,
+		args: readonly string[],
+		options: {
+			readonly encoding: "utf8";
+			readonly stdio: "pipe";
+			readonly windowsHide: true;
+			readonly timeout: number;
+		},
+	) => { readonly stdout?: string };
+}
+
+const daemonStartDiagnosticsDeps: DaemonStartDiagnosticsDeps = {
+	readFileSync,
+	existsSync,
+	spawnSync,
+};
+
+function tailNonEmptyLines(value: string, max: number): string[] {
+	return value
+		.split("\n")
+		.map((line) => line.trimEnd())
+		.filter((line) => line.trim().length > 0)
+		.slice(-max);
+}
+
+export function readDaemonStartFailureDiagnostics(
+	input: {
+		readonly startupLogPath: string;
+		readonly platform?: NodeJS.Platform;
+		readonly systemdUnitName?: string;
+	},
+	deps: DaemonStartDiagnosticsDeps = daemonStartDiagnosticsDeps,
+): string[] {
+	if (deps.existsSync(input.startupLogPath)) {
+		try {
+			const startupLines = tailNonEmptyLines(deps.readFileSync(input.startupLogPath, "utf-8"), 20);
+			if (startupLines.length > 0) {
+				return ["Daemon failed to start. stderr output:", ...startupLines];
+			}
+		} catch {
+			// Continue to service-manager diagnostics.
+		}
+	}
+
+	if ((input.platform ?? process.platform) === "linux" && input.systemdUnitName) {
+		const result = deps.spawnSync(
+			"journalctl",
+			[
+				"--user",
+				"--unit",
+				input.systemdUnitName,
+				"--since",
+				"5 minutes ago",
+				"--no-pager",
+				"--output=short-iso",
+				"-n",
+				"40",
+			],
+			{ encoding: "utf8", stdio: "pipe", windowsHide: true, timeout: 3000 },
+		);
+		const journal = result.stdout ?? "";
+		const journalLines = tailNonEmptyLines(journal, 20);
+		if (journalLines.length > 0) {
+			return [`Daemon failed to start. journalctl for ${input.systemdUnitName}:`, ...journalLines];
+		}
+	}
+
+	return [
+		"Daemon failed to start, and no startup diagnostics were captured.",
+		`Startup log checked: ${input.startupLogPath}`,
 	];
 }
 
@@ -583,6 +661,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	// platforms or environments where that is unavailable.
 	let procExited = false;
 	let startedByServiceManager = false;
+	const systemdUnitName = `signet-daemon-${process.pid}`;
 	if (process.platform === "linux") {
 		const systemdArgs = buildSystemdDaemonStartArgs({
 			daemonPath,
@@ -591,6 +670,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 			host: net.host,
 			bind: net.bind,
 			startupLogPath,
+			unitName: systemdUnitName,
 		});
 		const result = spawnSync("systemd-run", systemdArgs, {
 			stdio: ["ignore", "ignore", stderrTarget],
@@ -702,13 +782,14 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	}
 
 	try {
-		if (stderrFd !== null && existsSync(startupLogPath)) {
-			const stderr = readFileSync(startupLogPath, "utf-8").trim();
-			if (stderr) {
-				console.error(chalk.red("\nDaemon failed to start. stderr output:"));
-				for (const line of stderr.split("\n").slice(-20)) {
-					console.error(chalk.dim(line));
-				}
+		const diagnostics = readDaemonStartFailureDiagnostics({
+			startupLogPath,
+			systemdUnitName: process.platform === "linux" ? systemdUnitName : undefined,
+		});
+		if (diagnostics.length > 0) {
+			console.error(chalk.red(`\n${diagnostics[0]}`));
+			for (const line of diagnostics.slice(1)) {
+				console.error(chalk.dim(line));
 			}
 		}
 	} catch {
