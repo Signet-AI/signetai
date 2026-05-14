@@ -35,8 +35,6 @@ type SqliteStatement = {
 	run(...params: unknown[]): void;
 	get(...params: unknown[]): Record<string, unknown> | undefined;
 	all(...params: unknown[]): Record<string, unknown>[];
-	values(...params: unknown[]): unknown[][];
-	finalize(): void;
 };
 
 type SqliteDatabase = {
