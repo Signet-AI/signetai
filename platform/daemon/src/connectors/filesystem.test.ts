@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { globToRegex, matchGlob } from "./filesystem";
+import { matchGlob } from "./filesystem";
 
 describe("globToRegex", () => {
 	test("**/*.md matches root-level files", () => {

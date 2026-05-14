@@ -226,6 +226,7 @@ download_url() {
     return 1
   fi
   local stage_dir="$SIGNET_INSTALL_DIR/runtime/staging/$name"
+  mkdir -p "$SIGNET_INSTALL_DIR/runtime/staging"
   rm -rf "$stage_dir"
   mv "$tmp_extract" "$stage_dir"
   rm -f "$tmp"
@@ -468,7 +469,6 @@ if [ -d "$STAGING" ]; then
     OLD="${DEST}.old"
     if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
     if mv "$dir" "$DEST" 2>/dev/null; then
-      rm -rf "$OLD"
       touch "$DEST/.complete"
       MOVED="$MOVED $comp_name"
     else
@@ -478,12 +478,16 @@ if [ -d "$STAGING" ]; then
       for prev in $MOVED; do
         PDEST="$SIGNET_INSTALL_DIR/runtime/$prev"
         POLD="${PDEST}.old"
-        if [ -d "$PDEST" ]; then mv "$PDEST" "$POLD"; fi
+        if [ -d "$PDEST" ]; then rm -rf "$PDEST"; fi
         if [ -d "$POLD" ]; then mv "$POLD" "$PDEST"; fi
       done
       rm -rf "$STAGING"
       exit 1
     fi
+  done
+  # All promoted — safe to remove backups
+  for prev in $MOVED; do
+    rm -rf "$SIGNET_INSTALL_DIR/runtime/$prev.old"
   done
   rm -rf "$STAGING"
 fi
