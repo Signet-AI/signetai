@@ -115,10 +115,7 @@ json_value() {
     return
   fi
   local name field
-  name="$(printf '%s' "$key" | sed -n 's/.*\."([^"]*)"\..*/\1/p' 2>/dev/null || echo "")"
-  if [ -z "$name" ]; then
-    name="$(printf '%s' "$key" | sed 's/\.components\.//;s/\..*//' | tr -d '"')"
-  fi
+  name="$(printf '%s' "$key" | sed 's/.*\."//;s/".*//')"
   field="$(printf '%s' "$key" | sed 's/.*\.\([a-zA-Z0-9_]*\)$/\1/')"
   sed -n "/\"${name}\"/,/}/p" "$file" | sed -n "s/^[[:space:]]*\"${field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
 }

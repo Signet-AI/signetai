@@ -221,10 +221,7 @@ json_value() {
   fi
   # Parse .components."NAME".FIELD
   local name field
-  name="$(printf '%s' "$key" | sed -n 's/.*\."([^"]*)"\..*/\1/p' 2>/dev/null || echo "")"
-  if [ -z "$name" ]; then
-    name="$(printf '%s' "$key" | sed "s/\\.components\\.//;s/\\..*//" | tr -d '"')"
-  fi
+  name="$(printf '%s' "$key" | sed 's/.*\."//;s/".*//')"
   field="$(printf '%s' "$key" | sed 's/.*\.\([a-zA-Z0-9_]*\)$/\1/')"
   # Find the line with the component key, then scan forward for the field
   sed -n "/\"${name}\"/,/}/p" "$file" | sed -n "s/^[[:space:]]*\"${field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
@@ -250,9 +247,9 @@ get_manifest_value() {
 # ── Component list (Node.js runtime) ──
 
 COMPONENTS=(
-  node cli daemon-js daemon-rs predictor dashboard
+  node cli daemon-js daemon-rs dashboard
   connectors plugin-opencode plugin-oh-my-pi plugin-pi
-  native onnxruntime sqlite-vec skills templates
+  native skills templates
 )
 
 # ── Generate wrapper scripts (Bun-only) ──
@@ -284,10 +281,6 @@ export SIGNET_DIR
 exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" mcp "$@"
 WRAPPER
   chmod +x "${bindir}/signet-mcp"
-
-  if [ -f "$SIGNET_INSTALL_DIR/runtime/predictor/signet-predictor" ]; then
-    ln -sf "$SIGNET_INSTALL_DIR/runtime/predictor/signet-predictor" "${bindir}/signet-predictor"
-  fi
 
   curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/signet-uninstall" 2>/dev/null && chmod +x "${bindir}/signet-uninstall" || warn "Could not download uninstaller"
   curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/signet-update" 2>/dev/null && chmod +x "${bindir}/signet-update" || warn "Could not download updater"
@@ -353,7 +346,7 @@ main() {
   printf "${BOLD}  Downloading components...${NC}\n"
   echo ""
 
-  REQUIRED_COMPONENTS="node cli daemon-js native onnxruntime sqlite-vec"
+  REQUIRED_COMPONENTS="node cli daemon-js native"
 
   for name in "${COMPONENTS[@]}"; do
     sha=""

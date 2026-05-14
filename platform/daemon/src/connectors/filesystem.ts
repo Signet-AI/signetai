@@ -79,7 +79,6 @@ async function* walkDir(
 		return;
 	}
 	for (const entry of entries) {
-		if (entry.name.startsWith(".")) continue;
 		const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
 		if (ignorePatterns.some((p) => entry.name === p || relativePath === p || relativePath.startsWith(`${p}/`))) continue;
 		const fullPath = join(dir, entry.name);

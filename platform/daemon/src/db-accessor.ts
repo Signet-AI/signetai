@@ -126,7 +126,7 @@ let vecLoadError: string | null = null;
 // Initialisation
 // ---------------------------------------------------------------------------
 
-function configurePragmas(db: Database): void {
+function configurePragmas(db: SqliteDatabase): void {
 	db.exec("PRAGMA journal_mode = WAL");
 	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec("PRAGMA synchronous = NORMAL");
@@ -138,7 +138,7 @@ function toRecordOrUndefined(row: unknown): Record<string, unknown> | undefined 
 	return row as Record<string, unknown>;
 }
 
-function toMigrationDb(db: Database): {
+function toMigrationDb(db: SqliteDatabase): {
 	exec(sql: string): void;
 	prepare(sql: string): {
 		run(...args: unknown[]): void;
@@ -384,7 +384,7 @@ function configureCustomSqlite(agentsDir?: string): void {
 	}
 }
 
-function loadVecExtension(db: Database): void {
+function loadVecExtension(db: SqliteDatabase): void {
 	if (vecExtPath === undefined) {
 		vecExtPath = findSqliteVecExtension();
 		if (!vecExtPath) {
@@ -678,7 +678,7 @@ export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string
  * tokenizer. Older installs can carry a legacy porter-tokenized table,
  * which silently harms lexical recall quality for conversational cues.
  */
-export function ensureFtsTable(db: Database): void {
+export function ensureFtsTable(db: SqliteDatabase): void {
 	const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 
 	if (sql === null) {
@@ -702,7 +702,7 @@ export function ensureFtsTable(db: Database): void {
 // Vec table creation + backfill
 // ---------------------------------------------------------------------------
 
-function ensureVecTable(db: Database): void {
+function ensureVecTable(db: SqliteDatabase): void {
 	// Check if vec_embeddings exists and has the correct schema (TEXT id).
 	// If it exists without an id column, drop and recreate.
 	const existing = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get() as
@@ -727,7 +727,7 @@ function ensureVecTable(db: Database): void {
 	`);
 }
 
-function backfillVecEmbeddings(db: Database): void {
+function backfillVecEmbeddings(db: SqliteDatabase): void {
 	// Directly query for missing rows instead of comparing counts.
 	// Count comparison is racy — a row can exist in embeddings but not
 	// vec_embeddings even when counts match (e.g. after a crash mid-sync).
@@ -799,15 +799,15 @@ function backfillVecEmbeddings(db: Database): void {
 const READ_POOL_SIZE = 4;
 const MAX_READ_CONNECTIONS = 16;
 
-function createAccessor(writeConn: Database): DbAccessor {
+function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 	let closed = false;
 
 	// Small pool of reusable read connections. Recall does 3 reads per
 	// request so opening/closing every time adds measurable overhead.
-	const readPool: Database[] = [];
-	const readInUse = new Set<Database>();
+	const readPool: SqliteDatabase[] = [];
+	const readInUse = new Set<SqliteDatabase>();
 
-	function acquireRead(): Database {
+	function acquireRead(): SqliteDatabase {
 		if (dbPath === null) throw new Error("DbAccessor not initialised");
 		const pooled = readPool.pop();
 		if (pooled) {
@@ -825,7 +825,7 @@ function createAccessor(writeConn: Database): DbAccessor {
 		return conn;
 	}
 
-	function releaseRead(conn: Database): void {
+	function releaseRead(conn: SqliteDatabase): void {
 		readInUse.delete(conn);
 		if (readPool.length < READ_POOL_SIZE) {
 			readPool.push(conn);
