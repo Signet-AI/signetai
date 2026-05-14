@@ -140,7 +140,6 @@ safe_tar_extract() {
         link_target="$(printf '%s' "$line" | sed 's/.*-> //' 2>/dev/null || true)"
         case "$link_target" in
           /*) echo "abs-symlink:$entry -> $link_target" ;;
-          ../*|*/../*|*/..|..) echo "escape-symlink:$entry -> $link_target" ;;
         esac
         ;;
       *)

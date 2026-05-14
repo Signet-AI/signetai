@@ -354,7 +354,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Checksums and manifest ──
+      # ── Checksums ──
 
       - name: Generate checksums
         run: |
@@ -366,13 +366,6 @@ jobs:
           for f in *.tar.gz; do
             $SHA_CMD "$f" > "$f.sha256"
           done
-
-      - name: Generate manifest
-        run: |
-          VERSION="$(jq -r '.version' package.json)"
-          bun deploy/bundle/scripts/generate-manifest.ts \
-            "$VERSION" "$PLATFORM" "$ARTIFACT_DIR" "bundle-latest" \
-            > "$ARTIFACT_DIR/manifest-$PLATFORM.json"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -394,6 +387,35 @@ jobs:
         with:
           path: /tmp/all-artifacts
           pattern: bundle-*
+
+      - name: Generate manifests
+        run: |
+          VERSION="$(jq -r '.version' package.json)"
+          SHARED_DIR="/tmp/all-artifacts/bundle-linux-x64"
+          for PLATFORM in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            PLAT_DIR="/tmp/all-artifacts/bundle-$PLATFORM"
+            if [ ! -d "$PLAT_DIR" ]; then continue; fi
+            MERGE_DIR="/tmp/manifest-merge/$PLATFORM"
+            mkdir -p "$MERGE_DIR"
+            # Copy shared artifacts from linux-x64 (cli, dashboard, etc.)
+            if [ "$PLATFORM" != "linux-x64" ] && [ -d "$SHARED_DIR" ]; then
+              for f in "$SHARED_DIR"/*.tar.gz "$SHARED_DIR"/*.sha256; do
+                base="$(basename "$f")"
+                if [ ! -f "$PLAT_DIR/$base" ]; then
+                  cp "$f" "$MERGE_DIR/"
+                fi
+              done
+            fi
+            # Copy platform-specific artifacts
+            for f in "$PLAT_DIR"/*.tar.gz "$PLAT_DIR"/*.sha256; do
+              cp "$f" "$MERGE_DIR/"
+            done
+            bun deploy/bundle/scripts/generate-manifest.ts \
+              "$VERSION" "$PLATFORM" "$MERGE_DIR" "bundle-latest" \
+              > "$MERGE_DIR/manifest-$PLATFORM.json"
+            # Copy manifest back to the artifact dir for upload
+            cp "$MERGE_DIR/manifest-$PLATFORM.json" "$PLAT_DIR/"
+          done
 
       - name: Find or create release
         env:
