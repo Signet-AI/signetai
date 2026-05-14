@@ -53,6 +53,11 @@ function main() {
 		const component = parseComponentFromFilename(file);
 		if (!component) continue;
 
+		if (components[component]) {
+			console.error(`Duplicate component key "${component}" from ${file} (already seen)`);
+			process.exit(1);
+		}
+
 		const shaFile = join(artifactDir, `${file}.sha256`);
 		if (!existsSync(shaFile)) {
 			console.error(`Missing checksum: ${file}.sha256 — cannot publish unsigned artifact`);

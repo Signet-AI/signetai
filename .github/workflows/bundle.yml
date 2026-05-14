@@ -397,10 +397,13 @@ jobs:
             if [ ! -d "$PLAT_DIR" ]; then continue; fi
             MERGE_DIR="/tmp/manifest-merge/$PLATFORM"
             mkdir -p "$MERGE_DIR"
-            # Copy shared artifacts from linux-x64 (cli, dashboard, etc.)
+            # Copy shared (platform-independent) artifacts from linux-x64
             if [ "$PLATFORM" != "linux-x64" ] && [ -d "$SHARED_DIR" ]; then
               for f in "$SHARED_DIR"/*.tar.gz "$SHARED_DIR"/*.sha256; do
                 base="$(basename "$f")"
+                case "$base" in
+                  *-darwin-arm64.*|*-darwin-x64.*|*-linux-x64.*|*-linux-arm64.*) continue ;;
+                esac
                 if [ ! -f "$PLAT_DIR/$base" ]; then
                   cp "$f" "$MERGE_DIR/"
                 fi
