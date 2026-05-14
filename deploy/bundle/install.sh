@@ -132,26 +132,22 @@ safe_tar_extract() {
   local archive="$1" dest="$2"
   local unsafe
   unsafe="$(tar tvf "$archive" 2>/dev/null | while read -r line; do
+    local entry
+    entry="$(printf '%s' "$line" | sed 's/^.* //')"
     case "$line" in
-      l*|h*|\-*)
-        local entry
-        entry="$(printf '%s' "$line" | sed 's/^.* //')"
+      l*|h*)
+        local link_target
+        link_target="$(printf '%s' "$line" | sed 's/.*-> //' 2>/dev/null || true)"
+        case "$link_target" in
+          /*) echo "abs-symlink:$entry -> $link_target" ;;
+          ../*|*/../*|*/..|..) echo "escape-symlink:$entry -> $link_target" ;;
+        esac
+        ;;
+      *)
         case "$entry" in
           ../*|*/../*|*/..|..) echo "$entry" ;;
           /*) echo "$entry" ;;
         esac
-        ;;
-      *)
-        local link_target=""
-        case "$line" in
-          *"-> "*)
-            link_target="$(printf '%s' "$line" | sed 's/.*-> //')"
-            entry="$(printf '%s' "$line" | sed 's/^.* //;s/ ->.*//')"
-            ;;
-        esac
-        if [ -n "$link_target" ]; then
-          echo "symlink:$entry -> $link_target"
-        fi
         ;;
     esac
   done)"

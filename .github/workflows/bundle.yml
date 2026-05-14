@@ -194,6 +194,7 @@ jobs:
       # ── CLI bundle (target node) ──
 
       - name: Build CLI bundle
+        if: matrix.platform == 'linux-x64'
         run: |
           bun run build:connector-base
           cd surfaces/cli
@@ -203,6 +204,7 @@ jobs:
       # ── Dashboard ──
 
       - name: Build dashboard
+        if: matrix.platform == 'linux-x64'
         run: |
           cd surfaces/dashboard
           bun install
@@ -250,6 +252,7 @@ jobs:
       # ── Connectors ──
 
       - name: Build connectors
+        if: matrix.platform == 'linux-x64'
         run: |
           bun run build:connector-base
           bun run build:deps
@@ -269,6 +272,7 @@ jobs:
       # ── Plugins ──
 
       - name: Build OpenCode plugin
+        if: matrix.platform == 'linux-x64'
         run: |
           bun run build:opencode-plugin
           STAGE="$ARTIFACT_DIR/signet-plugin-opencode"
@@ -277,6 +281,7 @@ jobs:
           tar czf "$ARTIFACT_DIR/signet-plugin-opencode.tar.gz" -C "$STAGE" .
 
       - name: Build Oh My Pi extension
+        if: matrix.platform == 'linux-x64'
         run: |
           bun run build:oh-my-pi-extension
           STAGE="$ARTIFACT_DIR/signet-plugin-oh-my-pi"
@@ -285,6 +290,7 @@ jobs:
           tar czf "$ARTIFACT_DIR/signet-plugin-oh-my-pi.tar.gz" -C "$STAGE" .
 
       - name: Build Pi extension
+        if: matrix.platform == 'linux-x64'
         run: |
           bun run build:pi-extension
           STAGE="$ARTIFACT_DIR/signet-plugin-pi"
@@ -310,16 +316,19 @@ jobs:
        # ── Content bundles (platform-independent) ──
 
       - name: Package skills
+        if: matrix.platform == 'linux-x64'
         run: |
           tar czf "$ARTIFACT_DIR/signet-skills.tar.gz" -C skills .
 
       - name: Package templates
+        if: matrix.platform == 'linux-x64'
         run: |
           tar czf "$ARTIFACT_DIR/signet-templates.tar.gz" -C surfaces/cli/templates .
 
       # ── CI workflow bundle (independently updateable) ──
 
       - name: Bundle CI workflows
+        if: matrix.platform == 'linux-x64'
         run: |
           STAGE="$ARTIFACT_DIR/signet-workflows"
           mkdir -p "$STAGE"
