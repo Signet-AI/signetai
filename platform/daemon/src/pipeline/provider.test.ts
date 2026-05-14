@@ -252,6 +252,30 @@ printf 'ok\\n'
 		}
 	});
 
+	it("treats an unreadable ACPX proc root as best-effort cleanup", async () => {
+		if (process.platform !== "linux") return;
+		const root = join(tmpdir(), `signet-acpx-missing-proc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-ok.sh");
+		writeFileSync(
+			bin,
+			`#!/usr/bin/env bash
+printf 'ok\\n'
+`,
+		);
+		chmodSync(bin, 0o755);
+		const previousProcRoot = process.env.SIGNET_ACPX_PROC_ROOT;
+		process.env.SIGNET_ACPX_PROC_ROOT = join(root, "missing-proc");
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
+			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+		} finally {
+			if (previousProcRoot === undefined) Reflect.deleteProperty(process.env, "SIGNET_ACPX_PROC_ROOT");
+			else process.env.SIGNET_ACPX_PROC_ROOT = previousProcRoot;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("captures ACPX JSON events while preserving the final text provider contract", async () => {
 		const root = join(tmpdir(), `signet-acpx-events-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(root, { recursive: true });

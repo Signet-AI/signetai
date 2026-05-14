@@ -1143,18 +1143,22 @@ function acpxAgentProcessBasenames(agent: string): string[] {
 	}
 }
 
-function procEnvContainsRunId(pid: string, runId: string): boolean {
+function acpxProcRoot(): string {
+	return process.env.SIGNET_ACPX_PROC_ROOT || "/proc";
+}
+
+function procEnvContainsRunId(procRoot: string, pid: string, runId: string): boolean {
 	try {
-		const environ = readFileSync(`/proc/${pid}/environ`, "utf8");
+		const environ = readFileSync(`${procRoot}/${pid}/environ`, "utf8");
 		return environ.includes(`SIGNET_ACPX_RUN_ID=${runId}`);
 	} catch {
 		return false;
 	}
 }
 
-function procCommandMatchesAgent(pid: string, basenames: ReadonlySet<string>): boolean {
+function procCommandMatchesAgent(procRoot: string, pid: string, basenames: ReadonlySet<string>): boolean {
 	try {
-		const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+		const cmdline = readFileSync(`${procRoot}/${pid}/cmdline`, "utf8");
 		return cmdline
 			.split("\0")
 			.filter(Boolean)
@@ -1168,10 +1172,17 @@ function cleanupAcpxAgentProcesses(agent: string, runId: string): void {
 	if (process.platform !== "linux") return;
 	const basenames = new Set(acpxAgentProcessBasenames(agent));
 	if (basenames.size === 0) return;
-	const pids = readdirSync("/proc")
+	const procRoot = acpxProcRoot();
+	let procEntries: string[];
+	try {
+		procEntries = readdirSync(procRoot);
+	} catch {
+		return;
+	}
+	const pids = procEntries
 		.filter((pid) => /^\d+$/.test(pid))
-		.filter((pid) => procCommandMatchesAgent(pid, basenames))
-		.filter((pid) => procEnvContainsRunId(pid, runId))
+		.filter((pid) => procCommandMatchesAgent(procRoot, pid, basenames))
+		.filter((pid) => procEnvContainsRunId(procRoot, pid, runId))
 		.map((pid) => Number(pid))
 		.filter((pid) => Number.isFinite(pid) && pid > 0);
 	for (const pid of pids) {
