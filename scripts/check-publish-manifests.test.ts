@@ -69,6 +69,19 @@ describe("check-publish-manifests", () => {
 		}
 	});
 
+	test("validates archive paths from raw tar member names", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			expect(script).toContain('tar tzf "$archive"');
+			expect(script).toContain("while IFS= read -r entry");
+			expect(script).not.toContain('tar tvf "$archive"');
+			expect(script).not.toContain("sed 's/^.* //'");
+		}
+	});
+
 	test("fails macOS desktop bundle builds when expected artifacts are missing", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
