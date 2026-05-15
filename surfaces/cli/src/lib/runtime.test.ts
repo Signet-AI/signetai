@@ -11,6 +11,7 @@ import {
 	didSystemdDaemonStart,
 	getDaemonStatus,
 	launchdDaemonPlistPath,
+	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
 } from "./runtime.js";
 
@@ -136,6 +137,47 @@ describe("didSystemdDaemonStart", () => {
 		expect(didSystemdDaemonStart({ status: 1, signal: null, error: undefined })).toBe(false);
 		expect(didSystemdDaemonStart({ status: null, signal: "SIGTERM", error: undefined })).toBe(false);
 		expect(didSystemdDaemonStart({ status: null, signal: null, error: new Error("spawn timed out") })).toBe(false);
+	});
+});
+
+describe("readDaemonStartFailureDiagnostics", () => {
+	it("prefers startup log stderr when present", () => {
+		const lines = readDaemonStartFailureDiagnostics(
+			{ startupLogPath: "/tmp/startup.log", platform: "linux", systemdUnitName: "signet-daemon-test" },
+			{
+				existsSync: () => true,
+				readFileSync: () => "first\nsecond\n",
+				spawnSync: () => ({ stdout: "" }),
+			},
+		);
+
+		expect(lines).toEqual(["Daemon failed to start. stderr output:", "first", "second"]);
+	});
+
+	it("falls back to the transient systemd unit journal when startup log is empty", () => {
+		let command = "";
+		let args: readonly string[] = [];
+		const lines = readDaemonStartFailureDiagnostics(
+			{ startupLogPath: "/tmp/startup.log", platform: "linux", systemdUnitName: "signet-daemon-123" },
+			{
+				existsSync: () => true,
+				readFileSync: () => "",
+				spawnSync: (cmd, argv) => {
+					command = cmd;
+					args = argv;
+					return { stdout: "May 13 signet-daemon-123: Fatal error\nMay 13 signet-daemon-123: ENOSPC\n" };
+				},
+			},
+		);
+
+		expect(command).toBe("journalctl");
+		expect(args).toContain("--unit");
+		expect(args).toContain("signet-daemon-123");
+		expect(lines).toEqual([
+			"Daemon failed to start. journalctl for signet-daemon-123:",
+			"May 13 signet-daemon-123: Fatal error",
+			"May 13 signet-daemon-123: ENOSPC",
+		]);
 	});
 });
 

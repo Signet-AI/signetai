@@ -8,13 +8,12 @@
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
 import { spawn as nodeSpawn } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
-	defaultPipelineModel,
 	type LlmGenerateResult,
 	type LlmProvider,
 	type LlmUsage,
@@ -22,6 +21,7 @@ import {
 	OPENCODE_PIPELINE_SYSTEM_PROMPT,
 	type PipelineExtractionConfig,
 	type ProviderRateLimitConfig,
+	defaultPipelineModel,
 } from "@signet/core";
 import { logger } from "../logger";
 import { bypassSession } from "../session-tracker";
@@ -1000,13 +1000,14 @@ function acpxPermissionArgs(mode: AcpxPermissionMode | undefined): string[] {
 	}
 }
 
-function acpxEnv(hooks: AcpxHooksMode | undefined): NodeJS.ProcessEnv {
+function acpxEnv(hooks: AcpxHooksMode | undefined, runId?: string): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	if (hooks === "disabled") {
 		env.SIGNET_NO_HOOKS = "1";
 	} else if (hooks === "enabled") {
 		env.SIGNET_NO_HOOKS = undefined;
 	}
+	if (runId) env.SIGNET_ACPX_RUN_ID = runId;
 	return env;
 }
 
@@ -1133,6 +1134,74 @@ function terminateChildProcessTreeWithEscalation(child: ReturnType<typeof nodeSp
 	child.once("close", () => clearTimeout(escalation));
 }
 
+function acpxAgentProcessBasenames(agent: string): string[] {
+	switch (normalizeAcpxAgent(agent).toLowerCase()) {
+		case "codex":
+			return ["codex-acp"];
+		default:
+			return [];
+	}
+}
+
+function acpxProcRoot(): string {
+	return process.env.SIGNET_ACPX_PROC_ROOT || "/proc";
+}
+
+function procEnvContainsRunId(procRoot: string, pid: string, runId: string): boolean {
+	try {
+		const environ = readFileSync(`${procRoot}/${pid}/environ`, "utf8");
+		return environ.includes(`SIGNET_ACPX_RUN_ID=${runId}`);
+	} catch {
+		return false;
+	}
+}
+
+function procCommandMatchesAgent(procRoot: string, pid: string, basenames: ReadonlySet<string>): boolean {
+	try {
+		const cmdline = readFileSync(`${procRoot}/${pid}/cmdline`, "utf8");
+		return cmdline
+			.split("\0")
+			.filter(Boolean)
+			.some((arg) => basenames.has(arg.split("/").pop() ?? ""));
+	} catch {
+		return false;
+	}
+}
+
+function cleanupAcpxAgentProcesses(agent: string, runId: string): void {
+	if (process.platform !== "linux") return;
+	const basenames = new Set(acpxAgentProcessBasenames(agent));
+	if (basenames.size === 0) return;
+	const procRoot = acpxProcRoot();
+	let procEntries: string[];
+	try {
+		procEntries = readdirSync(procRoot);
+	} catch {
+		return;
+	}
+	const pids = procEntries
+		.filter((pid) => /^\d+$/.test(pid))
+		.filter((pid) => procCommandMatchesAgent(procRoot, pid, basenames))
+		.filter((pid) => procEnvContainsRunId(procRoot, pid, runId))
+		.map((pid) => Number(pid))
+		.filter((pid) => Number.isFinite(pid) && pid > 0);
+	for (const pid of pids) {
+		try {
+			process.kill(pid, "SIGTERM");
+		} catch {
+			// Already gone or not ours to signal.
+		}
+		const escalation = setTimeout(() => {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {
+				// Already exited.
+			}
+		}, 1000);
+		escalation.unref?.();
+	}
+}
+
 function parseAcpxJsonOutput(
 	stdout: string,
 	config: Pick<AcpxProviderConfig, "agent" | "captureEvents" | "maxCapturedEvents" | "onEvent">,
@@ -1186,13 +1255,14 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 			const timeoutMs = opts?.timeoutMs ?? config.timeoutMs ?? 60_000;
 			const { bin, args, cwd } = buildAcpxCommand(config, timeoutMs);
 			const outputFormat = resolveAcpxFormat(config);
+			const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 			return new Promise<string>((resolve, reject) => {
 				let stdout = "";
 				let stderr = "";
 				let settled = false;
 				const child = nodeSpawn(bin, args, {
 					cwd,
-					env: acpxEnv(config.hooks),
+					env: acpxEnv(config.hooks, runId),
 					stdio: ["pipe", "pipe", "pipe"],
 					detached: process.platform !== "win32",
 					windowsHide: true,
@@ -1201,6 +1271,7 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 					if (settled) return;
 					settled = true;
 					clearTimeout(timer);
+					cleanupAcpxAgentProcesses(config.agent, runId);
 					fn();
 				};
 				const timer = setTimeout(() => {

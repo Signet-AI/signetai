@@ -6,8 +6,11 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-15
+- Features: make constellation graph usable.
+
 ### 2026-05-14
-- Bug fixes: reap acpx process trees.
+- Bug fixes: surface daemon start journal diagnostics; clean up detached codex acp processes; reap acpx process trees.
 
 ### 2026-05-13
 - Features: daily reflections with dashboard card.
@@ -29,12 +32,26 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-05-09
 - Bug fixes: hide deleted rows from list endpoint; add auth whoami parity route; disable embeddings in mutation api route tests; add batch memory forget route parity; isolate background acpx summaries; use claude connector for Claude Code.
 
-### 2026-05-08
-- Features: capture ACPX JSON events; add proposal maintenance loop; split stable and nightly channels.
-- Bug fixes: restore knowledge graph mentions schema; bound ontology constellation graph reads; avoid resumed summary artifact collisions; stream logs without EventSource; align release commits with version sync; match connector list schema; keep dev workspace links local; prune migration backups before copy; catch release version sync regression; harden recent regression surfaces.
-- Docs: update ACPX integration architecture.
-
 ## Release Ledger
+
+## [0.119.0] - 2026-05-15
+
+Release summary: 1 feature.
+Tag range: `v0.118.5..v0.119.0`.
+
+### Features
+
+- **dashboard**: make constellation graph usable (#715)
+
+## [0.118.5] - 2026-05-14
+
+Release summary: 2 bug fixes.
+Tag range: `v0.118.4..v0.118.5`.
+
+### Bug Fixes
+
+- **cli**: surface daemon start journal diagnostics (#710)
+- **daemon**: clean up detached codex acp processes (#709)
 
 ## [0.118.4] - 2026-05-14
 
