@@ -69,7 +69,7 @@ if (isBun) {
 				alias: ALIAS,
 				format: "esm",
 				banner: {
-					js: 'import { createRequire as __createRequire } from "module"; const __require = __createRequire(import.meta.url);',
+					js: 'import { createRequire as __createRequire } from "module"; const require = __createRequire(import.meta.url);',
 				},
 				logLevel: "warning",
 			});

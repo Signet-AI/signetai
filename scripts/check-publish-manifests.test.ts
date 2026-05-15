@@ -26,6 +26,18 @@ describe("check-publish-manifests", () => {
 		expect(metaPackageBuild).toContain('outfile: "./dist/extraction-thread.js"');
 	});
 
+	test("keeps Node daemon build banner from colliding with esbuild require helper", () => {
+		const root = join(import.meta.dir, "..");
+		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
+		const metaPackageBuild = readFileSync(join(root, "dist", "signetai", "build-daemon.ts"), "utf-8");
+		const banner = "const require = __createRequire(import.meta.url);";
+
+		expect(daemonBuild).toContain(banner);
+		expect(metaPackageBuild).toContain(banner);
+		expect(daemonBuild).not.toContain("const __require =");
+		expect(metaPackageBuild).not.toContain("const __require =");
+	});
+
 	test("keeps Hermes plugin assets in the signetai publish package", () => {
 		const root = join(import.meta.dir, "..");
 		const manifest = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {
