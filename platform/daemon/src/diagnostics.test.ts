@@ -335,16 +335,19 @@ describe("getDiagnostics", () => {
 	});
 
 	test("composite status reflects worst unhealthy domain", () => {
-		const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 		for (let i = 0; i < 51; i++) {
 			const memId = `mem-comp-unhealthy-${i}`;
 			insertMemory(db, memId);
-			insertJob(db, `job-comp-unhealthy-${i}`, memId, "pending", old, old);
+			insertJob(db, `job-comp-unhealthy-${i}`, memId, "pending");
 		}
+		insertMemory(db, "mem-comp-dead");
+		insertJob(db, "job-comp-dead", "mem-comp-dead", "dead");
 
 		const tracker = createProviderTracker();
 		const report = getDiagnostics(asReadDb(db), tracker);
 
+		expect(report.queue.depth).toBe(51);
+		expect(report.queue.deadRate).toBeGreaterThan(0.01);
 		expect(report.queue.status).toBe("unhealthy");
 		expect(report.composite.score).toBeGreaterThanOrEqual(0.8);
 		expect(report.composite.status).toBe("unhealthy");
