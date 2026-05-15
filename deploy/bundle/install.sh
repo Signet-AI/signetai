@@ -619,11 +619,13 @@ done
   fi
 
   if [ "${SIGNET_NO_START:-}" != "1" ]; then
-    info "Starting daemon..."
-    if signet daemon start 2>/dev/null; then
+    info "Restarting daemon..."
+    if signet daemon restart --no-sync 2>/dev/null; then
+      ok "Daemon restarted"
+    elif signet daemon start 2>/dev/null; then
       ok "Daemon started"
     else
-      warn "Daemon start failed — run 'signet daemon start' manually"
+      warn "Daemon restart failed — run 'signet daemon restart' manually"
     fi
   fi
 

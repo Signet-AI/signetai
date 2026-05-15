@@ -445,6 +445,11 @@ jobs:
                 exit 1
               fi
             done
+            if [ "$PLATFORM" = "linux-x64" ]; then
+              SIGNET_DAEMON_SMOKE="$CHECK_DIR/runtime/daemon-js/daemon.js" \
+                "$CHECK_DIR/runtime/node/bin/node" \
+                -e 'import(process.env.SIGNET_DAEMON_SMOKE)'
+            fi
             # Copy manifest back to the artifact dir for upload
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$PLAT_DIR/"
             # Copy shared artifacts into platform dir so they get uploaded

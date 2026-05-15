@@ -130,6 +130,10 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/runtime/cli/cli.js"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/cli/package.json"');
 		expect(workflow).toContain("Bundle artifact layout missing");
+		expect(workflow).toContain('if [ "$PLATFORM" = "linux-x64" ]; then');
+		expect(workflow).toContain('SIGNET_DAEMON_SMOKE="$CHECK_DIR/runtime/daemon-js/daemon.js"');
+		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node"');
+		expect(workflow).toContain("-e 'import(process.env.SIGNET_DAEMON_SMOKE)'");
 	});
 
 	test("delegates updater reinstall without sharing the install lock trap", () => {
@@ -145,12 +149,27 @@ describe("check-publish-manifests", () => {
 	test("promotes installer manifest only after required install steps", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
-		const manifestCopy = installer.indexOf('cp "${tmpdir}/manifest.json" "$SIGNET_INSTALL_DIR/manifest.json"');
+		const manifestCopy = installer.indexOf('cp "${' + 'tmpdir}/manifest.json" "$SIGNET_INSTALL_DIR/manifest.json"');
 
 		expect(manifestCopy).toBeGreaterThan(installer.indexOf("verify_entrypoints"));
 		expect(manifestCopy).toBeGreaterThan(installer.indexOf("generate_wrappers"));
 		expect(manifestCopy).toBeGreaterThan(installer.indexOf("setup_path"));
+		expect(manifestCopy).toBeGreaterThan(installer.indexOf("signet daemon restart --no-sync"));
 		expect(manifestCopy).toBeLessThan(installer.indexOf("Signet v${VERSION_VAL} installed"));
+	});
+
+	test("restarts an existing bundled daemon before promoting the install manifest", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const restart = installer.indexOf("signet daemon restart --no-sync");
+		const startFallback = installer.indexOf("signet daemon start");
+		const manifestCopy = installer.indexOf('cp "${' + 'tmpdir}/manifest.json" "$SIGNET_INSTALL_DIR/manifest.json"');
+
+		expect(installer).toContain('if [ "${SIGNET_NO_START:-}" != "1" ]; then');
+		expect(installer).toContain('warn "Daemon restart failed');
+		expect(restart).toBeGreaterThan(installer.indexOf("signet setup --non-interactive"));
+		expect(startFallback).toBeGreaterThan(restart);
+		expect(manifestCopy).toBeGreaterThan(restart);
 	});
 
 	test("refreshes bundle wrappers and helper scripts during updates", () => {
