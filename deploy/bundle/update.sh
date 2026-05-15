@@ -191,6 +191,22 @@ manifest_keys() {
   fi
 }
 
+component_runtime_path() {
+  local name="$1"
+  case "$name" in
+    plugin-*) printf '%s/runtime/plugins/%s' "$SIGNET_INSTALL_DIR" "${name#plugin-}" ;;
+    *) printf '%s/runtime/%s' "$SIGNET_INSTALL_DIR" "$name" ;;
+  esac
+}
+
+cleanup_legacy_plugin_paths() {
+  for dir in "$SIGNET_INSTALL_DIR/runtime"/plugin-*/; do
+    [ -d "$dir" ] || continue
+    warn "Removing legacy plugin component path: $(basename "$dir")"
+    rm -rf "$dir"
+  done
+}
+
 # Compare versions
 LOCAL_VERSION="$(get_manifest_value '.version' "$LOCAL_MANIFEST")"
 REMOTE_VERSION="$(get_manifest_value '.version' "$REMOTE_MANIFEST")"
@@ -226,6 +242,12 @@ find "$SIGNET_INSTALL_DIR/runtime" -maxdepth 1 -name '*.old' -type d 2>/dev/null
   warn "Cleaning stale backup: $(basename "$olddir")"
   rm -rf "$olddir"
 done
+if [ -d "$SIGNET_INSTALL_DIR/runtime/plugins" ]; then
+  find "$SIGNET_INSTALL_DIR/runtime/plugins" -maxdepth 1 -name '*.old' -type d 2>/dev/null | while read -r olddir; do
+    warn "Cleaning stale plugin backup: $(basename "$olddir")"
+    rm -rf "$olddir"
+  done
+fi
 UPDATED=0
 FAILED=0
 
@@ -292,13 +314,15 @@ if [ -n "$STAGED" ]; then
   PROMOTED=""
   # Stage 1: Move old components aside (keep backups for rollback)
   for comp in $STAGED; do
-    DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
+    DEST="$(component_runtime_path "$comp")"
     OLD="${DEST}.old"
+    mkdir -p "$(dirname "$DEST")"
     if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
   done
   # Stage 2: Promote staged components
   for comp in $STAGED; do
-    DEST="$SIGNET_INSTALL_DIR/runtime/$comp"
+    DEST="$(component_runtime_path "$comp")"
+    mkdir -p "$(dirname "$DEST")"
     if mv "$TMPDIR/staged/$comp" "$DEST" 2>/dev/null; then
       touch "$DEST/.complete"
       ok "$comp updated"
@@ -308,13 +332,14 @@ if [ -n "$STAGED" ]; then
       rm -rf "$DEST"
       # Roll back all components that already succeeded
       for prev in $PROMOTED; do
-        PDEST="$SIGNET_INSTALL_DIR/runtime/$prev"
+        PDEST="$(component_runtime_path "$prev")"
         rm -rf "$PDEST"
       done
       # Restore all .old backups (promoted + failed)
       for comp2 in $STAGED; do
-        OLD2="$SIGNET_INSTALL_DIR/runtime/$comp2.old"
-        DEST2="$SIGNET_INSTALL_DIR/runtime/$comp2"
+        DEST2="$(component_runtime_path "$comp2")"
+        OLD2="${DEST2}.old"
+        mkdir -p "$(dirname "$DEST2")"
         if [ -d "$OLD2" ]; then mv "$OLD2" "$DEST2"; fi
       done
       rm -rf "$TMPDIR/staged"
@@ -324,11 +349,12 @@ if [ -n "$STAGED" ]; then
   done
   # All promoted successfully — safe to remove backups
   for comp in $STAGED; do
-    rm -rf "$SIGNET_INSTALL_DIR/runtime/$comp.old"
+    rm -rf "$(component_runtime_path "$comp").old"
   done
 fi
 
 rm -rf "$TMPDIR/staged"
+cleanup_legacy_plugin_paths
 
 # Remove components present locally but absent from remote manifest
 REMOTE_KEYS="$(manifest_keys "$REMOTE_MANIFEST")"
@@ -336,6 +362,18 @@ if [ -d "$SIGNET_INSTALL_DIR/runtime" ]; then
   for dir in "$SIGNET_INSTALL_DIR/runtime"/*/; do
     [ -d "$dir" ] || continue
     comp_name="$(basename "$dir")"
+    if [ "$comp_name" = "plugins" ]; then
+      for plugin_dir in "$dir"*/; do
+        [ -d "$plugin_dir" ] || continue
+        plugin_key="plugin-$(basename "$plugin_dir")"
+        case " $REMOTE_KEYS " in
+          *" $plugin_key "*) continue ;;
+        esac
+        warn "Removing obsolete component: $plugin_key"
+        rm -rf "$plugin_dir"
+      done
+      continue
+    fi
     case " $REMOTE_KEYS " in
       *" $comp_name "*) continue ;;
     esac

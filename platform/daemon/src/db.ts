@@ -1,14 +1,15 @@
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
+const require = (await import("node:module")).createRequire(import.meta.url);
 
 let Database: new (path: string, opts?: Record<string, unknown>) => unknown;
 
 if (isBun) {
 	// eslint-disable-next-line @typescript-eslint/no-require-imports
-	({ Database } = require("bun:sqlite"));
+	const sqlite = require("bun:sqlite");
+	Database = sqlite.Database;
 } else {
-	const { createRequire } = await import("node:module");
 	// eslint-disable-next-line @typescript-eslint/no-require-imports
-	Database = createRequire(import.meta.url)("better-sqlite3");
+	Database = require("better-sqlite3");
 }
 
 export { Database };

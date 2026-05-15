@@ -38,6 +38,27 @@ describe("check-publish-manifests", () => {
 		expect(metaPackageBuild).not.toContain("const __require =");
 	});
 
+	test("keeps runtime split SQLite loader ESM-safe", () => {
+		const root = join(import.meta.dir, "..");
+		const dbSource = readFileSync(join(root, "platform", "daemon", "src", "db.ts"), "utf-8");
+
+		expect(dbSource).toContain("createRequire(import.meta.url)");
+		expect(dbSource).not.toContain('({ Database } = require("bun:sqlite"));');
+	});
+
+	test("installs bundle plugins under runtime/plugins", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			expect(script).toContain("component_runtime_path()");
+			expect(script).toContain("cleanup_legacy_plugin_paths()");
+			expect(script).toContain('plugin-*) printf \'%s/runtime/plugins/%s\' "$SIGNET_INSTALL_DIR" "${name#plugin-}" ;;');
+		}
+		expect(updater).toContain('plugin_key="plugin-$(basename "$plugin_dir")"');
+	});
+
 	test("keeps Hermes plugin assets in the signetai publish package", () => {
 		const root = join(import.meta.dir, "..");
 		const manifest = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {

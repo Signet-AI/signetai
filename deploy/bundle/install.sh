@@ -292,6 +292,22 @@ COMPONENTS=(
   native skills templates
 )
 
+component_runtime_path() {
+  local name="$1"
+  case "$name" in
+    plugin-*) printf '%s/runtime/plugins/%s' "$SIGNET_INSTALL_DIR" "${name#plugin-}" ;;
+    *) printf '%s/runtime/%s' "$SIGNET_INSTALL_DIR" "$name" ;;
+  esac
+}
+
+cleanup_legacy_plugin_paths() {
+  for dir in "$SIGNET_INSTALL_DIR/runtime"/plugin-*/; do
+    [ -d "$dir" ] || continue
+    warn "Removing legacy plugin component path: $(basename "$dir")"
+    rm -rf "$dir"
+  done
+}
+
 # ── Generate wrapper scripts (Bun-only) ──
 
 generate_wrappers() {
@@ -486,7 +502,7 @@ main() {
       esac
     fi
 
-    dest="$SIGNET_INSTALL_DIR/runtime/${name}"
+    dest="$(component_runtime_path "$name")"
   download_url "$name" "$comp_url" "$filename" "$sha" "$dest" || {
     case " $REQUIRED_COMPONENTS " in
       *" $name "*)
@@ -501,46 +517,50 @@ main() {
   }
 done
 
-STAGING="$SIGNET_INSTALL_DIR/runtime/staging"
-if [ -d "$STAGING" ]; then
-  MOVED=""
-  # Stage 1: Move all old components aside
-  for dir in "$STAGING"/*/; do
-    [ -d "$dir" ] || continue
-    comp_name="$(basename "$dir")"
-    DEST="$SIGNET_INSTALL_DIR/runtime/$comp_name"
-    OLD="${DEST}.old"
-    if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
-    MOVED="$MOVED $comp_name"
-  done
-  # Stage 2: Promote all staged components
-  PROMOTED=""
-  for dir in "$STAGING"/*/; do
-    [ -d "$dir" ] || continue
-    comp_name="$(basename "$dir")"
-    DEST="$SIGNET_INSTALL_DIR/runtime/$comp_name"
-    if mv "$dir" "$DEST" 2>/dev/null; then
-      touch "$DEST/.complete"
-      PROMOTED="$PROMOTED $comp_name"
-    else
-      err "Failed to promote $comp_name — rolling back"
-      rm -rf "$DEST"
-      for prev in $MOVED; do
-        PDEST="$SIGNET_INSTALL_DIR/runtime/$prev"
-        POLD="${PDEST}.old"
-        if [ -d "$PDEST" ]; then rm -rf "$PDEST"; fi
-        if [ -d "$POLD" ]; then mv "$POLD" "$PDEST"; fi
-      done
-      rm -rf "$STAGING"
-      exit 1
-    fi
-  done
-  # All promoted — safe to remove backups
-  for prev in $MOVED; do
-    rm -rf "$SIGNET_INSTALL_DIR/runtime/$prev.old"
-  done
-  rm -rf "$STAGING"
-fi
+  STAGING="$SIGNET_INSTALL_DIR/runtime/staging"
+  if [ -d "$STAGING" ]; then
+    MOVED=""
+    # Stage 1: Move all old components aside
+    for dir in "$STAGING"/*/; do
+      [ -d "$dir" ] || continue
+      comp_name="$(basename "$dir")"
+      DEST="$(component_runtime_path "$comp_name")"
+      OLD="${DEST}.old"
+      mkdir -p "$(dirname "$DEST")"
+      if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
+      MOVED="$MOVED $comp_name"
+    done
+    # Stage 2: Promote all staged components
+    PROMOTED=""
+    for dir in "$STAGING"/*/; do
+      [ -d "$dir" ] || continue
+      comp_name="$(basename "$dir")"
+      DEST="$(component_runtime_path "$comp_name")"
+      mkdir -p "$(dirname "$DEST")"
+      if mv "$dir" "$DEST" 2>/dev/null; then
+        touch "$DEST/.complete"
+        PROMOTED="$PROMOTED $comp_name"
+      else
+        err "Failed to promote $comp_name — rolling back"
+        rm -rf "$DEST"
+        for prev in $MOVED; do
+          PDEST="$(component_runtime_path "$prev")"
+          POLD="${PDEST}.old"
+          if [ -d "$PDEST" ]; then rm -rf "$PDEST"; fi
+          mkdir -p "$(dirname "$PDEST")"
+          if [ -d "$POLD" ]; then mv "$POLD" "$PDEST"; fi
+        done
+        rm -rf "$STAGING"
+        exit 1
+      fi
+    done
+    # All promoted — safe to remove backups
+    for prev in $MOVED; do
+      rm -rf "$(component_runtime_path "$prev").old"
+    done
+    rm -rf "$STAGING"
+  fi
+  cleanup_legacy_plugin_paths
 
   cp "${tmpdir}/manifest.json" "$SIGNET_INSTALL_DIR/manifest.json"
   echo ""
