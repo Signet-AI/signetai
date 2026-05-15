@@ -429,6 +429,22 @@ jobs:
             bun deploy/bundle/scripts/generate-manifest.ts \
               "$VERSION" "$PLATFORM" "$MERGE_DIR" "bundle-latest" \
               > "$MERGE_DIR/manifest-$PLATFORM.json"
+            CHECK_DIR="/tmp/bundle-layout-check/$PLATFORM"
+            rm -rf "$CHECK_DIR"
+            mkdir -p "$CHECK_DIR/runtime/node" "$CHECK_DIR/runtime/cli" "$CHECK_DIR/runtime/daemon-js"
+            tar xzf "$MERGE_DIR/signet-node-$PLATFORM.tar.gz" -C "$CHECK_DIR/runtime/node"
+            tar xzf "$MERGE_DIR/signet-cli.tar.gz" -C "$CHECK_DIR/runtime/cli"
+            tar xzf "$MERGE_DIR/signet-daemon-js-$PLATFORM.tar.gz" -C "$CHECK_DIR/runtime/daemon-js"
+            for entrypoint in \
+              "$CHECK_DIR/runtime/node/bin/node" \
+              "$CHECK_DIR/runtime/cli/cli.js" \
+              "$CHECK_DIR/runtime/cli/package.json" \
+              "$CHECK_DIR/runtime/daemon-js/daemon.js"; do
+              if [ ! -e "$entrypoint" ]; then
+                echo "::error::Bundle artifact layout missing $entrypoint"
+                exit 1
+              fi
+            done
             # Copy manifest back to the artifact dir for upload
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$PLAT_DIR/"
             # Copy shared artifacts into platform dir so they get uploaded

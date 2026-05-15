@@ -97,6 +97,17 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain('tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js\n');
 	});
 
+	test("smoke-checks native bundle artifact layout before release upload", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain("bundle-layout-check");
+		expect(workflow).toContain('tar xzf "$MERGE_DIR/signet-cli.tar.gz" -C "$CHECK_DIR/runtime/cli"');
+		expect(workflow).toContain('"$CHECK_DIR/runtime/cli/cli.js"');
+		expect(workflow).toContain('"$CHECK_DIR/runtime/cli/package.json"');
+		expect(workflow).toContain("Bundle artifact layout missing");
+	});
+
 	test("delegates updater reinstall without sharing the install lock trap", () => {
 		const root = join(import.meta.dir, "..");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
@@ -105,6 +116,15 @@ describe("check-publish-manifests", () => {
 		expect(updater).toContain("trap 'rm -rf \"$TMPDIR\"' EXIT");
 		expect(updater).toContain('SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash "$INSTALLER"');
 		expect(updater).not.toContain('curl -fsSL "${DOWNLOAD_BASE}/install.sh" |');
+	});
+
+	test("does not advertise unsupported versioned bundle installs", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+
+		expect(installer).toContain('if [ "$SIGNET_VERSION" != "latest" ]; then');
+		expect(installer).toContain("SIGNET_VERSION is not supported by the native bundle installer yet");
+		expect(installer).not.toContain("SIGNET_VERSION      — version tag");
 	});
 
 	test("keeps bundle downloads pinned to expected release assets", () => {

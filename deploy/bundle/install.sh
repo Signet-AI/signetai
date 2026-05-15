@@ -7,7 +7,6 @@
 #
 # Environment options:
 #   SIGNET_INSTALL_DIR  — install location (default: ~/.signet)
-#   SIGNET_VERSION      — version tag or "latest" (default: latest)
 #   SIGNET_NO_START     — set to "1" to skip daemon start
 #   SIGNET_NO_SETUP     — set to "1" to skip setup wizard
 #   SIGNET_NO_PATH      — set to "1" to skip PATH modification
@@ -19,6 +18,11 @@ SIGNET_AGENTS_DIR="${SIGNET_PATH:-$HOME/.agents}"
 SIGNET_VERSION="${SIGNET_VERSION:-latest}"
 SIGNET_REPO="Signet-AI/signetai"
 SIGNET_RELEASE_TAG="bundle-${SIGNET_VERSION}"
+
+if [ "$SIGNET_VERSION" != "latest" ]; then
+  echo "SIGNET_VERSION is not supported by the native bundle installer yet; use SIGNET_VERSION=latest."
+  exit 1
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
