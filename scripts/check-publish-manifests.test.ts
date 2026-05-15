@@ -56,7 +56,6 @@ describe("check-publish-manifests", () => {
 			expect(script).toContain("cleanup_legacy_plugin_paths()");
 			expect(script).toContain('plugin-*) printf \'%s/runtime/plugins/%s\' "$SIGNET_INSTALL_DIR" "${name#plugin-}" ;;');
 		}
-		expect(updater).toContain('plugin_key="plugin-$(basename "$plugin_dir")"');
 	});
 
 	test("keeps bundle manifest fallback parser scoped to component fields", () => {
@@ -78,6 +77,37 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("Electron build produced no macOS zip");
 		expect(workflow).not.toContain('cp release/*.dmg "$ARTIFACT_DIR/" 2>/dev/null || true');
 		expect(workflow).not.toContain('cp release/*.zip "$ARTIFACT_DIR/" 2>/dev/null || true');
+	});
+
+	test("keeps bundle downloads pinned to expected release assets", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			expect(script).toContain("is_expected_asset_url()");
+			expect(script).toContain('"$DOWNLOAD_BASE"/*');
+			expect(script).toContain('signet-"$name".tar.gz|signet-"$name"-"$PLATFORM".tar.gz');
+			expect(script).toContain("outside expected release assets");
+		}
+	});
+
+	test("refuses remote manifests that drop installed components", () => {
+		const root = join(import.meta.dir, "..");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		expect(updater).toContain("require_remote_manifest_superset()");
+		expect(updater).toContain("Remote manifest dropped installed component");
+		expect(updater).toContain("refusing update without explicit obsolete marker");
+		expect(updater).not.toContain("Removing obsolete component:");
+	});
+
+	test("documents daemon-js as platform-specific", () => {
+		const root = join(import.meta.dir, "..");
+		const readme = readFileSync(join(root, "deploy", "bundle", "README.md"), "utf-8");
+
+		expect(readme).toContain("| `daemon-js` | Daemon JS bundle with Node runtime dependencies | Yes |");
+		expect(readme).not.toContain("| `daemon-js` | Daemon JS bundle | No |");
 	});
 
 	test("keeps Hermes plugin assets in the signetai publish package", () => {

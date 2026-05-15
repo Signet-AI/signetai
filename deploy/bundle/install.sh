@@ -128,6 +128,21 @@ sha_verify() {
   [ "$actual" = "$expected" ]
 }
 
+is_expected_asset_url() {
+  local name="$1" url="$2" filename="$3"
+  case "$url" in
+    "$DOWNLOAD_BASE"/*) ;;
+    *) return 1 ;;
+  esac
+  case "$filename" in
+    ""|"."|".."|*/*|*\?*|*#*) return 1 ;;
+  esac
+  case "$filename" in
+    signet-"$name".tar.gz|signet-"$name"-"$PLATFORM".tar.gz) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 safe_tar_extract() {
   local archive="$1" dest="$2"
   local unsafe
@@ -506,6 +521,10 @@ main() {
     fi
 
     filename="$(basename "$comp_url")"
+    if ! is_expected_asset_url "$name" "$comp_url" "$filename"; then
+      err "Manifest URL for '$name' is outside expected release assets: $comp_url"
+      exit 1
+    fi
 
     if [ -z "$sha" ]; then
       case " $REQUIRED_COMPONENTS " in

@@ -76,6 +76,21 @@ fi
 
 info "Checking for updates..."
 
+is_expected_asset_url() {
+  local name="$1" url="$2" filename="$3"
+  case "$url" in
+    "$DOWNLOAD_BASE"/*) ;;
+    *) return 1 ;;
+  esac
+  case "$filename" in
+    ""|"."|".."|*/*|*\?*|*#*) return 1 ;;
+  esac
+  case "$filename" in
+    signet-"$name".tar.gz|signet-"$name"-"$PLATFORM".tar.gz) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Download latest manifest
 REMOTE_MANIFEST="$TMPDIR/manifest-latest.json"
 curl -fsSL "${DOWNLOAD_BASE}/manifest-${PLATFORM}.json" -o "$REMOTE_MANIFEST" || {
@@ -226,14 +241,31 @@ cleanup_legacy_plugin_paths() {
   done
 }
 
+require_remote_manifest_superset() {
+  local remote_keys="$1"
+  local local_keys
+  local_keys="$(manifest_keys "$LOCAL_MANIFEST")"
+  for comp in $local_keys; do
+    case " $remote_keys " in
+      *" $comp "*) ;;
+      *)
+        err "Remote manifest dropped installed component '$comp'; refusing update without explicit obsolete marker"
+        exit 1
+        ;;
+    esac
+  done
+}
+
 # Compare versions
 LOCAL_VERSION="$(get_manifest_value '.version' "$LOCAL_MANIFEST")"
 REMOTE_VERSION="$(get_manifest_value '.version' "$REMOTE_MANIFEST")"
+REMOTE_KEYS="$(manifest_keys "$REMOTE_MANIFEST")"
+require_remote_manifest_superset "$REMOTE_KEYS"
 
 if [ "$LOCAL_VERSION" = "$REMOTE_VERSION" ]; then
   # Check individual component checksums
   CHANGED=0
-  COMPONENTS="$(manifest_keys "$REMOTE_MANIFEST")"
+  COMPONENTS="$REMOTE_KEYS"
   for comp in $COMPONENTS; do
     LOCAL_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$LOCAL_MANIFEST")"
     REMOTE_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$REMOTE_MANIFEST")"
@@ -253,7 +285,7 @@ else
 fi
 
 # Download changed components
-COMPONENTS="$(manifest_keys "$REMOTE_MANIFEST")"
+COMPONENTS="$REMOTE_KEYS"
 STAGED=""
 
 # Clean stale .old dirs from any previous failed update
@@ -286,6 +318,12 @@ for comp in $COMPONENTS; do
   fi
 
   FILENAME="$(basename "$REMOTE_URL")"
+  if ! is_expected_asset_url "$comp" "$REMOTE_URL" "$FILENAME"; then
+    err "Manifest URL for $comp is outside expected release assets: $REMOTE_URL"
+    FAILED=$((FAILED + 1))
+    continue
+  fi
+
   info "Updating $comp..."
 
   curl -fsSL "$REMOTE_URL" -o "$TMPDIR/$FILENAME" || {
@@ -374,32 +412,6 @@ fi
 
 rm -rf "$TMPDIR/staged"
 cleanup_legacy_plugin_paths
-
-# Remove components present locally but absent from remote manifest
-REMOTE_KEYS="$(manifest_keys "$REMOTE_MANIFEST")"
-if [ -d "$SIGNET_INSTALL_DIR/runtime" ]; then
-  for dir in "$SIGNET_INSTALL_DIR/runtime"/*/; do
-    [ -d "$dir" ] || continue
-    comp_name="$(basename "$dir")"
-    if [ "$comp_name" = "plugins" ]; then
-      for plugin_dir in "$dir"*/; do
-        [ -d "$plugin_dir" ] || continue
-        plugin_key="plugin-$(basename "$plugin_dir")"
-        case " $REMOTE_KEYS " in
-          *" $plugin_key "*) continue ;;
-        esac
-        warn "Removing obsolete component: $plugin_key"
-        rm -rf "$plugin_dir"
-      done
-      continue
-    fi
-    case " $REMOTE_KEYS " in
-      *" $comp_name "*) continue ;;
-    esac
-    warn "Removing obsolete component: $comp_name"
-    rm -rf "$dir"
-  done
-fi
 
 cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"
 echo "$REMOTE_VERSION" > "$SIGNET_INSTALL_DIR/VERSION"

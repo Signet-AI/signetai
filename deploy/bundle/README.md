@@ -62,7 +62,7 @@ what changed since the last install.
 |-----------|-------------|-------------------|
 | `node` | Node.js runtime | Yes |
 | `cli` | CLI command bundle | No |
-| `daemon-js` | Daemon JS bundle | No |
+| `daemon-js` | Daemon JS bundle with Node runtime dependencies | Yes |
 | `daemon-rs` | Rust daemon binary | Yes |
 | `dashboard` | Web UI static files | No |
 | `connectors` | Harness integration bundles | No |
