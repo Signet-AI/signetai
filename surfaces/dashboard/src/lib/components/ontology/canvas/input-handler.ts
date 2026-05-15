@@ -6,7 +6,8 @@ interface InputCallbacks {
 	onNodeHover: (node: GraphCanvasNode | null) => void;
 	onNodeClick: (node: GraphCanvasNode | null) => void;
 	onNodeDragStart: (node: GraphCanvasNode) => void;
-	onNodeDragEnd: () => void;
+	onNodeDragEnd: (node: GraphCanvasNode) => void;
+	onNodeDoubleClick: (node: GraphCanvasNode | null) => void;
 	onRequestRender: () => void;
 }
 
@@ -23,6 +24,7 @@ export class GraphInputHandler {
 	private readonly mouseMove = this.onMouseMove.bind(this);
 	private readonly mouseUp = this.onMouseUp.bind(this);
 	private readonly click = this.onClick.bind(this);
+	private readonly doubleClick = this.onDoubleClick.bind(this);
 	private readonly wheel = this.onWheel.bind(this);
 
 	constructor(
@@ -36,6 +38,7 @@ export class GraphInputHandler {
 		canvas.addEventListener("mouseup", this.mouseUp);
 		canvas.addEventListener("mouseleave", this.mouseUp);
 		canvas.addEventListener("click", this.click);
+		canvas.addEventListener("dblclick", this.doubleClick);
 		canvas.addEventListener("wheel", this.wheel, { passive: false });
 	}
 
@@ -45,6 +48,7 @@ export class GraphInputHandler {
 		this.canvas.removeEventListener("mouseup", this.mouseUp);
 		this.canvas.removeEventListener("mouseleave", this.mouseUp);
 		this.canvas.removeEventListener("click", this.click);
+		this.canvas.removeEventListener("dblclick", this.doubleClick);
 		this.canvas.removeEventListener("wheel", this.wheel);
 	}
 
@@ -116,10 +120,9 @@ export class GraphInputHandler {
 
 	private onMouseUp(): void {
 		if (this.draggingNode) {
-			this.draggingNode.fx = null;
-			this.draggingNode.fy = null;
+			const node = this.draggingNode;
 			this.draggingNode = null;
-			this.callbacks.onNodeDragEnd();
+			this.callbacks.onNodeDragEnd(node);
 			this.canvas.style.cursor = this.currentHoverId ? "grab" : "default";
 			return;
 		}
@@ -140,6 +143,11 @@ export class GraphInputHandler {
 		if (this.didDrag) return;
 		const point = this.canvasPoint(e);
 		this.callbacks.onNodeClick(this.nodeAt(point.x, point.y));
+	}
+
+	private onDoubleClick(e: MouseEvent): void {
+		const point = this.canvasPoint(e);
+		this.callbacks.onNodeDoubleClick(this.nodeAt(point.x, point.y));
 	}
 
 	private onWheel(e: WheelEvent): void {

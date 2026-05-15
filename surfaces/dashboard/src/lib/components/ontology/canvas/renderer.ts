@@ -132,12 +132,19 @@ function drawNodes(
 		const selected = node.id === state.selectedId;
 		const hovered = node.id === state.hoveredId;
 		const related = state.relatedIds.has(node.id);
+		const matched = state.searchMatchIds?.has(node.id) ?? false;
 		const dimmed = state.selectedId !== null && !selected && !related;
 		const alpha = dimmed ? Math.max(0.12, 1 - state.dimProgress * 0.85) : 1;
 		ctx.save();
 		ctx.globalAlpha = alpha;
-		if (selected || hovered || related)
-			drawGlow(ctx, screen.x, screen.y, size, selected ? colors.selectionGlow : colors.relatedGlow[node.kind]);
+		if (selected || hovered || related || matched)
+			drawGlow(
+				ctx,
+				screen.x,
+				screen.y,
+				size,
+				selected ? colors.selectionGlow : matched ? "rgba(125, 211, 252, 0.2)" : colors.relatedGlow[node.kind],
+			);
 		if (size < 6 && !selected && !hovered) {
 			drawTinyNode(ctx, screen.x, screen.y, Math.max(1.5, size * 0.35), dimmed ? node.dimColor : node.color);
 			ctx.restore();
@@ -152,13 +159,13 @@ function drawNodes(
 			selected || related ? colors.selection : node.color,
 			node.shape ?? "circle",
 		);
-		if (shouldDrawLabel(node, viewport.zoom, selected, hovered, related, size))
+		if (shouldDrawLabel(node, viewport.zoom, selected, hovered, related || matched, size))
 			drawLabel(
 				ctx,
 				node.label,
 				screen.x,
 				screen.y + size * 0.5 + 4,
-				selected ? colors.selection : related ? node.color : dimmed ? colors.textDim : colors.text,
+				selected ? colors.selection : related || matched ? node.color : dimmed ? colors.textDim : colors.text,
 				colors.labelShadow,
 				node.kind === "memory" ? 8 : 10,
 				viewport.zoom,

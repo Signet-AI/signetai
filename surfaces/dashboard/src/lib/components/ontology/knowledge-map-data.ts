@@ -1,7 +1,28 @@
-import type { ConstellationAttribute, ConstellationEntity, ConstellationGraph } from "$lib/api";
+import type { ConstellationAspect, ConstellationAttribute, ConstellationEntity, ConstellationGraph } from "$lib/api";
 
-export type KnowledgeMapNodeKind = "source" | "document" | "session" | "claim" | "memory" | "entity" | "proposal";
-export type KnowledgeMapEdgeKind = "contains" | "derives" | "supports" | "updates" | "extends" | "mentions" | "about";
+export type KnowledgeMapNodeKind =
+	| "source"
+	| "document"
+	| "session"
+	| "entity"
+	| "aspect"
+	| "attribute"
+	| "memory"
+	| "proposal";
+export type KnowledgeMapEdgeKind =
+	| "contains"
+	| "has_aspect"
+	| "has_attribute"
+	| "supports"
+	| "updates"
+	| "extends"
+	| "mentions"
+	| "about";
+
+export interface KnowledgeMapDetailRow {
+	label: string;
+	value: string;
+}
 
 export interface KnowledgeMapNode {
 	id: string;
@@ -15,6 +36,7 @@ export interface KnowledgeMapNode {
 	status?: "current" | "stale" | "conflict" | "review" | "forgotten";
 	weight?: number;
 	counts?: Record<string, number>;
+	details?: KnowledgeMapDetailRow[];
 	x: number;
 	y: number;
 	data: unknown;
@@ -37,18 +59,21 @@ export interface KnowledgeMapBuildOptions {
 }
 
 const DEFAULT_LIMIT = 80;
-const EVIDENCE_SOURCE_ID = "source:semantic-memory";
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const PRIMARY_ENTITY_TYPES = new Set(["person", "project", "topic", "system", "product", "organization", "org"]);
 const NOISY_ENTITY_TYPES = new Set(["artifact", "benchmark", "run", "file", "chunk", "unknown"]);
+const MAX_ENTITY_ANCHORS = 32;
+const MAX_ASPECTS_PER_ENTITY = 5;
+const MAX_ATTRIBUTES_PER_ASPECT = 4;
 
 export const KNOWLEDGE_NODE_COLORS: Record<KnowledgeMapNodeKind, string> = {
 	source: "#38bdf8",
 	document: "#60a5fa",
 	session: "#818cf8",
-	claim: "#a78bfa",
-	memory: "#06b6d4",
-	entity: "#3b82f6",
+	entity: "#7dd3fc",
+	aspect: "#60a5fa",
+	attribute: "#a78bfa",
+	memory: "#22d3ee",
 	proposal: "#f59e0b",
 };
 
@@ -56,9 +81,10 @@ export const KNOWLEDGE_NODE_COLORS_DIM: Record<KnowledgeMapNodeKind, string> = {
 	source: "rgba(56, 189, 248, 0.38)",
 	document: "rgba(96, 165, 250, 0.34)",
 	session: "rgba(129, 140, 248, 0.34)",
-	claim: "rgba(167, 139, 250, 0.36)",
-	memory: "rgba(6, 182, 212, 0.34)",
-	entity: "rgba(59, 130, 246, 0.34)",
+	entity: "rgba(125, 211, 252, 0.38)",
+	aspect: "rgba(96, 165, 250, 0.34)",
+	attribute: "rgba(167, 139, 250, 0.34)",
+	memory: "rgba(34, 211, 238, 0.32)",
 	proposal: "rgba(245, 158, 11, 0.34)",
 };
 
@@ -66,9 +92,10 @@ export const KNOWLEDGE_RELATED_GLOW: Record<KnowledgeMapNodeKind, string> = {
 	source: "rgba(56, 189, 248, 0.14)",
 	document: "rgba(96, 165, 250, 0.14)",
 	session: "rgba(129, 140, 248, 0.16)",
-	claim: "rgba(167, 139, 250, 0.18)",
-	memory: "rgba(6, 182, 212, 0.16)",
-	entity: "rgba(59, 130, 246, 0.14)",
+	entity: "rgba(125, 211, 252, 0.16)",
+	aspect: "rgba(96, 165, 250, 0.15)",
+	attribute: "rgba(167, 139, 250, 0.17)",
+	memory: "rgba(34, 211, 238, 0.16)",
 	proposal: "rgba(245, 158, 11, 0.16)",
 };
 
@@ -77,73 +104,74 @@ export function buildKnowledgeMapFromConstellation(
 	options: KnowledgeMapBuildOptions = {},
 ): { nodes: KnowledgeMapNode[]; edges: KnowledgeMapEdge[] } {
 	const limit = clampLimit(options.limit ?? DEFAULT_LIMIT);
-	const source = sourceNode();
 	const entities = graph.entities
 		.filter(includeEntity)
-		.sort((a, b) => entityScore(b, options.focusLabel) - entityScore(a, options.focusLabel));
+		.sort((a, b) => entityScore(b, options.focusLabel) - entityScore(a, options.focusLabel))
+		.slice(0, Math.min(MAX_ENTITY_ANCHORS, Math.max(1, limit)));
 
-	const nodes: KnowledgeMapNode[] = [source];
+	const nodes: KnowledgeMapNode[] = [];
 	const edges: KnowledgeMapEdge[] = [];
 	const includedEntityIds = new Set<string>();
-
 	const entityNodes = new Map<string, KnowledgeMapNode>();
+
 	let entityIndex = 0;
 	for (const entity of entities) {
 		if (nodes.length >= limit) break;
-		const entityNode = toEntityNode(entity, entityIndex++);
+		const entityNode = toEntityNode(entity, entityIndex++, entities.length);
 		nodes.push(entityNode);
 		entityNodes.set(entity.id, entityNode);
 		includedEntityIds.add(entity.id);
-		edges.push({
-			id: `contains:${EVIDENCE_SOURCE_ID}:${entity.id}`,
-			source: EVIDENCE_SOURCE_ID,
-			target: entity.id,
-			label: "contains",
-			kind: "contains",
-			strength: 0.35,
-		});
 	}
 
 	for (const entity of entities) {
 		const entityNode = entityNodes.get(entity.id);
 		if (!entityNode) continue;
-		const claims = claimCandidates(entity)
-			.sort((a, b) => b.attribute.importance - a.attribute.importance)
-			.slice(0, 4);
-		for (const claim of claims) {
+		const aspects = entity.aspects.toSorted((a, b) => aspectScore(b) - aspectScore(a)).slice(0, MAX_ASPECTS_PER_ENTITY);
+
+		for (let aspectIndex = 0; aspectIndex < aspects.length; aspectIndex++) {
 			if (nodes.length >= limit) break;
-			const claimNode = toClaimNode(entityNode, claim.attribute, claim.aspectName, claim.index);
-			nodes.push(claimNode);
+			const aspect = aspects[aspectIndex];
+			const aspectNode = toAspectNode(entityNode, aspect, aspectIndex);
+			nodes.push(aspectNode);
 			edges.push({
-				id: `derives:${entity.id}:${claimNode.id}`,
+				id: `has_aspect:${entity.id}:${aspectNode.id}`,
 				source: entity.id,
-				target: claimNode.id,
-				label: "derives claim",
-				kind: "derives",
-				strength: 0.6,
-			});
-			edges.push({
-				id: `about:${claimNode.id}:${entity.id}`,
-				source: claimNode.id,
-				target: entity.id,
-				label: "about",
-				kind: "about",
-				strength: 0.5,
-				dashed: true,
-				visualOnly: true,
+				target: aspectNode.id,
+				label: "aspect",
+				kind: "has_aspect",
+				strength: 0.58,
 			});
 
-			if (!claim.attribute.memoryId || nodes.length >= limit) continue;
-			const memoryNode = toMemoryNode(claimNode, claim.attribute, claim.index);
-			nodes.push(memoryNode);
-			edges.push({
-				id: `supports:${memoryNode.id}:${claimNode.id}`,
-				source: memoryNode.id,
-				target: claimNode.id,
-				label: "supports",
-				kind: "supports",
-				strength: 0.7,
-			});
+			const attributes = aspect.attributes
+				.filter((attribute) => attribute.importance >= 0.18)
+				.toSorted((a, b) => b.importance - a.importance)
+				.slice(0, MAX_ATTRIBUTES_PER_ASPECT);
+			for (let attributeIndex = 0; attributeIndex < attributes.length; attributeIndex++) {
+				if (nodes.length >= limit) break;
+				const attribute = attributes[attributeIndex];
+				const attributeNode = toAttributeNode(aspectNode, attribute, attributeIndex);
+				nodes.push(attributeNode);
+				edges.push({
+					id: `has_attribute:${aspectNode.id}:${attributeNode.id}`,
+					source: aspectNode.id,
+					target: attributeNode.id,
+					label: attribute.kind,
+					kind: "has_attribute",
+					strength: 0.66,
+				});
+
+				if (!attribute.memoryId || nodes.length >= limit) continue;
+				const memoryNode = toMemoryNode(attributeNode, attribute, attributeIndex);
+				nodes.push(memoryNode);
+				edges.push({
+					id: `supports:${memoryNode.id}:${attributeNode.id}`,
+					source: memoryNode.id,
+					target: attributeNode.id,
+					label: "evidence",
+					kind: "supports",
+					strength: 0.64,
+				});
+			}
 		}
 		if (nodes.length >= limit) break;
 	}
@@ -182,20 +210,6 @@ function clampLimit(value: number): number {
 	return Math.max(1, Math.min(Math.floor(value), 160));
 }
 
-function sourceNode(): KnowledgeMapNode {
-	return {
-		id: EVIDENCE_SOURCE_ID,
-		kind: "source",
-		label: "Signet knowledge",
-		sublabel: "semantic map",
-		preview: "Curated evidence, claims, memories, and high-signal entities from the active agent workspace.",
-		x: 0,
-		y: 0,
-		counts: {},
-		data: { source: "constellation" },
-	};
-}
-
 function includeEntity(entity: ConstellationEntity): boolean {
 	const type = entity.entityType.toLowerCase();
 	if (entity.pinned) return true;
@@ -231,9 +245,18 @@ function entityScore(entity: ConstellationEntity, focusLabel?: string): number {
 	return focusBoost + pinnedBoost + typeBoost + entity.mentions * 1.8 + attrScore;
 }
 
-function toEntityNode(entity: ConstellationEntity, index: number): KnowledgeMapNode {
-	const radius = 220 + Math.sqrt(index + 1) * 92;
-	const angle = index * GOLDEN_ANGLE;
+function aspectScore(aspect: ConstellationAspect): number {
+	return aspect.weight * 4 + aspect.attributes.reduce((sum, attr) => sum + attr.importance, 0);
+}
+
+function toEntityNode(entity: ConstellationEntity, index: number, total: number): KnowledgeMapNode {
+	const radius = 320 + Math.sqrt(index + 1) * 88;
+	const angle = index * GOLDEN_ANGLE + (total > 1 ? 0 : 0.35);
+	const topAspects = entity.aspects
+		.toSorted((a, b) => aspectScore(b) - aspectScore(a))
+		.slice(0, 4)
+		.map((aspect) => aspect.name)
+		.join(", ");
 	return {
 		id: entity.id,
 		kind: "entity",
@@ -243,48 +266,73 @@ function toEntityNode(entity: ConstellationEntity, index: number): KnowledgeMapN
 		entityType: entity.entityType,
 		weight: entityScore(entity),
 		counts: { mentions: entity.mentions, aspects: entity.aspects.length },
+		details: [
+			{ label: "Type", value: entity.entityType },
+			{ label: "Mentions", value: String(entity.mentions) },
+			{ label: "Aspects", value: String(entity.aspects.length) },
+			{ label: "Strongest", value: topAspects || "None indexed" },
+		],
 		x: Math.cos(angle) * radius,
 		y: Math.sin(angle) * radius,
 		data: entity,
 	};
 }
 
-function claimCandidates(entity: ConstellationEntity): Array<{
-	aspectName: string;
-	attribute: ConstellationAttribute;
-	index: number;
-}> {
-	const result: Array<{ aspectName: string; attribute: ConstellationAttribute; index: number }> = [];
-	for (const aspect of entity.aspects) {
-		for (const attribute of aspect.attributes) {
-			if (attribute.importance < 0.2) continue;
-			result.push({ aspectName: aspect.name, attribute, index: result.length });
-		}
-	}
-	return result;
+function toAspectNode(parent: KnowledgeMapNode, aspect: ConstellationAspect, index: number): KnowledgeMapNode {
+	const angle = index * GOLDEN_ANGLE + stableUnit(aspect.id, "aspect") * 0.5;
+	const radius = 150 + stableUnit(aspect.id, "aspect-r") * 52;
+	const topAttributes = aspect.attributes
+		.toSorted((a, b) => b.importance - a.importance)
+		.slice(0, 3)
+		.map((attribute) => attribute.content)
+		.join(" / ");
+	return {
+		id: `aspect:${aspect.id}`,
+		kind: "aspect",
+		label: aspect.name,
+		searchText: `${aspect.name} ${topAttributes}`,
+		sublabel: "aspect",
+		preview: topAttributes || "No attributes indexed for this aspect yet.",
+		parentId: parent.id,
+		status: "current",
+		weight: aspect.weight,
+		counts: { attributes: aspect.attributes.length },
+		details: [
+			{ label: "Entity", value: parent.label },
+			{ label: "Aspect", value: aspect.name },
+			{ label: "Weight", value: aspect.weight.toFixed(2) },
+			{ label: "Attributes", value: String(aspect.attributes.length) },
+			{ label: "Strongest", value: topAttributes || "None indexed" },
+		],
+		x: parent.x + Math.cos(angle) * radius,
+		y: parent.y + Math.sin(angle) * radius,
+		data: aspect,
+	};
 }
 
-function toClaimNode(
-	parent: KnowledgeMapNode,
-	attribute: ConstellationAttribute,
-	aspectName: string,
-	index: number,
-): KnowledgeMapNode {
-	const angle = index * GOLDEN_ANGLE + stableUnit(attribute.id, "claim") * 0.7;
-	const radius = 122 + stableUnit(attribute.id, "claim-r") * 58;
+function toAttributeNode(parent: KnowledgeMapNode, attribute: ConstellationAttribute, index: number): KnowledgeMapNode {
+	const angle = index * GOLDEN_ANGLE + stableUnit(attribute.id, "attribute") * 0.65;
+	const radius = 96 + stableUnit(attribute.id, "attribute-r") * 34;
 	return {
-		id: `claim:${attribute.id}`,
-		kind: "claim",
+		id: `attribute:${attribute.id}`,
+		kind: "attribute",
 		label: truncate(attribute.content, 58),
 		searchText: attribute.content,
-		sublabel: aspectName,
+		sublabel: attribute.kind,
 		preview: attribute.content,
 		parentId: parent.id,
 		status: "current",
 		weight: attribute.importance,
+		counts: { importance: Math.round(attribute.importance * 100) },
+		details: [
+			{ label: "Aspect", value: parent.label },
+			{ label: "Kind", value: attribute.kind },
+			{ label: "Importance", value: `${Math.round(attribute.importance * 100)}%` },
+			{ label: "Evidence", value: attribute.memoryId ?? "No memory id" },
+		],
 		x: parent.x + Math.cos(angle) * radius,
 		y: parent.y + Math.sin(angle) * radius,
-		data: { attribute, aspectName },
+		data: attribute,
 	};
 }
 
@@ -300,6 +348,13 @@ function toMemoryNode(parent: KnowledgeMapNode, attribute: ConstellationAttribut
 		preview: attribute.content,
 		parentId: parent.id,
 		weight: attribute.importance,
+		counts: { importance: Math.round(attribute.importance * 100) },
+		details: [
+			{ label: "Supports", value: parent.label },
+			{ label: "Kind", value: attribute.kind },
+			{ label: "Memory", value: attribute.memoryId ?? "unknown" },
+			{ label: "Claim", value: attribute.content },
+		],
 		x: parent.x + Math.cos(angle) * radius,
 		y: parent.y + Math.sin(angle) * radius,
 		data: attribute,

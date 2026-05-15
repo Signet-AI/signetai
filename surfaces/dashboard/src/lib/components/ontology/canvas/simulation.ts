@@ -10,11 +10,11 @@ export interface ForceSimulationOptions {
 }
 
 const DEFAULT_OPTIONS: ForceSimulationOptions = {
-	chargeStrength: -180,
-	linkDistance: 80,
+	chargeStrength: -2000,
+	linkDistance: 220,
 	linkStrength: 0.15,
-	collisionPadding: 2,
-	preSettleTicks: 80,
+	collisionPadding: 18,
+	preSettleTicks: 150,
 };
 
 export class KnowledgeForceSimulation {
@@ -87,7 +87,8 @@ export class KnowledgeForceSimulation {
 
 function edgeDistance(edge: GraphCanvasEdge, fallback: number): number {
 	if (edge.kind === "supports") return 64;
-	if (edge.kind === "derives") return 96;
+	if (edge.kind === "has_attribute") return 115;
+	if (edge.kind === "has_aspect") return 180;
 	if (edge.kind === "contains") return 170;
 	if (edge.kind === "about") return 210;
 	if (edge.kind === "updates" || edge.kind === "extends") return 78;
@@ -96,7 +97,8 @@ function edgeDistance(edge: GraphCanvasEdge, fallback: number): number {
 
 function edgeStrength(edge: GraphCanvasEdge, fallback: number): number {
 	if (edge.kind === "supports") return 0.34;
-	if (edge.kind === "derives") return 0.26;
+	if (edge.kind === "has_attribute") return 0.44;
+	if (edge.kind === "has_aspect") return 0.34;
 	if (edge.kind === "contains") return 0.16;
 	if (edge.kind === "about") return Math.max(0.06, Math.min(edge.strength ?? fallback, 0.28));
 	if (edge.kind === "updates" || edge.kind === "extends") return 0.3;

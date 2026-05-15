@@ -24,20 +24,40 @@ interface Props {
 }
 const { agentId = "default" }: Props = $props();
 
+type GraphDepth = "entities" | "aspects" | "attributes" | "evidence";
+
+const DEPTH_OPTIONS: { value: GraphDepth; label: string }[] = [
+	{ value: "entities", label: "Entities" },
+	{ value: "aspects", label: "Aspects" },
+	{ value: "attributes", label: "Attributes" },
+	{ value: "evidence", label: "Evidence" },
+];
+
+const FILTERABLE_KINDS: { kind: KnowledgeMapNodeKind; label: string }[] = [
+	{ kind: "entity", label: "Entities" },
+	{ kind: "aspect", label: "Aspects" },
+	{ kind: "attribute", label: "Attributes" },
+	{ kind: "memory", label: "Evidence" },
+];
+
+const DEFAULT_KIND_FILTER = new Set<KnowledgeMapNodeKind>(["entity", "aspect", "attribute", "memory"]);
+
 const BASE_SIZES: Record<KnowledgeMapNodeKind, number> = {
 	source: 58,
 	document: 48,
 	session: 46,
-	claim: 36,
+	aspect: 32,
+	attribute: 22,
 	memory: 24,
 	entity: 42,
 	proposal: 34,
 };
 
 const EDGE_COLORS: GraphRenderColors["edges"] = {
-	contains: { color: "rgb(96, 165, 250)", alpha: 0.22, width: 1.1 },
-	derives: { color: "rgb(56, 189, 248)", alpha: 0.3, width: 1.15 },
-	supports: { color: "rgb(167, 139, 250)", alpha: 0.42, width: 1.35 },
+	contains: { color: "rgb(96, 165, 250)", alpha: 0.18, width: 1.1 },
+	has_aspect: { color: "rgb(96, 165, 250)", alpha: 0.46, width: 1.35 },
+	has_attribute: { color: "rgb(167, 139, 250)", alpha: 0.42, width: 1.2 },
+	supports: { color: "rgb(34, 211, 238)", alpha: 0.42, width: 1.25 },
 	updates: { color: "rgb(34, 211, 238)", alpha: 0.58, width: 1.8 },
 	extends: { color: "rgb(14, 165, 233)", alpha: 0.36, width: 1.2 },
 	mentions: { color: "rgb(59, 130, 246)", alpha: 0.12, width: 0.9 },
@@ -56,9 +76,9 @@ const RENDER_COLORS: GraphRenderColors = {
 };
 
 const LEGEND_ITEMS: { kind: KnowledgeMapNodeKind; label: string }[] = [
-	{ kind: "source", label: "Sources" },
-	{ kind: "entity", label: "Anchors" },
-	{ kind: "claim", label: "Claims" },
+	{ kind: "entity", label: "Entities" },
+	{ kind: "aspect", label: "Aspects" },
+	{ kind: "attribute", label: "Attributes" },
 	{ kind: "memory", label: "Evidence" },
 ];
 
@@ -75,11 +95,18 @@ let loading = $state(false);
 let error = $state<string | null>(null);
 // biome-ignore lint/style/useConst: Svelte $state primitive is reassigned by event handlers.
 let legendOpen = $state(false);
+let query = $state("");
+let depth = $state<GraphDepth>("entities");
+let kindFilter = $state(new Set(DEFAULT_KIND_FILTER));
+let searchMatchIds = $state<Set<string> | null>(null);
+let activeMatchIndex = $state(0);
+let pinnedIds = $state(new Set<string>());
 let width = $state(800);
 let height = $state(600);
 let zoomDisplay = $state(50);
 const cardNode = $derived(selectedNode());
-const cardScreen = $derived(selectedScreen());
+const selectedRelations = $derived(relationSummary(cardNode));
+const visibleSummary = $derived(summaryText());
 let nodeCache = new Map<string, GraphCanvasNode>();
 let nodeMap = new Map<string, GraphCanvasNode>();
 let viewport: ViewportState | null = null;
@@ -95,7 +122,8 @@ function nodeRadius(node: KnowledgeMapNode): number {
 	const base = BASE_SIZES[node.kind];
 	const weight = Math.max(0, Math.min(node.weight ?? 0, 1));
 	if (node.kind === "entity") return base + Math.min(Math.log2((node.counts?.mentions ?? 0) + 1) * 3, 18);
-	if (node.kind === "claim") return base + weight * 12;
+	if (node.kind === "aspect") return base + weight * 8;
+	if (node.kind === "attribute") return base + weight * 8;
 	if (node.kind === "memory") return base + weight * 8;
 	return base;
 }
@@ -103,6 +131,7 @@ function nodeRadius(node: KnowledgeMapNode): number {
 function shapeFor(kind: KnowledgeMapNodeKind): "circle" | "rect" | "hex" {
 	if (kind === "source" || kind === "document" || kind === "session") return "rect";
 	if (kind === "entity") return "hex";
+	if (kind === "aspect" || kind === "attribute") return "rect";
 	return "circle";
 }
 
@@ -151,11 +180,101 @@ function buildSim(nodes: KnowledgeMapNode[], edges: KnowledgeMapEdge[], forceIni
 	simEdges = nextEdges;
 	nodeMap = new Map(nextNodes.map((node) => [node.id, node]));
 	spatial.rebuild(nextNodes);
-	const charge = nextNodes.length > 90 ? -80 : -140;
-	if (forceInit) sim.init(nextNodes, nextEdges, { chargeStrength: charge, linkDistance: 98, preSettleTicks: 180 });
+	const charge = nextNodes.length > 90 ? -1500 : -2000;
+	if (forceInit)
+		sim.init(nextNodes, nextEdges, {
+			chargeStrength: charge,
+			linkDistance: 220,
+			collisionPadding: 18,
+			preSettleTicks: 180,
+		});
 	else sim.update(nextNodes, nextEdges);
 	autoFitPending = forceInit;
 	requestRender();
+}
+
+function applyVisibleGraph(forceInit = false): void {
+	const ids = visibleNodeIds();
+	const visibleNodes = rawNodes.filter((node) => ids.has(node.id) && kindAllowed(node));
+	const visibleIds = new Set(visibleNodes.map((node) => node.id));
+	const visibleEdges = rawEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
+	buildSim(visibleNodes, visibleEdges, forceInit);
+}
+
+function visibleNodeIds(): Set<string> {
+	const ids = new Set<string>();
+	const trimmed = query.trim().toLowerCase();
+	const matches = new Set<string>();
+
+	for (const node of rawNodes) {
+		if (node.kind === "entity") ids.add(node.id);
+		if (depth !== "entities" && node.kind === "aspect") ids.add(node.id);
+		if ((depth === "attributes" || depth === "evidence") && node.kind === "attribute") ids.add(node.id);
+		if (depth === "evidence" && node.kind === "memory") ids.add(node.id);
+		if (trimmed && searchableText(node).includes(trimmed)) matches.add(node.id);
+	}
+
+	if (selectedId) addFocusNeighborhood(ids, selectedId);
+
+	if (trimmed) {
+		for (const id of matches) {
+			ids.add(id);
+			addAncestors(ids, id);
+			for (const child of directChildren(id)) ids.add(child.id);
+		}
+		searchMatchIds = matches;
+		activeMatchIndex = Math.min(activeMatchIndex, Math.max(matches.size - 1, 0));
+	} else {
+		searchMatchIds = null;
+		activeMatchIndex = 0;
+	}
+
+	return ids;
+}
+
+function kindAllowed(node: KnowledgeMapNode): boolean {
+	if (node.id === selectedId) return true;
+	return kindFilter.has(node.kind);
+}
+
+function searchableText(node: KnowledgeMapNode): string {
+	return `${node.label} ${node.sublabel ?? ""} ${node.searchText ?? ""} ${node.preview ?? ""}`.toLowerCase();
+}
+
+function addFocusNeighborhood(ids: Set<string>, id: string): void {
+	ids.add(id);
+	addAncestors(ids, id);
+	for (const neighbor of relatedIdsForKnowledgeNode(id, rawEdges)) ids.add(neighbor);
+
+	const node = rawNodes.find((item) => item.id === id);
+	if (!node) return;
+	if (node.kind === "entity") {
+		for (const aspect of directChildren(id)) {
+			ids.add(aspect.id);
+			if (depth === "attributes" || depth === "evidence") {
+				for (const attribute of directChildren(aspect.id)) {
+					ids.add(attribute.id);
+					if (depth === "evidence") {
+						for (const evidence of directChildren(attribute.id)) ids.add(evidence.id);
+					}
+				}
+			}
+		}
+		return;
+	}
+	for (const child of directChildren(id)) ids.add(child.id);
+}
+
+function addAncestors(ids: Set<string>, id: string): void {
+	let current = rawNodes.find((node) => node.id === id);
+	while (current?.parentId) {
+		ids.add(current.parentId);
+		current = rawNodes.find((node) => node.id === current?.parentId);
+	}
+}
+
+function directChildren(id: string): KnowledgeMapNode[] {
+	return rawNodes.filter((node) => node.parentId === id);
 }
 
 async function loadMap(id: string): Promise<void> {
@@ -176,7 +295,10 @@ async function loadMap(id: string): Promise<void> {
 		rawNodes = graph.nodes;
 		rawEdges = graph.edges;
 		nodeCache = new Map();
-		buildSim(graph.nodes, graph.edges, true);
+		selectedId = null;
+		searchMatchIds = null;
+		activeMatchIndex = 0;
+		applyVisibleGraph(true);
 	} catch (err) {
 		error = err instanceof Error ? err.message : String(err);
 	} finally {
@@ -245,6 +367,7 @@ function loop(): void {
 			selectedId,
 			hoveredId,
 			relatedIds,
+			searchMatchIds,
 			dimProgress,
 		},
 		nodeMap,
@@ -256,23 +379,18 @@ function selectGraphNode(node: GraphCanvasNode | null): void {
 	if (!node) {
 		selectedId = null;
 		relatedIds = new Set();
+		applyVisibleGraph();
 		return;
 	}
-	selectedId = selectedId === node.id ? null : node.id;
+	selectedId = node.id;
 	relatedIds = selectedId ? relatedIdsForKnowledgeNode(selectedId, rawEdges) : new Set();
+	applyVisibleGraph();
 }
 
 function selectedNode(): KnowledgeMapNode | null {
 	if (!selectedId) return null;
 	const node = rawNodes.find((item) => item.id === selectedId);
 	return node ?? null;
-}
-
-function selectedScreen(): { x: number; y: number } | null {
-	if (!selectedId || !viewport) return null;
-	const node = nodeMap.get(selectedId);
-	if (!node) return null;
-	return viewport.worldToScreen(node.x, node.y);
 }
 
 function fitGraph(): void {
@@ -300,11 +418,73 @@ function zoomBy(factor: number): void {
 }
 
 function selectAndCenter(id: string): void {
-	const node = nodeMap.get(id);
-	if (!node) return;
 	selectedId = id;
 	relatedIds = relatedIdsForKnowledgeNode(id, rawEdges);
+	applyVisibleGraph();
+	const node = nodeMap.get(id);
+	if (!node) return;
 	viewport?.centerOn(node.x, node.y, width, height);
+	requestRender();
+}
+
+function expandSelection(): void {
+	const node = selectedNode();
+	if (!node) return;
+	if (node.kind === "entity" && depth === "entities") depth = "aspects";
+	else if (node.kind === "aspect" && (depth === "entities" || depth === "aspects")) depth = "attributes";
+	else if (node.kind === "attribute") depth = "evidence";
+	applyVisibleGraph();
+	const visible = nodeMap.get(node.id);
+	if (visible) viewport?.centerOn(visible.x, visible.y, width, height);
+	requestRender();
+}
+
+function updateQuery(value: string): void {
+	query = value;
+	applyVisibleGraph();
+	const first = [...(searchMatchIds ?? new Set<string>())][0];
+	if (first) selectAndCenter(first);
+}
+
+function queryInput(event: Event): void {
+	if (!(event.currentTarget instanceof HTMLInputElement)) return;
+	updateQuery(event.currentTarget.value);
+}
+
+function cycleSearch(direction: 1 | -1): void {
+	const matches = [...(searchMatchIds ?? new Set<string>())];
+	if (matches.length === 0) return;
+	activeMatchIndex = (activeMatchIndex + direction + matches.length) % matches.length;
+	selectAndCenter(matches[activeMatchIndex]);
+}
+
+function setDepth(next: GraphDepth): void {
+	depth = next;
+	applyVisibleGraph();
+}
+
+function toggleKind(kind: KnowledgeMapNodeKind): void {
+	const next = new Set(kindFilter);
+	if (next.has(kind)) next.delete(kind);
+	else next.add(kind);
+	kindFilter = next;
+	applyVisibleGraph();
+}
+
+function togglePin(id: string): void {
+	const node = nodeMap.get(id);
+	if (!node) return;
+	const next = new Set(pinnedIds);
+	if (next.has(id)) {
+		next.delete(id);
+		node.fx = null;
+		node.fy = null;
+	} else {
+		next.add(id);
+		node.fx = node.x;
+		node.fy = node.y;
+	}
+	pinnedIds = next;
 	requestRender();
 }
 
@@ -329,23 +509,48 @@ function navigateChild(): void {
 	if (child) selectAndCenter(child.id);
 }
 
-function cardStyle(screen: { x: number; y: number } | null): string {
-	if (!screen) return "display: none";
-	const cardWidth = 360;
-	const cardHeight = 220;
-	const left = Math.max(20, Math.min(width - cardWidth - 20, screen.x + 28));
-	const top = Math.max(76, Math.min(height - cardHeight - 20, screen.y - 72));
-	return `left: ${left}px; top: ${top}px; width: ${cardWidth}px`;
-}
-
 function nodeKindLabel(kind: KnowledgeMapNodeKind): string {
 	return kind === "memory" ? "Evidence" : kind[0]?.toUpperCase() + kind.slice(1);
+}
+
+function footerSummary(node: KnowledgeMapNode): string {
+	if (node.counts?.mentions) return `${node.counts.mentions} mentions`;
+	if (node.counts?.importance) return `${node.counts.importance}% importance`;
+	return node.status ?? "current";
+}
+
+function relationSummary(node: KnowledgeMapNode | null): {
+	parent: KnowledgeMapNode | null;
+	children: KnowledgeMapNode[];
+} {
+	if (!node) return { parent: null, children: [] };
+	return {
+		parent: node.parentId ? (rawNodes.find((item) => item.id === node.parentId) ?? null) : null,
+		children: directChildren(node.id),
+	};
+}
+
+function summaryText(): string {
+	const total = rawNodes.length;
+	const visible = simNodes.length;
+	if (loading) return "Loading knowledge map...";
+	if (error) return error;
+	if (query.trim() && searchMatchIds) return `${searchMatchIds.size} matches • ${visible} visible of ${total}`;
+	return `${visible} visible of ${total} curated nodes`;
 }
 
 function keyboard(e: KeyboardEvent): void {
 	const target = e.target as HTMLElement;
 	if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
 	switch (e.key) {
+		case "/":
+			e.preventDefault();
+			document.getElementById("constellation-search")?.focus();
+			break;
+		case "Enter":
+			e.preventDefault();
+			expandSelection();
+			break;
 		case "z":
 		case "Z":
 			fitGraph();
@@ -365,6 +570,7 @@ function keyboard(e: KeyboardEvent): void {
 		case "Escape":
 			selectedId = null;
 			relatedIds = new Set();
+			applyVisibleGraph();
 			requestRender();
 			break;
 		case "ArrowRight":
@@ -408,7 +614,18 @@ onMount(() => {
 			},
 			onNodeClick: selectGraphNode,
 			onNodeDragStart: () => sim.reheat(),
-			onNodeDragEnd: () => sim.coolDown(),
+			onNodeDragEnd: (node) => {
+				node.fx = node.x;
+				node.fy = node.y;
+				pinnedIds = new Set(pinnedIds).add(node.id);
+				sim.coolDown();
+				requestRender();
+			},
+			onNodeDoubleClick: (node) => {
+				if (!node) return;
+				selectGraphNode(node);
+				expandSelection();
+			},
 			onRequestRender: requestRender,
 		});
 	}
@@ -429,13 +646,43 @@ onMount(() => {
 	<div class="graph-chrome top-left">
 		<div class="map-title">SIGNET CONSTELLATION</div>
 		<div class="map-subtitle">
-			{#if loading}
-				Loading knowledge map...
-			{:else if error}
-				{error}
-			{:else}
-				{simNodes.length} curated nodes • evidence-first view
-			{/if}
+			{visibleSummary}
+		</div>
+	</div>
+
+	<div class="graph-toolbar">
+		<div class="search-row">
+			<input
+				id="constellation-search"
+				type="search"
+				value={query}
+				placeholder="Search constellation"
+				oninput={queryInput}
+			/>
+			<button type="button" aria-label="Previous match" onclick={() => cycleSearch(-1)}>‹</button>
+			<button type="button" aria-label="Next match" onclick={() => cycleSearch(1)}>›</button>
+		</div>
+		<div class="depth-tabs" aria-label="Constellation depth">
+			{#each DEPTH_OPTIONS as option (option.value)}
+				<button
+					type="button"
+					class:active={depth === option.value}
+					onclick={() => setDepth(option.value)}
+				>
+					{option.label}
+				</button>
+			{/each}
+		</div>
+		<div class="kind-toggles" aria-label="Visible node kinds">
+			{#each FILTERABLE_KINDS as item (item.kind)}
+				<button
+					type="button"
+					class:active={kindFilter.has(item.kind)}
+					onclick={() => toggleKind(item.kind)}
+				>
+					{item.label}
+				</button>
+			{/each}
 		</div>
 	</div>
 
@@ -463,23 +710,47 @@ onMount(() => {
 	</div>
 
 	{#if cardNode}
-		<div class="node-card" style={cardStyle(cardScreen)}>
+		<aside class="node-inspector">
 			<div class="node-card-kind">{nodeKindLabel(cardNode.kind)} {cardNode.sublabel ? `• ${cardNode.sublabel}` : ""}</div>
 			<div class="node-card-title">{cardNode.label}</div>
 			{#if cardNode.preview}
 				<div class="node-card-preview">{cardNode.preview}</div>
 			{/if}
+			{#if cardNode.details?.length}
+				<div class="node-detail-list">
+					{#each cardNode.details as row (`${row.label}:${row.value}`)}
+						<div class="node-detail-row">
+							<span>{row.label}</span>
+							<strong>{row.value}</strong>
+						</div>
+					{/each}
+				</div>
+			{/if}
+			<div class="inspector-actions">
+				<button type="button" onclick={expandSelection}>Expand</button>
+				<button type="button" onclick={() => togglePin(cardNode.id)}>
+					{pinnedIds.has(cardNode.id) ? "Unpin" : "Pin"}
+				</button>
+				{#if selectedRelations.parent}
+					<button type="button" onclick={() => selectedRelations.parent && selectAndCenter(selectedRelations.parent.id)}>Parent</button>
+				{/if}
+			</div>
+			{#if selectedRelations.children.length}
+				<div class="relation-list">
+					<div class="relation-heading">Children</div>
+					{#each selectedRelations.children.slice(0, 8) as child (child.id)}
+						<button type="button" onclick={() => selectAndCenter(child.id)}>
+							<span>{nodeKindLabel(child.kind)}</span>
+							<strong>{child.label}</strong>
+						</button>
+					{/each}
+				</div>
+			{/if}
 			<div class="node-card-footer">
-				<span>{cardNode.counts?.mentions ? `${cardNode.counts.mentions} mentions` : cardNode.status ?? "current"}</span>
+				<span>{footerSummary(cardNode)}</span>
 				<code>{cardNode.id.length > 18 ? `${cardNode.id.slice(0, 10)}...${cardNode.id.slice(-5)}` : cardNode.id}</code>
 			</div>
-		</div>
-		<div class="node-actions" style={cardScreen ? `left: ${Math.max(20, Math.min(width - 220, cardScreen.x + 408))}px; top: ${Math.max(88, Math.min(height - 190, cardScreen.y - 44))}px` : "display: none"}>
-			<button type="button" onclick={navigateParent}>↑ Parent</button>
-			<button type="button" onclick={navigateChild}>↓ Evidence</button>
-			<button type="button" onclick={() => navigateSibling(1)}>→ Next</button>
-			<button type="button" onclick={() => navigateSibling(-1)}>← Prev</button>
-		</div>
+		</aside>
 	{/if}
 </div>
 
@@ -552,11 +823,50 @@ onMount(() => {
 		align-items: flex-start;
 	}
 
+	.graph-toolbar {
+		position: absolute;
+		top: 18px;
+		right: 22px;
+		z-index: 7;
+		display: grid;
+		gap: 8px;
+		width: min(420px, calc(100% - 360px));
+	}
+
+	.search-row,
+	.depth-tabs,
+	.kind-toggles {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.search-row input {
+		min-width: 0;
+		flex: 1;
+		height: 36px;
+		padding: 0 12px;
+		border: 1px solid rgba(71, 85, 105, 0.78);
+		border-radius: 6px;
+		background: rgba(15, 23, 42, 0.76);
+		color: rgba(241, 245, 249, 0.92);
+		font-family: var(--font-body);
+		font-size: 12px;
+		box-shadow: 0 18px 44px rgba(0, 0, 0, 0.3);
+		backdrop-filter: blur(14px);
+	}
+
+	.search-row input:focus {
+		outline: none;
+		border-color: rgba(125, 211, 252, 0.8);
+		background: rgba(15, 23, 42, 0.9);
+	}
+
 	.map-controls button,
 	.zoom-row,
 	.legend-list,
-	.node-card,
-	.node-actions button {
+	.node-inspector,
+	.graph-toolbar button {
 		border: 1px solid rgba(71, 85, 105, 0.78);
 		background: rgba(15, 23, 42, 0.76);
 		box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
@@ -564,14 +874,16 @@ onMount(() => {
 	}
 
 	.map-controls button,
-	.node-actions button {
+	.graph-toolbar button,
+	.inspector-actions button,
+	.relation-list button {
 		display: inline-flex;
 		align-items: center;
-		gap: 12px;
-		min-width: 96px;
+		justify-content: center;
+		gap: 8px;
 		height: 36px;
 		padding: 0 14px;
-		border-radius: 18px;
+		border-radius: 6px;
 		font-family: var(--font-body);
 		font-size: 12px;
 		color: rgba(241, 245, 249, 0.92);
@@ -579,9 +891,33 @@ onMount(() => {
 	}
 
 	.map-controls button:hover,
-	.node-actions button:hover {
+	.graph-toolbar button:hover,
+	.inspector-actions button:hover,
+	.relation-list button:hover,
+	.graph-toolbar button.active {
 		border-color: rgba(96, 165, 250, 0.78);
 		background: rgba(30, 41, 59, 0.88);
+	}
+
+	.map-controls button {
+		min-width: 96px;
+		border-radius: 18px;
+		justify-content: flex-start;
+		gap: 12px;
+	}
+
+	.search-row button {
+		width: 36px;
+		padding: 0;
+	}
+
+	.depth-tabs button,
+	.kind-toggles button {
+		height: 30px;
+		font-family: var(--font-mono);
+		font-size: 10px;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
 	}
 
 	kbd {
@@ -652,11 +988,18 @@ onMount(() => {
 		box-shadow: 0 0 14px currentColor;
 	}
 
-	.node-card {
+	.node-inspector {
 		position: absolute;
+		top: 154px;
+		right: 22px;
+		bottom: 22px;
+		width: min(360px, calc(100% - 44px));
 		z-index: 8;
-		border-radius: 10px;
+		display: flex;
+		flex-direction: column;
 		padding: 16px 18px 12px;
+		border-radius: 8px;
+		overflow: hidden;
 		color: rgba(241, 245, 249, 0.94);
 	}
 
@@ -677,19 +1020,100 @@ onMount(() => {
 
 	.node-card-preview {
 		margin-top: 12px;
-		max-height: 92px;
-		overflow: hidden;
+		max-height: 120px;
+		overflow: auto;
 		font-family: var(--font-body);
 		font-size: 12px;
 		line-height: 1.45;
 		color: rgba(203, 213, 225, 0.74);
 	}
 
+	.node-detail-list {
+		display: grid;
+		gap: 8px;
+		margin-top: 14px;
+		padding-top: 12px;
+		border-top: 1px solid rgba(71, 85, 105, 0.46);
+		overflow: auto;
+	}
+
+	.node-detail-row {
+		display: grid;
+		grid-template-columns: 86px minmax(0, 1fr);
+		gap: 10px;
+		align-items: baseline;
+		font-family: var(--font-body);
+		font-size: 11px;
+		line-height: 1.35;
+	}
+
+	.node-detail-row span,
+	.relation-heading,
+	.relation-list button span {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: rgba(125, 211, 252, 0.6);
+	}
+
+	.node-detail-row strong {
+		min-width: 0;
+		max-height: 48px;
+		overflow: hidden;
+		font-weight: 500;
+		color: rgba(226, 232, 240, 0.84);
+	}
+
+	.inspector-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-top: 14px;
+	}
+
+	.inspector-actions button {
+		min-width: 84px;
+		border: 1px solid rgba(71, 85, 105, 0.78);
+		background: rgba(15, 23, 42, 0.72);
+	}
+
+	.relation-list {
+		display: grid;
+		gap: 7px;
+		margin-top: 14px;
+		padding-top: 12px;
+		border-top: 1px solid rgba(71, 85, 105, 0.46);
+		overflow: auto;
+	}
+
+	.relation-list button {
+		display: grid;
+		grid-template-columns: 60px minmax(0, 1fr);
+		justify-content: initial;
+		height: auto;
+		min-height: 34px;
+		padding: 8px 10px;
+		border: 1px solid rgba(71, 85, 105, 0.62);
+		background: rgba(15, 23, 42, 0.48);
+		text-align: left;
+	}
+
+	.relation-list button strong {
+		min-width: 0;
+		overflow: hidden;
+		font-size: 11px;
+		font-weight: 500;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: rgba(226, 232, 240, 0.84);
+	}
+
 	.node-card-footer {
 		display: flex;
 		justify-content: space-between;
 		gap: 14px;
-		margin-top: 14px;
+		margin-top: auto;
 		padding-top: 10px;
 		border-top: 1px solid rgba(71, 85, 105, 0.56);
 		font-family: var(--font-mono);
@@ -702,17 +1126,21 @@ onMount(() => {
 		color: rgba(148, 163, 184, 0.86);
 	}
 
-	.node-actions {
-		position: absolute;
-		z-index: 9;
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
+	@media (max-width: 900px) {
+		.graph-toolbar {
+			left: 20px;
+			right: 20px;
+			width: auto;
+			top: 68px;
+		}
 
-	.node-actions button {
-		min-width: 132px;
-		justify-content: flex-start;
-		border-radius: 8px;
+		.node-inspector {
+			top: auto;
+			left: 20px;
+			right: 20px;
+			bottom: 20px;
+			width: auto;
+			max-height: 42%;
+		}
 	}
 </style>

@@ -50,5 +50,6 @@ export interface GraphRenderState {
 	selectedId: string | null;
 	hoveredId: string | null;
 	relatedIds: Set<string>;
+	searchMatchIds: Set<string> | null;
 	dimProgress: number;
 }
