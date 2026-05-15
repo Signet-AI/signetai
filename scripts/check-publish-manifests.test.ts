@@ -38,6 +38,17 @@ describe("check-publish-manifests", () => {
 		expect(metaPackageBuild).not.toContain("const __require =");
 	});
 
+	test("routes forced daemon builds through the Node/esbuild path", () => {
+		const root = join(import.meta.dir, "..");
+		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
+		const metaPackageBuild = readFileSync(join(root, "dist", "signetai", "build-daemon.ts"), "utf-8");
+
+		for (const buildScript of [daemonBuild, metaPackageBuild]) {
+			expect(buildScript).toContain('const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";');
+			expect(buildScript).toContain('const isBun = typeof Bun !== "undefined" && !forceNodeBuild;');
+		}
+	});
+
 	test("keeps runtime split SQLite loader ESM-safe", () => {
 		const root = join(import.meta.dir, "..");
 		const dbSource = readFileSync(join(root, "platform", "daemon", "src", "db.ts"), "utf-8");
