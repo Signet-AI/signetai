@@ -1,10 +1,10 @@
-import type { OntologyEdgeKind, OntologyNodeKind } from "../ontology-data";
+import type { KnowledgeMapEdgeKind, KnowledgeMapNodeKind } from "../knowledge-map-data";
 
 export type GraphNodeShape = "circle" | "rect" | "hex";
 
 export interface GraphCanvasNode {
 	id: string;
-	kind: OntologyNodeKind;
+	kind: KnowledgeMapNodeKind;
 	label: string;
 	sublabel?: string;
 	searchText?: string;
@@ -29,7 +29,7 @@ export interface GraphCanvasEdge {
 	source: string | GraphCanvasNode;
 	target: string | GraphCanvasNode;
 	label: string;
-	kind: OntologyEdgeKind;
+	kind: KnowledgeMapEdgeKind;
 	strength?: number;
 	dashed?: boolean;
 	visualOnly?: boolean;
@@ -42,8 +42,8 @@ export interface GraphRenderColors {
 	textMuted: string;
 	textDim: string;
 	labelShadow: string;
-	edges: Record<OntologyEdgeKind, { color: string; alpha: number; width: number }>;
-	relatedGlow: Record<OntologyNodeKind, string>;
+	edges: Record<KnowledgeMapEdgeKind, { color: string; alpha: number; width: number }>;
+	relatedGlow: Record<KnowledgeMapNodeKind, string>;
 }
 
 export interface GraphRenderState {

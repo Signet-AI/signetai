@@ -86,15 +86,19 @@ export class KnowledgeForceSimulation {
 }
 
 function edgeDistance(edge: GraphCanvasEdge, fallback: number): number {
-	if (edge.kind === "has_aspect") return 72;
-	if (edge.kind === "has_attribute") return 42;
-	if (edge.kind === "dependency") return 180;
+	if (edge.kind === "supports") return 64;
+	if (edge.kind === "derives") return 96;
+	if (edge.kind === "contains") return 170;
+	if (edge.kind === "about") return 210;
+	if (edge.kind === "updates" || edge.kind === "extends") return 78;
 	return fallback;
 }
 
 function edgeStrength(edge: GraphCanvasEdge, fallback: number): number {
-	if (edge.kind === "has_aspect") return 0.28;
-	if (edge.kind === "has_attribute") return 0.22;
-	if (edge.kind === "dependency") return Math.max(0.08, Math.min(edge.strength ?? fallback, 0.45));
+	if (edge.kind === "supports") return 0.34;
+	if (edge.kind === "derives") return 0.26;
+	if (edge.kind === "contains") return 0.16;
+	if (edge.kind === "about") return Math.max(0.06, Math.min(edge.strength ?? fallback, 0.28));
+	if (edge.kind === "updates" || edge.kind === "extends") return 0.3;
 	return fallback;
 }
