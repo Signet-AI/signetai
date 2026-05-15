@@ -136,6 +136,7 @@ jobs:
       PLATFORM: ${{ matrix.platform }}
       RUST_TARGET: ${{ matrix.rust_target }}
       ARTIFACT_DIR: /tmp/signet-bundle-artifacts
+      BUNDLE_NODE_VERSION: 20.19.5
 
     steps:
       - uses: actions/checkout@v4
@@ -174,7 +175,7 @@ jobs:
 
       - name: Stage Node.js runtime
         run: |
-          NODE_VER="$(node --version | sed 's/^v//')"
+          NODE_VER="$BUNDLE_NODE_VERSION"
           case "$PLATFORM" in
             darwin-arm64) NODE_ARCH="darwin-arm64" ;;
             darwin-x64)   NODE_ARCH="darwin-x64" ;;

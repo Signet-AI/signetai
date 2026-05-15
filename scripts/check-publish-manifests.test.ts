@@ -79,6 +79,25 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain('cp release/*.zip "$ARTIFACT_DIR/" 2>/dev/null || true');
 	});
 
+	test("pins bundled Node runtime versions in CI", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain("BUNDLE_NODE_VERSION: 20.19.5");
+		expect(workflow).toContain('NODE_VER="$BUNDLE_NODE_VERSION"');
+		expect(workflow).not.toContain("NODE_VER=\"$(node --version | sed 's/^v//')\"");
+	});
+
+	test("delegates updater reinstall without sharing the install lock trap", () => {
+		const root = join(import.meta.dir, "..");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		expect(updater).toContain('INSTALLER="$TMPDIR/install.sh"');
+		expect(updater).toContain("trap 'rm -rf \"$TMPDIR\"' EXIT");
+		expect(updater).toContain('SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash "$INSTALLER"');
+		expect(updater).not.toContain('curl -fsSL "${DOWNLOAD_BASE}/install.sh" |');
+	});
+
 	test("keeps bundle downloads pinned to expected release assets", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");

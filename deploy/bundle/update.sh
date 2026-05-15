@@ -100,8 +100,14 @@ curl -fsSL "${DOWNLOAD_BASE}/manifest-${PLATFORM}.json" -o "$REMOTE_MANIFEST" ||
 
 if ! command -v jq >/dev/null 2>&1 && [ ! -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
   warn "jq and bundled node not found — performing full reinstall"
+  INSTALLER="$TMPDIR/install.sh"
+  curl -fsSL "${DOWNLOAD_BASE}/install.sh" -o "$INSTALLER" || {
+    err "Failed to fetch installer for reinstall"
+    exit 1
+  }
   rm -rf "$LOCKFILE"
-  curl -fsSL "${DOWNLOAD_BASE}/install.sh" | SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash
+  trap 'rm -rf "$TMPDIR"' EXIT
+  SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash "$INSTALLER"
   exit $?
 fi
 
