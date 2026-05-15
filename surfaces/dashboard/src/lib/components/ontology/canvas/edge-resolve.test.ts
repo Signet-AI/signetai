@@ -19,7 +19,7 @@ function node(id: string, x: number): GraphCanvasNode {
 }
 
 describe("knowledge graph edge identity", () => {
-	it("keeps stable sourceId and targetId after d3 mutates source and target", () => {
+	it("does not let d3 mutate render edge endpoints", () => {
 		const nodes = [node("a", -100), node("b", 100)];
 		const edge: GraphCanvasEdge = {
 			id: "dependency:a:b",
@@ -36,8 +36,8 @@ describe("knowledge graph edge identity", () => {
 
 		expect(edge.sourceId).toBe("a");
 		expect(edge.targetId).toBe("b");
-		expect(typeof edge.source).toBe("object");
-		expect(typeof edge.target).toBe("object");
+		expect(edge.source).toBe("a");
+		expect(edge.target).toBe("b");
 		sim.destroy();
 	});
 });

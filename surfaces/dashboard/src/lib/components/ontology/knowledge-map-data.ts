@@ -58,13 +58,10 @@ export interface KnowledgeMapBuildOptions {
 	limit?: number;
 }
 
-const DEFAULT_LIMIT = 80;
+const DEFAULT_LIMIT = 600;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const PRIMARY_ENTITY_TYPES = new Set(["person", "project", "topic", "system", "product", "organization", "org"]);
 const NOISY_ENTITY_TYPES = new Set(["artifact", "benchmark", "run", "file", "chunk", "unknown"]);
-const MAX_ENTITY_ANCHORS = 32;
-const MAX_ASPECTS_PER_ENTITY = 5;
-const MAX_ATTRIBUTES_PER_ASPECT = 4;
 
 export const KNOWLEDGE_NODE_COLORS: Record<KnowledgeMapNodeKind, string> = {
 	source: "#38bdf8",
@@ -107,12 +104,20 @@ export function buildKnowledgeMapFromConstellation(
 	const entities = graph.entities
 		.filter(includeEntity)
 		.sort((a, b) => entityScore(b, options.focusLabel) - entityScore(a, options.focusLabel))
-		.slice(0, Math.min(MAX_ENTITY_ANCHORS, Math.max(1, limit)));
+		.slice(0, Math.max(1, limit));
 
 	const nodes: KnowledgeMapNode[] = [];
 	const edges: KnowledgeMapEdge[] = [];
 	const includedEntityIds = new Set<string>();
 	const entityNodes = new Map<string, KnowledgeMapNode>();
+	const aspectRecords: Array<{
+		readonly aspect: ConstellationAspect;
+		readonly node: KnowledgeMapNode;
+	}> = [];
+	const attributeRecords: Array<{
+		readonly attribute: ConstellationAttribute;
+		readonly node: KnowledgeMapNode;
+	}> = [];
 
 	let entityIndex = 0;
 	for (const entity of entities) {
@@ -122,17 +127,19 @@ export function buildKnowledgeMapFromConstellation(
 		entityNodes.set(entity.id, entityNode);
 		includedEntityIds.add(entity.id);
 	}
+	normalizeEntityScales(nodes);
 
-	for (const entity of entities) {
-		const entityNode = entityNodes.get(entity.id);
-		if (!entityNode) continue;
-		const aspects = entity.aspects.toSorted((a, b) => aspectScore(b) - aspectScore(a)).slice(0, MAX_ASPECTS_PER_ENTITY);
-
-		for (let aspectIndex = 0; aspectIndex < aspects.length; aspectIndex++) {
+	const maxAspectCount = entities.reduce((max, entity) => Math.max(max, entity.aspects.length), 0);
+	for (let aspectIndex = 0; aspectIndex < maxAspectCount; aspectIndex++) {
+		for (const entity of entities) {
 			if (nodes.length >= limit) break;
-			const aspect = aspects[aspectIndex];
+			const entityNode = entityNodes.get(entity.id);
+			if (!entityNode) continue;
+			const aspect = entity.aspects.toSorted((a, b) => aspectScore(b) - aspectScore(a))[aspectIndex];
+			if (!aspect) continue;
 			const aspectNode = toAspectNode(entityNode, aspect, aspectIndex);
 			nodes.push(aspectNode);
+			aspectRecords.push({ aspect, node: aspectNode });
 			edges.push({
 				id: `has_aspect:${entity.id}:${aspectNode.id}`,
 				source: entity.id,
@@ -141,39 +148,44 @@ export function buildKnowledgeMapFromConstellation(
 				kind: "has_aspect",
 				strength: 0.58,
 			});
-
-			const attributes = aspect.attributes
-				.filter((attribute) => attribute.importance >= 0.18)
-				.toSorted((a, b) => b.importance - a.importance)
-				.slice(0, MAX_ATTRIBUTES_PER_ASPECT);
-			for (let attributeIndex = 0; attributeIndex < attributes.length; attributeIndex++) {
-				if (nodes.length >= limit) break;
-				const attribute = attributes[attributeIndex];
-				const attributeNode = toAttributeNode(aspectNode, attribute, attributeIndex);
-				nodes.push(attributeNode);
-				edges.push({
-					id: `has_attribute:${aspectNode.id}:${attributeNode.id}`,
-					source: aspectNode.id,
-					target: attributeNode.id,
-					label: attribute.kind,
-					kind: "has_attribute",
-					strength: 0.66,
-				});
-
-				if (!attribute.memoryId || nodes.length >= limit) continue;
-				const memoryNode = toMemoryNode(attributeNode, attribute, attributeIndex);
-				nodes.push(memoryNode);
-				edges.push({
-					id: `supports:${memoryNode.id}:${attributeNode.id}`,
-					source: memoryNode.id,
-					target: attributeNode.id,
-					label: "evidence",
-					kind: "supports",
-					strength: 0.64,
-				});
-			}
 		}
-		if (nodes.length >= limit) break;
+	}
+
+	const maxAttributeCount = aspectRecords.reduce(
+		(max, record) => Math.max(max, sortedAttributes(record.aspect).length),
+		0,
+	);
+	for (let attributeIndex = 0; attributeIndex < maxAttributeCount; attributeIndex++) {
+		for (const record of aspectRecords) {
+			if (nodes.length >= limit) break;
+			const attribute = sortedAttributes(record.aspect)[attributeIndex];
+			if (!attribute) continue;
+			const attributeNode = toAttributeNode(record.node, attribute, attributeIndex);
+			nodes.push(attributeNode);
+			attributeRecords.push({ attribute, node: attributeNode });
+			edges.push({
+				id: `has_attribute:${record.node.id}:${attributeNode.id}`,
+				source: record.node.id,
+				target: attributeNode.id,
+				label: attribute.kind,
+				kind: "has_attribute",
+				strength: 0.66,
+			});
+		}
+	}
+
+	for (const record of attributeRecords) {
+		if (!record.attribute.memoryId || nodes.length >= limit) continue;
+		const memoryNode = toMemoryNode(record.node, record.attribute);
+		nodes.push(memoryNode);
+		edges.push({
+			id: `supports:${memoryNode.id}:${record.node.id}`,
+			source: memoryNode.id,
+			target: record.node.id,
+			label: "evidence",
+			kind: "supports",
+			strength: 0.64,
+		});
 	}
 
 	for (const dep of graph.dependencies) {
@@ -187,6 +199,7 @@ export function buildKnowledgeMapFromConstellation(
 			kind: "about",
 			strength: dep.strength,
 			dashed: true,
+			visualOnly: true,
 		});
 	}
 
@@ -207,11 +220,12 @@ export function relatedIdsForKnowledgeNode(id: string, edges: readonly Knowledge
 
 function clampLimit(value: number): number {
 	if (!Number.isFinite(value)) return DEFAULT_LIMIT;
-	return Math.max(1, Math.min(Math.floor(value), 160));
+	return Math.max(1, Math.min(Math.floor(value), 2200));
 }
 
 function includeEntity(entity: ConstellationEntity): boolean {
 	const type = entity.entityType.toLowerCase();
+	if (entity.aspects.length === 0) return false;
 	if (entity.pinned) return true;
 	if (PRIMARY_ENTITY_TYPES.has(type)) return true;
 	if (NOISY_ENTITY_TYPES.has(type)) return false;
@@ -249,9 +263,15 @@ function aspectScore(aspect: ConstellationAspect): number {
 	return aspect.weight * 4 + aspect.attributes.reduce((sum, attr) => sum + attr.importance, 0);
 }
 
+function sortedAttributes(aspect: ConstellationAspect): ConstellationAttribute[] {
+	return aspect.attributes.filter((item) => item.content.trim().length > 0).toSorted((a, b) => b.importance - a.importance);
+}
+
 function toEntityNode(entity: ConstellationEntity, index: number, total: number): KnowledgeMapNode {
 	const radius = 320 + Math.sqrt(index + 1) * 88;
 	const angle = index * GOLDEN_ANGLE + (total > 1 ? 0 : 0.35);
+	const attributeCount = entity.aspects.reduce((sum, aspect) => sum + aspect.attributes.length, 0);
+	const influence = entityInfluence(entity, attributeCount);
 	const topAspects = entity.aspects
 		.toSorted((a, b) => aspectScore(b) - aspectScore(a))
 		.slice(0, 4)
@@ -265,7 +285,7 @@ function toEntityNode(entity: ConstellationEntity, index: number, total: number)
 		preview: `${entity.mentions} mentions • ${entity.aspects.length} aspects`,
 		entityType: entity.entityType,
 		weight: entityScore(entity),
-		counts: { mentions: entity.mentions, aspects: entity.aspects.length },
+		counts: { mentions: entity.mentions, aspects: entity.aspects.length, attributes: attributeCount, influence, scale: 0 },
 		details: [
 			{ label: "Type", value: entity.entityType },
 			{ label: "Mentions", value: String(entity.mentions) },
@@ -278,9 +298,37 @@ function toEntityNode(entity: ConstellationEntity, index: number, total: number)
 	};
 }
 
+function entityInfluence(entity: ConstellationEntity, attributeCount: number): number {
+	return Math.log2(entity.mentions + 1) * 1.85 + entity.aspects.length * 1.45 + Math.sqrt(attributeCount) * 1.7;
+}
+
+function normalizeEntityScales(nodes: KnowledgeMapNode[]): void {
+	const entities = nodes.filter((node) => node.kind === "entity");
+	if (entities.length === 0) return;
+	const scores = entities.map((node) => node.counts?.influence ?? 0).toSorted((a, b) => a - b);
+	const low = percentile(scores, 0.58);
+	const high = Math.max(percentile(scores, 0.96), low + 1);
+	for (const node of entities) {
+		const normalized = clamp01(((node.counts?.influence ?? 0) - low) / (high - low));
+		const scale = Math.pow(normalized, 2.15);
+		node.counts = { ...node.counts, scale };
+	}
+}
+
+function percentile(sorted: readonly number[], position: number): number {
+	if (sorted.length === 0) return 0;
+	const index = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * position)));
+	return sorted[index] ?? 0;
+}
+
+function clamp01(value: number): number {
+	return Math.max(0, Math.min(value, 1));
+}
+
 function toAspectNode(parent: KnowledgeMapNode, aspect: ConstellationAspect, index: number): KnowledgeMapNode {
 	const angle = index * GOLDEN_ANGLE + stableUnit(aspect.id, "aspect") * 0.5;
-	const radius = 150 + stableUnit(aspect.id, "aspect-r") * 52;
+	const parentScale = Math.max(0, Math.min(parent.counts?.scale ?? 0, 1));
+	const radius = 145 + parentScale * 155 + stableUnit(aspect.id, "aspect-r") * (58 + parentScale * 42);
 	const topAttributes = aspect.attributes
 		.toSorted((a, b) => b.importance - a.importance)
 		.slice(0, 3)
@@ -336,11 +384,11 @@ function toAttributeNode(parent: KnowledgeMapNode, attribute: ConstellationAttri
 	};
 }
 
-function toMemoryNode(parent: KnowledgeMapNode, attribute: ConstellationAttribute, index: number): KnowledgeMapNode {
-	const angle = index * GOLDEN_ANGLE + stableUnit(attribute.id, "memory") * 0.9;
+function toMemoryNode(parent: KnowledgeMapNode, attribute: ConstellationAttribute): KnowledgeMapNode {
+	const angle = stableUnit(attribute.id, "memory") * Math.PI * 2;
 	const radius = 74 + stableUnit(attribute.id, "memory-r") * 34;
 	return {
-		id: `memory:${attribute.memoryId ?? attribute.id}`,
+		id: `memory:${attribute.memoryId ?? attribute.id}:${attribute.id}`,
 		kind: "memory",
 		label: truncate(attribute.content, 42),
 		searchText: attribute.content,

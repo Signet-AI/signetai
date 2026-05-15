@@ -49,6 +49,21 @@ const graph: ConstellationGraph = {
 			entityType: "person",
 			mentions: 8,
 			pinned: false,
+			aspects: [
+				{
+					id: "aspect-nicholai-preferences",
+					name: "preferences",
+					weight: 0.7,
+					attributes: [],
+				},
+			],
+		},
+		{
+			id: "entity-empty-person",
+			name: "Empty Person",
+			entityType: "person",
+			mentions: 120,
+			pinned: false,
 			aspects: [],
 		},
 	],
@@ -59,17 +74,20 @@ const graph: ConstellationGraph = {
 };
 
 describe("knowledge map data", () => {
-	it("builds an evidence-first map instead of raw entity/aspect/attribute dumps", () => {
+	it("builds a schema-native entity aspect attribute evidence map", () => {
 		const map = buildKnowledgeMapFromConstellation(graph, { focusLabel: "Signet", limit: 20 });
 
-		expect(map.nodes.map((node) => node.kind)).toContain("source");
-		expect(map.nodes.map((node) => node.kind)).toContain("claim");
+		expect(map.nodes.map((node) => node.kind)).toContain("entity");
+		expect(map.nodes.map((node) => node.kind)).toContain("aspect");
+		expect(map.nodes.map((node) => node.kind)).toContain("attribute");
 		expect(map.nodes.map((node) => node.kind)).toContain("memory");
-		expect(map.nodes.some((node) => node.id === "aspect-direction")).toBe(false);
-		expect(map.nodes.some((node) => node.id === "attr-source-native")).toBe(false);
+		expect(map.nodes.some((node) => node.id === "aspect:aspect-direction")).toBe(true);
+		expect(map.nodes.some((node) => node.id === "attribute:attr-source-native")).toBe(true);
 		expect(map.nodes.some((node) => node.id === "entity-noisy")).toBe(false);
+		expect(map.nodes.some((node) => node.id === "entity-empty-person")).toBe(false);
 		expect(map.edges.some((edge) => edge.kind === "supports")).toBe(true);
 		expect(map.edges.some((edge) => edge.kind === "about")).toBe(true);
+		expect(map.edges.find((edge) => edge.kind === "about")?.visualOnly).toBe(true);
 	});
 
 	it("keeps the map bounded and ranks useful people/projects/topics ahead of noisy extracted entities", () => {
@@ -81,14 +99,54 @@ describe("knowledge map data", () => {
 		expect(map.nodes.map((node) => node.id)).not.toContain("entity-noisy");
 	});
 
-	it("places claims and memories around their parent anchor deterministically", () => {
+	it("places attributes and memories around their parent anchor deterministically", () => {
 		const first = buildKnowledgeMapFromConstellation(graph, { limit: 20 });
 		const second = buildKnowledgeMapFromConstellation(graph, { limit: 20 });
-		const firstClaim = first.nodes.find((node) => node.kind === "claim");
-		const secondClaim = second.nodes.find((node) => node.id === firstClaim?.id);
+		const firstAttribute = first.nodes.find((node) => node.kind === "attribute");
+		const secondAttribute = second.nodes.find((node) => node.id === firstAttribute?.id);
+		const memory = first.nodes.find((node) => node.kind === "memory");
 
-		expect(firstClaim?.parentId).toBe("entity-signet");
-		expect(secondClaim?.x).toBe(firstClaim?.x);
-		expect(secondClaim?.y).toBe(firstClaim?.y);
+		expect(firstAttribute?.parentId).toBe("aspect:aspect-direction");
+		expect(memory?.parentId).toBe(firstAttribute?.id);
+		expect(secondAttribute?.x).toBe(firstAttribute?.x);
+		expect(secondAttribute?.y).toBe(firstAttribute?.y);
+	});
+
+	it("reserves graph budget for attributes on visible aspects", () => {
+		const crowded: ConstellationGraph = {
+			entities: Array.from({ length: 32 }, (_, entityIndex) => ({
+				id: `entity-${entityIndex}`,
+				name: `Entity ${entityIndex}`,
+				entityType: "topic",
+				mentions: 20 - (entityIndex % 6),
+				pinned: entityIndex === 0,
+				aspects: Array.from({ length: 5 }, (_, aspectIndex) => ({
+					id: `aspect-${entityIndex}-${aspectIndex}`,
+					name: `aspect ${aspectIndex}`,
+					weight: 0.8,
+					attributes: [
+						{
+							id: `attr-${entityIndex}-${aspectIndex}`,
+							content: `Attribute ${entityIndex}.${aspectIndex}`,
+							kind: "attribute",
+							importance: 0.05,
+							memoryId: `mem-${entityIndex}-${aspectIndex}`,
+						},
+					],
+				})),
+			})),
+			dependencies: [],
+		};
+
+		const map = buildKnowledgeMapFromConstellation(crowded, { limit: 400 });
+		const aspectIds = map.nodes.filter((node) => node.kind === "aspect").map((node) => node.id);
+		const aspectIdsWithAttributes = new Set(
+			map.edges.filter((edge) => edge.kind === "has_attribute").map((edge) => edge.source),
+		);
+
+		expect(map.nodes).toHaveLength(400);
+		expect(map.nodes.map((node) => node.kind)).toContain("attribute");
+		expect(aspectIds.length).toBeGreaterThan(0);
+		expect(aspectIds.every((id) => aspectIdsWithAttributes.has(id))).toBe(true);
 	});
 });

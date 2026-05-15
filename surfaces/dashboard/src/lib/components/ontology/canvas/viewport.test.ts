@@ -33,4 +33,29 @@ describe("knowledge graph viewport", () => {
 		expect(right.x).toBeLessThanOrEqual(401);
 		expect(right.y).toBeLessThanOrEqual(241);
 	});
+
+	it("honors a tighter max zoom for focused neighborhoods", () => {
+		const viewport = new ViewportState(0, 0, 0.4);
+
+		viewport.fitToNodes([{ x: 10, y: 10, size: 20 }], 800, 600, { maxZoom: 1.05 });
+
+		for (let i = 0; i < 60; i++) viewport.tick();
+
+		expect(viewport.zoom).toBeLessThanOrEqual(1.051);
+	});
+
+	it("moves programmatic focus toward one stable camera target", () => {
+		const viewport = new ViewportState(0, 0, 0.25);
+
+		viewport.fitToNodes([{ x: 500, y: -200, size: 20 }], 800, 600, { maxZoom: 0.7 });
+
+		let previousDistance = Number.POSITIVE_INFINITY;
+		for (let i = 0; i < 30; i++) {
+			viewport.tick();
+			const screen = viewport.worldToScreen(500, -200);
+			const distance = Math.hypot(screen.x - 400, screen.y - 300);
+			expect(distance).toBeLessThanOrEqual(previousDistance + 0.001);
+			previousDistance = distance;
+		}
+	});
 });

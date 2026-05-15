@@ -15,9 +15,13 @@ export interface GraphCanvasNode {
 	vy?: number;
 	fx?: number | null;
 	fy?: number | null;
+	anchorDx?: number;
+	anchorDy?: number;
 	size: number;
+	mass?: number;
 	color: string;
 	dimColor: string;
+	sprite?: string;
 	shape?: GraphNodeShape;
 	data: unknown;
 }

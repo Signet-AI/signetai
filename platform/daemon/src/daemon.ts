@@ -109,6 +109,7 @@ import { mountAppTrayRoutes } from "./routes/app-tray.js";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { mountChangelogRoutes } from "./routes/changelog.js";
 import { registerConnectorRoutes } from "./routes/connectors-routes.js";
+import { registerDatabaseDiagnosticsRoutes } from "./routes/database-diagnostics.js";
 import { setupDashboardRoutes } from "./routes/dashboard.js";
 import { mountEventBusRoutes } from "./routes/event-bus.js";
 import {
@@ -198,6 +199,7 @@ registerSourcesRoutes(app);
 registerPipelineRoutes(app);
 registerReflectionRoutes(app);
 registerTelemetryRoutes(app);
+registerDatabaseDiagnosticsRoutes(app);
 registerMiscRoutes(app);
 app.use("/api/inference", async (c, next) => {
 	if (c.req.method === "GET") return requirePermission("diagnostics", authConfig)(c, next);

@@ -3,7 +3,7 @@ import { getConstellationOverlay } from "$lib/api";
 import { onMount } from "svelte";
 import { SpatialIndex } from "./canvas/hit-test";
 import { GraphInputHandler } from "./canvas/input-handler";
-import { renderFrame } from "./canvas/renderer";
+import { isNodeVisibleAtLod, renderFrame } from "./canvas/renderer";
 import { KnowledgeForceSimulation } from "./canvas/simulation";
 import type { GraphCanvasEdge, GraphCanvasNode, GraphRenderColors } from "./canvas/types";
 import { ViewportState } from "./canvas/viewport";
@@ -16,7 +16,6 @@ import {
 	type KnowledgeMapNode,
 	type KnowledgeMapNodeKind,
 	buildKnowledgeMapFromConstellation,
-	relatedIdsForKnowledgeNode,
 } from "./knowledge-map-data";
 
 interface Props {
@@ -24,34 +23,45 @@ interface Props {
 }
 const { agentId = "default" }: Props = $props();
 
-type GraphDepth = "entities" | "aspects" | "attributes" | "evidence";
-
-const DEPTH_OPTIONS: { value: GraphDepth; label: string }[] = [
-	{ value: "entities", label: "Entities" },
-	{ value: "aspects", label: "Aspects" },
-	{ value: "attributes", label: "Attributes" },
-	{ value: "evidence", label: "Evidence" },
-];
-
-const FILTERABLE_KINDS: { kind: KnowledgeMapNodeKind; label: string }[] = [
-	{ kind: "entity", label: "Entities" },
-	{ kind: "aspect", label: "Aspects" },
-	{ kind: "attribute", label: "Attributes" },
-	{ kind: "memory", label: "Evidence" },
-];
-
-const DEFAULT_KIND_FILTER = new Set<KnowledgeMapNodeKind>(["entity", "aspect", "attribute", "memory"]);
-
 const BASE_SIZES: Record<KnowledgeMapNodeKind, number> = {
 	source: 58,
 	document: 48,
 	session: 46,
 	aspect: 32,
-	attribute: 22,
-	memory: 24,
-	entity: 42,
+	attribute: 30,
+	memory: 28,
+	entity: 38,
 	proposal: 34,
 };
+
+const ENTITY_TYPE_COLORS: Record<string, { color: string; dim: string }> = {
+	person: { color: "#eab308", dim: "rgba(234, 179, 8, 0.34)" },
+	project: { color: "#06b6d4", dim: "rgba(6, 182, 212, 0.34)" },
+	product: { color: "#14f1d9", dim: "rgba(20, 241, 217, 0.3)" },
+	system: { color: "#a855f7", dim: "rgba(168, 85, 247, 0.32)" },
+	tool: { color: "#10b981", dim: "rgba(16, 185, 129, 0.3)" },
+	topic: { color: "#a78bfa", dim: "rgba(167, 139, 250, 0.32)" },
+	concept: { color: "#f43f5e", dim: "rgba(244, 63, 94, 0.3)" },
+	organization: { color: "#f59e0b", dim: "rgba(245, 158, 11, 0.28)" },
+	org: { color: "#f59e0b", dim: "rgba(245, 158, 11, 0.28)" },
+	skill: { color: "#f59e0b", dim: "rgba(245, 158, 11, 0.28)" },
+	task: { color: "#64748b", dim: "rgba(100, 116, 139, 0.3)" },
+};
+
+const ENTITY_SPRITE_TYPES = new Set([
+	"person",
+	"project",
+	"product",
+	"system",
+	"tool",
+	"topic",
+	"concept",
+	"organization",
+	"org",
+	"skill",
+	"task",
+	"unknown",
+]);
 
 const EDGE_COLORS: GraphRenderColors["edges"] = {
 	contains: { color: "rgb(96, 165, 250)", alpha: 0.18, width: 1.1 },
@@ -75,16 +85,52 @@ const RENDER_COLORS: GraphRenderColors = {
 	relatedGlow: KNOWLEDGE_RELATED_GLOW,
 };
 
-const LEGEND_ITEMS: { kind: KnowledgeMapNodeKind; label: string }[] = [
-	{ kind: "entity", label: "Entities" },
-	{ kind: "aspect", label: "Aspects" },
-	{ kind: "attribute", label: "Attributes" },
+const ENTITY_TYPE_ORDER = [
+	"person",
+	"project",
+	"system",
+	"tool",
+	"concept",
+	"topic",
+	"product",
+	"org",
+	"skill",
+	"task",
+	"extracted",
+	"unknown",
+];
+
+const ENTITY_TYPE_LABELS: Record<string, string> = {
+	person: "Person",
+	project: "Project",
+	product: "Product",
+	system: "System",
+	tool: "Tool",
+	topic: "Topic",
+	concept: "Concept",
+	org: "Org",
+	skill: "Skill",
+	task: "Task",
+	extracted: "Extracted",
+	unknown: "Other",
+};
+
+const MAX_ENTITY_TYPE_LEGEND_ITEMS = 12;
+
+const STRUCTURE_LEGEND: { kind: "aspect" | "attribute" | "memory"; label: string }[] = [
+	{ kind: "aspect", label: "Aspect" },
+	{ kind: "attribute", label: "Attribute" },
 	{ kind: "memory", label: "Evidence" },
 ];
+const ENTITY_FOCUS_ZOOM = 0.56;
+const ASPECT_FOCUS_ZOOM = 0.72;
+const ENTITY_DESELECT_ZOOM = 0.36;
+const ASPECT_DESELECT_ZOOM = 0.44;
 
 // biome-ignore lint/style/useConst: Svelte bind:this assigns to this rune.
 let canvas = $state<HTMLCanvasElement | null>(null);
 let simNodes = $state<GraphCanvasNode[]>([]);
+const entityLegendItems = $derived(entityLegendItemsFor(simNodes));
 let simEdges: GraphCanvasEdge[] = [];
 let rawNodes = $state<KnowledgeMapNode[]>([]);
 let rawEdges = $state<KnowledgeMapEdge[]>([]);
@@ -94,18 +140,12 @@ let relatedIds = $state(new Set<string>());
 let loading = $state(false);
 let error = $state<string | null>(null);
 // biome-ignore lint/style/useConst: Svelte $state primitive is reassigned by event handlers.
-let legendOpen = $state(false);
-let query = $state("");
-let depth = $state<GraphDepth>("entities");
-let kindFilter = $state(new Set(DEFAULT_KIND_FILTER));
-let searchMatchIds = $state<Set<string> | null>(null);
-let activeMatchIndex = $state(0);
-let pinnedIds = $state(new Set<string>());
+let legendOpen = $state(true);
 let width = $state(800);
 let height = $state(600);
 let zoomDisplay = $state(50);
-const cardNode = $derived(selectedNode());
-const selectedRelations = $derived(relationSummary(cardNode));
+let viewportVersion = $state(0);
+const popoverNode = $derived(focusedNode());
 const visibleSummary = $derived(summaryText());
 let nodeCache = new Map<string, GraphCanvasNode>();
 let nodeMap = new Map<string, GraphCanvasNode>();
@@ -117,11 +157,15 @@ let raf = 0;
 let renderNeeded = true;
 let dimProgress = 0;
 let autoFitPending = false;
+let spatialFrame = 0;
 
 function nodeRadius(node: KnowledgeMapNode): number {
 	const base = BASE_SIZES[node.kind];
 	const weight = Math.max(0, Math.min(node.weight ?? 0, 1));
-	if (node.kind === "entity") return base + Math.min(Math.log2((node.counts?.mentions ?? 0) + 1) * 3, 18);
+	if (node.kind === "entity") {
+		const scale = Math.max(0, Math.min(node.counts?.scale ?? 0, 1));
+		return base + Math.round(108 * scale);
+	}
 	if (node.kind === "aspect") return base + weight * 8;
 	if (node.kind === "attribute") return base + weight * 8;
 	if (node.kind === "memory") return base + weight * 8;
@@ -138,6 +182,7 @@ function shapeFor(kind: KnowledgeMapNodeKind): "circle" | "rect" | "hex" {
 function toCanvasNode(node: KnowledgeMapNode): GraphCanvasNode {
 	const cached = nodeCache.get(node.id);
 	const size = nodeRadius(node);
+	const entityTone = node.kind === "entity" ? entityColor(node.entityType) : null;
 	const next: GraphCanvasNode = {
 		id: node.id,
 		kind: node.kind,
@@ -151,14 +196,69 @@ function toCanvasNode(node: KnowledgeMapNode): GraphCanvasNode {
 		vy: cached?.vy ?? 0,
 		fx: cached?.fx ?? null,
 		fy: cached?.fy ?? null,
+		anchorDx: cached?.anchorDx,
+		anchorDy: cached?.anchorDy,
 		size,
-		color: KNOWLEDGE_NODE_COLORS[node.kind],
-		dimColor: KNOWLEDGE_NODE_COLORS_DIM[node.kind],
+		mass: node.kind === "entity" ? Math.max(0, Math.min(node.counts?.scale ?? 0, 1)) : undefined,
+		color: entityTone?.color ?? KNOWLEDGE_NODE_COLORS[node.kind],
+		dimColor: entityTone?.dim ?? KNOWLEDGE_NODE_COLORS_DIM[node.kind],
+		sprite: node.kind === "entity" ? entitySprite(node.entityType) : undefined,
 		shape: shapeFor(node.kind),
 		data: node,
 	};
-	nodeCache.set(node.id, next);
 	return next;
+}
+
+function entityColor(type: string | undefined): { color: string; dim: string } {
+	return ENTITY_TYPE_COLORS[normalizeEntityType(type)] ?? { color: "#93c5fd", dim: "rgba(147, 197, 253, 0.28)" };
+}
+
+function entitySprite(type: string | undefined): string {
+	const key = normalizeEntityType(type);
+	return `/constellation-assets/entity-${ENTITY_SPRITE_TYPES.has(key) ? key : "unknown"}.png`;
+}
+
+function normalizeEntityType(type: string | undefined): string {
+	const key = type?.trim().toLowerCase();
+	if (!key) return "unknown";
+	if (key === "organization") return "org";
+	return key;
+}
+
+function entityLegendItemsFor(nodes: GraphCanvasNode[]): { type: string; label: string; count: number }[] {
+	const counts = new Map<string, number>();
+	for (const node of nodes) {
+		if (node.kind !== "entity") continue;
+		const type = normalizeEntityType(canvasEntityType(node));
+		counts.set(type, (counts.get(type) ?? 0) + 1);
+	}
+	const order = new Map(ENTITY_TYPE_ORDER.map((type, index) => [type, index]));
+	return [...counts.entries()]
+		.sort(([a, aCount], [b, bCount]) => {
+			const aOrder = order.get(a);
+			const bOrder = order.get(b);
+			if (aOrder !== undefined || bOrder !== undefined) return (aOrder ?? 999) - (bOrder ?? 999);
+			return bCount - aCount || a.localeCompare(b);
+		})
+		.slice(0, MAX_ENTITY_TYPE_LEGEND_ITEMS)
+		.map(([type, count]) => ({ type, label: entityTypeLabel(type), count }));
+}
+
+function canvasEntityType(node: GraphCanvasNode): string | undefined {
+	const data = node.data;
+	if (!data || typeof data !== "object" || !("entityType" in data)) return undefined;
+	const value = data.entityType;
+	return typeof value === "string" ? value : undefined;
+}
+
+function entityTypeLabel(type: string): string {
+	const known = ENTITY_TYPE_LABELS[type];
+	if (known) return known;
+	return type
+		.split(/[-_\s]+/)
+		.filter(Boolean)
+		.map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+		.join(" ");
 }
 
 function toCanvasEdge(edge: KnowledgeMapEdge): GraphCanvasEdge {
@@ -178,99 +278,33 @@ function buildSim(nodes: KnowledgeMapNode[], edges: KnowledgeMapEdge[], forceIni
 	const nextEdges = edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)).map(toCanvasEdge);
 	simNodes = nextNodes;
 	simEdges = nextEdges;
-	nodeMap = new Map(nextNodes.map((node) => [node.id, node]));
-	spatial.rebuild(nextNodes);
-	const charge = nextNodes.length > 90 ? -1500 : -2000;
+	const activeNodes = simNodes;
+	const activeEdges = simEdges;
+	nodeCache = new Map(activeNodes.map((node) => [node.id, node]));
+	nodeMap = new Map(activeNodes.map((node) => [node.id, node]));
+	initializeAnchors(activeNodes);
+	syncAnchoredNodes();
+	rebuildSpatial();
+	const charge = activeNodes.length > 1000 ? -650 : activeNodes.length > 400 ? -1000 : activeNodes.length > 90 ? -1500 : -2000;
+	const layoutNodes = activeNodes.filter(shouldSimulateNode);
+	const layoutIds = new Set(layoutNodes.map((node) => node.id));
+	const layoutEdges = activeEdges.filter((edge) => layoutIds.has(edge.sourceId) && layoutIds.has(edge.targetId));
 	if (forceInit)
-		sim.init(nextNodes, nextEdges, {
+		sim.init(layoutNodes, layoutEdges, {
 			chargeStrength: charge,
-			linkDistance: 220,
-			collisionPadding: 18,
-			preSettleTicks: 180,
+			linkDistance: activeNodes.length > 1000 ? 150 : 220,
+			collisionPadding: activeNodes.length > 1000 ? 10 : 18,
+			preSettleTicks: activeNodes.length > 1000 ? 24 : activeNodes.length > 400 ? 45 : 140,
+			maxActiveTicks: activeNodes.length > 1000 ? 18 : activeNodes.length > 400 ? 28 : 70,
+			maxActiveMs: activeNodes.length > 1000 ? 280 : activeNodes.length > 400 ? 420 : 900,
 		});
-	else sim.update(nextNodes, nextEdges);
+	else sim.update(layoutNodes, layoutEdges);
 	autoFitPending = forceInit;
 	requestRender();
 }
 
 function applyVisibleGraph(forceInit = false): void {
-	const ids = visibleNodeIds();
-	const visibleNodes = rawNodes.filter((node) => ids.has(node.id) && kindAllowed(node));
-	const visibleIds = new Set(visibleNodes.map((node) => node.id));
-	const visibleEdges = rawEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
-	buildSim(visibleNodes, visibleEdges, forceInit);
-}
-
-function visibleNodeIds(): Set<string> {
-	const ids = new Set<string>();
-	const trimmed = query.trim().toLowerCase();
-	const matches = new Set<string>();
-
-	for (const node of rawNodes) {
-		if (node.kind === "entity") ids.add(node.id);
-		if (depth !== "entities" && node.kind === "aspect") ids.add(node.id);
-		if ((depth === "attributes" || depth === "evidence") && node.kind === "attribute") ids.add(node.id);
-		if (depth === "evidence" && node.kind === "memory") ids.add(node.id);
-		if (trimmed && searchableText(node).includes(trimmed)) matches.add(node.id);
-	}
-
-	if (selectedId) addFocusNeighborhood(ids, selectedId);
-
-	if (trimmed) {
-		for (const id of matches) {
-			ids.add(id);
-			addAncestors(ids, id);
-			for (const child of directChildren(id)) ids.add(child.id);
-		}
-		searchMatchIds = matches;
-		activeMatchIndex = Math.min(activeMatchIndex, Math.max(matches.size - 1, 0));
-	} else {
-		searchMatchIds = null;
-		activeMatchIndex = 0;
-	}
-
-	return ids;
-}
-
-function kindAllowed(node: KnowledgeMapNode): boolean {
-	if (node.id === selectedId) return true;
-	return kindFilter.has(node.kind);
-}
-
-function searchableText(node: KnowledgeMapNode): string {
-	return `${node.label} ${node.sublabel ?? ""} ${node.searchText ?? ""} ${node.preview ?? ""}`.toLowerCase();
-}
-
-function addFocusNeighborhood(ids: Set<string>, id: string): void {
-	ids.add(id);
-	addAncestors(ids, id);
-	for (const neighbor of relatedIdsForKnowledgeNode(id, rawEdges)) ids.add(neighbor);
-
-	const node = rawNodes.find((item) => item.id === id);
-	if (!node) return;
-	if (node.kind === "entity") {
-		for (const aspect of directChildren(id)) {
-			ids.add(aspect.id);
-			if (depth === "attributes" || depth === "evidence") {
-				for (const attribute of directChildren(aspect.id)) {
-					ids.add(attribute.id);
-					if (depth === "evidence") {
-						for (const evidence of directChildren(attribute.id)) ids.add(evidence.id);
-					}
-				}
-			}
-		}
-		return;
-	}
-	for (const child of directChildren(id)) ids.add(child.id);
-}
-
-function addAncestors(ids: Set<string>, id: string): void {
-	let current = rawNodes.find((node) => node.id === id);
-	while (current?.parentId) {
-		ids.add(current.parentId);
-		current = rawNodes.find((node) => node.id === current?.parentId);
-	}
+	buildSim(rawNodes, rawEdges, forceInit);
 }
 
 function directChildren(id: string): KnowledgeMapNode[] {
@@ -291,13 +325,11 @@ async function loadMap(id: string): Promise<void> {
 			buildSim([], [], true);
 			return;
 		}
-		const graph = buildKnowledgeMapFromConstellation(data, { focusLabel: "Signet", limit: 96 });
+		const graph = buildKnowledgeMapFromConstellation(data, { focusLabel: "Signet", limit: 2000 });
 		rawNodes = graph.nodes;
 		rawEdges = graph.edges;
 		nodeCache = new Map();
 		selectedId = null;
-		searchMatchIds = null;
-		activeMatchIndex = 0;
 		applyVisibleGraph(true);
 	} catch (err) {
 		error = err instanceof Error ? err.message : String(err);
@@ -349,7 +381,12 @@ function loop(): void {
 	}
 	const simActive = sim.isActive();
 	const dragging = input?.getDraggingNode() != null;
-	const spatialChanged = simActive || dragging ? spatial.rebuild(simNodes) : false;
+	const draggingNode = input?.getDraggingNode();
+	if (draggingNode) captureAnchorOffset(draggingNode);
+	const anchoredChanged = syncAnchoredNodes(draggingNode);
+	const spatialChanged =
+		viewportMoving || simActive || dragging || anchoredChanged || renderNeeded ? rebuildSpatial(spatialFrame++ % 3 !== 0) : false;
+	if ((selectedId ?? hoveredId) && (viewportMoving || simActive || spatialChanged)) viewportVersion += 1;
 	if (autoFitPending && simNodes.length > 0 && width > 0 && height > 0) {
 		vp.fitToNodes(simNodes, width, height);
 		autoFitPending = false;
@@ -367,7 +404,7 @@ function loop(): void {
 			selectedId,
 			hoveredId,
 			relatedIds,
-			searchMatchIds,
+			searchMatchIds: null,
 			dimProgress,
 		},
 		nodeMap,
@@ -376,15 +413,14 @@ function loop(): void {
 }
 
 function selectGraphNode(node: GraphCanvasNode | null): void {
-	if (!node) {
-		selectedId = null;
-		relatedIds = new Set();
-		applyVisibleGraph();
+	if (!node || selectedId === node.id) {
+		clearSelection();
 		return;
 	}
 	selectedId = node.id;
-	relatedIds = selectedId ? relatedIdsForKnowledgeNode(selectedId, rawEdges) : new Set();
-	applyVisibleGraph();
+	relatedIds = focusRelatedIds(node.id);
+	if (node.kind === "entity" || node.kind === "aspect") focusNodeNeighborhood(node.id);
+	requestRender();
 }
 
 function selectedNode(): KnowledgeMapNode | null {
@@ -399,6 +435,10 @@ function fitGraph(): void {
 }
 
 function centerGraph(): void {
+	if (selectedId) {
+		centerNode(selectedId);
+		return;
+	}
 	if (simNodes.length === 0) return;
 	let x = 0;
 	let y = 0;
@@ -419,73 +459,194 @@ function zoomBy(factor: number): void {
 
 function selectAndCenter(id: string): void {
 	selectedId = id;
-	relatedIds = relatedIdsForKnowledgeNode(id, rawEdges);
-	applyVisibleGraph();
+	relatedIds = focusRelatedIds(id);
+	const node = nodeMap.get(id);
+	if (node?.kind === "entity" || node?.kind === "aspect") focusNodeNeighborhood(id);
+	else centerNode(id);
+	requestRender();
+}
+
+function focusRelatedIds(id: string): Set<string> {
+	const node = rawNodes.find((item) => item.id === id);
+	if (!node) return new Set();
+	const ids = new Set<string>();
+	ids.add(id);
+	const ancestors = ancestorNodes(node);
+	const entity = node.kind === "entity" ? node : ancestors.find((item) => item.kind === "entity");
+	const aspect = node.kind === "aspect" ? node : ancestors.find((item) => item.kind === "aspect");
+
+	if (entity) {
+		ids.add(entity.id);
+		for (const child of directChildren(entity.id)) ids.add(child.id);
+	}
+	if (aspect) {
+		ids.add(aspect.id);
+		for (const child of directChildren(aspect.id)) ids.add(child.id);
+	}
+	for (const child of directChildren(id)) ids.add(child.id);
+	if (node.kind === "attribute" || node.kind === "memory") {
+		for (const edge of rawEdges) {
+			if (edge.kind !== "supports") continue;
+			if (edge.source === id) ids.add(edge.target);
+			if (edge.target === id) ids.add(edge.source);
+		}
+	}
+	return ids;
+}
+
+function ancestorNodes(node: KnowledgeMapNode): KnowledgeMapNode[] {
+	const ancestors: KnowledgeMapNode[] = [];
+	let current = node.parentId ? rawNodes.find((item) => item.id === node.parentId) : null;
+	while (current) {
+		ancestors.push(current);
+		current = current.parentId ? rawNodes.find((item) => item.id === current?.parentId) : null;
+	}
+	return ancestors;
+}
+
+function clearSelection(): void {
+	const previousId = selectedId;
+	selectedId = null;
+	relatedIds = new Set();
+	if (previousId) zoomOutFromFocus(previousId);
+	requestRender();
+}
+
+function centerNode(id: string): void {
 	const node = nodeMap.get(id);
 	if (!node) return;
 	viewport?.centerOn(node.x, node.y, width, height);
 	requestRender();
 }
 
-function expandSelection(): void {
-	const node = selectedNode();
-	if (!node) return;
-	if (node.kind === "entity" && depth === "entities") depth = "aspects";
-	else if (node.kind === "aspect" && (depth === "entities" || depth === "aspects")) depth = "attributes";
-	else if (node.kind === "attribute") depth = "evidence";
-	applyVisibleGraph();
-	const visible = nodeMap.get(node.id);
-	if (visible) viewport?.centerOn(visible.x, visible.y, width, height);
-	requestRender();
-}
-
-function updateQuery(value: string): void {
-	query = value;
-	applyVisibleGraph();
-	const first = [...(searchMatchIds ?? new Set<string>())][0];
-	if (first) selectAndCenter(first);
-}
-
-function queryInput(event: Event): void {
-	if (!(event.currentTarget instanceof HTMLInputElement)) return;
-	updateQuery(event.currentTarget.value);
-}
-
-function cycleSearch(direction: 1 | -1): void {
-	const matches = [...(searchMatchIds ?? new Set<string>())];
-	if (matches.length === 0) return;
-	activeMatchIndex = (activeMatchIndex + direction + matches.length) % matches.length;
-	selectAndCenter(matches[activeMatchIndex]);
-}
-
-function setDepth(next: GraphDepth): void {
-	depth = next;
-	applyVisibleGraph();
-}
-
-function toggleKind(kind: KnowledgeMapNodeKind): void {
-	const next = new Set(kindFilter);
-	if (next.has(kind)) next.delete(kind);
-	else next.add(kind);
-	kindFilter = next;
-	applyVisibleGraph();
-}
-
-function togglePin(id: string): void {
+function focusNodeNeighborhood(id: string): void {
 	const node = nodeMap.get(id);
 	if (!node) return;
-	const next = new Set(pinnedIds);
-	if (next.has(id)) {
-		next.delete(id);
-		node.fx = null;
-		node.fy = null;
-	} else {
-		next.add(id);
-		node.fx = node.x;
-		node.fy = node.y;
-	}
-	pinnedIds = next;
+	const children = directCanvasChildren(id);
+	arrangeOrbit(node, children);
+	sim.pause();
+	syncAnchoredNodes();
+	rebuildSpatial();
+	const maxZoom = node.kind === "entity" ? ENTITY_FOCUS_ZOOM : ASPECT_FOCUS_ZOOM;
+	viewport?.fitToNodes([node, ...children], width, height, {
+		maxZoom,
+		padding: node.kind === "entity" ? 0.34 : 0.42,
+	});
 	requestRender();
+}
+
+function zoomOutFromFocus(id: string): void {
+	const node = nodeMap.get(id);
+	const vp = viewport;
+	if (!node || !vp) return;
+	if (node.kind === "aspect" && node.parentId) {
+		const parent = nodeMap.get(node.parentId);
+		if (parent) {
+			vp.fitToNodes([parent, ...directCanvasChildren(parent.id)], width, height, {
+				maxZoom: ASPECT_DESELECT_ZOOM,
+				padding: 0.5,
+			});
+			return;
+		}
+	}
+	if (node.kind === "entity") {
+		vp.fitToNodes([node, ...directCanvasChildren(node.id)], width, height, {
+			maxZoom: ENTITY_DESELECT_ZOOM,
+			padding: 0.62,
+		});
+		return;
+	}
+	vp.zoomTo(Math.max(vp.zoom * 0.72, 0.38), width / 2, height / 2);
+}
+
+function directCanvasChildren(id: string): GraphCanvasNode[] {
+	return directChildren(id)
+		.map((child) => nodeMap.get(child.id))
+		.filter((child): child is GraphCanvasNode => child !== undefined);
+}
+
+function arrangeOrbit(parent: GraphCanvasNode, children: GraphCanvasNode[]): void {
+	if (children.length === 0) return;
+	const radius = parent.kind === "entity" ? 210 : 132;
+	const ringStep = parent.kind === "entity" ? 46 : 34;
+	const startAngle = -Math.PI / 2;
+	parent.vx = 0;
+	parent.vy = 0;
+	for (const [index, child] of children.entries()) {
+		const angle = startAngle + (Math.PI * 2 * index) / children.length;
+		const ring = radius + (children.length > 6 ? (index % 2) * ringStep : 0);
+		child.x = parent.x + Math.cos(angle) * ring;
+		child.y = parent.y + Math.sin(angle) * ring;
+		child.vx = 0;
+		child.vy = 0;
+		child.fx = null;
+		child.fy = null;
+		child.anchorDx = child.x - parent.x;
+		child.anchorDy = child.y - parent.y;
+	}
+}
+
+function shouldSimulateNode(node: GraphCanvasNode): boolean {
+	return node.kind === "entity" || node.kind === "aspect";
+}
+
+function shouldAnchorNode(node: GraphCanvasNode): boolean {
+	return node.kind === "attribute" || node.kind === "memory";
+}
+
+function initializeAnchors(nodes: GraphCanvasNode[]): void {
+	for (const node of nodes) {
+		if (!shouldAnchorNode(node) || !node.parentId) continue;
+		const parent = nodeMap.get(node.parentId);
+		if (!parent) continue;
+		node.anchorDx ??= node.x - parent.x;
+		node.anchorDy ??= node.y - parent.y;
+	}
+}
+
+function syncAnchoredNodes(except?: GraphCanvasNode | null): boolean {
+	let changed = false;
+	for (const node of simNodes) {
+		if (!shouldAnchorNode(node) || node === except || !node.parentId) continue;
+		const parent = nodeMap.get(node.parentId);
+		if (!parent) continue;
+		const x = parent.x + (node.anchorDx ?? 0);
+		const y = parent.y + (node.anchorDy ?? 0);
+		if (Math.abs(node.x - x) > 0.05 || Math.abs(node.y - y) > 0.05) {
+			node.x = x;
+			node.y = y;
+			changed = true;
+		}
+	}
+	return changed;
+}
+
+function captureAnchorOffset(node: GraphCanvasNode): void {
+	if (!shouldAnchorNode(node) || !node.parentId) return;
+	const parent = nodeMap.get(node.parentId);
+	if (!parent) return;
+	node.anchorDx = node.x - parent.x;
+	node.anchorDy = node.y - parent.y;
+}
+
+function rebuildSpatial(skipWhenLarge = false): boolean {
+	const vp = viewport;
+	if (skipWhenLarge && simNodes.length > 1000) return false;
+	const zoom = vp?.zoom ?? 1;
+	return spatial.rebuild(simNodes.filter((node) => isNodeInteractiveAtLod(node, zoom, isNodeEmphasized(node))));
+}
+
+function isNodeEmphasized(node: GraphCanvasNode): boolean {
+	return node.id === selectedId || node.id === hoveredId || relatedIds.has(node.id);
+}
+
+function isNodeInteractiveAtLod(node: GraphCanvasNode, zoom: number, emphasized = false): boolean {
+	if (emphasized) return true;
+	if (node.kind === "entity") return true;
+	if (node.kind === "aspect") return zoom >= 0.15;
+	if (node.kind === "attribute") return zoom >= 0.38;
+	if (node.kind === "memory") return zoom >= 0.62;
+	return isNodeVisibleAtLod(node, zoom, emphasized);
 }
 
 function navigateSibling(direction: 1 | -1): void {
@@ -519,38 +680,64 @@ function footerSummary(node: KnowledgeMapNode): string {
 	return node.status ?? "current";
 }
 
-function relationSummary(node: KnowledgeMapNode | null): {
-	parent: KnowledgeMapNode | null;
-	children: KnowledgeMapNode[];
-} {
-	if (!node) return { parent: null, children: [] };
-	return {
-		parent: node.parentId ? (rawNodes.find((item) => item.id === node.parentId) ?? null) : null,
-		children: directChildren(node.id),
-	};
+function parentNode(node: KnowledgeMapNode): KnowledgeMapNode | null {
+	return node.parentId ? (rawNodes.find((item) => item.id === node.parentId) ?? null) : null;
+}
+
+function focusedNode(): KnowledgeMapNode | null {
+	const id = selectedId ?? hoveredId;
+	return id ? (rawNodes.find((node) => node.id === id) ?? null) : null;
+}
+
+function popoverStyle(node: KnowledgeMapNode): string {
+	void viewportVersion;
+	const canvasNode = nodeMap.get(node.id);
+	const vp = viewport;
+	if (!canvasNode || !vp) return "display: none";
+	const screen = vp.worldToScreen(canvasNode.x, canvasNode.y);
+	const gap = 20;
+	const panelWidth = Math.max(260, Math.min(330, width - 32));
+	const panelHeight = 250;
+	const radius = (canvasNode.size * vp.zoom) / 2;
+	const rightSpace = width - (screen.x + radius + gap);
+	const leftSpace = screen.x - radius - gap;
+	const belowSpace = height - (screen.y + radius + gap);
+	const aboveSpace = screen.y - radius - gap;
+
+	let left = screen.x + radius + gap;
+	let top = screen.y - panelHeight / 2;
+	if (rightSpace < panelWidth && leftSpace >= panelWidth) {
+		left = screen.x - radius - gap - panelWidth;
+	} else if (rightSpace < panelWidth && belowSpace >= panelHeight) {
+		left = screen.x - panelWidth / 2;
+		top = screen.y + radius + gap;
+	} else if (rightSpace < panelWidth && aboveSpace > belowSpace) {
+		left = screen.x - panelWidth / 2;
+		top = screen.y - radius - gap - panelHeight;
+	}
+
+	return `left: ${clamp(left, 16, width - panelWidth - 16)}px; top: ${clamp(top, 16, height - panelHeight - 16)}px; width: ${panelWidth}px;`;
+}
+
+function shortId(id: string): string {
+	return id.length > 18 ? `${id.slice(0, 10)}...${id.slice(-5)}` : id;
+}
+
+function clamp(value: number, min: number, max: number): number {
+	return Math.max(min, Math.min(value, max));
 }
 
 function summaryText(): string {
-	const total = rawNodes.length;
 	const visible = simNodes.length;
 	if (loading) return "Loading knowledge map...";
 	if (error) return error;
-	if (query.trim() && searchMatchIds) return `${searchMatchIds.size} matches • ${visible} visible of ${total}`;
-	return `${visible} visible of ${total} curated nodes`;
+	return `${visible} ontology nodes • ${simEdges.length} relationships`;
 }
 
 function keyboard(e: KeyboardEvent): void {
 	const target = e.target as HTMLElement;
 	if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
 	switch (e.key) {
-		case "/":
-			e.preventDefault();
-			document.getElementById("constellation-search")?.focus();
-			break;
-		case "Enter":
-			e.preventDefault();
-			expandSelection();
-			break;
 		case "z":
 		case "Z":
 			fitGraph();
@@ -568,10 +755,7 @@ function keyboard(e: KeyboardEvent): void {
 			zoomBy(1 / 1.3);
 			break;
 		case "Escape":
-			selectedId = null;
-			relatedIds = new Set();
-			applyVisibleGraph();
-			requestRender();
+			clearSelection();
 			break;
 		case "ArrowRight":
 			e.preventDefault();
@@ -614,17 +798,13 @@ onMount(() => {
 			},
 			onNodeClick: selectGraphNode,
 			onNodeDragStart: () => sim.reheat(),
-			onNodeDragEnd: (node) => {
-				node.fx = node.x;
-				node.fy = node.y;
-				pinnedIds = new Set(pinnedIds).add(node.id);
+			onNodeDragEnd: () => {
 				sim.coolDown();
 				requestRender();
 			},
 			onNodeDoubleClick: (node) => {
 				if (!node) return;
-				selectGraphNode(node);
-				expandSelection();
+				selectAndCenter(node.id);
 			},
 			onRequestRender: requestRender,
 		});
@@ -650,75 +830,67 @@ onMount(() => {
 		</div>
 	</div>
 
-	<div class="graph-toolbar">
-		<div class="search-row">
-			<input
-				id="constellation-search"
-				type="search"
-				value={query}
-				placeholder="Search constellation"
-				oninput={queryInput}
-			/>
-			<button type="button" aria-label="Previous match" onclick={() => cycleSearch(-1)}>‹</button>
-			<button type="button" aria-label="Next match" onclick={() => cycleSearch(1)}>›</button>
-		</div>
-		<div class="depth-tabs" aria-label="Constellation depth">
-			{#each DEPTH_OPTIONS as option (option.value)}
-				<button
-					type="button"
-					class:active={depth === option.value}
-					onclick={() => setDepth(option.value)}
-				>
-					{option.label}
-				</button>
-			{/each}
-		</div>
-		<div class="kind-toggles" aria-label="Visible node kinds">
-			{#each FILTERABLE_KINDS as item (item.kind)}
-				<button
-					type="button"
-					class:active={kindFilter.has(item.kind)}
-					onclick={() => toggleKind(item.kind)}
-				>
-					{item.label}
-				</button>
-			{/each}
-		</div>
-	</div>
-
 	<div class="map-controls">
-		<button type="button" onclick={fitGraph}>Fit <kbd>Z</kbd></button>
-		<button type="button" onclick={centerGraph}>Center <kbd>C</kbd></button>
+		<button type="button" onclick={fitGraph}><span>Fit</span><kbd>Z</kbd></button>
+		<button type="button" onclick={centerGraph}><span>Center</span><kbd>C</kbd></button>
 		<div class="zoom-row">
 			<span>{zoomDisplay}%</span>
 			<button type="button" aria-label="Zoom out" onclick={() => zoomBy(1 / 1.3)}>-</button>
 			<button type="button" aria-label="Zoom in" onclick={() => zoomBy(1.3)}>+</button>
 		</div>
 		<div class="legend-shell">
-			<button type="button" class="legend-toggle" onclick={() => (legendOpen = !legendOpen)}>› Legend</button>
+			<button
+				type="button"
+				class="legend-toggle"
+				class:legend-toggle-open={legendOpen}
+				aria-expanded={legendOpen}
+				onclick={() => (legendOpen = !legendOpen)}
+			>
+				<span class="legend-chevron">›</span>
+				<span>Legend</span>
+			</button>
 			{#if legendOpen}
 				<div class="legend-list">
-					{#each LEGEND_ITEMS as item (item.kind)}
-						<div class="legend-item">
-							<span class="legend-dot" style="background: {KNOWLEDGE_NODE_COLORS[item.kind]}"></span>
-							<span>{item.label}</span>
+					<div class="legend-section">
+						<div class="legend-heading">Entity Type</div>
+						<div class="legend-grid">
+							{#each entityLegendItems as item (item.type)}
+								<div class="legend-item" title={`${item.count} visible`}>
+									<span class="legend-dot" style="background: {entityColor(item.type).color}"></span>
+									<span>{item.label}</span>
+								</div>
+							{/each}
+							{#if entityLegendItems.length === 0}
+								<div class="legend-empty">No entities visible</div>
+							{/if}
 						</div>
-					{/each}
+					</div>
+					<div class="legend-section legend-structure">
+						<div class="legend-heading">Structure</div>
+						{#each STRUCTURE_LEGEND as item (item.kind)}
+							<div class="legend-item">
+								<span class="legend-dot" style="background: {KNOWLEDGE_NODE_COLORS[item.kind]}"></span>
+								<span>{item.label}</span>
+							</div>
+						{/each}
+					</div>
 				</div>
 			{/if}
 		</div>
 	</div>
 
-	{#if cardNode}
-		<aside class="node-inspector">
-			<div class="node-card-kind">{nodeKindLabel(cardNode.kind)} {cardNode.sublabel ? `• ${cardNode.sublabel}` : ""}</div>
-			<div class="node-card-title">{cardNode.label}</div>
-			{#if cardNode.preview}
-				<div class="node-card-preview">{cardNode.preview}</div>
+	{#if popoverNode}
+		<div class="node-popover" class:selected={selectedId === popoverNode.id} style={popoverStyle(popoverNode)}>
+			<div class="node-card-kind">
+				{nodeKindLabel(popoverNode.kind)}{popoverNode.sublabel ? ` • ${popoverNode.sublabel}` : ""}
+			</div>
+			<div class="node-card-title">{popoverNode.label}</div>
+			{#if popoverNode.preview}
+				<div class="node-card-preview">{popoverNode.preview}</div>
 			{/if}
-			{#if cardNode.details?.length}
+			{#if popoverNode.details?.length}
 				<div class="node-detail-list">
-					{#each cardNode.details as row (`${row.label}:${row.value}`)}
+					{#each popoverNode.details.slice(0, 4) as row (`${row.label}:${row.value}`)}
 						<div class="node-detail-row">
 							<span>{row.label}</span>
 							<strong>{row.value}</strong>
@@ -726,31 +898,24 @@ onMount(() => {
 					{/each}
 				</div>
 			{/if}
-			<div class="inspector-actions">
-				<button type="button" onclick={expandSelection}>Expand</button>
-				<button type="button" onclick={() => togglePin(cardNode.id)}>
-					{pinnedIds.has(cardNode.id) ? "Unpin" : "Pin"}
-				</button>
-				{#if selectedRelations.parent}
-					<button type="button" onclick={() => selectedRelations.parent && selectAndCenter(selectedRelations.parent.id)}>Parent</button>
+			<div class="popover-actions">
+				{#if parentNode(popoverNode)}
+					<button type="button" onclick={() => popoverNode.parentId && selectAndCenter(popoverNode.parentId)}>
+						Parent
+					</button>
 				{/if}
+				{#each directChildren(popoverNode.id).slice(0, 3) as child (child.id)}
+					<button type="button" onclick={() => selectAndCenter(child.id)}>
+						<span>{nodeKindLabel(child.kind)}</span>
+						<strong>{child.label}</strong>
+					</button>
+				{/each}
 			</div>
-			{#if selectedRelations.children.length}
-				<div class="relation-list">
-					<div class="relation-heading">Children</div>
-					{#each selectedRelations.children.slice(0, 8) as child (child.id)}
-						<button type="button" onclick={() => selectAndCenter(child.id)}>
-							<span>{nodeKindLabel(child.kind)}</span>
-							<strong>{child.label}</strong>
-						</button>
-					{/each}
-				</div>
-			{/if}
 			<div class="node-card-footer">
-				<span>{footerSummary(cardNode)}</span>
-				<code>{cardNode.id.length > 18 ? `${cardNode.id.slice(0, 10)}...${cardNode.id.slice(-5)}` : cardNode.id}</code>
+				<span>{footerSummary(popoverNode)}</span>
+				<code>{shortId(popoverNode.id)}</code>
 			</div>
-		</aside>
+		</div>
 	{/if}
 </div>
 
@@ -760,25 +925,34 @@ onMount(() => {
 		height: 100%;
 		min-height: 0;
 		overflow: hidden;
-		background:
-			radial-gradient(circle at 50% 105%, rgba(14, 116, 144, 0.36), transparent 34%),
-			radial-gradient(circle at 42% 72%, rgba(37, 99, 235, 0.22), transparent 28%),
-			linear-gradient(180deg, #02040a 0%, #040712 55%, #071225 100%);
+		background: #02040a;
 	}
 
 	.knowledge-map-zone::before {
 		position: absolute;
 		inset: 0;
+		z-index: 0;
 		content: "";
-		background-image: radial-gradient(rgba(96, 165, 250, 0.42) 1px, transparent 1px);
-		background-size: 36px 36px;
-		opacity: 0.38;
+		background: url("/constellation-assets/background.png") center / cover no-repeat;
+		opacity: 0.26;
+		pointer-events: none;
+	}
+
+	.knowledge-map-zone::after {
+		position: absolute;
+		inset: 0;
+		z-index: 0;
+		content: "";
+		background:
+			linear-gradient(90deg, rgba(2, 6, 18, 0.72), rgba(2, 6, 18, 0.28) 24%, rgba(2, 6, 18, 0.28) 70%, rgba(2, 6, 18, 0.7)),
+			linear-gradient(180deg, rgba(2, 6, 18, 0.58), rgba(2, 6, 18, 0.36) 40%, rgba(2, 6, 18, 0.72));
 		pointer-events: none;
 	}
 
 	.graph-canvas {
 		position: absolute;
 		inset: 0;
+		z-index: 1;
 		display: block;
 		width: 100%;
 		height: 100%;
@@ -814,247 +988,273 @@ onMount(() => {
 
 	.map-controls {
 		position: absolute;
-		left: 22px;
-		bottom: 22px;
+		left: 24px;
+		bottom: 24px;
 		z-index: 6;
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
+		gap: 9px;
 		align-items: flex-start;
-	}
-
-	.graph-toolbar {
-		position: absolute;
-		top: 18px;
-		right: 22px;
-		z-index: 7;
-		display: grid;
-		gap: 8px;
-		width: min(420px, calc(100% - 360px));
-	}
-
-	.search-row,
-	.depth-tabs,
-	.kind-toggles {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
-
-	.search-row input {
-		min-width: 0;
-		flex: 1;
-		height: 36px;
-		padding: 0 12px;
-		border: 1px solid rgba(71, 85, 105, 0.78);
-		border-radius: 6px;
-		background: rgba(15, 23, 42, 0.76);
-		color: rgba(241, 245, 249, 0.92);
-		font-family: var(--font-body);
-		font-size: 12px;
-		box-shadow: 0 18px 44px rgba(0, 0, 0, 0.3);
-		backdrop-filter: blur(14px);
-	}
-
-	.search-row input:focus {
-		outline: none;
-		border-color: rgba(125, 211, 252, 0.8);
-		background: rgba(15, 23, 42, 0.9);
+		width: 276px;
 	}
 
 	.map-controls button,
 	.zoom-row,
-	.legend-list,
-	.node-inspector,
-	.graph-toolbar button {
-		border: 1px solid rgba(71, 85, 105, 0.78);
-		background: rgba(15, 23, 42, 0.76);
-		box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
-		backdrop-filter: blur(14px);
+	.legend-list {
+		border: 0;
+		background: url("/constellation-assets/button.png") center / 100% 100% no-repeat;
+		background-color: transparent;
 	}
 
 	.map-controls button,
-	.graph-toolbar button,
-	.inspector-actions button,
-	.relation-list button {
+	.popover-actions button {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
 		gap: 8px;
-		height: 36px;
-		padding: 0 14px;
-		border-radius: 6px;
+		height: 40px;
+		padding: 0 18px;
+		border-radius: 0;
 		font-family: var(--font-body);
-		font-size: 12px;
+		font-size: 11px;
 		color: rgba(241, 245, 249, 0.92);
 		cursor: pointer;
 	}
 
 	.map-controls button:hover,
-	.graph-toolbar button:hover,
-	.inspector-actions button:hover,
-	.relation-list button:hover,
-	.graph-toolbar button.active {
+	.popover-actions button:hover {
 		border-color: rgba(96, 165, 250, 0.78);
-		background: rgba(30, 41, 59, 0.88);
+		color: rgba(255, 255, 255, 0.98);
 	}
 
 	.map-controls button {
-		min-width: 96px;
-		border-radius: 18px;
+		width: 132px;
 		justify-content: flex-start;
-		gap: 12px;
+		gap: 14px;
+		letter-spacing: 0.01em;
 	}
 
-	.search-row button {
-		width: 36px;
-		padding: 0;
-	}
-
-	.depth-tabs button,
-	.kind-toggles button {
-		height: 30px;
-		font-family: var(--font-mono);
-		font-size: 10px;
-		letter-spacing: 0.07em;
-		text-transform: uppercase;
+	.map-controls button span {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	kbd {
-		padding: 1px 6px;
+		margin-left: auto;
+		min-width: 24px;
+		padding: 2px 6px;
 		border-radius: 5px;
 		border: 1px solid rgba(71, 85, 105, 0.72);
 		font-family: var(--font-mono);
-		font-size: 10px;
+		font-size: 9px;
+		line-height: 1.4;
+		text-align: center;
 		color: rgba(148, 163, 184, 0.82);
 	}
 
 	.zoom-row {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		height: 38px;
-		padding: 0 10px 0 15px;
-		border-radius: 19px;
+		gap: 7px;
+		width: 158px;
+		height: 42px;
+		padding: 0 10px 0 18px;
 		font-family: var(--font-body);
-		font-size: 12px;
+		font-size: 11px;
 		color: rgba(241, 245, 249, 0.9);
 	}
 
+	.zoom-row > span {
+		width: 48px;
+		text-align: left;
+	}
+
 	.zoom-row button {
-		min-width: 28px;
-		width: 28px;
-		height: 28px;
+		min-width: 30px;
+		width: 30px;
+		height: 30px;
 		justify-content: center;
 		padding: 0;
-		border-radius: 8px;
+		font-size: 12px;
 	}
 
 	.legend-shell {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 8px;
+		width: 100%;
 	}
 
 	.legend-toggle {
-		min-width: 168px !important;
+		width: 250px !important;
 		justify-content: flex-start;
-		border-radius: 5px !important;
+	}
+
+	.legend-chevron {
+		display: inline-flex;
+		width: 10px;
+		transition: transform 120ms ease;
+	}
+
+	.legend-toggle-open .legend-chevron {
+		transform: rotate(90deg);
 	}
 
 	.legend-list {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
-		padding: 10px 12px;
-		border-radius: 6px;
+		gap: 12px;
+		width: 250px;
+		min-height: 248px;
+		padding: 26px 30px 24px 34px;
+		box-sizing: border-box;
+		border: 0;
+		background: url("/constellation-assets/large-card.png") center / 100% 100% no-repeat;
+		background-color: transparent;
 	}
 
-	.legend-item {
+	.legend-section {
 		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-family: var(--font-body);
-		font-size: 10px;
-		letter-spacing: 0.07em;
-		color: rgba(203, 213, 225, 0.72);
+		flex-direction: column;
+		gap: 6px;
+		min-width: 0;
+	}
+
+	.legend-heading {
+		font-family: var(--font-mono);
+		font-size: 7px;
+		letter-spacing: 0.18em;
+		line-height: 1.4;
+		color: rgba(125, 211, 252, 0.82);
 		text-transform: uppercase;
 	}
 
-	.legend-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 999px;
-		box-shadow: 0 0 14px currentColor;
+	.legend-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		column-gap: 12px;
+		row-gap: 2px;
 	}
 
-	.node-inspector {
+	.legend-item {
+		display: grid;
+		grid-template-columns: 14px minmax(0, 1fr);
+		align-items: center;
+		gap: 8px;
+		min-height: 20px;
+		padding: 0 4px;
+		font-family: var(--font-body);
+		font-size: 7px;
+		letter-spacing: 0.14em;
+		color: rgba(203, 213, 225, 0.82);
+		text-transform: uppercase;
+	}
+
+	.legend-item span:last-child {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.legend-empty {
+		grid-column: 1 / -1;
+		min-height: 20px;
+		padding: 0 4px;
+		font-family: var(--font-body);
+		font-size: 7px;
+		letter-spacing: 0.14em;
+		color: rgba(148, 163, 184, 0.62);
+		text-transform: uppercase;
+	}
+
+	.legend-structure .legend-item + .legend-item {
+		border-top: 1px solid rgba(96, 165, 250, 0.1);
+	}
+
+	.legend-dot {
+		flex: 0 0 auto;
+		justify-self: center;
+		width: 7px;
+		height: 7px;
+		border-radius: 2px;
+		transform: rotate(45deg);
+		border: 1px solid rgba(226, 232, 240, 0.46);
+	}
+
+	.node-popover {
 		position: absolute;
-		top: 154px;
-		right: 22px;
-		bottom: 22px;
-		width: min(360px, calc(100% - 44px));
 		z-index: 8;
 		display: flex;
 		flex-direction: column;
-		padding: 16px 18px 12px;
-		border-radius: 8px;
-		overflow: hidden;
+		max-height: min(350px, calc(100% - 32px));
+		padding: 28px 38px 26px;
+		border: 0;
+		background: url("/constellation-assets/large-card.png") center / 100% 100% no-repeat;
+		background-color: transparent;
+		overflow: auto;
 		color: rgba(241, 245, 249, 0.94);
+		pointer-events: auto;
+	}
+
+	.node-popover.selected {
+		background: url("/constellation-assets/large-card.png") center / 100% 100% no-repeat;
 	}
 
 	.node-card-kind {
 		font-family: var(--font-mono);
-		font-size: 10px;
-		letter-spacing: 0.09em;
+		font-size: 9px;
+		letter-spacing: 0.16em;
 		text-transform: uppercase;
-		color: rgba(96, 165, 250, 0.82);
+		color: rgba(96, 165, 250, 0.96);
 	}
 
 	.node-card-title {
-		margin-top: 8px;
-		font-family: var(--font-body);
-		font-size: 16px;
-		line-height: 1.25;
+		margin-top: 10px;
+		font-family: var(--font-heading);
+		font-size: 22px;
+		line-height: 1.05;
+		letter-spacing: 0.02em;
+		color: rgba(241, 245, 249, 0.94);
 	}
 
 	.node-card-preview {
-		margin-top: 12px;
-		max-height: 120px;
+		margin-top: 8px;
+		max-height: 54px;
 		overflow: auto;
 		font-family: var(--font-body);
-		font-size: 12px;
+		font-size: 11px;
 		line-height: 1.45;
-		color: rgba(203, 213, 225, 0.74);
+		color: rgba(203, 213, 225, 0.82);
 	}
 
 	.node-detail-list {
 		display: grid;
 		gap: 8px;
-		margin-top: 14px;
-		padding-top: 12px;
-		border-top: 1px solid rgba(71, 85, 105, 0.46);
+		margin-top: 12px;
+		padding-top: 10px;
 		overflow: auto;
 	}
 
 	.node-detail-row {
 		display: grid;
-		grid-template-columns: 86px minmax(0, 1fr);
+		grid-template-columns: 92px minmax(0, 1fr);
 		gap: 10px;
 		align-items: baseline;
 		font-family: var(--font-body);
-		font-size: 11px;
+		font-size: 10px;
 		line-height: 1.35;
 	}
 
 	.node-detail-row span,
-	.relation-heading,
-	.relation-list button span {
+	.popover-actions button span {
 		font-family: var(--font-mono);
-		font-size: 9px;
+		font-size: 8px;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		color: rgba(125, 211, 252, 0.6);
+		color: rgba(125, 211, 252, 0.78);
 	}
 
 	.node-detail-row strong {
@@ -1062,51 +1262,33 @@ onMount(() => {
 		max-height: 48px;
 		overflow: hidden;
 		font-weight: 500;
-		color: rgba(226, 232, 240, 0.84);
+		color: rgba(226, 232, 240, 0.9);
 	}
 
-	.inspector-actions {
+	.popover-actions {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 8px;
-		margin-top: 14px;
+		margin-top: 12px;
 	}
 
-	.inspector-actions button {
-		min-width: 84px;
-		border: 1px solid rgba(71, 85, 105, 0.78);
-		background: rgba(15, 23, 42, 0.72);
+	.popover-actions button {
+		min-width: 0;
+		height: 34px;
+		max-width: 100%;
+		border: 0;
+		background: url("/constellation-assets/button.png") center / 100% 100% no-repeat;
+		background-color: transparent;
 	}
 
-	.relation-list {
-		display: grid;
-		gap: 7px;
-		margin-top: 14px;
-		padding-top: 12px;
-		border-top: 1px solid rgba(71, 85, 105, 0.46);
-		overflow: auto;
-	}
-
-	.relation-list button {
-		display: grid;
-		grid-template-columns: 60px minmax(0, 1fr);
-		justify-content: initial;
-		height: auto;
-		min-height: 34px;
-		padding: 8px 10px;
-		border: 1px solid rgba(71, 85, 105, 0.62);
-		background: rgba(15, 23, 42, 0.48);
-		text-align: left;
-	}
-
-	.relation-list button strong {
+	.popover-actions button strong {
 		min-width: 0;
 		overflow: hidden;
-		font-size: 11px;
+		font-size: 10px;
 		font-weight: 500;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		color: rgba(226, 232, 240, 0.84);
+		color: rgba(226, 232, 240, 0.9);
 	}
 
 	.node-card-footer {
@@ -1115,9 +1297,8 @@ onMount(() => {
 		gap: 14px;
 		margin-top: auto;
 		padding-top: 10px;
-		border-top: 1px solid rgba(71, 85, 105, 0.56);
 		font-family: var(--font-mono);
-		font-size: 10px;
+		font-size: 9px;
 		color: rgba(148, 163, 184, 0.78);
 	}
 
@@ -1126,21 +1307,10 @@ onMount(() => {
 		color: rgba(148, 163, 184, 0.86);
 	}
 
-	@media (max-width: 900px) {
-		.graph-toolbar {
-			left: 20px;
-			right: 20px;
-			width: auto;
-			top: 68px;
-		}
-
-		.node-inspector {
-			top: auto;
-			left: 20px;
-			right: 20px;
-			bottom: 20px;
-			width: auto;
-			max-height: 42%;
+	@media (max-width: 700px) {
+		.map-controls {
+			left: 14px;
+			bottom: 14px;
 		}
 	}
 </style>

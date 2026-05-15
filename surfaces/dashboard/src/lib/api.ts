@@ -231,6 +231,77 @@ export interface SessionBypassResponse {
 }
 
 // ============================================================================
+// Database Diagnostics Types
+// ============================================================================
+
+export type DatabaseSchemaGroup = "core" | "provenance" | "runtime" | "internal" | "other";
+
+export interface DatabaseColumnInfo {
+	readonly cid: number;
+	readonly name: string;
+	readonly type: string;
+	readonly notNull: boolean;
+	readonly defaultValue: unknown;
+	readonly primaryKey: boolean;
+}
+
+export interface DatabaseIndexColumnInfo {
+	readonly seqno: number;
+	readonly cid: number;
+	readonly name: string;
+}
+
+export interface DatabaseIndexInfo {
+	readonly name: string;
+	readonly unique: boolean;
+	readonly origin: string;
+	readonly partial: boolean;
+	readonly columns: readonly DatabaseIndexColumnInfo[];
+}
+
+export interface DatabaseForeignKeyInfo {
+	readonly id: number;
+	readonly seq: number;
+	readonly table: string;
+	readonly from: string;
+	readonly to: string;
+	readonly onUpdate: string;
+	readonly onDelete: string;
+	readonly match: string;
+}
+
+export interface DatabaseTableInfo {
+	readonly name: string;
+	readonly group: DatabaseSchemaGroup;
+	readonly kind: string;
+	readonly rowCount: number | null;
+	readonly sampleAllowed: boolean;
+	readonly sampleBlockedReason?: string;
+	readonly columns: readonly DatabaseColumnInfo[];
+	readonly indexes: readonly DatabaseIndexInfo[];
+	readonly foreignKeys: readonly DatabaseForeignKeyInfo[];
+	readonly sql: string | null;
+}
+
+export interface DatabaseSchemaResponse {
+	readonly generatedAt: string;
+	readonly tables: readonly DatabaseTableInfo[];
+	readonly groups: Record<DatabaseSchemaGroup, number>;
+	readonly error?: string;
+}
+
+export interface DatabaseTableSampleResponse {
+	readonly table: string;
+	readonly columns: readonly string[];
+	readonly rows: readonly Record<string, unknown>[];
+	readonly limit: number;
+	readonly offset: number;
+	readonly rowCount: number | null;
+	readonly hasMore: boolean;
+	readonly error?: string;
+}
+
+// ============================================================================
 // API Functions
 // ============================================================================
 
@@ -260,6 +331,71 @@ export async function fetchSessions(): Promise<SessionListResponse> {
 		return await response.json();
 	} catch {
 		return { sessions: [], count: 0 };
+	}
+}
+
+export async function getDatabaseSchema(): Promise<DatabaseSchemaResponse | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/diagnostics/database/schema`);
+		if (!response.ok) {
+			return {
+				generatedAt: new Date().toISOString(),
+				tables: [],
+				groups: { core: 0, provenance: 0, runtime: 0, internal: 0, other: 0 },
+				error:
+					response.status === 404
+						? "Database diagnostics route is not available on the running daemon. Restart the daemon from this branch."
+						: `Database diagnostics request failed with HTTP ${response.status}.`,
+			};
+		}
+		return await response.json();
+	} catch (err) {
+		return {
+			generatedAt: new Date().toISOString(),
+			tables: [],
+			groups: { core: 0, provenance: 0, runtime: 0, internal: 0, other: 0 },
+			error: err instanceof Error ? err.message : "Could not reach daemon.",
+		};
+	}
+}
+
+export async function getDatabaseTableSample(
+	table: string,
+	options: { limit?: number; offset?: number } = {},
+): Promise<DatabaseTableSampleResponse> {
+	try {
+		const params = new URLSearchParams();
+		if (typeof options.limit === "number") params.set("limit", String(options.limit));
+		if (typeof options.offset === "number") params.set("offset", String(options.offset));
+		const suffix = params.toString();
+		const response = await fetch(
+			`${API_BASE}/api/diagnostics/database/tables/${encodeURIComponent(table)}/sample${suffix ? `?${suffix}` : ""}`,
+		);
+		const body = (await response.json().catch(() => ({}))) as Partial<DatabaseTableSampleResponse>;
+		if (!response.ok) {
+			return {
+				table,
+				columns: [],
+				rows: [],
+				limit: options.limit ?? 25,
+				offset: options.offset ?? 0,
+				rowCount: null,
+				hasMore: false,
+				error: typeof body.error === "string" ? body.error : "Failed to fetch table sample",
+			};
+		}
+		return body as DatabaseTableSampleResponse;
+	} catch (err) {
+		return {
+			table,
+			columns: [],
+			rows: [],
+			limit: options.limit ?? 25,
+			offset: options.offset ?? 0,
+			rowCount: null,
+			hasMore: false,
+			error: err instanceof Error ? err.message : "Failed to fetch table sample",
+		};
 	}
 }
 

@@ -121,6 +121,8 @@ export class GraphInputHandler {
 	private onMouseUp(): void {
 		if (this.draggingNode) {
 			const node = this.draggingNode;
+			node.fx = null;
+			node.fy = null;
 			this.draggingNode = null;
 			this.callbacks.onNodeDragEnd(node);
 			this.canvas.style.cursor = this.currentHoverId ? "grab" : "default";
@@ -156,8 +158,15 @@ export class GraphInputHandler {
 		if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
 			this.viewport.pan(-e.deltaX, 0);
 		} else {
-			this.viewport.zoomImmediate(e.deltaY > 0 ? 0.94 : 1.06, point.x, point.y);
+			const delta = normalizeWheelDelta(e);
+			this.viewport.zoomImmediate(Math.max(0.86, Math.min(1.16, Math.exp(-delta * 0.0011))), point.x, point.y);
 		}
 		this.callbacks.onRequestRender();
 	}
+}
+
+function normalizeWheelDelta(e: WheelEvent): number {
+	if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) return e.deltaY * 16;
+	if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) return e.deltaY * 400;
+	return e.deltaY;
 }
