@@ -70,8 +70,8 @@ interface DiscoveredFile {
 async function* walkDir(
 	dir: string,
 	ignorePatterns: readonly string[],
-	relativePrefix: string = "",
-	dot: boolean = false,
+	relativePrefix = "",
+	dot = false,
 ): AsyncGenerator<string> {
 	let entries: ReturnType<typeof readdirSync>;
 	try {
@@ -82,7 +82,8 @@ async function* walkDir(
 	for (const entry of entries) {
 		if (!dot && entry.name.startsWith(".")) continue;
 		const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
-		if (ignorePatterns.some((p) => entry.name === p || relativePath === p || relativePath.startsWith(`${p}/`))) continue;
+		if (ignorePatterns.some((p) => entry.name === p || relativePath === p || relativePath.startsWith(`${p}/`)))
+			continue;
 		const fullPath = join(dir, entry.name);
 		if (entry.isDirectory()) {
 			yield* walkDir(fullPath, ignorePatterns, relativePath, dot);
@@ -95,6 +96,19 @@ async function* walkDir(
 export function matchGlob(pattern: string, path: string): boolean {
 	const regex = globToRegex(pattern);
 	return regex.test(path);
+}
+
+function hasDotSegment(path: string): boolean {
+	return path.split("/").some((part) => part.startsWith("."));
+}
+
+function patternAllowsDotSegment(pattern: string): boolean {
+	return pattern.split("/").some((part) => part.startsWith("."));
+}
+
+export function matchConnectorPattern(pattern: string, path: string): boolean {
+	if (hasDotSegment(path) && !patternAllowsDotSegment(pattern)) return false;
+	return matchGlob(pattern, path);
 }
 
 export function globToRegex(pattern: string): RegExp {
@@ -126,7 +140,7 @@ async function discoverFiles(settings: FilesystemSettings): Promise<readonly Dis
 	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns, "", wantsDot)) {
 		const rel = relative(resolvedRoot, absolutePath);
 		if (!rel || rel.startsWith("..")) continue;
-		const matches = patterns.some((p) => matchGlob(p, rel));
+		const matches = patterns.some((p) => matchConnectorPattern(p, rel));
 		if (!matches) continue;
 		if (seen.has(rel)) continue;
 

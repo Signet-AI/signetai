@@ -258,8 +258,26 @@ json_value() {
   local name field
   name="$(printf '%s' "$key" | sed 's/.*\."//;s/".*//')"
   field="$(printf '%s' "$key" | sed 's/.*\.\([a-zA-Z0-9_]*\)$/\1/')"
-  # Find the line with the component key, then scan forward for the field
-  sed -n "/\"${name}\"/,/}/p" "$file" | sed -n "s/^[[:space:]]*\"${field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -1
+  # Parse only first-level fields in the component object, ignoring nested metadata.
+  awk -v name="$name" -v field="$field" '
+    $0 ~ "\"" name "\"[[:space:]]*:" { in_component = 1; depth = 0 }
+    in_component {
+      line = $0
+      if (depth == 1) {
+        prefix = "^[[:space:]]*\"" field "\"[[:space:]]*:[[:space:]]*\""
+        if (line ~ prefix) {
+          sub(prefix, "", line)
+          sub("\".*", "", line)
+          print line
+          exit
+        }
+      }
+      opens = gsub(/\{/, "{", line)
+      closes = gsub(/\}/, "}", line)
+      depth += opens - closes
+      if (depth <= 0 && closes > 0) exit
+    }
+  ' "$file"
 }
 
 get_manifest_value() {

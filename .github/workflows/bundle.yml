@@ -354,8 +354,16 @@ jobs:
           bun run build:main
           npx electron-builder --mac dmg --${{ matrix.electron_arch }} --publish never
           mkdir -p "$ARTIFACT_DIR"
-          cp release/*.dmg "$ARTIFACT_DIR/" 2>/dev/null || true
-          cp release/*.zip "$ARTIFACT_DIR/" 2>/dev/null || true
+          if ! ls release/*.dmg >/dev/null 2>&1; then
+            echo "::error::Electron build produced no macOS DMG"
+            exit 1
+          fi
+          if ! ls release/*.zip >/dev/null 2>&1; then
+            echo "::error::Electron build produced no macOS zip"
+            exit 1
+          fi
+          cp release/*.dmg "$ARTIFACT_DIR/"
+          cp release/*.zip "$ARTIFACT_DIR/"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

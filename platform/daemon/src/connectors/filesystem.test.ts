@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { matchGlob } from "./filesystem";
+import { matchConnectorPattern, matchGlob } from "./filesystem";
 
 describe("globToRegex", () => {
 	test("**/*.md matches root-level files", () => {
@@ -28,6 +28,13 @@ describe("globToRegex", () => {
 	test("dotfiles match when explicitly in pattern", () => {
 		expect(matchGlob("**/*.md", ".agents/SOUL.md")).toBe(true);
 		expect(matchGlob("**/*.md", ".github/CONTRIBUTING.md")).toBe(true);
+	});
+
+	test("connector matching only includes dot paths for explicit dot patterns", () => {
+		expect(matchConnectorPattern("**/*.md", ".agents/SOUL.md")).toBe(false);
+		expect(matchConnectorPattern("**/*.md", ".github/CONTRIBUTING.md")).toBe(false);
+		expect(matchConnectorPattern(".github/*.md", ".github/CONTRIBUTING.md")).toBe(true);
+		expect(matchConnectorPattern("docs/.private/*.md", "docs/.private/notes.md")).toBe(true);
 	});
 
 	test("*.md does not match .env", () => {

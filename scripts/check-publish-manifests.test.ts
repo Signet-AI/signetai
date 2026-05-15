@@ -59,6 +59,27 @@ describe("check-publish-manifests", () => {
 		expect(updater).toContain('plugin_key="plugin-$(basename "$plugin_dir")"');
 	});
 
+	test("keeps bundle manifest fallback parser scoped to component fields", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			expect(script).toContain("ignoring nested metadata");
+			expect(script).toContain("if (depth == 1)");
+		}
+	});
+
+	test("fails macOS desktop bundle builds when expected artifacts are missing", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain("Electron build produced no macOS DMG");
+		expect(workflow).toContain("Electron build produced no macOS zip");
+		expect(workflow).not.toContain('cp release/*.dmg "$ARTIFACT_DIR/" 2>/dev/null || true');
+		expect(workflow).not.toContain('cp release/*.zip "$ARTIFACT_DIR/" 2>/dev/null || true');
+	});
+
 	test("keeps Hermes plugin assets in the signetai publish package", () => {
 		const root = join(import.meta.dir, "..");
 		const manifest = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {
