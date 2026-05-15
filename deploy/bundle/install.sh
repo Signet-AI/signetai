@@ -593,9 +593,6 @@ done
   fi
   cleanup_legacy_plugin_paths
 
-  cp "${tmpdir}/manifest.json" "$SIGNET_INSTALL_DIR/manifest.json"
-  echo ""
-
   # Verify critical entrypoints exist before declaring success
   verify_entrypoints
 
@@ -603,7 +600,6 @@ done
   setup_path
 
   VERSION_VAL="$(get_manifest_value '.version' 2>/dev/null || echo "unknown")"
-  echo "$VERSION_VAL" > "$SIGNET_INSTALL_DIR/VERSION"
 
   echo ""
   printf "${BOLD}  ──────────────────────────────────────${NC}\n"
@@ -630,6 +626,9 @@ done
       warn "Daemon start failed — run 'signet daemon start' manually"
     fi
   fi
+
+  cp "${tmpdir}/manifest.json" "$SIGNET_INSTALL_DIR/manifest.json"
+  echo "$VERSION_VAL" > "$SIGNET_INSTALL_DIR/VERSION"
 
   echo ""
   printf "${GREEN}${BOLD}  ✓ Signet v${VERSION_VAL} installed!${NC}\n"

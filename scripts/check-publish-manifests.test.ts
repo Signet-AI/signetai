@@ -131,6 +131,29 @@ describe("check-publish-manifests", () => {
 		expect(updater).not.toContain('curl -fsSL "${DOWNLOAD_BASE}/install.sh" |');
 	});
 
+	test("promotes installer manifest only after required install steps", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const manifestCopy = installer.indexOf('cp "${tmpdir}/manifest.json" "$SIGNET_INSTALL_DIR/manifest.json"');
+
+		expect(manifestCopy).toBeGreaterThan(installer.indexOf("verify_entrypoints"));
+		expect(manifestCopy).toBeGreaterThan(installer.indexOf("generate_wrappers"));
+		expect(manifestCopy).toBeGreaterThan(installer.indexOf("setup_path"));
+		expect(manifestCopy).toBeLessThan(installer.indexOf("Signet v${VERSION_VAL} installed"));
+	});
+
+	test("refreshes bundle wrappers and helper scripts during updates", () => {
+		const root = join(import.meta.dir, "..");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+		const refresh = updater.indexOf("refresh_wrappers");
+		const manifestCopy = updater.indexOf('cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"');
+
+		expect(updater).toContain("refresh_wrappers()");
+		expect(updater).toContain('${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh"');
+		expect(updater).toContain('${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh"');
+		expect(refresh).toBeLessThan(manifestCopy);
+	});
+
 	test("does not advertise unsupported versioned bundle installs", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");

@@ -263,6 +263,70 @@ cleanup_legacy_plugin_paths() {
   done
 }
 
+refresh_wrappers() {
+  local bindir="$SIGNET_INSTALL_DIR/bin"
+  mkdir -p "$bindir"
+
+  cat > "${bindir}/signet" << 'WRAPPER'
+#!/usr/bin/env bash
+SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export SIGNET_DIR
+export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"
+case "$(uname -s)" in
+  Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+  Darwin) export DYLD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
+esac
+exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" "$@"
+WRAPPER
+  chmod +x "${bindir}/signet"
+
+  cat > "${bindir}/signet-daemon" << 'WRAPPER'
+#!/usr/bin/env bash
+SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export SIGNET_DIR
+export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"
+case "$(uname -s)" in
+  Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+  Darwin) export DYLD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
+esac
+exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/daemon-js/daemon.js" "$@"
+WRAPPER
+  chmod +x "${bindir}/signet-daemon"
+
+  cat > "${bindir}/signet-mcp" << 'WRAPPER'
+#!/usr/bin/env bash
+SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export SIGNET_DIR
+export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"
+case "$(uname -s)" in
+  Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+  Darwin) export DYLD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
+esac
+exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" mcp "$@"
+WRAPPER
+  chmod +x "${bindir}/signet-mcp"
+
+  curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh"
+  chmod +x "${bindir}/_uninstall.sh"
+  cat > "${bindir}/signet-uninstall" << WRAPPER
+#!/usr/bin/env bash
+SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export SIGNET_INSTALL_DIR
+exec "\$SIGNET_INSTALL_DIR/bin/_uninstall.sh" "\$@"
+WRAPPER
+  chmod +x "${bindir}/signet-uninstall"
+
+  curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh"
+  chmod +x "${bindir}/_update.sh"
+  cat > "${bindir}/signet-update" << WRAPPER
+#!/usr/bin/env bash
+SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export SIGNET_INSTALL_DIR
+exec "\$SIGNET_INSTALL_DIR/bin/_update.sh" "\$@"
+WRAPPER
+  chmod +x "${bindir}/signet-update"
+}
+
 require_remote_manifest_superset() {
   local remote_keys="$1"
   local local_keys
@@ -434,6 +498,7 @@ fi
 
 rm -rf "$TMPDIR/staged"
 cleanup_legacy_plugin_paths
+refresh_wrappers
 
 cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"
 echo "$REMOTE_VERSION" > "$SIGNET_INSTALL_DIR/VERSION"
