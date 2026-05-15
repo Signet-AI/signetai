@@ -62,8 +62,8 @@ export const ontology = $state({
 	searching: false,
 
 	/** Visible edge/node kinds on graph (driven by schema table selection) */
-	visibleEdgeKinds: new Set(["dependency"]) as Set<string>,
-	visibleNodeKinds: new Set(["entity"]) as Set<OntologyNodeKind>,
+	visibleEdgeKinds: new Set(DEFAULT_EDGE_FILTER) as Set<string>,
+	visibleNodeKinds: new Set(DEFAULT_NODE_FILTER) as Set<OntologyNodeKind>,
 
 	/** IDs related to current selection (aspects, attributes, dep neighbors) */
 	relatedIds: new Set<string>() as Set<string>,
