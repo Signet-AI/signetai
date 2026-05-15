@@ -88,6 +88,15 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain("NODE_VER=\"$(node --version | sed 's/^v//')\"");
 	});
 
+	test("packages CLI bundle with Node ESM metadata", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain('printf \'{"type":"module"}\\n\' > ./dist/package.json');
+		expect(workflow).toContain('tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js package.json');
+		expect(workflow).not.toContain('tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js\n');
+	});
+
 	test("delegates updater reinstall without sharing the install lock trap", () => {
 		const root = join(import.meta.dir, "..");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");

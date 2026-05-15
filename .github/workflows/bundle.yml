@@ -200,7 +200,8 @@ jobs:
           bun run build:connector-base
           cd surfaces/cli
           bun build ./src/cli.ts --outfile ./dist/cli.js --target node
-          tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js
+          printf '{"type":"module"}\n' > ./dist/package.json
+          tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js package.json
 
       # ── Dashboard ──
 
