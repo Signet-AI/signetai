@@ -57,7 +57,7 @@ function drawEdges(
 			(s.y > height + margin && t.y > height + margin)
 		)
 			continue;
-		if (edge.kind === "has_attribute" && viewport.zoom < 0.35) continue;
+		if (edge.kind === "mentions" && viewport.zoom < 0.35) continue;
 		const dx = t.x - s.x;
 		const dy = t.y - s.y;
 		const dist = Math.hypot(dx, dy);
@@ -160,7 +160,7 @@ function drawNodes(
 				screen.y + size * 0.5 + 4,
 				selected ? colors.selection : related ? node.color : dimmed ? colors.textDim : colors.text,
 				colors.labelShadow,
-				node.kind === "attribute" ? 8 : 10,
+				node.kind === "memory" ? 8 : 10,
 				viewport.zoom,
 			);
 		ctx.restore();
@@ -222,7 +222,7 @@ function shouldDrawLabel(
 	size: number,
 ): boolean {
 	if (selected || hovered) return true;
-	if (node.kind === "attribute" && !related) return false;
+	if (node.kind === "memory" && !related) return false;
 	return zoom > 0.58 && size > 3;
 }
 
