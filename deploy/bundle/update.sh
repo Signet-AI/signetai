@@ -199,29 +199,57 @@ get_manifest_value() {
     fi
     printf '%s' "$val"
   elif [ -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
-    "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e "
-      const fs=require('fs');
-      const d=JSON.parse(fs.readFileSync('$file','utf8'));
-      const parts='${key}'.split('.').filter(Boolean).map(p=>p.replace(/^\"|\"$/g,''));
-      let v=d; for(const p of parts) v=v?.[p];
-      if(v!==undefined && v!==null) process.stdout.write(String(v));
-    " 2>/dev/null || true
+    "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e '
+      const fs = require("fs");
+      const [file, key] = process.argv.slice(1);
+      const d = JSON.parse(fs.readFileSync(file, "utf8"));
+      const parts = key.split(".").filter(Boolean).map((p) => p.replace(/^"|"$/g, ""));
+      let v = d;
+      for (const p of parts) v = v?.[p];
+      if (v !== undefined && v !== null) process.stdout.write(String(v));
+    ' "$file" "$key" 2>/dev/null || true
   else
     json_value "$key" "$file"
   fi
 }
 
+validate_component_name() {
+  local comp="$1"
+  case "$comp" in
+    ""|*[!a-zA-Z0-9_-]*)
+      err "Manifest contains invalid component name: $comp"
+      exit 1
+      ;;
+  esac
+}
+
 manifest_keys() {
   local file="${1:-$REMOTE_MANIFEST}"
   if command -v jq >/dev/null 2>&1; then
+    local invalid
+    invalid="$(jq -r '.components | keys[] | select(test("^[A-Za-z0-9_-]+$") | not)' "$file" 2>/dev/null | head -1)"
+    if [ -n "$invalid" ]; then
+      validate_component_name "$invalid"
+    fi
     jq -r '.components | keys[]' "$file" 2>/dev/null
   elif [ -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
-    "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e "
-      const d=JSON.parse(require('fs').readFileSync('$file','utf8'));
-      if(d.components) Object.keys(d.components).forEach(k=>process.stdout.write(k+'\n'));
-    " 2>/dev/null || true
+    "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e '
+      const fs = require("fs");
+      const [file] = process.argv.slice(1);
+      const d = JSON.parse(fs.readFileSync(file, "utf8"));
+      for (const key of Object.keys(d.components || {})) {
+        if (!/^[A-Za-z0-9_-]+$/.test(key)) {
+          console.error(`Manifest contains invalid component name: ${key}`);
+          process.exit(1);
+        }
+        process.stdout.write(`${key}\n`);
+      }
+    ' "$file"
   else
-    sed -n '/"components"/,/^}/p' "$file" | sed -n 's/^[[:space:]]*"\([^"]*\)"[[:space:]]*:.*/\1/p' | grep -v '^components$'
+    sed -n '/"components"/,/^}/p' "$file" | sed -n 's/^[[:space:]]*"\([^"]*\)"[[:space:]]*:.*/\1/p' | grep -v '^components$' | while IFS= read -r comp; do
+      validate_component_name "$comp"
+      printf '%s\n' "$comp"
+    done
   fi
 }
 

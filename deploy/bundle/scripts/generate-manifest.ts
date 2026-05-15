@@ -8,7 +8,7 @@
  * produces a JSON manifest mapping component names to download URLs and checksums.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const PLATFORM_SUFFIXES = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
@@ -73,7 +73,7 @@ function main() {
 		components[component] = {
 			url: `${BASE_URL}/${file}`,
 			sha256,
-			size: 0,
+			size: statSync(join(artifactDir, file)).size,
 		};
 	}
 

@@ -110,6 +110,29 @@ describe("check-publish-manifests", () => {
 		expect(readme).not.toContain("| `daemon-js` | Daemon JS bundle | No |");
 	});
 
+	test("keeps manifest node fallback free of generated lookup code", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			expect(script).toContain("process.argv.slice(1)");
+			expect(script).not.toContain("const parts='${key}'");
+		}
+		expect(updater).toContain("validate_component_name()");
+		expect(updater).toContain("Manifest contains invalid component name");
+		expect(updater).toContain("^[A-Za-z0-9_-]+$");
+	});
+
+	test("writes real bundle artifact sizes into manifests", () => {
+		const root = join(import.meta.dir, "..");
+		const generator = readFileSync(join(root, "deploy", "bundle", "scripts", "generate-manifest.ts"), "utf-8");
+
+		expect(generator).toContain("statSync");
+		expect(generator).toContain("size: statSync(join(artifactDir, file)).size");
+		expect(generator).not.toContain("size: 0");
+	});
+
 	test("keeps Hermes plugin assets in the signetai publish package", () => {
 		const root = join(import.meta.dir, "..");
 		const manifest = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {

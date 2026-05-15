@@ -305,13 +305,15 @@ get_manifest_value() {
     fi
     printf '%s' "$val"
   elif [ -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
-    "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e "
-      const fs=require('fs');
-      const d=JSON.parse(fs.readFileSync('${tmpdir}/manifest.json','utf8'));
-      const parts='${key}'.split('.').filter(Boolean).map(p=>p.replace(/^\"|\"$/g,''));
-      let v=d; for(const p of parts) v=v?.[p];
-      if(v!==undefined && v!==null) process.stdout.write(String(v));
-    " 2>/dev/null || true
+    "$SIGNET_INSTALL_DIR/runtime/node/bin/node" -e '
+      const fs = require("fs");
+      const [file, key] = process.argv.slice(1);
+      const d = JSON.parse(fs.readFileSync(file, "utf8"));
+      const parts = key.split(".").filter(Boolean).map((p) => p.replace(/^"|"$/g, ""));
+      let v = d;
+      for (const p of parts) v = v?.[p];
+      if (v !== undefined && v !== null) process.stdout.write(String(v));
+    ' "${tmpdir}/manifest.json" "$key" 2>/dev/null || true
   else
     json_value "$key" "${tmpdir}/manifest.json"
   fi
