@@ -15,8 +15,6 @@ on:
       - "skills/**"
       - "scripts/**"
       - "deploy/bundle/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
       - "package.json"
       - "bun.lock"
       - ".github/workflows/bundle.yml"
@@ -31,8 +29,6 @@ on:
       - "skills/**"
       - "scripts/**"
       - "deploy/bundle/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
       - "package.json"
       - "bun.lock"
       - ".github/workflows/bundle.yml"
@@ -76,8 +72,6 @@ jobs:
               - "platform/core/**"
             daemon_rs:
               - "platform/daemon-rs/**"
-              - "Cargo.toml"
-              - "Cargo.lock"
             dashboard:
               - "surfaces/dashboard/**"
             connectors:
@@ -95,8 +89,6 @@ jobs:
               - "platform/core/**"
             native:
               - "platform/native/**"
-              - "Cargo.toml"
-              - "Cargo.lock"
             skills:
               - "skills/**"
             templates:
@@ -290,10 +282,10 @@ jobs:
 
       - name: Build Rust daemon
         run: |
-          cargo build --release --target "$RUST_TARGET" -p signet-daemon
+          cargo build --release --manifest-path platform/daemon-rs/Cargo.toml --target "$RUST_TARGET" -p signet-daemon
           STAGE="$ARTIFACT_DIR/signet-daemon-rs-$PLATFORM"
           mkdir -p "$STAGE"
-          cp "target/$RUST_TARGET/release/signet-daemon" "$STAGE/signet-daemon"
+          cp "platform/daemon-rs/target/$RUST_TARGET/release/signet-daemon" "$STAGE/signet-daemon"
           chmod +x "$STAGE/signet-daemon"
           tar czf "$ARTIFACT_DIR/signet-daemon-rs-$PLATFORM.tar.gz" -C "$STAGE" signet-daemon
 

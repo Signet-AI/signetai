@@ -121,17 +121,18 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain('cp release/*.zip "$ARTIFACT_DIR/" 2>/dev/null || true');
 	});
 
-	test("rebuilds Rust bundle artifacts when root Cargo inputs change", () => {
+	test("builds Rust bundle artifacts from nested workspaces", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
 
 		expect(workflow).toContain("GitHub-hosted standard Linux arm64 runner label");
 		expect(workflow).toContain("docs.github.com/actions/reference/runners/github-hosted-runners");
 		expect(workflow).toContain("- runner: ubuntu-24.04-arm\n            platform: linux-arm64");
-		expect(workflow).toContain('- "Cargo.toml"');
-		expect(workflow).toContain('- "Cargo.lock"');
-		expect(workflow).toContain('daemon_rs:\n              - "platform/daemon-rs/**"\n              - "Cargo.toml"\n              - "Cargo.lock"');
-		expect(workflow).toContain('native:\n              - "platform/native/**"\n              - "Cargo.toml"\n              - "Cargo.lock"');
+		expect(workflow).toContain('daemon_rs:\n              - "platform/daemon-rs/**"');
+		expect(workflow).toContain('native:\n              - "platform/native/**"');
+		expect(workflow).toContain("cargo build --release --manifest-path platform/daemon-rs/Cargo.toml");
+		expect(workflow).toContain('cp "platform/daemon-rs/target/$RUST_TARGET/release/signet-daemon"');
+		expect(workflow).not.toContain('cp "target/$RUST_TARGET/release/signet-daemon"');
 	});
 
 	test("runs bundle validation on pull requests without publishing releases", () => {
