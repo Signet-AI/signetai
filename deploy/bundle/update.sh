@@ -690,6 +690,10 @@ if [ -n "$STAGED" ]; then
     DEST="$(component_runtime_path "$comp")"
     OLD="${DEST}.old"
     mkdir -p "$(dirname "$DEST")"
+    if path_exists_or_symlink "$OLD"; then
+      warn "Cleaning stale backup: $(basename "$OLD")"
+      rm -rf "$OLD"
+    fi
     if path_exists_or_symlink "$DEST"; then mv "$DEST" "$OLD"; fi
   done
   # Stage 2: Promote staged components

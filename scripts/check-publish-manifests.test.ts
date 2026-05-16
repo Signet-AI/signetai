@@ -381,9 +381,11 @@ describe("check-publish-manifests", () => {
 			expect(script).toContain('[ -e "$1" ] || [ -L "$1" ]');
 			expect(script).toContain('if path_exists_or_symlink "$DEST"; then mv "$DEST" "$OLD"; fi');
 		}
-		expect(installer).toContain('if path_exists_or_symlink "$OLD"; then');
-		expect(installer).toContain('warn "Cleaning stale backup: $(basename "$OLD")"');
-		expect(installer).toContain('rm -rf "$OLD"');
+		for (const script of [installer, updater]) {
+			expect(script).toContain('if path_exists_or_symlink "$OLD"; then');
+			expect(script).toContain('warn "Cleaning stale backup: $(basename "$OLD")"');
+			expect(script).toContain('rm -rf "$OLD"');
+		}
 		expect(installer).toContain('if path_exists_or_symlink "$PDEST"; then rm -rf "$PDEST"; fi');
 		expect(installer).toContain('if path_exists_or_symlink "$POLD"; then mv "$POLD" "$PDEST"; fi');
 		expect(updater).toContain('if path_exists_or_symlink "$OLD2"; then mv "$OLD2" "$DEST2"; fi');
