@@ -486,6 +486,19 @@ jobs:
             bun deploy/bundle/scripts/generate-manifest.ts \
               "$VERSION" "$PLATFORM" "$MERGE_DIR" "bundle-latest" \
               > "$MERGE_DIR/manifest-$PLATFORM.json"
+            # Desktop artifacts are released as macOS .dmg/.zip assets, not manifest components.
+            case "$PLATFORM" in
+              darwin-*)
+                if ! find "$PLAT_DIR" -maxdepth 1 -type f -name '*.dmg' -print -quit | grep -q .; then
+                  echo "::error::Missing desktop DMG release asset for $PLATFORM"
+                  exit 1
+                fi
+                if ! find "$PLAT_DIR" -maxdepth 1 -type f -name '*.zip' -print -quit | grep -q .; then
+                  echo "::error::Missing desktop zip release asset for $PLATFORM"
+                  exit 1
+                fi
+                ;;
+            esac
             for component in node cli daemon-js daemon-rs dashboard connectors plugin-opencode plugin-oh-my-pi plugin-pi native skills templates; do
               if ! jq -e --arg component "$component" \
                 '.components[$component].url and .components[$component].sha256 and (.components[$component].size > 0)' \
