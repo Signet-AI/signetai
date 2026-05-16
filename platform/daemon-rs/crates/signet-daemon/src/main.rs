@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -9,6 +10,7 @@ use chrono::{SecondsFormat, Utc};
 use signet_core::config::{DaemonConfig, network_mode_from_bind};
 use signet_core::db::DbPool;
 use tokio::signal;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 
 #[allow(dead_code)] // Auth module built but not wired into routes until later phases
@@ -59,6 +61,28 @@ fn merge_rate_limits(config: &DaemonConfig) -> HashMap<String, RateLimitRule> {
     }
 
     rules
+}
+
+fn dashboard_dir() -> Option<PathBuf> {
+    let candidates = [
+        std::env::var_os("SIGNET_DASHBOARD_DIR").map(PathBuf::from),
+        std::env::var_os("SIGNET_DIR")
+            .map(PathBuf::from)
+            .map(|dir| dir.join("runtime").join("dashboard")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|dir| dir.to_path_buf()))
+            .and_then(|daemon_dir| {
+                daemon_dir
+                    .parent()
+                    .map(|runtime_dir| runtime_dir.join("dashboard"))
+            }),
+    ];
+
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|dir| dir.join("index.html").is_file())
 }
 
 #[tokio::main]
@@ -577,8 +601,19 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/logs", get(routes::diagnostics::logs))
         .route("/api/version", get(routes::diagnostics::version))
-        .route("/api/update", get(routes::diagnostics::update_status))
-        .with_state(state.clone());
+        .route("/api/update", get(routes::diagnostics::update_status));
+
+    let app = if let Some(dashboard_dir) = dashboard_dir() {
+        info!(path = %dashboard_dir.display(), "serving dashboard assets");
+        app.fallback_service(
+            ServeDir::new(&dashboard_dir)
+                .fallback(ServeFile::new(dashboard_dir.join("index.html"))),
+        )
+    } else {
+        warn!("dashboard assets not found; root dashboard route disabled");
+        app
+    }
+    .with_state(state.clone());
 
     // Bind — use string form so "localhost" resolves via DNS
     let bind_host = config.bind.as_deref().unwrap_or(&config.host);

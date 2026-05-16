@@ -583,7 +583,7 @@ jobs:
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
-          for pattern in '*.tar.gz' '*.sha256' '*.dmg' '*.zip' '*.sh'; do
+          for pattern in '*.tar.gz' '*.sha256' '*.sh.sha256' '*.dmg' '*.zip' '*.sh'; do
             find /tmp/release-staging -type f -name "$pattern" | while read -r f; do
               gh release upload "$TAG" "$f" --repo "$REPO" --clobber
             done
