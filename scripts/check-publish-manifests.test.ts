@@ -176,7 +176,7 @@ describe("check-publish-manifests", () => {
 
 		expect(workflow).toContain("bun run build:workspace-deps");
 		expect(workflow).toContain("bun run build:cli");
-		expect(workflow).toContain('printf \'{"type":"module"}\\n\' > ./dist/package.json');
+		expect(workflow).toContain("jq '{type:\"module\", version:.version}' package.json > ./dist/package.json");
 		expect(workflow).toContain('tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js package.json');
 		expect(workflow).not.toContain('tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js\n');
 	});
@@ -224,7 +224,13 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node"');
 		expect(workflow).toContain("--input-type=module");
 		expect(workflow).toContain("-e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'");
-		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/cli/cli.js" mcp --help >/dev/null');
+		expect(workflow).toContain('} > "$CHECK_DIR/bin/signet"');
+		expect(workflow).toContain('export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"');
+		expect(workflow).toContain('"$CHECK_DIR/bin/signet" setup --help >/dev/null');
+		expect(workflow).toContain('"$CHECK_DIR/bin/signet" dashboard --help >/dev/null');
+		expect(workflow).toContain('"$CHECK_DIR/bin/signet" daemon --help >/dev/null');
+		expect(workflow).toContain('"$CHECK_DIR/bin/signet" daemon status --path "$CHECK_DIR/smoke-agents" --json >/dev/null');
+		expect(workflow).toContain('"$CHECK_DIR/bin/signet" mcp --help >/dev/null');
 		expect(workflow).not.toContain('if [ "$PLATFORM" = "linux-x64" ]; then\n              # Import the daemon package API entrypoint');
 		expect(workflow).not.toContain("import(process.env.SIGNET_DAEMON_SMOKE)");
 	});
@@ -248,14 +254,17 @@ describe("check-publish-manifests", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
 
-		expect(workflow).toContain("for pattern in '*.tar.gz' '*.sha256' '*.dmg' '*.zip' '*.sh'; do");
+		expect(workflow).toContain(
+			"for pattern in '*.tar.gz' '*.sha256' '*.sh.sha256' '*.dmg' '*.zip' '*.sh' 'manifest-*.json'; do",
+		);
 		expect(workflow).toContain('find /tmp/release-staging -type f -name "$pattern"');
 		expect(workflow).toContain('gh release upload "$TAG" "$f" --repo "$REPO" --clobber');
 		expect(workflow).toContain('for script in install.sh update.sh uninstall.sh; do');
 		expect(workflow).toContain('"/tmp/release-staging/$script.sha256"');
 		expect(workflow).toContain("Missing staged helper asset");
 		expect(workflow).toContain('gh release upload "$TAG" "$helper_asset" --repo "$REPO" --clobber');
-		expect(workflow).toContain("including desktop DMG and zip assets");
+		expect(workflow).toContain("Stable manifest pointer for the latest native bundle");
+		expect(workflow).toContain("bundle-latest is the stable pointer");
 		expect(workflow).toContain('find /tmp/release-staging -type f -name \'manifest-*.json\'');
 		expect(workflow).not.toContain("gh release upload \"$TAG\" deploy/bundle/install.sh");
 	});
@@ -480,7 +489,11 @@ describe("check-publish-manifests", () => {
 
 		for (const script of [installer, updater]) {
 			expect(script).toContain("is_expected_asset_url()");
-			expect(script).toContain('"$DOWNLOAD_BASE"/*');
+			expect(script).toContain("RELEASE_DOWNLOAD_PREFIX=");
+			expect(script).toContain("is_expected_release_url()");
+			expect(script).toContain('"$RELEASE_DOWNLOAD_PREFIX"/*');
+			expect(script).toContain("bundle-*)");
+			expect(script).toContain('[ "$asset" = "$filename" ]');
 			expect(script).toContain('signet-"$name".tar.gz|signet-"$name"-"$PLATFORM".tar.gz');
 			expect(script).toContain("outside expected release assets");
 		}
@@ -494,11 +507,14 @@ describe("check-publish-manifests", () => {
 
 		for (const script of [installer, updater]) {
 			expect(script).toContain("is_expected_script_url()");
-			expect(script).toContain('"$DOWNLOAD_BASE/$script"');
+			expect(script).toContain('is_expected_release_url "$url" "$filename" || return 1');
+			expect(script).toContain('filename="$(basename "$url")"');
 			expect(script).toContain(`url="$(get_manifest_value ".scripts.\\"${scriptInterpolation}\\".url`);
 			expect(script).toContain(`sha="$(get_manifest_value ".scripts.\\"${scriptInterpolation}\\".sha256`);
 			expect(script).toContain("components|scripts)");
 			expect(script).toContain("Checksum mismatch for helper script");
+			expect(script).toContain("outside expected release assets");
+			expect(script).not.toContain('"$DOWNLOAD_BASE/$script"');
 			expect(script).not.toContain('${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh');
 			expect(script).not.toContain('${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh');
 		}

@@ -544,7 +544,29 @@ jobs:
               "$CHECK_DIR/runtime/node/bin/node" \
               --input-type=module \
               -e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'
-            "$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/cli/cli.js" mcp --help >/dev/null
+            mkdir -p "$CHECK_DIR/bin" "$CHECK_DIR/smoke-agents"
+            {
+              printf '%s\n' '#!/usr/bin/env bash'
+              printf '%s\n' 'set -euo pipefail'
+              printf '%s\n' 'SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"'
+              printf '%s\n' 'export SIGNET_DIR'
+              printf '%s\n' 'export SIGNET_DASHBOARD_DIR="$SIGNET_DIR/runtime/dashboard"'
+              printf '%s\n' 'export SIGNET_SKILLS_SOURCE="$SIGNET_DIR/runtime/skills"'
+              printf '%s\n' 'export SIGNET_TEMPLATES_DIR="$SIGNET_DIR/runtime/templates"'
+              printf '%s\n' 'export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"'
+              printf '%s\n' 'case "$(uname -s)" in'
+              printf '%s\n' '  Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;'
+              printf '%s\n' '  Darwin) export DYLD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;'
+              printf '%s\n' 'esac'
+              printf '%s\n' 'exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" "$@"'
+            } > "$CHECK_DIR/bin/signet"
+            chmod +x "$CHECK_DIR/bin/signet"
+            "$CHECK_DIR/bin/signet" --help >/dev/null
+            "$CHECK_DIR/bin/signet" setup --help >/dev/null
+            "$CHECK_DIR/bin/signet" dashboard --help >/dev/null
+            "$CHECK_DIR/bin/signet" daemon --help >/dev/null
+            "$CHECK_DIR/bin/signet" daemon status --path "$CHECK_DIR/smoke-agents" --json >/dev/null
+            "$CHECK_DIR/bin/signet" mcp --help >/dev/null
             # Copy manifest into explicit release staging inputs for upload
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$MANIFEST_DIR/"
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$PLAT_DIR/"
