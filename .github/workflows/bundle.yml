@@ -500,7 +500,7 @@ jobs:
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
           if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$REPO" --title "Latest Bundle" --notes "Auto-updated bundle artifacts" --prerelease
+            gh release create "$TAG" --repo "$REPO" --title "Latest Bundle" --notes "Auto-updated bundle artifacts, including desktop DMG and zip assets" --prerelease
           fi
 
       - name: De-duplicate and stage release assets

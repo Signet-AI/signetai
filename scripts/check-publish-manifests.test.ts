@@ -211,6 +211,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("for pattern in '*.tar.gz' '*.sha256' '*.dmg' '*.zip'; do");
 		expect(workflow).toContain('find /tmp/release-staging -type f -name "$pattern"');
 		expect(workflow).toContain('gh release upload "$TAG" "$f" --repo "$REPO" --clobber');
+		expect(workflow).toContain("including desktop DMG and zip assets");
 		expect(workflow).toContain('find /tmp/release-staging -type f -name \'manifest-*.json\'');
 	});
 
