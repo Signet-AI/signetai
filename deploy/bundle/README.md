@@ -28,10 +28,10 @@ curl -fsSL https://signetai.sh/install.sh | SIGNET_NO_START=1 bash
 curl -fsSL https://signetai.sh/install.sh | SIGNET_NO_SETUP=1 bash
 
 # Custom install location
-SIGNET_INSTALL_DIR=/opt/signet curl -fsSL https://signetai.sh/install.sh | bash
+curl -fsSL https://signetai.sh/install.sh | SIGNET_INSTALL_DIR=/opt/signet bash
 
 # Skip PATH modification
-SIGNET_NO_PATH=1 curl -fsSL https://signetai.sh/install.sh | bash
+curl -fsSL https://signetai.sh/install.sh | SIGNET_NO_PATH=1 bash
 ```
 
 ## Uninstall

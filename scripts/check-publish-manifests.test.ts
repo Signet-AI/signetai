@@ -202,6 +202,23 @@ describe("check-publish-manifests", () => {
 		expect(manifestCopy).toBeGreaterThan(restart);
 	});
 
+	test("requires first-run skills and templates bundle components", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+
+		expect(installer).toContain('REQUIRED_COMPONENTS="node cli daemon-js dashboard native skills templates"');
+	});
+
+	test("documents pipeline-side installer environment options", () => {
+		const root = join(import.meta.dir, "..");
+		const readme = readFileSync(join(root, "deploy", "bundle", "README.md"), "utf-8");
+
+		expect(readme).toContain("curl -fsSL https://signetai.sh/install.sh | SIGNET_INSTALL_DIR=/opt/signet bash");
+		expect(readme).toContain("curl -fsSL https://signetai.sh/install.sh | SIGNET_NO_PATH=1 bash");
+		expect(readme).not.toContain("SIGNET_INSTALL_DIR=/opt/signet curl");
+		expect(readme).not.toContain("SIGNET_NO_PATH=1 curl");
+	});
+
 	test("refreshes bundle wrappers and helper scripts during updates", () => {
 		const root = join(import.meta.dir, "..");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
