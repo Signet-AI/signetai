@@ -184,7 +184,17 @@ jobs:
           done
 
       - name: Install JS dependencies
-        run: bun install
+        run: |
+          for attempt in 1 2 3; do
+            echo "bun install attempt ${attempt}/3"
+            if bun install; then
+              exit 0
+            fi
+            if [ "$attempt" = "3" ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
       - name: Build core (shared dependency)
         run: bun run build:core

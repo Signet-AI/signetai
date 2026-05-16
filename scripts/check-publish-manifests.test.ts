@@ -147,6 +147,16 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("github.ref == 'refs/heads/main'");
 	});
 
+	test("retries transient bundle dependency install failures", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain("bun install attempt ${attempt}/3");
+		expect(workflow).toContain("for attempt in 1 2 3; do");
+		expect(workflow).toContain("sleep $((attempt * 5))");
+		expect(workflow).not.toContain("- name: Install JS dependencies\n        run: bun install");
+	});
+
 	test("pins bundled Node runtime versions in CI", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
