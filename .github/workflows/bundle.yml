@@ -235,7 +235,7 @@ jobs:
           cd surfaces/cli
           bun run build:workspace-deps
           bun run build:cli
-          printf '{"type":"module"}\n' > ./dist/package.json
+          jq '{type:"module", version:.version}' package.json > ./dist/package.json
           tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js package.json
 
       # ── Dashboard ──
@@ -263,6 +263,7 @@ jobs:
           BSQ3_VER="$(jq -r '.dependencies["better-sqlite3"] // "11.0.0"' package.json)"
           OP_VER="$(jq -r '.dependencies["@1password/sdk"] // "latest"' package.json)"
           HF_VER="$(jq -r '.dependencies["@huggingface/transformers"] // "latest"' package.json)"
+          SODIUM_VER="$(jq -r '.dependencies["libsodium-wrappers"] // "0.8.2"' package.json)"
           SQLITE_VEC_VER="0.1.9"
           SQLITE_VEC_NATIVE=""
           case "$PLATFORM" in
@@ -277,6 +278,7 @@ jobs:
             "sqlite-vec@$SQLITE_VEC_VER" \
             "$SQLITE_VEC_NATIVE" \
             "@1password/sdk@$OP_VER" \
+            "libsodium-wrappers@$SODIUM_VER" \
             "@huggingface/transformers@$HF_VER"
           tar czf "$ARTIFACT_DIR/signet-daemon-js-$PLATFORM.tar.gz" -C dist .
 

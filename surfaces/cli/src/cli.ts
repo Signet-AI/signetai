@@ -102,6 +102,13 @@ import { syncTemplates } from "./features/sync.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
 import {
+	acquireNativeSyncLock,
+	embeddingProvider,
+	hasNativeModelCache,
+	isRecord,
+	releaseNativeSyncLock,
+} from "./lib/native-sync.js";
+import {
 	AGENTS_DIR,
 	DEFAULT_PORT,
 	formatUptime,
@@ -113,13 +120,6 @@ import {
 	startDaemon,
 	stopDaemon,
 } from "./lib/runtime.js";
-import {
-	acquireNativeSyncLock,
-	embeddingProvider,
-	hasNativeModelCache,
-	isRecord,
-	releaseNativeSyncLock,
-} from "./lib/native-sync.js";
 import "./sqlite.js";
 
 // Template directory location (relative to built CLI)
@@ -409,6 +409,15 @@ function getCliVersion(): string {
 		const version = getVersionFromPackageJson(candidate);
 		if (version) {
 			return version;
+		}
+	}
+
+	if (process.env.SIGNET_DIR) {
+		try {
+			const version = readFileSync(join(process.env.SIGNET_DIR, "VERSION"), "utf8").trim();
+			if (version) return version;
+		} catch {
+			// Fall through to unknown version.
 		}
 	}
 

@@ -528,6 +528,7 @@ export SIGNET_DIR
 export SIGNET_DASHBOARD_DIR="$SIGNET_DIR/runtime/dashboard"
 export SIGNET_SKILLS_SOURCE="$SIGNET_DIR/runtime/skills"
 export SIGNET_TEMPLATES_DIR="$SIGNET_DIR/runtime/templates"
+export SIGNET_DAEMON_ENTRYPOINT=1
 export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"
 case "$(uname -s)" in
   Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
@@ -592,13 +593,18 @@ setup_path() {
   local bindir="$SIGNET_INSTALL_DIR/bin"
   local shell_rc=""
 
-  if [ -n "${ZSH_VERSION:-}" ] || [ "${SHELL:-}" = */zsh ]; then
+  case "${SHELL:-}" in
+    */zsh) shell_rc="$HOME/.zshrc" ;;
+    */bash) shell_rc="$HOME/.bashrc" ;;
+  esac
+
+  if [ -z "$shell_rc" ] && [ -n "${ZSH_VERSION:-}" ]; then
     shell_rc="$HOME/.zshrc"
-  elif [ -n "${BASH_VERSION:-}" ] || [ "${SHELL:-}" = */bash ]; then
+  elif [ -z "$shell_rc" ] && [ -n "${BASH_VERSION:-}" ]; then
     shell_rc="$HOME/.bashrc"
-  elif [ -f "$HOME/.zshrc" ]; then
+  elif [ -z "$shell_rc" ] && [ -f "$HOME/.zshrc" ]; then
     shell_rc="$HOME/.zshrc"
-  elif [ -f "$HOME/.bashrc" ]; then
+  elif [ -z "$shell_rc" ] && [ -f "$HOME/.bashrc" ]; then
     shell_rc="$HOME/.bashrc"
   fi
 

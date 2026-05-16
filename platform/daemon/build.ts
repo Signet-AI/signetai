@@ -10,6 +10,7 @@ const EXTERNAL_NODE = [
 	"bun",
 	"bun:sqlite",
 	"@1password/sdk",
+	"libsodium-wrappers",
 	"onnxruntime-node",
 	"@huggingface/transformers",
 ];

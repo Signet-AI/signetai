@@ -9,11 +9,11 @@ import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import {
@@ -112,8 +112,8 @@ import { mountAppTrayRoutes } from "./routes/app-tray.js";
 import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { mountChangelogRoutes } from "./routes/changelog.js";
 import { registerConnectorRoutes } from "./routes/connectors-routes.js";
-import { registerDatabaseDiagnosticsRoutes } from "./routes/database-diagnostics.js";
 import { setupDashboardRoutes } from "./routes/dashboard.js";
+import { registerDatabaseDiagnosticsRoutes } from "./routes/database-diagnostics.js";
 import { mountEventBusRoutes } from "./routes/event-bus.js";
 import {
 	getGitStatus,
@@ -1483,6 +1483,7 @@ async function main() {
 				SIGNET_HOST: HOST,
 				SIGNET_BIND: BIND_HOST,
 				SIGNET_PATH: AGENTS_DIR,
+				SIGNET_DAEMON_ENTRYPOINT: "1",
 			},
 		});
 		replacement.unref();
@@ -1662,7 +1663,17 @@ async function main() {
 	});
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(__filename)) {
+function isMainEntrypoint(): boolean {
+	if (process.env.SIGNET_DAEMON_ENTRYPOINT === "1") return true;
+	if (!process.argv[1]) return false;
+	try {
+		return realpathSync(process.argv[1]) === realpathSync(__filename);
+	} catch {
+		return false;
+	}
+}
+
+if (isMainEntrypoint()) {
 	main().catch((err) => {
 		logger.error("daemon", "Fatal error", err);
 		process.exit(1);

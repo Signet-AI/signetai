@@ -15,7 +15,6 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
-import sodium from "libsodium-wrappers";
 import {
 	BITWARDEN_ACTIVE_PROVIDER_SECRET,
 	BITWARDEN_MANAGED_FOLDER_SECRET,
@@ -203,11 +202,22 @@ function getMachineId(): string {
 }
 
 let _masterKey: Uint8Array | null = null;
+type SodiumModule = typeof import("libsodium-wrappers").default;
+let sodiumPromise: Promise<SodiumModule> | null = null;
+
+async function getSodium(): Promise<SodiumModule> {
+	sodiumPromise ??= import("libsodium-wrappers").then(async (mod) => {
+		const sodium = mod.default;
+		await sodium.ready;
+		return sodium;
+	});
+	return sodiumPromise;
+}
 
 async function getMasterKey(): Promise<Uint8Array> {
 	if (_masterKey) return _masterKey;
 
-	await sodium.ready;
+	const sodium = await getSodium();
 
 	const machineId = getMachineId();
 	const input = `signet:secrets:${machineId}`;
@@ -225,7 +235,7 @@ async function getMasterKey(): Promise<Uint8Array> {
 // ---------------------------------------------------------------------------
 
 async function encrypt(plaintext: string): Promise<string> {
-	await sodium.ready;
+	const sodium = await getSodium();
 	const key = await getMasterKey();
 	const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
 	const message = new TextEncoder().encode(plaintext);
@@ -240,7 +250,7 @@ async function encrypt(plaintext: string): Promise<string> {
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
-	await sodium.ready;
+	const sodium = await getSodium();
 	const key = await getMasterKey();
 
 	const combined = sodium.from_base64(ciphertext, sodium.base64_variants.ORIGINAL);
