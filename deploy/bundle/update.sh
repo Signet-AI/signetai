@@ -404,25 +404,35 @@ exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" mcp "$
 WRAPPER
   chmod +x "${bindir}/signet-mcp"
 
-  curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh"
-  chmod +x "${bindir}/_uninstall.sh"
-  cat > "${bindir}/signet-uninstall" << WRAPPER
+  if curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh.tmp" 2>/dev/null; then
+    chmod +x "${bindir}/_uninstall.sh.tmp"
+    mv "${bindir}/_uninstall.sh.tmp" "${bindir}/_uninstall.sh"
+    cat > "${bindir}/signet-uninstall" << WRAPPER
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export SIGNET_INSTALL_DIR
 exec "\$SIGNET_INSTALL_DIR/bin/_uninstall.sh" "\$@"
 WRAPPER
-  chmod +x "${bindir}/signet-uninstall"
+    chmod +x "${bindir}/signet-uninstall"
+  else
+    rm -f "${bindir}/_uninstall.sh.tmp"
+    warn "Could not refresh uninstaller helper"
+  fi
 
-  curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh"
-  chmod +x "${bindir}/_update.sh"
-  cat > "${bindir}/signet-update" << WRAPPER
+  if curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh.tmp" 2>/dev/null; then
+    chmod +x "${bindir}/_update.sh.tmp"
+    mv "${bindir}/_update.sh.tmp" "${bindir}/_update.sh"
+    cat > "${bindir}/signet-update" << WRAPPER
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export SIGNET_INSTALL_DIR
 exec "\$SIGNET_INSTALL_DIR/bin/_update.sh" "\$@"
 WRAPPER
-  chmod +x "${bindir}/signet-update"
+    chmod +x "${bindir}/signet-update"
+  else
+    rm -f "${bindir}/_update.sh.tmp"
+    warn "Could not refresh updater helper"
+  fi
 }
 
 require_remote_manifest_superset() {

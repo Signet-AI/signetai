@@ -297,8 +297,12 @@ describe("check-publish-manifests", () => {
 		const manifestCopy = updater.indexOf('cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"');
 
 		expect(updater).toContain("refresh_wrappers()");
-		expect(updater).toContain('${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh"');
-		expect(updater).toContain('${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh"');
+		expect(updater).toContain('${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh.tmp"');
+		expect(updater).toContain('mv "${bindir}/_uninstall.sh.tmp" "${bindir}/_uninstall.sh"');
+		expect(updater).toContain("Could not refresh uninstaller helper");
+		expect(updater).toContain('${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh.tmp"');
+		expect(updater).toContain('mv "${bindir}/_update.sh.tmp" "${bindir}/_update.sh"');
+		expect(updater).toContain("Could not refresh updater helper");
 		expect(refresh).toBeLessThan(manifestCopy);
 	});
 
