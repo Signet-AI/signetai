@@ -64,10 +64,10 @@ validate_install_dir() {
 
 banner() {
   echo ""
-  printf "${BOLD}  ╔══════════════════════════════════════╗${NC}\n"
-  printf "${BOLD}  ║         Signet Installer            ║${NC}\n"
-  printf "${BOLD}  ║    Portable AI Agent Identity        ║${NC}\n"
-  printf "${BOLD}  ╚══════════════════════════════════════╝${NC}\n"
+  printf "${CYAN}${BOLD}  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}\n"
+  printf "${CYAN}${BOLD}  ┃${NC}  ${BOLD}SIGNET${NC} ${DIM}native bundle installer${NC}       ${CYAN}${BOLD}┃${NC}\n"
+  printf "${CYAN}${BOLD}  ┃${NC}  ${DIM}portable identity · memory · skills${NC}   ${CYAN}${BOLD}┃${NC}\n"
+  printf "${CYAN}${BOLD}  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}\n"
   echo ""
 }
 
