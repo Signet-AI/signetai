@@ -54,6 +54,12 @@ validate_install_dir() {
     err "Install dir is a dangerous path ($install_dir). Set SIGNET_INSTALL_DIR to a dedicated directory."
     exit 1
   fi
+  case "$install_dir" in
+    *'$'*|*'`'*|*'"'*|*"'"*|*\\*|*$'\n'*|*$'\r'*)
+      err "Install dir contains shell-significant characters ($install_dir). Set SIGNET_INSTALL_DIR to a path without quotes, dollar signs, backticks, backslashes, or newlines."
+      exit 1
+      ;;
+  esac
 }
 
 banner() {

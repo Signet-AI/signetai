@@ -42,6 +42,12 @@ validate_install_dir() {
     err "Install dir is a dangerous path ($install_dir). Set SIGNET_INSTALL_DIR to a dedicated directory."
     exit 1
   fi
+  case "$install_dir" in
+    *'$'*|*'`'*|*'"'*|*"'"*|*\\*|*$'\n'*|*$'\r'*)
+      err "Install dir contains shell-significant characters ($install_dir). Set SIGNET_INSTALL_DIR to a path without quotes, dollar signs, backticks, backslashes, or newlines."
+      exit 1
+      ;;
+  esac
 }
 
 # Detect platform
@@ -54,7 +60,11 @@ detect_platform() {
     darwin:x86_64) echo "darwin-x64" ;;
     linux:aarch64) echo "linux-arm64" ;;
     linux:x86_64|linux:amd64) echo "linux-x64" ;;
-    *) echo "unknown" ;;
+    *)
+      err "Unsupported platform: $os $arch"
+      err "Signet requires macOS (ARM64/x64) or Linux (ARM64/x64)"
+      exit 1
+      ;;
   esac
 }
 

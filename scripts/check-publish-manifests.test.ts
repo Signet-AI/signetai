@@ -153,6 +153,16 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain('tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js\n');
 	});
 
+	test("fails Pi plugin packaging when the extension artifact is missing", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain('cp integrations/pi/extension/dist/signet-pi.mjs "$STAGE/"');
+		expect(workflow).toContain('[ ! -s "$STAGE/signet-pi.mjs" ]');
+		expect(workflow).toContain("Pi extension build did not produce signet-pi.mjs");
+		expect(workflow).not.toContain('cp integrations/pi/extension/dist/*.mjs "$STAGE/" 2>/dev/null || true');
+	});
+
 	test("smoke-checks native bundle artifact layout before release upload", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
@@ -214,9 +224,26 @@ describe("check-publish-manifests", () => {
 			expect(script).toContain('[ -z "$install_dir" ]');
 			expect(script).toContain('[ "$normalized_dir" = "/" ]');
 			expect(script).toContain('[ "$normalized_dir" = "$normalized_home" ]');
+			expect(script).toContain("Install dir contains shell-significant characters");
+			expect(script).toContain("dollar signs, backticks, backslashes, or newlines");
+			expect(script).toContain("$'\\n'");
 			expect(validation).toBeGreaterThan(-1);
 			expect(validation).toBeLessThan(mkdirInstallDir);
 		}
+	});
+
+	test("updater rejects unsupported platforms before fetching manifests", () => {
+		const root = join(import.meta.dir, "..");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+		const platformDetection = updater.indexOf('PLATFORM="$(detect_platform)"');
+		const manifestPath = updater.indexOf('REMOTE_MANIFEST="$TMPDIR/manifest-latest.json"');
+
+		expect(updater).toContain("Unsupported platform:");
+		expect(updater).toContain("Signet requires macOS (ARM64/x64) or Linux (ARM64/x64)");
+		expect(updater).not.toContain('*) echo "unknown" ;;');
+		expect(platformDetection).toBeGreaterThan(-1);
+		expect(manifestPath).toBeGreaterThan(-1);
+		expect(platformDetection).toBeLessThan(manifestPath);
 	});
 
 	test("normalizes uninstaller dangerous path guards before deletion", () => {

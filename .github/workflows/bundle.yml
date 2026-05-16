@@ -319,7 +319,11 @@ jobs:
           bun run build:pi-extension
           STAGE="$ARTIFACT_DIR/signet-plugin-pi"
           mkdir -p "$STAGE"
-          cp integrations/pi/extension/dist/*.mjs "$STAGE/" 2>/dev/null || true
+          cp integrations/pi/extension/dist/signet-pi.mjs "$STAGE/"
+          if [ ! -s "$STAGE/signet-pi.mjs" ]; then
+            echo "::error::Pi extension build did not produce signet-pi.mjs"
+            exit 1
+          fi
           tar czf "$ARTIFACT_DIR/signet-plugin-pi.tar.gz" -C "$STAGE" .
 
       # ── Native modules ──
