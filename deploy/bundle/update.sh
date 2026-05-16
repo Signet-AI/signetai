@@ -349,6 +349,10 @@ download_verified_script() {
     err "Manifest missing checksum metadata for helper script '$script'"
     return 1
   fi
+  if [ -z "$SHA256_CMD" ]; then
+    err "No checksum tool available — cannot verify helper script '$script'. Install sha256sum or shasum and retry."
+    return 1
+  fi
 
   filename="$(basename "$url")"
   if ! is_expected_script_url "$script" "$url" "$filename"; then
