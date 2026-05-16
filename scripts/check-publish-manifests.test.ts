@@ -209,6 +209,25 @@ describe("check-publish-manifests", () => {
 		}
 	});
 
+	test("normalizes uninstaller dangerous path guards before deletion", () => {
+		const root = join(import.meta.dir, "..");
+		const uninstaller = readFileSync(join(root, "deploy", "bundle", "uninstall.sh"), "utf-8");
+		const validation = uninstaller.indexOf('validate_safe_dir "install dir" "$SIGNET_INSTALL_DIR"');
+		const stopDaemon = uninstaller.indexOf("# Stop daemon if running");
+		const removal = uninstaller.indexOf('rm -rf "$SIGNET_INSTALL_DIR"');
+
+		expect(uninstaller).toContain("normalize_path_for_guard()");
+		expect(uninstaller).toContain("validate_safe_dir()");
+		expect(uninstaller).toContain('[ "$normalized_value" = "/" ]');
+		expect(uninstaller).toContain('[ "$normalized_value" = "$normalized_home" ]');
+		expect(uninstaller).toContain('validate_safe_dir "agents dir" "$AGENTS_DIR"');
+		expect(uninstaller).toContain("no manifest.json");
+		expect(uninstaller).not.toContain('[ ! -d "$SIGNET_INSTALL_DIR/bin" ]');
+		expect(validation).toBeGreaterThan(-1);
+		expect(validation).toBeLessThan(stopDaemon);
+		expect(validation).toBeLessThan(removal);
+	});
+
 	test("promotes installer manifest only after required install steps", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
