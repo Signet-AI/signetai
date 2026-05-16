@@ -9,11 +9,15 @@ import { extractOntologyProposals } from "./ontology-extraction";
 import { getOntologyLinkEvidence } from "./ontology-link-evidence";
 import {
 	OntologyProposalError,
+	applyOntologyOperation,
+	applyOntologyOperationBatch,
 	applyOntologyProposal,
 	createOntologyProposal,
 	createOntologyProposals,
+	getClaimVersion,
 	getOntologyProposal,
 	getOntologyProposalEvidence,
+	listClaimVersions,
 	listOntologyProposalConflicts,
 	listOntologyProposals,
 	proposeDuplicateEntityMerges,
@@ -1039,5 +1043,348 @@ describe("ontology proposals", () => {
 		const failed = getOntologyProposal(getDbAccessor(), proposal.id, "default");
 		expect(failed?.status).toBe("failed");
 		expect(failed?.result?.error).toContain("Unsupported");
+	});
+
+	it("applies direct operations by creating an applied proposal and graph mutation atomically", () => {
+		const result = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Signet",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "control_plane",
+				value: "Direct ontology operations are audited through applied proposals.",
+			},
+			reason: "operator asserted audited control plane behavior",
+			evidence: [{ source_kind: "test", quote: "audited control plane" }],
+			confidence: 0.94,
+		});
+
+		expect(result.dryRun).toBe(false);
+		expect(result.proposed).toBe(false);
+		expect(result.proposal.status).toBe("applied");
+		expect(result.proposal.appliedBy).toBe("operator");
+		expect(result.result?.version).toBe(1);
+
+		const attrs = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "control_plane",
+		});
+		expect(attrs.count).toBe(1);
+		expect(attrs.items[0]?.proposalId).toBe(result.proposal.id);
+		expect(attrs.items[0]?.content).toContain("audited");
+	});
+
+	it("dry-runs direct operations without writing proposals or graph state", () => {
+		const result = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_entity",
+			payload: { name: "Dry Run Entity", entity_type: "project" },
+			dryRun: true,
+		});
+
+		expect(result.dryRun).toBe(true);
+		expect(result.proposal.status).toBe("applied");
+		const proposal = getOntologyProposal(getDbAccessor(), result.proposal.id, "ant");
+		const entity = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Dry Run Entity") as
+					| { id: string }
+					| undefined,
+		);
+		expect(proposal).toBeNull();
+		expect(entity).toBeNull();
+	});
+
+	it("exercises dry-run, apply, propose, reject, evidence, and immutable source artifacts end to end", () => {
+		const sourcePath = "memory/codex/transcripts/control-plane-e2e.jsonl";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, session_id,
+				  session_key, session_token, harness, captured_at, content, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"ant",
+				sourcePath,
+				"sha-control-plane-e2e",
+				"transcript",
+				"session-control-plane-e2e",
+				"control-plane-e2e",
+				"token-control-plane-e2e",
+				"codex",
+				"2026-05-16T00:01:00.000Z",
+				"Raw artifact says ontology control-plane mutations are audited through proposals.",
+				"2026-05-16T00:01:00.000Z",
+			);
+		});
+		const sourceBefore = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT content FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+					.get("ant", sourcePath) as { content: string } | undefined,
+		);
+
+		const payload = {
+			entity: "Signet",
+			entity_type: "project",
+			aspect: "architecture",
+			group_key: "ontology",
+			claim_key: "control_plane_e2e",
+			value: "Ontology control-plane mutations are audited through proposals.",
+		};
+		const dryRun = applyOntologyOperationBatch(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			dryRun: true,
+			operations: [{ operation: "set_claim_value", payload }],
+		});
+		expect(dryRun.dryRun).toBe(true);
+		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+
+		const applied = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload,
+			sourceKind: "transcript",
+			sourceId: "control-plane-e2e",
+			sourcePath,
+			evidence: [{ source_kind: "memory_artifact", source_path: sourcePath, quote: "audited through proposals" }],
+		});
+		const proposed = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_entity",
+			payload: { name: "Rejected Candidate", entity_type: "project" },
+			propose: true,
+		});
+		const rejected = rejectOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: proposed.proposal.id,
+			actor: "operator",
+			reason: "proposal review rejected this candidate",
+		});
+		const evidence = getOntologyClaimEvidence(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "control_plane_e2e",
+		});
+		const sourceAfter = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT content FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+					.get("ant", sourcePath) as { content: string } | undefined,
+		);
+
+		expect(applied.proposal.status).toBe("applied");
+		expect(rejected.status).toBe("rejected");
+		expect(evidence.items[0]?.attribute.proposalId).toBe(applied.proposal.id);
+		expect(evidence.items[0]?.evidence.map((item) => item.kind)).toContain("memory_artifact");
+		expect(sourceAfter?.content).toBe(sourceBefore?.content);
+	});
+
+	it("proposes direct operations without mutating graph state", () => {
+		const result = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_entity",
+			payload: { name: "Proposed Entity", entity_type: "project" },
+			propose: true,
+		});
+
+		expect(result.proposed).toBe(true);
+		expect(result.proposal.status).toBe("pending");
+		const entity = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Proposed Entity") as
+					| { id: string }
+					| undefined,
+		);
+		expect(entity).toBeNull();
+	});
+
+	it("set_claim_value creates queryable version chains and restore switches the active version", () => {
+		const payload = {
+			entity: "Signet",
+			entity_type: "project",
+			aspect: "architecture",
+			group_key: "ontology",
+			claim_key: "versioned_claim",
+		};
+		const v1 = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Version one." },
+		});
+		const v2 = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Version two." },
+		});
+		const v3 = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Version three." },
+		});
+
+		expect(v1.result?.version).toBe(1);
+		expect(v2.result?.version).toBe(2);
+		expect(v3.result?.version).toBe(3);
+		const versions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "versioned_claim",
+		});
+		expect(versions.items.map((item) => item.version)).toEqual([3, 2, 1]);
+		expect(versions.items.map((item) => item.status)).toEqual(["active", "superseded", "superseded"]);
+
+		const shown = getClaimVersion(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "versioned_claim",
+			version: 2,
+		});
+		expect(shown?.content).toBe("Version two.");
+
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "restore_claim_version",
+			payload: { attribute_id: shown?.id },
+		});
+		const restored = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "versioned_claim",
+		});
+		expect(restored.items.find((item) => item.version === 2)?.status).toBe("active");
+		expect(restored.items.find((item) => item.version === 3)?.status).toBe("superseded");
+	});
+
+	it("archives claim values and hides them from default active reads", () => {
+		const applied = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Signet",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "archive_claim",
+				value: "Archive me.",
+			},
+		});
+		const attributeId = applied.result?.attributeId as string;
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_claim_value",
+			payload: { attribute_id: attributeId, reason: "obsolete" },
+		});
+
+		const active = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT COUNT(*) AS n FROM entity_attributes WHERE id = ? AND status = 'active'")
+					.get(attributeId) as { n: number },
+		);
+		const versions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "archive_claim",
+		});
+		expect(active.n).toBe(0);
+		expect(versions.items[0]?.status).toBe("deleted");
+	});
+
+	it("rolls back an operation batch when one operation is invalid", () => {
+		expect(() =>
+			applyOntologyOperationBatch(getDbAccessor(), {
+				agentId: "ant",
+				actor: "operator",
+				operations: [
+					{ operation: "create_entity", payload: { name: "Batch Good", entity_type: "project" } },
+					{ operation: "rename_entity", payload: { selector: "Missing", new_name: "Nope" } },
+				],
+			}),
+		).toThrow(OntologyProposalError);
+		const count = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Batch Good") as {
+					n: number;
+				},
+		);
+		expect(count.n).toBe(0);
+		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+	});
+
+	it("returns per-line dry-run batch validation errors without writing", () => {
+		const result = applyOntologyOperationBatch(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			dryRun: true,
+			operations: [
+				{ operation: "create_entity", payload: { name: "Batch Preview", entity_type: "project" } },
+				{ operation: "rename_entity", payload: { selector: "Missing", new_name: "Nope" } },
+			],
+		});
+		const count = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND name = ?")
+					.get("ant", "Batch Preview") as {
+					n: number;
+				},
+		);
+
+		expect(result.dryRun).toBe(true);
+		expect(result.items).toHaveLength(1);
+		expect(result.errors).toEqual([
+			{
+				index: 1,
+				line: 2,
+				operation: "rename_entity",
+				error: "Entity not found: Missing",
+				status: 404,
+			},
+		]);
+		expect(count.n).toBe(0);
+		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+	});
+
+	it("rejects ambiguous same-agent entity selectors", () => {
+		insertEntity("one", "Signet A", "signet", "ant", 1);
+		insertEntity("two", "Signet B", "signet", "ant", 2);
+
+		expect(() =>
+			applyOntologyOperation(getDbAccessor(), {
+				agentId: "ant",
+				actor: "operator",
+				operation: "rename_entity",
+				payload: { selector: "signet", new_name: "Signet" },
+			}),
+		).toThrow("ambiguous");
 	});
 });

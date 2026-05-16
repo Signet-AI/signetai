@@ -228,6 +228,31 @@ function readProposalFile(path: string): readonly ProposalImportInput[] {
 	return normalizeProposalFile(readJsonFile(path));
 }
 
+function readTextFileOrStdin(path: string): string {
+	if (path === "-") return readFileSync(0, "utf8");
+	return readFileSync(path, "utf8");
+}
+
+function readOperationJsonl(path: string): readonly Record<string, unknown>[] {
+	return readTextFileOrStdin(path)
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+		.map((line, index) => {
+			try {
+				const parsed: unknown = JSON.parse(line);
+				if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+					return parsed as Record<string, unknown>;
+				}
+				throw new Error("line is not an object");
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				console.error(chalk.red(`Invalid JSONL operation on line ${index + 1}: ${message}`));
+				process.exit(1);
+			}
+		});
+}
+
 function proposalInput(
 	operation: string | undefined,
 	payload: Record<string, unknown>,
@@ -616,6 +641,57 @@ function addCommonOptions(cmd: Command): Command {
 	return cmd.option("--agent <name>", "Agent scope, default default").option("--json", "Output as JSON");
 }
 
+function addOperationOptions(cmd: Command): Command {
+	return addCommonOptions(cmd)
+		.option("--dry-run", "Validate and preview without writing")
+		.option("--propose", "Create a pending proposal instead of applying")
+		.option("--actor <name>", "Audit actor", "operator")
+		.option("--reason <text>", "Audit reason")
+		.option("--evidence-file <path>", "JSON evidence file, array or single object");
+}
+
+function operationBody(
+	operation: string,
+	payload: Record<string, unknown>,
+	options: Record<string, unknown>,
+): Record<string, unknown> {
+	return {
+		agent_id: options.agent,
+		actor: options.actor,
+		operation,
+		payload,
+		reason: options.reason,
+		evidence: readEvidenceFile(typeof options.evidenceFile === "string" ? options.evidenceFile : undefined),
+		dry_run: options.dryRun === true,
+		propose: options.propose === true,
+	};
+}
+
+async function postOperation(
+	deps: OntologyDeps,
+	operation: string,
+	payload: Record<string, unknown>,
+	options: Record<string, unknown>,
+): Promise<unknown> {
+	if (options.dryRun && options.propose) {
+		console.error(chalk.red("--dry-run and --propose cannot be used together"));
+		process.exit(1);
+	}
+	return apiPost(deps, "/api/ontology/operations/apply", operationBody(operation, payload, options));
+}
+
+function printOperationResult(data: unknown, options: Record<string, unknown>, label: string): void {
+	if (options.json) {
+		console.log(JSON.stringify(data, null, 2));
+		return;
+	}
+	const record = asRecord(data);
+	const proposal = asRecord(record.proposal);
+	const id = typeof proposal.id === "string" ? proposal.id : "";
+	const mode = record.dryRun === true ? "Dry-run validated" : record.proposed === true ? "Proposed" : "Applied";
+	console.log(chalk.green(`${mode} ${label}${id ? ` (${id})` : ""}`));
+}
+
 export function registerOntologyCommands(program: Command, deps: OntologyDeps): void {
 	const ontology = program.command("ontology").description("Inspect and maintain the operational ontology");
 
@@ -854,6 +930,423 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		if (options.json) console.log(JSON.stringify(data, null, 2));
 		else printOntologyClaims(data);
 	});
+
+	const entity = ontology.command("entity").description("Apply audited entity operations");
+	addOperationOptions(
+		entity
+			.command("create")
+			.description("Create an entity")
+			.argument("<name>", "Entity name")
+			.requiredOption("--type <type>"),
+	).action(async (name: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "create_entity", { name, entity_type: options.type }, options);
+		printOperationResult(data, options, "entity create");
+	});
+	addOperationOptions(
+		entity
+			.command("rename")
+			.description("Rename an entity")
+			.argument("<selector>", "Entity id or exact canonical name")
+			.argument("<new-name>", "New entity name"),
+	).action(async (selector: string, newName: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "rename_entity", { selector, new_name: newName }, options);
+		printOperationResult(data, options, "entity rename");
+	});
+	addOperationOptions(
+		entity
+			.command("merge")
+			.description("Merge source entities into a target entity")
+			.argument("<target>", "Target entity selector")
+			.argument("<source...>", "Source entity selectors"),
+	).action(async (target: string, source: readonly string[], options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"merge_entities",
+			{ target_entity: target, source_entities: source },
+			options,
+		);
+		printOperationResult(data, options, "entity merge");
+	});
+	addOperationOptions(
+		entity
+			.command("archive")
+			.description("Archive an entity")
+			.argument("<selector>", "Entity id or exact canonical name"),
+	).action(async (selector: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "archive_entity", { selector, reason: options.reason }, options);
+		printOperationResult(data, options, "entity archive");
+	});
+
+	const claim = ontology.command("claim").description("Apply audited claim/version operations");
+	addOperationOptions(
+		claim
+			.command("set")
+			.description("Set the current value for a claim")
+			.argument("<entity>", "Entity selector")
+			.argument("<aspect>", "Aspect name")
+			.argument("<group>", "Group key")
+			.argument("<claim>", "Claim key")
+			.requiredOption("--value <text>", "Claim value")
+			.option("--kind <kind>", "attribute or constraint"),
+	).action(async (entityName: string, aspect: string, group: string, claimKey: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"set_claim_value",
+			{
+				entity: entityName,
+				aspect,
+				group_key: group,
+				claim_key: claimKey,
+				value: options.value,
+				kind: options.kind,
+			},
+			options,
+		);
+		printOperationResult(data, options, "claim set");
+	});
+	addCommonOptions(
+		claim
+			.command("versions")
+			.description("List versions for a claim")
+			.argument("<entity>", "Entity selector")
+			.argument("<aspect>", "Aspect name")
+			.argument("<group>", "Group key")
+			.argument("<claim>", "Claim key")
+			.option("--kind <kind>", "attribute or constraint"),
+	).action(async (entityName: string, aspect: string, group: string, claimKey: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams({ entity: entityName, aspect, group, claim: claimKey });
+		appendAgent(params, options.agent);
+		if (options.kind) params.set("kind", options.kind);
+		const data = await apiGet(deps, "/api/ontology/claims/versions", params);
+		console.log(JSON.stringify(data, null, 2));
+	});
+	addCommonOptions(
+		claim
+			.command("show")
+			.description("Show one claim version")
+			.argument("<entity>", "Entity selector")
+			.argument("<aspect>", "Aspect name")
+			.argument("<group>", "Group key")
+			.argument("<claim>", "Claim key")
+			.requiredOption("--version <n>", "Version number", Number.parseInt)
+			.option("--kind <kind>", "attribute or constraint"),
+	).action(async (entityName: string, aspect: string, group: string, claimKey: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams({
+			entity: entityName,
+			aspect,
+			group,
+			claim: claimKey,
+			version: String(options.version),
+		});
+		appendAgent(params, options.agent);
+		if (options.kind) params.set("kind", options.kind);
+		const data = await apiGet(deps, "/api/ontology/claims/version", params);
+		console.log(JSON.stringify(data, null, 2));
+	});
+	addOperationOptions(
+		claim.command("archive").description("Archive a claim value").requiredOption("--attribute-id <id>"),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"archive_claim_value",
+			{ attribute_id: options.attributeId, reason: options.reason },
+			options,
+		);
+		printOperationResult(data, options, "claim archive");
+	});
+	addOperationOptions(
+		claim.command("restore").description("Restore a claim version").requiredOption("--attribute-id <id>"),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "restore_claim_version", { attribute_id: options.attributeId }, options);
+		printOperationResult(data, options, "claim restore");
+	});
+
+	const aspect = ontology.command("aspect").description("Apply audited aspect operations");
+	addOperationOptions(
+		aspect
+			.command("create")
+			.description("Create an aspect")
+			.argument("<entity>", "Entity selector")
+			.argument("<name>", "Aspect name"),
+	).action(async (entityName: string, name: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "create_aspect", { entity: entityName, name }, options);
+		printOperationResult(data, options, "aspect create");
+	});
+	addOperationOptions(
+		aspect
+			.command("rename")
+			.description("Rename an aspect")
+			.argument("<entity>", "Entity selector")
+			.argument("<selector>", "Aspect selector")
+			.argument("<new-name>", "New aspect name"),
+	).action(async (entityName: string, selector: string, newName: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"rename_aspect",
+			{ entity: entityName, selector, new_name: newName },
+			options,
+		);
+		printOperationResult(data, options, "aspect rename");
+	});
+	addOperationOptions(
+		aspect
+			.command("archive")
+			.description("Archive an aspect")
+			.argument("<entity>", "Entity selector")
+			.argument("<selector>", "Aspect selector"),
+	).action(async (entityName: string, selector: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"archive_aspect",
+			{ entity: entityName, selector, reason: options.reason },
+			options,
+		);
+		printOperationResult(data, options, "aspect archive");
+	});
+
+	const link = ontology.command("link").description("Apply audited link operations");
+	addOperationOptions(
+		link
+			.command("create")
+			.description("Create a link")
+			.argument("<source>", "Source entity selector")
+			.argument("<type>", "Dependency/link type")
+			.argument("<target>", "Target entity selector")
+			.option("--source-type <type>")
+			.option("--target-type <type>")
+			.option("--strength <n>", "Strength from 0 to 1", Number.parseFloat)
+			.option("--confidence <n>", "Confidence from 0 to 1", Number.parseFloat),
+	).action(async (source: string, type: string, target: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"create_link",
+			{
+				source_entity: source,
+				link_type: type,
+				target_entity: target,
+				source_type: options.sourceType,
+				target_type: options.targetType,
+				strength: options.strength,
+				confidence: options.confidence,
+				reason: options.reason,
+			},
+			options,
+		);
+		printOperationResult(data, options, "link create");
+	});
+	addOperationOptions(
+		link
+			.command("update")
+			.description("Update a link")
+			.argument("<id>", "Link id")
+			.option("--type <type>", "Dependency/link type")
+			.option("--strength <n>", "Strength from 0 to 1", Number.parseFloat)
+			.option("--confidence <n>", "Confidence from 0 to 1", Number.parseFloat),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"update_link",
+			{
+				id,
+				link_type: options.type,
+				strength: options.strength,
+				confidence: options.confidence,
+				reason: options.reason,
+			},
+			options,
+		);
+		printOperationResult(data, options, "link update");
+	});
+	addOperationOptions(link.command("archive").description("Archive a link").argument("<id>", "Link id")).action(
+		async (id: string, options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const data = await postOperation(deps, "archive_link", { id, reason: options.reason }, options);
+			printOperationResult(data, options, "link archive");
+		},
+	);
+
+	const stream = ontology.command("stream").description("Apply JSONL operation streams");
+	stream
+		.command("apply")
+		.description("Apply, dry-run, or propose a JSONL operation stream")
+		.argument("<path>", "JSONL path or - for stdin")
+		.option("--dry-run", "Validate and preview without writing")
+		.option("--propose", "Create pending proposals instead of applying")
+		.option("--agent <name>", "Agent scope, default default")
+		.option("--actor <name>", "Audit actor", "operator")
+		.option("--json", "Output as JSON")
+		.action(async (path: string, options) => {
+			if (options.dryRun && options.propose) {
+				console.error(chalk.red("--dry-run and --propose cannot be used together"));
+				process.exit(1);
+			}
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const operations = readOperationJsonl(path);
+			const data = await apiPost(deps, "/api/ontology/operations/batch", {
+				agent_id: options.agent,
+				actor: options.actor,
+				dry_run: options.dryRun === true,
+				propose: options.propose === true,
+				operations,
+			});
+			if (options.json) console.log(JSON.stringify(data, null, 2));
+			else printOperationResult(data, options, "operation stream");
+		});
+
+	const pipeline = ontology.command("pipeline").description("Inspect Pipeline V2 graph mutation state");
+	pipeline
+		.command("status")
+		.description("Show graph-related Pipeline V2 status")
+		.option("--json", "Output as JSON")
+		.action(async (options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const status = asRecord(await apiGet(deps, "/api/status", new URLSearchParams()));
+			const pipe = asRecord(status.pipelineV2);
+			const data = {
+				enabled: pipe.enabled,
+				paused: pipe.paused,
+				graphEnabled: asRecord(pipe.graph).enabled,
+				traversal: pipe.traversal,
+				shadowMode: pipe.shadowMode,
+				mutationsFrozen: pipe.mutationsFrozen,
+				autonomousEnabled: asRecord(pipe.autonomous).enabled,
+				allowUpdateDelete: asRecord(pipe.autonomous).allowUpdateDelete,
+				extraction: pipe.extraction,
+				dampening: pipe.dampening,
+				writeGates: {
+					shadowMode: pipe.shadowMode,
+					mutationsFrozen: pipe.mutationsFrozen,
+					minFactConfidenceForWrite: pipe.minFactConfidenceForWrite,
+					allowUpdateDelete: asRecord(pipe.autonomous).allowUpdateDelete,
+				},
+			};
+			if (options.json) console.log(JSON.stringify(data, null, 2));
+			else {
+				console.log(chalk.bold("\n  Ontology Pipeline Status\n"));
+				console.log(chalk.dim(`  Pipeline V2: ${data.enabled ? "enabled" : "disabled"}`));
+				console.log(chalk.dim(`  Graph:       ${data.graphEnabled ? "enabled" : "disabled"}`));
+				console.log(chalk.dim(`  Traversal:   ${asRecord(data.traversal).enabled ? "enabled" : "disabled"}`));
+				console.log(chalk.dim(`  Shadow:      ${data.shadowMode ? "on" : "off"}`));
+				console.log(chalk.dim(`  Frozen:      ${data.mutationsFrozen ? "yes" : "no"}`));
+				console.log(chalk.dim(`  Autonomous:  ${data.autonomousEnabled ? "enabled" : "disabled"}`));
+				console.log(chalk.dim(`  Update/del:  ${data.allowUpdateDelete ? "allowed" : "blocked"}`));
+				console.log();
+			}
+		});
+	pipeline
+		.command("config")
+		.description("Show graph-related Pipeline V2 config")
+		.option("--json", "Output as JSON")
+		.action(async (options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const status = asRecord(await apiGet(deps, "/api/status", new URLSearchParams()));
+			const pipe = asRecord(status.pipelineV2);
+			const data = {
+				pipelineV2: {
+					enabled: pipe.enabled,
+					paused: pipe.paused,
+					graph: pipe.graph,
+					traversal: pipe.traversal,
+					reranker: pipe.reranker,
+					dampening: pipe.dampening,
+					shadowMode: pipe.shadowMode,
+					mutationsFrozen: pipe.mutationsFrozen,
+					autonomous: pipe.autonomous,
+					extraction: pipe.extraction,
+					hints: pipe.hints,
+				},
+			};
+			console.log(JSON.stringify(data, null, 2));
+		});
+	pipeline
+		.command("explain")
+		.description("Explain what can currently mutate or shape the graph")
+		.option("--json", "Output as JSON")
+		.action(async (options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const status = asRecord(await apiGet(deps, "/api/status", new URLSearchParams()));
+			const pipe = asRecord(status.pipelineV2);
+			const graph = asRecord(pipe.graph);
+			const autonomous = asRecord(pipe.autonomous);
+			const data = {
+				directOperations:
+					"signet ontology entity/claim/aspect/link/stream commands mutate only through applied proposals.",
+				generatedChanges: "ontology extract/consolidate/dreaming skill paths are proposal-first by default.",
+				pipelineWrites:
+					pipe.enabled === true && pipe.shadowMode !== true && pipe.mutationsFrozen !== true
+						? "Pipeline V2 controlled writes may add memories; graph extraction writes depend on graph config."
+						: "Pipeline V2 direct writes are blocked by disabled, shadow, or frozen mode.",
+				graphExtractionWrites: graph.extractionWritesEnabled,
+				traversalShapesRecall: asRecord(pipe.traversal).enabled === true,
+				autonomousMaintenance: autonomous.enabled === true && autonomous.frozen !== true,
+				allowUpdateDelete: autonomous.allowUpdateDelete === true,
+			};
+			if (options.json) console.log(JSON.stringify(data, null, 2));
+			else {
+				console.log(chalk.bold("\n  What Can Shape The Knowledge Graph\n"));
+				for (const [key, value] of Object.entries(data)) console.log(`  ${chalk.dim(`${key}:`)} ${value}`);
+				console.log();
+			}
+		});
+
+	const config = ontology.command("config").description("Inspect ontology control-plane config");
+	config
+		.command("show")
+		.option("--json", "Output as JSON")
+		.action(async () => {
+			const data = {
+				operationsUsable: true,
+				operationSurface: {
+					applyFirst: true,
+					propose: true,
+					dryRun: true,
+					auditedThrough: "ontology_proposals",
+				},
+				policyFile: {
+					path: "$SIGNET_WORKSPACE/ontology/graph.yaml",
+					active: false,
+					note: "No separate graph.yaml policy gate is active; audited daemon operation tools are usable without it.",
+				},
+			};
+			console.log(JSON.stringify(data, null, 2));
+		});
+	config
+		.command("validate")
+		.option("--json", "Output as JSON")
+		.action(async () => {
+			const data = {
+				valid: true,
+				operationsUsable: true,
+				policyFileActive: false,
+				warnings: ["No external ontology graph.yaml policy gate is active."],
+			};
+			console.log(JSON.stringify(data, null, 2));
+		});
+	config
+		.command("explain")
+		.option("--json", "Output as JSON")
+		.action(async () => {
+			const data = {
+				hiddenMutationPaths: false,
+				explanation:
+					"Generated maintenance must use pending proposals or dry-run diffs; exact CLI/API operations can apply directly only through audited daemon operation endpoints.",
+			};
+			console.log(JSON.stringify(data, null, 2));
+		});
 
 	ontology
 		.command("repair")

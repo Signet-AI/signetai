@@ -647,6 +647,12 @@ export interface Entity {
 	mentions?: number;
 	pinned?: boolean;
 	pinnedAt?: string | null;
+	status?: OntologyRowStatus;
+	archivedAt?: string | null;
+	archivedBy?: string | null;
+	archiveReason?: string | null;
+	proposalId?: string | null;
+	proposalEvidence?: readonly unknown[];
 	createdAt: string;
 	updatedAt: string;
 }
@@ -738,6 +744,8 @@ export type AttributeKind = (typeof ATTRIBUTE_KINDS)[number];
 
 export const ATTRIBUTE_STATUSES = ["active", "superseded", "deleted"] as const;
 export type AttributeStatus = (typeof ATTRIBUTE_STATUSES)[number];
+export const ONTOLOGY_ROW_STATUSES = ["active", "archived"] as const;
+export type OntologyRowStatus = (typeof ONTOLOGY_ROW_STATUSES)[number];
 
 export const DEPENDENCY_TYPES = [
 	// core
@@ -824,7 +832,17 @@ export type OntologyProposalStatus = (typeof ONTOLOGY_PROPOSAL_STATUSES)[number]
 export const ONTOLOGY_PROPOSAL_OPERATIONS = [
 	"create_entity",
 	"add_claim_value",
+	"set_claim_value",
+	"rename_entity",
+	"archive_entity",
+	"create_aspect",
+	"rename_aspect",
+	"archive_aspect",
+	"archive_claim_value",
+	"restore_claim_version",
 	"create_link",
+	"update_link",
+	"archive_link",
 	"merge_entities",
 	"supersede_claim_value",
 	"create_policy",
@@ -865,6 +883,12 @@ export interface EntityAspect {
 	readonly name: string;
 	readonly canonicalName: string;
 	readonly weight: number;
+	readonly status?: OntologyRowStatus;
+	readonly archivedAt?: string | null;
+	readonly archivedBy?: string | null;
+	readonly archiveReason?: string | null;
+	readonly proposalId?: string | null;
+	readonly proposalEvidence?: readonly unknown[];
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }
@@ -883,6 +907,12 @@ export interface EntityAttribute {
 	readonly importance: number;
 	readonly status: AttributeStatus;
 	readonly supersededBy: string | null;
+	readonly version?: number;
+	readonly versionRootId?: string | null;
+	readonly previousAttributeId?: string | null;
+	readonly archivedAt?: string | null;
+	readonly archivedBy?: string | null;
+	readonly archiveReason?: string | null;
 	readonly sourceKind: string | null;
 	readonly sourceId: string | null;
 	readonly sourcePath: string | null;
@@ -903,6 +933,10 @@ export interface EntityDependency {
 	readonly strength: number;
 	readonly confidence: number;
 	readonly reason: string | null;
+	readonly status?: OntologyRowStatus;
+	readonly archivedAt?: string | null;
+	readonly archivedBy?: string | null;
+	readonly archiveReason?: string | null;
 	readonly sourceKind: string | null;
 	readonly sourceId: string | null;
 	readonly sourcePath: string | null;
