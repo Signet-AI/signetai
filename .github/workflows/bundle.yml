@@ -539,34 +539,75 @@ jobs:
                 exit 1
               fi
             done
-            # Import the daemon package API entrypoint; daemon.js is the service entrypoint and would start the server.
-            SIGNET_DAEMON_SMOKE_MODULE="$CHECK_DIR/runtime/daemon-js/index.js" \
-              "$CHECK_DIR/runtime/node/bin/node" \
-              --input-type=module \
-              -e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'
-            mkdir -p "$CHECK_DIR/bin" "$CHECK_DIR/smoke-agents"
-            {
-              printf '%s\n' '#!/usr/bin/env bash'
-              printf '%s\n' 'set -euo pipefail'
-              printf '%s\n' 'SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"'
-              printf '%s\n' 'export SIGNET_DIR'
-              printf '%s\n' 'export SIGNET_DASHBOARD_DIR="$SIGNET_DIR/runtime/dashboard"'
-              printf '%s\n' 'export SIGNET_SKILLS_SOURCE="$SIGNET_DIR/runtime/skills"'
-              printf '%s\n' 'export SIGNET_TEMPLATES_DIR="$SIGNET_DIR/runtime/templates"'
-              printf '%s\n' 'export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"'
-              printf '%s\n' 'case "$(uname -s)" in'
-              printf '%s\n' '  Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;'
-              printf '%s\n' '  Darwin) export DYLD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;'
-              printf '%s\n' 'esac'
-              printf '%s\n' 'exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" "$@"'
-            } > "$CHECK_DIR/bin/signet"
-            chmod +x "$CHECK_DIR/bin/signet"
-            "$CHECK_DIR/bin/signet" --help >/dev/null
-            "$CHECK_DIR/bin/signet" setup --help >/dev/null
-            "$CHECK_DIR/bin/signet" dashboard --help >/dev/null
-            "$CHECK_DIR/bin/signet" daemon --help >/dev/null
-            "$CHECK_DIR/bin/signet" daemon status --path "$CHECK_DIR/smoke-agents" --json >/dev/null
-            "$CHECK_DIR/bin/signet" mcp --help >/dev/null
+            if [ "$PLATFORM" = "linux-x64" ]; then
+              # Runtime smoke can only execute the assembled bundle matching the release runner OS/arch.
+              SIGNET_DAEMON_SMOKE_MODULE="$CHECK_DIR/runtime/daemon-js/index.js" \
+                "$CHECK_DIR/runtime/node/bin/node" \
+                --input-type=module \
+                -e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'
+              mkdir -p "$CHECK_DIR/bin" "$CHECK_DIR/smoke-agents"
+              {
+                printf '%s\n' '#!/usr/bin/env bash'
+                printf '%s\n' 'set -euo pipefail'
+                printf '%s\n' 'SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"'
+                printf '%s\n' 'export SIGNET_DIR'
+                printf '%s\n' 'export SIGNET_DASHBOARD_DIR="$SIGNET_DIR/runtime/dashboard"'
+                printf '%s\n' 'export SIGNET_SKILLS_SOURCE="$SIGNET_DIR/runtime/skills"'
+                printf '%s\n' 'export SIGNET_TEMPLATES_DIR="$SIGNET_DIR/runtime/templates"'
+                printf '%s\n' 'export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"'
+                printf '%s\n' 'case "$(uname -s)" in'
+                printf '%s\n' '  Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;'
+                printf '%s\n' '  Darwin) export DYLD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;'
+                printf '%s\n' 'esac'
+                printf '%s\n' 'exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" "$@"'
+              } > "$CHECK_DIR/bin/signet"
+              chmod +x "$CHECK_DIR/bin/signet"
+              "$CHECK_DIR/bin/signet" --help >/dev/null
+              "$CHECK_DIR/bin/signet" setup --help >/dev/null
+              "$CHECK_DIR/bin/signet" dashboard --help >/dev/null
+              "$CHECK_DIR/bin/signet" daemon --help >/dev/null
+              "$CHECK_DIR/bin/signet" daemon status --path "$CHECK_DIR/smoke-agents" --json >/dev/null
+              "$CHECK_DIR/bin/signet" mcp --help >/dev/null
+
+              SMOKE_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+              SMOKE_PID=""
+              SMOKE_LOG="$CHECK_DIR/daemon-smoke.log"
+              trap 'if [ -n "${SMOKE_PID:-}" ]; then kill "$SMOKE_PID" 2>/dev/null || true; fi' EXIT
+              SIGNET_DIR="$CHECK_DIR" \
+                SIGNET_PATH="$CHECK_DIR/smoke-agents" \
+                SIGNET_PORT="$SMOKE_PORT" \
+                SIGNET_HOST="127.0.0.1" \
+                SIGNET_BIND="127.0.0.1" \
+                SIGNET_DAEMON_ENTRYPOINT="1" \
+                SIGNET_DASHBOARD_DIR="$CHECK_DIR/runtime/dashboard" \
+                SIGNET_SKILLS_SOURCE="$CHECK_DIR/runtime/skills" \
+                SIGNET_TEMPLATES_DIR="$CHECK_DIR/runtime/templates" \
+                NODE_PATH="$CHECK_DIR/runtime/daemon-js/node_modules" \
+                LD_LIBRARY_PATH="$CHECK_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+                "$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/daemon-js/daemon.js" > "$SMOKE_LOG" 2>&1 &
+              SMOKE_PID="$!"
+              SMOKE_OK=0
+              for _ in {1..30}; do
+                if curl -fsS "http://127.0.0.1:${SMOKE_PORT}/health" | grep -q '"status":"healthy"'; then
+                  SMOKE_OK=1
+                  break
+                fi
+                if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
+                  echo "::error::Bundled Node daemon exited before /health became ready"
+                  cat "$SMOKE_LOG"
+                  exit 1
+                fi
+                sleep 1
+              done
+              if [ "$SMOKE_OK" != "1" ]; then
+                echo "::error::Bundled Node daemon did not become healthy"
+                cat "$SMOKE_LOG"
+                exit 1
+              fi
+              kill "$SMOKE_PID" 2>/dev/null || true
+              wait "$SMOKE_PID" 2>/dev/null || true
+              SMOKE_PID=""
+            fi
             # Copy manifest into explicit release staging inputs for upload
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$MANIFEST_DIR/"
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$PLAT_DIR/"

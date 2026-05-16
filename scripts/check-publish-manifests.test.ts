@@ -217,13 +217,14 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain(".scripts[$script].url and .scripts[$script].sha256");
 		expect(workflow).toContain("Merged manifest for $PLATFORM missing expected helper script: $script");
 		expect(workflow).toContain('cp "$MERGE_DIR/manifest-$PLATFORM.json" "$MANIFEST_DIR/"');
-		expect(workflow).toContain("Import the daemon package API entrypoint");
 		expect(daemonBuild).toContain('{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" }');
 		expect(daemonBuild).toContain('{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" }');
 		expect(workflow).toContain('SIGNET_DAEMON_SMOKE_MODULE="$CHECK_DIR/runtime/daemon-js/index.js"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node"');
 		expect(workflow).toContain("--input-type=module");
 		expect(workflow).toContain("-e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'");
+		expect(workflow).toContain('if [ "$PLATFORM" = "linux-x64" ]; then');
+		expect(workflow).toContain("Runtime smoke can only execute the assembled bundle matching the release runner OS/arch");
 		expect(workflow).toContain('} > "$CHECK_DIR/bin/signet"');
 		expect(workflow).toContain('export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"');
 		expect(workflow).toContain('"$CHECK_DIR/bin/signet" setup --help >/dev/null');
@@ -231,6 +232,12 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/bin/signet" daemon --help >/dev/null');
 		expect(workflow).toContain('"$CHECK_DIR/bin/signet" daemon status --path "$CHECK_DIR/smoke-agents" --json >/dev/null');
 		expect(workflow).toContain('"$CHECK_DIR/bin/signet" mcp --help >/dev/null');
+		expect(workflow).toContain('SMOKE_PORT="$(python3 -c');
+		expect(workflow).toContain('SIGNET_DAEMON_ENTRYPOINT="1"');
+		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/daemon-js/daemon.js" > "$SMOKE_LOG" 2>&1 &');
+		expect(workflow).toContain('curl -fsS "http://127.0.0.1:${SMOKE_PORT}/health"');
+		expect(workflow).toContain("Bundled Node daemon did not become healthy");
+		expect(workflow).toContain('trap \'if [ -n "${SMOKE_PID:-}" ]; then kill "$SMOKE_PID"');
 		expect(workflow).not.toContain('if [ "$PLATFORM" = "linux-x64" ]; then\n              # Import the daemon package API entrypoint');
 		expect(workflow).not.toContain("import(process.env.SIGNET_DAEMON_SMOKE)");
 	});
