@@ -3178,6 +3178,63 @@ Diagnostic data for a single domain. Known domains: `database`, `pipeline`,
 
 Returns `400` for unknown domains.
 
+### GET /api/diagnostics/database/schema
+
+Read-only SQLite schema explorer data for the dashboard database table view.
+Returns live table metadata grouped by conceptual area, with row counts,
+columns, indexes, foreign keys, and whether sample rows are available.
+
+**Response**
+
+```json
+{
+  "generatedAt": "2026-05-15T12:00:00.000Z",
+  "groups": { "core": 8, "provenance": 6, "runtime": 12, "internal": 3, "other": 1 },
+  "tables": [
+    {
+      "name": "entities",
+      "group": "core",
+      "kind": "table",
+      "rowCount": 42,
+      "sampleAllowed": true,
+      "columns": [
+        { "cid": 0, "name": "id", "type": "TEXT", "notNull": false, "defaultValue": null, "primaryKey": true }
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "sql": "CREATE TABLE entities (...)"
+    }
+  ]
+}
+```
+
+### GET /api/diagnostics/database/tables/:table/sample
+
+Returns a bounded read-only sample for a validated table name. The daemon
+derives valid table names from SQLite metadata before constructing SQL.
+Internal index and virtual tables can return `400` with an explanatory error.
+
+Query parameters:
+
+| Name | Default | Notes |
+|------|---------|-------|
+| `limit` | `25` | Clamped to `1..100`. |
+| `offset` | `0` | Clamped to non-negative values. |
+
+**Response**
+
+```json
+{
+  "table": "entities",
+  "columns": ["id", "name", "entity_type"],
+  "rows": [{ "id": "entity-1", "name": "Signet", "entity_type": "system" }],
+  "limit": 25,
+  "offset": 0,
+  "rowCount": 42,
+  "hasMore": true
+}
+```
+
 
 Repair
 ------
@@ -4310,6 +4367,8 @@ silently disappear from the API reference.
 | GET | `/api/os/agent-sessions` | platform/daemon/src/routes/os-agent.ts |
 | POST | `/api/os/chat` | platform/daemon/src/routes/os-chat.ts |
 | GET | `/api/home/greeting` | platform/daemon/src/routes/pipeline-routes.ts |
+| GET | `/api/diagnostics/database/schema` | platform/daemon/src/routes/database-diagnostics.ts |
+| GET | `/api/diagnostics/database/tables/:table/sample` | platform/daemon/src/routes/database-diagnostics.ts |
 | POST | `/api/diagnostics/openclaw/heartbeat` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/diagnostics/openclaw` | platform/daemon/src/routes/pipeline-routes.ts |
 | POST | `/api/pipeline/nudge` | platform/daemon/src/routes/pipeline-routes.ts |

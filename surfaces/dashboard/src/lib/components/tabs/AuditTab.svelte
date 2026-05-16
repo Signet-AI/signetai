@@ -1,6 +1,6 @@
 <script lang="ts">
-type Section = "troubleshooter" | "logs";
-const SECTION_SET = new Set<string>(["troubleshooter", "logs"]);
+type Section = "troubleshooter" | "database" | "logs";
+const SECTION_SET = new Set<string>(["troubleshooter", "database", "logs"]);
 
 function readSection(): Section {
 	if (typeof window === "undefined") return "troubleshooter";
@@ -43,11 +43,14 @@ const idle = `${btn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var
 		<div class="tab-header-left">
 			<span class="tab-header-title">AUDIT</span>
 			<span class="tab-header-sep" aria-hidden="true"></span>
-			<span class="tab-header-count">TROUBLESHOOTER + LOGS</span>
+			<span class="tab-header-count">TROUBLESHOOTER + DATABASE + LOGS</span>
 		</div>
 		<div class="sub-group">
 			<button class={section === "troubleshooter" ? active : idle} onclick={() => (section = "troubleshooter")}>
 				TROUBLESHOOTER
+			</button>
+			<button class={section === "database" ? active : idle} onclick={() => (section = "database")}>
+				DATABASE
 			</button>
 			<button class={section === "logs" ? active : idle} onclick={() => (section = "logs")}>
 				LOGS
@@ -59,6 +62,14 @@ const idle = `${btn} bg-transparent text-[var(--sig-text-muted)] hover:text-[var
 		{#if section === "troubleshooter"}
 			{#await import("$lib/components/cortex/TroubleshooterPanel.svelte")}
 				<div class="audit-loading">Loading troubleshooter...</div>
+			{:then mod}
+				<mod.default />
+			{:catch err}
+				<div class="audit-error">Failed to load: {err?.message ?? "unknown"}</div>
+			{/await}
+		{:else if section === "database"}
+			{#await import("$lib/components/audit/DatabaseSchemaPanel.svelte")}
+				<div class="audit-loading">Loading database schema...</div>
 			{:then mod}
 				<mod.default />
 			{:catch err}

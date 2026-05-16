@@ -72,7 +72,6 @@ export interface UpdateHealth extends HealthScore {
 	readonly lastError: string | null;
 }
 
-
 export interface GraphHealth {
 	readonly entityCount: number;
 	readonly edgeCount: number;
@@ -173,6 +172,12 @@ function scoreStatus(score: number): "healthy" | "degraded" | "unhealthy" {
 	if (score >= 0.8) return "healthy";
 	if (score >= 0.5) return "degraded";
 	return "unhealthy";
+}
+
+function worstStatus(statuses: readonly HealthScore["status"][]): HealthScore["status"] {
+	if (statuses.includes("unhealthy")) return "unhealthy";
+	if (statuses.includes("degraded")) return "degraded";
+	return "healthy";
 }
 
 function clamp(n: number): number {
@@ -530,7 +535,6 @@ const BASE_WEIGHTS = {
 	update: 0.11,
 } as const;
 
-
 // ---------------------------------------------------------------------------
 // Graph health (informational, not included in composite score)
 // ---------------------------------------------------------------------------
@@ -603,7 +607,16 @@ export function getDiagnostics(
 
 	const composite: HealthScore = {
 		score: compositeScore,
-		status: scoreStatus(compositeScore),
+		status: worstStatus([
+			queue.status,
+			storage.status,
+			index.status,
+			provider.status,
+			mutation.status,
+			duplicate.status,
+			connector.status,
+			update.status,
+		]),
 	};
 
 	const openclaw: OpenClawHealth = openclawHealth ?? {

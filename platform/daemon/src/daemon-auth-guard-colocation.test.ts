@@ -320,6 +320,15 @@ describe("auth guard co-location", () => {
 		});
 	});
 
+	describe("database diagnostics routes need diagnostics guards", () => {
+		it("GET /api/diagnostics/database/schema returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerDatabaseDiagnosticsRoutes } = await import("./routes/database-diagnostics");
+			registerDatabaseDiagnosticsRoutes(app);
+			expect(await status(app, "GET", "/api/diagnostics/database/schema")).toBe(403);
+		});
+	});
+
 	describe("plugin routes need guards", () => {
 		it("GET /api/plugins returns 403 without auth", async () => {
 			const app = await makeApp();
