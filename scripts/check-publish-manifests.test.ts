@@ -187,6 +187,18 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain("import(process.env.SIGNET_DAEMON_SMOKE)");
 	});
 
+	test("fails release staging when duplicate asset names have different content", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain("De-duplicate and stage release assets");
+		expect(workflow).toContain('existing="$(sha256sum "/tmp/release-staging/$base"');
+		expect(workflow).toContain('current="$(sha256sum "$f"');
+		expect(workflow).toContain("::error::Duplicate asset $base with different content");
+		expect(workflow).toContain("exit 1");
+		expect(workflow).not.toContain("::warning::Duplicate asset $base with different content");
+	});
+
 	test("delegates updater reinstall without sharing the install lock trap", () => {
 		const root = join(import.meta.dir, "..");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");

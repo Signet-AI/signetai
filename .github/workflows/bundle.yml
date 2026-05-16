@@ -505,7 +505,8 @@ jobs:
               existing="$(sha256sum "/tmp/release-staging/$base" | awk '{print $1}')"
               current="$(sha256sum "$f" | awk '{print $1}')"
               if [ "$existing" = "$current" ]; then continue; fi
-              echo "::warning::Duplicate asset $base with different content"
+              echo "::error::Duplicate asset $base with different content"
+              exit 1
             fi
             cp "$f" "/tmp/release-staging/"
           done
