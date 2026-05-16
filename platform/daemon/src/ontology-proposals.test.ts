@@ -1319,6 +1319,48 @@ describe("ontology proposals", () => {
 		expect(versions.items[0]?.status).toBe("deleted");
 	});
 
+	it("continues claim version chains after the active value is archived", () => {
+		const payload = {
+			entity: "Archive Version Chain",
+			entity_type: "project",
+			aspect: "architecture",
+			group_key: "ontology",
+			claim_key: "archived_chain",
+		};
+		const first = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Archived first version." },
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_claim_value",
+			payload: { attribute_id: first.result?.attributeId, reason: "retired" },
+		});
+		const second = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Replacement after archive." },
+		});
+
+		const versions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Archive Version Chain",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "archived_chain",
+		});
+
+		expect(second.result?.version).toBe(2);
+		expect(second.result?.versionRootId).toBe(first.result?.versionRootId);
+		expect(second.result?.previousAttributeId).toBe(first.result?.attributeId);
+		expect(versions.items.map((item) => item.version)).toEqual([2, 1]);
+		expect(versions.items.map((item) => item.status)).toEqual(["active", "deleted"]);
+	});
+
 	it("records the applying actor when pending archive proposals are applied", () => {
 		const entity = applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",

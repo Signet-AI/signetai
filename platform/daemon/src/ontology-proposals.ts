@@ -671,16 +671,15 @@ function applySetClaimValue(
 	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect);
 	const groupKey = canonicalKey(readString(payload, "group_key") ?? readString(payload, "group")) ?? "general";
 	const kind = normalizeAttributeKind(readString(payload, "kind"));
-	const active = db
+	const slot = db
 		.prepare(
-			`SELECT id, content, normalized_content, version, version_root_id, kind
+			`SELECT id, content, normalized_content, version, version_root_id, kind, status
 			 FROM entity_attributes
 			 WHERE aspect_id = ?
 			   AND agent_id = ?
 			   AND kind = ?
 			   AND COALESCE(group_key, 'general') = ?
 			   AND claim_key = ?
-			   AND status = 'active'
 			 ORDER BY version DESC, updated_at DESC`,
 		)
 		.all(aspectId, agentId, kind, groupKey, claimKey) as Array<{
@@ -690,7 +689,9 @@ function applySetClaimValue(
 		version: number | null;
 		version_root_id: string | null;
 		kind: string;
+		status: string;
 	}>;
+	const active = slot.filter((row) => row.status === "active");
 	const normalized = canonical(value);
 	const existing = active.find((row) => row.normalized_content === normalized);
 	if (existing && active.length === 1) {
@@ -712,8 +713,8 @@ function applySetClaimValue(
 		throw new OntologyProposalError("Refusing to replace active constraint claim without force", 409);
 	}
 
-	const previous = active[0] ?? null;
-	const version = previous === null ? 1 : Math.max(...active.map((row) => row.version ?? 1)) + 1;
+	const previous = active[0] ?? slot[0] ?? null;
+	const version = previous === null ? 1 : Math.max(...slot.map((row) => row.version ?? 1)) + 1;
 	const rootId = previous?.version_root_id ?? previous?.id ?? crypto.randomUUID();
 	const id = version === 1 ? rootId : crypto.randomUUID();
 	const confidence = clamp01(readNumber(payload, "confidence") ?? proposal.confidence);
