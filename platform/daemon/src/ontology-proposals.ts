@@ -608,11 +608,6 @@ function applyAddClaimValue(
 		)
 		.get(aspectId, agentId, kind, normalized, groupKey, claimKey) as { id: string } | undefined;
 	if (existing) {
-		db.prepare(
-			`UPDATE entity_attributes
-			 SET proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
-			 WHERE id = ? AND agent_id = ?`,
-		).run(proposal.id, JSON.stringify(proposalAuditEvidence(proposal)), existing.id, agentId);
 		return { entityId, aspectId, attributeId: existing.id, deduped: true };
 	}
 
@@ -695,11 +690,6 @@ function applySetClaimValue(
 	const normalized = canonical(value);
 	const existing = active.find((row) => row.normalized_content === normalized);
 	if (existing && active.length === 1) {
-		db.prepare(
-			`UPDATE entity_attributes
-			 SET proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
-			 WHERE id = ? AND agent_id = ?`,
-		).run(proposal.id, JSON.stringify(proposalAuditEvidence(proposal)), existing.id, agentId);
 		return {
 			entityId,
 			aspectId,

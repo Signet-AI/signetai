@@ -1361,6 +1361,118 @@ describe("ontology proposals", () => {
 		expect(versions.items.map((item) => item.status)).toEqual(["active", "deleted"]);
 	});
 
+	it("preserves original claim provenance when repeated writes dedupe", () => {
+		const first = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Dedupe Provenance",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "source_truth",
+				value: "The original evidence owns this row.",
+			},
+			evidence: [{ source: "transcript:first", message_ids: ["m1"] }],
+			createdBy: "first",
+		});
+		const applied = applyOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: first.id,
+			actor: "operator",
+		});
+		const repeated = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Dedupe Provenance",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "source_truth",
+				value: "The original evidence owns this row.",
+			},
+			evidence: [{ source: "transcript:repeat", message_ids: ["m2"] }],
+			createdBy: "repeat",
+		});
+
+		const second = applyOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: repeated.id,
+			actor: "operator",
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT proposal_id, proposal_evidence FROM entity_attributes WHERE id = ?")
+					.get(applied.result?.attributeId as string) as
+					| { proposal_id: string | null; proposal_evidence: string | null }
+					| undefined,
+		);
+		expect(second.result?.deduped).toBe(true);
+		expect(second.result?.attributeId).toBe(applied.result?.attributeId);
+		expect(row?.proposal_id).toBe(first.id);
+		expect(JSON.parse(row?.proposal_evidence ?? "[]")).toEqual([{ source: "transcript:first", message_ids: ["m1"] }]);
+	});
+
+	it("preserves original additive claim provenance when repeated values dedupe", () => {
+		const first = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Additive Provenance",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "source_truth",
+				value: "Repeated additive values keep the first source.",
+			},
+			evidence: [{ source: "transcript:first-add", message_ids: ["m1"] }],
+			createdBy: "first",
+		});
+		const applied = applyOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: first.id,
+			actor: "operator",
+		});
+		const repeated = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Additive Provenance",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "source_truth",
+				value: "Repeated additive values keep the first source.",
+			},
+			evidence: [{ source: "transcript:repeat-add", message_ids: ["m2"] }],
+			createdBy: "repeat",
+		});
+
+		const second = applyOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: repeated.id,
+			actor: "operator",
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT proposal_id, proposal_evidence FROM entity_attributes WHERE id = ?")
+					.get(applied.result?.attributeId as string) as
+					| { proposal_id: string | null; proposal_evidence: string | null }
+					| undefined,
+		);
+		expect(second.result?.deduped).toBe(true);
+		expect(second.result?.attributeId).toBe(applied.result?.attributeId);
+		expect(row?.proposal_id).toBe(first.id);
+		expect(JSON.parse(row?.proposal_evidence ?? "[]")).toEqual([
+			{ source: "transcript:first-add", message_ids: ["m1"] },
+		]);
+	});
+
 	it("records the applying actor when pending archive proposals are applied", () => {
 		const entity = applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",

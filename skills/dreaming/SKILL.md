@@ -1,6 +1,6 @@
 ---
 name: dreaming
-description: "Ingest memory, transcript, and source artifacts into Signet's living ontology by producing evidence-backed proposal JSON/JSONL through the audited ontology control plane."
+description: "Maintain Signet's living ontology and memory substrate from transcripts, memory artifacts, source artifacts, notes, summaries, and imported records."
 version: 1.0.0
 ---
 
@@ -9,16 +9,18 @@ version: 1.0.0
 Use this skill when an agent should wake up, read accumulated source evidence,
 and turn it into Signet ontology structure. The job is flexible bulk ingestion:
 transcripts, memory artifacts, source artifacts, notes, summaries, and imported
-records go in; evidence-backed ontology operations come out.
+records go in; the knowledge graph, scoped memories, and maintenance trail get
+better.
 
-The ontology control plane is the only write path. Generated work should fill
-in entities, aspects, groups, claims, attributes, and links by producing
-operation JSON/JSONL for the daemon-backed CLI/API. It must not silently save
-ordinary memories, rewrite source artifacts, or edit SQLite directly.
+The point is to maintain the graph, not to create JSON. JSON/JSONL is only the
+transport for audited ontology operations when the daemon-backed CLI/API needs a
+batch. Successful graph mutations must go through the ontology control plane so
+they are permission-checked and auditable.
 
-Default mode is proposal-first. Start with `--dry-run`, then write pending
-proposals with `--propose` unless the operator explicitly asks for exact
-operations to be applied.
+Dreaming may save memories when the evidence supports durable recall, but not by
+calling the API `remember` endpoint. Save explicit source-backed memory artifacts
+or use the configured source/import machinery so provenance remains inspectable.
+Do not rewrite raw transcript/source artifacts or edit SQLite directly.
 
 ## Inputs
 
@@ -50,20 +52,23 @@ signet knowledge hygiene --json
 signet dream status
 ```
 
-## Output Artifacts
+## Outputs
 
-Produce these artifacts for the operator or harness:
+Produce the artifacts needed to complete the maintenance pass:
 
-- proposal JSON or JSONL using the ontology operation line shape
-- a dreaming log artifact with sources examined, candidate count, rejects, and
-  questions
-- a short summary of high-confidence changes
+- applied ontology operations, pending ontology proposals, or an operation
+  stream for the daemon control plane
+- source-backed memory artifacts for durable recall when the evidence warrants
+  saving memory
+- a dreaming log artifact with sources examined, changes made or proposed,
+  rejected candidates, and questions
+- a short summary of high-confidence graph and memory changes
 - rejected candidates with reasons
 - explicit questions where evidence is weak
 - optional AGENTS.md, identity-file, or skill patch proposals as written
   artifacts, never as silent edits
 
-JSONL operation line shape:
+Ontology operation line shape when batching is useful:
 
 ```json
 {"operation":"set_claim_value","payload":{"entity":"Signet","aspect":"architecture","group_key":"ontology","claim_key":"mutation_policy","value":"Generated ontology maintenance emits proposals before graph mutation."},"reason":"Consolidated from cited transcript evidence.","evidence":[{"source_kind":"transcript","source_id":"session-key","quote":"..."}]}
@@ -80,15 +85,17 @@ Use one JSON object per line. Good operation streams usually contain a mix of:
 - `archive_*` or `restore_claim_version` only when evidence is strong and the
   operator asked for maintenance, not just ingestion
 
-For large ingests, split output into reviewable batches. Prefer fewer,
-high-confidence operations with direct evidence quotes over broad speculative
+For large ingests, split work into coherent batches. Prefer fewer,
+high-confidence changes with direct evidence quotes over broad speculative
 coverage.
 
 ## Routing Rules
 
-- Source-backed graph facts -> ontology operation JSON/JSONL.
+- Source-backed graph facts -> ontology operations through the control plane.
 - Entity, aspect, group, claim, attribute, and link updates -> ontology
   operations.
+- Durable recall lessons -> source-backed memory artifacts, not the API
+  `remember` endpoint.
 - Behavioral lessons -> AGENTS.md or identity-file patch proposals.
 - Repeated procedures -> skill patch proposals.
 - Source-backed concepts -> source/literature note proposals when that source
@@ -108,40 +115,46 @@ or operating rule, route it to identity/AGENTS/skill patch proposals instead.
 3. Extract concrete semantic objects and stable facts.
 4. Reconcile against existing entities, aspects, groups, claims, and pending
    proposals.
-5. Emit operation JSONL with direct evidence for each proposed mutation.
-6. Dry-run the full stream and fix selector or validation errors.
-7. Write pending proposals for review, or apply only if explicitly authorized.
+5. Apply straightforward, authorized maintenance through the control plane, or
+   write pending proposals when review is requested or confidence is not high
+   enough for direct mutation.
+6. Save source-backed memory artifacts for durable recall when the pass learns
+   something useful that is not already represented in the graph.
+7. Keep a dreaming log with source ranges, changes, rejected candidates, and
+   open questions.
 
 When source volume is large, process in chunks and keep a dreaming log that
 records source ranges, skipped inputs, rejected candidates, and open questions.
 
 ## Control-Plane Commands
 
-Validate proposal JSON before asking the operator to apply it:
+Apply exact, authorized operations:
 
 ```bash
-signet ontology stream apply proposals.jsonl --dry-run --json
+signet ontology stream apply ops.jsonl --json
 ```
 
-Write proposals for review by default:
+Write proposals when review is desired:
 
 ```bash
 signet ontology stream apply proposals.jsonl --propose --json
 signet ontology proposals --status pending --json
 ```
 
-Only apply exact operator-authored operations directly when explicitly asked:
+Use dry-run only when the operator asks for validation first, or when a risky or
+destructive maintenance batch needs a cheap selector check:
 
 ```bash
-signet ontology stream apply approved-ops.jsonl --json
+signet ontology stream apply ops.jsonl --dry-run --json
 ```
 
 ## Hard Constraints
 
 - Do not edit SQLite directly.
 - Do not instruct an agent to silently mutate ontology state from LLM output.
-- Use `--dry-run` or `--propose` by default.
-- Preserve evidence for every proposed mutation.
+- Do not call `/api/memory/remember`, `/memory/remember`, or equivalent
+  remember endpoints from this skill.
+- Preserve evidence for every graph mutation or memory artifact.
 - Produce an evidence-backed mutation diff, not a vibe summary.
 - Treat source memories, source artifacts, transcripts, and raw records as
   immutable provenance.
@@ -149,8 +162,8 @@ signet ontology stream apply approved-ops.jsonl --json
 - Do not invent entities or attributes just to fill a schema. Weak evidence
   belongs in rejected candidates or open questions.
 - Do not bypass `ontology_proposals` for successful graph mutations.
-- Do not treat bulk ingestion as permission to apply generated changes without
-  review.
+- Do not treat bulk ingestion as permission to apply low-confidence, ambiguous,
+  destructive, or authority-changing mutations without review.
 
 ## Review Standard
 
