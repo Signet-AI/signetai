@@ -434,6 +434,17 @@ jobs:
         run: |
           VERSION="$(jq -r '.version' package.json)"
           SHARED_DIR="/tmp/all-artifacts/bundle-linux-x64"
+          HELPER_SCRIPT_DIR="/tmp/release-helper-scripts"
+          SHA_CMD="sha256sum"
+          if ! command -v sha256sum >/dev/null 2>&1; then
+            SHA_CMD="shasum -a 256"
+          fi
+          rm -rf "$HELPER_SCRIPT_DIR"
+          mkdir -p "$HELPER_SCRIPT_DIR"
+          for script in install.sh update.sh uninstall.sh; do
+            cp "deploy/bundle/$script" "$HELPER_SCRIPT_DIR/$script"
+            $SHA_CMD "$HELPER_SCRIPT_DIR/$script" > "$HELPER_SCRIPT_DIR/$script.sha256"
+          done
           for PLATFORM in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
             PLAT_DIR="/tmp/all-artifacts/bundle-$PLATFORM"
             if [ ! -d "$PLAT_DIR" ]; then continue; fi
@@ -453,13 +464,8 @@ jobs:
             for f in "$PLAT_DIR"/*.tar.gz "$PLAT_DIR"/*.sha256; do
               cp "$f" "$MERGE_DIR/"
             done
-            SHA_CMD="sha256sum"
-            if ! command -v sha256sum >/dev/null 2>&1; then
-              SHA_CMD="shasum -a 256"
-            fi
             for script in install.sh update.sh uninstall.sh; do
-              cp "deploy/bundle/$script" "$MERGE_DIR/$script"
-              $SHA_CMD "$MERGE_DIR/$script" > "$MERGE_DIR/$script.sha256"
+              cp "$HELPER_SCRIPT_DIR/$script" "$HELPER_SCRIPT_DIR/$script.sha256" "$MERGE_DIR/"
             done
             bun deploy/bundle/scripts/generate-manifest.ts \
               "$VERSION" "$PLATFORM" "$MERGE_DIR" "bundle-latest" \
@@ -529,7 +535,7 @@ jobs:
         run: |
           mkdir -p /tmp/release-staging
           # Copy all artifacts into a flat staging dir, skipping duplicates
-          find /tmp/all-artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.dmg' -o -name '*.zip' -o -name 'manifest-*.json' \) | while read -r f; do
+          find /tmp/all-artifacts /tmp/release-helper-scripts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.dmg' -o -name '*.zip' -o -name '*.sh' -o -name 'manifest-*.json' \) | while read -r f; do
             base="$(basename "$f")"
             if [ -f "/tmp/release-staging/$base" ]; then
               existing="$(sha256sum "/tmp/release-staging/$base" | awk '{print $1}')"
@@ -547,13 +553,13 @@ jobs:
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
-          for pattern in '*.tar.gz' '*.sha256' '*.dmg' '*.zip'; do
+          for pattern in '*.tar.gz' '*.sha256' '*.dmg' '*.zip' '*.sh'; do
             find /tmp/release-staging -type f -name "$pattern" | while read -r f; do
               gh release upload "$TAG" "$f" --repo "$REPO" --clobber
             done
           done
 
-      - name: Upload manifests and installer scripts
+      - name: Upload manifests
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -562,4 +568,3 @@ jobs:
           find /tmp/release-staging -type f -name 'manifest-*.json' | while read -r f; do
             gh release upload "$TAG" "$f" --repo "$REPO" --clobber
           done
-          gh release upload "$TAG" deploy/bundle/install.sh deploy/bundle/uninstall.sh deploy/bundle/update.sh --repo "$REPO" --clobber

@@ -187,12 +187,16 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/runtime/daemon-js/index.js"');
 		expect(workflow).toContain("Bundle artifact layout missing");
 		expect(workflow).toContain("for PLATFORM in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do");
+		expect(workflow).toContain('HELPER_SCRIPT_DIR="/tmp/release-helper-scripts"');
+		expect(workflow).toContain('cp "deploy/bundle/$script" "$HELPER_SCRIPT_DIR/$script"');
+		expect(workflow).toContain('$SHA_CMD "$HELPER_SCRIPT_DIR/$script" > "$HELPER_SCRIPT_DIR/$script.sha256"');
 		expect(workflow).toContain(
 			"for component in node cli daemon-js daemon-rs dashboard connectors plugin-opencode plugin-oh-my-pi plugin-pi native skills templates; do",
 		);
 		expect(workflow).toContain("Merged manifest for $PLATFORM missing expected component: $component");
 		expect(workflow).toContain(".components[$component].url and .components[$component].sha256");
 		expect(workflow).toContain("for script in install.sh update.sh uninstall.sh; do");
+		expect(workflow).toContain('cp "$HELPER_SCRIPT_DIR/$script" "$HELPER_SCRIPT_DIR/$script.sha256" "$MERGE_DIR/"');
 		expect(workflow).toContain(".scripts[$script].url and .scripts[$script].sha256");
 		expect(workflow).toContain("Merged manifest for $PLATFORM missing expected helper script: $script");
 		expect(workflow).toContain("Import the daemon package API entrypoint");
@@ -212,6 +216,8 @@ describe("check-publish-manifests", () => {
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
 
 		expect(workflow).toContain("De-duplicate and stage release assets");
+		expect(workflow).toContain("find /tmp/all-artifacts /tmp/release-helper-scripts -type f");
+		expect(workflow).toContain("-name '*.sh'");
 		expect(workflow).toContain('existing="$(sha256sum "/tmp/release-staging/$base"');
 		expect(workflow).toContain('current="$(sha256sum "$f"');
 		expect(workflow).toContain("::error::Duplicate asset $base with different content");
@@ -223,11 +229,12 @@ describe("check-publish-manifests", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
 
-		expect(workflow).toContain("for pattern in '*.tar.gz' '*.sha256' '*.dmg' '*.zip'; do");
+		expect(workflow).toContain("for pattern in '*.tar.gz' '*.sha256' '*.dmg' '*.zip' '*.sh'; do");
 		expect(workflow).toContain('find /tmp/release-staging -type f -name "$pattern"');
 		expect(workflow).toContain('gh release upload "$TAG" "$f" --repo "$REPO" --clobber');
 		expect(workflow).toContain("including desktop DMG and zip assets");
 		expect(workflow).toContain('find /tmp/release-staging -type f -name \'manifest-*.json\'');
+		expect(workflow).not.toContain("gh release upload \"$TAG\" deploy/bundle/install.sh");
 	});
 
 	test("delegates updater reinstall without sharing the install lock trap", () => {
