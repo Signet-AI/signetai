@@ -608,7 +608,7 @@ main() {
   printf "${BOLD}  Downloading components...${NC}\n"
   echo ""
 
-  REQUIRED_COMPONENTS="node cli daemon-js dashboard native skills templates"
+  REQUIRED_COMPONENTS="node cli daemon-js daemon-rs dashboard connectors plugin-opencode plugin-oh-my-pi plugin-pi native skills templates"
 
   for name in "${COMPONENTS[@]}"; do
     sha=""

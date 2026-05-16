@@ -348,11 +348,13 @@ describe("check-publish-manifests", () => {
 		expect(manifestCopy).toBeGreaterThan(restart);
 	});
 
-	test("requires first-run skills and templates bundle components", () => {
+	test("requires every expected bundle component during install", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
 
-		expect(installer).toContain('REQUIRED_COMPONENTS="node cli daemon-js dashboard native skills templates"');
+		expect(installer).toContain(
+			'REQUIRED_COMPONENTS="node cli daemon-js daemon-rs dashboard connectors plugin-opencode plugin-oh-my-pi plugin-pi native skills templates"',
+		);
 	});
 
 	test("documents pipeline-side installer environment options", () => {
@@ -437,11 +439,13 @@ describe("check-publish-manifests", () => {
 		expect(checksumFailure).toBeLessThan(downloadBase);
 	});
 
-	test("removes obsolete optional components without dropping required components", () => {
+	test("removes obsolete optional components without dropping bundle-required components", () => {
 		const root = join(import.meta.dir, "..");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
 
-		expect(updater).toContain('REQUIRED_COMPONENTS="node cli daemon-js dashboard native skills templates"');
+		expect(updater).toContain(
+			'REQUIRED_COMPONENTS="node cli daemon-js daemon-rs dashboard connectors plugin-opencode plugin-oh-my-pi plugin-pi native skills templates"',
+		);
 		expect(updater).toContain("is_required_component()");
 		expect(updater).toContain("has_manifest_key()");
 		expect(updater).toContain('printf \'%s\\n\' "$keys" | grep -Fx -- "$comp"');

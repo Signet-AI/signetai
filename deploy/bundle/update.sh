@@ -459,7 +459,7 @@ WRAPPER
   fi
 }
 
-REQUIRED_COMPONENTS="node cli daemon-js dashboard native skills templates"
+REQUIRED_COMPONENTS="node cli daemon-js daemon-rs dashboard connectors plugin-opencode plugin-oh-my-pi plugin-pi native skills templates"
 
 is_required_component() {
   local comp="$1"
