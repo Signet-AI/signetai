@@ -156,6 +156,7 @@ describe("check-publish-manifests", () => {
 	test("smoke-checks native bundle artifact layout before release upload", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
 
 		expect(workflow).toContain("bundle-layout-check");
 		expect(workflow).toContain('tar xzf "$MERGE_DIR/signet-cli.tar.gz" -C "$CHECK_DIR/runtime/cli"');
@@ -164,6 +165,9 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/runtime/daemon-js/index.js"');
 		expect(workflow).toContain("Bundle artifact layout missing");
 		expect(workflow).toContain('if [ "$PLATFORM" = "linux-x64" ]; then');
+		expect(workflow).toContain("Import the daemon package API entrypoint");
+		expect(daemonBuild).toContain('{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" }');
+		expect(daemonBuild).toContain('{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" }');
 		expect(workflow).toContain('SIGNET_DAEMON_SMOKE_MODULE="$CHECK_DIR/runtime/daemon-js/index.js"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node"');
 		expect(workflow).toContain("--input-type=module");

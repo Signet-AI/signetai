@@ -464,6 +464,7 @@ jobs:
               fi
             done
             if [ "$PLATFORM" = "linux-x64" ]; then
+              # Import the daemon package API entrypoint; daemon.js is the service entrypoint and would start the server.
               SIGNET_DAEMON_SMOKE_MODULE="$CHECK_DIR/runtime/daemon-js/index.js" \
                 "$CHECK_DIR/runtime/node/bin/node" \
                 --input-type=module \
