@@ -41,6 +41,31 @@ validate_safe_dir() {
 
 validate_safe_dir "install dir" "$SIGNET_INSTALL_DIR"
 
+remove_path_from_rc() {
+  local rc="$1" bindir="$SIGNET_INSTALL_DIR/bin" tmp
+  tmp="${rc}.signet.$$"
+  awk -v bindir="$bindir" '
+    $0 == "# Signet PATH" { in_signet = 1; next }
+    in_signet && $0 == "# End Signet PATH" { in_signet = 0; next }
+    in_signet { next }
+    $0 == "# Signet" { legacy_marker = 1; next }
+    legacy_marker {
+      if ($0 == "export PATH=\"" bindir ":$PATH\"") {
+        legacy_marker = 0
+        next
+      }
+      print "# Signet"
+      legacy_marker = 0
+    }
+    $0 == "export PATH=\"" bindir ":$PATH\"" { next }
+    { print }
+    END {
+      if (legacy_marker) print "# Signet"
+    }
+  ' "$rc" > "$tmp" && mv "$tmp" "$rc"
+  rm -f "$tmp"
+}
+
 # Stop daemon if running
 if [ -f "$SIGNET_INSTALL_DIR/bin/signet" ]; then
   export PATH="$SIGNET_INSTALL_DIR/bin:$PATH"
@@ -51,10 +76,9 @@ fi
 
 # Remove PATH from shell config
 for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
-  if [ -f "$rc" ] && grep -q 'signet/bin' "$rc"; then
+  if [ -f "$rc" ] && grep -Fq "export PATH=\"$SIGNET_INSTALL_DIR/bin:\$PATH\"" "$rc"; then
     info "Removing PATH from $(basename "$rc")..."
-    sed -i.bak '/# Signet/d; /signet\/bin/d' "$rc"
-    rm -f "${rc}.bak"
+    remove_path_from_rc "$rc"
     ok "Cleaned $(basename "$rc")"
   fi
 done

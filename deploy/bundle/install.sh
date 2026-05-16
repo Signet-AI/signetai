@@ -529,12 +529,12 @@ setup_path() {
     return 0
   fi
 
-  if grep -q 'signet/bin' "$shell_rc" 2>/dev/null; then
+  if grep -Fq "export PATH=\"$bindir:\$PATH\"" "$shell_rc" 2>/dev/null; then
     ok "PATH already configured in $(basename "$shell_rc")"
     return 0
   fi
 
-  printf '\n# Signet\nexport PATH="%s:$PATH"\n' "$bindir" >> "$shell_rc"
+  printf '\n# Signet PATH\nexport PATH="%s:$PATH"\n# End Signet PATH\n' "$bindir" >> "$shell_rc"
   ok "Added to PATH in $(basename "$shell_rc")"
 }
 

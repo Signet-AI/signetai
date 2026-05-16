@@ -228,6 +228,25 @@ describe("check-publish-manifests", () => {
 		expect(validation).toBeLessThan(removal);
 	});
 
+	test("manages shell PATH entries by exact install bin path", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const uninstaller = readFileSync(join(root, "deploy", "bundle", "uninstall.sh"), "utf-8");
+
+		expect(installer).toContain('grep -Fq "export PATH=\\"$bindir:\\$PATH\\""');
+		expect(installer).toContain("# Signet PATH");
+		expect(installer).toContain("# End Signet PATH");
+		expect(installer).not.toContain("grep -q 'signet/bin'");
+
+		expect(uninstaller).toContain("remove_path_from_rc()");
+		expect(uninstaller).toContain('grep -Fq "export PATH=\\"$SIGNET_INSTALL_DIR/bin:\\$PATH\\""');
+		expect(uninstaller).toContain('awk -v bindir="$bindir"');
+		expect(uninstaller).toContain('$0 == "# Signet PATH"');
+		expect(uninstaller).toContain('$0 == "# Signet"');
+		expect(uninstaller).not.toContain("sed -i.bak");
+		expect(uninstaller).not.toContain("signet\\/bin");
+	});
+
 	test("promotes installer manifest only after required install steps", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
