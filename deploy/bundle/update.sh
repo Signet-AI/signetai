@@ -25,6 +25,25 @@ ok()    { printf "${GREEN}  ✓${NC} %s\n" "$1"; }
 warn()  { printf "${YELLOW}  !${NC} %s\n" "$1"; }
 err()   { printf "${RED}  ✗${NC} %s\n" "$1" >&2; }
 
+normalize_path_for_guard() {
+  local path="$1"
+  while [ "${#path}" -gt 1 ] && [ "${path%/}" != "$path" ]; do
+    path="${path%/}"
+  done
+  printf '%s' "$path"
+}
+
+validate_install_dir() {
+  local install_dir normalized_dir normalized_home
+  install_dir="$1"
+  normalized_dir="$(normalize_path_for_guard "$install_dir")"
+  normalized_home="$(normalize_path_for_guard "$HOME")"
+  if [ -z "$install_dir" ] || [ "$normalized_dir" = "/" ] || [ "$normalized_dir" = "$normalized_home" ]; then
+    err "Install dir is a dangerous path ($install_dir). Set SIGNET_INSTALL_DIR to a dedicated directory."
+    exit 1
+  fi
+}
+
 # Detect platform
 detect_platform() {
   local os arch
@@ -40,6 +59,7 @@ detect_platform() {
 }
 
 PLATFORM="$(detect_platform)"
+validate_install_dir "$SIGNET_INSTALL_DIR"
 LOCAL_MANIFEST="$SIGNET_INSTALL_DIR/manifest.json"
 TMPDIR="$(mktemp -d)"
 LOCKFILE="$SIGNET_INSTALL_DIR/.lock"

@@ -37,6 +37,25 @@ ok()    { printf "${GREEN}  ✓${NC} %s\n" "$1"; }
 warn()  { printf "${YELLOW}  !${NC} %s\n" "$1"; }
 err()   { printf "${RED}  ✗${NC} %s\n" "$1" >&2; }
 
+normalize_path_for_guard() {
+  local path="$1"
+  while [ "${#path}" -gt 1 ] && [ "${path%/}" != "$path" ]; do
+    path="${path%/}"
+  done
+  printf '%s' "$path"
+}
+
+validate_install_dir() {
+  local install_dir normalized_dir normalized_home
+  install_dir="$1"
+  normalized_dir="$(normalize_path_for_guard "$install_dir")"
+  normalized_home="$(normalize_path_for_guard "$HOME")"
+  if [ -z "$install_dir" ] || [ "$normalized_dir" = "/" ] || [ "$normalized_dir" = "$normalized_home" ]; then
+    err "Install dir is a dangerous path ($install_dir). Set SIGNET_INSTALL_DIR to a dedicated directory."
+    exit 1
+  fi
+}
+
 banner() {
   echo ""
   printf "${BOLD}  ╔══════════════════════════════════════╗${NC}\n"
@@ -80,6 +99,8 @@ require_cmd() {
 
 require_cmd curl
 require_cmd tar
+
+validate_install_dir "$SIGNET_INSTALL_DIR"
 
 # sha256sum or shasum
 SHA256_CMD=""

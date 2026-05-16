@@ -191,6 +191,24 @@ describe("check-publish-manifests", () => {
 		}
 	});
 
+	test("rejects dangerous install dirs before lock creation", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			const validation = script.indexOf('validate_install_dir "$SIGNET_INSTALL_DIR"');
+			const mkdirInstallDir = script.indexOf('mkdir -p "$SIGNET_INSTALL_DIR"');
+			expect(script).toContain("normalize_path_for_guard()");
+			expect(script).toContain("Install dir is a dangerous path");
+			expect(script).toContain('[ -z "$install_dir" ]');
+			expect(script).toContain('[ "$normalized_dir" = "/" ]');
+			expect(script).toContain('[ "$normalized_dir" = "$normalized_home" ]');
+			expect(validation).toBeGreaterThan(-1);
+			expect(validation).toBeLessThan(mkdirInstallDir);
+		}
+	});
+
 	test("promotes installer manifest only after required install steps", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
