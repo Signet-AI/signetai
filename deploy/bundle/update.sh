@@ -445,30 +445,49 @@ WRAPPER
   fi
 }
 
-require_remote_manifest_superset() {
+REQUIRED_COMPONENTS="node cli daemon-js dashboard native skills templates"
+
+is_required_component() {
+  local comp="$1"
+  case " $REQUIRED_COMPONENTS " in
+    *" $comp "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+collect_obsolete_components() {
   local remote_keys="$1"
-  local local_keys
+  local local_keys obsolete
   local_keys="$(manifest_keys "$LOCAL_MANIFEST")"
+  obsolete=""
   for comp in $local_keys; do
     case " $remote_keys " in
       *" $comp "*) ;;
       *)
-        err "Remote manifest dropped installed component '$comp'; refusing update without explicit obsolete marker"
-        exit 1
+        if is_required_component "$comp"; then
+          err "Remote manifest is missing required installed component '$comp'"
+          exit 1
+        fi
+        warn "Remote manifest no longer includes optional component '$comp'; removing it during this update" >&2
+        obsolete="${obsolete:+$obsolete }$comp"
         ;;
     esac
   done
+  printf '%s' "$obsolete"
 }
 
 # Compare versions
 LOCAL_VERSION="$(get_manifest_value '.version' "$LOCAL_MANIFEST")"
 REMOTE_VERSION="$(get_manifest_value '.version' "$REMOTE_MANIFEST")"
 REMOTE_KEYS="$(manifest_keys "$REMOTE_MANIFEST")"
-require_remote_manifest_superset "$REMOTE_KEYS"
+OBSOLETE_COMPONENTS="$(collect_obsolete_components "$REMOTE_KEYS")"
 
 if [ "$LOCAL_VERSION" = "$REMOTE_VERSION" ]; then
   # Check individual component checksums
   CHANGED=0
+  for comp in $OBSOLETE_COMPONENTS; do
+    CHANGED=$((CHANGED + 1))
+  done
   COMPONENTS="$REMOTE_KEYS"
   for comp in $COMPONENTS; do
     LOCAL_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$LOCAL_MANIFEST")"
@@ -505,6 +524,7 @@ if [ -d "$SIGNET_INSTALL_DIR/runtime/plugins" ]; then
 fi
 UPDATED=0
 FAILED=0
+REMOVED=0
 
 for comp in $COMPONENTS; do
   LOCAL_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$LOCAL_MANIFEST")"
@@ -614,6 +634,15 @@ if [ -n "$STAGED" ]; then
   done
 fi
 
+for comp in $OBSOLETE_COMPONENTS; do
+  DEST="$(component_runtime_path "$comp")"
+  if [ -e "$DEST" ]; then
+    rm -rf "$DEST" "${DEST}.old"
+    ok "$comp removed"
+    REMOVED=$((REMOVED + 1))
+  fi
+done
+
 rm -rf "$TMPDIR/staged"
 cleanup_legacy_plugin_paths
 refresh_wrappers
@@ -622,8 +651,8 @@ cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"
 echo "$REMOTE_VERSION" > "$SIGNET_INSTALL_DIR/VERSION"
 
 echo ""
-if [ "$UPDATED" -gt 0 ]; then
-  ok "$UPDATED component(s) updated to v$REMOTE_VERSION"
+if [ "$UPDATED" -gt 0 ] || [ "$REMOVED" -gt 0 ]; then
+  ok "$UPDATED component(s) updated, $REMOVED obsolete component(s) removed to v$REMOTE_VERSION"
   info "Restart the daemon to apply changes: signet daemon restart"
 else
   ok "No updates needed"

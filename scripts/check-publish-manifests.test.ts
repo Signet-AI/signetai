@@ -378,14 +378,21 @@ describe("check-publish-manifests", () => {
 		expect(checksumFailure).toBeLessThan(downloadBase);
 	});
 
-	test("refuses remote manifests that drop installed components", () => {
+	test("removes obsolete optional components without dropping required components", () => {
 		const root = join(import.meta.dir, "..");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
 
-		expect(updater).toContain("require_remote_manifest_superset()");
-		expect(updater).toContain("Remote manifest dropped installed component");
-		expect(updater).toContain("refusing update without explicit obsolete marker");
-		expect(updater).not.toContain("Removing obsolete component:");
+		expect(updater).toContain('REQUIRED_COMPONENTS="node cli daemon-js dashboard native skills templates"');
+		expect(updater).toContain("is_required_component()");
+		expect(updater).toContain("collect_obsolete_components()");
+		expect(updater).toContain("Remote manifest is missing required installed component");
+		expect(updater).toContain("Remote manifest no longer includes optional component");
+		expect(updater).toContain("removing it during this update\" >&2");
+		expect(updater).toContain('OBSOLETE_COMPONENTS="$(collect_obsolete_components "$REMOTE_KEYS")"');
+		expect(updater).toContain("for comp in $OBSOLETE_COMPONENTS; do");
+		expect(updater).toContain('rm -rf "$DEST" "${DEST}.old"');
+		expect(updater).toContain("obsolete component(s) removed");
+		expect(updater).not.toContain("refusing update without explicit obsolete marker");
 	});
 
 	test("documents daemon-js as platform-specific", () => {
