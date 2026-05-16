@@ -151,7 +151,7 @@ jobs:
             rust_target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write
+      contents: read
     defaults:
       run:
         shell: bash
@@ -553,7 +553,7 @@ jobs:
         run: |
           mkdir -p /tmp/release-staging
           # Copy all artifacts into a flat staging dir, skipping duplicates
-          find /tmp/all-artifacts /tmp/release-helper-scripts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.dmg' -o -name '*.zip' -o -name '*.sh' -o -name 'manifest-*.json' \) | while read -r f; do
+          find /tmp/all-artifacts /tmp/release-helper-scripts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.sh.sha256' -o -name '*.dmg' -o -name '*.zip' -o -name '*.sh' -o -name 'manifest-*.json' \) | while read -r f; do
             base="$(basename "$f")"
             if [ -f "/tmp/release-staging/$base" ]; then
               existing="$(sha256sum "/tmp/release-staging/$base" | awk '{print $1}')"

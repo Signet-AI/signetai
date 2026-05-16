@@ -140,6 +140,8 @@ describe("check-publish-manifests", () => {
 
 		expect(workflow).toContain("pull_request:\n    branches: [main]");
 		expect(workflow).toContain('pull_request:\n    branches: [main]\n    paths:\n      - "platform/**"');
+		expect(workflow).toContain("build:\n    needs: detect-changes");
+		expect(workflow).toContain("permissions:\n      contents: read");
 		expect(workflow).toContain("release:\n    needs: [detect-changes, build]");
 		expect(workflow).toContain("github.ref == 'refs/heads/main'");
 	});
@@ -231,6 +233,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("De-duplicate and stage release assets");
 		expect(workflow).toContain("find /tmp/all-artifacts /tmp/release-helper-scripts -type f");
 		expect(workflow).toContain("-name '*.sh'");
+		expect(workflow).toContain("-name '*.sh.sha256'");
 		expect(workflow).toContain('existing="$(sha256sum "/tmp/release-staging/$base"');
 		expect(workflow).toContain('current="$(sha256sum "$f"');
 		expect(workflow).toContain("::error::Duplicate asset $base with different content");
