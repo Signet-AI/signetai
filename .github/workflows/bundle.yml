@@ -128,6 +128,8 @@ jobs:
           - runner: ubuntu-latest
             platform: linux-x64
             rust_target: x86_64-unknown-linux-gnu
+          # GitHub-hosted standard Linux arm64 runner label.
+          # https://docs.github.com/actions/reference/runners/github-hosted-runners
           - runner: ubuntu-24.04-arm
             platform: linux-arm64
             rust_target: aarch64-unknown-linux-gnu
