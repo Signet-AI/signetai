@@ -401,23 +401,28 @@ fetch_manifest() {
 }
 
 # POSIX-safe JSON value extraction (no jq/node/python required)
-# Handles: .version, .components."name".sha256, .components."name".url
+# Handles: .version plus .components."name".FIELD and .scripts."name".FIELD
 json_value() {
   local key="$1" file="${2:-${tmpdir}/manifest.json}"
   if [ "$key" = ".version" ]; then
     sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -1
     return
   fi
-  # Parse .components."NAME".FIELD
-  local name field
+  local collection name field
+  collection="$(printf '%s' "$key" | sed -n 's/^\.\([a-zA-Z0-9_]*\)\..*/\1/p')"
   name="$(printf '%s' "$key" | sed 's/.*\."//;s/".*//')"
   field="$(printf '%s' "$key" | sed 's/.*\.\([a-zA-Z0-9_]*\)$/\1/')"
-  # Parse only first-level fields in the component object, ignoring nested metadata.
-  awk -v name="$name" -v field="$field" '
-    $0 ~ "\"" name "\"[[:space:]]*:" { in_component = 1; depth = 0 }
-    in_component {
+  case "$collection" in
+    components|scripts) ;;
+    *) return ;;
+  esac
+  # Parse only first-level fields in the target manifest object, ignoring nested metadata.
+  awk -v collection="$collection" -v name="$name" -v field="$field" '
+    $0 ~ "\"" collection "\"[[:space:]]*:" { in_collection = 1; collection_depth = 0 }
+    in_collection && !in_item && $0 ~ "\"" name "\"[[:space:]]*:" { in_item = 1; item_depth = 0 }
+    in_collection {
       line = $0
-      if (depth == 1) {
+      if (in_item && item_depth == 1) {
         prefix = "^[[:space:]]*\"" field "\"[[:space:]]*:[[:space:]]*\""
         if (line ~ prefix) {
           sub(prefix, "", line)
@@ -426,10 +431,18 @@ json_value() {
           exit
         }
       }
-      opens = gsub(/\{/, "{", line)
-      closes = gsub(/\}/, "}", line)
-      depth += opens - closes
-      if (depth <= 0 && closes > 0) exit
+      item_line = $0
+      item_opens = gsub(/\{/, "{", item_line)
+      item_closes = gsub(/\}/, "}", item_line)
+      if (in_item) {
+        item_depth += item_opens - item_closes
+        if (item_depth <= 0 && item_closes > 0) exit
+      }
+      collection_line = $0
+      collection_opens = gsub(/\{/, "{", collection_line)
+      collection_closes = gsub(/\}/, "}", collection_line)
+      collection_depth += collection_opens - collection_closes
+      if (!in_item && collection_depth <= 0 && collection_closes > 0) exit
     }
   ' "$file"
 }

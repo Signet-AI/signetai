@@ -69,14 +69,16 @@ describe("check-publish-manifests", () => {
 		}
 	});
 
-	test("keeps bundle manifest fallback parser scoped to component fields", () => {
+	test("keeps bundle manifest fallback parser scoped to first-level manifest fields", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
 
 		for (const script of [installer, updater]) {
 			expect(script).toContain("ignoring nested metadata");
-			expect(script).toContain("if (depth == 1)");
+			expect(script).toContain("components|scripts)");
+			expect(script).toContain("if (in_item && item_depth == 1)");
+			expect(script).toContain('collection="$(printf');
 		}
 	});
 
@@ -456,12 +458,14 @@ describe("check-publish-manifests", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+		const scriptInterpolation = "$" + "{script}";
 
 		for (const script of [installer, updater]) {
 			expect(script).toContain("is_expected_script_url()");
 			expect(script).toContain('"$DOWNLOAD_BASE/$script"');
-			expect(script).toContain('url="$(get_manifest_value ".scripts.\\"${script}\\".url');
-			expect(script).toContain('sha="$(get_manifest_value ".scripts.\\"${script}\\".sha256');
+			expect(script).toContain(`url="$(get_manifest_value ".scripts.\\"${scriptInterpolation}\\".url`);
+			expect(script).toContain(`sha="$(get_manifest_value ".scripts.\\"${scriptInterpolation}\\".sha256`);
+			expect(script).toContain("components|scripts)");
 			expect(script).toContain("Checksum mismatch for helper script");
 			expect(script).not.toContain('${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh');
 			expect(script).not.toContain('${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh');
