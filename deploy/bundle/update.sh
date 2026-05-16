@@ -364,6 +364,10 @@ component_runtime_path() {
   esac
 }
 
+path_exists_or_symlink() {
+  [ -e "$1" ] || [ -L "$1" ]
+}
+
 cleanup_legacy_plugin_paths() {
   for dir in "$SIGNET_INSTALL_DIR/runtime"/plugin-*/; do
     [ -d "$dir" ] || continue
@@ -611,7 +615,7 @@ if [ -n "$STAGED" ]; then
     DEST="$(component_runtime_path "$comp")"
     OLD="${DEST}.old"
     mkdir -p "$(dirname "$DEST")"
-    if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
+    if path_exists_or_symlink "$DEST"; then mv "$DEST" "$OLD"; fi
   done
   # Stage 2: Promote staged components
   for comp in $STAGED; do
@@ -634,7 +638,7 @@ if [ -n "$STAGED" ]; then
         DEST2="$(component_runtime_path "$comp2")"
         OLD2="${DEST2}.old"
         mkdir -p "$(dirname "$DEST2")"
-        if [ -d "$OLD2" ]; then mv "$OLD2" "$DEST2"; fi
+        if path_exists_or_symlink "$OLD2"; then mv "$OLD2" "$DEST2"; fi
       done
       rm -rf "$TMPDIR/staged"
       err "Update failed — all components rolled back"
@@ -649,7 +653,7 @@ fi
 
 for comp in $OBSOLETE_COMPONENTS; do
   DEST="$(component_runtime_path "$comp")"
-  if [ -e "$DEST" ]; then
+  if path_exists_or_symlink "$DEST"; then
     rm -rf "$DEST" "${DEST}.old"
     ok "$comp removed"
     REMOVED=$((REMOVED + 1))

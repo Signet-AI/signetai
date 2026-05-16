@@ -313,6 +313,22 @@ describe("check-publish-manifests", () => {
 		expect(manifestCopy).toBeLessThan(installer.indexOf("Signet v${VERSION_VAL} installed"));
 	});
 
+	test("treats broken symlinks as existing component paths during promotion and removal", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			expect(script).toContain("path_exists_or_symlink()");
+			expect(script).toContain('[ -e "$1" ] || [ -L "$1" ]');
+			expect(script).toContain('if path_exists_or_symlink "$DEST"; then mv "$DEST" "$OLD"; fi');
+		}
+		expect(installer).toContain('if path_exists_or_symlink "$PDEST"; then rm -rf "$PDEST"; fi');
+		expect(installer).toContain('if path_exists_or_symlink "$POLD"; then mv "$POLD" "$PDEST"; fi');
+		expect(updater).toContain('if path_exists_or_symlink "$OLD2"; then mv "$OLD2" "$DEST2"; fi');
+		expect(updater).toContain('if path_exists_or_symlink "$DEST"; then\n    rm -rf "$DEST" "${DEST}.old"');
+	});
+
 	test("restarts an existing bundled daemon before promoting the install manifest", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
@@ -430,6 +446,7 @@ describe("check-publish-manifests", () => {
 		expect(updater).toContain("removing it during this update\" >&2");
 		expect(updater).toContain('OBSOLETE_COMPONENTS="$(collect_obsolete_components "$REMOTE_KEYS")"');
 		expect(updater).toContain("for comp in $OBSOLETE_COMPONENTS; do");
+		expect(updater).toContain('if path_exists_or_symlink "$DEST"; then');
 		expect(updater).toContain('rm -rf "$DEST" "${DEST}.old"');
 		expect(updater).toContain("obsolete component(s) removed");
 		expect(updater).not.toContain("refusing update without explicit obsolete marker");

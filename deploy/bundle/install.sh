@@ -429,6 +429,10 @@ component_runtime_path() {
   esac
 }
 
+path_exists_or_symlink() {
+  [ -e "$1" ] || [ -L "$1" ]
+}
+
 cleanup_legacy_plugin_paths() {
   for dir in "$SIGNET_INSTALL_DIR/runtime"/plugin-*/; do
     [ -d "$dir" ] || continue
@@ -669,7 +673,7 @@ done
       DEST="$(component_runtime_path "$comp_name")"
       OLD="${DEST}.old"
       mkdir -p "$(dirname "$DEST")"
-      if [ -d "$DEST" ]; then mv "$DEST" "$OLD"; fi
+      if path_exists_or_symlink "$DEST"; then mv "$DEST" "$OLD"; fi
       MOVED="$MOVED $comp_name"
     done
     # Stage 2: Promote all staged components
@@ -688,9 +692,9 @@ done
         for prev in $MOVED; do
           PDEST="$(component_runtime_path "$prev")"
           POLD="${PDEST}.old"
-          if [ -d "$PDEST" ]; then rm -rf "$PDEST"; fi
+          if path_exists_or_symlink "$PDEST"; then rm -rf "$PDEST"; fi
           mkdir -p "$(dirname "$PDEST")"
-          if [ -d "$POLD" ]; then mv "$POLD" "$PDEST"; fi
+          if path_exists_or_symlink "$POLD"; then mv "$POLD" "$PDEST"; fi
         done
         rm -rf "$STAGING"
         exit 1
