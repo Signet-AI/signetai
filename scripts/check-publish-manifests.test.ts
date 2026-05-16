@@ -248,6 +248,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('for script in install.sh update.sh uninstall.sh; do');
 		expect(workflow).toContain('"/tmp/release-staging/$script.sha256"');
 		expect(workflow).toContain("Missing staged helper asset");
+		expect(workflow).toContain('gh release upload "$TAG" "$helper_asset" --repo "$REPO" --clobber');
 		expect(workflow).toContain("including desktop DMG and zip assets");
 		expect(workflow).toContain('find /tmp/release-staging -type f -name \'manifest-*.json\'');
 		expect(workflow).not.toContain("gh release upload \"$TAG\" deploy/bundle/install.sh");

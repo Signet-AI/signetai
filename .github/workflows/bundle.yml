@@ -582,6 +582,7 @@ jobs:
                 echo "::error::Missing staged helper asset: $(basename "$helper_asset")"
                 exit 1
               fi
+              gh release upload "$TAG" "$helper_asset" --repo "$REPO" --clobber
             done
           done
 
