@@ -134,6 +134,16 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('native:\n              - "platform/native/**"\n              - "Cargo.toml"\n              - "Cargo.lock"');
 	});
 
+	test("runs bundle validation on pull requests without publishing releases", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain("pull_request:\n    branches: [main]");
+		expect(workflow).toContain('pull_request:\n    branches: [main]\n    paths:\n      - "platform/**"');
+		expect(workflow).toContain("release:\n    needs: [detect-changes, build]");
+		expect(workflow).toContain("github.ref == 'refs/heads/main'");
+	});
+
 	test("pins bundled Node runtime versions in CI", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");

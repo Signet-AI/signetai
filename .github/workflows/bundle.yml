@@ -4,6 +4,22 @@ permissions:
   contents: read
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "platform/**"
+      - "surfaces/**"
+      - "integrations/**"
+      - "libs/**"
+      - "plugins/**"
+      - "skills/**"
+      - "scripts/**"
+      - "deploy/bundle/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/bundle.yml"
   push:
     branches: [main]
     paths:
