@@ -109,6 +109,15 @@ elif command -v shasum >/dev/null 2>&1; then
   SHA256_CMD="shasum -a 256"
 fi
 
+sha_verify() {
+  local file="$1" expected="$2"
+  if [ -z "$SHA256_CMD" ]; then return 1; fi
+  if [ -z "$expected" ]; then return 1; fi
+  local actual
+  actual="$($SHA256_CMD "$file" | awk '{print $1}')"
+  [ "$actual" = "$expected" ]
+}
+
 if [ ! -f "$LOCAL_MANIFEST" ]; then
   echo "No Signet installation found at $SIGNET_INSTALL_DIR"
   echo "Run the installer first: curl -fsSL https://signetai.sh/install.sh | bash"
@@ -132,26 +141,24 @@ is_expected_asset_url() {
   esac
 }
 
+is_expected_script_url() {
+  local script="$1" url="$2" filename="$3"
+  case "$url" in
+    "$DOWNLOAD_BASE/$script") ;;
+    *) return 1 ;;
+  esac
+  case "$filename" in
+    "$script") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Download latest manifest
 REMOTE_MANIFEST="$TMPDIR/manifest-latest.json"
 curl -fsSL "${DOWNLOAD_BASE}/manifest-${PLATFORM}.json" -o "$REMOTE_MANIFEST" || {
   echo "Failed to fetch remote manifest"
   exit 1
 }
-
-if ! command -v jq >/dev/null 2>&1 && [ ! -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
-  warn "jq and bundled node not found — performing full reinstall"
-  INSTALLER="$TMPDIR/install.sh"
-  curl -fsSL "${DOWNLOAD_BASE}/install.sh" -o "$INSTALLER" || {
-    err "Failed to fetch installer for reinstall"
-    exit 1
-  }
-  rm -rf "$LOCKFILE"
-  LOCK_ACQUIRED=0
-  trap 'rm -rf "$TMPDIR"' EXIT
-  SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash "$INSTALLER"
-  exit $?
-fi
 
 safe_tar_extract() {
   local archive="$1" dest="$2"
@@ -316,6 +323,53 @@ get_manifest_value() {
   fi
 }
 
+download_verified_script() {
+  local script="$1" dest="$2"
+  local url sha filename tmp
+  url="$(get_manifest_value ".scripts.\"${script}\".url" "$REMOTE_MANIFEST")"
+  sha="$(get_manifest_value ".scripts.\"${script}\".sha256" "$REMOTE_MANIFEST")"
+
+  if [ -z "$url" ] || [ -z "$sha" ]; then
+    err "Manifest missing checksum metadata for helper script '$script'"
+    return 1
+  fi
+
+  filename="$(basename "$url")"
+  if ! is_expected_script_url "$script" "$url" "$filename"; then
+    err "Manifest URL for helper script '$script' is outside expected release assets: $url"
+    return 1
+  fi
+
+  tmp="${dest}.tmp"
+  rm -f "$tmp"
+  curl -fsSL "$url" -o "$tmp" || {
+    err "Failed to download helper script '$script'"
+    rm -f "$tmp"
+    return 1
+  }
+  if ! sha_verify "$tmp" "$sha"; then
+    err "Checksum mismatch for helper script '$script'"
+    rm -f "$tmp"
+    return 1
+  fi
+  chmod +x "$tmp"
+  mv "$tmp" "$dest"
+}
+
+if ! command -v jq >/dev/null 2>&1 && [ ! -x "$SIGNET_INSTALL_DIR/runtime/node/bin/node" ]; then
+  warn "jq and bundled node not found — performing full reinstall"
+  INSTALLER="$TMPDIR/install.sh"
+  download_verified_script "install.sh" "$INSTALLER" || {
+    err "Failed to fetch verified installer for reinstall"
+    exit 1
+  }
+  rm -rf "$LOCKFILE"
+  LOCK_ACQUIRED=0
+  trap 'rm -rf "$TMPDIR"' EXIT
+  SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash "$INSTALLER"
+  exit $?
+fi
+
 validate_component_name() {
   local comp="$1"
   case "$comp" in
@@ -428,9 +482,7 @@ exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" mcp "$
 WRAPPER
   chmod +x "${bindir}/signet-mcp"
 
-  if curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh.tmp" 2>/dev/null; then
-    chmod +x "${bindir}/_uninstall.sh.tmp"
-    mv "${bindir}/_uninstall.sh.tmp" "${bindir}/_uninstall.sh"
+  if download_verified_script "uninstall.sh" "${bindir}/_uninstall.sh"; then
     cat > "${bindir}/signet-uninstall" << WRAPPER
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -439,13 +491,11 @@ exec "\$SIGNET_INSTALL_DIR/bin/_uninstall.sh" "\$@"
 WRAPPER
     chmod +x "${bindir}/signet-uninstall"
   else
-    rm -f "${bindir}/_uninstall.sh.tmp"
-    warn "Could not refresh uninstaller helper"
+    err "Could not refresh verified uninstaller helper"
+    exit 1
   fi
 
-  if curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh.tmp" 2>/dev/null; then
-    chmod +x "${bindir}/_update.sh.tmp"
-    mv "${bindir}/_update.sh.tmp" "${bindir}/_update.sh"
+  if download_verified_script "update.sh" "${bindir}/_update.sh"; then
     cat > "${bindir}/signet-update" << WRAPPER
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -454,8 +504,8 @@ exec "\$SIGNET_INSTALL_DIR/bin/_update.sh" "\$@"
 WRAPPER
     chmod +x "${bindir}/signet-update"
   else
-    rm -f "${bindir}/_update.sh.tmp"
-    warn "Could not refresh updater helper"
+    err "Could not refresh verified updater helper"
+    exit 1
   fi
 }
 
@@ -509,6 +559,13 @@ if [ "$LOCAL_VERSION" = "$REMOTE_VERSION" ]; then
   for comp in $COMPONENTS; do
     LOCAL_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$LOCAL_MANIFEST")"
     REMOTE_SHA="$(get_manifest_value ".components.\"$comp\".sha256" "$REMOTE_MANIFEST")"
+    if [ "$LOCAL_SHA" != "$REMOTE_SHA" ] && [ -n "$REMOTE_SHA" ]; then
+      CHANGED=$((CHANGED + 1))
+    fi
+  done
+  for script in update.sh uninstall.sh; do
+    LOCAL_SHA="$(get_manifest_value ".scripts.\"$script\".sha256" "$LOCAL_MANIFEST")"
+    REMOTE_SHA="$(get_manifest_value ".scripts.\"$script\".sha256" "$REMOTE_MANIFEST")"
     if [ "$LOCAL_SHA" != "$REMOTE_SHA" ] && [ -n "$REMOTE_SHA" ]; then
       CHANGED=$((CHANGED + 1))
     fi
@@ -607,6 +664,8 @@ if [ "$FAILED" -gt 0 ]; then
   exit 1
 fi
 
+refresh_wrappers
+
 if [ -n "$STAGED" ]; then
   mkdir -p "$SIGNET_INSTALL_DIR/runtime"
   PROMOTED=""
@@ -662,7 +721,6 @@ done
 
 rm -rf "$TMPDIR/staged"
 cleanup_legacy_plugin_paths
-refresh_wrappers
 
 cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"
 echo "$REMOTE_VERSION" > "$SIGNET_INSTALL_DIR/VERSION"

@@ -182,6 +182,18 @@ is_expected_asset_url() {
   esac
 }
 
+is_expected_script_url() {
+  local script="$1" url="$2" filename="$3"
+  case "$url" in
+    "$DOWNLOAD_BASE/$script") ;;
+    *) return 1 ;;
+  esac
+  case "$filename" in
+    "$script") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 safe_tar_extract() {
   local archive="$1" dest="$2"
   local unsafe
@@ -342,6 +354,39 @@ download_url() {
   return 0
 }
 
+download_verified_script() {
+  local script="$1" dest="$2"
+  local url sha filename tmp
+  url="$(get_manifest_value ".scripts.\"${script}\".url")"
+  sha="$(get_manifest_value ".scripts.\"${script}\".sha256")"
+
+  if [ -z "$url" ] || [ -z "$sha" ]; then
+    err "Manifest missing checksum metadata for helper script '$script'"
+    return 1
+  fi
+
+  filename="$(basename "$url")"
+  if ! is_expected_script_url "$script" "$url" "$filename"; then
+    err "Manifest URL for helper script '$script' is outside expected release assets: $url"
+    return 1
+  fi
+
+  tmp="${dest}.tmp"
+  rm -f "$tmp"
+  curl -fsSL "$url" -o "$tmp" || {
+    err "Failed to download helper script '$script'"
+    rm -f "$tmp"
+    return 1
+  }
+  if ! sha_verify "$tmp" "$sha"; then
+    err "Checksum mismatch for helper script '$script'"
+    rm -f "$tmp"
+    return 1
+  fi
+  chmod +x "$tmp"
+  mv "$tmp" "$dest"
+}
+
 # ── Fetch manifest ──
 
 fetch_manifest() {
@@ -495,8 +540,7 @@ exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" mcp "$
 WRAPPER
   chmod +x "${bindir}/signet-mcp"
 
-  if curl -fsSL "${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh" 2>/dev/null; then
-    chmod +x "${bindir}/_uninstall.sh"
+  if download_verified_script "uninstall.sh" "${bindir}/_uninstall.sh"; then
     cat > "${bindir}/signet-uninstall" << WRAPPER
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -505,11 +549,11 @@ exec "\$SIGNET_INSTALL_DIR/bin/_uninstall.sh" "\$@"
 WRAPPER
     chmod +x "${bindir}/signet-uninstall"
   else
-    warn "Could not download uninstaller"
+    err "Could not install verified uninstaller helper"
+    exit 1
   fi
 
-  if curl -fsSL "${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh" 2>/dev/null; then
-    chmod +x "${bindir}/_update.sh"
+  if download_verified_script "update.sh" "${bindir}/_update.sh"; then
     cat > "${bindir}/signet-update" << WRAPPER
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -518,7 +562,8 @@ exec "\$SIGNET_INSTALL_DIR/bin/_update.sh" "\$@"
 WRAPPER
     chmod +x "${bindir}/signet-update"
   else
-    warn "Could not download updater"
+    err "Could not install verified updater helper"
+    exit 1
   fi
 
   ok "Wrapper scripts created"
@@ -673,6 +718,10 @@ done
       DEST="$(component_runtime_path "$comp_name")"
       OLD="${DEST}.old"
       mkdir -p "$(dirname "$DEST")"
+      if path_exists_or_symlink "$OLD"; then
+        warn "Cleaning stale backup: $(basename "$OLD")"
+        rm -rf "$OLD"
+      fi
       if path_exists_or_symlink "$DEST"; then mv "$DEST" "$OLD"; fi
       MOVED="$MOVED $comp_name"
     done

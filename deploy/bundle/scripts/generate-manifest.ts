@@ -30,6 +30,8 @@ interface Component {
 	size: number;
 }
 
+const HELPER_SCRIPTS = ["install.sh", "update.sh", "uninstall.sh"];
+
 function parseComponentFromFilename(filename: string): string | null {
 	if (!filename.endsWith(".tar.gz")) return null;
 	let base = filename.replace(/\.tar\.gz$/, "");
@@ -46,6 +48,7 @@ function parseComponentFromFilename(filename: string): string | null {
 
 function main() {
 	const components: Record<string, Component> = {};
+	const scripts: Record<string, Component> = {};
 
 	const files = readdirSync(artifactDir).filter((f) => f.endsWith(".tar.gz"));
 
@@ -77,11 +80,33 @@ function main() {
 		};
 	}
 
+	for (const script of HELPER_SCRIPTS) {
+		const scriptPath = join(artifactDir, script);
+		if (!existsSync(scriptPath)) continue;
+		const shaFile = join(artifactDir, `${script}.sha256`);
+		if (!existsSync(shaFile)) {
+			console.error(`Missing checksum: ${script}.sha256 — cannot publish unsigned helper script`);
+			process.exit(1);
+		}
+		const content = readFileSync(shaFile, "utf8").trim();
+		const sha256 = content.split(/\s+/)[0];
+		if (!sha256 || sha256.length < 32) {
+			console.error(`Invalid checksum in ${shaFile}: "${content}"`);
+			process.exit(1);
+		}
+		scripts[script] = {
+			url: `${BASE_URL}/${script}`,
+			sha256,
+			size: statSync(scriptPath).size,
+		};
+	}
+
 	const manifest = {
 		version,
 		generated: new Date().toISOString(),
 		platform,
 		components,
+		scripts,
 	};
 
 	console.log(JSON.stringify(manifest, null, 2));

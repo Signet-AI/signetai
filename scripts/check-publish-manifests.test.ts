@@ -119,6 +119,16 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain('cp release/*.zip "$ARTIFACT_DIR/" 2>/dev/null || true');
 	});
 
+	test("rebuilds Rust bundle artifacts when root Cargo inputs change", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain('- "Cargo.toml"');
+		expect(workflow).toContain('- "Cargo.lock"');
+		expect(workflow).toContain('daemon_rs:\n              - "platform/daemon-rs/**"\n              - "Cargo.toml"\n              - "Cargo.lock"');
+		expect(workflow).toContain('native:\n              - "platform/native/**"\n              - "Cargo.toml"\n              - "Cargo.lock"');
+	});
+
 	test("pins bundled Node runtime versions in CI", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
@@ -180,6 +190,9 @@ describe("check-publish-manifests", () => {
 		);
 		expect(workflow).toContain("Merged manifest for $PLATFORM missing expected component: $component");
 		expect(workflow).toContain(".components[$component].url and .components[$component].sha256");
+		expect(workflow).toContain("for script in install.sh update.sh uninstall.sh; do");
+		expect(workflow).toContain(".scripts[$script].url and .scripts[$script].sha256");
+		expect(workflow).toContain("Merged manifest for $PLATFORM missing expected helper script: $script");
 		expect(workflow).toContain("Import the daemon package API entrypoint");
 		expect(daemonBuild).toContain('{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" }');
 		expect(daemonBuild).toContain('{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" }');
@@ -339,6 +352,9 @@ describe("check-publish-manifests", () => {
 			expect(script).toContain('[ -e "$1" ] || [ -L "$1" ]');
 			expect(script).toContain('if path_exists_or_symlink "$DEST"; then mv "$DEST" "$OLD"; fi');
 		}
+		expect(installer).toContain('if path_exists_or_symlink "$OLD"; then');
+		expect(installer).toContain('warn "Cleaning stale backup: $(basename "$OLD")"');
+		expect(installer).toContain('rm -rf "$OLD"');
 		expect(installer).toContain('if path_exists_or_symlink "$PDEST"; then rm -rf "$PDEST"; fi');
 		expect(installer).toContain('if path_exists_or_symlink "$POLD"; then mv "$POLD" "$PDEST"; fi');
 		expect(updater).toContain('if path_exists_or_symlink "$OLD2"; then mv "$OLD2" "$DEST2"; fi');
@@ -381,16 +397,15 @@ describe("check-publish-manifests", () => {
 	test("refreshes bundle wrappers and helper scripts during updates", () => {
 		const root = join(import.meta.dir, "..");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
-		const refresh = updater.indexOf("refresh_wrappers");
+		const refresh = updater.lastIndexOf("refresh_wrappers");
 		const manifestCopy = updater.indexOf('cp "$REMOTE_MANIFEST" "$LOCAL_MANIFEST"');
 
 		expect(updater).toContain("refresh_wrappers()");
-		expect(updater).toContain('${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh.tmp"');
-		expect(updater).toContain('mv "${bindir}/_uninstall.sh.tmp" "${bindir}/_uninstall.sh"');
-		expect(updater).toContain("Could not refresh uninstaller helper");
-		expect(updater).toContain('${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh.tmp"');
-		expect(updater).toContain('mv "${bindir}/_update.sh.tmp" "${bindir}/_update.sh"');
-		expect(updater).toContain("Could not refresh updater helper");
+		expect(updater).toContain('download_verified_script "uninstall.sh" "${bindir}/_uninstall.sh"');
+		expect(updater).toContain("Could not refresh verified uninstaller helper");
+		expect(updater).toContain('download_verified_script "update.sh" "${bindir}/_update.sh"');
+		expect(updater).toContain("Could not refresh verified updater helper");
+		expect(refresh).toBeGreaterThan(updater.indexOf('if [ "$FAILED" -gt 0 ]'));
 		expect(refresh).toBeLessThan(manifestCopy);
 	});
 
@@ -435,6 +450,23 @@ describe("check-publish-manifests", () => {
 			expect(script).toContain('signet-"$name".tar.gz|signet-"$name"-"$PLATFORM".tar.gz');
 			expect(script).toContain("outside expected release assets");
 		}
+	});
+
+	test("verifies downloaded helper scripts against the manifest", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			expect(script).toContain("is_expected_script_url()");
+			expect(script).toContain('"$DOWNLOAD_BASE/$script"');
+			expect(script).toContain('url="$(get_manifest_value ".scripts.\\"${script}\\".url');
+			expect(script).toContain('sha="$(get_manifest_value ".scripts.\\"${script}\\".sha256');
+			expect(script).toContain("Checksum mismatch for helper script");
+			expect(script).not.toContain('${DOWNLOAD_BASE}/uninstall.sh" -o "${bindir}/_uninstall.sh');
+			expect(script).not.toContain('${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh');
+		}
+		expect(updater).toContain('download_verified_script "install.sh" "$INSTALLER"');
 	});
 
 	test("installer requires checksum tooling before downloads", () => {
@@ -504,6 +536,9 @@ describe("check-publish-manifests", () => {
 
 		expect(generator).toContain("statSync");
 		expect(generator).toContain("size: statSync(join(artifactDir, file)).size");
+		expect(generator).toContain('const HELPER_SCRIPTS = ["install.sh", "update.sh", "uninstall.sh"]');
+		expect(generator).toContain("Missing checksum: ${script}.sha256");
+		expect(generator).toContain("scripts[script] =");
 		expect(generator).not.toContain("size: 0");
 	});
 
