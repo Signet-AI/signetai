@@ -384,6 +384,8 @@ describe("check-publish-manifests", () => {
 
 		expect(updater).toContain('REQUIRED_COMPONENTS="node cli daemon-js dashboard native skills templates"');
 		expect(updater).toContain("is_required_component()");
+		expect(updater).toContain("has_manifest_key()");
+		expect(updater).toContain('printf \'%s\\n\' "$keys" | grep -Fx -- "$comp"');
 		expect(updater).toContain("collect_obsolete_components()");
 		expect(updater).toContain("Remote manifest is missing required installed component");
 		expect(updater).toContain("Remote manifest no longer includes optional component");

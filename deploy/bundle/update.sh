@@ -455,23 +455,26 @@ is_required_component() {
   esac
 }
 
+has_manifest_key() {
+  local keys="$1" comp="$2"
+  printf '%s\n' "$keys" | grep -Fx -- "$comp" >/dev/null 2>&1
+}
+
 collect_obsolete_components() {
   local remote_keys="$1"
   local local_keys obsolete
   local_keys="$(manifest_keys "$LOCAL_MANIFEST")"
   obsolete=""
   for comp in $local_keys; do
-    case " $remote_keys " in
-      *" $comp "*) ;;
-      *)
-        if is_required_component "$comp"; then
-          err "Remote manifest is missing required installed component '$comp'"
-          exit 1
-        fi
-        warn "Remote manifest no longer includes optional component '$comp'; removing it during this update" >&2
-        obsolete="${obsolete:+$obsolete }$comp"
-        ;;
-    esac
+    if has_manifest_key "$remote_keys" "$comp"; then
+      continue
+    fi
+    if is_required_component "$comp"; then
+      err "Remote manifest is missing required installed component '$comp'"
+      exit 1
+    fi
+    warn "Remote manifest no longer includes optional component '$comp'; removing it during this update" >&2
+    obsolete="${obsolete:+$obsolete }$comp"
   done
   printf '%s' "$obsolete"
 }
