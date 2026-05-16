@@ -159,11 +159,14 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('tar xzf "$MERGE_DIR/signet-cli.tar.gz" -C "$CHECK_DIR/runtime/cli"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/cli/cli.js"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/cli/package.json"');
+		expect(workflow).toContain('"$CHECK_DIR/runtime/daemon-js/index.js"');
 		expect(workflow).toContain("Bundle artifact layout missing");
 		expect(workflow).toContain('if [ "$PLATFORM" = "linux-x64" ]; then');
-		expect(workflow).toContain('SIGNET_DAEMON_SMOKE="$CHECK_DIR/runtime/daemon-js/daemon.js"');
+		expect(workflow).toContain('SIGNET_DAEMON_SMOKE_MODULE="$CHECK_DIR/runtime/daemon-js/index.js"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node"');
-		expect(workflow).toContain("-e 'import(process.env.SIGNET_DAEMON_SMOKE)'");
+		expect(workflow).toContain("--input-type=module");
+		expect(workflow).toContain("-e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'");
+		expect(workflow).not.toContain("import(process.env.SIGNET_DAEMON_SMOKE)");
 	});
 
 	test("delegates updater reinstall without sharing the install lock trap", () => {

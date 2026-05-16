@@ -456,16 +456,18 @@ jobs:
               "$CHECK_DIR/runtime/node/bin/node" \
               "$CHECK_DIR/runtime/cli/cli.js" \
               "$CHECK_DIR/runtime/cli/package.json" \
-              "$CHECK_DIR/runtime/daemon-js/daemon.js"; do
+              "$CHECK_DIR/runtime/daemon-js/daemon.js" \
+              "$CHECK_DIR/runtime/daemon-js/index.js"; do
               if [ ! -e "$entrypoint" ]; then
                 echo "::error::Bundle artifact layout missing $entrypoint"
                 exit 1
               fi
             done
             if [ "$PLATFORM" = "linux-x64" ]; then
-              SIGNET_DAEMON_SMOKE="$CHECK_DIR/runtime/daemon-js/daemon.js" \
+              SIGNET_DAEMON_SMOKE_MODULE="$CHECK_DIR/runtime/daemon-js/index.js" \
                 "$CHECK_DIR/runtime/node/bin/node" \
-                -e 'import(process.env.SIGNET_DAEMON_SMOKE)'
+                --input-type=module \
+                -e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'
             fi
             # Copy manifest back to the artifact dir for upload
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$PLAT_DIR/"
