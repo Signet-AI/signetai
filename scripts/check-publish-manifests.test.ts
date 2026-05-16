@@ -314,6 +314,11 @@ describe("check-publish-manifests", () => {
 			const validation = script.indexOf('validate_install_dir "$SIGNET_INSTALL_DIR"');
 			const mkdirInstallDir = script.indexOf('mkdir -p "$SIGNET_INSTALL_DIR"');
 			expect(script).toContain("normalize_path_for_guard()");
+			expect(script).toContain('*) absolute="$(pwd -P)/$path" ;;');
+			expect(script).toContain('read -r -a parts <<< "$absolute"');
+			expect(script).toContain('if [ -d "$next" ]; then');
+			expect(script).toContain('next="$(cd "$next" 2>/dev/null && pwd -P || printf');
+			expect(script).toContain('SIGNET_INSTALL_DIR="$(validate_install_dir "$SIGNET_INSTALL_DIR")"');
 			expect(script).toContain("Install dir is a dangerous path");
 			expect(script).toContain('[ -z "$install_dir" ]');
 			expect(script).toContain('[ "$normalized_dir" = "/" ]');
@@ -348,10 +353,15 @@ describe("check-publish-manifests", () => {
 		const removal = uninstaller.indexOf('rm -rf "$SIGNET_INSTALL_DIR"');
 
 		expect(uninstaller).toContain("normalize_path_for_guard()");
+		expect(uninstaller).toContain('*) absolute="$(pwd -P)/$path" ;;');
+		expect(uninstaller).toContain('read -r -a parts <<< "$absolute"');
+		expect(uninstaller).toContain('if [ -d "$next" ]; then');
+		expect(uninstaller).toContain('next="$(cd "$next" 2>/dev/null && pwd -P || printf');
 		expect(uninstaller).toContain("validate_safe_dir()");
 		expect(uninstaller).toContain('[ "$normalized_value" = "/" ]');
 		expect(uninstaller).toContain('[ "$normalized_value" = "$normalized_home" ]');
-		expect(uninstaller).toContain('validate_safe_dir "agents dir" "$AGENTS_DIR"');
+		expect(uninstaller).toContain('SIGNET_INSTALL_DIR="$(validate_safe_dir "install dir" "$SIGNET_INSTALL_DIR")"');
+		expect(uninstaller).toContain('AGENTS_DIR="$(validate_safe_dir "agents dir" "$AGENTS_DIR")"');
 		expect(uninstaller).toContain("no manifest.json");
 		expect(uninstaller).not.toContain('[ ! -d "$SIGNET_INSTALL_DIR/bin" ]');
 		expect(validation).toBeGreaterThan(-1);

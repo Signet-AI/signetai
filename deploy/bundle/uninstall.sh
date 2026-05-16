@@ -22,11 +22,43 @@ ok()    { printf "${GREEN}  ✓${NC} %s\n" "$1"; }
 warn()  { printf "${YELLOW}  !${NC} %s\n" "$1"; }
 
 normalize_path_for_guard() {
-  local path="$1"
-  while [ "${#path}" -gt 1 ] && [ "${path%/}" != "$path" ]; do
-    path="${path%/}"
+  local path="$1" absolute current part next old_ifs
+  local -a parts
+  if [ -z "$path" ]; then
+    printf '%s' ""
+    return
+  fi
+  case "$path" in
+    /*) absolute="$path" ;;
+    *) absolute="$(pwd -P)/$path" ;;
+  esac
+  current="/"
+  old_ifs="$IFS"
+  IFS='/'
+  read -r -a parts <<< "$absolute"
+  IFS="$old_ifs"
+  for part in "${parts[@]}"; do
+    case "$part" in
+      ""|.) continue ;;
+      ..)
+        if [ "$current" != "/" ]; then
+          current="${current%/*}"
+          [ -n "$current" ] || current="/"
+        fi
+        continue
+        ;;
+    esac
+    if [ "$current" = "/" ]; then
+      next="/$part"
+    else
+      next="$current/$part"
+    fi
+    if [ -d "$next" ]; then
+      next="$(cd "$next" 2>/dev/null && pwd -P || printf '%s' "$next")"
+    fi
+    current="$next"
   done
-  printf '%s' "$path"
+  printf '%s' "$current"
 }
 
 validate_safe_dir() {
@@ -34,12 +66,13 @@ validate_safe_dir() {
   normalized_value="$(normalize_path_for_guard "$value")"
   normalized_home="$(normalize_path_for_guard "$HOME")"
   if [ -z "$value" ] || [ "$normalized_value" = "/" ] || [ "$normalized_value" = "$normalized_home" ]; then
-    echo "Error: $label is a dangerous path ($value). Refusing to continue."
+    echo "Error: $label is a dangerous path ($value). Refusing to continue." >&2
     exit 1
   fi
+  printf '%s' "$normalized_value"
 }
 
-validate_safe_dir "install dir" "$SIGNET_INSTALL_DIR"
+SIGNET_INSTALL_DIR="$(validate_safe_dir "install dir" "$SIGNET_INSTALL_DIR")"
 
 remove_path_from_rc() {
   local rc="$1" bindir="$SIGNET_INSTALL_DIR/bin" tmp
@@ -98,7 +131,7 @@ fi
 # Optionally purge user data
 if [ "$PURGE" = "--purge" ]; then
   AGENTS_DIR="${SIGNET_PATH:-$HOME/.agents}"
-  validate_safe_dir "agents dir" "$AGENTS_DIR"
+  AGENTS_DIR="$(validate_safe_dir "agents dir" "$AGENTS_DIR")"
   if [ -d "$AGENTS_DIR" ]; then
     warn "Purging user data at $AGENTS_DIR..."
     rm -rf "$AGENTS_DIR"

@@ -38,11 +38,43 @@ warn()  { printf "${YELLOW}  !${NC} %s\n" "$1"; }
 err()   { printf "${RED}  ✗${NC} %s\n" "$1" >&2; }
 
 normalize_path_for_guard() {
-  local path="$1"
-  while [ "${#path}" -gt 1 ] && [ "${path%/}" != "$path" ]; do
-    path="${path%/}"
+  local path="$1" absolute current part next old_ifs
+  local -a parts
+  if [ -z "$path" ]; then
+    printf '%s' ""
+    return
+  fi
+  case "$path" in
+    /*) absolute="$path" ;;
+    *) absolute="$(pwd -P)/$path" ;;
+  esac
+  current="/"
+  old_ifs="$IFS"
+  IFS='/'
+  read -r -a parts <<< "$absolute"
+  IFS="$old_ifs"
+  for part in "${parts[@]}"; do
+    case "$part" in
+      ""|.) continue ;;
+      ..)
+        if [ "$current" != "/" ]; then
+          current="${current%/*}"
+          [ -n "$current" ] || current="/"
+        fi
+        continue
+        ;;
+    esac
+    if [ "$current" = "/" ]; then
+      next="/$part"
+    else
+      next="$current/$part"
+    fi
+    if [ -d "$next" ]; then
+      next="$(cd "$next" 2>/dev/null && pwd -P || printf '%s' "$next")"
+    fi
+    current="$next"
   done
-  printf '%s' "$path"
+  printf '%s' "$current"
 }
 
 validate_install_dir() {
@@ -60,6 +92,7 @@ validate_install_dir() {
       exit 1
       ;;
   esac
+  printf '%s' "$normalized_dir"
 }
 
 banner() {
@@ -106,7 +139,7 @@ require_cmd() {
 require_cmd curl
 require_cmd tar
 
-validate_install_dir "$SIGNET_INSTALL_DIR"
+SIGNET_INSTALL_DIR="$(validate_install_dir "$SIGNET_INSTALL_DIR")"
 
 # sha256sum or shasum
 SHA256_CMD=""
