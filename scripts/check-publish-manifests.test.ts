@@ -471,6 +471,8 @@ describe("check-publish-manifests", () => {
 			expect(script).not.toContain('${DOWNLOAD_BASE}/update.sh" -o "${bindir}/_update.sh');
 		}
 		expect(updater).toContain('download_verified_script "install.sh" "$INSTALLER"');
+		expect(updater).toContain("Dependency-free manifest lookup for the no-jq/no-node reinstall path");
+		expect(updater).toContain("first-level fields under .components and .scripts");
 	});
 
 	test("installer requires checksum tooling before downloads", () => {

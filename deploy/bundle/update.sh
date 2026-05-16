@@ -268,6 +268,8 @@ safe_tar_extract() {
   fi
 }
 
+# Dependency-free manifest lookup for the no-jq/no-node reinstall path.
+# Handles .version plus first-level fields under .components and .scripts.
 json_value() {
   local key="$1" file="${2:-${TMPDIR}/manifest-latest.json}"
   if [ "$key" = ".version" ]; then
