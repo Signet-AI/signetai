@@ -112,6 +112,20 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain("NODE_VER=\"$(node --version | sed 's/^v//')\"");
 	});
 
+	test("verifies bundled Node runtime against upstream checksums", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain("SHASUMS256.txt");
+		expect(workflow).toContain('EXPECTED_SHA="$(awk -v file="$NODE_TAR"');
+		expect(workflow).toContain("Node upstream checksum not found");
+		expect(workflow).toContain('ACTUAL_SHA="$($SHA_CMD "/tmp/${NODE_TAR}"');
+		expect(workflow).toContain("Node checksum mismatch");
+		expect(workflow.indexOf("Node checksum mismatch")).toBeLessThan(
+			workflow.indexOf('tar xzf "/tmp/${NODE_TAR}"'),
+		);
+	});
+
 	test("packages CLI bundle with Node ESM metadata", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
