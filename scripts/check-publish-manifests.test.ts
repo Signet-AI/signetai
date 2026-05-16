@@ -87,9 +87,25 @@ describe("check-publish-manifests", () => {
 
 		for (const script of [installer, updater]) {
 			expect(script).toContain('tar tzf "$archive"');
-			expect(script).toContain("while IFS= read -r entry");
-			expect(script).not.toContain('tar tvf "$archive"');
+			expect(script).toContain('$0 ~ /[[:space:]]/');
+			expect(script).toContain('$0 ~ /(^|\\/)\\.\\.($|\\/)/');
 			expect(script).not.toContain("sed 's/^.* //'");
+		}
+	});
+
+	test("rejects unsafe archive links before extraction", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			const linkCheck = script.indexOf("Archive contains unsafe links");
+			expect(linkCheck).toBeGreaterThan(-1);
+			expect(script).toContain("absolute symlink target");
+			expect(script).toContain("escaping symlink target");
+			expect(script).toContain("member descends through symlink");
+			expect(script).toContain("hard link entry");
+			expect(linkCheck).toBeLessThan(script.indexOf('tar xzf "$archive" -C "$dest"'));
 		}
 	});
 

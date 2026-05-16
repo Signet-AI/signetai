@@ -114,16 +114,85 @@ fi
 safe_tar_extract() {
   local archive="$1" dest="$2"
   local unsafe
-  unsafe="$(tar tzf "$archive" 2>/dev/null | while IFS= read -r entry; do
-    case "$entry" in
-      ""|../*|*/../*|*/..|..|/*)
-        echo "$entry"
-        ;;
-    esac
-  done)"
+  unsafe="$(tar tzf "$archive" 2>/dev/null | awk '$0 == "" || $0 == ".." || $0 ~ /[[:space:]]/ || $0 ~ /^\// || $0 ~ /^\.\.\// || $0 ~ /(^|\/)\.\.($|\/)/ { print }')"
   if [ -n "$unsafe" ]; then
     err "Archive contains unsafe paths:"
     echo "$unsafe"
+    return 1
+  fi
+  local unsafe_links
+  unsafe_links="$(awk '
+    function clean(path, parts, stack, depth, n, i, p, out) {
+      if (path ~ /^\//) return "__ABS__"
+      n = split(path, parts, "/")
+      depth = 0
+      for (i = 1; i <= n; i++) {
+        p = parts[i]
+        if (p == "" || p == ".") continue
+        if (p == "..") {
+          if (depth == 0) return "__ESCAPE__"
+          depth--
+          continue
+        }
+        stack[++depth] = p
+      }
+      out = ""
+      for (i = 1; i <= depth; i++) out = out (out == "" ? "" : "/") stack[i]
+      return out
+    }
+
+    FNR == NR {
+      if ($1 ~ /^h/) {
+        print "hard link entry: " $0
+        next
+      }
+      if ($1 ~ /^l/) {
+        line = $0
+        split(line, arrow, " -> ")
+        if (!(2 in arrow)) {
+          print "unparseable symlink entry: " line
+          next
+        }
+        left = arrow[1]
+        target = arrow[2]
+        n = split(left, fields, /[[:space:]]+/)
+        link = fields[n]
+        sub(/^\.\//, "", link)
+        normalized_link = clean(link)
+        if (normalized_link == "__ESCAPE__" || normalized_link == "__ABS__") {
+          print "unsafe symlink path: " link
+          next
+        }
+        if (target ~ /^\//) {
+          print "absolute symlink target: " link " -> " target
+          next
+        }
+        base = normalized_link
+        sub(/\/?[^\/]*$/, "", base)
+        resolved = clean((base == "" ? "" : base "/") target)
+        if (resolved == "__ESCAPE__" || resolved == "__ABS__") {
+          print "escaping symlink target: " link " -> " target
+          next
+        }
+        links[normalized_link] = 1
+      }
+      next
+    }
+
+    {
+      entry = $0
+      sub(/^\.\//, "", entry)
+      normalized_entry = clean(entry)
+      for (link in links) {
+        if (normalized_entry != link && index(normalized_entry, link "/") == 1) {
+          print "member descends through symlink: " entry " via " link
+        }
+      }
+    }
+  ' <(tar tvf "$archive" 2>/dev/null) <(tar tzf "$archive" 2>/dev/null))"
+  if [ -n "$unsafe_links" ]; then
+    err "Archive contains unsafe links:"
+    echo "$unsafe_links"
     return 1
   fi
   mkdir -p "$dest"
@@ -132,17 +201,15 @@ safe_tar_extract() {
   escaped="$(find "$dest" -type l 2>/dev/null | while read -r link; do
     local target
     target="$(readlink "$link")"
-    case "$target" in
-      /*) echo "$link -> $target" ;;
-      *)
-        local resolved
-        resolved="$(cd "$(dirname "$link")" && cd "$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")"
-        case "$resolved" in
-          "$dest"/*) ;;
-          *) echo "$link -> $resolved" ;;
-        esac
-        ;;
-    esac
+    if [ "${target#/}" != "$target" ]; then
+      echo "$link -> $target"
+      continue
+    fi
+    local resolved
+    resolved="$(cd "$(dirname "$link")" && cd "$(dirname "$target")" 2>/dev/null && pwd)/$(basename "$target")"
+    if [ "$resolved" != "$dest" ] && [ "${resolved#"$dest"/}" = "$resolved" ]; then
+      echo "$link -> $resolved"
+    fi
   done)"
   if [ -n "$escaped" ]; then
     err "Extracted archive contains symlinks escaping dest dir:"
