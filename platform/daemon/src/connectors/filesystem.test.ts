@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { matchConnectorPattern, matchGlob } from "./filesystem";
+import { discoverFiles, matchConnectorPattern, matchGlob } from "./filesystem";
 
 describe("globToRegex", () => {
 	test("**/*.md matches root-level files", () => {
@@ -35,6 +38,33 @@ describe("globToRegex", () => {
 		expect(matchConnectorPattern("**/*.md", ".github/CONTRIBUTING.md")).toBe(false);
 		expect(matchConnectorPattern(".github/*.md", ".github/CONTRIBUTING.md")).toBe(true);
 		expect(matchConnectorPattern("docs/.private/*.md", "docs/.private/notes.md")).toBe(true);
+	});
+
+	test("filesystem discovery descends into explicitly included dot directories", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-fs-connector-"));
+		try {
+			mkdirSync(join(root, ".github"), { recursive: true });
+			mkdirSync(join(root, "docs", ".private"), { recursive: true });
+			mkdirSync(join(root, ".agents"), { recursive: true });
+			writeFileSync(join(root, ".github", "CONTRIBUTING.md"), "github");
+			writeFileSync(join(root, "docs", ".private", "notes.md"), "private");
+			writeFileSync(join(root, ".agents", "SOUL.md"), "agent");
+			writeFileSync(join(root, "README.md"), "readme");
+
+			const files = await discoverFiles({
+				rootPath: root,
+				patterns: [".github/*.md", "docs/.private/*.md"],
+				ignorePatterns: [],
+				maxFileSize: 1_048_576,
+			});
+
+			expect(files.map((file) => file.relativePath).sort()).toEqual([
+				".github/CONTRIBUTING.md",
+				"docs/.private/notes.md",
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	test("*.md does not match .env", () => {

@@ -130,13 +130,13 @@ export function globToRegex(pattern: string): RegExp {
 	return new RegExp(anchored, "i");
 }
 
-async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
+export async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
 	const { patterns, ignorePatterns, maxFileSize } = settings;
 	const resolvedRoot = resolve(settings.rootPath);
 	const seen = new Set<string>();
 	const results: DiscoveredFile[] = [];
 
-	const wantsDot = patterns.some((p) => p.startsWith(".") || p.includes("/."));
+	const wantsDot = patterns.some(patternAllowsDotSegment);
 	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns, "", wantsDot)) {
 		const rel = relative(resolvedRoot, absolutePath);
 		if (!rel || rel.startsWith("..")) continue;
