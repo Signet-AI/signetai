@@ -576,6 +576,14 @@ jobs:
               gh release upload "$TAG" "$f" --repo "$REPO" --clobber
             done
           done
+          for script in install.sh update.sh uninstall.sh; do
+            for helper_asset in "/tmp/release-staging/$script" "/tmp/release-staging/$script.sha256"; do
+              if [ ! -f "$helper_asset" ]; then
+                echo "::error::Missing staged helper asset: $(basename "$helper_asset")"
+                exit 1
+              fi
+            done
+          done
 
       - name: Upload manifests
         env:
