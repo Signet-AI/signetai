@@ -55,6 +55,12 @@ function rowToEntity(r: Record<string, unknown>): Entity {
 		mentions: typeof r.mentions === "number" ? r.mentions : undefined,
 		pinned: r.pinned === 1,
 		pinnedAt: typeof r.pinned_at === "string" ? r.pinned_at : null,
+		status: r.status === "archived" ? "archived" : "active",
+		archivedAt: typeof r.archived_at === "string" ? r.archived_at : null,
+		archivedBy: typeof r.archived_by === "string" ? r.archived_by : null,
+		archiveReason: typeof r.archive_reason === "string" ? r.archive_reason : null,
+		proposalId: typeof r.proposal_id === "string" ? r.proposal_id : null,
+		proposalEvidence: parseJsonArray(r.proposal_evidence),
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
@@ -72,6 +78,12 @@ function rowToAspect(r: Record<string, unknown>): EntityAspect {
 		name: r.name as string,
 		canonicalName: r.canonical_name as string,
 		weight: r.weight as number,
+		status: r.status === "archived" ? "archived" : "active",
+		archivedAt: typeof r.archived_at === "string" ? r.archived_at : null,
+		archivedBy: typeof r.archived_by === "string" ? r.archived_by : null,
+		archiveReason: typeof r.archive_reason === "string" ? r.archive_reason : null,
+		proposalId: typeof r.proposal_id === "string" ? r.proposal_id : null,
+		proposalEvidence: parseJsonArray(r.proposal_evidence),
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
@@ -93,6 +105,12 @@ function rowToAttribute(r: Record<string, unknown>): EntityAttribute {
 		importance: r.importance as number,
 		status: r.status as AttributeStatus,
 		supersededBy: (r.superseded_by as string) ?? null,
+		version: typeof r.version === "number" ? r.version : 1,
+		versionRootId: typeof r.version_root_id === "string" ? r.version_root_id : (r.id as string),
+		previousAttributeId: typeof r.previous_attribute_id === "string" ? r.previous_attribute_id : null,
+		archivedAt: typeof r.archived_at === "string" ? r.archived_at : null,
+		archivedBy: typeof r.archived_by === "string" ? r.archived_by : null,
+		archiveReason: typeof r.archive_reason === "string" ? r.archive_reason : null,
 		sourceKind: (r.source_kind as string) ?? null,
 		sourceId: (r.source_id as string) ?? null,
 		sourcePath: (r.source_path as string) ?? null,
@@ -116,6 +134,10 @@ function rowToDependency(r: Record<string, unknown>): EntityDependency {
 		strength: r.strength as number,
 		confidence: typeof r.confidence === "number" ? r.confidence : 0.7,
 		reason: typeof r.reason === "string" ? r.reason : null,
+		status: r.status === "archived" ? "archived" : "active",
+		archivedAt: typeof r.archived_at === "string" ? r.archived_at : null,
+		archivedBy: typeof r.archived_by === "string" ? r.archived_by : null,
+		archiveReason: typeof r.archive_reason === "string" ? r.archive_reason : null,
 		sourceKind: (r.source_kind as string) ?? null,
 		sourceId: (r.source_id as string) ?? null,
 		sourcePath: (r.source_path as string) ?? null,
@@ -184,6 +206,7 @@ export function getAspectsForEntity(accessor: DbAccessor, entityId: string, agen
 			.prepare(
 				`SELECT * FROM entity_aspects
 				 WHERE entity_id = ? AND agent_id = ?
+				   AND COALESCE(status, 'active') = 'active'
 				 ORDER BY weight DESC`,
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
@@ -297,6 +320,7 @@ export function getConstraintsForEntity(
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 				 WHERE asp.entity_id = ? AND asp.agent_id = ?
 				   AND ea.agent_id = ?
+				   AND COALESCE(asp.status, 'active') = 'active'
 				   AND ea.kind = 'constraint'
 				   AND ea.status = 'active'
 				 ORDER BY ea.importance DESC`,
@@ -459,8 +483,14 @@ export function getDependenciesFrom(
 	return accessor.withReadDb((db) => {
 		const rows = db
 			.prepare(
-				`SELECT * FROM entity_dependencies
-				 WHERE source_entity_id = ? AND agent_id = ?`,
+				`SELECT dep.*
+				 FROM entity_dependencies dep
+				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+				 WHERE dep.source_entity_id = ? AND dep.agent_id = ?
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'`,
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToDependency);
@@ -475,8 +505,14 @@ export function getDependenciesTo(
 	return accessor.withReadDb((db) => {
 		const rows = db
 			.prepare(
-				`SELECT * FROM entity_dependencies
-				 WHERE target_entity_id = ? AND agent_id = ?`,
+				`SELECT dep.*
+				 FROM entity_dependencies dep
+				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+				 WHERE dep.target_entity_id = ? AND dep.agent_id = ?
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'`,
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToDependency);
@@ -526,6 +562,7 @@ export function getPinnedEntities(accessor: DbAccessor, agentId: string): Readon
 				 FROM entities
 				 WHERE agent_id = ?
 				   AND pinned = 1
+				   AND COALESCE(status, 'active') = 'active'
 				 ORDER BY pinned_at DESC, updated_at DESC, name ASC`,
 			)
 			.all(agentId) as Array<Record<string, unknown>>;
@@ -797,6 +834,7 @@ export function resolveNamedEntity(
 					END AS match_rank
 				 FROM entities
 				 WHERE agent_id = ?
+				   AND COALESCE(status, 'active') = 'active'
 				   AND (
 						COALESCE(canonical_name, LOWER(name)) = ?
 						OR LOWER(name) = ?
@@ -859,6 +897,7 @@ function resolveAspectByName(
 			 FROM entity_aspects
 			 WHERE entity_id = ?
 			   AND agent_id = ?
+			   AND COALESCE(status, 'active') = 'active'
 			   AND (canonical_name = ? OR LOWER(name) = ?)
 			 ORDER BY weight DESC, updated_at DESC
 			 LIMIT 1`,
@@ -884,6 +923,7 @@ function resolveEntityRecordByName(
 			`SELECT *
 			 FROM entities
 			 WHERE agent_id = ?
+			   AND COALESCE(status, 'active') = 'active'
 			   AND (
 					COALESCE(canonical_name, LOWER(name)) = ?
 					OR LOWER(name) = ?
@@ -995,6 +1035,7 @@ export function getEntityKnowledgeTree(
 				 LEFT JOIN entity_attributes attr
 				   ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
 				 WHERE asp.entity_id = ? AND asp.agent_id = ?
+				   AND COALESCE(asp.status, 'active') = 'active'
 				 GROUP BY asp.id
 				 ORDER BY asp.weight DESC, asp.name ASC
 				 LIMIT ?`,
@@ -1308,6 +1349,7 @@ export function listKnowledgeEntities(
 	return accessor.withReadDb((db) => {
 		const conditions = ["e.agent_id = ?"];
 		const args: Array<string | number> = [params.agentId];
+		conditions.push("COALESCE(e.status, 'active') = 'active'");
 		if (params.type) {
 			conditions.push("e.entity_type = ?");
 			args.push(params.type);
@@ -1335,12 +1377,14 @@ export function listKnowledgeEntities(
 					(
 						SELECT COUNT(*) FROM entity_aspects asp
 						WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 					) AS aspect_count,
 					(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
 						WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'attribute'
 						  AND attr.status = 'active'
@@ -1350,13 +1394,19 @@ export function listKnowledgeEntities(
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
 						WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'constraint'
 						  AND attr.status = 'active'
 					) AS constraint_count,
 					(
 						SELECT COUNT(*) FROM entity_dependencies dep
+						JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+						JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
 						WHERE dep.agent_id = e.agent_id
+						  AND COALESCE(dep.status, 'active') = 'active'
+						  AND COALESCE(src.status, 'active') = 'active'
+						  AND COALESCE(dst.status, 'active') = 'active'
 						  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
 					) AS dependency_count
 				 FROM page p
@@ -1391,13 +1441,15 @@ export function getKnowledgeEntityDetail(
 					e.*,
 					(
 						SELECT COUNT(*) FROM entity_aspects asp
-						WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+						  WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+						    AND COALESCE(asp.status, 'active') = 'active'
 					) AS aspect_count,
 					(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
-						WHERE asp.entity_id = e.id
+						  WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'attribute'
 						  AND attr.status = 'active'
@@ -1405,22 +1457,32 @@ export function getKnowledgeEntityDetail(
 					(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
-						WHERE asp.entity_id = e.id
+						  WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'constraint'
 						  AND attr.status = 'active'
 					) AS constraint_count,
 					(
 						SELECT COUNT(*) FROM entity_dependencies dep
-						WHERE dep.agent_id = e.agent_id AND dep.source_entity_id = e.id
+						JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+						WHERE dep.agent_id = e.agent_id
+						  AND COALESCE(dep.status, 'active') = 'active'
+						  AND COALESCE(dst.status, 'active') = 'active'
+						  AND dep.source_entity_id = e.id
 					) AS outgoing_dependency_count,
 					(
 						SELECT COUNT(*) FROM entity_dependencies dep
-						WHERE dep.agent_id = e.agent_id AND dep.target_entity_id = e.id
+						JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+						WHERE dep.agent_id = e.agent_id
+						  AND COALESCE(dep.status, 'active') = 'active'
+						  AND COALESCE(src.status, 'active') = 'active'
+						  AND dep.target_entity_id = e.id
 					) AS incoming_dependency_count
 				 FROM entities e
-				 WHERE e.id = ? AND e.agent_id = ?`,
+				 WHERE e.id = ? AND e.agent_id = ?
+				   AND COALESCE(e.status, 'active') = 'active'`,
 			)
 			.get(entityId, agentId) as Record<string, unknown> | undefined;
 
@@ -1462,6 +1524,7 @@ export function getEntityAspectsWithCounts(
 				 LEFT JOIN entity_attributes attr
 				   ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
 				 WHERE asp.entity_id = ? AND asp.agent_id = ?
+				   AND COALESCE(asp.status, 'active') = 'active'
 				 GROUP BY asp.id
 				 ORDER BY asp.weight DESC, asp.name ASC`,
 			)
@@ -1488,7 +1551,14 @@ export function getAttributesForAspectFiltered(
 	},
 ): readonly EntityAttribute[] {
 	return accessor.withReadDb((db) => {
-		const conditions = ["asp.entity_id = ?", "asp.id = ?", "asp.agent_id = ?", "ea.agent_id = ?"];
+		const conditions = [
+			"asp.entity_id = ?",
+			"asp.id = ?",
+			"asp.agent_id = ?",
+			"ea.agent_id = ?",
+			"COALESCE(e.status, 'active') = 'active'",
+			"COALESCE(asp.status, 'active') = 'active'",
+		];
 		const args: Array<string | number> = [params.entityId, params.aspectId, params.agentId, params.agentId];
 		if (params.kind) {
 			conditions.push("ea.kind = ?");
@@ -1504,6 +1574,7 @@ export function getAttributesForAspectFiltered(
 				`SELECT ea.*
 				 FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 				 WHERE ${conditions.join(" AND ")}
 				 ORDER BY ea.importance DESC, ea.created_at DESC
 				 LIMIT ? OFFSET ?`,
@@ -1540,6 +1611,9 @@ export function getEntityDependenciesDetailed(
 				 JOIN entities dst ON dst.id = dep.target_entity_id
 				 WHERE dep.agent_id = ?
 				   AND (${directionClauses.join(" OR ")})
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'
 				 ORDER BY dep.strength DESC, dep.updated_at DESC`,
 			)
 			.all(
@@ -1576,37 +1650,72 @@ export function getKnowledgeStats(accessor: DbAccessor, agentId: string): Knowle
 				`SELECT COUNT(DISTINCT mem.memory_id) as n
 				 FROM memory_entity_mentions mem
 				 JOIN entities e ON e.id = mem.entity_id AND e.agent_id = ?
-				 JOIN memories m ON m.id = mem.memory_id AND m.is_deleted = 0`,
+				 JOIN memories m ON m.id = mem.memory_id AND m.is_deleted = 0
+				 WHERE COALESCE(e.status, 'active') = 'active'`,
 			)
 			.get(agentId) as { n: number };
-		const entityCount = db.prepare("SELECT COUNT(*) as n FROM entities WHERE agent_id = ?").get(agentId) as {
-			n: number;
-		};
-		const aspectCount = db.prepare("SELECT COUNT(*) as n FROM entity_aspects WHERE agent_id = ?").get(agentId) as {
-			n: number;
-		};
+		const entityCount = db
+			.prepare("SELECT COUNT(*) as n FROM entities WHERE agent_id = ? AND COALESCE(status, 'active') = 'active'")
+			.get(agentId) as { n: number };
+		const aspectCount = db
+			.prepare(
+				`SELECT COUNT(*) as n
+				 FROM entity_aspects asp
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE asp.agent_id = ?
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
+			)
+			.get(agentId) as { n: number };
 		const attributeCount = db
 			.prepare(
-				`SELECT COUNT(*) as n FROM entity_attributes
-				 WHERE agent_id = ? AND kind = 'attribute' AND status = 'active'`,
+				`SELECT COUNT(*) as n
+				 FROM entity_attributes attr
+				 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE attr.agent_id = ?
+				   AND attr.kind = 'attribute'
+				   AND attr.status = 'active'
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
 			)
 			.get(agentId) as { n: number };
 		const constraintCount = db
 			.prepare(
-				`SELECT COUNT(*) as n FROM entity_attributes
-				 WHERE agent_id = ? AND kind = 'constraint' AND status = 'active'`,
+				`SELECT COUNT(*) as n
+				 FROM entity_attributes attr
+				 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE attr.agent_id = ?
+				   AND attr.kind = 'constraint'
+				   AND attr.status = 'active'
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
 			)
 			.get(agentId) as { n: number };
 		const dependencyCount = db
-			.prepare("SELECT COUNT(*) as n FROM entity_dependencies WHERE agent_id = ?")
+			.prepare(
+				`SELECT COUNT(*) as n
+				 FROM entity_dependencies dep
+				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+				 WHERE dep.agent_id = ?
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'`,
+			)
 			.get(agentId) as { n: number };
 		const assignedMemoryCount = db
 			.prepare(
-				`SELECT COUNT(DISTINCT memory_id) as n
-				 FROM entity_attributes
-				 WHERE agent_id = ?
-				   AND status = 'active'
-				   AND memory_id IS NOT NULL`,
+				`SELECT COUNT(DISTINCT attr.memory_id) as n
+				 FROM entity_attributes attr
+				 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE attr.agent_id = ?
+				   AND attr.status = 'active'
+				   AND attr.memory_id IS NOT NULL
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
 			)
 			.get(agentId) as { n: number };
 		const feedbackStats = db
@@ -1617,10 +1726,13 @@ export function getKnowledgeStats(accessor: DbAccessor, agentId: string): Knowle
 					COUNT(CASE WHEN weight >= 1.0 THEN 1 END) AS max_weight_count,
 					COUNT(CASE WHEN weight <= 0.1 THEN 1 END) AS min_weight_count,
 					COUNT(CASE
-						WHEN updated_at >= datetime('now', '-7 days') THEN 1
+						WHEN asp.updated_at >= datetime('now', '-7 days') THEN 1
 					END) AS updated_last_7_days
-				 FROM entity_aspects
-				 WHERE agent_id = ?`,
+				 FROM entity_aspects asp
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE asp.agent_id = ?
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
 			)
 			.get(agentId) as {
 			aspect_count: number;

@@ -13,11 +13,15 @@ import { OntologyExtractionError, extractOntologyProposals } from "../ontology-e
 import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
 import {
 	OntologyProposalError,
+	applyOntologyOperation,
+	applyOntologyOperationBatch,
 	applyOntologyProposal,
 	createOntologyProposal,
 	createOntologyProposals,
+	getClaimVersion,
 	getOntologyProposal,
 	getOntologyProposalEvidence,
+	listClaimVersions,
 	listOntologyProposalConflicts,
 	listOntologyProposals,
 	parseOntologyProposalStatus,
@@ -105,6 +109,9 @@ export function registerOntologyRoutes(app: Hono): void {
 	app.use("/api/ontology/consolidate", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
+	});
+	app.use("/api/ontology/operations/*", async (c, next) => {
+		return requirePermission("modify", authConfig)(c, next);
 	});
 	app.use("/api/ontology/claims/*", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
@@ -257,11 +264,133 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
+	app.get("/api/ontology/claims/versions", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		const claim = c.req.query("claim")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		if (!claim) return c.json({ error: "claim is required" }, 400);
+		const kind = parseOntologyClaimAttributeKind(c.req.query("kind"));
+		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
+		try {
+			return c.json(
+				listClaimVersions(getDbAccessor(), { agentId: scoped.agentId, entity, aspect, group, claim, kind }),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.get("/api/ontology/claims/version", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		const claim = c.req.query("claim")?.trim();
+		const version = parseBoundedInt(c.req.query("version"), 0, 1, 1_000_000);
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		if (!claim) return c.json({ error: "claim is required" }, 400);
+		if (version === 0) return c.json({ error: "version is required" }, 400);
+		const kind = parseOntologyClaimAttributeKind(c.req.query("kind"));
+		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
+		try {
+			const item = getClaimVersion(getDbAccessor(), {
+				agentId: scoped.agentId,
+				entity,
+				aspect,
+				group,
+				claim,
+				kind,
+				version,
+			});
+			if (item === null) return c.json({ error: "Claim version not found" }, 404);
+			return c.json(item);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
 	app.get("/api/ontology/links/:id/evidence", (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		try {
 			return c.json(getOntologyLinkEvidence(getDbAccessor(), { agentId: scoped.agentId, id: c.req.param("id") }));
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/operations/apply", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		const operation = readString(body, "operation");
+		if (!operation) return c.json({ error: "operation is required" }, 400);
+		const payload = asRecord(body.payload);
+		if (Object.keys(payload).length === 0) return c.json({ error: "payload object is required" }, 400);
+		try {
+			return c.json(
+				applyOntologyOperation(getDbAccessor(), {
+					agentId: scoped.agentId,
+					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",
+					operation,
+					payload,
+					reason: readString(body, "reason") ?? readString(body, "rationale"),
+					evidence: readArray(body, "evidence"),
+					confidence: readNumber(body, "confidence"),
+					risk: readString(body, "risk") ?? null,
+					sourceKind: readString(body, "source_kind") ?? null,
+					sourceId: readString(body, "source_id") ?? null,
+					sourcePath: readString(body, "source_path") ?? null,
+					sourceRoot: readString(body, "source_root") ?? null,
+					dryRun: readBoolean(body, "dry_run") ?? false,
+					propose: readBoolean(body, "propose") ?? false,
+				}),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/operations/batch", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		const operations = readArray(body, "operations") ?? readArray(body, "items") ?? [];
+		if (operations.length === 0) return c.json({ error: "operations are required" }, 400);
+		const actor = readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator";
+		try {
+			return c.json(
+				applyOntologyOperationBatch(getDbAccessor(), {
+					agentId: scoped.agentId,
+					actor,
+					dryRun: readBoolean(body, "dry_run") ?? false,
+					propose: readBoolean(body, "propose") ?? false,
+					operations: operations.map((raw) => {
+						const op = asRecord(raw);
+						return {
+							operation: readString(op, "operation") ?? "",
+							payload: asRecord(op.payload),
+							reason: readString(op, "reason") ?? readString(op, "rationale"),
+							evidence: readArray(op, "evidence"),
+							confidence: readNumber(op, "confidence"),
+							risk: readString(op, "risk") ?? null,
+							sourceKind: readString(op, "source_kind") ?? readString(body, "source_kind") ?? null,
+							sourceId: readString(op, "source_id") ?? readString(body, "source_id") ?? null,
+							sourcePath: readString(op, "source_path") ?? readString(body, "source_path") ?? null,
+							sourceRoot: readString(op, "source_root") ?? readString(body, "source_root") ?? null,
+						};
+					}),
+				}),
+			);
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}

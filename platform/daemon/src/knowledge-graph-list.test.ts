@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
+	getDependenciesFrom,
+	getDependenciesTo,
 	getKnowledgeEntityDetail,
 	getKnowledgeGraphForConstellation,
 	getKnowledgeStats,
@@ -197,6 +199,56 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(hub?.dependencyCount).toBe(2);
 	});
 
+	test("excludes archived graph rows from default list counts", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		seedEntity("e-active", "Active", { mentions: 5 });
+		seedEntity("e-archived", "Archived", { mentions: 10 });
+		seedAspect("asp-active", "e-active", "capability");
+		seedAspect("asp-archived", "e-active", "retired");
+		seedAttribute("attr-active", "asp-active", { kind: "attribute" });
+		seedAttribute("constraint-archived-aspect", "asp-archived", { kind: "constraint" });
+		seedDependency("dep-archived", "e-active", "e-archived");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET status = 'archived' WHERE id = ?").run("e-archived");
+			db.prepare("UPDATE entity_aspects SET status = 'archived' WHERE id = ?").run("asp-archived");
+		});
+
+		const result = listKnowledgeEntities(getDbAccessor(), {
+			agentId: "default",
+			limit: 10,
+			offset: 0,
+		});
+
+		expect(result.map((item) => item.entity.id)).toEqual(["e-active"]);
+		expect(result[0]?.aspectCount).toBe(1);
+		expect(result[0]?.attributeCount).toBe(1);
+		expect(result[0]?.constraintCount).toBe(0);
+		expect(result[0]?.dependencyCount).toBe(0);
+	});
+
+	test("dependency reads hide edges attached to archived endpoint entities", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		seedEntity("e-active", "Active");
+		seedEntity("e-archived", "Archived");
+		seedEntity("e-other", "Other");
+		seedDependency("dep-hidden-target", "e-active", "e-archived");
+		seedDependency("dep-hidden-source", "e-archived", "e-active");
+		seedDependency("dep-visible-out", "e-active", "e-other");
+		seedDependency("dep-visible-in", "e-other", "e-active");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET status = 'archived' WHERE id = ?").run("e-archived");
+		});
+
+		expect(getDependenciesFrom(getDbAccessor(), "e-active", "default").map((dep) => dep.id)).toEqual([
+			"dep-visible-out",
+		]);
+		expect(getDependenciesTo(getDbAccessor(), "e-active", "default").map((dep) => dep.id)).toEqual(["dep-visible-in"]);
+	});
+
 	test("respects limit and offset pagination", () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
@@ -376,5 +428,34 @@ describe("getKnowledgeStats (issue #515)", () => {
 
 		const stats = getKnowledgeStats(getDbAccessor(), "default");
 		expect(stats.unassignedMemoryCount).toBe(0);
+	});
+
+	test("excludes archived graph rows from stats and coverage", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		seedEntity("e-active", "Active", { agentId: "default" });
+		seedEntity("e-archived", "Archived", { agentId: "default" });
+		seedAspect("asp-active", "e-active", "capability");
+		seedAspect("asp-archived", "e-active", "retired");
+		seedAttribute("attr-active", "asp-active", { memoryId: "m-active" });
+		seedAttribute("attr-archived-aspect", "asp-archived", { memoryId: "m-archived-aspect" });
+		seedDependency("dep-archived-target", "e-active", "e-archived");
+		seedMemory("m-active");
+		seedMemory("m-archived-entity");
+		seedMention("m-active", "e-active");
+		seedMention("m-archived-entity", "e-archived");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET status = 'archived' WHERE id = ?").run("e-archived");
+			db.prepare("UPDATE entity_aspects SET status = 'archived' WHERE id = ?").run("asp-archived");
+		});
+
+		const stats = getKnowledgeStats(getDbAccessor(), "default");
+		expect(stats.entityCount).toBe(1);
+		expect(stats.aspectCount).toBe(1);
+		expect(stats.attributeCount).toBe(1);
+		expect(stats.dependencyCount).toBe(0);
+		expect(stats.unassignedMemoryCount).toBe(0);
+		expect(stats.coveragePercent).toBe(100);
 	});
 });

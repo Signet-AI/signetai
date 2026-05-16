@@ -9,11 +9,15 @@ import { extractOntologyProposals } from "./ontology-extraction";
 import { getOntologyLinkEvidence } from "./ontology-link-evidence";
 import {
 	OntologyProposalError,
+	applyOntologyOperation,
+	applyOntologyOperationBatch,
 	applyOntologyProposal,
 	createOntologyProposal,
 	createOntologyProposals,
+	getClaimVersion,
 	getOntologyProposal,
 	getOntologyProposalEvidence,
+	listClaimVersions,
 	listOntologyProposalConflicts,
 	listOntologyProposals,
 	proposeDuplicateEntityMerges,
@@ -1039,5 +1043,848 @@ describe("ontology proposals", () => {
 		const failed = getOntologyProposal(getDbAccessor(), proposal.id, "default");
 		expect(failed?.status).toBe("failed");
 		expect(failed?.result?.error).toContain("Unsupported");
+	});
+
+	it("applies direct operations by creating an applied proposal and graph mutation atomically", () => {
+		const result = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Signet",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "control_plane",
+				value: "Direct ontology operations are audited through applied proposals.",
+			},
+			reason: "operator asserted audited control plane behavior",
+			evidence: [{ source_kind: "test", quote: "audited control plane" }],
+			confidence: 0.94,
+		});
+
+		expect(result.dryRun).toBe(false);
+		expect(result.proposed).toBe(false);
+		expect(result.proposal.status).toBe("applied");
+		expect(result.proposal.appliedBy).toBe("operator");
+		expect(result.result?.version).toBe(1);
+
+		const attrs = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "control_plane",
+		});
+		expect(attrs.count).toBe(1);
+		expect(attrs.items[0]?.proposalId).toBe(result.proposal.id);
+		expect(attrs.items[0]?.content).toContain("audited");
+	});
+
+	it("dry-runs direct operations without writing proposals or graph state", () => {
+		const result = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_entity",
+			payload: { name: "Dry Run Entity", entity_type: "project" },
+			dryRun: true,
+		});
+
+		expect(result.dryRun).toBe(true);
+		expect(result.proposal.status).toBe("applied");
+		const proposal = getOntologyProposal(getDbAccessor(), result.proposal.id, "ant");
+		const entity = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Dry Run Entity") as
+					| { id: string }
+					| undefined,
+		);
+		expect(proposal).toBeNull();
+		expect(entity).toBeNull();
+	});
+
+	it("exercises dry-run, apply, propose, reject, evidence, and immutable source artifacts end to end", () => {
+		const sourcePath = "memory/codex/transcripts/control-plane-e2e.jsonl";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, session_id,
+				  session_key, session_token, harness, captured_at, content, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"ant",
+				sourcePath,
+				"sha-control-plane-e2e",
+				"transcript",
+				"session-control-plane-e2e",
+				"control-plane-e2e",
+				"token-control-plane-e2e",
+				"codex",
+				"2026-05-16T00:01:00.000Z",
+				"Raw artifact says ontology control-plane mutations are audited through proposals.",
+				"2026-05-16T00:01:00.000Z",
+			);
+		});
+		const sourceBefore = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT content FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+					.get("ant", sourcePath) as { content: string } | undefined,
+		);
+
+		const payload = {
+			entity: "Signet",
+			entity_type: "project",
+			aspect: "architecture",
+			group_key: "ontology",
+			claim_key: "control_plane_e2e",
+			value: "Ontology control-plane mutations are audited through proposals.",
+		};
+		const dryRun = applyOntologyOperationBatch(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			dryRun: true,
+			operations: [{ operation: "set_claim_value", payload }],
+		});
+		expect(dryRun.dryRun).toBe(true);
+		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+
+		const applied = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload,
+			sourceKind: "transcript",
+			sourceId: "control-plane-e2e",
+			sourcePath,
+			evidence: [{ source_kind: "memory_artifact", source_path: sourcePath, quote: "audited through proposals" }],
+		});
+		const proposed = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_entity",
+			payload: { name: "Rejected Candidate", entity_type: "project" },
+			propose: true,
+		});
+		const rejected = rejectOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: proposed.proposal.id,
+			actor: "operator",
+			reason: "proposal review rejected this candidate",
+		});
+		const evidence = getOntologyClaimEvidence(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "control_plane_e2e",
+		});
+		const sourceAfter = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT content FROM memory_artifacts WHERE agent_id = ? AND source_path = ?")
+					.get("ant", sourcePath) as { content: string } | undefined,
+		);
+
+		expect(applied.proposal.status).toBe("applied");
+		expect(rejected.status).toBe("rejected");
+		expect(evidence.items[0]?.attribute.proposalId).toBe(applied.proposal.id);
+		expect(evidence.items[0]?.evidence.map((item) => item.kind)).toContain("memory_artifact");
+		expect(sourceAfter?.content).toBe(sourceBefore?.content);
+	});
+
+	it("proposes direct operations without mutating graph state", () => {
+		const result = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_entity",
+			payload: { name: "Proposed Entity", entity_type: "project" },
+			propose: true,
+		});
+
+		expect(result.proposed).toBe(true);
+		expect(result.proposal.status).toBe("pending");
+		const entity = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Proposed Entity") as
+					| { id: string }
+					| undefined,
+		);
+		expect(entity).toBeNull();
+	});
+
+	it("set_claim_value creates queryable version chains and restore switches the active version", () => {
+		const payload = {
+			entity: "Signet",
+			entity_type: "project",
+			aspect: "architecture",
+			group_key: "ontology",
+			claim_key: "versioned_claim",
+		};
+		const v1 = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Version one." },
+		});
+		const v2 = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Version two." },
+		});
+		const v3 = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Version three." },
+		});
+
+		expect(v1.result?.version).toBe(1);
+		expect(v2.result?.version).toBe(2);
+		expect(v3.result?.version).toBe(3);
+		const versions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "versioned_claim",
+		});
+		expect(versions.items.map((item) => item.version)).toEqual([3, 2, 1]);
+		expect(versions.items.map((item) => item.status)).toEqual(["active", "superseded", "superseded"]);
+
+		const shown = getClaimVersion(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "versioned_claim",
+			version: 2,
+		});
+		expect(shown?.content).toBe("Version two.");
+
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "restore_claim_version",
+			payload: { attribute_id: shown?.id },
+		});
+		const restored = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "versioned_claim",
+		});
+		expect(restored.items.find((item) => item.version === 2)?.status).toBe("active");
+		expect(restored.items.find((item) => item.version === 3)?.status).toBe("superseded");
+	});
+
+	it("archives claim values and hides them from default active reads", () => {
+		const applied = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Signet",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "archive_claim",
+				value: "Archive me.",
+			},
+		});
+		const attributeId = applied.result?.attributeId as string;
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_claim_value",
+			payload: { attribute_id: attributeId, reason: "obsolete" },
+		});
+
+		const active = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT COUNT(*) AS n FROM entity_attributes WHERE id = ? AND status = 'active'")
+					.get(attributeId) as { n: number },
+		);
+		const versions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "archive_claim",
+		});
+		expect(active.n).toBe(0);
+		expect(versions.items[0]?.status).toBe("deleted");
+	});
+
+	it("continues claim version chains after the active value is archived", () => {
+		const payload = {
+			entity: "Archive Version Chain",
+			entity_type: "project",
+			aspect: "architecture",
+			group_key: "ontology",
+			claim_key: "archived_chain",
+		};
+		const first = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Archived first version." },
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_claim_value",
+			payload: { attribute_id: first.result?.attributeId, reason: "retired" },
+		});
+		const second = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: { ...payload, value: "Replacement after archive." },
+		});
+
+		const versions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Archive Version Chain",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "archived_chain",
+		});
+
+		expect(second.result?.version).toBe(2);
+		expect(second.result?.versionRootId).toBe(first.result?.versionRootId);
+		expect(second.result?.previousAttributeId).toBe(first.result?.attributeId);
+		expect(versions.items.map((item) => item.version)).toEqual([2, 1]);
+		expect(versions.items.map((item) => item.status)).toEqual(["active", "deleted"]);
+	});
+
+	it("preserves original claim provenance when repeated writes dedupe", () => {
+		const first = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Dedupe Provenance",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "source_truth",
+				value: "The original evidence owns this row.",
+			},
+			evidence: [{ source: "transcript:first", message_ids: ["m1"] }],
+			createdBy: "first",
+		});
+		const applied = applyOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: first.id,
+			actor: "operator",
+		});
+		const repeated = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Dedupe Provenance",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "source_truth",
+				value: "The original evidence owns this row.",
+			},
+			evidence: [{ source: "transcript:repeat", message_ids: ["m2"] }],
+			createdBy: "repeat",
+		});
+
+		const second = applyOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: repeated.id,
+			actor: "operator",
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT proposal_id, proposal_evidence FROM entity_attributes WHERE id = ?")
+					.get(applied.result?.attributeId as string) as
+					| { proposal_id: string | null; proposal_evidence: string | null }
+					| undefined,
+		);
+		expect(second.result?.deduped).toBe(true);
+		expect(second.result?.attributeId).toBe(applied.result?.attributeId);
+		expect(row?.proposal_id).toBe(first.id);
+		expect(JSON.parse(row?.proposal_evidence ?? "[]")).toEqual([{ source: "transcript:first", message_ids: ["m1"] }]);
+	});
+
+	it("preserves original additive claim provenance when repeated values dedupe", () => {
+		const first = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Additive Provenance",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "source_truth",
+				value: "Repeated additive values keep the first source.",
+			},
+			evidence: [{ source: "transcript:first-add", message_ids: ["m1"] }],
+			createdBy: "first",
+		});
+		const applied = applyOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: first.id,
+			actor: "operator",
+		});
+		const repeated = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Additive Provenance",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "source_truth",
+				value: "Repeated additive values keep the first source.",
+			},
+			evidence: [{ source: "transcript:repeat-add", message_ids: ["m2"] }],
+			createdBy: "repeat",
+		});
+
+		const second = applyOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			id: repeated.id,
+			actor: "operator",
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT proposal_id, proposal_evidence FROM entity_attributes WHERE id = ?")
+					.get(applied.result?.attributeId as string) as
+					| { proposal_id: string | null; proposal_evidence: string | null }
+					| undefined,
+		);
+		expect(second.result?.deduped).toBe(true);
+		expect(second.result?.attributeId).toBe(applied.result?.attributeId);
+		expect(row?.proposal_id).toBe(first.id);
+		expect(JSON.parse(row?.proposal_evidence ?? "[]")).toEqual([
+			{ source: "transcript:first-add", message_ids: ["m1"] },
+		]);
+	});
+
+	it("records the applying actor when pending archive proposals are applied", () => {
+		const entity = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "creator",
+			operation: "create_entity",
+			payload: { name: "Archive Actor Entity", entity_type: "project" },
+		});
+		const claim = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "creator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Archive Actor Claim",
+				entity_type: "project",
+				aspect: "audit",
+				group_key: "ontology",
+				claim_key: "actor",
+				value: "Archive me.",
+			},
+		});
+		const link = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "creator",
+			operation: "create_link",
+			payload: {
+				source_entity: "Archive Actor Source",
+				source_type: "project",
+				link_type: "related_to",
+				target_entity: "Archive Actor Target",
+				target_type: "project",
+				reason: "Audit actor fixture.",
+			},
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "creator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Archive Actor Aspect",
+				entity_type: "project",
+				aspect: "retire_me",
+				group_key: "ontology",
+				claim_key: "actor",
+				value: "Archive my aspect.",
+			},
+		});
+
+		const proposals = createOntologyProposals(getDbAccessor(), [
+			{
+				agentId: "ant",
+				operation: "archive_entity",
+				payload: { selector: entity.result?.entityId },
+				createdBy: "creator",
+			},
+			{
+				agentId: "ant",
+				operation: "archive_claim_value",
+				payload: { attribute_id: claim.result?.attributeId },
+				createdBy: "creator",
+			},
+			{
+				agentId: "ant",
+				operation: "archive_link",
+				payload: { id: link.result?.dependencyId },
+				createdBy: "creator",
+			},
+			{
+				agentId: "ant",
+				operation: "archive_aspect",
+				payload: { entity: "Archive Actor Aspect", selector: "retire_me" },
+				createdBy: "creator",
+			},
+		]);
+
+		for (const proposal of proposals.items) {
+			applyOntologyProposal(getDbAccessor(), {
+				agentId: "ant",
+				id: proposal.id,
+				actor: "reviewer",
+			});
+		}
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT
+						 (SELECT archived_by FROM entities WHERE id = ?) AS entity_actor,
+						 (SELECT archived_by FROM entity_attributes WHERE id = ?) AS claim_actor,
+						 (SELECT archived_by FROM entity_dependencies WHERE id = ?) AS link_actor,
+						 (SELECT asp.archived_by
+						    FROM entity_aspects asp
+						    JOIN entities ent ON ent.id = asp.entity_id
+						   WHERE ent.agent_id = ? AND ent.name = ? AND asp.name = ?) AS aspect_actor,
+						 (SELECT attr.archived_by
+						    FROM entity_attributes attr
+						    JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						    JOIN entities ent ON ent.id = asp.entity_id
+						   WHERE ent.agent_id = ? AND ent.name = ? AND asp.name = ?) AS aspect_attr_actor`,
+					)
+					.get(
+						entity.result?.entityId as string,
+						claim.result?.attributeId as string,
+						link.result?.dependencyId as string,
+						"ant",
+						"Archive Actor Aspect",
+						"retire_me",
+						"ant",
+						"Archive Actor Aspect",
+						"retire_me",
+					) as {
+					entity_actor: string | null;
+					claim_actor: string | null;
+					link_actor: string | null;
+					aspect_actor: string | null;
+					aspect_attr_actor: string | null;
+				},
+		);
+		expect(row).toEqual({
+			entity_actor: "reviewer",
+			claim_actor: "reviewer",
+			link_actor: "reviewer",
+			aspect_actor: "reviewer",
+			aspect_attr_actor: "reviewer",
+		});
+	});
+
+	it("reactivates archived aspects when creating claims for the same aspect slot", () => {
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Aspect Restore",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "old_claim",
+				value: "Before archive.",
+			},
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_aspect",
+			payload: { entity: "Aspect Restore", selector: "architecture", reason: "retired" },
+		});
+		const recreated = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Aspect Restore",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "new_claim",
+				value: "After archive.",
+			},
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT asp.status AS aspect_status, asp.archived_by, attr.status AS claim_status
+						 FROM entity_aspects asp
+						 JOIN entity_attributes attr ON attr.aspect_id = asp.id
+						 WHERE asp.id = ? AND attr.id = ?`,
+					)
+					.get(recreated.result?.aspectId as string, recreated.result?.attributeId as string) as
+					| { aspect_status: string; archived_by: string | null; claim_status: string }
+					| undefined,
+		);
+		expect(row?.aspect_status).toBe("active");
+		expect(row?.archived_by).toBeNull();
+		expect(row?.claim_status).toBe("active");
+	});
+
+	it("reactivates archived links when creating the same link again", () => {
+		const created = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_link",
+			payload: {
+				source_entity: "Archived Link Source",
+				source_type: "project",
+				link_type: "related_to",
+				target_entity: "Archived Link Target",
+				target_type: "project",
+				reason: "Initial relationship.",
+			},
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_link",
+			payload: { id: created.result?.dependencyId, reason: "retired" },
+		});
+		const recreated = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_link",
+			payload: {
+				source_entity: "Archived Link Source",
+				source_type: "project",
+				link_type: "related_to",
+				target_entity: "Archived Link Target",
+				target_type: "project",
+				reason: "Restored relationship.",
+				strength: 0.9,
+			},
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT status, archived_by, reason, strength FROM entity_dependencies WHERE id = ?")
+					.get(created.result?.dependencyId as string) as
+					| { status: string; archived_by: string | null; reason: string; strength: number }
+					| undefined,
+		);
+		expect(recreated.result?.dependencyId).toBe(created.result?.dependencyId);
+		expect(recreated.result?.reactivated).toBe(true);
+		expect(row?.status).toBe("active");
+		expect(row?.archived_by).toBeNull();
+		expect(row?.reason).toBe("Restored relationship.");
+		expect(row?.strength).toBeCloseTo(0.9);
+	});
+
+	it("keeps claim version history readable after archiving its parent entity", () => {
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Signet",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "archived_parent_history",
+				value: "History survives entity archival.",
+			},
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_entity",
+			payload: { selector: "Signet", reason: "retired" },
+		});
+
+		const versions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "archived_parent_history",
+		});
+		const version = getClaimVersion(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "archived_parent_history",
+			version: 1,
+		});
+		expect(versions.count).toBe(1);
+		expect(version?.content).toBe("History survives entity archival.");
+	});
+
+	it("requires strict claim-version entity selectors across archived duplicates", () => {
+		insertEntity("archived-history", "Duplicate History A", "duplicate history", "ant", 1);
+		insertEntity("active-history", "Duplicate History B", "duplicate history", "ant", 2);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET status = 'archived' WHERE id = ?").run("archived-history");
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, 0.5, datetime('now'), datetime('now'))`,
+			).run("archived-history-aspect", "archived-history", "ant", "architecture", "architecture");
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, 0.5, datetime('now'), datetime('now'))`,
+			).run("active-history-aspect", "active-history", "ant", "architecture", "architecture");
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content,
+				  confidence, importance, status, group_key, claim_key,
+				  version, version_root_id, created_at, updated_at)
+				 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', ?, ?, 1, ?, datetime('now'), datetime('now'))`,
+			).run(
+				"archived-history-attr",
+				"archived-history-aspect",
+				"ant",
+				"Archived entity history.",
+				"archived entity history.",
+				"ontology",
+				"lineage",
+				"archived-history-attr",
+			);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content,
+				  confidence, importance, status, group_key, claim_key,
+				  version, version_root_id, created_at, updated_at)
+				 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', ?, ?, 1, ?, datetime('now'), datetime('now'))`,
+			).run(
+				"active-history-attr",
+				"active-history-aspect",
+				"ant",
+				"Active entity history.",
+				"active entity history.",
+				"ontology",
+				"lineage",
+				"active-history-attr",
+			);
+		});
+
+		expect(() =>
+			listClaimVersions(getDbAccessor(), {
+				agentId: "ant",
+				entity: "duplicate history",
+				aspect: "architecture",
+				group: "ontology",
+				claim: "lineage",
+			}),
+		).toThrow("ambiguous");
+		const archivedVersions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "archived-history",
+			aspect: "archived-history-aspect",
+			group: "ontology",
+			claim: "lineage",
+		});
+		const activeVersions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "active-history",
+			aspect: "active-history-aspect",
+			group: "ontology",
+			claim: "lineage",
+		});
+		expect(archivedVersions.items.map((item) => item.content)).toEqual(["Archived entity history."]);
+		expect(activeVersions.items.map((item) => item.content)).toEqual(["Active entity history."]);
+	});
+
+	it("rolls back an operation batch when one operation is invalid", () => {
+		expect(() =>
+			applyOntologyOperationBatch(getDbAccessor(), {
+				agentId: "ant",
+				actor: "operator",
+				operations: [
+					{ operation: "create_entity", payload: { name: "Batch Good", entity_type: "project" } },
+					{ operation: "rename_entity", payload: { selector: "Missing", new_name: "Nope" } },
+				],
+			}),
+		).toThrow(OntologyProposalError);
+		const count = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Batch Good") as {
+					n: number;
+				},
+		);
+		expect(count.n).toBe(0);
+		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+	});
+
+	it("returns per-line dry-run batch validation errors without writing", () => {
+		const result = applyOntologyOperationBatch(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			dryRun: true,
+			operations: [
+				{ operation: "create_entity", payload: { name: "Batch Preview", entity_type: "project" } },
+				{ operation: "rename_entity", payload: { selector: "Missing", new_name: "Nope" } },
+			],
+		});
+		const count = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND name = ?")
+					.get("ant", "Batch Preview") as {
+					n: number;
+				},
+		);
+
+		expect(result.dryRun).toBe(true);
+		expect(result.items).toHaveLength(1);
+		expect(result.errors).toEqual([
+			{
+				index: 1,
+				line: 2,
+				operation: "rename_entity",
+				error: "Entity not found: Missing",
+				status: 404,
+			},
+		]);
+		expect(count.n).toBe(0);
+		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+	});
+
+	it("rejects ambiguous same-agent entity selectors", () => {
+		insertEntity("one", "Signet A", "signet", "ant", 1);
+		insertEntity("two", "Signet B", "signet", "ant", 2);
+
+		expect(() =>
+			applyOntologyOperation(getDbAccessor(), {
+				agentId: "ant",
+				actor: "operator",
+				operation: "rename_entity",
+				payload: { selector: "signet", new_name: "Signet" },
+			}),
+		).toThrow("ambiguous");
 	});
 });

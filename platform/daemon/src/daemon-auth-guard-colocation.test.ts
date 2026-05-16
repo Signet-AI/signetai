@@ -47,8 +47,10 @@ writeFileSync(
 `,
 );
 process.env.SIGNET_PATH = tmpDir;
+let closeAccessor: (() => void) | null = null;
 
 afterAll(() => {
+	closeAccessor?.();
 	if (prevSignetPath === undefined) {
 		Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	}
@@ -61,8 +63,10 @@ describe("auth guard co-location", () => {
 		// Import daemon to warm the full module graph and break the
 		// circular dependency chain (state → pipeline → hooks → daemon → git-sync → state).
 		await import("./daemon");
-		const { initDbAccessor } = await import("./db-accessor");
+		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
+		closeDbAccessor();
 		initDbAccessor(join(tmpDir, "memory", "memories.db"));
+		closeAccessor = closeDbAccessor;
 
 		// Switch to team mode.  The initial parseAuthConfig(undefined, ...)
 		// always defaults to local.  reloadAuthState reads agent.yaml from
@@ -168,6 +172,20 @@ describe("auth guard co-location", () => {
 			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "POST", "/api/ontology/proposals/batch")).toBe(403);
+		});
+
+		it("POST /api/ontology/operations/apply returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "POST", "/api/ontology/operations/apply")).toBe(403);
+		});
+
+		it("POST /api/ontology/operations/batch returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			registerOntologyRoutes(app);
+			expect(await status(app, "POST", "/api/ontology/operations/batch")).toBe(403);
 		});
 
 		it("GET /api/ontology/proposals/:id/evidence returns 403 without auth", async () => {

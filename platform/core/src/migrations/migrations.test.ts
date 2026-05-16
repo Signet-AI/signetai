@@ -12,6 +12,7 @@ import { readMemoriesFtsSql } from "../fts-schema";
 import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
 import { up as threadHeadsMigration } from "./048-thread-heads";
+import { up as ontologyControlPlaneState } from "./070-ontology-control-plane-state";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -640,6 +641,81 @@ describe("migration framework", () => {
 
 		const indexes = db.query("PRAGMA index_list(memory_artifacts)").all() as Array<{ name: string }>;
 		expect(indexes.map((row) => row.name)).toContain("idx_memory_artifacts_agent_deleted");
+	});
+
+	test("migration 070 adds ontology control-plane status and version state safely", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE entities (
+				id TEXT PRIMARY KEY,
+				agent_id TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE entity_aspects (
+				id TEXT PRIMARY KEY,
+				entity_id TEXT NOT NULL,
+				agent_id TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE entity_attributes (
+				id TEXT PRIMARY KEY,
+				aspect_id TEXT NOT NULL,
+				agent_id TEXT NOT NULL,
+				group_key TEXT,
+				claim_key TEXT,
+				status TEXT NOT NULL DEFAULT 'active',
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE entity_dependencies (
+				id TEXT PRIMARY KEY,
+				source_entity_id TEXT NOT NULL,
+				target_entity_id TEXT NOT NULL,
+				agent_id TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			INSERT INTO entities (id, agent_id, updated_at) VALUES ('entity-1', 'ant', '2026-05-16T00:00:00.000Z');
+			INSERT INTO entity_aspects (id, entity_id, agent_id, updated_at)
+			VALUES ('aspect-1', 'entity-1', 'ant', '2026-05-16T00:00:00.000Z');
+			INSERT INTO entity_attributes (id, aspect_id, agent_id, updated_at)
+			VALUES ('attr-1', 'aspect-1', 'ant', '2026-05-16T00:00:00.000Z');
+			INSERT INTO entity_dependencies (id, source_entity_id, target_entity_id, agent_id, updated_at)
+			VALUES ('dep-1', 'entity-1', 'entity-1', 'ant', '2026-05-16T00:00:00.000Z');
+		`);
+
+		ontologyControlPlaneState(db);
+
+		const entity = db.query("SELECT status, archived_at FROM entities WHERE id = 'entity-1'").get() as {
+			status: string;
+			archived_at: string | null;
+		};
+		const aspect = db.query("SELECT status, archive_reason FROM entity_aspects WHERE id = 'aspect-1'").get() as {
+			status: string;
+			archive_reason: string | null;
+		};
+		const attr = db
+			.query(
+				"SELECT version, version_root_id, previous_attribute_id, archived_at FROM entity_attributes WHERE id = 'attr-1'",
+			)
+			.get() as {
+			version: number;
+			version_root_id: string;
+			previous_attribute_id: string | null;
+			archived_at: string | null;
+		};
+		const dep = db.query("SELECT status, archived_by FROM entity_dependencies WHERE id = 'dep-1'").get() as {
+			status: string;
+			archived_by: string | null;
+		};
+
+		expect(entity).toEqual({ status: "active", archived_at: null });
+		expect(aspect).toEqual({ status: "active", archive_reason: null });
+		expect(attr).toEqual({
+			version: 1,
+			version_root_id: "attr-1",
+			previous_attribute_id: null,
+			archived_at: null,
+		});
+		expect(dep).toEqual({ status: "active", archived_by: null });
 	});
 
 	test("entities table has pinning columns after migration 022", () => {

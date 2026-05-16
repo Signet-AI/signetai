@@ -75,6 +75,7 @@ import { up as memorySearchTelemetry } from "./066-memory-search-telemetry";
 import { up as ontologyProposals } from "./067-ontology-proposals";
 import { up as dailyReflections } from "./068-daily-reflections";
 import { up as dailyReflectionsMultipleInsights } from "./069-daily-reflections-multiple-insights";
+import { up as ontologyControlPlaneState } from "./070-ontology-control-plane-state";
 
 // -- Public interface consumed by Database.init() --
 
@@ -645,6 +646,21 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: dailyReflectionsMultipleInsights,
 		artifacts: {
 			tables: ["daily_reflections"],
+		},
+	},
+	{
+		version: 70,
+		name: "ontology-control-plane-state",
+		up: ontologyControlPlaneState,
+		artifacts: {
+			columns: [
+				{ table: "entities", column: "status" },
+				{ table: "entity_aspects", column: "status" },
+				{ table: "entity_attributes", column: "version" },
+				{ table: "entity_attributes", column: "version_root_id" },
+				{ table: "entity_attributes", column: "previous_attribute_id" },
+				{ table: "entity_dependencies", column: "status" },
+			],
 		},
 	},
 ];

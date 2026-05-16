@@ -14,6 +14,29 @@ afterEach(() => {
 });
 
 describe("registerOntologyCommands", () => {
+	test("registers the public audited mutation command tree", () => {
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async () => ({ ok: true, data: {} }),
+		});
+
+		const ontology = program.commands.find((cmd) => cmd.name() === "ontology");
+		expect(ontology).toBeDefined();
+		if (!ontology) throw new Error("ontology command was not registered");
+		expect(ontology?.commands.map((cmd) => cmd.name())).toEqual(
+			expect.arrayContaining(["entity", "claim", "aspect", "link", "stream"]),
+		);
+
+		const names = (parent: Command, name: string): readonly string[] =>
+			parent.commands.find((cmd) => cmd.name() === name)?.commands.map((cmd) => cmd.name()) ?? [];
+		expect(names(ontology, "entity")).toEqual(expect.arrayContaining(["create", "rename", "merge", "archive"]));
+		expect(names(ontology, "claim")).toEqual(expect.arrayContaining(["set", "versions", "show", "archive", "restore"]));
+		expect(names(ontology, "aspect")).toEqual(expect.arrayContaining(["create", "rename", "archive"]));
+		expect(names(ontology, "link")).toEqual(expect.arrayContaining(["create", "update", "archive"]));
+		expect(names(ontology, "stream")).toEqual(expect.arrayContaining(["apply"]));
+	});
+
 	test("objects lists ontology objects through knowledge navigation", async () => {
 		const calls: Array<{ readonly method: string; readonly path: string }> = [];
 		const lines: string[] = [];
@@ -485,5 +508,290 @@ describe("registerOntologyCommands", () => {
 		expect(body.proposals?.map((proposal) => proposal.operation)).toEqual(["add_claim_value", "create_link"]);
 		expect(body.proposals?.[0]?.payload?.claim_key).toBe("proposal_loop");
 		expect(body.proposals?.[1]?.payload?.link_type).toBe("supports_claim");
+	});
+
+	test("entity create posts audited operation payloads", async () => {
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+		console.log = () => {};
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (method, path, body) => {
+				calls.push({ method, path, body });
+				return { ok: true, data: { proposal: { id: "proposal-1" }, dryRun: true } };
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"entity",
+			"create",
+			"Signet",
+			"--type",
+			"project",
+			"--agent",
+			"ant",
+			"--dry-run",
+			"--reason",
+			"manual",
+			"--json",
+		]);
+
+		expect(calls).toEqual([
+			{
+				method: "POST",
+				path: "/api/ontology/operations/apply",
+				body: {
+					agent_id: "ant",
+					actor: "operator",
+					operation: "create_entity",
+					payload: { name: "Signet", entity_type: "project" },
+					reason: "manual",
+					evidence: undefined,
+					dry_run: true,
+					propose: false,
+				},
+			},
+		]);
+	});
+
+	test("claim set and stream apply use operation endpoints", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-ontology-cli-ops-"));
+		const file = join(dir, "ops.jsonl");
+		writeFileSync(
+			file,
+			`${JSON.stringify({ operation: "create_entity", payload: { name: "Signet", entity_type: "project" } })}\n`,
+		);
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+		console.log = () => {};
+		try {
+			const program = new Command();
+			registerOntologyCommands(program, {
+				ensureDaemonForSecrets: async () => true,
+				secretApiCall: async (method, path, body) => {
+					calls.push({ method, path, body });
+					return { ok: true, data: { proposal: { id: "proposal-1" }, items: [], count: 1 } };
+				},
+			});
+
+			await program.parseAsync([
+				"node",
+				"test",
+				"ontology",
+				"claim",
+				"set",
+				"Signet",
+				"architecture",
+				"ontology",
+				"control_plane",
+				"--value",
+				"Audited operations",
+				"--propose",
+				"--agent",
+				"ant",
+			]);
+			await program.parseAsync(["node", "test", "ontology", "stream", "apply", file, "--dry-run", "--json"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+
+		expect(calls[0]?.path).toBe("/api/ontology/operations/apply");
+		expect((calls[0]?.body as { readonly operation?: string }).operation).toBe("set_claim_value");
+		expect((calls[0]?.body as { readonly propose?: boolean }).propose).toBe(true);
+		expect(calls[1]?.path).toBe("/api/ontology/operations/batch");
+		expect((calls[1]?.body as { readonly dry_run?: boolean }).dry_run).toBe(true);
+		expect((calls[1]?.body as { readonly operations?: readonly unknown[] }).operations).toHaveLength(1);
+	});
+
+	test("claim version commands call version read and archive/restore operation endpoints", async () => {
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+		console.log = () => {};
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (method, path, body) => {
+				calls.push({ method, path, body });
+				return { ok: true, data: { proposal: { id: "proposal-1" }, items: [], count: 1 } };
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"claim",
+			"versions",
+			"Signet",
+			"architecture",
+			"ontology",
+			"control_plane",
+			"--agent",
+			"ant",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"claim",
+			"show",
+			"Signet",
+			"architecture",
+			"ontology",
+			"control_plane",
+			"--version",
+			"2",
+			"--agent",
+			"ant",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"claim",
+			"archive",
+			"--attribute-id",
+			"attr-1",
+			"--reason",
+			"obsolete",
+		]);
+		await program.parseAsync(["node", "test", "ontology", "claim", "restore", "--attribute-id", "attr-1"]);
+
+		expect(calls[0]?.path).toBe(
+			"/api/ontology/claims/versions?entity=Signet&aspect=architecture&group=ontology&claim=control_plane&agent_id=ant",
+		);
+		expect(calls[1]?.path).toBe(
+			"/api/ontology/claims/version?entity=Signet&aspect=architecture&group=ontology&claim=control_plane&version=2&agent_id=ant",
+		);
+		expect((calls[2]?.body as { readonly operation?: string }).operation).toBe("archive_claim_value");
+		expect((calls[3]?.body as { readonly operation?: string }).operation).toBe("restore_claim_version");
+	});
+
+	test("aspect and link commands hit audited operation endpoints", async () => {
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+		console.log = () => {};
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (method, path, body) => {
+				calls.push({ method, path, body });
+				return { ok: true, data: { proposal: { id: "proposal-1" } } };
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"aspect",
+			"create",
+			"Signet",
+			"architecture",
+			"--agent",
+			"ant",
+			"--dry-run",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"aspect",
+			"rename",
+			"Signet",
+			"architecture",
+			"design",
+			"--propose",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"aspect",
+			"archive",
+			"Signet",
+			"design",
+			"--reason",
+			"obsolete",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"link",
+			"create",
+			"Signet",
+			"supports_claim",
+			"Transcript",
+			"--strength",
+			"0.8",
+			"--confidence",
+			"0.9",
+		]);
+		await program.parseAsync(["node", "test", "ontology", "link", "update", "link-1", "--type", "related_to"]);
+		await program.parseAsync(["node", "test", "ontology", "link", "archive", "link-1", "--reason", "obsolete"]);
+
+		expect(calls.map((call) => (call.body as { readonly operation?: string }).operation)).toEqual([
+			"create_aspect",
+			"rename_aspect",
+			"archive_aspect",
+			"create_link",
+			"update_link",
+			"archive_link",
+		]);
+		expect((calls[0]?.body as { readonly agent_id?: string; readonly dry_run?: boolean }).agent_id).toBe("ant");
+		expect((calls[0]?.body as { readonly dry_run?: boolean }).dry_run).toBe(true);
+		expect((calls[1]?.body as { readonly propose?: boolean }).propose).toBe(true);
+		expect((calls[3]?.body as { readonly payload?: { readonly strength?: number } }).payload?.strength).toBe(0.8);
+	});
+
+	test("pipeline explain reads daemon status", async () => {
+		let capturedPath = "";
+		console.log = () => {};
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, path) => {
+				capturedPath = path;
+				return {
+					ok: true,
+					data: {
+						pipelineV2: {
+							enabled: true,
+							shadowMode: false,
+							mutationsFrozen: false,
+							graph: { enabled: true, extractionWritesEnabled: false },
+							traversal: { enabled: true },
+							autonomous: { enabled: true, frozen: false, allowUpdateDelete: false },
+						},
+					},
+				};
+			},
+		});
+
+		await program.parseAsync(["node", "test", "ontology", "pipeline", "explain"]);
+
+		expect(capturedPath).toBe("/api/status");
+	});
+
+	test("config show makes the audited operation surface explicit", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async () => ({ ok: true, data: {} }),
+		});
+
+		await program.parseAsync(["node", "test", "ontology", "config", "show", "--json"]);
+
+		const data = JSON.parse(lines.join("\n")) as {
+			readonly operationsUsable?: boolean;
+			readonly policyFile?: { readonly active?: boolean };
+		};
+		expect(data.operationsUsable).toBe(true);
+		expect(data.policyFile?.active).toBe(false);
 	});
 });
