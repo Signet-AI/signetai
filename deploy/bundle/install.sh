@@ -109,7 +109,8 @@ if command -v sha256sum >/dev/null 2>&1; then
 elif command -v shasum >/dev/null 2>&1; then
   SHA256_CMD="shasum -a 256"
 else
-  warn "No sha256 tool found — checksums will not be verified"
+  err "No checksum tool available — install sha256sum or shasum and retry."
+  exit 1
 fi
 
 # ── Download helpers ──
@@ -152,7 +153,7 @@ tmpdir="$(mktemp -d)"
 
 sha_verify() {
   local file="$1" expected="$2"
-  if [ -z "$SHA256_CMD" ]; then return 0; fi
+  if [ -z "$SHA256_CMD" ]; then return 1; fi
   if [ -z "$expected" ]; then return 0; fi
   local actual
   actual="$($SHA256_CMD "$file" | awk '{print $1}')"

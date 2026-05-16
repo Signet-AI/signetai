@@ -331,6 +331,19 @@ describe("check-publish-manifests", () => {
 		}
 	});
 
+	test("installer requires checksum tooling before downloads", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const checksumFailure = installer.indexOf("No checksum tool available");
+		const downloadBase = installer.indexOf("DOWNLOAD_BASE=");
+
+		expect(installer).toContain('err "No checksum tool available');
+		expect(installer).toContain("if [ -z \"$SHA256_CMD\" ]; then return 1; fi");
+		expect(installer).not.toContain("checksums will not be verified");
+		expect(checksumFailure).toBeGreaterThan(-1);
+		expect(checksumFailure).toBeLessThan(downloadBase);
+	});
+
 	test("refuses remote manifests that drop installed components", () => {
 		const root = join(import.meta.dir, "..");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
