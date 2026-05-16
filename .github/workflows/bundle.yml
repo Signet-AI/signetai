@@ -445,12 +445,14 @@ jobs:
           VERSION="$(jq -r '.version' package.json)"
           SHARED_DIR="/tmp/all-artifacts/bundle-linux-x64"
           HELPER_SCRIPT_DIR="/tmp/release-helper-scripts"
+          MANIFEST_DIR="/tmp/release-manifests"
           SHA_CMD="sha256sum"
           if ! command -v sha256sum >/dev/null 2>&1; then
             SHA_CMD="shasum -a 256"
           fi
           rm -rf "$HELPER_SCRIPT_DIR"
-          mkdir -p "$HELPER_SCRIPT_DIR"
+          rm -rf "$MANIFEST_DIR"
+          mkdir -p "$HELPER_SCRIPT_DIR" "$MANIFEST_DIR"
           for script in install.sh update.sh uninstall.sh; do
             cp "deploy/bundle/$script" "$HELPER_SCRIPT_DIR/$script"
             $SHA_CMD "$HELPER_SCRIPT_DIR/$script" > "$HELPER_SCRIPT_DIR/$script.sha256"
@@ -519,7 +521,8 @@ jobs:
               --input-type=module \
               -e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'
             "$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/cli/cli.js" mcp --help >/dev/null
-            # Copy manifest back to the artifact dir for upload
+            # Copy manifest into explicit release staging inputs for upload
+            cp "$MERGE_DIR/manifest-$PLATFORM.json" "$MANIFEST_DIR/"
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$PLAT_DIR/"
             # Copy shared artifacts into platform dir so they get uploaded
             if [ "$PLATFORM" != "linux-x64" ] && [ -d "$SHARED_DIR" ]; then
@@ -545,7 +548,7 @@ jobs:
         run: |
           mkdir -p /tmp/release-staging
           # Copy all artifacts into a flat staging dir, skipping duplicates
-          find /tmp/all-artifacts /tmp/release-helper-scripts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.sh.sha256' -o -name '*.dmg' -o -name '*.zip' -o -name '*.sh' -o -name 'manifest-*.json' \) | while read -r f; do
+          find /tmp/all-artifacts /tmp/release-helper-scripts /tmp/release-manifests -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.sh.sha256' -o -name '*.dmg' -o -name '*.zip' -o -name '*.sh' -o -name 'manifest-*.json' \) | while read -r f; do
             base="$(basename "$f")"
             if [ -f "/tmp/release-staging/$base" ]; then
               existing="$(sha256sum "/tmp/release-staging/$base" | awk '{print $1}')"

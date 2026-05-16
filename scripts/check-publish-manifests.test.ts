@@ -204,6 +204,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("Bundle artifact layout missing");
 		expect(workflow).toContain("for PLATFORM in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do");
 		expect(workflow).toContain('HELPER_SCRIPT_DIR="/tmp/release-helper-scripts"');
+		expect(workflow).toContain('MANIFEST_DIR="/tmp/release-manifests"');
 		expect(workflow).toContain('cp "deploy/bundle/$script" "$HELPER_SCRIPT_DIR/$script"');
 		expect(workflow).toContain('$SHA_CMD "$HELPER_SCRIPT_DIR/$script" > "$HELPER_SCRIPT_DIR/$script.sha256"');
 		expect(workflow).toContain(
@@ -215,6 +216,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('cp "$HELPER_SCRIPT_DIR/$script" "$HELPER_SCRIPT_DIR/$script.sha256" "$MERGE_DIR/"');
 		expect(workflow).toContain(".scripts[$script].url and .scripts[$script].sha256");
 		expect(workflow).toContain("Merged manifest for $PLATFORM missing expected helper script: $script");
+		expect(workflow).toContain('cp "$MERGE_DIR/manifest-$PLATFORM.json" "$MANIFEST_DIR/"');
 		expect(workflow).toContain("Import the daemon package API entrypoint");
 		expect(daemonBuild).toContain('{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" }');
 		expect(daemonBuild).toContain('{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" }');
@@ -232,7 +234,7 @@ describe("check-publish-manifests", () => {
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
 
 		expect(workflow).toContain("De-duplicate and stage release assets");
-		expect(workflow).toContain("find /tmp/all-artifacts /tmp/release-helper-scripts -type f");
+		expect(workflow).toContain("find /tmp/all-artifacts /tmp/release-helper-scripts /tmp/release-manifests -type f");
 		expect(workflow).toContain("-name '*.sh'");
 		expect(workflow).toContain("-name '*.sh.sha256'");
 		expect(workflow).toContain('existing="$(sha256sum "/tmp/release-staging/$base"');
