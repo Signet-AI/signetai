@@ -519,12 +519,22 @@ function resolveOrCreateAspect(db: WriteDb, entityId: string, agentId: string, n
 	const key = canonical(name);
 	const existing = db
 		.prepare(
-			`SELECT id FROM entity_aspects
+			`SELECT id, status FROM entity_aspects
 			 WHERE entity_id = ? AND agent_id = ? AND canonical_name = ?
 			 LIMIT 1`,
 		)
-		.get(entityId, agentId, key) as { id: string } | undefined;
-	if (existing) return existing.id;
+		.get(entityId, agentId, key) as { id: string; status: string | null } | undefined;
+	if (existing) {
+		if ((existing.status ?? "active") !== "active") {
+			db.prepare(
+				`UPDATE entity_aspects
+				 SET status = 'active', archived_at = NULL, archived_by = NULL,
+				     archive_reason = NULL, updated_at = datetime('now')
+				 WHERE id = ? AND agent_id = ?`,
+			).run(existing.id, agentId);
+		}
+		return existing.id;
+	}
 
 	const id = crypto.randomUUID();
 	db.prepare(
@@ -878,6 +888,7 @@ function applyArchiveEntity(
 	agentId: string,
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
+	actor: string,
 ): Readonly<Record<string, unknown>> {
 	const selector = readPayloadSelector(payload, "selector", "entity", "entity_id", "name");
 	if (selector === null) throw new OntologyProposalError("payload.selector is required", 400);
@@ -894,7 +905,7 @@ function applyArchiveEntity(
 		     archive_reason = ?, proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
 		 WHERE id = ? AND agent_id = ?`,
 	).run(
-		proposal.applied_by ?? proposal.created_by,
+		actor,
 		readString(payload, "reason") ?? proposal.rationale,
 		proposal.id,
 		JSON.stringify(proposalAuditEvidence(proposal)),
@@ -962,6 +973,7 @@ function applyArchiveAspect(
 	agentId: string,
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
+	actor: string,
 ): Readonly<Record<string, unknown>> {
 	const entitySelector = readPayloadSelector(payload, "entity", "entity_id");
 	const aspectSelector = readPayloadSelector(payload, "selector", "aspect", "aspect_id", "name");
@@ -975,7 +987,7 @@ function applyArchiveAspect(
 		     archive_reason = ?, proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
 		 WHERE id = ? AND agent_id = ?`,
 	).run(
-		proposal.applied_by ?? proposal.created_by,
+		actor,
 		readString(payload, "reason") ?? proposal.rationale,
 		proposal.id,
 		JSON.stringify(proposalAuditEvidence(proposal)),
@@ -987,12 +999,7 @@ function applyArchiveAspect(
 		 SET status = 'deleted', archived_at = datetime('now'), archived_by = ?,
 		     archive_reason = ?, updated_at = datetime('now')
 		 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'`,
-	).run(
-		proposal.applied_by ?? proposal.created_by,
-		readString(payload, "reason") ?? proposal.rationale,
-		aspect.id,
-		agentId,
-	);
+	).run(actor, readString(payload, "reason") ?? proposal.rationale, aspect.id, agentId);
 	return { entityId: entity.id, aspectId: aspect.id, archived: true };
 }
 
@@ -1001,6 +1008,7 @@ function applyArchiveClaimValue(
 	agentId: string,
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
+	actor: string,
 ): Readonly<Record<string, unknown>> {
 	const attributeId = readString(payload, "attribute_id");
 	if (attributeId === null) throw new OntologyProposalError("payload.attribute_id is required", 400);
@@ -1017,7 +1025,7 @@ function applyArchiveClaimValue(
 		     archive_reason = ?, proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
 		 WHERE id = ? AND agent_id = ?`,
 	).run(
-		proposal.applied_by ?? proposal.created_by,
+		actor,
 		readString(payload, "reason") ?? proposal.rationale,
 		proposal.id,
 		JSON.stringify(proposalAuditEvidence(proposal)),
@@ -1179,16 +1187,18 @@ function applyCreateLink(
 
 	const existing = db
 		.prepare(
-			`SELECT id FROM entity_dependencies
+			`SELECT id, status FROM entity_dependencies
 			 WHERE source_entity_id = ? AND target_entity_id = ?
 			   AND dependency_type = ? AND agent_id = ?
 			 LIMIT 1`,
 		)
-		.get(sourceId, targetId, dependencyType, agentId) as { id: string } | undefined;
+		.get(sourceId, targetId, dependencyType, agentId) as { id: string; status: string | null } | undefined;
 	if (existing) {
 		db.prepare(
 			`UPDATE entity_dependencies
-			 SET strength = ?, confidence = ?, reason = ?, updated_at = datetime('now'),
+			 SET status = 'active', archived_at = NULL, archived_by = NULL,
+			     archive_reason = NULL, strength = ?, confidence = ?, reason = ?,
+			     updated_at = datetime('now'),
 			     source_id = ?, source_kind = ?, source_path = ?, source_root = ?,
 			     proposal_id = ?, proposal_evidence = ?
 			 WHERE id = ? AND agent_id = ?`,
@@ -1205,7 +1215,13 @@ function applyCreateLink(
 			existing.id,
 			agentId,
 		);
-		return { dependencyId: existing.id, sourceId, targetId, updated: true };
+		return {
+			dependencyId: existing.id,
+			sourceId,
+			targetId,
+			updated: true,
+			reactivated: (existing.status ?? "active") !== "active",
+		};
 	}
 
 	const id = crypto.randomUUID();
@@ -1290,6 +1306,7 @@ function applyArchiveLink(
 	agentId: string,
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
+	actor: string,
 ): Readonly<Record<string, unknown>> {
 	const id = readString(payload, "id") ?? readString(payload, "dependency_id") ?? readString(payload, "link_id");
 	if (id === null) throw new OntologyProposalError("payload.id is required", 400);
@@ -1303,7 +1320,7 @@ function applyArchiveLink(
 		     archive_reason = ?, proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
 		 WHERE id = ? AND agent_id = ?`,
 	).run(
-		proposal.applied_by ?? proposal.created_by,
+		actor,
 		readString(payload, "reason") ?? proposal.rationale,
 		proposal.id,
 		JSON.stringify(proposalAuditEvidence(proposal)),
@@ -1313,14 +1330,16 @@ function applyArchiveLink(
 	return { dependencyId: id, archived: true };
 }
 
-function applyOperation(db: WriteDb, proposal: ProposalRow): Readonly<Record<string, unknown>> {
+function applyOperation(db: WriteDb, proposal: ProposalRow, actor: string): Readonly<Record<string, unknown>> {
 	const payload = parseJsonRecord(proposal.payload);
 	if (proposal.operation === "create_entity") return applyCreateEntity(db, proposal.agent_id, proposal, payload);
 	if (proposal.operation === "rename_entity") return applyRenameEntity(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "archive_entity") return applyArchiveEntity(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "archive_entity")
+		return applyArchiveEntity(db, proposal.agent_id, proposal, payload, actor);
 	if (proposal.operation === "create_aspect") return applyCreateAspect(db, proposal.agent_id, proposal, payload);
 	if (proposal.operation === "rename_aspect") return applyRenameAspect(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "archive_aspect") return applyArchiveAspect(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "archive_aspect")
+		return applyArchiveAspect(db, proposal.agent_id, proposal, payload, actor);
 	if (proposal.operation === "add_claim_value") return applyAddClaimValue(db, proposal.agent_id, proposal, payload);
 	if (proposal.operation === "set_claim_value") return applySetClaimValue(db, proposal.agent_id, proposal, payload);
 	if (proposal.operation === "merge_entities") return applyMergeEntities(db, proposal.agent_id, payload);
@@ -1328,13 +1347,13 @@ function applyOperation(db: WriteDb, proposal: ProposalRow): Readonly<Record<str
 		return applySupersedeClaimValue(db, proposal.agent_id, proposal, payload);
 	}
 	if (proposal.operation === "archive_claim_value")
-		return applyArchiveClaimValue(db, proposal.agent_id, proposal, payload);
+		return applyArchiveClaimValue(db, proposal.agent_id, proposal, payload, actor);
 	if (proposal.operation === "restore_claim_version") {
 		return applyRestoreClaimVersion(db, proposal.agent_id, proposal, payload);
 	}
 	if (proposal.operation === "create_link") return applyCreateLink(db, proposal.agent_id, proposal, payload);
 	if (proposal.operation === "update_link") return applyUpdateLink(db, proposal.agent_id, proposal, payload);
-	if (proposal.operation === "archive_link") return applyArchiveLink(db, proposal.agent_id, proposal, payload);
+	if (proposal.operation === "archive_link") return applyArchiveLink(db, proposal.agent_id, proposal, payload, actor);
 	throw new OntologyProposalError(`Unsupported ontology proposal operation: ${proposal.operation}`, 400);
 }
 
@@ -1712,7 +1731,7 @@ export function applyOntologyProposal(accessor: DbAccessor, params: ApplyOntolog
 				throw new OntologyProposalError(`Proposal is ${proposal.status}, not pending`, 409);
 			}
 
-			const result = applyOperation(db, proposal);
+			const result = applyOperation(db, proposal, params.actor);
 			const ts = now();
 			db.prepare(
 				`UPDATE ontology_proposals
@@ -1789,7 +1808,7 @@ export function applyOntologyOperation(
 			const inserted = insertProposalInTx(db, operationToProposalInput(params), now());
 			const row = getProposalInTx(db, inserted.id, params.agentId);
 			if (row === null) throw new OntologyProposalError("Proposal not found", 404);
-			const operationResult = applyOperation(db, row);
+			const operationResult = applyOperation(db, row, params.actor);
 			const proposal = markAppliedInTx(db, row, params.actor, operationResult);
 			const item = { proposal, result: operationResult, dryRun: params.dryRun === true, proposed: false };
 			if (params.dryRun) {
@@ -1869,7 +1888,7 @@ export function applyOntologyOperationBatch(
 					);
 					const row = getProposalInTx(db, inserted.id, params.agentId);
 					if (row === null) throw new OntologyProposalError("Proposal not found", 404);
-					const operationResult = applyOperation(db, row);
+					const operationResult = applyOperation(db, row, params.actor);
 					const proposal = markAppliedInTx(db, row, params.actor, operationResult);
 					items.push({ proposal, result: operationResult, dryRun: params.dryRun === true, proposed: false });
 				} catch (err) {

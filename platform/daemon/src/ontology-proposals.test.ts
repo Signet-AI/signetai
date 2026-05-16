@@ -1319,6 +1319,236 @@ describe("ontology proposals", () => {
 		expect(versions.items[0]?.status).toBe("deleted");
 	});
 
+	it("records the applying actor when pending archive proposals are applied", () => {
+		const entity = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "creator",
+			operation: "create_entity",
+			payload: { name: "Archive Actor Entity", entity_type: "project" },
+		});
+		const claim = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "creator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Archive Actor Claim",
+				entity_type: "project",
+				aspect: "audit",
+				group_key: "ontology",
+				claim_key: "actor",
+				value: "Archive me.",
+			},
+		});
+		const link = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "creator",
+			operation: "create_link",
+			payload: {
+				source_entity: "Archive Actor Source",
+				source_type: "project",
+				link_type: "related_to",
+				target_entity: "Archive Actor Target",
+				target_type: "project",
+				reason: "Audit actor fixture.",
+			},
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "creator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Archive Actor Aspect",
+				entity_type: "project",
+				aspect: "retire_me",
+				group_key: "ontology",
+				claim_key: "actor",
+				value: "Archive my aspect.",
+			},
+		});
+
+		const proposals = createOntologyProposals(getDbAccessor(), [
+			{
+				agentId: "ant",
+				operation: "archive_entity",
+				payload: { selector: entity.result?.entityId },
+				createdBy: "creator",
+			},
+			{
+				agentId: "ant",
+				operation: "archive_claim_value",
+				payload: { attribute_id: claim.result?.attributeId },
+				createdBy: "creator",
+			},
+			{
+				agentId: "ant",
+				operation: "archive_link",
+				payload: { id: link.result?.dependencyId },
+				createdBy: "creator",
+			},
+			{
+				agentId: "ant",
+				operation: "archive_aspect",
+				payload: { entity: "Archive Actor Aspect", selector: "retire_me" },
+				createdBy: "creator",
+			},
+		]);
+
+		for (const proposal of proposals.items) {
+			applyOntologyProposal(getDbAccessor(), {
+				agentId: "ant",
+				id: proposal.id,
+				actor: "reviewer",
+			});
+		}
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT
+						 (SELECT archived_by FROM entities WHERE id = ?) AS entity_actor,
+						 (SELECT archived_by FROM entity_attributes WHERE id = ?) AS claim_actor,
+						 (SELECT archived_by FROM entity_dependencies WHERE id = ?) AS link_actor,
+						 (SELECT asp.archived_by
+						    FROM entity_aspects asp
+						    JOIN entities ent ON ent.id = asp.entity_id
+						   WHERE ent.agent_id = ? AND ent.name = ? AND asp.name = ?) AS aspect_actor,
+						 (SELECT attr.archived_by
+						    FROM entity_attributes attr
+						    JOIN entity_aspects asp ON asp.id = attr.aspect_id
+						    JOIN entities ent ON ent.id = asp.entity_id
+						   WHERE ent.agent_id = ? AND ent.name = ? AND asp.name = ?) AS aspect_attr_actor`,
+					)
+					.get(
+						entity.result?.entityId as string,
+						claim.result?.attributeId as string,
+						link.result?.dependencyId as string,
+						"ant",
+						"Archive Actor Aspect",
+						"retire_me",
+						"ant",
+						"Archive Actor Aspect",
+						"retire_me",
+					) as {
+					entity_actor: string | null;
+					claim_actor: string | null;
+					link_actor: string | null;
+					aspect_actor: string | null;
+					aspect_attr_actor: string | null;
+				},
+		);
+		expect(row).toEqual({
+			entity_actor: "reviewer",
+			claim_actor: "reviewer",
+			link_actor: "reviewer",
+			aspect_actor: "reviewer",
+			aspect_attr_actor: "reviewer",
+		});
+	});
+
+	it("reactivates archived aspects when creating claims for the same aspect slot", () => {
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Aspect Restore",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "old_claim",
+				value: "Before archive.",
+			},
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_aspect",
+			payload: { entity: "Aspect Restore", selector: "architecture", reason: "retired" },
+		});
+		const recreated = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Aspect Restore",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "new_claim",
+				value: "After archive.",
+			},
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT asp.status AS aspect_status, asp.archived_by, attr.status AS claim_status
+						 FROM entity_aspects asp
+						 JOIN entity_attributes attr ON attr.aspect_id = asp.id
+						 WHERE asp.id = ? AND attr.id = ?`,
+					)
+					.get(recreated.result?.aspectId as string, recreated.result?.attributeId as string) as
+					| { aspect_status: string; archived_by: string | null; claim_status: string }
+					| undefined,
+		);
+		expect(row?.aspect_status).toBe("active");
+		expect(row?.archived_by).toBeNull();
+		expect(row?.claim_status).toBe("active");
+	});
+
+	it("reactivates archived links when creating the same link again", () => {
+		const created = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_link",
+			payload: {
+				source_entity: "Archived Link Source",
+				source_type: "project",
+				link_type: "related_to",
+				target_entity: "Archived Link Target",
+				target_type: "project",
+				reason: "Initial relationship.",
+			},
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_link",
+			payload: { id: created.result?.dependencyId, reason: "retired" },
+		});
+		const recreated = applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "create_link",
+			payload: {
+				source_entity: "Archived Link Source",
+				source_type: "project",
+				link_type: "related_to",
+				target_entity: "Archived Link Target",
+				target_type: "project",
+				reason: "Restored relationship.",
+				strength: 0.9,
+			},
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT status, archived_by, reason, strength FROM entity_dependencies WHERE id = ?")
+					.get(created.result?.dependencyId as string) as
+					| { status: string; archived_by: string | null; reason: string; strength: number }
+					| undefined,
+		);
+		expect(recreated.result?.dependencyId).toBe(created.result?.dependencyId);
+		expect(recreated.result?.reactivated).toBe(true);
+		expect(row?.status).toBe("active");
+		expect(row?.archived_by).toBeNull();
+		expect(row?.reason).toBe("Restored relationship.");
+		expect(row?.strength).toBeCloseTo(0.9);
+	});
+
 	it("keeps claim version history readable after archiving its parent entity", () => {
 		applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
