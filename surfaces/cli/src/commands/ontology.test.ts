@@ -14,6 +14,29 @@ afterEach(() => {
 });
 
 describe("registerOntologyCommands", () => {
+	test("registers the public audited mutation command tree", () => {
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async () => ({ ok: true, data: {} }),
+		});
+
+		const ontology = program.commands.find((cmd) => cmd.name() === "ontology");
+		expect(ontology).toBeDefined();
+		if (!ontology) throw new Error("ontology command was not registered");
+		expect(ontology?.commands.map((cmd) => cmd.name())).toEqual(
+			expect.arrayContaining(["entity", "claim", "aspect", "link", "stream"]),
+		);
+
+		const names = (parent: Command, name: string): readonly string[] =>
+			parent.commands.find((cmd) => cmd.name() === name)?.commands.map((cmd) => cmd.name()) ?? [];
+		expect(names(ontology, "entity")).toEqual(expect.arrayContaining(["create", "rename", "merge", "archive"]));
+		expect(names(ontology, "claim")).toEqual(expect.arrayContaining(["set", "versions", "show", "archive", "restore"]));
+		expect(names(ontology, "aspect")).toEqual(expect.arrayContaining(["create", "rename", "archive"]));
+		expect(names(ontology, "link")).toEqual(expect.arrayContaining(["create", "update", "archive"]));
+		expect(names(ontology, "stream")).toEqual(expect.arrayContaining(["apply"]));
+	});
+
 	test("objects lists ontology objects through knowledge navigation", async () => {
 		const calls: Array<{ readonly method: string; readonly path: string }> = [];
 		const lines: string[] = [];

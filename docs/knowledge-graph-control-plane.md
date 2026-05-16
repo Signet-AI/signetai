@@ -119,9 +119,8 @@ rejection, default hiding for archived graph rows, and an in-process
 end-to-end fixture that verifies dry-run, apply, propose, reject, evidence
 lookup, and raw source artifact immutability.
 
-Missing or thin coverage:
+Remaining thin coverage:
 
-- Route-level tests for `/api/ontology/operations/*` auth middleware.
 - Full end-to-end daemon + CLI process fixture using a real running daemon.
 - `graph.yaml` policy validation, because no active policy file is implemented
   in this slice.
