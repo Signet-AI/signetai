@@ -214,9 +214,9 @@ jobs:
       - name: Build CLI bundle
         if: matrix.platform == 'linux-x64'
         run: |
-          bun run build:connector-base
           cd surfaces/cli
-          bun build ./src/cli.ts --outfile ./dist/cli.js --target node
+          bun run build:workspace-deps
+          bun run build:cli
           printf '{"type":"module"}\n' > ./dist/package.json
           tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js package.json
 
@@ -468,6 +468,7 @@ jobs:
                 "$CHECK_DIR/runtime/node/bin/node" \
                 --input-type=module \
                 -e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'
+              "$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/cli/cli.js" mcp --help >/dev/null
             fi
             # Copy manifest back to the artifact dir for upload
             cp "$MERGE_DIR/manifest-$PLATFORM.json" "$PLAT_DIR/"

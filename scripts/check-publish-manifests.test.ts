@@ -146,6 +146,8 @@ describe("check-publish-manifests", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
 
+		expect(workflow).toContain("bun run build:workspace-deps");
+		expect(workflow).toContain("bun run build:cli");
 		expect(workflow).toContain('printf \'{"type":"module"}\\n\' > ./dist/package.json');
 		expect(workflow).toContain('tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js package.json');
 		expect(workflow).not.toContain('tar czf "$ARTIFACT_DIR/signet-cli.tar.gz" -C dist cli.js\n');
@@ -166,6 +168,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node"');
 		expect(workflow).toContain("--input-type=module");
 		expect(workflow).toContain("-e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'");
+		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/cli/cli.js" mcp --help >/dev/null');
 		expect(workflow).not.toContain("import(process.env.SIGNET_DAEMON_SMOKE)");
 	});
 
