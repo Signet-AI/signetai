@@ -447,6 +447,7 @@ jobs:
       - name: Generate manifests
         run: |
           VERSION="$(jq -r '.version' package.json)"
+          ASSET_TAG="bundle-${VERSION}-${GITHUB_SHA}"
           SHARED_DIR="/tmp/all-artifacts/bundle-linux-x64"
           HELPER_SCRIPT_DIR="/tmp/release-helper-scripts"
           MANIFEST_DIR="/tmp/release-manifests"
@@ -484,8 +485,14 @@ jobs:
               cp "$HELPER_SCRIPT_DIR/$script" "$HELPER_SCRIPT_DIR/$script.sha256" "$MERGE_DIR/"
             done
             bun deploy/bundle/scripts/generate-manifest.ts \
-              "$VERSION" "$PLATFORM" "$MERGE_DIR" "bundle-latest" \
+              "$VERSION" "$PLATFORM" "$MERGE_DIR" "$ASSET_TAG" \
               > "$MERGE_DIR/manifest-$PLATFORM.json"
+            if ! jq -e --arg tag "$ASSET_TAG" \
+              '([.components[]?, .scripts[]?] | all(.url | contains("/releases/download/" + $tag + "/")))' \
+              "$MERGE_DIR/manifest-$PLATFORM.json" >/dev/null; then
+              echo "::error::Merged manifest for $PLATFORM does not point at immutable asset tag $ASSET_TAG"
+              exit 1
+            fi
             # Desktop artifacts are released as macOS .dmg/.zip assets, not manifest components.
             case "$PLATFORM" in
               darwin-*)
@@ -551,14 +558,19 @@ jobs:
             fi
           done
 
-      - name: Find or create release
+      - name: Find or create releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="bundle-latest"
+          VERSION="$(jq -r '.version' package.json)"
+          ASSET_TAG="bundle-${VERSION}-${GITHUB_SHA}"
+          LATEST_TAG="bundle-latest"
           REPO="${{ github.repository }}"
-          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$REPO" --title "Latest Bundle" --notes "Auto-updated bundle artifacts, including desktop DMG and zip assets" --prerelease
+          if ! gh release view "$ASSET_TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$ASSET_TAG" --repo "$REPO" --title "Bundle ${VERSION} (${GITHUB_SHA::12})" --notes "Immutable native bundle assets for ${GITHUB_SHA}. bundle-latest is updated after these assets are published." --prerelease
+          fi
+          if ! gh release view "$LATEST_TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$LATEST_TAG" --repo "$REPO" --title "Latest Bundle" --notes "Stable manifest pointer for the latest native bundle." --prerelease
           fi
 
       - name: De-duplicate and stage release assets
@@ -577,11 +589,12 @@ jobs:
             cp "$f" "/tmp/release-staging/"
           done
 
-      - name: Upload artifacts to release
+      - name: Upload immutable assets to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="bundle-latest"
+          VERSION="$(jq -r '.version' package.json)"
+          TAG="bundle-${VERSION}-${GITHUB_SHA}"
           REPO="${{ github.repository }}"
           for pattern in '*.tar.gz' '*.sha256' '*.sh.sha256' '*.dmg' '*.zip' '*.sh' 'manifest-*.json'; do
             find /tmp/release-staging -type f -name "$pattern" | while read -r f; do
@@ -604,6 +617,7 @@ jobs:
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
+          # bundle-latest is the stable pointer. It only advances after immutable assets exist.
           find /tmp/release-staging -type f -name 'manifest-*.json' | while read -r f; do
             gh release upload "$TAG" "$f" --repo "$REPO" --clobber
           done

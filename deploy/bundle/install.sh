@@ -122,6 +122,7 @@ fi
 # ── Download helpers ──
 
 DOWNLOAD_BASE="https://github.com/${SIGNET_REPO}/releases/download/${SIGNET_RELEASE_TAG}"
+RELEASE_DOWNLOAD_PREFIX="https://github.com/${SIGNET_REPO}/releases/download"
 
 tmpdir=""
 LOCKFILE="$SIGNET_INSTALL_DIR/.lock"
@@ -167,12 +168,29 @@ sha_verify() {
   [ "$actual" = "$expected" ]
 }
 
-is_expected_asset_url() {
-  local name="$1" url="$2" filename="$3"
+is_expected_release_url() {
+  local url="$1" filename="$2" rel tag asset
+  case "$filename" in
+    ""|"."|".."|*/*|*\?*|*#*) return 1 ;;
+  esac
   case "$url" in
-    "$DOWNLOAD_BASE"/*) ;;
+    "$RELEASE_DOWNLOAD_PREFIX"/*) ;;
     *) return 1 ;;
   esac
+  rel="${url#"$RELEASE_DOWNLOAD_PREFIX"/}"
+  tag="${rel%%/*}"
+  asset="${rel#*/}"
+  if [ "$asset" = "$rel" ]; then return 1; fi
+  case "$tag" in
+    bundle-*) ;;
+    *) return 1 ;;
+  esac
+  [ "$asset" = "$filename" ]
+}
+
+is_expected_asset_url() {
+  local name="$1" url="$2" filename="$3"
+  is_expected_release_url "$url" "$filename" || return 1
   case "$filename" in
     ""|"."|".."|*/*|*\?*|*#*) return 1 ;;
   esac
@@ -184,10 +202,7 @@ is_expected_asset_url() {
 
 is_expected_script_url() {
   local script="$1" url="$2" filename="$3"
-  case "$url" in
-    "$DOWNLOAD_BASE/$script") ;;
-    *) return 1 ;;
-  esac
+  is_expected_release_url "$url" "$filename" || return 1
   case "$filename" in
     "$script") return 0 ;;
     *) return 1 ;;
