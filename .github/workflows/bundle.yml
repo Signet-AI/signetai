@@ -129,7 +129,9 @@ jobs:
             platform: darwin-arm64
             rust_target: aarch64-apple-darwin
             electron_arch: arm64
-          - runner: macos-13
+          # macos-13 was retired by GitHub on 2025-12-04; keep the x64
+          # package on the current Intel runner label.
+          - runner: macos-15-intel
             platform: darwin-x64
             rust_target: x86_64-apple-darwin
             electron_arch: x64
