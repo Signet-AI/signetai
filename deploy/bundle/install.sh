@@ -140,12 +140,13 @@ mkdir -p "$SIGNET_INSTALL_DIR"
 if mkdir "$LOCKFILE" 2>/dev/null; then
   LOCK_ACQUIRED=1
 else
-  LOCK_AGE="$(($(date +%s) - $(stat -f %m "$LOCKFILE" 2>/dev/null || stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0)))"
-  if [ "$LOCK_AGE" -lt 300 ]; then
-    err "Another install or update is already running (lock is ${LOCK_AGE}s old)"
+  LOCK_PID="$(cat "$LOCKFILE/pid" 2>/dev/null || true)"
+  if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+    err "Another install or update is already running (pid $LOCK_PID)"
     exit 1
   fi
-  warn "Stale lock found (${LOCK_AGE}s old) — removing"
+  LOCK_AGE="$(($(date +%s) - $(stat -f %m "$LOCKFILE" 2>/dev/null || stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0)))"
+  warn "Stale lock found (${LOCK_AGE}s old, pid ${LOCK_PID:-unknown} not running) — removing"
   rm -rf "$LOCKFILE"
   if ! mkdir "$LOCKFILE" 2>/dev/null; then
     err "Failed to acquire lock after clearing stale lock"

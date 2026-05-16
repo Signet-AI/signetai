@@ -174,7 +174,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/runtime/cli/package.json"');
 		expect(workflow).toContain('"$CHECK_DIR/runtime/daemon-js/index.js"');
 		expect(workflow).toContain("Bundle artifact layout missing");
-		expect(workflow).toContain('if [ "$PLATFORM" = "linux-x64" ]; then');
+		expect(workflow).toContain("for PLATFORM in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do");
 		expect(workflow).toContain("Import the daemon package API entrypoint");
 		expect(daemonBuild).toContain('{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" }');
 		expect(daemonBuild).toContain('{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" }');
@@ -183,6 +183,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("--input-type=module");
 		expect(workflow).toContain("-e 'await import(process.env.SIGNET_DAEMON_SMOKE_MODULE)'");
 		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/cli/cli.js" mcp --help >/dev/null');
+		expect(workflow).not.toContain('if [ "$PLATFORM" = "linux-x64" ]; then\n              # Import the daemon package API entrypoint');
 		expect(workflow).not.toContain("import(process.env.SIGNET_DAEMON_SMOKE)");
 	});
 
@@ -207,6 +208,10 @@ describe("check-publish-manifests", () => {
 			expect(script).toContain('if [ "$LOCK_ACQUIRED" = "1" ]; then');
 			expect(script).toContain("LOCK_ACQUIRED=1");
 			expect(script).toContain('if mkdir "$LOCKFILE" 2>/dev/null; then');
+			expect(script).toContain('LOCK_PID="$(cat "$LOCKFILE/pid" 2>/dev/null || true)"');
+			expect(script).toContain('kill -0 "$LOCK_PID"');
+			expect(script).toContain("pid ${LOCK_PID:-unknown} not running");
+			expect(script).not.toContain('if [ "$LOCK_AGE" -lt 300 ]; then');
 			expect(script).not.toContain('trap \'rm -rf "$TMPDIR"; rm -rf "$LOCKFILE"\' EXIT');
 		}
 	});
