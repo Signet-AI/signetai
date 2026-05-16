@@ -172,8 +172,23 @@ describe("check-publish-manifests", () => {
 
 		expect(updater).toContain('INSTALLER="$TMPDIR/install.sh"');
 		expect(updater).toContain("trap 'rm -rf \"$TMPDIR\"' EXIT");
+		expect(updater).toContain("LOCK_ACQUIRED=0");
 		expect(updater).toContain('SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash "$INSTALLER"');
 		expect(updater).not.toContain('curl -fsSL "${DOWNLOAD_BASE}/install.sh" |');
+	});
+
+	test("cleans install and update locks only after acquiring ownership", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+
+		for (const script of [installer, updater]) {
+			expect(script).toContain("LOCK_ACQUIRED=0");
+			expect(script).toContain('if [ "$LOCK_ACQUIRED" = "1" ]; then');
+			expect(script).toContain("LOCK_ACQUIRED=1");
+			expect(script).toContain('if mkdir "$LOCKFILE" 2>/dev/null; then');
+			expect(script).not.toContain('trap \'rm -rf "$TMPDIR"; rm -rf "$LOCKFILE"\' EXIT');
+		}
 	});
 
 	test("promotes installer manifest only after required install steps", () => {

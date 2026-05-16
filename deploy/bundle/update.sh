@@ -43,10 +43,19 @@ PLATFORM="$(detect_platform)"
 LOCAL_MANIFEST="$SIGNET_INSTALL_DIR/manifest.json"
 TMPDIR="$(mktemp -d)"
 LOCKFILE="$SIGNET_INSTALL_DIR/.lock"
-trap 'rm -rf "$TMPDIR"; rm -rf "$LOCKFILE"' EXIT
+LOCK_ACQUIRED=0
+cleanup() {
+  rm -rf "$TMPDIR"
+  if [ "$LOCK_ACQUIRED" = "1" ]; then
+    rm -rf "$LOCKFILE"
+  fi
+}
+trap cleanup EXIT
 
 mkdir -p "$SIGNET_INSTALL_DIR"
-if ! mkdir "$LOCKFILE" 2>/dev/null; then
+if mkdir "$LOCKFILE" 2>/dev/null; then
+  LOCK_ACQUIRED=1
+else
   LOCK_AGE="$(($(date +%s) - $(stat -f %m "$LOCKFILE" 2>/dev/null || stat -c %Y "$LOCKFILE" 2>/dev/null || echo 0)))"
   if [ "$LOCK_AGE" -lt 300 ]; then
     err "Another update or install is already running (lock is ${LOCK_AGE}s old)"
@@ -58,6 +67,7 @@ if ! mkdir "$LOCKFILE" 2>/dev/null; then
     err "Failed to acquire lock after clearing stale lock"
     exit 1
   fi
+  LOCK_ACQUIRED=1
 fi
 echo "$$" > "$LOCKFILE/pid"
 
@@ -106,6 +116,7 @@ if ! command -v jq >/dev/null 2>&1 && [ ! -x "$SIGNET_INSTALL_DIR/runtime/node/b
     exit 1
   }
   rm -rf "$LOCKFILE"
+  LOCK_ACQUIRED=0
   trap 'rm -rf "$TMPDIR"' EXIT
   SIGNET_INSTALL_DIR="$SIGNET_INSTALL_DIR" bash "$INSTALLER"
   exit $?
