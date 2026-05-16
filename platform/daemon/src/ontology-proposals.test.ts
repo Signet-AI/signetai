@@ -1743,6 +1743,82 @@ describe("ontology proposals", () => {
 		expect(version?.content).toBe("History survives entity archival.");
 	});
 
+	it("requires strict claim-version entity selectors across archived duplicates", () => {
+		insertEntity("archived-history", "Duplicate History A", "duplicate history", "ant", 1);
+		insertEntity("active-history", "Duplicate History B", "duplicate history", "ant", 2);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET status = 'archived' WHERE id = ?").run("archived-history");
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, 0.5, datetime('now'), datetime('now'))`,
+			).run("archived-history-aspect", "archived-history", "ant", "architecture", "architecture");
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, 0.5, datetime('now'), datetime('now'))`,
+			).run("active-history-aspect", "active-history", "ant", "architecture", "architecture");
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content,
+				  confidence, importance, status, group_key, claim_key,
+				  version, version_root_id, created_at, updated_at)
+				 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', ?, ?, 1, ?, datetime('now'), datetime('now'))`,
+			).run(
+				"archived-history-attr",
+				"archived-history-aspect",
+				"ant",
+				"Archived entity history.",
+				"archived entity history.",
+				"ontology",
+				"lineage",
+				"archived-history-attr",
+			);
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content,
+				  confidence, importance, status, group_key, claim_key,
+				  version, version_root_id, created_at, updated_at)
+				 VALUES (?, ?, ?, 'attribute', ?, ?, 0.8, 0.5, 'active', ?, ?, 1, ?, datetime('now'), datetime('now'))`,
+			).run(
+				"active-history-attr",
+				"active-history-aspect",
+				"ant",
+				"Active entity history.",
+				"active entity history.",
+				"ontology",
+				"lineage",
+				"active-history-attr",
+			);
+		});
+
+		expect(() =>
+			listClaimVersions(getDbAccessor(), {
+				agentId: "ant",
+				entity: "duplicate history",
+				aspect: "architecture",
+				group: "ontology",
+				claim: "lineage",
+			}),
+		).toThrow("ambiguous");
+		const archivedVersions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "archived-history",
+			aspect: "archived-history-aspect",
+			group: "ontology",
+			claim: "lineage",
+		});
+		const activeVersions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "active-history",
+			aspect: "active-history-aspect",
+			group: "ontology",
+			claim: "lineage",
+		});
+		expect(archivedVersions.items.map((item) => item.content)).toEqual(["Archived entity history."]);
+		expect(activeVersions.items.map((item) => item.content)).toEqual(["Active entity history."]);
+	});
+
 	it("rolls back an operation batch when one operation is invalid", () => {
 		expect(() =>
 			applyOntologyOperationBatch(getDbAccessor(), {

@@ -12,10 +12,10 @@ transcripts, memory artifacts, source artifacts, notes, summaries, and imported
 records go in; the knowledge graph, scoped memories, and maintenance trail get
 better.
 
-The point is to maintain the graph, not to create JSON. JSON/JSONL is only the
-transport for audited ontology operations when the daemon-backed CLI/API needs a
-batch. Successful graph mutations must go through the ontology control plane so
-they are permission-checked and auditable.
+Dreaming maintains the graph by turning source and memory artifacts into
+entities, aspects, claim attributes, and links. Memory artifacts are evidence
+for attributes; the ontology control plane is the audited path that applies
+those attributes to the graph.
 
 Dreaming may save memories when the evidence supports durable recall, but not by
 calling the API `remember` endpoint. Save explicit source-backed memory artifacts

@@ -1512,36 +1512,60 @@ export function listClaimVersions(
 	const kind = params.kind ?? "attribute";
 	return accessor.withReadDb((db) => {
 		const entityKey = canonical(params.entity);
+		const exactEntity = db
+			.prepare("SELECT id FROM entities WHERE agent_id = ? AND id = ? LIMIT 1")
+			.get(params.agentId, params.entity) as { id: string } | undefined;
+		const entity =
+			exactEntity ??
+			(() => {
+				const rows = db
+					.prepare(
+						`SELECT id FROM entities
+						 WHERE agent_id = ?
+						   AND (COALESCE(canonical_name, LOWER(name)) = ? OR LOWER(name) = ?)
+						 ORDER BY updated_at DESC, name ASC`,
+					)
+					.all(params.agentId, entityKey, entityKey) as Array<{ id: string }>;
+				if (rows.length === 0) throw new OntologyProposalError(`Entity not found: ${params.entity}`, 404);
+				if (rows.length > 1) {
+					throw new OntologyProposalError(`Entity selector is ambiguous: ${params.entity}. Use an id.`, 409);
+				}
+				return rows[0] as { id: string };
+			})();
 		const aspectKey = canonical(params.aspect);
+		const exactAspect = db
+			.prepare("SELECT id FROM entity_aspects WHERE entity_id = ? AND agent_id = ? AND id = ? LIMIT 1")
+			.get(entity.id, params.agentId, params.aspect) as { id: string } | undefined;
+		const aspect =
+			exactAspect ??
+			(() => {
+				const rows = db
+					.prepare(
+						`SELECT id FROM entity_aspects
+						 WHERE entity_id = ?
+						   AND agent_id = ?
+						   AND (canonical_name = ? OR LOWER(name) = ?)
+						 ORDER BY updated_at DESC, name ASC`,
+					)
+					.all(entity.id, params.agentId, aspectKey, aspectKey) as Array<{ id: string }>;
+				if (rows.length === 0) throw new OntologyProposalError(`Aspect not found: ${params.aspect}`, 404);
+				if (rows.length > 1) {
+					throw new OntologyProposalError(`Aspect selector is ambiguous: ${params.aspect}. Use an id.`, 409);
+				}
+				return rows[0] as { id: string };
+			})();
 		const rows = db
 			.prepare(
 				`SELECT attr.*
 				 FROM entity_attributes attr
-				 JOIN entity_aspects asp ON asp.id = attr.aspect_id
-				 JOIN entities ent ON ent.id = asp.entity_id
-				 WHERE ent.agent_id = ?
-				   AND asp.agent_id = ?
-				   AND attr.agent_id = ?
-				   AND (ent.id = ? OR COALESCE(ent.canonical_name, LOWER(ent.name)) = ? OR LOWER(ent.name) = ?)
-				   AND (asp.canonical_name = ? OR LOWER(asp.name) = ?)
+				 WHERE attr.agent_id = ?
+				   AND attr.aspect_id = ?
 				   AND COALESCE(attr.group_key, 'general') = ?
 				   AND attr.claim_key = ?
 				   AND attr.kind = ?
 				 ORDER BY attr.version DESC, attr.updated_at DESC`,
 			)
-			.all(
-				params.agentId,
-				params.agentId,
-				params.agentId,
-				params.entity,
-				entityKey,
-				entityKey,
-				aspectKey,
-				aspectKey,
-				groupKey,
-				claimKey,
-				kind,
-			) as Array<Record<string, unknown>>;
+			.all(params.agentId, aspect.id, groupKey, claimKey, kind) as Array<Record<string, unknown>>;
 		const items = rows.map(claimVersionRow);
 		return { items, count: items.length };
 	});
