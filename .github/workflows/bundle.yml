@@ -525,8 +525,10 @@ jobs:
         run: |
           TAG="bundle-latest"
           REPO="${{ github.repository }}"
-          find /tmp/release-staging -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.dmg' -o -name '*.zip' \) | while read -r f; do
-            gh release upload "$TAG" "$f" --repo "$REPO" --clobber
+          for pattern in '*.tar.gz' '*.sha256' '*.dmg' '*.zip'; do
+            find /tmp/release-staging -type f -name "$pattern" | while read -r f; do
+              gh release upload "$TAG" "$f" --repo "$REPO" --clobber
+            done
           done
 
       - name: Upload manifests and installer scripts

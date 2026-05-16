@@ -204,6 +204,16 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain("::warning::Duplicate asset $base with different content");
 	});
 
+	test("uploads staged desktop release assets", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+
+		expect(workflow).toContain("for pattern in '*.tar.gz' '*.sha256' '*.dmg' '*.zip'; do");
+		expect(workflow).toContain('find /tmp/release-staging -type f -name "$pattern"');
+		expect(workflow).toContain('gh release upload "$TAG" "$f" --repo "$REPO" --clobber');
+		expect(workflow).toContain('find /tmp/release-staging -type f -name \'manifest-*.json\'');
+	});
+
 	test("delegates updater reinstall without sharing the install lock trap", () => {
 		const root = join(import.meta.dir, "..");
 		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
