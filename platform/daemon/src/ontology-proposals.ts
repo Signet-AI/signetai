@@ -1512,8 +1512,6 @@ export function listClaimVersions(
 				 WHERE ent.agent_id = ?
 				   AND asp.agent_id = ?
 				   AND attr.agent_id = ?
-				   AND COALESCE(ent.status, 'active') = 'active'
-				   AND COALESCE(asp.status, 'active') = 'active'
 				   AND (ent.id = ? OR COALESCE(ent.canonical_name, LOWER(ent.name)) = ? OR LOWER(ent.name) = ?)
 				   AND (asp.canonical_name = ? OR LOWER(asp.name) = ?)
 				   AND COALESCE(attr.group_key, 'general') = ?

@@ -1319,6 +1319,46 @@ describe("ontology proposals", () => {
 		expect(versions.items[0]?.status).toBe("deleted");
 	});
 
+	it("keeps claim version history readable after archiving its parent entity", () => {
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "set_claim_value",
+			payload: {
+				entity: "Signet",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "archived_parent_history",
+				value: "History survives entity archival.",
+			},
+		});
+		applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "operator",
+			operation: "archive_entity",
+			payload: { selector: "Signet", reason: "retired" },
+		});
+
+		const versions = listClaimVersions(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "archived_parent_history",
+		});
+		const version = getClaimVersion(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			aspect: "architecture",
+			group: "ontology",
+			claim: "archived_parent_history",
+			version: 1,
+		});
+		expect(versions.count).toBe(1);
+		expect(version?.content).toBe("History survives entity archival.");
+	});
+
 	it("rolls back an operation batch when one operation is invalid", () => {
 		expect(() =>
 			applyOntologyOperationBatch(getDbAccessor(), {

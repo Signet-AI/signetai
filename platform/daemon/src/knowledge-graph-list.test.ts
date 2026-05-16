@@ -14,6 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
+	getDependenciesFrom,
+	getDependenciesTo,
 	getKnowledgeEntityDetail,
 	getKnowledgeGraphForConstellation,
 	getKnowledgeStats,
@@ -224,6 +226,27 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(result[0]?.attributeCount).toBe(1);
 		expect(result[0]?.constraintCount).toBe(0);
 		expect(result[0]?.dependencyCount).toBe(0);
+	});
+
+	test("dependency reads hide edges attached to archived endpoint entities", () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		seedEntity("e-active", "Active");
+		seedEntity("e-archived", "Archived");
+		seedEntity("e-other", "Other");
+		seedDependency("dep-hidden-target", "e-active", "e-archived");
+		seedDependency("dep-hidden-source", "e-archived", "e-active");
+		seedDependency("dep-visible-out", "e-active", "e-other");
+		seedDependency("dep-visible-in", "e-other", "e-active");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET status = 'archived' WHERE id = ?").run("e-archived");
+		});
+
+		expect(getDependenciesFrom(getDbAccessor(), "e-active", "default").map((dep) => dep.id)).toEqual([
+			"dep-visible-out",
+		]);
+		expect(getDependenciesTo(getDbAccessor(), "e-active", "default").map((dep) => dep.id)).toEqual(["dep-visible-in"]);
 	});
 
 	test("respects limit and offset pagination", () => {

@@ -483,9 +483,14 @@ export function getDependenciesFrom(
 	return accessor.withReadDb((db) => {
 		const rows = db
 			.prepare(
-				`SELECT * FROM entity_dependencies
-				 WHERE source_entity_id = ? AND agent_id = ?
-				   AND COALESCE(status, 'active') = 'active'`,
+				`SELECT dep.*
+				 FROM entity_dependencies dep
+				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+				 WHERE dep.source_entity_id = ? AND dep.agent_id = ?
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'`,
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToDependency);
@@ -500,9 +505,14 @@ export function getDependenciesTo(
 	return accessor.withReadDb((db) => {
 		const rows = db
 			.prepare(
-				`SELECT * FROM entity_dependencies
-				 WHERE target_entity_id = ? AND agent_id = ?
-				   AND COALESCE(status, 'active') = 'active'`,
+				`SELECT dep.*
+				 FROM entity_dependencies dep
+				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+				 WHERE dep.target_entity_id = ? AND dep.agent_id = ?
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'`,
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToDependency);
