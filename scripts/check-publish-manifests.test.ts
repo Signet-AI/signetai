@@ -348,6 +348,27 @@ describe("check-publish-manifests", () => {
 		expect(refresh).toBeLessThan(manifestCopy);
 	});
 
+	test("exposes bundled dashboard skills and templates through wrappers", () => {
+		const root = join(import.meta.dir, "..");
+		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");
+		const updater = readFileSync(join(root, "deploy", "bundle", "update.sh"), "utf-8");
+		const cli = readFileSync(join(root, "surfaces", "cli", "src", "cli.ts"), "utf-8");
+		const dashboardRoutes = readFileSync(
+			join(root, "platform", "daemon", "src", "routes", "dashboard.ts"),
+			"utf-8",
+		);
+
+		for (const script of [installer, updater]) {
+			expect(script.match(/SIGNET_DASHBOARD_DIR="\$SIGNET_DIR\/runtime\/dashboard"/g)?.length).toBe(3);
+			expect(script.match(/SIGNET_SKILLS_SOURCE="\$SIGNET_DIR\/runtime\/skills"/g)?.length).toBe(3);
+			expect(script.match(/SIGNET_TEMPLATES_DIR="\$SIGNET_DIR\/runtime\/templates"/g)?.length).toBe(3);
+		}
+		expect(cli).toContain("process.env.SIGNET_TEMPLATES_DIR");
+		expect(cli).toContain("process.env.SIGNET_SKILLS_SOURCE");
+		expect(dashboardRoutes).toContain("process.env.SIGNET_DASHBOARD_DIR");
+		expect(dashboardRoutes).toContain("...(envDashboardDir ? [envDashboardDir] : [])");
+	});
+
 	test("does not advertise unsupported versioned bundle installs", () => {
 		const root = join(import.meta.dir, "..");
 		const installer = readFileSync(join(root, "deploy", "bundle", "install.sh"), "utf-8");

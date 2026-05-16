@@ -380,6 +380,9 @@ refresh_wrappers() {
 #!/usr/bin/env bash
 SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export SIGNET_DIR
+export SIGNET_DASHBOARD_DIR="$SIGNET_DIR/runtime/dashboard"
+export SIGNET_SKILLS_SOURCE="$SIGNET_DIR/runtime/skills"
+export SIGNET_TEMPLATES_DIR="$SIGNET_DIR/runtime/templates"
 export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"
 case "$(uname -s)" in
   Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
@@ -393,6 +396,9 @@ WRAPPER
 #!/usr/bin/env bash
 SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export SIGNET_DIR
+export SIGNET_DASHBOARD_DIR="$SIGNET_DIR/runtime/dashboard"
+export SIGNET_SKILLS_SOURCE="$SIGNET_DIR/runtime/skills"
+export SIGNET_TEMPLATES_DIR="$SIGNET_DIR/runtime/templates"
 export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"
 case "$(uname -s)" in
   Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
@@ -406,6 +412,9 @@ WRAPPER
 #!/usr/bin/env bash
 SIGNET_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export SIGNET_DIR
+export SIGNET_DASHBOARD_DIR="$SIGNET_DIR/runtime/dashboard"
+export SIGNET_SKILLS_SOURCE="$SIGNET_DIR/runtime/skills"
+export SIGNET_TEMPLATES_DIR="$SIGNET_DIR/runtime/templates"
 export NODE_PATH="$SIGNET_DIR/runtime/daemon-js/node_modules"
 case "$(uname -s)" in
   Linux)  export LD_LIBRARY_PATH="$SIGNET_DIR/runtime/native${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
