@@ -450,6 +450,14 @@ jobs:
             bun deploy/bundle/scripts/generate-manifest.ts \
               "$VERSION" "$PLATFORM" "$MERGE_DIR" "bundle-latest" \
               > "$MERGE_DIR/manifest-$PLATFORM.json"
+            for component in node cli daemon-js daemon-rs dashboard connectors plugin-opencode plugin-oh-my-pi plugin-pi native skills templates; do
+              if ! jq -e --arg component "$component" \
+                '.components[$component].url and .components[$component].sha256 and (.components[$component].size > 0)' \
+                "$MERGE_DIR/manifest-$PLATFORM.json" >/dev/null; then
+                echo "::error::Merged manifest for $PLATFORM missing expected component: $component"
+                exit 1
+              fi
+            done
             CHECK_DIR="/tmp/bundle-layout-check/$PLATFORM"
             rm -rf "$CHECK_DIR"
             mkdir -p "$CHECK_DIR/runtime/node" "$CHECK_DIR/runtime/cli" "$CHECK_DIR/runtime/daemon-js"

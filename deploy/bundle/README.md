@@ -62,7 +62,7 @@ what changed since the last install.
 |-----------|-------------|-------------------|
 | `node` | Node.js runtime | Yes |
 | `cli` | CLI command bundle | No |
-| `daemon-js` | Daemon JS bundle with Node runtime dependencies | Yes |
+| `daemon-js` | Daemon JS bundle with Node runtime dependencies, ONNX Runtime, and sqlite-vec | Yes |
 | `daemon-rs` | Rust daemon binary | Yes |
 | `dashboard` | Web UI static files | No |
 | `connectors` | Harness integration bundles | No |
@@ -70,8 +70,6 @@ what changed since the last install.
 | `plugin-oh-my-pi` | Oh My Pi extension | No |
 | `plugin-pi` | Pi extension | No |
 | `native` | NAPI native module | Yes |
-| `onnxruntime` | ONNX Runtime native binaries | Yes |
-| `sqlite-vec` | SQLite vector extension | Yes |
 | `skills` | Built-in skills | No |
 | `templates` | Config templates | No |
 

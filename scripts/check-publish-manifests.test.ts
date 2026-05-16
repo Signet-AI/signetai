@@ -175,6 +175,11 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/runtime/daemon-js/index.js"');
 		expect(workflow).toContain("Bundle artifact layout missing");
 		expect(workflow).toContain("for PLATFORM in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do");
+		expect(workflow).toContain(
+			"for component in node cli daemon-js daemon-rs dashboard connectors plugin-opencode plugin-oh-my-pi plugin-pi native skills templates; do",
+		);
+		expect(workflow).toContain("Merged manifest for $PLATFORM missing expected component: $component");
+		expect(workflow).toContain(".components[$component].url and .components[$component].sha256");
 		expect(workflow).toContain("Import the daemon package API entrypoint");
 		expect(daemonBuild).toContain('{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" }');
 		expect(daemonBuild).toContain('{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" }');
@@ -456,8 +461,12 @@ describe("check-publish-manifests", () => {
 		const root = join(import.meta.dir, "..");
 		const readme = readFileSync(join(root, "deploy", "bundle", "README.md"), "utf-8");
 
-		expect(readme).toContain("| `daemon-js` | Daemon JS bundle with Node runtime dependencies | Yes |");
+		expect(readme).toContain(
+			"| `daemon-js` | Daemon JS bundle with Node runtime dependencies, ONNX Runtime, and sqlite-vec | Yes |",
+		);
 		expect(readme).not.toContain("| `daemon-js` | Daemon JS bundle | No |");
+		expect(readme).not.toContain("| `onnxruntime` |");
+		expect(readme).not.toContain("| `sqlite-vec` |");
 	});
 
 	test("keeps manifest node fallback free of generated lookup code", () => {
