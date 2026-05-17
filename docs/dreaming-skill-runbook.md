@@ -6,8 +6,9 @@ evidence. Dreaming promotes only explicit, high-confidence statements into
 current attribute slots. In the default non-provider path, plain
 natural-language preference extraction is limited to confidence-bearing memory
 rows. Memory artifacts and transcripts are still readable evidence sources, but
-they must contain structured high-confidence `set_claim_value` or
-`claim_values` JSON unless the caller opts into `--use-provider`.
+embedded `set_claim_value` or `claim_values` JSON is preview-only because raw
+source JSON cannot self-attest confidence for direct apply. Plain prose in
+artifacts or transcripts needs `--use-provider` or the proposal review path.
 
 ## Attribute Promotion Path
 

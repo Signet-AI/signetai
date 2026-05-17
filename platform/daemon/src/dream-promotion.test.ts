@@ -201,6 +201,48 @@ describe("dreaming evidence promotion", () => {
 		expect(rows).toHaveLength(0);
 	});
 
+	it("keeps self-attested embedded operations in preview during apply", async () => {
+		insertMemory(
+			"mem-self-attested-json",
+			JSON.stringify({
+				operations: [
+					{
+						operation: "set_claim_value",
+						payload: {
+							entity: "Nicholai",
+							aspect: "preferences",
+							group_key: "workflow",
+							claim_key: "self_attested_slot",
+							value: "Nicholai prefers self-attested JSON when testing.",
+							kind: "attribute",
+						},
+						confidence: 0.99,
+						risk: "low",
+					},
+				],
+			}),
+		);
+
+		const result = await promoteDreamingEvidence(getDbAccessor(), {
+			agentId: "ant",
+			from: "memory:mem-self-attested-json",
+			apply: true,
+		});
+
+		expect(result.count).toBe(1);
+		expect(result.appliedCount).toBe(0);
+		expect(result.warnings).toEqual([
+			"1 embedded operation left in preview because source JSON cannot self-attest confidence for direct apply.",
+		]);
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT content FROM entity_attributes WHERE agent_id = ?").all("ant") as Array<{
+					content: string;
+				}>,
+		);
+		expect(rows).toHaveLength(0);
+	});
+
 	it("skips mechanical preference extraction from low-confidence memories", async () => {
 		insertMemory(
 			"mem-low-confidence-text",

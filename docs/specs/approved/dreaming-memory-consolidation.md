@@ -438,10 +438,12 @@ The mechanical consolidation engine is complete:
   memories, memory artifacts, and transcripts as evidence and emits direct
   `set_claim_value` operations. Default mechanical natural-language promotion
   is limited to confidence-bearing memory rows; memory artifacts and
-  transcripts must provide structured high-confidence operation JSON or opt into
-  provider extraction. The route previews by default and applies only when
-  requested; it does not use Pipeline V2 extraction and does not create pending
-  proposals as the default path.
+  transcripts can provide structured operation JSON for preview, but raw source
+  JSON cannot self-attest confidence for direct apply. Plain prose in artifacts
+  or transcripts requires provider extraction or the proposal review path. The
+  route previews by default and applies only when requested; it does not use
+  Pipeline V2 extraction and does not create pending proposals as the default
+  path.
 - **CLI.** `signet dream status`, `signet dream trigger [--compact]`,
   `signet dream promote [--from <source>] [--apply]`.
 - **DB migration 055.** `dreaming_state` (per-agent PK) and

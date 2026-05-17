@@ -40,6 +40,7 @@ export interface DreamPromotionOperation {
 	readonly sourceId?: string | null;
 	readonly sourcePath?: string | null;
 	readonly sourceRoot?: string | null;
+	readonly trustedForApply?: boolean;
 }
 
 export interface DreamPromotionParams {
@@ -523,12 +524,17 @@ function mechanicalPreferenceOperations(source: SourceRecord): DreamPromotionOpe
 			sourceId: source.sourceId,
 			sourcePath: source.sourcePath,
 			sourceRoot: source.kind,
+			trustedForApply: true,
 		});
 	}
 	return operations;
 }
 
-function normalizeExplicitOperation(raw: unknown, source: SourceRecord): DreamPromotionOperation | null {
+function normalizeExplicitOperation(
+	raw: unknown,
+	source: SourceRecord,
+	trustedForApply: boolean,
+): DreamPromotionOperation | null {
 	if (!isRecord(raw)) return null;
 	const operation = readString(raw, "operation");
 	if (operation !== "set_claim_value") return null;
@@ -561,10 +567,15 @@ function normalizeExplicitOperation(raw: unknown, source: SourceRecord): DreamPr
 		sourceId: source.sourceId,
 		sourcePath: source.sourcePath,
 		sourceRoot: source.kind,
+		trustedForApply,
 	};
 }
 
-function normalizeClaimValue(raw: unknown, source: SourceRecord): DreamPromotionOperation | null {
+function normalizeClaimValue(
+	raw: unknown,
+	source: SourceRecord,
+	trustedForApply: boolean,
+): DreamPromotionOperation | null {
 	if (!isRecord(raw)) return null;
 	const kind = readString(raw, "kind") ?? "attribute";
 	if (kind !== "attribute") return null;
@@ -599,6 +610,7 @@ function normalizeClaimValue(raw: unknown, source: SourceRecord): DreamPromotion
 		sourceId: source.sourceId,
 		sourcePath: source.sourcePath,
 		sourceRoot: source.kind,
+		trustedForApply,
 	};
 }
 
@@ -621,6 +633,7 @@ function extractJsonBlocks(content: string): unknown[] {
 function normalizeJsonOperations(
 	raw: unknown,
 	source: SourceRecord,
+	trustedForApply: boolean,
 ): {
 	readonly operations: readonly DreamPromotionOperation[];
 	readonly questions: readonly string[];
@@ -628,16 +641,16 @@ function normalizeJsonOperations(
 	if (Array.isArray(raw))
 		return {
 			operations: raw
-				.map((item) => normalizeExplicitOperation(item, source))
+				.map((item) => normalizeExplicitOperation(item, source, trustedForApply))
 				.filter((item): item is DreamPromotionOperation => item !== null),
 			questions: [],
 		};
 	if (!isRecord(raw)) return { operations: [], questions: [] };
 	const explicit = readArray(raw, "operations")
-		.map((item) => normalizeExplicitOperation(item, source))
+		.map((item) => normalizeExplicitOperation(item, source, trustedForApply))
 		.filter((item): item is DreamPromotionOperation => item !== null);
 	const claims = readArray(raw, "claim_values")
-		.map((item) => normalizeClaimValue(item, source))
+		.map((item) => normalizeClaimValue(item, source, trustedForApply))
 		.filter((item): item is DreamPromotionOperation => item !== null);
 	return {
 		operations: [...explicit, ...claims],
@@ -665,7 +678,7 @@ function parseProviderOutput(
 		const parsed = tryParseJson(object);
 		if (parsed !== null) candidates.push(parsed);
 	}
-	const parsed = candidates.map((candidate) => normalizeJsonOperations(candidate, source));
+	const parsed = candidates.map((candidate) => normalizeJsonOperations(candidate, source, true));
 	return {
 		operations: parsed.flatMap((item) => item.operations),
 		questions: [...new Set(parsed.flatMap((item) => item.questions).map((item) => item.trim()))],
@@ -676,7 +689,9 @@ function extractExplicitOperations(source: SourceRecord): {
 	readonly operations: readonly DreamPromotionOperation[];
 	readonly questions: readonly string[];
 } {
-	const parsed = extractJsonBlocks(source.content).map((candidate) => normalizeJsonOperations(candidate, source));
+	const parsed = extractJsonBlocks(source.content).map((candidate) =>
+		normalizeJsonOperations(candidate, source, false),
+	);
 	return {
 		operations: parsed.flatMap((item) => item.operations),
 		questions: [...new Set(parsed.flatMap((item) => item.questions).map((item) => item.trim()))],
@@ -808,12 +823,19 @@ export async function promoteDreamingEvidence(
 	if (deduped.length === 0 && sources.length > 0) {
 		skipped.push("No explicit high-confidence attribute promotions found.");
 	}
+	const applyable = params.apply === true ? deduped.filter((operation) => operation.trustedForApply === true) : deduped;
+	const previewOnly = deduped.length - applyable.length;
+	if (params.apply === true && previewOnly > 0) {
+		warnings.push(
+			`${previewOnly} embedded operation${previewOnly === 1 ? "" : "s"} left in preview because source JSON cannot self-attest confidence for direct apply.`,
+		);
+	}
 	const applied =
-		deduped.length > 0
+		applyable.length > 0
 			? applyOntologyOperationBatch(accessor, {
 					agentId: params.agentId,
 					actor: params.actor ?? "dreaming-promote",
-					operations: deduped,
+					operations: applyable,
 					dryRun: params.apply !== true,
 					propose: false,
 				})

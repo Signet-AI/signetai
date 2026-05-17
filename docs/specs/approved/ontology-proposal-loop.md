@@ -162,10 +162,12 @@ It writes pending proposals only when `write_proposals` is true.
 skill. It reads memories, memory artifacts, and transcripts as evidence and
 emits `set_claim_value` operations. The default non-provider path only
 mechanically promotes natural-language statements from confidence-bearing memory
-rows; artifacts and transcripts need structured high-confidence operation JSON
-or provider extraction. The default mode is dry-run. When `apply` is true, the
-route uses the same audited operation handlers and stores applied lineage, but
-it does not create pending proposal work items.
+rows; artifacts and transcripts can provide structured operation JSON for
+preview, but raw source JSON cannot self-attest confidence for direct apply.
+Plain prose in artifacts or transcripts requires provider extraction or the
+proposal review path. The default mode is dry-run. When `apply` is true, the
+route uses the same audited operation handlers and stores applied lineage, but it
+does not create pending proposal work items.
 
 ## CLI contract
 
