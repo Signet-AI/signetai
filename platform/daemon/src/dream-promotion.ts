@@ -399,14 +399,11 @@ function readSources(
 	const limit = boundedInt(params.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
 	return accessor.withReadDb((db) => {
 		if (from === "all") {
-			const perKind = Math.max(1, Math.ceil(limit / 3));
 			return [
-				...readRecentMemorySources(db, params.agentId, perKind),
-				...readRecentArtifactSources(db, params.agentId, perKind),
-				...readRecentTranscriptSources(db, params.agentId, perKind),
-			]
-				.sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))
-				.slice(0, limit);
+				...readRecentMemorySources(db, params.agentId, limit),
+				...readRecentArtifactSources(db, params.agentId, limit),
+				...readRecentTranscriptSources(db, params.agentId, limit),
+			].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
 		}
 		if (from === "memories:recent") return readRecentMemorySources(db, params.agentId, limit);
 		if (from === "artifacts:recent") return readRecentArtifactSources(db, params.agentId, limit);

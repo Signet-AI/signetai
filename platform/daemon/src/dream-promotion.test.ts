@@ -195,6 +195,36 @@ describe("dreaming evidence promotion", () => {
 		expect(rows).toHaveLength(0);
 	});
 
+	it("does not split the all-source candidate limit across source classes", async () => {
+		insertMemory(
+			"mem-all-1",
+			"Nicholai prefers compact first updates when we're pairing.",
+			"ant",
+			"2026-05-16T12:05:00.000Z",
+		);
+		insertMemory(
+			"mem-all-2",
+			"Nicholai prefers compact second updates when we're pairing.",
+			"ant",
+			"2026-05-16T12:04:00.000Z",
+		);
+		insertMemory(
+			"mem-all-3",
+			"Nicholai prefers compact third updates when we're pairing.",
+			"ant",
+			"2026-05-16T12:03:00.000Z",
+		);
+
+		const result = await promoteDreamingEvidence(getDbAccessor(), {
+			agentId: "ant",
+			from: "all",
+			limit: 3,
+		});
+
+		expect(result.count).toBe(3);
+		expect(result.operations.map((operation) => operation.sourceId)).toEqual(["mem-all-1", "mem-all-2", "mem-all-3"]);
+	});
+
 	it("reads all evidence sources in agent scope and skips deleted or other-agent artifacts", async () => {
 		insertMemory("mem-all", "Nicholai prefers compact status updates when we're pairing.");
 		insertMemory("mem-other", "Nicholai prefers noisy updates when we're pairing.", "other");
