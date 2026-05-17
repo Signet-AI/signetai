@@ -66,8 +66,8 @@ const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promis
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
-	if (typeof value === "object" && value !== null && !Array.isArray(value)) return value as Record<string, unknown>;
-	return {};
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	return value as Record<string, unknown>;
 }
 
 function readString(record: Readonly<Record<string, unknown>>, key: string): string | undefined {
@@ -465,6 +465,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		});
 	});
 
+	app.use("/api/dream/promote", pipelineAdminGuard);
 	app.use("/api/dream/*", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
 	});

@@ -83,6 +83,7 @@ const DEFAULT_PROVIDER_TIMEOUT_MS = 90_000;
 const MAX_PROVIDER_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_PROVIDER_MAX_TOKENS = 4096;
 const MAX_PROVIDER_MAX_TOKENS = 16_000;
+const MIN_EXPLICIT_CONFIDENCE = 0.75;
 
 function boundedInt(value: number | undefined, fallback: number, min: number, max: number): number {
 	if (value === undefined || !Number.isFinite(value)) return fallback;
@@ -103,6 +104,19 @@ function readString(record: Readonly<Record<string, unknown>>, key: string): str
 function readNumber(record: Readonly<Record<string, unknown>>, key: string): number | undefined {
 	const value = record[key];
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function explicitConfidence(
+	raw: Readonly<Record<string, unknown>>,
+	payload: Readonly<Record<string, unknown>>,
+): number | null {
+	const confidence = readNumber(raw, "confidence") ?? readNumber(payload, "confidence");
+	if (confidence === undefined || confidence < MIN_EXPLICIT_CONFIDENCE || confidence > 1) return null;
+	return confidence;
+}
+
+function isBlockedRisk(value: string | null): boolean {
+	return value?.toLowerCase() === "high";
 }
 
 function readArray(record: Readonly<Record<string, unknown>>, key: string): readonly unknown[] {
@@ -510,6 +524,8 @@ function normalizeExplicitOperation(raw: unknown, source: SourceRecord): DreamPr
 	const payload = isRecord(raw.payload) ? raw.payload : {};
 	const kind = readString(payload, "kind") ?? "attribute";
 	if (kind !== "attribute") return null;
+	const confidence = explicitConfidence(raw, payload);
+	if (confidence === null || isBlockedRisk(readString(raw, "risk"))) return null;
 	const entity = readString(payload, "entity");
 	const aspect = readString(payload, "aspect");
 	const claimKey = readString(payload, "claim_key") ?? readString(payload, "claim");
@@ -521,8 +537,9 @@ function normalizeExplicitOperation(raw: unknown, source: SourceRecord): DreamPr
 			...payload,
 			claim_key: claimKey,
 			kind,
+			confidence,
 		},
-		confidence: readNumber(raw, "confidence") ?? readNumber(payload, "confidence"),
+		confidence,
 		reason:
 			readString(raw, "reason") ??
 			readString(raw, "rationale") ??
@@ -540,6 +557,8 @@ function normalizeClaimValue(raw: unknown, source: SourceRecord): DreamPromotion
 	if (!isRecord(raw)) return null;
 	const kind = readString(raw, "kind") ?? "attribute";
 	if (kind !== "attribute") return null;
+	const confidence = explicitConfidence(raw, raw);
+	if (confidence === null || isBlockedRisk(readString(raw, "risk"))) return null;
 	const entity = readString(raw, "entity");
 	const aspect = readString(raw, "aspect");
 	const claimKey = readString(raw, "claim_key") ?? readString(raw, "claim");
@@ -555,10 +574,10 @@ function normalizeClaimValue(raw: unknown, source: SourceRecord): DreamPromotion
 			claim_key: claimKey,
 			value,
 			kind,
-			confidence: readNumber(raw, "confidence"),
+			confidence,
 			importance: readNumber(raw, "importance"),
 		},
-		confidence: readNumber(raw, "confidence"),
+		confidence,
 		reason:
 			readString(raw, "reason") ??
 			readString(raw, "rationale") ??

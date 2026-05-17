@@ -142,6 +142,59 @@ describe("dreaming evidence promotion", () => {
 		expect(claims[1]?.previous_attribute_id).toBeString();
 	});
 
+	it("skips explicit embedded operations without high-confidence low-risk evidence", async () => {
+		insertMemory(
+			"mem-low-confidence-json",
+			JSON.stringify({
+				operations: [
+					{
+						operation: "set_claim_value",
+						payload: {
+							entity: "Nicholai",
+							aspect: "preferences",
+							group_key: "workflow",
+							claim_key: "low_confidence_slot",
+							value: "Nicholai prefers weak evidence when testing.",
+							kind: "attribute",
+						},
+						confidence: 0.1,
+						risk: "low",
+					},
+					{
+						operation: "set_claim_value",
+						payload: {
+							entity: "Nicholai",
+							aspect: "preferences",
+							group_key: "workflow",
+							claim_key: "high_risk_slot",
+							value: "Nicholai prefers high-risk evidence when testing.",
+							kind: "attribute",
+						},
+						confidence: 0.95,
+						risk: "high",
+					},
+				],
+			}),
+		);
+
+		const result = await promoteDreamingEvidence(getDbAccessor(), {
+			agentId: "ant",
+			from: "memory:mem-low-confidence-json",
+			apply: true,
+		});
+
+		expect(result.count).toBe(0);
+		expect(result.appliedCount).toBe(0);
+		expect(result.skipped).toEqual(["No explicit high-confidence attribute promotions found."]);
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT content FROM entity_attributes WHERE agent_id = ?").all("ant") as Array<{
+					content: string;
+				}>,
+		);
+		expect(rows).toHaveLength(0);
+	});
+
 	it("reads all evidence sources in agent scope and skips deleted or other-agent artifacts", async () => {
 		insertMemory("mem-all", "Nicholai prefers compact status updates when we're pairing.");
 		insertMemory("mem-other", "Nicholai prefers noisy updates when we're pairing.", "other");
