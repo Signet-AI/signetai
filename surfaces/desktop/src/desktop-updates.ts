@@ -1,5 +1,9 @@
+import { createRequire } from "node:module";
 import { app, dialog } from "electron";
-import { type UpdateCheckResult, autoUpdater } from "electron-updater";
+import type { AppUpdater, UpdateCheckResult } from "electron-updater";
+
+const require = createRequire(import.meta.url);
+const { autoUpdater } = require("electron-updater") as { readonly autoUpdater: AppUpdater };
 
 export type DesktopUpdateStatus =
 	| "unsupported"
