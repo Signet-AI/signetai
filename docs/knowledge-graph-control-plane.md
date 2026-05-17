@@ -16,6 +16,7 @@ graph control plane. It is not a speculative product spec.
 | `entity_dependency_history` | 050 | hidden/internal | audit trigger | Trigger-backed history for dependency insert/update/delete. |
 | `task_meta` | 019, 054 | hidden/internal | task/procedural helpers | Agent-scoped task metadata, not part of this control-plane CLI slice. |
 | `ontology_proposals` | 067 | CLI/API | proposal loop and applied audit ledger | Pending, applied, rejected, and failed proposals. Direct operations create applied rows inside the same transaction as graph mutation. |
+| `epistemic_assertions` | 071 | CLI/API | source-attributed assertion ledger | Records who claimed, believed, observed, decided, preferred, denied, or questioned something, with confidence, evidence, source provenance, status, and optional link to an applied claim attribute. Assertions do not by themselves make the statement current ontology truth. |
 | `dreaming_state`, `dreaming_passes` | 055 | CLI/API via dream status/trigger | dreaming worker | Existing dreaming pass records/status. LLM dreaming remains proposal-first for ontology changes in this slice. |
 | `memory_artifacts` | 051, 061, 062 | API/internal | immutable source artifact records | Source-backed evidence for proposals and applied graph rows. Ontology updates must not rewrite these rows. |
 | `session_transcripts` | 040, 045, 047 | API/internal | immutable transcript/index records | Proposal extraction can cite transcripts; graph mutation must preserve transcript provenance. |
@@ -33,7 +34,13 @@ graph control plane. It is not a speculative product spec.
 | `GET /api/ontology/proposals/:id/evidence` | CLI/API | read-only | Covered by evidence tests. |
 | `GET /api/ontology/proposals/conflicts` | CLI/API | read-only | Covered by conflict tests. |
 | `POST /api/ontology/proposals/repair/duplicates` | CLI/API | dry-run or pending proposals | Covered by duplicate repair tests. |
-| `POST /api/ontology/extract` | CLI/API | dry-run or pending proposals | Proposal-first. Covered by extraction tests. |
+| `GET /api/ontology/assertions` | CLI/API | read-only | Lists source-attributed assertions by entity, predicate, speaker, source, status, or text query. Covered by assertion tests. |
+| `GET /api/ontology/assertions/:id` | CLI/API | read-only | Reads one same-agent assertion. Covered by assertion tests. |
+| `POST /api/ontology/assertions` | CLI/API | creates source-attributed assertion | Requires evidence or source provenance. Covered by assertion tests. |
+| `POST /api/ontology/assertions/:id/link-claim` | CLI/API | links assertion to applied claim value | Rejects cross-agent and cross-entity links. Covered by assertion tests. |
+| `POST /api/ontology/assertions/:id/archive` | CLI/API | archives assertion | Preserves assertion evidence. Covered by assertion tests. |
+| `POST /api/ontology/assertions/:id/supersede` | CLI/API | creates replacement assertion and supersedes old row | Omitting predicate preserves old predicate. Covered by assertion route tests. |
+| `POST /api/ontology/extract` | CLI/API | dry-run, pending proposals, and/or assertions | Proposal-first for ontology truth; assertion writes are source-attributed ledger writes. Proposal and assertion inserts are atomic when both write flags are set. Covered by extraction tests. |
 | `POST /api/ontology/consolidate` | CLI/API | dry-run or pending proposals | Proposal-first. Covered by consolidation tests. |
 | `POST /api/ontology/operations/apply` | CLI/API | dry-run, pending proposal, or applied proposal + graph mutation | New direct operation endpoint. Requires `modify`. Covered through operation engine and CLI tests. |
 | `POST /api/ontology/operations/batch` | CLI/API | atomic batch dry-run/propose/apply | Requires `modify`; rolls back on invalid operation. Covered by operation batch tests. |
@@ -55,6 +62,8 @@ graph control plane. It is not a speculative product spec.
 | `signet ontology apply <id>` | CLI | applies pending proposal | Preserves proposal history and agent scope. |
 | `signet ontology reject <id>` | CLI | rejects pending proposal | Preserves rejected proposal history. |
 | `signet ontology conflicts` | CLI | read-only | Lists pending claim conflicts. |
+| `signet ontology assertions` | CLI | read-only | Lists source-attributed assertions with filters for entity, predicate, speaker, source, status, query, and agent. |
+| `signet ontology assertion show/create/link-claim/archive/supersede/import` | CLI | assertion ledger writes | Creates and maintains attributed assertion rows. `supersede` preserves the old predicate when `--predicate` is omitted. `import` accepts a JSON array or `{ "assertions": [...] }`. |
 | `signet ontology entity create/rename/merge/archive` | CLI | direct operation endpoint | Supports `--dry-run`, `--propose`, `--json`, `--agent`, `--actor`, `--reason`, `--evidence-file`. |
 | `signet ontology claim set/versions/show/archive/restore` | CLI | operation endpoint for writes, read endpoints for versions | `set` creates version chains; `restore` only required for claim versions in this slice. |
 | `signet ontology aspect create/rename/archive` | CLI | direct operation endpoint | Uses same audited operation path. |
@@ -62,7 +71,7 @@ graph control plane. It is not a speculative product spec.
 | `signet ontology stream apply <path|- >` | CLI | atomic JSONL operation batch | Supports file and stdin, `--dry-run`, `--propose`, `--json`, `--agent`, `--actor`. |
 | `signet ontology pipeline status/config/explain` | CLI | graph-state inspection | Explains Pipeline V2 graph flags and write gates. |
 | `signet ontology config show/validate/explain` | CLI | control-plane inspection | Confirms audited operation tools are usable and no external `graph.yaml` policy gate is active in this slice. |
-| `signet ontology extract` | CLI | dry-run/pending proposals | Existing proposal-first extraction surface. |
+| `signet ontology extract` | CLI | dry-run/pending proposals/assertions | `--write-proposals` persists pending proposal rows; `--write-assertions` persists source-attributed assertion rows. |
 | `signet ontology consolidate` | CLI | dry-run/pending proposals | Existing proposal-first consolidation surface. |
 | `signet dream status/trigger` | CLI | existing dream worker | Existing pass status and trigger behavior. |
 
