@@ -11,6 +11,8 @@ export interface GraphCanvasNode {
 	parentId?: string;
 	x: number;
 	y: number;
+	zoneX?: number;
+	zoneY?: number;
 	vx?: number;
 	vy?: number;
 	fx?: number | null;
@@ -19,6 +21,9 @@ export interface GraphCanvasNode {
 	anchorDy?: number;
 	size: number;
 	mass?: number;
+	systemRadius?: number;
+	iconScale?: number;
+	counts?: Record<string, number>;
 	color: string;
 	dimColor: string;
 	sprite?: string;

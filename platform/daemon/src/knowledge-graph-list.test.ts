@@ -321,6 +321,48 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedAttribute("attr-hidden", "asp-hidden", { content: "hidden attr" });
 		seedDependency("dep-visible", "e-hub", "e-leaf", { strength: 0.9 });
 		seedDependency("dep-hidden", "e-hub", "e-hidden", { strength: 0.8 });
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`UPDATE entity_attributes
+				 SET version = 2,
+				     version_root_id = 'attr-hub-a-root',
+				     previous_attribute_id = 'attr-hub-a-0',
+				     group_key = 'general',
+				     claim_key = 'alpha_claim',
+				     source_kind = 'transcript',
+				     source_path = 'sessions/alpha.jsonl',
+				     proposal_id = 'proposal-applied-alpha',
+				     proposal_evidence = '[{"kind":"memory","id":"mem-a"}]'
+				 WHERE id = 'attr-hub-a-1'`,
+			).run();
+			db.prepare(
+				`INSERT INTO ontology_proposals
+				 (id, agent_id, operation, status, payload, confidence, rationale, evidence, source_kind, source_path, created_at, updated_at)
+				 VALUES (?, 'default', 'add_claim_value', 'pending', ?, 0.91, 'needs alpha claim', ?, 'transcript',
+				         'sessions/alpha.jsonl', '2026-05-16T12:00:00Z', '2026-05-16T12:00:00Z')`,
+			).run(
+				"proposal-pending-alpha",
+				JSON.stringify({ entity: "Hub", aspect: "alpha", claim_key: "alpha_claim", value: "important alpha" }),
+				JSON.stringify([{ kind: "memory", id: "mem-a" }]),
+			);
+			db.prepare(
+				`INSERT INTO ontology_proposals
+				 (id, agent_id, operation, status, payload, confidence, rationale, evidence, created_at, updated_at, applied_at)
+				 VALUES (?, 'default', 'add_claim_value', 'applied', ?, 0.82, 'already applied', '[]',
+				         datetime('now'), datetime('now'), datetime('now'))`,
+			).run("proposal-recent-applied", JSON.stringify({ entity: "Hub" }));
+			db.prepare(
+				`INSERT INTO dreaming_state
+				 (agent_id, tokens_since_last_pass, consecutive_failures, last_pass_at, last_pass_id, last_pass_mode)
+				 VALUES ('default', 2400, 0, '2026-05-16T13:00:00Z', 'dream-alpha', 'incremental')`,
+			).run();
+			db.prepare(
+				`INSERT INTO dreaming_passes
+				 (id, agent_id, mode, status, started_at, completed_at, mutations_applied, mutations_skipped, mutations_failed, created_at)
+				 VALUES ('dream-alpha', 'default', 'incremental', 'completed', '2026-05-16T12:50:00Z',
+				         '2026-05-16T13:00:00Z', 3, 1, 0, '2026-05-16T12:50:00Z')`,
+			).run();
+		});
 
 		const graph = getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
 			limit: 2,
@@ -332,8 +374,18 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(graph.entities.map((entity) => entity.id)).toEqual(["e-hub", "e-leaf"]);
 		expect(graph.entities[0].aspects.map((aspect) => aspect.id)).toEqual(["asp-hub-a"]);
 		expect(graph.entities[0].aspects[0].attributes.map((attr) => attr.id)).toEqual(["attr-hub-a-1"]);
+		expect(graph.entities[0].aspects[0].attributes[0].version).toBe(2);
+		expect(graph.entities[0].aspects[0].attributes[0].proposalId).toBe("proposal-applied-alpha");
+		expect(graph.entities[0].aspects[0].attributes[0].proposalEvidenceCount).toBe(1);
 		expect(graph.dependencies.map((dependency) => dependency.sourceEntityId)).toEqual(["e-hub"]);
 		expect(graph.dependencies.map((dependency) => dependency.targetEntityId)).toEqual(["e-leaf"]);
+		expect(graph.proposals.map((proposal) => proposal.id)).toContain("proposal-pending-alpha");
+		expect(graph.proposals[0]?.targetEntityId).toBe("e-hub");
+		expect(graph.proposals[0]?.targetAspectName).toBe("alpha");
+		expect(graph.metadata.proposals.pending).toBe(1);
+		expect(graph.metadata.proposals.appliedRecent).toBe(1);
+		expect(graph.metadata.dreaming.tokensSinceLastPass).toBe(2400);
+		expect(graph.metadata.dreaming.latestPass?.mutationsApplied).toBe(3);
 	});
 });
 

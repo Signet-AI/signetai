@@ -1890,12 +1890,24 @@ export interface ConstellationAttribute {
 	readonly kind: "attribute" | "constraint";
 	readonly importance: number;
 	readonly memoryId: string | null;
+	readonly status: AttributeStatus;
+	readonly version: number;
+	readonly versionRootId: string | null;
+	readonly previousAttributeId: string | null;
+	readonly groupKey: string | null;
+	readonly claimKey: string | null;
+	readonly sourceKind: string | null;
+	readonly sourcePath: string | null;
+	readonly proposalId: string | null;
+	readonly proposalEvidenceCount: number;
 }
 
 export interface ConstellationAspect {
 	readonly id: string;
 	readonly name: string;
 	readonly weight: number;
+	readonly status: "active" | "archived";
+	readonly proposalId: string | null;
 	readonly attributes: readonly ConstellationAttribute[];
 }
 
@@ -1905,6 +1917,8 @@ export interface ConstellationEntity {
 	readonly entityType: string;
 	readonly mentions: number;
 	readonly pinned: boolean;
+	readonly status: "active" | "archived";
+	readonly proposalId: string | null;
 	readonly aspects: readonly ConstellationAspect[];
 }
 
@@ -1913,11 +1927,57 @@ export interface ConstellationDependency {
 	readonly targetEntityId: string;
 	readonly dependencyType: string;
 	readonly strength: number;
+	readonly status: "active" | "archived";
+	readonly proposalId: string | null;
+	readonly proposalEvidenceCount: number;
+}
+
+export interface ConstellationProposal {
+	readonly id: string;
+	readonly operation: string;
+	readonly confidence: number;
+	readonly rationale: string;
+	readonly evidenceCount: number;
+	readonly sourceKind: string | null;
+	readonly sourcePath: string | null;
+	readonly updatedAt: string;
+	readonly targetEntityId: string | null;
+	readonly targetEntityName: string | null;
+	readonly targetAspectName: string | null;
+	readonly preview: string | null;
+}
+
+export interface ConstellationDreamingSummary {
+	readonly tokensSinceLastPass: number;
+	readonly consecutiveFailures: number;
+	readonly lastPassAt: string | null;
+	readonly lastPassId: string | null;
+	readonly lastPassMode: string | null;
+	readonly latestPass: {
+		readonly id: string;
+		readonly mode: string;
+		readonly status: string;
+		readonly completedAt: string | null;
+		readonly mutationsApplied: number | null;
+		readonly mutationsSkipped: number | null;
+		readonly mutationsFailed: number | null;
+	} | null;
+}
+
+export interface ConstellationProposalSummary {
+	readonly pending: number;
+	readonly appliedRecent: number;
+	readonly failedRecent: number;
 }
 
 export interface ConstellationGraph {
 	readonly entities: readonly ConstellationEntity[];
 	readonly dependencies: readonly ConstellationDependency[];
+	readonly proposals: readonly ConstellationProposal[];
+	readonly metadata: {
+		readonly dreaming: ConstellationDreamingSummary;
+		readonly proposals: ConstellationProposalSummary;
+	};
 }
 
 export interface ConstellationGraphOptions {
@@ -1935,6 +1995,123 @@ function placeholders(count: number): string {
 	return Array.from({ length: count }, () => "?").join(", ");
 }
 
+function parseJsonRecord(value: unknown): Record<string, unknown> {
+	if (typeof value !== "string") return {};
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: {};
+	} catch {
+		return {};
+	}
+}
+
+function readStringValue(record: Record<string, unknown>, keys: readonly string[]): string | null {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim().length > 0) return value.trim();
+	}
+	return null;
+}
+
+function previewFromProposalPayload(payload: Record<string, unknown>): string | null {
+	const value = readStringValue(payload, ["value", "content", "name", "target", "reason"]);
+	if (!value) return null;
+	return value.length > 140 ? `${value.slice(0, 137)}...` : value;
+}
+
+function resolveProposalTargetEntity(
+	payload: Record<string, unknown>,
+	entitiesById: ReadonlyMap<string, string>,
+	entitiesByName: ReadonlyMap<string, string>,
+): { readonly id: string | null; readonly name: string | null } {
+	const id = readStringValue(payload, ["entity_id", "target_entity_id", "target_id"]);
+	if (id && entitiesById.has(id)) return { id, name: entitiesById.get(id) ?? null };
+
+	const name = readStringValue(payload, ["entity", "target_entity", "name", "target"]);
+	if (!name) return { id: null, name: null };
+	return { id: entitiesByName.get(toCanonicalName(name)) ?? null, name };
+}
+
+function getConstellationDreamingSummary(db: ReadDb, agentId: string): ConstellationDreamingSummary {
+	const state = db
+		.prepare(
+			`SELECT tokens_since_last_pass, consecutive_failures, last_pass_at, last_pass_id, last_pass_mode
+			 FROM dreaming_state WHERE agent_id = ?`,
+		)
+		.get(agentId) as
+		| {
+				tokens_since_last_pass: number;
+				consecutive_failures: number;
+				last_pass_at: string | null;
+				last_pass_id: string | null;
+				last_pass_mode: string | null;
+		  }
+		| undefined;
+	const latestPass = db
+		.prepare(
+			`SELECT id, mode, status, completed_at, mutations_applied, mutations_skipped, mutations_failed
+			 FROM dreaming_passes
+			 WHERE agent_id = ?
+			 ORDER BY created_at DESC
+			 LIMIT 1`,
+		)
+		.get(agentId) as
+		| {
+				id: string;
+				mode: string;
+				status: string;
+				completed_at: string | null;
+				mutations_applied: number | null;
+				mutations_skipped: number | null;
+				mutations_failed: number | null;
+		  }
+		| undefined;
+
+	return {
+		tokensSinceLastPass: Math.max(0, state?.tokens_since_last_pass ?? 0),
+		consecutiveFailures: Math.max(0, state?.consecutive_failures ?? 0),
+		lastPassAt: state?.last_pass_at ?? null,
+		lastPassId: state?.last_pass_id ?? null,
+		lastPassMode: state?.last_pass_mode ?? null,
+		latestPass: latestPass
+			? {
+					id: latestPass.id,
+					mode: latestPass.mode,
+					status: latestPass.status,
+					completedAt: latestPass.completed_at,
+					mutationsApplied: latestPass.mutations_applied,
+					mutationsSkipped: latestPass.mutations_skipped,
+					mutationsFailed: latestPass.mutations_failed,
+				}
+			: null,
+	};
+}
+
+function getConstellationProposalSummary(db: ReadDb, agentId: string): ConstellationProposalSummary {
+	const pending = db
+		.prepare("SELECT COUNT(*) AS n FROM ontology_proposals WHERE agent_id = ? AND status = 'pending'")
+		.get(agentId) as { n: number } | undefined;
+	const applied = db
+		.prepare(
+			`SELECT COUNT(*) AS n FROM ontology_proposals
+			 WHERE agent_id = ? AND status = 'applied' AND updated_at >= datetime('now', '-7 days')`,
+		)
+		.get(agentId) as { n: number } | undefined;
+	const failed = db
+		.prepare(
+			`SELECT COUNT(*) AS n FROM ontology_proposals
+			 WHERE agent_id = ? AND status = 'failed' AND updated_at >= datetime('now', '-7 days')`,
+		)
+		.get(agentId) as { n: number } | undefined;
+	return {
+		pending: Math.max(0, pending?.n ?? 0),
+		appliedRecent: Math.max(0, applied?.n ?? 0),
+		failedRecent: Math.max(0, failed?.n ?? 0),
+	};
+}
+
 export function getKnowledgeGraphForConstellation(
 	accessor: DbAccessor,
 	agentId: string,
@@ -1942,7 +2119,7 @@ export function getKnowledgeGraphForConstellation(
 ): ConstellationGraph {
 	const limit = boundedInteger(options.limit, 150, 1, 300);
 	const maxAspectsPerEntity = boundedInteger(options.maxAspectsPerEntity, 6, 1, 25);
-	const maxAttributesPerAspect = boundedInteger(options.maxAttributesPerAspect, 4, 1, 20);
+	const maxAttributesPerAspect = boundedInteger(options.maxAttributesPerAspect, 4, 1, 250);
 	const dependencyLimit = boundedInteger(options.dependencyLimit, 500, 1, 2000);
 
 	return accessor.withReadDb((db) => {
@@ -1952,9 +2129,10 @@ export function getKnowledgeGraphForConstellation(
 		// event-loop/RSS spike big enough for systemd to SIGKILL the daemon.
 		const entityRows = db
 			.prepare(
-				`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned
+				`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id
 				 FROM entities e
 				 WHERE e.agent_id = ?
+				   AND COALESCE(e.status, 'active') = 'active'
 				   AND (e.mentions > 0 OR e.pinned = 1)
 				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC
 				 LIMIT ?`,
@@ -1964,19 +2142,29 @@ export function getKnowledgeGraphForConstellation(
 		const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
 
 		if (entityIds.length === 0) {
-			return { entities: [], dependencies: [] };
+			return {
+				entities: [],
+				dependencies: [],
+				proposals: [],
+				metadata: {
+					dreaming: getConstellationDreamingSummary(db, agentId),
+					proposals: getConstellationProposalSummary(db, agentId),
+				},
+			};
 		}
 
 		const entityIdSet = new Set(entityIds);
 		const entityIdPlaceholders = placeholders(entityIds.length);
 		const aspectRows = db
 			.prepare(
-				`SELECT id, entity_id, name, weight
+				`SELECT id, entity_id, name, weight, status, proposal_id
 				 FROM (
-				   SELECT id, entity_id, name, weight,
+				   SELECT id, entity_id, name, weight, status, proposal_id,
 				          ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY weight DESC, name ASC) AS rn
 				   FROM entity_aspects
-				   WHERE agent_id = ? AND entity_id IN (${entityIdPlaceholders})
+				   WHERE agent_id = ?
+				     AND COALESCE(status, 'active') = 'active'
+				     AND entity_id IN (${entityIdPlaceholders})
 				 ) ranked_aspects
 				 WHERE rn <= ?
 				 ORDER BY entity_id ASC, weight DESC, name ASC`,
@@ -1989,6 +2177,8 @@ export function getKnowledgeGraphForConstellation(
 				id: string;
 				name: string;
 				weight: number;
+				status: "active" | "archived";
+				proposalId: string | null;
 			}>
 		>();
 		const aspectIds: string[] = [];
@@ -2004,6 +2194,8 @@ export function getKnowledgeGraphForConstellation(
 				id: aspectId,
 				name: row.name as string,
 				weight: Number(row.weight ?? 0.5),
+				status: row.status === "archived" ? "archived" : "active",
+				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
 			});
 			aspectsByEntity.set(entityId, bucket);
 		}
@@ -2014,9 +2206,15 @@ export function getKnowledgeGraphForConstellation(
 			const aspectIdPlaceholders = placeholders(aspectIds.length);
 			const attrRows = db
 				.prepare(
-					`SELECT id, aspect_id, content, kind, importance, memory_id
+					`SELECT id, aspect_id, content, kind, importance, memory_id, status,
+					        version, version_root_id, previous_attribute_id,
+					        group_key, claim_key, source_kind, source_path,
+					        proposal_id, proposal_evidence
 					 FROM (
-					   SELECT id, aspect_id, content, kind, importance, memory_id,
+					   SELECT id, aspect_id, content, kind, importance, memory_id, status,
+					          version, version_root_id, previous_attribute_id,
+					          group_key, claim_key, source_kind, source_path,
+					          proposal_id, proposal_evidence,
 					          ROW_NUMBER() OVER (PARTITION BY aspect_id ORDER BY importance DESC, id ASC) AS rn
 					   FROM entity_attributes
 					   WHERE agent_id = ? AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
@@ -2037,34 +2235,54 @@ export function getKnowledgeGraphForConstellation(
 					kind: row.kind as "attribute" | "constraint",
 					importance: Number(row.importance ?? 0.5),
 					memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
+					status: row.status as AttributeStatus,
+					version: typeof row.version === "number" ? row.version : 1,
+					versionRootId: typeof row.version_root_id === "string" ? row.version_root_id : null,
+					previousAttributeId: typeof row.previous_attribute_id === "string" ? row.previous_attribute_id : null,
+					groupKey: typeof row.group_key === "string" ? row.group_key : null,
+					claimKey: typeof row.claim_key === "string" ? row.claim_key : null,
+					sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+					sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+					proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
 				});
 				attrsByAspect.set(aspectId, bucket);
 			}
 		}
 
+		const entitiesById = new Map<string, string>();
+		const entitiesByName = new Map<string, string>();
 		const entities: ConstellationEntity[] = entityRows.map((row) => {
 			const eid = row.id as string;
+			const name = row.name as string;
+			entitiesById.set(eid, name);
+			entitiesByName.set(toCanonicalName(name), eid);
 			const aspects: ConstellationAspect[] = (aspectsByEntity.get(eid) ?? []).map((asp) => ({
 				id: asp.id,
 				name: asp.name,
 				weight: asp.weight,
+				status: asp.status,
+				proposalId: asp.proposalId,
 				attributes: attrsByAspect.get(asp.id) ?? [],
 			}));
 			return {
 				id: eid,
-				name: row.name as string,
+				name,
 				entityType: row.entity_type as string,
 				mentions: typeof row.mentions === "number" ? row.mentions : 0,
 				pinned: row.pinned === 1,
+				status: row.status === "archived" ? "archived" : "active",
+				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
 				aspects,
 			};
 		});
 
 		const depRows = db
 			.prepare(
-				`SELECT source_entity_id, target_entity_id, dependency_type, strength
+				`SELECT source_entity_id, target_entity_id, dependency_type, strength, status, proposal_id, proposal_evidence
 				 FROM entity_dependencies
 				 WHERE agent_id = ?
+				   AND COALESCE(status, 'active') = 'active'
 				   AND source_entity_id IN (${entityIdPlaceholders})
 				   AND target_entity_id IN (${entityIdPlaceholders})
 				 ORDER BY strength DESC
@@ -2077,9 +2295,49 @@ export function getKnowledgeGraphForConstellation(
 			targetEntityId: row.target_entity_id as string,
 			dependencyType: row.dependency_type as string,
 			strength: Number(row.strength ?? 0.5),
+			status: row.status === "archived" ? "archived" : "active",
+			proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+			proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
 		}));
 
-		return { entities, dependencies };
+		const proposalRows = db
+			.prepare(
+				`SELECT id, operation, payload, confidence, rationale, evidence,
+				        source_kind, source_path, updated_at
+				 FROM ontology_proposals
+				 WHERE agent_id = ? AND status = 'pending'
+				 ORDER BY updated_at DESC
+				 LIMIT 80`,
+			)
+			.all(agentId) as Array<Record<string, unknown>>;
+		const proposals: ConstellationProposal[] = proposalRows.map((row) => {
+			const payload = parseJsonRecord(row.payload);
+			const target = resolveProposalTargetEntity(payload, entitiesById, entitiesByName);
+			return {
+				id: row.id as string,
+				operation: row.operation as string,
+				confidence: Number(row.confidence ?? 0),
+				rationale: typeof row.rationale === "string" ? row.rationale : "",
+				evidenceCount: parseJsonArray(row.evidence).length,
+				sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+				sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+				updatedAt: row.updated_at as string,
+				targetEntityId: target.id,
+				targetEntityName: target.name,
+				targetAspectName: readStringValue(payload, ["aspect", "target_aspect", "aspect_name"]),
+				preview: previewFromProposalPayload(payload),
+			};
+		});
+
+		return {
+			entities,
+			dependencies,
+			proposals,
+			metadata: {
+				dreaming: getConstellationDreamingSummary(db, agentId),
+				proposals: getConstellationProposalSummary(db, agentId),
+			},
+		};
 	});
 }
 
