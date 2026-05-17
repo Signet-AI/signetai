@@ -76,6 +76,7 @@ import { up as ontologyProposals } from "./067-ontology-proposals";
 import { up as dailyReflections } from "./068-daily-reflections";
 import { up as dailyReflectionsMultipleInsights } from "./069-daily-reflections-multiple-insights";
 import { up as ontologyControlPlaneState } from "./070-ontology-control-plane-state";
+import { up as epistemicAssertions } from "./071-epistemic-assertions";
 
 // -- Public interface consumed by Database.init() --
 
@@ -661,6 +662,14 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "entity_attributes", column: "previous_attribute_id" },
 				{ table: "entity_dependencies", column: "status" },
 			],
+		},
+	},
+	{
+		version: 71,
+		name: "epistemic-assertions",
+		up: epistemicAssertions,
+		artifacts: {
+			tables: ["epistemic_assertions"],
 		},
 	},
 ];

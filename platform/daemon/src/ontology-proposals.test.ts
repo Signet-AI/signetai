@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { listEpistemicAssertions } from "./ontology-assertions";
 import { getOntologyClaimEvidence } from "./ontology-claim-evidence";
 import { consolidateOntologyProposals } from "./ontology-consolidation";
 import { extractOntologyProposals } from "./ontology-extraction";
@@ -12,6 +13,7 @@ import {
 	applyOntologyOperation,
 	applyOntologyOperationBatch,
 	applyOntologyProposal,
+	createEntityMergePlan,
 	createOntologyProposal,
 	createOntologyProposals,
 	getClaimVersion,
@@ -45,16 +47,18 @@ describe("ontology proposals", () => {
 		agentId: string,
 		mentions: number,
 		pinned = false,
+		entityType = "project",
 	): void {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO entities
 				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
-				 VALUES (?, ?, ?, 'project', ?, ?, ?, ?, ?)`,
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				id,
 				name,
 				canonicalName,
+				entityType,
 				agentId,
 				mentions,
 				pinned ? 1 : 0,
@@ -268,6 +272,102 @@ describe("ontology proposals", () => {
 		expect(written.writtenCount).toBe(2);
 		expect(written.items.map((item) => item.createdBy)).toEqual(["test-extractor", "test-extractor"]);
 		expect(written.items.every((item) => item.sourceKind === "transcript")).toBe(true);
+	});
+
+	it("writes extracted assertions without marking the response as a dry run", async () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 1);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"assertion-extract",
+				JSON.stringify({
+					assertions: [
+						{
+							entity: "Signet",
+							predicate: "believes",
+							content: "Signet should model who believes what over time.",
+							speaker: "Nicholai",
+							confidence: 0.91,
+							evidence: [{ quote: "who believes what" }],
+						},
+					],
+				}),
+				"codex",
+				"/tmp/signet",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:01:00.000Z",
+			);
+		});
+
+		const result = await extractOntologyProposals(getDbAccessor(), {
+			agentId: "ant",
+			from: "transcript:assertion-extract",
+			writeAssertions: true,
+		});
+
+		expect(result.dryRun).toBe(false);
+		expect(result.writtenCount).toBe(0);
+		expect(result.writtenAssertionCount).toBe(1);
+		expect(result.assertionItems[0]?.predicate).toBe("believes");
+	});
+
+	it("rolls back proposal and assertion extraction when one assertion is invalid", async () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 1);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"invalid-assertion-extract",
+				JSON.stringify({
+					proposals: [
+						{
+							operation: "create_entity",
+							payload: { name: "Rollback Candidate", entity_type: "concept" },
+							confidence: 0.7,
+							rationale: "Candidate from source evidence.",
+							evidence: [{ quote: "candidate" }],
+						},
+					],
+					assertions: [
+						{
+							entity: "Signet",
+							predicate: "claims",
+							content: "Signet keeps attributed assertions.",
+							evidence: [{ quote: "attributed assertions" }],
+						},
+						{
+							entity: "Signet",
+							predicate: "maybe",
+							content: "This invalid assertion should roll back the batch.",
+							evidence: [{ quote: "invalid assertion" }],
+						},
+					],
+				}),
+				"codex",
+				"/tmp/signet",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:01:00.000Z",
+			);
+		});
+
+		await expect(
+			extractOntologyProposals(getDbAccessor(), {
+				agentId: "ant",
+				from: "transcript:invalid-assertion-extract",
+				writeProposals: true,
+				writeAssertions: true,
+			}),
+		).rejects.toThrow("predicate is invalid");
+
+		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "ant", status: "all" }).items).toHaveLength(0);
 	});
 
 	it("mechanically extracts conservative proposals from plain transcript text", async () => {
@@ -938,6 +1038,97 @@ describe("ontology proposals", () => {
 		expect(rows.map((row) => row.content)).toContain("Proposal-first mutation loop");
 	});
 
+	it("applies ID-first merge_entities when entity names are ambiguous", () => {
+		const target = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Signet",
+				entity_type: "project",
+				aspect: "identity",
+				group_key: "product",
+				claim_key: "category",
+				value: "Context substrate",
+			},
+		});
+		applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: target.id, actor: "test" });
+
+		const source = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "add_claim_value",
+			payload: {
+				entity: "Signet Alias",
+				entity_type: "project",
+				aspect: "architecture",
+				group_key: "ontology",
+				claim_key: "proposal_loop",
+				value: "Proposal-first maintenance.",
+			},
+		});
+		applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: source.id, actor: "test" });
+
+		const ids = getDbAccessor().withWriteTx((db) => {
+			const targetRow = db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("ant", "Signet") as {
+				id: string;
+			};
+			const sourceRow = db
+				.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?")
+				.get("ant", "Signet Alias") as { id: string };
+			db.prepare("UPDATE entities SET canonical_name = ? WHERE id = ?").run("signet", sourceRow.id);
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+			).run(
+				"entity-signet-skill",
+				"signet",
+				"signet",
+				"skill",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:00:00.000Z",
+			);
+			return { targetId: targetRow.id, sourceId: sourceRow.id };
+		});
+
+		const merge = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "merge_entities",
+			payload: {
+				target_entity: "Signet",
+				target_entity_id: ids.targetId,
+				source_entities: ["Signet Alias"],
+				source_entity_ids: [ids.sourceId],
+			},
+		});
+
+		const applied = applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" });
+
+		expect(applied.status).toBe("applied");
+		expect(applied.result?.targetEntityId).toBe(ids.targetId);
+		expect(applied.result?.mergedEntities).toEqual([{ name: "Signet Alias", entityId: ids.sourceId, movedAspects: 1 }]);
+	});
+
+	it("rejects merge_entities when supplied IDs and names disagree", () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 8);
+		insertEntity("entity-other", "Other", "other", "ant", 4);
+		insertEntity("entity-alias", "Signet Alias", "signet alias", "ant", 1);
+
+		const merge = createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "merge_entities",
+			payload: {
+				target_entity: "Other",
+				target_entity_id: "entity-signet",
+				source_entity_ids: ["entity-alias"],
+			},
+		});
+
+		expect(() => applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" })).toThrow(
+			OntologyProposalError,
+		);
+	});
+
 	it("dry-runs duplicate entity repair candidates without creating proposals", () => {
 		insertEntity("entity-signet", "Signet", "signet", "ant", 8, true);
 		insertEntity("entity-signet-upper", "SIGNET", "signet", "ant", 3);
@@ -957,6 +1148,26 @@ describe("ontology proposals", () => {
 		expect(result.items[0]?.target.name).toBe("Signet");
 		expect(result.items[0]?.sources.map((source) => source.name).sort()).toEqual(["SIGNET", "signet.ai"]);
 
+		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
+		expect(listed.items).toHaveLength(0);
+	});
+
+	it("blocks mixed-type duplicate entity repair proposals by default", () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 8, true, "project");
+		insertEntity("entity-signet-skill", "signet", "signet", "ant", 3, false, "skill");
+
+		const result = proposeDuplicateEntityMerges(getDbAccessor(), {
+			agentId: "ant",
+			limit: 10,
+			writeProposals: true,
+			createdBy: "repair-test",
+		});
+
+		expect(result.count).toBe(1);
+		expect(result.writtenCount).toBe(0);
+		expect(result.skippedCount).toBe(1);
+		expect(result.items[0]?.blocked).toBe(true);
+		expect(result.items[0]?.warnings.join("\n")).toContain("differs from target type");
 		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
 		expect(listed.items).toHaveLength(0);
 	});
@@ -990,6 +1201,54 @@ describe("ontology proposals", () => {
 
 		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
 		expect(listed.items).toHaveLength(1);
+	});
+
+	it("previews and writes manual entity merge plans with ID-first payloads", () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 8);
+		insertEntity("entity-alias", "Signet Alias", "signet alias", "ant", 2);
+
+		const preview = createEntityMergePlan(getDbAccessor(), {
+			agentId: "ant",
+			targetEntityId: "entity-signet",
+			sourceEntityIds: ["entity-alias"],
+		});
+
+		expect(preview.dryRun).toBe(true);
+		expect(preview.proposal).toBeUndefined();
+		expect(preview.payload.target_entity_id).toBe("entity-signet");
+		expect(preview.payload.source_entity_ids).toEqual(["entity-alias"]);
+
+		const written = createEntityMergePlan(getDbAccessor(), {
+			agentId: "ant",
+			targetEntityId: "entity-signet",
+			sourceEntityIds: ["entity-alias"],
+			writeProposal: true,
+			createdBy: "merge-plan-test",
+		});
+
+		expect(written.dryRun).toBe(false);
+		expect(written.proposal?.operation).toBe("merge_entities");
+		expect(written.proposal?.createdBy).toBe("merge-plan-test");
+		expect(written.proposal?.payload.target_entity_id).toBe("entity-signet");
+	});
+
+	it("keeps blocked manual merge-plan writes reported as dry-runs", () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 8, false, "project");
+		insertEntity("entity-signet-skill", "signet", "signet", "ant", 2, false, "skill");
+
+		const result = createEntityMergePlan(getDbAccessor(), {
+			agentId: "ant",
+			targetEntityId: "entity-signet",
+			sourceEntityIds: ["entity-signet-skill"],
+			writeProposal: true,
+			createdBy: "merge-plan-test",
+		});
+
+		expect(result.blocked).toBe(true);
+		expect(result.dryRun).toBe(true);
+		expect(result.proposal).toBeUndefined();
+		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
+		expect(listed.items).toHaveLength(0);
 	});
 
 	it("rejects invalid proposal batches without partial writes", () => {

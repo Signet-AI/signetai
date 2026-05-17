@@ -25,16 +25,21 @@ describe("registerOntologyCommands", () => {
 		expect(ontology).toBeDefined();
 		if (!ontology) throw new Error("ontology command was not registered");
 		expect(ontology?.commands.map((cmd) => cmd.name())).toEqual(
-			expect.arrayContaining(["entity", "claim", "aspect", "link", "stream"]),
+			expect.arrayContaining(["entity", "claim", "aspect", "link", "stream", "assertions", "assertion"]),
 		);
 
 		const names = (parent: Command, name: string): readonly string[] =>
 			parent.commands.find((cmd) => cmd.name() === name)?.commands.map((cmd) => cmd.name()) ?? [];
-		expect(names(ontology, "entity")).toEqual(expect.arrayContaining(["create", "rename", "merge", "archive"]));
+		expect(names(ontology, "entity")).toEqual(
+			expect.arrayContaining(["create", "rename", "merge", "merge-plan", "archive"]),
+		);
 		expect(names(ontology, "claim")).toEqual(expect.arrayContaining(["set", "versions", "show", "archive", "restore"]));
 		expect(names(ontology, "aspect")).toEqual(expect.arrayContaining(["create", "rename", "archive"]));
 		expect(names(ontology, "link")).toEqual(expect.arrayContaining(["create", "update", "archive"]));
 		expect(names(ontology, "stream")).toEqual(expect.arrayContaining(["apply"]));
+		expect(names(ontology, "assertion")).toEqual(
+			expect.arrayContaining(["show", "create", "link-claim", "archive", "supersede", "import"]),
+		);
 	});
 
 	test("objects lists ontology objects through knowledge navigation", async () => {
@@ -435,6 +440,65 @@ describe("registerOntologyCommands", () => {
 		expect(lines.join("\n")).toContain("Signet <- SIGNET");
 	});
 
+	test("entity merge-plan posts a read-only merge preview request", async () => {
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (method, path, body) => {
+				calls.push({ method, path, body });
+				return {
+					ok: true,
+					data: {
+						dryRun: true,
+						target: { id: "entity-signet", name: "Signet", entityType: "project" },
+						sources: [{ id: "entity-alias", name: "Signet Alias", entityType: "project" }],
+						impact: { aspects: 1, attributes: 2, dependencies: 0, memoryMentions: 3 },
+						warnings: [],
+						blocked: false,
+						rationale: "Merge duplicate Signet aliases.",
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"entity",
+			"merge-plan",
+			"entity-signet",
+			"entity-alias",
+			"--agent",
+			"ant",
+		]);
+
+		expect(calls).toEqual([
+			{
+				method: "POST",
+				path: "/api/ontology/proposals/repair/merge-plan",
+				body: {
+					agent_id: "ant",
+					target_entity: "entity-signet",
+					source_entities: ["entity-alias"],
+					force: false,
+					write_proposal: false,
+					created_by: "ontology-merge-plan",
+					rationale: undefined,
+					evidence: undefined,
+				},
+			},
+		]);
+		expect(lines.join("\n")).toContain("Entity Merge Plan");
+		expect(lines.join("\n")).toContain("Signet <- Signet Alias");
+	});
+
 	test("import-proposals maps extraction output to batch proposal creation", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-ontology-cli-"));
 		const file = join(dir, "extraction.json");
@@ -772,6 +836,86 @@ describe("registerOntologyCommands", () => {
 		await program.parseAsync(["node", "test", "ontology", "pipeline", "explain"]);
 
 		expect(capturedPath).toBe("/api/status");
+	});
+
+	test("assertion commands use epistemic assertion endpoints", async () => {
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+		let daemonChecks = 0;
+		console.log = () => {};
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => {
+				daemonChecks += 1;
+				return true;
+			},
+			secretApiCall: async (method, path, body) => {
+				calls.push({ method, path, body });
+				return {
+					ok: true,
+					data: {
+						id: "assertion-1",
+						subjectEntityName: "Signet",
+						predicate: "claims",
+						content: "Signet tracks attributed claims.",
+						confidence: 0.9,
+						status: "active",
+					},
+				};
+			},
+		});
+
+		await program.parseAsync(["node", "test", "ontology", "assertions", "--entity", "Signet", "--agent", "ant"]);
+		await program.parseAsync(["node", "test", "ontology", "assertion", "show", "assertion-1", "--agent", "ant"]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"assertion",
+			"create",
+			"--entity",
+			"Signet",
+			"--predicate",
+			"claims",
+			"--content",
+			"Signet tracks attributed claims.",
+			"--source-kind",
+			"transcript",
+			"--confidence",
+			"0.9",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"assertion",
+			"link-claim",
+			"assertion-1",
+			"--attribute-id",
+			"attr-1",
+		]);
+		await program.parseAsync(["node", "test", "ontology", "assertion", "archive", "assertion-1", "--reason", "stale"]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"assertion",
+			"supersede",
+			"assertion-1",
+			"--content",
+			"Signet tracks attributed assertions.",
+			"--source-kind",
+			"transcript",
+		]);
+
+		expect(calls[0]?.path).toBe("/api/ontology/assertions?entity=Signet&status=active&agent_id=ant");
+		expect(calls[1]?.path).toBe("/api/ontology/assertions/assertion-1?agent_id=ant");
+		expect(calls[2]?.path).toBe("/api/ontology/assertions");
+		expect((calls[2]?.body as { readonly predicate?: string; readonly confidence?: number }).predicate).toBe("claims");
+		expect((calls[2]?.body as { readonly confidence?: number }).confidence).toBe(0.9);
+		expect(calls[3]?.path).toBe("/api/ontology/assertions/assertion-1/link-claim");
+		expect(calls[4]?.path).toBe("/api/ontology/assertions/assertion-1/archive");
+		expect(calls[5]?.path).toBe("/api/ontology/assertions/assertion-1/supersede");
+		expect(daemonChecks).toBe(calls.length);
 	});
 
 	test("config show makes the audited operation surface explicit", async () => {

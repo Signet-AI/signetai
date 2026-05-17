@@ -3652,18 +3652,88 @@ Resolve evidence for an already-applied ontology link from stored dependency
 provenance. Links applied through proposals include the applying proposal id and
 copied proposal evidence before broader source fallback evidence.
 
+### GET /api/ontology/assertions
+
+List source-attributed epistemic assertions. Assertions record who claimed,
+believed, observed, decided, preferred, denied, or questioned something about an
+entity without promoting that statement into current ontology truth. Query
+parameters: `agent_id`, `entity`, `entity_id`, `predicate`, `status`,
+`speaker`, `source_kind`, `source_id`, `query`, `limit`, and `offset`.
+
+Valid predicates are `claims`, `believes`, `observed`, `decided`, `prefers`,
+`denies`, and `questions`. Valid statuses are `active`, `archived`,
+`superseded`, and `all` for list reads.
+
+```text
+/api/ontology/assertions?entity=Signet&predicate=believes&speaker=Nicholai
+```
+
+### GET /api/ontology/assertions/:id
+
+Return one epistemic assertion by id, scoped to the resolved `agent_id`.
+Returns `404` when the assertion does not exist in that agent scope.
+
+### POST /api/ontology/assertions
+
+Create a source-attributed epistemic assertion. Body parameters: `agent_id`,
+`entity` or `entity_id`, `predicate`, `content`, `speaker`, `asserted_at`,
+`confidence`, `evidence`, `source_kind`, `source_id`, `source_path`,
+`source_root`, `claim_attribute_id`, and `created_by`.
+
+Every assertion must include either structured `evidence` or source provenance
+fields. If `claim_attribute_id` is supplied, the referenced applied claim value
+must be active and belong to the same agent and subject entity.
+
+### POST /api/ontology/assertions/:id/link-claim
+
+Link an existing assertion to an applied claim attribute. Body parameters:
+`agent_id` and `attribute_id`. The daemon rejects cross-agent and cross-entity
+links, and it only accepts active claim attribute rows.
+
+### POST /api/ontology/assertions/:id/archive
+
+Archive an assertion without deleting evidence. Body parameters: `agent_id`,
+`actor`, and `reason`.
+
+### POST /api/ontology/assertions/:id/supersede
+
+Create a replacement assertion and mark the old assertion `superseded`. Body
+parameters match assertion creation plus `agent_id`. Omitting `predicate`
+preserves the old assertion predicate; pass a predicate only when the epistemic
+meaning is intentionally changing. Omitting source fields inherits source
+provenance from the old assertion, but replacement content is still required.
+Supersede keeps the old subject entity; use a new assertion when the subject
+entity changes.
+
+CLI equivalents:
+
+```bash
+signet ontology assertions --entity Signet --predicate believes --speaker Nicholai
+signet ontology assertion create --entity Signet --predicate believes --content "Signet should model attributed beliefs." --source-kind transcript
+signet ontology assertion show <assertion-id>
+signet ontology assertion link-claim <assertion-id> --attribute-id <claim-attribute-id>
+signet ontology assertion archive <assertion-id> --reason "superseded by newer evidence"
+signet ontology assertion supersede <assertion-id> --content "Updated attributed belief." --source-kind transcript
+signet ontology assertion import --file assertions.json
+```
+
 ### POST /api/ontology/extract
 
-Extract candidate ontology proposals from an agent-scoped transcript or memory
-artifact. Body parameters: `from`, `agent_id`, `write_proposals`, `created_by`,
-`limit`, `use_provider`, `provider_timeout_ms`, and `provider_max_tokens`.
-`from` accepts refs such as `transcript:<id>`, `artifact:<source_path>`, or
-`source:<source_path>`. The route dry-runs by default and writes pending
-proposals only when `write_proposals` is true. When `use_provider` is true, the
-route uses the configured `memory_extraction` inference workload and falls back
-to deterministic extraction if no valid provider proposals are returned.
-Provider-returned `questions` are surfaced in the response for review; this
-route does not persist first-class question objects yet.
+Extract candidate ontology proposals and source-attributed assertions from an
+agent-scoped transcript or memory artifact. Body parameters: `from`, `agent_id`,
+`write_proposals`, `write_assertions`, `created_by`, `limit`, `use_provider`,
+`provider_timeout_ms`, and `provider_max_tokens`. `from` accepts refs such as
+`transcript:<id>`, `artifact:<source_path>`, or `source:<source_path>`.
+
+The route dry-runs by default. It writes pending proposals only when
+`write_proposals` is true and writes epistemic assertions only when
+`write_assertions` is true. If both write flags are set, proposal and assertion
+inserts share one transaction and roll back together on invalid extracted
+items. When `use_provider` is true, the route uses the configured
+`memory_extraction` inference workload and falls back to deterministic
+extraction if no valid provider proposals are returned. Provider-returned
+`questions` are surfaced in the response for review; this route does not persist
+first-class question objects yet.
 
 ### POST /api/ontology/consolidate
 
