@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	OntologyAssertionError,
@@ -12,6 +13,7 @@ import {
 	listEpistemicAssertions,
 	supersedeEpistemicAssertion,
 } from "./ontology-assertions";
+import { registerOntologyRoutes } from "./routes/ontology-routes";
 
 describe("epistemic assertions", () => {
 	let dir = "";
@@ -136,6 +138,33 @@ describe("epistemic assertions", () => {
 		});
 		expect(archived.status).toBe("archived");
 		expect(archived.evidence).toEqual([{ quote: "who believes what" }]);
+	});
+
+	it("preserves the old predicate when route supersede omits a replacement predicate", async () => {
+		const first = createEpistemicAssertion(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			predicate: "believes",
+			content: "Signet should preserve epistemic predicates.",
+			evidence: [{ quote: "preserve predicates" }],
+			sourceKind: "transcript",
+		});
+		const app = new Hono();
+		registerOntologyRoutes(app);
+
+		const res = await app.request(`/api/ontology/assertions/${first.id}/supersede?agent_id=ant`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				content: "Signet still preserves epistemic predicates.",
+				evidence: [{ quote: "still preserves" }],
+			}),
+		});
+
+		expect(res.status).toBe(200);
+		const next = (await res.json()) as { readonly predicate?: string; readonly supersedesAssertionId?: string };
+		expect(next.predicate).toBe("believes");
+		expect(next.supersedesAssertionId).toBe(first.id);
 	});
 
 	it("rejects invalid assertions before writing", () => {

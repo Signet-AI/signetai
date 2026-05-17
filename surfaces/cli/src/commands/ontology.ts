@@ -985,7 +985,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 			.description("Supersede an epistemic assertion with a newer assertion")
 			.argument("<id>", "Assertion id")
 			.requiredOption("--content <text>", "Replacement assertion content")
-			.option("--predicate <predicate>", "Replacement predicate", "claims")
+			.option("--predicate <predicate>", "Replacement predicate")
 			.option("--speaker <name>", "Speaker or claimant")
 			.option("--asserted-at <iso>", "When the replacement assertion was made")
 			.option("--confidence <n>", "Assertion confidence", Number.parseFloat)

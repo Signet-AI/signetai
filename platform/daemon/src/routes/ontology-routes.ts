@@ -459,7 +459,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					oldAssertionId: c.req.param("id"),
 					entity: readString(body, "entity"),
 					entityId: readString(body, "entity_id"),
-					predicate: readString(body, "predicate") ?? "claims",
+					predicate: readString(body, "predicate") ?? "",
 					content: readString(body, "content") ?? "",
 					speaker: readString(body, "speaker") ?? null,
 					assertedAt: readString(body, "asserted_at") ?? null,
