@@ -1,4 +1,4 @@
-import { addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
+import { addGitHubSource, addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
 import chalk from "chalk";
 
 export interface SourcesDeps {
@@ -37,6 +37,60 @@ export async function addObsidianVaultSource(
 	console.log(chalk.dim(`  ${result.source.root}`));
 	console.log();
 	console.log(chalk.dim("The daemon indexes configured sources on startup and during its native-memory polling loop."));
+	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
+}
+
+export async function addGitHubRepoSource(
+	options: {
+		readonly repos?: readonly string[];
+		readonly name?: string;
+		readonly tokenRef?: string;
+		readonly types?: string;
+		readonly state?: string;
+		readonly comments?: boolean;
+		readonly docPaths?: readonly string[];
+		readonly maxItems?: string;
+	},
+	deps: SourcesDeps,
+): Promise<void> {
+	const repos = options.repos ?? [];
+	if (repos.length === 0) {
+		console.error(chalk.red("✗ --repos is required (e.g. --repos owner/repo owner/*)"));
+		process.exitCode = 1;
+		return;
+	}
+	const resourceTypes = options.types
+		? (options.types.split(",").filter((t): t is "issues" | "pulls" | "discussions" | "docs" =>
+				["issues", "pulls", "discussions", "docs"].includes(t.trim())))
+		: undefined;
+	const maxItems = options.maxItems ? Number(options.maxItems) : undefined;
+
+	const result = addGitHubSource(
+		{
+			repos,
+			name: options.name,
+			tokenRef: options.tokenRef,
+			resourceTypes,
+			state: options.state as "open" | "closed" | "all" | undefined,
+			includeComments: options.comments,
+			docPaths: options.docPaths,
+			maxItemsPerRepo: maxItems,
+		},
+		deps.agentsDir,
+	);
+	if (result.ok === false) {
+		console.error(chalk.red(`✗ ${result.error}`));
+		process.exitCode = 1;
+		return;
+	}
+
+	const verb = result.created ? "Added" : "Updated";
+	console.log(chalk.green(`✓ ${verb} GitHub source: ${result.source.name}`));
+	console.log(chalk.dim(`  repos: ${repos.join(", ")}`));
+	if (options.tokenRef) console.log(chalk.dim(`  token: ${options.tokenRef}`));
+	console.log(chalk.dim(`  types: ${(resourceTypes ?? ["issues", "pulls", "discussions", "docs"]).join(", ")}`));
+	console.log();
+	console.log(chalk.dim("The daemon indexes GitHub sources on startup and polls every 5 minutes."));
 	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
 }
 

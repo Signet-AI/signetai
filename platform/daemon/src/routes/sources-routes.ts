@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import { promisify } from "node:util";
 import {
 	type SignetSourceEntry,
+	addGitHubSource,
 	addObsidianSource,
 	loadSourcesConfig,
 	markSourceIndexed,
@@ -20,6 +21,7 @@ import {
 	purgeNativeMemorySourceArtifacts,
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
+import { purgeGitHubSource, syncGitHubSource } from "../github-source-bridge";
 import {
 	type SourceIndexJob,
 	beginSourceIndexJob,
@@ -57,6 +59,18 @@ interface AddObsidianSourceBody {
 	readonly root?: string;
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
+}
+
+interface AddGitHubSourceBody {
+	readonly repos?: readonly string[];
+	readonly name?: string;
+	readonly tokenRef?: string;
+	readonly resourceTypes?: readonly ("issues" | "pulls" | "discussions" | "docs")[];
+	readonly state?: "open" | "closed" | "all";
+	readonly includeComments?: boolean;
+	readonly labels?: readonly string[];
+	readonly docPaths?: readonly string[];
+	readonly maxItemsPerRepo?: number;
 }
 
 interface PickDirectoryBody {
@@ -125,6 +139,45 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 	});
 
+	app.post("/api/sources/github", async (c) => {
+		let body: AddGitHubSourceBody = {};
+		try {
+			body = (await c.req.json()) as AddGitHubSourceBody;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const repos = Array.isArray(body.repos) ? body.repos.filter((r) => typeof r === "string") : [];
+		if (repos.length === 0) return c.json({ error: "repos is required (e.g. ['owner/repo', 'owner/*'])" }, 400);
+
+		const result = addGitHubSource(
+			{
+				repos,
+				name: body.name,
+				tokenRef: body.tokenRef,
+				resourceTypes: body.resourceTypes,
+				state: body.state,
+				includeComments: body.includeComments,
+				labels: body.labels,
+				docPaths: body.docPaths,
+				maxItemsPerRepo: body.maxItemsPerRepo,
+			},
+			agentsDir,
+		);
+		if (result.ok === false) return c.json({ error: result.error }, 400);
+
+		syncGitHubSource(result.source, { agentsDir }).catch((err) => {
+			logger.warn(
+				"sources",
+				"Background GitHub source sync failed",
+				undefined,
+				err instanceof Error ? { message: err.message } : { error: String(err) },
+			);
+		});
+
+		return c.json({ source: result.source, created: result.created, queued: true }, 202);
+	});
+
 	app.delete("/api/sources/:sourceId", (c) => {
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
@@ -139,7 +192,9 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 						obsidianNativeMemorySource(result.source.root, result.source.name, result.source.id),
 						sourceAgentId,
 					)
-				: 0;
+				: result.source.kind === "github"
+					? (purgeGitHubSource(result.source.id, sourceAgentId), 0)
+					: 0;
 		if (!isSourceIndexInFlight(result.source.id))
 			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
