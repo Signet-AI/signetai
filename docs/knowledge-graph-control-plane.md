@@ -7,17 +7,17 @@ graph control plane. It is not a speculative product spec.
 
 | Surface | Migration | Exposure | Mutation model | Notes |
 |---|---:|---|---|---|
-| `entities` | 002, 005, 019, 022, 027, 037, 064, 070 | CLI/API | proposal/audit-backed through ontology operations; internal pipeline writes still exist | Agent-scoped after 019. 070 adds `status`, archive metadata, and proposal provenance. Name/canonical selectors must resolve to one same-agent active row. |
+| `entities` | 002, 005, 019, 022, 027, 037, 064, 070 | CLI/API | apply-first audited operations; proposal review for large refactors | Agent-scoped after 019. 070 adds `status`, archive metadata, and proposal provenance. Name/canonical selectors must resolve to one same-agent active row. |
 | `relations` | 002, 005 | hidden/internal | internal graph legacy | Kept for legacy entity relation compatibility. New control-plane links use `entity_dependencies`. |
 | `memory_entity_mentions` | 002, 005 | hidden/internal | internal write-time linker | Links memories to entities; source memories remain immutable provenance. |
-| `entity_aspects` | 019, 070 | CLI/API | proposal/audit-backed through ontology operations | 070 adds archive metadata and proposal provenance. Default reads should treat archived aspects as hidden. |
-| `entity_attributes` | 019, 059, 060, 064, 067, 070 | CLI/API | proposal/audit-backed for operations; pipeline/supersession helpers also write | Claim slots use `group_key` + `claim_key`. 070 adds first-class versions: `version`, `version_root_id`, `previous_attribute_id`. Default reads show active rows; history reads can inspect all versions. |
-| `entity_dependencies` | 019, 031, 036, 039, 050, 064, 067, 070 | CLI/API | proposal/audit-backed through ontology operations; structural workers also write | Link operations create/update/archive rows here. Reason/confidence/proposal/source provenance are preserved. |
+| `entity_aspects` | 019, 070 | CLI/API | apply-first audited operations; proposal review for large refactors | 070 adds archive metadata and proposal provenance. Default reads should treat archived aspects as hidden. |
+| `entity_attributes` | 019, 059, 060, 064, 067, 070 | CLI/API | apply-first audited operations; pipeline/supersession helpers also write | Claim slots use `group_key` + `claim_key`. 070 adds first-class versions: `version`, `version_root_id`, `previous_attribute_id`. Default reads show active rows; history reads can inspect all versions. |
+| `entity_dependencies` | 019, 031, 036, 039, 050, 064, 067, 070 | CLI/API | apply-first audited operations; structural workers also write | Link operations create/update/archive rows here. Reason/confidence/proposal/source provenance are preserved. |
 | `entity_dependency_history` | 050 | hidden/internal | audit trigger | Trigger-backed history for dependency insert/update/delete. |
 | `task_meta` | 019, 054 | hidden/internal | task/procedural helpers | Agent-scoped task metadata, not part of this control-plane CLI slice. |
-| `ontology_proposals` | 067 | CLI/API | proposal loop and applied audit ledger | Pending, applied, rejected, and failed proposals. Direct operations create applied rows inside the same transaction as graph mutation. |
+| `ontology_proposals` | 067 | CLI/API | refactor proposal queue and applied operation ledger | Pending proposals are for broad graph refactors or explicit review. Direct operations create applied rows inside the same transaction as graph mutation so provenance remains queryable. |
 | `epistemic_assertions` | 071 | CLI/API | source-attributed assertion ledger | Records who claimed, believed, observed, decided, preferred, denied, or questioned something, with confidence, evidence, source provenance, status, and optional link to an applied claim attribute. Assertions do not by themselves make the statement current ontology truth. |
-| `dreaming_state`, `dreaming_passes` | 055 | CLI/API via dream status/trigger | dreaming worker | Existing dreaming pass records/status. LLM dreaming remains proposal-first for ontology changes in this slice. |
+| `dreaming_state`, `dreaming_passes` | 055 | CLI/API via dream status/trigger | dreaming worker | Existing dreaming pass records/status. Dream promotion is apply-first with provenance; generated or ambiguous candidates remain preview/questions until explicitly applied. |
 | `memory_artifacts` | 051, 061, 062 | API/internal | immutable source artifact records | Source-backed evidence for proposals and applied graph rows. Ontology updates must not rewrite these rows. |
 | `session_transcripts` | 040, 045, 047 | API/internal | immutable transcript/index records | Proposal extraction can cite transcripts; graph mutation must preserve transcript provenance. |
 
@@ -33,16 +33,16 @@ graph control plane. It is not a speculative product spec.
 | `POST /api/ontology/proposals/:id/reject` | CLI/API | rejects pending proposal | Covered by reject tests. |
 | `GET /api/ontology/proposals/:id/evidence` | CLI/API | read-only | Covered by evidence tests. |
 | `GET /api/ontology/proposals/conflicts` | CLI/API | read-only | Covered by conflict tests. |
-| `POST /api/ontology/proposals/repair/duplicates` | CLI/API | dry-run or pending proposals | Covered by duplicate repair tests. |
+| `POST /api/ontology/proposals/repair/duplicates` | CLI/API | dry-run candidates or large-refactor proposals | Covered by duplicate repair tests. Clear single merges should use direct `entity merge`. |
 | `GET /api/ontology/assertions` | CLI/API | read-only | Lists source-attributed assertions by entity, predicate, speaker, source, status, or text query. Covered by assertion tests. |
 | `GET /api/ontology/assertions/:id` | CLI/API | read-only | Reads one same-agent assertion. Covered by assertion tests. |
 | `POST /api/ontology/assertions` | CLI/API | creates source-attributed assertion | Requires evidence or source provenance. Covered by assertion tests. |
 | `POST /api/ontology/assertions/:id/link-claim` | CLI/API | links assertion to applied claim value | Rejects cross-agent and cross-entity links. Covered by assertion tests. |
 | `POST /api/ontology/assertions/:id/archive` | CLI/API | archives assertion | Preserves assertion evidence. Covered by assertion tests. |
 | `POST /api/ontology/assertions/:id/supersede` | CLI/API | creates replacement assertion and supersedes old row | Omitting predicate preserves old predicate. Covered by assertion route tests. |
-| `POST /api/ontology/extract` | CLI/API | dry-run, pending proposals, and/or assertions | Proposal-first for ontology truth; assertion writes are source-attributed ledger writes. Proposal and assertion inserts are atomic when both write flags are set. Covered by extraction tests. |
-| `POST /api/ontology/consolidate` | CLI/API | dry-run or pending proposals | Proposal-first. Covered by consolidation tests. |
-| `POST /api/ontology/operations/apply` | CLI/API | dry-run, pending proposal, or applied proposal + graph mutation | New direct operation endpoint. Requires `modify`. Covered through operation engine and CLI tests. |
+| `POST /api/ontology/extract` | CLI/API | dry-run, pending refactor proposals, and/or assertions | Extraction writes assertions for attributed claims and pending proposals only when explicitly requested. Covered by extraction tests. |
+| `POST /api/ontology/consolidate` | CLI/API | dry-run or pending refactor proposals | Consolidates review queues; not the default dreaming maintenance path. Covered by consolidation tests. |
+| `POST /api/ontology/operations/apply` | CLI/API | dry-run, pending refactor proposal, or applied operation + graph mutation | Direct operation endpoint. Requires `modify`. Covered through operation engine and CLI tests. |
 | `POST /api/ontology/operations/batch` | CLI/API | atomic batch dry-run/propose/apply | Requires `modify`; rolls back on invalid operation. Covered by operation batch tests. |
 | `GET /api/ontology/claims/evidence` | CLI/API | read-only | Covered by claim evidence tests. |
 | `GET /api/ontology/claims/versions` | CLI/API | read-only | Covered by version chain tests. |
@@ -50,7 +50,7 @@ graph control plane. It is not a speculative product spec.
 | `GET /api/ontology/links/:id/evidence` | CLI/API | read-only | Covered by link evidence tests. |
 | `GET /api/knowledge/navigation/*` | CLI/API | read-only | Existing knowledge navigation tests cover entity/aspect/group/claim browsing. |
 | `GET /api/pipeline/status`, `GET /api/status` | CLI/API | read-only | `ontology pipeline *` uses these to explain graph mutation state. |
-| `GET /api/dream/status`, `POST /api/dream/trigger` | CLI/API | dreaming worker | Existing dream CLI/daemon surface. Ontology dreaming skill uses proposal JSON/JSONL by default. |
+| `GET /api/dream/status`, `POST /api/dream/trigger` | CLI/API | dreaming worker | Existing dream CLI/daemon surface. Ontology dreaming skill uses apply-first operations with provenance by default. |
 
 ## CLI Commands
 
@@ -64,15 +64,15 @@ graph control plane. It is not a speculative product spec.
 | `signet ontology conflicts` | CLI | read-only | Lists pending claim conflicts. |
 | `signet ontology assertions` | CLI | read-only | Lists source-attributed assertions with filters for entity, predicate, speaker, source, status, query, and agent. |
 | `signet ontology assertion show/create/link-claim/archive/supersede/import` | CLI | assertion ledger writes | Creates and maintains attributed assertion rows. `supersede` preserves the old predicate when `--predicate` is omitted. `import` accepts a JSON array or `{ "assertions": [...] }`. |
-| `signet ontology entity create/rename/merge/archive` | CLI | direct operation endpoint | Supports `--dry-run`, `--propose`, `--json`, `--agent`, `--actor`, `--reason`, `--evidence-file`. |
+| `signet ontology entity create/rename/merge/archive` | CLI | direct operation endpoint | Applies by default with audit/provenance. Supports `--dry-run`, `--propose`, `--json`, `--agent`, `--actor`, `--reason`, `--evidence-file`; reserve `--propose` for broad refactors or explicit review. |
 | `signet ontology claim set/versions/show/archive/restore` | CLI | operation endpoint for writes, read endpoints for versions | `set` creates version chains; `restore` only required for claim versions in this slice. |
 | `signet ontology aspect create/rename/archive` | CLI | direct operation endpoint | Uses same audited operation path. |
 | `signet ontology link create/update/archive` | CLI | direct operation endpoint | Uses `entity_dependencies`. |
 | `signet ontology stream apply <path|- >` | CLI | atomic JSONL operation batch | Supports file and stdin, `--dry-run`, `--propose`, `--json`, `--agent`, `--actor`. |
 | `signet ontology pipeline status/config/explain` | CLI | graph-state inspection | Explains Pipeline V2 graph flags and write gates. |
 | `signet ontology config show/validate/explain` | CLI | control-plane inspection | Confirms audited operation tools are usable and no external `graph.yaml` policy gate is active in this slice. |
-| `signet ontology extract` | CLI | dry-run/pending proposals/assertions | `--write-proposals` persists pending proposal rows; `--write-assertions` persists source-attributed assertion rows. |
-| `signet ontology consolidate` | CLI | dry-run/pending proposals | Existing proposal-first consolidation surface. |
+| `signet ontology extract` | CLI | dry-run/refactor proposals/assertions | `--write-proposals` persists pending proposal rows only when review is requested; `--write-assertions` persists source-attributed assertion rows. |
+| `signet ontology consolidate` | CLI | dry-run/refactor proposals | Consolidates existing review queues; normal graph maintenance should use direct operation apply. |
 | `signet dream status/trigger` | CLI | existing dream worker | Existing pass status and trigger behavior. |
 
 ## Pipeline V2 Graph Knobs
@@ -97,11 +97,14 @@ Current graph-affecting configuration is loaded from `memory.pipelineV2` in
 Unsafe or ambiguous behavior to keep watching:
 
 - Legacy graph workers still have internal write paths. Generated LLM changes
-  must remain proposal-first when they target ontology maintenance.
+  must remain explicit, audited, and provenance-backed when they target ontology
+  maintenance; pending proposals are for large refactors or explicit review.
 - `relations` remains a legacy graph table; new audited control-plane links use
   `entity_dependencies`.
 - `merge_entities` still moves graph rows and removes the source entity. Use
-  entity archive operations when lineage inspection of the source row matters.
+  `entity merge-plan` for impact inspection and reserve `--propose` for broad
+  merge campaigns or risky refactors. Use entity archive operations when
+  lineage inspection of the source row matters.
 - A separate `$SIGNET_WORKSPACE/ontology/graph.yaml` policy is not active yet;
   adding one should fail closed and must not introduce hidden mutation paths.
 

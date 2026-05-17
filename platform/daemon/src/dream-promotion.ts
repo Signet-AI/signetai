@@ -3,6 +3,8 @@ import type { DbAccessor, ReadDb } from "./db-accessor";
 import { type ApplyOntologyOperationBatchResult, applyOntologyOperationBatch } from "./ontology-proposals";
 import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";
 
+// Dream promotion is the normal apply-first graph maintenance path:
+// preview by default, direct audited apply on request, provenance always attached.
 type SourceKind = "memory" | "artifact" | "transcript";
 
 type SourceRecord = {

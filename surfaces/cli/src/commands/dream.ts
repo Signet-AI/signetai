@@ -141,7 +141,7 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 
 	dream
 		.command("promote")
-		.description("Promote source-backed evidence into update-in-place ontology attributes")
+		.description("Preview or apply source-backed evidence into provenance-backed ontology attributes")
 		.option(
 			"--from <source>",
 			"Source selector: all, memories:recent, memory:<id>, artifact:<id>, source:<path>, transcript:<id>",

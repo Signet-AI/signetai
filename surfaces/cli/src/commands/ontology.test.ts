@@ -811,7 +811,10 @@ describe("registerOntologyCommands", () => {
 
 	test("pipeline explain reads daemon status", async () => {
 		let capturedPath = "";
-		console.log = () => {};
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
 		const program = new Command();
 		registerOntologyCommands(program, {
 			ensureDaemonForSecrets: async () => true,
@@ -833,9 +836,16 @@ describe("registerOntologyCommands", () => {
 			},
 		});
 
-		await program.parseAsync(["node", "test", "ontology", "pipeline", "explain"]);
+		await program.parseAsync(["node", "test", "ontology", "pipeline", "explain", "--json"]);
 
 		expect(capturedPath).toBe("/api/status");
+		const data = JSON.parse(lines.join("\n")) as {
+			readonly directOperations?: string;
+			readonly generatedChanges?: string;
+		};
+		expect(data.directOperations).toContain("apply first");
+		expect(data.directOperations).toContain("provenance");
+		expect(data.generatedChanges).toContain("pending proposals only for large refactors");
 	});
 
 	test("assertion commands use epistemic assertion endpoints", async () => {
@@ -933,9 +943,17 @@ describe("registerOntologyCommands", () => {
 
 		const data = JSON.parse(lines.join("\n")) as {
 			readonly operationsUsable?: boolean;
+			readonly operationSurface?: {
+				readonly applyFirst?: boolean;
+				readonly refactorProposals?: boolean;
+				readonly provenanceRequired?: boolean;
+			};
 			readonly policyFile?: { readonly active?: boolean };
 		};
 		expect(data.operationsUsable).toBe(true);
+		expect(data.operationSurface?.applyFirst).toBe(true);
+		expect(data.operationSurface?.refactorProposals).toBe(true);
+		expect(data.operationSurface?.provenanceRequired).toBe(true);
 		expect(data.policyFile?.active).toBe(false);
 	});
 });

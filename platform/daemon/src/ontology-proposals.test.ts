@@ -78,7 +78,7 @@ describe("ontology proposals", () => {
 				aspect: "architecture",
 				group_key: "ontology",
 				claim_key: "proposal_loop",
-				value: "Ontology extraction writes proposals before mutating semantic state.",
+				value: "Ontology extraction preserves provenance before mutating semantic state.",
 			},
 			confidence: 0.92,
 			rationale: "Explicit architecture decision from transcript evidence.",
@@ -134,7 +134,7 @@ describe("ontology proposals", () => {
 		expect(row?.aspect).toBe("architecture");
 		expect(row?.group_key).toBe("ontology");
 		expect(row?.claim_key).toBe("proposal_loop");
-		expect(row?.content).toContain("writes proposals");
+		expect(row?.content).toContain("preserves provenance");
 		expect(row?.confidence).toBeCloseTo(0.92);
 		expect(row?.source_kind).toBe("transcript");
 		expect(row?.proposal_id).toBe(proposal.id);
@@ -193,7 +193,7 @@ describe("ontology proposals", () => {
 					entity: "Signet",
 					aspect: "architecture",
 					claim_key: "maintenance_loop",
-					value: "Extraction emits proposals before ontology mutation.",
+					value: "Extraction emits provenance-backed operations before ontology mutation.",
 				},
 				evidence: [{ transcript_id: "transcript:1", message_ids: ["m1"] }],
 				confidence: 0.8,
@@ -470,7 +470,7 @@ describe("ontology proposals", () => {
 				aspect: "architecture",
 				group_key: "ontology",
 				claim_key: "proposal_loop",
-				value: "Extraction should emit proposals first.",
+				value: "Extraction should preserve source evidence first.",
 			},
 			confidence: 0.72,
 			rationale: "Raw extraction candidate.",
@@ -483,7 +483,7 @@ describe("ontology proposals", () => {
 				aspect: "architecture",
 				group_key: "ontology",
 				claim_key: "proposal_loop",
-				value: "Ontology maintenance should review proposals before mutation.",
+				value: "Ontology maintenance should apply high-confidence operations with provenance.",
 			},
 			confidence: 0.8,
 			rationale: "Second raw extraction candidate.",
@@ -509,11 +509,11 @@ describe("ontology proposals", () => {
 									aspect: "architecture",
 									group_key: "ontology",
 									claim_key: "proposal_loop",
-									value: "Signet ontology maintenance uses proposals before mutation.",
+									value: "Signet ontology maintenance uses apply-first operations with provenance.",
 								},
 								confidence: 0.9,
-								rationale: "The pending proposals agree on proposal-before-mutation semantics.",
-								evidence: [{ source_kind: "ontology_proposal", source_id: "candidate", quote: "proposals first" }],
+								rationale: "The pending proposals agree on apply-first provenance semantics.",
+								evidence: [{ source_kind: "ontology_proposal", source_id: "candidate", quote: "apply first" }],
 							},
 						],
 						rejections: [{ candidate_id: "duplicate", reason: "duplicate" }],
@@ -548,7 +548,7 @@ describe("ontology proposals", () => {
 									aspect: "architecture",
 									group_key: "ontology",
 									claim_key: "proposal_loop",
-									value: "Signet ontology maintenance uses proposals before mutation.",
+									value: "Signet ontology maintenance uses apply-first operations with provenance.",
 								},
 							},
 						],
@@ -593,7 +593,7 @@ describe("ontology proposals", () => {
 				"token-1",
 				"codex",
 				"2026-05-06T00:01:00.000Z",
-				"Canonical artifact says proposals preserve lineage back to source truth.",
+				"Canonical artifact says applied operations preserve lineage back to source truth.",
 				"2026-05-06T00:01:00.000Z",
 			);
 		});
@@ -735,7 +735,7 @@ describe("ontology proposals", () => {
 			actor: "test",
 		});
 		const oldId = initialApplied.result?.attributeId;
-		expect(typeof oldId).toBe("string");
+		if (typeof oldId !== "string") throw new Error("initial attribute id was not returned");
 
 		const supersede = createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",
@@ -746,7 +746,7 @@ describe("ontology proposals", () => {
 				group_key: "ontology",
 				claim_key: "current_loop",
 				old_value: "Extraction writes directly into ontology state.",
-				new_value: "Extraction writes pending proposals before ontology mutation.",
+				new_value: "Extraction writes provenance-backed operations before ontology mutation.",
 				confidence: 0.93,
 			},
 			sourceKind: "transcript",
@@ -761,7 +761,7 @@ describe("ontology proposals", () => {
 
 		expect(applied.status).toBe("applied");
 		const replacementId = applied.result?.replacementAttributeId;
-		expect(typeof replacementId).toBe("string");
+		if (typeof replacementId !== "string") throw new Error("replacement attribute id was not returned");
 		expect(applied.result?.supersededAttributeIds).toEqual([oldId]);
 
 		const rows = getDbAccessor().withReadDb(
@@ -773,7 +773,7 @@ describe("ontology proposals", () => {
 						 WHERE id IN (?, ?)
 						 ORDER BY status DESC`,
 					)
-					.all(oldId as string, replacementId as string) as Array<{
+					.all(oldId, replacementId) as Array<{
 					id: string;
 					content: string;
 					status: string;
@@ -788,7 +788,7 @@ describe("ontology proposals", () => {
 		expect(old?.status).toBe("superseded");
 		expect(old?.superseded_by).toBe(replacementId);
 		expect(replacement?.status).toBe("active");
-		expect(replacement?.content).toContain("pending proposals");
+		expect(replacement?.content).toContain("provenance-backed operations");
 		expect(replacement?.confidence).toBeCloseTo(0.93);
 		expect(replacement?.source_kind).toBe("transcript");
 	});
@@ -943,7 +943,7 @@ describe("ontology proposals", () => {
 					aspect: "architecture",
 					group_key: "ontology",
 					claim_key: "mutation_policy",
-					value: "Extraction writes proposals before graph mutation.",
+					value: "Extraction writes provenance-backed operations before graph mutation.",
 				},
 				confidence: 0.93,
 			},
@@ -1380,7 +1380,7 @@ describe("ontology proposals", () => {
 				"token-control-plane-e2e",
 				"codex",
 				"2026-05-16T00:01:00.000Z",
-				"Raw artifact says ontology control-plane mutations are audited through proposals.",
+				"Raw artifact says ontology control-plane mutations apply first with provenance.",
 				"2026-05-16T00:01:00.000Z",
 			);
 		});
@@ -1397,7 +1397,7 @@ describe("ontology proposals", () => {
 			aspect: "architecture",
 			group_key: "ontology",
 			claim_key: "control_plane_e2e",
-			value: "Ontology control-plane mutations are audited through proposals.",
+			value: "Ontology control-plane mutations apply first with provenance.",
 		};
 		const dryRun = applyOntologyOperationBatch(getDbAccessor(), {
 			agentId: "ant",
@@ -1416,7 +1416,7 @@ describe("ontology proposals", () => {
 			sourceKind: "transcript",
 			sourceId: "control-plane-e2e",
 			sourcePath,
-			evidence: [{ source_kind: "memory_artifact", source_path: sourcePath, quote: "audited through proposals" }],
+			evidence: [{ source_kind: "memory_artifact", source_path: sourcePath, quote: "apply first with provenance" }],
 		});
 		const proposed = applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",

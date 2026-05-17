@@ -641,7 +641,7 @@ function printDuplicateRepairs(data: unknown): void {
 		return;
 	}
 
-	const mode = record.dryRun === false ? "Duplicate Merge Proposals" : "Duplicate Merge Candidates";
+	const mode = record.dryRun === false ? "Duplicate Merge Refactor Proposals" : "Duplicate Merge Candidates";
 	console.log(chalk.bold(`\n  ${mode}\n`));
 	for (const item of items) {
 		const target = item.target?.name ?? "unknown";
@@ -660,7 +660,7 @@ function printDuplicateRepairs(data: unknown): void {
 		for (const warning of item.warnings ?? []) console.log(chalk.yellow(`    warning ${warning}`));
 		if (item.rationale) console.log(chalk.dim(`    ${item.rationale}`));
 	}
-	if (writtenCount > 0) console.log(chalk.green(`\n  Created ${writtenCount} pending merge proposals`));
+	if (writtenCount > 0) console.log(chalk.green(`\n  Created ${writtenCount} pending merge refactor proposals`));
 	if (skippedCount > 0) console.log(chalk.yellow(`  Skipped ${skippedCount} blocked merge candidate(s)`));
 	console.log();
 }
@@ -672,7 +672,7 @@ function printEntityMergePlan(data: unknown): void {
 	const title = result.blocked
 		? chalk.red("Entity Merge Blocked")
 		: result.proposal
-			? "Entity Merge Proposal"
+			? "Entity Merge Refactor Proposal"
 			: "Entity Merge Plan";
 	console.log(chalk.bold(`\n  ${title}\n`));
 	console.log(
@@ -771,7 +771,7 @@ function addCommonOptions(cmd: Command): Command {
 function addOperationOptions(cmd: Command): Command {
 	return addCommonOptions(cmd)
 		.option("--dry-run", "Validate and preview without writing")
-		.option("--propose", "Create a pending proposal instead of applying")
+		.option("--propose", "Create a pending proposal for large refactor review instead of applying")
 		.option("--actor <name>", "Audit actor", "operator")
 		.option("--reason <text>", "Audit reason")
 		.option("--evidence-file <path>", "JSON evidence file, array or single object");
@@ -1124,7 +1124,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		.command("extract")
 		.description("Extract candidate ontology proposals from a transcript or artifact")
 		.requiredOption("--from <source>", "Source ref, e.g. transcript:<id>, artifact:<path>, or source:<path>")
-		.option("--write-proposals", "Persist extracted candidates as pending proposals")
+		.option("--write-proposals", "Persist extracted candidates as pending proposals for explicit review")
 		.option("--write-assertions", "Persist extracted epistemic assertions")
 		.option("--dry-run", "Preview candidates without writing", true)
 		.option("--use-provider", "Use the configured memory extraction inference workload")
@@ -1160,7 +1160,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		.command("consolidate")
 		.description("Consolidate pending ontology proposals into higher-confidence proposals")
 		.option("--proposals <status>", "Proposal status to consolidate", "pending")
-		.option("--write-proposals", "Persist consolidated candidates as pending proposals")
+		.option("--write-proposals", "Persist consolidated candidates as pending proposals for explicit review")
 		.option("--dry-run", "Preview consolidated candidates without writing", true)
 		.option("--use-provider", "Use the configured memory extraction inference workload")
 		.option("--provider-timeout-ms <n>", "Provider consolidation timeout in milliseconds", Number.parseInt)
@@ -1304,10 +1304,10 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 	addCommonOptions(
 		entity
 			.command("merge-plan")
-			.description("Preview an entity merge and optionally create a pending proposal")
+			.description("Preview merge impact; optionally create a large-refactor proposal")
 			.argument("<target>", "Target entity selector")
 			.argument("<source...>", "Source entity selectors")
-			.option("--propose", "Create a pending merge proposal")
+			.option("--propose", "Create a pending merge proposal for large refactor review")
 			.option("--force", "Allow pinned or mixed-type source entities")
 			.option("--created-by <name>", "Audit creator", "ontology-merge-plan")
 			.option("--rationale <text>", "Short rationale")
@@ -1542,7 +1542,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		.description("Apply, dry-run, or propose a JSONL operation stream")
 		.argument("<path>", "JSONL path or - for stdin")
 		.option("--dry-run", "Validate and preview without writing")
-		.option("--propose", "Create pending proposals instead of applying")
+		.option("--propose", "Create pending proposals for large refactor review instead of applying")
 		.option("--agent <name>", "Agent scope, default default")
 		.option("--actor <name>", "Audit actor", "operator")
 		.option("--json", "Output as JSON")
@@ -1641,8 +1641,9 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 			const autonomous = asRecord(pipe.autonomous);
 			const data = {
 				directOperations:
-					"signet ontology entity/claim/aspect/link/stream commands mutate only through applied proposals.",
-				generatedChanges: "ontology extract/consolidate/dreaming skill paths are proposal-first by default.",
+					"signet ontology entity/claim/aspect/link/stream commands apply first through audited operation handlers with provenance.",
+				generatedChanges:
+					"dreaming and ordinary graph maintenance should apply high-confidence operations with evidence; use pending proposals only for large refactors or explicit review.",
 				pipelineWrites:
 					pipe.enabled === true && pipe.shadowMode !== true && pipe.mutationsFrozen !== true
 						? "Pipeline V2 controlled writes may add memories; graph extraction writes depend on graph config."
@@ -1669,9 +1670,10 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 				operationsUsable: true,
 				operationSurface: {
 					applyFirst: true,
-					propose: true,
 					dryRun: true,
-					auditedThrough: "ontology_proposals",
+					refactorProposals: true,
+					provenanceRequired: true,
+					auditLedger: "ontology_proposals.applied",
 				},
 				policyFile: {
 					path: "$SIGNET_WORKSPACE/ontology/graph.yaml",
@@ -1700,18 +1702,18 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 			const data = {
 				hiddenMutationPaths: false,
 				explanation:
-					"Generated maintenance must use pending proposals or dry-run diffs; exact CLI/API operations can apply directly only through audited daemon operation endpoints.",
+					"Dreaming and normal graph maintenance apply first through audited daemon operation endpoints with provenance; pending proposals are reserved for large graph refactors or explicit review.",
 			};
 			console.log(JSON.stringify(data, null, 2));
 		});
 
 	ontology
 		.command("repair")
-		.description("Find ontology repair candidates and optionally write proposals")
+		.description("Find ontology repair candidates and optionally write large-refactor proposals")
 		.option("--duplicates", "Detect duplicate entities with the same canonical name")
 		.option("--orphans", "Reserved for orphan repair candidates")
-		.option("--dry-run", "Preview repair proposals without writing them")
-		.option("--write-proposals", "Write pending repair proposals")
+		.option("--dry-run", "Preview repair candidates without writing them")
+		.option("--write-proposals", "Write pending repair proposals for broad graph refactors")
 		.option("-l, --limit <n>", "Max repair candidates to return", Number.parseInt)
 		.option("--agent <name>", "Agent scope, default default")
 		.option("--created-by <name>", "Audit creator", "ontology-repair")
