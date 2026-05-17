@@ -141,12 +141,7 @@ function parseRateLimit(headers: Headers): RateLimitInfo {
 	};
 }
 
-async function githubRequest(
-	url: string,
-	token?: string,
-	method = "GET",
-	body?: unknown,
-): Promise<GitHubApiResponse> {
+async function githubRequest(url: string, token?: string, method = "GET", body?: unknown): Promise<GitHubApiResponse> {
 	const headers: Record<string, string> = {
 		Accept: "application/vnd.github.v3+json",
 		"User-Agent": "signet-daemon",
@@ -210,9 +205,9 @@ export async function fetchRepoInfo(config: GitHubFetchConfig): Promise<GitHubRe
 	}
 	const data = response.body as Record<string, unknown>;
 	return {
-		owner: data.owner as { login: string }?.login ?? config.owner,
-		repo: data.name as string ?? config.repo,
-		fullName: data.full_name as string ?? `${config.owner}/${config.repo}`,
+		owner: ((data.owner as Record<string, unknown> | undefined)?.login as string) ?? config.owner,
+		repo: (data.name as string) ?? config.repo,
+		fullName: (data.full_name as string) ?? `${config.owner}/${config.repo}`,
 		description: (data.description as string) ?? null,
 		defaultBranch: (data.default_branch as string) ?? "main",
 		htmlUrl: (data.html_url as string) ?? `https://github.com/${config.owner}/${config.repo}`,
@@ -293,10 +288,7 @@ export async function fetchIssues(
 	return { resources, rateLimitRemaining, rateLimitReset, errors };
 }
 
-export async function fetchIssueComments(
-	config: GitHubFetchConfig,
-	issueNumber: number,
-): Promise<GitHubComment[]> {
+export async function fetchIssueComments(config: GitHubFetchConfig, issueNumber: number): Promise<GitHubComment[]> {
 	const comments: GitHubComment[] = [];
 	let page = 1;
 	while (true) {
@@ -527,7 +519,7 @@ export async function fetchDiscussionComments(
 		const nodes = data.data?.repository?.discussion?.comments?.nodes ?? [];
 		for (const c of nodes) {
 			comments.push({
-				id: Number.parseInt(c.id.replace(/^DIC_/,""), 10) || 0,
+				id: Number.parseInt(c.id.replace(/^DIC_/, ""), 10) || 0,
 				body: c.body,
 				author: c.author,
 				created_at: c.createdAt,
@@ -567,7 +559,10 @@ export async function fetchRepoDocs(
 		rateLimitReset = rl.reset;
 		if (response.status === 404) continue;
 		if (response.status !== 200) {
-			errors.push({ message: `Doc fetch failed for ${docPath}: ${response.status}`, retryable: response.status >= 500 });
+			errors.push({
+				message: `Doc fetch failed for ${docPath}: ${response.status}`,
+				retryable: response.status >= 500,
+			});
 			continue;
 		}
 		const data = response.body as { content?: string; sha?: string; name?: string };
@@ -592,11 +587,7 @@ export async function fetchRepoDocs(
 	return { resources, rateLimitRemaining, rateLimitReset, errors };
 }
 
-async function fetchTreeDocs(
-	config: GitHubFetchConfig,
-	globPath: string,
-	branch?: string,
-): Promise<GitHubFetchResult> {
+async function fetchTreeDocs(config: GitHubFetchConfig, globPath: string, branch?: string): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
 	const errors: { message: string; retryable: boolean }[] = [];
 	const ref = branch ? `?ref=${branch}` : "";
@@ -640,7 +631,10 @@ async function fetchTreeDocs(
 	return { resources, rateLimitRemaining: 5000, rateLimitReset: 0, errors };
 }
 
-export function resourceToMarkdown(resource: GitHubResource, comments?: readonly { author: string | null; body: string; createdAt: string }[]): string {
+export function resourceToMarkdown(
+	resource: GitHubResource,
+	comments?: readonly { author: string | null; body: string; createdAt: string }[],
+): string {
 	const parts: string[] = [];
 	parts.push(`# ${resource.title}`);
 	parts.push("");

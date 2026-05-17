@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
+import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "./db-helpers";
-import type { EmbeddingConfig } from "./memory-config";
-import type { SourceEmbeddingFetch } from "./obsidian-source-embeddings";
-import { yieldEvery } from "./async-yield";
-import { logger } from "./logger";
 import type { GitHubResource } from "./github-source-fetch";
 import { resourceToMarkdown } from "./github-source-fetch";
+import { logger } from "./logger";
+import type { EmbeddingConfig } from "./memory-config";
+import type { SourceEmbeddingFetch } from "./obsidian-source-embeddings";
 
 export const GITHUB_CHUNK_SOURCE_TYPE = "source_github_chunk";
 const GITHUB_SOURCE_CHUNK_DELAY_MS = 100;
@@ -129,7 +129,11 @@ interface MarkdownSection {
 function parseMarkdownSections(content: string): MarkdownSection[] {
 	const lines = content.replace(/\r\n?/g, "\n").split("\n");
 	const sections: Array<{ heading: string; startLine: number; lines: string[] }> = [];
-	let current: { heading: string; startLine: number; lines: string[] } = { heading: "Overview", startLine: 1, lines: [] };
+	let current: { heading: string; startLine: number; lines: string[] } = {
+		heading: "Overview",
+		startLine: 1,
+		lines: [],
+	};
 
 	for (let idx = 0; idx < lines.length; idx++) {
 		const line = lines[idx] ?? "";
@@ -178,7 +182,11 @@ function splitLongText(text: string): string[] {
 }
 
 function slug(input: string): string {
-	return input.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+	return input
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 80);
 }
 
 function sleep(ms: number): Promise<void> {

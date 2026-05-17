@@ -97,7 +97,17 @@ function upsertCommunity(
 		   name = excluded.name,
 		   updated_at = excluded.updated_at,
 		   source_id = excluded.source_id`,
-	).run(input.id, input.agentId, input.name, input.now, input.now, input.sourceId, GITHUB_SOURCE_KIND, "", input.sourceId);
+	).run(
+		input.id,
+		input.agentId,
+		input.name,
+		input.now,
+		input.now,
+		input.sourceId,
+		GITHUB_SOURCE_KIND,
+		"",
+		input.sourceId,
+	);
 }
 
 function upsertDependency(
@@ -195,7 +205,13 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 			now,
 		});
 		const repoCommunityId = idFor(input.agentId, input.sourceId, "community", input.repo);
-		upsertCommunity(db, { id: repoCommunityId, name: input.repo, agentId: input.agentId, sourceId: input.sourceId, now });
+		upsertCommunity(db, {
+			id: repoCommunityId,
+			name: input.repo,
+			agentId: input.agentId,
+			sourceId: input.sourceId,
+			now,
+		});
 		db.prepare("UPDATE entities SET community_id = ? WHERE id = ?").run(repoCommunityId, repoEntityId);
 		upsertDependency(db, {
 			sourceEntityId,
@@ -209,7 +225,14 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 			now,
 		});
 
-		const resourceEntityId = idFor(input.agentId, input.sourceId, "resource", input.repo, input.resource.type, String(input.resource.number ?? input.resource.path));
+		const resourceEntityId = idFor(
+			input.agentId,
+			input.sourceId,
+			"resource",
+			input.repo,
+			input.resource.type,
+			String(input.resource.number ?? input.resource.path),
+		);
 		const resourceCanonical = `github:${sourcePath}`;
 		upsertEntity(db, {
 			id: resourceEntityId,
@@ -229,7 +252,10 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 			type: "contains",
 			strength: 1,
 			confidence: 1,
-			reason: requireDependencyReason("related_to", `GitHub repo ${input.repo} contains ${input.resource.type} ${input.resource.number ?? input.resource.path}`),
+			reason: requireDependencyReason(
+				"related_to",
+				`GitHub repo ${input.repo} contains ${input.resource.type} ${input.resource.number ?? input.resource.path}`,
+			),
 			sourceId: input.sourceId,
 			now,
 		});
@@ -280,7 +306,10 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 				type: "wiki_link",
 				strength: ref.type === "pull" ? 0.9 : 0.7,
 				confidence: 0.8,
-				reason: requireDependencyReason("related_to", `GitHub ${input.resource.type} references ${ref.type} #${ref.number}`),
+				reason: requireDependencyReason(
+					"related_to",
+					`GitHub ${input.resource.type} references ${ref.type} #${ref.number}`,
+				),
 				sourceId: input.sourceId,
 				now,
 			});
@@ -311,23 +340,24 @@ interface GitHubRef {
 	readonly number: number;
 }
 
-function extractGitHubRefs(body: string, _repo: string): GitHubRef[] {
+export function extractGitHubRefs(body: string, _repo: string): GitHubRef[] {
 	const refs = new Map<string, GitHubRef>();
 	const patterns = [
 		/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|ref[s]?|see)\s+#(\d+)/gi,
 		/(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|ref[s]?|see)\s+https:\/\/github\.com\/[^/]+\/[^/]+\/(issues|pull)\/(\d+)/gi,
+		/https:\/\/github\.com\/[^/]+\/[^/]+\/(issues|pull)\/(\d+)/gi,
 		/#(\d+)/g,
 	];
 	for (const pattern of patterns) {
 		let match: RegExpExecArray | null;
 		while ((match = pattern.exec(body))) {
-			if (pattern === patterns[2]) {
+			if (pattern === patterns[3]) {
 				const num = Number(match[1]);
 				if (num > 0 && num < 1_000_000) {
 					const key = `issue:${num}`;
 					if (!refs.has(key)) refs.set(key, { type: "issue", number: num });
 				}
-			} else if (pattern === patterns[1]) {
+			} else if (pattern === patterns[1] || pattern === patterns[2]) {
 				const type = match[1] === "pull" ? "pull" : "issue";
 				const num = Number(match[2]);
 				if (num > 0) refs.set(`${type}:${num}`, { type, number: num });
@@ -347,9 +377,7 @@ export function purgeGitHubSourceStructure(input: PurgeGitHubSourceStructureInpu
 	const params = input.agentId ? [input.agentId, input.sourceId] : [input.sourceId];
 	return getDbAccessor().withWriteTx((db) => {
 		const attrs = db.prepare(`DELETE FROM entity_attributes WHERE ${agentWhere}source_id = ?`).run(...params).changes;
-		const deps = db
-			.prepare(`DELETE FROM entity_dependencies WHERE ${agentWhere}source_id = ?`)
-			.run(...params).changes;
+		const deps = db.prepare(`DELETE FROM entity_dependencies WHERE ${agentWhere}source_id = ?`).run(...params).changes;
 		const entities = db.prepare(`DELETE FROM entities WHERE ${agentWhere}source_id = ?`).run(...params).changes;
 		const communities = db
 			.prepare(`DELETE FROM entity_communities WHERE ${agentWhere}source_id = ?`)

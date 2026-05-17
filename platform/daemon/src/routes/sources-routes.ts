@@ -15,13 +15,13 @@ import {
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
+import { purgeGitHubSource, syncGitHubSource } from "../github-source-bridge";
 import {
 	type NativeMemoryBridgeHandle,
 	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
-import { purgeGitHubSource, syncGitHubSource } from "../github-source-bridge";
 import {
 	type SourceIndexJob,
 	beginSourceIndexJob,
@@ -178,7 +178,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		return c.json({ source: result.source, created: result.created, queued: true }, 202);
 	});
 
-	app.delete("/api/sources/:sourceId", (c) => {
+	app.delete("/api/sources/:sourceId", async (c) => {
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 404);
@@ -186,15 +186,16 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 
 		const sourceAgentId = resolveDaemonAgentId();
 		recordSourceDeletionTombstone(result.source, sourceAgentId, agentsDir);
-		const purged =
-			result.source.kind === "obsidian"
-				? purgeNativeSource(
-						obsidianNativeMemorySource(result.source.root, result.source.name, result.source.id),
-						sourceAgentId,
-					)
-				: result.source.kind === "github"
-					? (purgeGitHubSource(result.source.id, sourceAgentId), 0)
-					: 0;
+		let purged = 0;
+		if (result.source.kind === "obsidian") {
+			purged = purgeNativeSource(
+				obsidianNativeMemorySource(result.source.root, result.source.name, result.source.id),
+				sourceAgentId,
+			);
+		} else if (result.source.kind === "github") {
+			await purgeGitHubSource(result.source.id, sourceAgentId);
+			purged = 0;
+		}
 		if (!isSourceIndexInFlight(result.source.id))
 			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });

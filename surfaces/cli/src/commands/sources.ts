@@ -1,5 +1,11 @@
 import type { Command } from "commander";
-import { type SourcesDeps, addGitHubRepoSource, addObsidianVaultSource, listSources, removeConfiguredSource } from "../features/sources.js";
+import {
+	type SourcesDeps,
+	addGitHubRepoSource,
+	addObsidianVaultSource,
+	listSources,
+	removeConfiguredSource,
+} from "../features/sources.js";
 import type { DaemonApiCall } from "../lib/daemon.js";
 
 export interface RegisterSourcesCommandsDeps extends SourcesDeps {

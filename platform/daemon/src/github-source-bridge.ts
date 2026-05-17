@@ -3,8 +3,10 @@ import { parseGitHubSettings } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
+import { indexGitHubSourceEmbeddings, purgeGitHubSourceEmbeddings } from "./github-source-embeddings";
 import type { GitHubResource } from "./github-source-fetch";
 import {
+	type GitHubFetchConfig,
 	expandRepoGlob,
 	fetchDiscussionComments,
 	fetchDiscussions,
@@ -13,13 +15,11 @@ import {
 	fetchPullRequests,
 	fetchRepoDocs,
 	fetchRepoInfo,
-	type GitHubFetchConfig,
 } from "./github-source-fetch";
-import { indexGitHubSourceEmbeddings, purgeGitHubSourceEmbeddings } from "./github-source-embeddings";
-import type { SourceEmbeddingFetch } from "./obsidian-source-embeddings";
 import { indexGitHubSourceStructure, purgeGitHubSourceStructure } from "./github-source-graph";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
+import type { SourceEmbeddingFetch } from "./obsidian-source-embeddings";
 
 export interface GitHubSourceBridgeHandle {
 	readonly sync: () => Promise<number>;
@@ -91,9 +91,10 @@ export async function syncGitHubSource(
 			if (settings.resourceTypes.includes("issues")) {
 				const result = await fetchIssues(config, undefined, settings.state, settings.maxItemsPerRepo);
 				for (const resource of result.resources) {
-					const comments = settings.includeComments && resource.commentsCount > 0
-						? await fetchIssueComments(config, resource.number ?? 0)
-						: undefined;
+					const comments =
+						settings.includeComments && resource.commentsCount > 0
+							? await fetchIssueComments(config, resource.number ?? 0)
+							: undefined;
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, options);
 					repoIndexed++;
 					await yielder();
@@ -104,9 +105,10 @@ export async function syncGitHubSource(
 			if (settings.resourceTypes.includes("pulls")) {
 				const result = await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo);
 				for (const resource of result.resources) {
-					const comments = settings.includeComments && resource.commentsCount > 0
-						? await fetchIssueComments(config, resource.number ?? 0)
-						: undefined;
+					const comments =
+						settings.includeComments && resource.commentsCount > 0
+							? await fetchIssueComments(config, resource.number ?? 0)
+							: undefined;
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, options);
 					repoIndexed++;
 					await yielder();
@@ -117,9 +119,10 @@ export async function syncGitHubSource(
 			if (settings.resourceTypes.includes("discussions")) {
 				const result = await fetchDiscussions(config, undefined, settings.maxItemsPerRepo);
 				for (const resource of result.resources) {
-					const comments = settings.includeComments && resource.commentsCount > 0
-						? await fetchDiscussionComments(config, resource.number ?? 0)
-						: undefined;
+					const comments =
+						settings.includeComments && resource.commentsCount > 0
+							? await fetchDiscussionComments(config, resource.number ?? 0)
+							: undefined;
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, options);
 					repoIndexed++;
 					await yielder();
@@ -186,7 +189,7 @@ async function indexResource(
 
 async function resolveToken(tokenRef: string, agentsDir?: string): Promise<string | undefined> {
 	try {
-		const dir = agentsDir ?? process.env.SIGNET_PATH ?? `${require("os").homedir()}/.agents`;
+		const dir = agentsDir ?? process.env.SIGNET_PATH ?? `${require("node:os").homedir()}/.agents`;
 		const response = await fetch(`http://localhost:3850/api/secrets/${encodeURIComponent(tokenRef)}`, {
 			headers: { "Content-Type": "application/json" },
 		});
@@ -200,7 +203,13 @@ async function resolveToken(tokenRef: string, agentsDir?: string): Promise<strin
 	return undefined;
 }
 
-function logErrors(sourceId: string, repo: string, type: string, count: number, errors: readonly { message: string }[]): void {
+function logErrors(
+	sourceId: string,
+	repo: string,
+	type: string,
+	count: number,
+	errors: readonly { message: string }[],
+): void {
 	if (errors.length > 0) {
 		logger.warn("github-source", `Errors during ${type} fetch`, {
 			sourceId,

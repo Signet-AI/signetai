@@ -60,8 +60,11 @@ export async function addGitHubRepoSource(
 		return;
 	}
 	const resourceTypes = options.types
-		? (options.types.split(",").filter((t): t is "issues" | "pulls" | "discussions" | "docs" =>
-				["issues", "pulls", "discussions", "docs"].includes(t.trim())))
+		? options.types
+				.split(",")
+				.filter((t): t is "issues" | "pulls" | "discussions" | "docs" =>
+					["issues", "pulls", "discussions", "docs"].includes(t.trim()),
+				)
 		: undefined;
 	const maxItems = options.maxItems ? Number(options.maxItems) : undefined;
 

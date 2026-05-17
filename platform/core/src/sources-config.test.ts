@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
+	addGitHubSource,
 	addObsidianSource,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
+	parseGitHubSettings,
 	removeSource,
 } from "./sources-config";
 
@@ -151,5 +153,76 @@ describe("sources-config", () => {
 		expect(removed.ok).toBe(false);
 		if (removed.ok === true) throw new Error("expected removeSource to fail");
 		expect(removed.error).toContain("not found");
+	});
+
+	describe("GitHub source", () => {
+		it("adds a GitHub source with repos and token ref", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource(
+				{ repos: ["Signet-AI/signetai", "Signet-AI/sqmd"], name: "Signet Repos", tokenRef: "github-pat", now: "2026-01-01T00:00:00.000Z" },
+				agentsDir,
+			);
+			expect(result.ok).toBe(true);
+			if (result.ok === false) throw new Error(result.error);
+			expect(result.created).toBe(true);
+			expect(result.source.kind).toBe("github");
+			expect(result.source.mode).toBe("read-only");
+			expect(result.source.enabled).toBe(true);
+			expect(result.source.name).toBe("Signet Repos");
+
+			const config = loadSourcesConfig(agentsDir);
+			expect(config.sources).toHaveLength(1);
+			const settings = parseGitHubSettings(config.sources[0]!.settings);
+			expect(settings.repos).toEqual(["Signet-AI/signetai", "Signet-AI/sqmd"]);
+			expect(settings.tokenRef).toBe("github-pat");
+		});
+
+		it("updates an existing GitHub source instead of duplicating", () => {
+			const agentsDir = tmp();
+			const first = addGitHubSource(
+				{ repos: ["owner/repo"], name: "Repo A", now: "2026-01-01T00:00:00.000Z" },
+				agentsDir,
+			);
+			const second = addGitHubSource(
+				{ repos: ["owner/repo"], name: "Repo B", now: "2026-01-02T00:00:00.000Z" },
+				agentsDir,
+			);
+			expect(first.ok).toBe(true);
+			expect(second.ok).toBe(true);
+			if (second.ok === false) throw new Error(second.error);
+			expect(second.created).toBe(false);
+			expect(second.source.name).toBe("Repo B");
+			expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+		});
+
+		it("requires at least one repo", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource({ repos: [] }, agentsDir);
+			expect(result.ok).toBe(false);
+			if (result.ok === true) throw new Error("expected failure");
+			expect(result.error).toContain("repo");
+		});
+
+		it("coexists with Obsidian sources", () => {
+			const agentsDir = tmp();
+			const vault = join(agentsDir, "vault");
+			mkdirSync(vault, { recursive: true });
+
+			addObsidianSource({ root: vault, name: "My Vault" }, agentsDir);
+			addGitHubSource({ repos: ["owner/repo"], name: "GitHub" }, agentsDir);
+
+			const config = loadSourcesConfig(agentsDir);
+			expect(config.sources).toHaveLength(2);
+			expect(config.sources.map((s) => s.kind)).toEqual(["obsidian", "github"]);
+		});
+
+		it("defaults resource types to all four", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource({ repos: ["owner/repo"] }, agentsDir);
+			expect(result.ok).toBe(true);
+			if (result.ok === false) throw new Error(result.error);
+			const settings = parseGitHubSettings(loadSourcesConfig(agentsDir).sources[0]!.settings);
+			expect(settings.resourceTypes).toEqual(["issues", "pulls", "discussions", "docs"]);
+		});
 	});
 });

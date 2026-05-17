@@ -216,7 +216,9 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 	const now = input.now ?? new Date().toISOString();
 	const cfg = loadSourcesConfigForWrite(agentsDir);
 	const settingsKey = repos.sort().join(",");
-	const existing = cfg.sources.find((source) => source.kind === "github" && (source.settings?.repos as string[])?.sort().join(",") === settingsKey);
+	const existing = cfg.sources.find(
+		(source) => source.kind === "github" && (source.settings?.repos as string[])?.sort().join(",") === settingsKey,
+	);
 
 	if (existing) {
 		const updated: SignetSourceEntry = {
@@ -227,7 +229,10 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 			settings: buildGitHubSettings(input),
 		};
 		saveSourcesConfig(
-			{ version: SOURCES_CONFIG_VERSION, sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)) },
+			{
+				version: SOURCES_CONFIG_VERSION,
+				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
+			},
 			agentsDir,
 		);
 		return { ok: true, source: updated, created: false };
@@ -265,21 +270,28 @@ export function parseGitHubSettings(raw: Readonly<Record<string, unknown>> | und
 	if (!raw) {
 		return { repos: [], resourceTypes: [...DEFAULT_GITHUB_RESOURCE_TYPES] };
 	}
-	const repos = Array.isArray(raw.repos) && raw.repos.every((r) => typeof r === "string") ? raw.repos as string[] : [];
-	const resourceTypes = Array.isArray(raw.resourceTypes) && raw.resourceTypes.every((t) => typeof t === "string")
-		? (raw.resourceTypes as string[]).filter((t): t is "issues" | "pulls" | "discussions" | "docs" =>
-			["issues", "pulls", "discussions", "docs"].includes(t))
-		: [...DEFAULT_GITHUB_RESOURCE_TYPES];
+	const repos =
+		Array.isArray(raw.repos) && raw.repos.every((r) => typeof r === "string") ? (raw.repos as string[]) : [];
+	const resourceTypes =
+		Array.isArray(raw.resourceTypes) && raw.resourceTypes.every((t) => typeof t === "string")
+			? (raw.resourceTypes as string[]).filter((t): t is "issues" | "pulls" | "discussions" | "docs" =>
+					["issues", "pulls", "discussions", "docs"].includes(t),
+				)
+			: [...DEFAULT_GITHUB_RESOURCE_TYPES];
 	return {
 		repos,
 		tokenRef: typeof raw.tokenRef === "string" ? raw.tokenRef : undefined,
 		resourceTypes,
 		state: raw.state === "open" || raw.state === "closed" || raw.state === "all" ? raw.state : "all",
 		includeComments: typeof raw.includeComments === "boolean" ? raw.includeComments : true,
-		labels: Array.isArray(raw.labels) && raw.labels.every((l) => typeof l === "string") ? raw.labels as string[] : undefined,
-		docPaths: Array.isArray(raw.docPaths) && raw.docPaths.every((p) => typeof p === "string")
-			? raw.docPaths as string[]
-			: [...DEFAULT_GITHUB_DOC_PATHS],
+		labels:
+			Array.isArray(raw.labels) && raw.labels.every((l) => typeof l === "string")
+				? (raw.labels as string[])
+				: undefined,
+		docPaths:
+			Array.isArray(raw.docPaths) && raw.docPaths.every((p) => typeof p === "string")
+				? (raw.docPaths as string[])
+				: [...DEFAULT_GITHUB_DOC_PATHS],
 		maxItemsPerRepo: typeof raw.maxItemsPerRepo === "number" && raw.maxItemsPerRepo > 0 ? raw.maxItemsPerRepo : 500,
 	};
 }
