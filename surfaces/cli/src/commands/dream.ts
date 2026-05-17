@@ -47,6 +47,33 @@ interface TriggerAccepted {
 	readonly error?: string;
 }
 
+interface DreamPromotionOperation {
+	readonly operation: string;
+	readonly payload: Readonly<Record<string, unknown>>;
+}
+
+interface DreamPromotionResult {
+	readonly sources: readonly unknown[];
+	readonly operations: readonly DreamPromotionOperation[];
+	readonly count: number;
+	readonly appliedCount: number;
+	readonly skipped: readonly string[];
+	readonly questions: readonly string[];
+	readonly warnings: readonly string[];
+	readonly dryRun: boolean;
+}
+
+function parsePositiveInt(value: string | undefined, label: string): number | undefined {
+	if (value === undefined) return undefined;
+	const trimmed = value.trim();
+	const parsed = Number.parseInt(trimmed, 10);
+	if (!/^\d+$/.test(trimmed) || Number.isNaN(parsed) || parsed <= 0) {
+		console.error(chalk.red(`  Invalid ${label} value: "${value}" (must be a positive integer)`));
+		process.exit(1);
+	}
+	return parsed;
+}
+
 export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 	const dream = program.command("dream").description("Manage dreaming memory consolidation");
 
@@ -111,6 +138,83 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 			}
 			console.log();
 		});
+
+	dream
+		.command("promote")
+		.description("Promote source-backed evidence into update-in-place ontology attributes")
+		.option(
+			"--from <source>",
+			"Source selector: all, memories:recent, memory:<id>, artifact:<id>, source:<path>, transcript:<id>",
+			"all",
+		)
+		.option("--apply", "Apply operations instead of previewing them")
+		.option("--limit <n>", "Maximum operations to promote", "50")
+		.option("--agent <id>", "Agent scope")
+		.option("--actor <name>", "Actor recorded on applied operations", "dreaming-promote")
+		.option("--use-provider", "Use configured inference provider in addition to mechanical extraction")
+		.option("--provider-timeout-ms <n>", "Provider timeout in milliseconds")
+		.option("--provider-max-tokens <n>", "Provider max output tokens")
+		.option("--json", "Print raw JSON")
+		.action(
+			async (opts: {
+				from?: string;
+				apply?: boolean;
+				limit?: string;
+				agent?: string;
+				actor?: string;
+				useProvider?: boolean;
+				providerTimeoutMs?: string;
+				providerMaxTokens?: string;
+				json?: boolean;
+			}) => {
+				const data = await deps.fetchFromDaemon<DreamPromotionResult>("/api/dream/promote", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						from: opts.from ?? "all",
+						apply: opts.apply === true,
+						limit: parsePositiveInt(opts.limit, "--limit"),
+						agent_id: opts.agent,
+						actor: opts.actor,
+						use_provider: opts.useProvider === true,
+						provider_timeout_ms: parsePositiveInt(opts.providerTimeoutMs, "--provider-timeout-ms"),
+						provider_max_tokens: parsePositiveInt(opts.providerMaxTokens, "--provider-max-tokens"),
+					}),
+				});
+
+				if (!data) {
+					console.error(chalk.red("Failed to promote dreaming evidence (is the daemon running?)"));
+					process.exit(1);
+				}
+
+				if (opts.json) {
+					console.log(JSON.stringify(data, null, 2));
+					return;
+				}
+
+				console.log(chalk.bold("\n  Dreaming Promotion\n"));
+				console.log(`  ${chalk.dim("Mode:")}       ${data.dryRun ? chalk.yellow("preview") : chalk.green("apply")}`);
+				console.log(`  ${chalk.dim("Sources:")}    ${data.sources.length}`);
+				console.log(`  ${chalk.dim("Operations:")} ${data.count}`);
+				console.log(`  ${chalk.dim("Applied:")}    ${data.appliedCount}`);
+				if (data.operations.length > 0) {
+					console.log(chalk.bold("\n  Operations\n"));
+					for (const operation of data.operations.slice(0, 12)) {
+						const entity = String(operation.payload.entity ?? "");
+						const aspect = String(operation.payload.aspect ?? "");
+						const claim = String(operation.payload.claim_key ?? "");
+						console.log(`  ${operation.operation} ${chalk.dim(`${entity}/${aspect}/${claim}`)}`);
+					}
+					if (data.operations.length > 12) {
+						console.log(chalk.dim(`  ...${data.operations.length - 12} more`));
+					}
+				}
+				for (const warning of data.warnings) console.log(chalk.yellow(`  Warning: ${warning}`));
+				for (const item of data.skipped) console.log(chalk.dim(`  Skipped: ${item}`));
+				for (const question of data.questions) console.log(chalk.dim(`  Question: ${question}`));
+				console.log();
+			},
+		);
 
 	dream
 		.command("trigger")

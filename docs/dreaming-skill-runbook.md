@@ -1,10 +1,11 @@
 # Dreaming Skill Runbook
 
-This is the first runnable proposal-first dreaming path for ontology
-maintenance. It uses existing daemon-backed CLI surfaces and the built-in
-`dreaming` skill instructions.
+This is the runnable dreaming path for promoting source-backed evidence into
+the ontology. Raw memories, transcripts, and source artifacts remain immutable
+evidence. Dreaming promotes only explicit, high-confidence statements into
+current attribute slots.
 
-## Proposal-First Path
+## Attribute Promotion Path
 
 Inspect the current graph write gates:
 
@@ -12,53 +13,33 @@ Inspect the current graph write gates:
 signet ontology pipeline explain --json
 ```
 
-Collect graph hygiene and proposal context:
+Preview promotions from all source evidence:
 
 ```bash
-signet knowledge hygiene --json > dreaming-hygiene.json
-signet ontology proposals --status pending --json > dreaming-pending.json
-signet ontology proposals --status applied --limit 50 --json > dreaming-applied-recent.json
-signet ontology proposals --status rejected --limit 50 --json > dreaming-rejected-recent.json
-signet dream status > dreaming-status.txt
+signet dream promote --from all --json
 ```
 
-Extract candidate proposals from a specific evidence artifact or transcript:
+Preview a narrower source:
 
 ```bash
-signet ontology extract --from transcript:<session-key> --json > dreaming-extract.json
+signet dream promote --from memories:recent --json
+signet dream promote --from memory:<id> --json
+signet dream promote --from artifact:<id> --json
+signet dream promote --from transcript:<session-key> --json
 ```
 
-Consolidate pending proposal candidates without mutation:
+Apply accepted explicit promotions:
 
 ```bash
-signet ontology consolidate --proposals pending --json > dreaming-consolidate.json
+signet dream promote --from all --apply --json
 ```
 
-Convert accepted candidates into operation JSONL, keeping one object per line:
+The promotion endpoint emits direct `set_claim_value` operations. That
+operation updates the current value for a stable `(entity, aspect, group,
+claim, kind)` slot and supersedes the older active value in place.
 
-```json
-{"operation":"set_claim_value","payload":{"entity":"Signet","aspect":"architecture","group_key":"ontology","claim_key":"mutation_policy","value":"Generated ontology maintenance emits proposals before graph mutation."},"reason":"Consolidated from cited transcript evidence.","evidence":[{"source_kind":"transcript","source_id":"<session-key>","quote":"..."}]}
-```
-
-Validate without writing:
-
-```bash
-signet ontology stream apply proposals.jsonl --dry-run --json
-```
-
-Write pending proposals for review:
-
-```bash
-signet ontology stream apply proposals.jsonl --propose --json
-signet ontology proposals --status pending --json
-```
-
-After human/operator review, apply or reject proposals explicitly:
-
-```bash
-signet ontology apply <proposal-id> --actor operator --json
-signet ontology reject <proposal-id> --reason "weak evidence" --actor operator --json
-```
+Low-confidence or ambiguous evidence is skipped or returned as a question. It
+is not stored as a pending proposal by default.
 
 Inspect versioned claim evidence:
 
@@ -68,10 +49,25 @@ signet ontology claim show <entity> <aspect> <group> <claim> --version 1 --json
 signet ontology claim-evidence <entity> <aspect> <group> <claim> --status all --json
 ```
 
+## Reviewable Proposal Path
+
+Use the ontology proposal loop when a human wants a durable pending review
+queue instead of direct promotion:
+
+```bash
+signet ontology extract --from transcript:<session-key> --json
+signet ontology consolidate --proposals pending --json
+signet ontology stream apply proposals.jsonl --propose --json
+signet ontology apply <proposal-id> --actor operator --json
+signet ontology reject <proposal-id> --reason "weak evidence" --actor operator --json
+```
+
 ## Rules
 
-- LLM-generated dreaming output uses `--dry-run` or `--propose` by default.
-- Raw memories, transcripts, and source artifacts are evidence only; do not
-  rewrite them when graph claims change.
-- Direct apply is reserved for exact operator-authored operations.
-- Every successful mutation must pass through `ontology_proposals`.
+- Dreaming promotion never rewrites raw memories, transcripts, or source
+  artifacts.
+- The default `signet dream promote` mode is a preview.
+- `--apply` uses audited ontology operation handlers, not Pipeline V2.
+- Ambiguous generated output is skipped or surfaced as a question.
+- Pending proposals are optional review artifacts, not the default dreaming
+  promotion path.
