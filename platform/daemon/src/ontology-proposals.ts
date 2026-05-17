@@ -2027,7 +2027,7 @@ export function createEntityMergePlan(accessor: DbAccessor, params: EntityMergeP
 	const agentId = requireText(params.agentId, "agentId");
 	const dryRun = params.writeProposal !== true;
 	const plan = accessor.withReadDb((db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"));
-	if (dryRun || plan.blocked) return { ...plan, dryRun };
+	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = createOntologyProposal(accessor, {
 		agentId,
 		operation: plan.operation,

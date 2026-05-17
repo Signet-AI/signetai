@@ -1135,6 +1135,25 @@ describe("ontology proposals", () => {
 		expect(written.proposal?.payload.target_entity_id).toBe("entity-signet");
 	});
 
+	it("keeps blocked manual merge-plan writes reported as dry-runs", () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 8, false, "project");
+		insertEntity("entity-signet-skill", "signet", "signet", "ant", 2, false, "skill");
+
+		const result = createEntityMergePlan(getDbAccessor(), {
+			agentId: "ant",
+			targetEntityId: "entity-signet",
+			sourceEntityIds: ["entity-signet-skill"],
+			writeProposal: true,
+			createdBy: "merge-plan-test",
+		});
+
+		expect(result.blocked).toBe(true);
+		expect(result.dryRun).toBe(true);
+		expect(result.proposal).toBeUndefined();
+		const listed = listOntologyProposals(getDbAccessor(), { agentId: "ant", operation: "merge_entities" });
+		expect(listed.items).toHaveLength(0);
+	});
+
 	it("rejects invalid proposal batches without partial writes", () => {
 		expect(() =>
 			createOntologyProposals(getDbAccessor(), [
