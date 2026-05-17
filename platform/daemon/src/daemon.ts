@@ -48,6 +48,7 @@ import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import { type NativeMemoryBridgeHandle, startNativeMemoryBridge } from "./native-memory-sources";
+import { syncDiscordSource, purgeDiscordSource } from "./discord-source-bridge";
 import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import type { WorkerInit } from "./pipeline/extraction-thread-protocol";
@@ -1607,6 +1608,30 @@ async function main() {
 				})
 				.finally(() => {
 					for (const sourceId of startupSourceJobs.keys()) clearSourceIndexInFlight(sourceId);
+				});
+		}
+
+		for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
+			if (!source.enabled || source.kind !== "discord") continue;
+			const startupEmbedCfg = loadMemoryConfig(AGENTS_DIR).embedding;
+			syncDiscordSource(source, {
+				agentId: resolveDaemonAgentId(),
+				embeddingConfig: startupEmbedCfg,
+				fetchEmbedding,
+				agentsDir: AGENTS_DIR,
+			})
+				.then((indexed) => {
+					logger.info("discord-source", "Discord source startup sync complete", {
+						sourceId: source.id,
+						indexed,
+					});
+					markSourceIndexed(source.id, undefined, AGENTS_DIR);
+				})
+				.catch((e) => {
+					logger.error("discord-source", "Discord source startup sync failed", undefined, {
+						sourceId: source.id,
+						error: e instanceof Error ? e.message : String(e),
+					});
 				});
 		}
 

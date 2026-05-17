@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
-export type SignetSourceKind = "obsidian";
+export type SignetSourceKind = "obsidian" | "discord";
 export type SignetSourceMode = "read-only";
 
 export interface SignetSourceEntry {
@@ -17,6 +17,7 @@ export interface SignetSourceEntry {
 	readonly updatedAt: string;
 	readonly lastIndexedAt?: string;
 	readonly excludeGlobs?: readonly string[];
+	readonly settings?: Readonly<Record<string, unknown>>;
 }
 
 export const DEFAULT_OBSIDIAN_EXCLUDE_GLOBS = [
@@ -36,6 +37,28 @@ export interface AddObsidianSourceInput {
 	readonly root: string;
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
+	readonly now?: string;
+}
+
+export interface DiscordSourceSettings {
+	readonly guildIds: readonly string[];
+	readonly tokenRef: string;
+	readonly channelFilter?: readonly string[];
+	readonly maxMessagesPerChannel?: number;
+	readonly includeThreads?: boolean;
+	readonly since?: string;
+}
+
+export const DEFAULT_DISCORD_MAX_MESSAGES = 1000;
+
+export interface AddDiscordSourceInput {
+	readonly guildIds: readonly string[];
+	readonly tokenRef: string;
+	readonly name?: string;
+	readonly channelFilter?: readonly string[];
+	readonly maxMessagesPerChannel?: number;
+	readonly includeThreads?: boolean;
+	readonly since?: string;
 	readonly now?: string;
 }
 
@@ -103,6 +126,98 @@ function loadSourcesConfigForWrite(agentsDir = getAgentsDir()): SignetSourcesCon
 
 export function addObsidianSource(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	return withSourcesConfigLock(agentsDir, () => addObsidianSourceUnlocked(input, agentsDir));
+}
+
+export function addDiscordSource(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addDiscordSourceUnlocked(input, agentsDir));
+}
+
+function addDiscordSourceUnlocked(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	try {
+		return addDiscordSourceChecked(input, agentsDir);
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
+function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	if (!input.guildIds || input.guildIds.length === 0) {
+		return { ok: false, error: "At least one Discord guild ID is required" };
+	}
+	const trimmedTokenRef = input.tokenRef?.trim();
+	if (!trimmedTokenRef) return { ok: false, error: "Discord bot token reference (tokenRef) is required" };
+	for (const id of input.guildIds) {
+		if (!/^\d{17,20}$/.test(id.trim())) {
+			return { ok: false, error: `Invalid Discord guild ID: ${id}` };
+		}
+	}
+
+	const guildIds = input.guildIds.map((id) => id.trim());
+	const key = guildIds.slice().sort().join(",");
+	const now = input.now ?? new Date().toISOString();
+	const cfg = loadSourcesConfigForWrite(agentsDir);
+	const sourceId = `discord:${createHash("sha256").update(key).digest("hex").slice(0, 16)}`;
+	const existing = cfg.sources.find((source) => source.id === sourceId);
+
+	if (existing) {
+		const updated = {
+			...existing,
+			name: cleanName(input.name) ?? existing.name,
+			enabled: true,
+			settings: buildDiscordSettings(input),
+			updatedAt: now,
+		};
+		saveSourcesConfig(
+			{
+				version: SOURCES_CONFIG_VERSION,
+				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
+			},
+			agentsDir,
+		);
+		return { ok: true, source: updated, created: false };
+	}
+
+	const source: SignetSourceEntry = {
+		id: sourceId,
+		kind: "discord",
+		name: cleanName(input.name) ?? "Discord Server",
+		root: "",
+		enabled: true,
+		mode: "read-only",
+		createdAt: now,
+		updatedAt: now,
+		settings: buildDiscordSettings(input),
+	};
+	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
+	return { ok: true, source, created: true };
+}
+
+function buildDiscordSettings(input: AddDiscordSourceInput): Record<string, unknown> {
+	return {
+		guildIds: input.guildIds.map((id) => id.trim()),
+		tokenRef: input.tokenRef.trim(),
+		...(input.channelFilter && input.channelFilter.length > 0 ? { channelFilter: input.channelFilter } : {}),
+		maxMessagesPerChannel: input.maxMessagesPerChannel ?? DEFAULT_DISCORD_MAX_MESSAGES,
+		includeThreads: input.includeThreads ?? true,
+		...(input.since ? { since: input.since } : {}),
+	};
+}
+
+export function parseDiscordSettings(raw?: Readonly<Record<string, unknown>>): DiscordSourceSettings {
+	if (!raw) {
+		return { guildIds: [], tokenRef: "", includeThreads: true };
+	}
+	const guildIds = Array.isArray(raw.guildIds) ? raw.guildIds.filter((id): id is string => typeof id === "string") : [];
+	const tokenRef = typeof raw.tokenRef === "string" ? raw.tokenRef : "";
+	const channelFilter = Array.isArray(raw.channelFilter)
+		? raw.channelFilter.filter((id): id is string => typeof id === "string")
+		: undefined;
+	const maxMessagesPerChannel =
+		typeof raw.maxMessagesPerChannel === "number" ? raw.maxMessagesPerChannel : DEFAULT_DISCORD_MAX_MESSAGES;
+	const includeThreads = typeof raw.includeThreads === "boolean" ? raw.includeThreads : true;
+	const since = typeof raw.since === "string" ? raw.since : undefined;
+	return { guildIds, tokenRef, channelFilter, maxMessagesPerChannel, includeThreads, since };
 }
 
 function addObsidianSourceUnlocked(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
@@ -272,7 +387,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isSourceEntry(value: unknown): value is SignetSourceEntry {
 	return (
 		isRecord(value) &&
-		value.kind === "obsidian" &&
+		(value.kind === "obsidian" || value.kind === "discord") &&
 		typeof value.id === "string" &&
 		typeof value.name === "string" &&
 		typeof value.root === "string" &&
@@ -282,6 +397,7 @@ function isSourceEntry(value: unknown): value is SignetSourceEntry {
 		typeof value.updatedAt === "string" &&
 		(value.lastIndexedAt === undefined || typeof value.lastIndexedAt === "string") &&
 		(value.excludeGlobs === undefined ||
-			(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string")))
+			(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string"))) &&
+		(value.settings === undefined || isRecord(value.settings))
 	);
 }
