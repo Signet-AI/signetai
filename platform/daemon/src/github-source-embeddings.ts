@@ -4,7 +4,6 @@ import { getDbAccessor } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "./db-helpers";
 import type { GitHubResource } from "./github-source-fetch";
 import { resourceToMarkdown } from "./github-source-fetch";
-import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import type { SourceEmbeddingFetch } from "./obsidian-source-embeddings";
 

@@ -40,7 +40,7 @@ import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
-import { type GitHubSourceBridgeHandle, purgeGitHubSource, startGitHubSourceBridge } from "./github-source-bridge";
+import { type GitHubSourceBridgeHandle, startGitHubSourceBridge } from "./github-source-bridge";
 import { createSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
 import { getOrCreateInferenceRouter } from "./inference-router.js";

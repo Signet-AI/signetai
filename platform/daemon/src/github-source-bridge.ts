@@ -2,8 +2,6 @@ import type { GitHubSourceSettings, SignetSourceEntry } from "@signet/core";
 import { parseGitHubSettings } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
-import { getDbAccessor } from "./db-accessor";
-import { indexGitHubSourceEmbeddings, purgeGitHubSourceEmbeddings } from "./github-source-embeddings";
 import type { GitHubResource } from "./github-source-fetch";
 import {
 	type GitHubFetchConfig,
@@ -187,9 +185,8 @@ async function indexResource(
 	}
 }
 
-async function resolveToken(tokenRef: string, agentsDir?: string): Promise<string | undefined> {
+async function resolveToken(tokenRef: string, _agentsDir?: string): Promise<string | undefined> {
 	try {
-		const dir = agentsDir ?? process.env.SIGNET_PATH ?? `${require("node:os").homedir()}/.agents`;
 		const response = await fetch(`http://localhost:3850/api/secrets/${encodeURIComponent(tokenRef)}`, {
 			headers: { "Content-Type": "application/json" },
 		});
