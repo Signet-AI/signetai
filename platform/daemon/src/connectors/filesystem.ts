@@ -120,14 +120,7 @@ export function globToRegex(pattern: string): RegExp {
 		.replace(/\/\{\{GLOBSTAR\}\}/g, "(?:/.*)?")
 		.replace(/\{\{GLOBSTAR\}\}\//g, "(?:.*/)?")
 		.replace(/\{\{GLOBSTAR\}\}/g, ".*");
-	const anchored = `^${normalized}$`;
-	if (!pattern.includes("/") && !pattern.includes("*") && !pattern.includes("?")) {
-		return new RegExp(`^${normalized}$`, "i");
-	}
-	if (!pattern.includes("/") && !pattern.includes("{{GLOBSTAR}}")) {
-		return new RegExp(`(?:^|/)${normalized}$`, "i");
-	}
-	return new RegExp(anchored, "i");
+	return new RegExp(`^${normalized}$`, "i");
 }
 
 export async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {

@@ -1,7 +1,7 @@
+import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
 import { discoverFiles, matchConnectorPattern, matchGlob } from "./filesystem";
 
 describe("globToRegex", () => {
@@ -22,10 +22,10 @@ describe("globToRegex", () => {
 		expect(matchGlob("**/*.txt", "file.md")).toBe(false);
 	});
 
-	test("*.md matches at any depth (Bun.Glob compat)", () => {
+	test("*.md only matches root-level files", () => {
 		expect(matchGlob("*.md", "AGENTS.md")).toBe(true);
-		expect(matchGlob("*.md", "sub/file.md")).toBe(true);
-		expect(matchGlob("*.md", "a/b/c.md")).toBe(true);
+		expect(matchGlob("*.md", "sub/file.md")).toBe(false);
+		expect(matchGlob("*.md", "a/b/c.md")).toBe(false);
 	});
 
 	test("dotfiles match when explicitly in pattern", () => {
@@ -62,6 +62,29 @@ describe("globToRegex", () => {
 				".github/CONTRIBUTING.md",
 				"docs/.private/notes.md",
 			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("filesystem discovery keeps basename globs at connector root", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-fs-connector-"));
+		try {
+			mkdirSync(join(root, "sub"), { recursive: true });
+			mkdirSync(join(root, "a", "b"), { recursive: true });
+			writeFileSync(join(root, "README.md"), "root");
+			writeFileSync(join(root, "sub", "file.md"), "nested");
+			writeFileSync(join(root, "a", "b", "deep.md"), "deep");
+			writeFileSync(join(root, "notes.txt"), "text");
+
+			const files = await discoverFiles({
+				rootPath: root,
+				patterns: ["*.md"],
+				ignorePatterns: [],
+				maxFileSize: 1_048_576,
+			});
+
+			expect(files.map((file) => file.relativePath).sort()).toEqual(["README.md"]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
