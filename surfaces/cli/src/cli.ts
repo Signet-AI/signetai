@@ -8,12 +8,10 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
-	copyFileSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
 	readFileSync,
-	readdirSync,
 	readlinkSync,
 	renameSync,
 	rmSync,
@@ -98,9 +96,16 @@ import { doctorForge, installForge, showForgeStatus, updateForge } from "./featu
 import { getStatusReport, showDoctor, showStatus } from "./features/health.js";
 import { importFromGitHub } from "./features/import.js";
 import { setupWizard } from "./features/setup.js";
-import { syncTemplates } from "./features/sync.js";
+import { copyDirRecursive, syncBuiltinSkills, syncTemplates } from "./features/sync.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
+import {
+	acquireNativeSyncLock,
+	embeddingProvider,
+	hasNativeModelCache,
+	isRecord,
+	releaseNativeSyncLock,
+} from "./lib/native-sync.js";
 import {
 	AGENTS_DIR,
 	DEFAULT_PORT,
@@ -113,13 +118,6 @@ import {
 	startDaemon,
 	stopDaemon,
 } from "./lib/runtime.js";
-import {
-	acquireNativeSyncLock,
-	embeddingProvider,
-	hasNativeModelCache,
-	isRecord,
-	releaseNativeSyncLock,
-} from "./lib/native-sync.js";
 import "./sqlite.js";
 
 // Template directory location (relative to built CLI)
@@ -147,98 +145,6 @@ function getSkillsSourceDir() {
 
 	// Backward compat: fall back to templates/skills/
 	return join(getTemplatesDir(), "skills");
-}
-
-function copyDirRecursive(src: string, dest: string) {
-	mkdirSync(dest, { recursive: true });
-	const entries = readdirSync(src, { withFileTypes: true });
-
-	for (const entry of entries) {
-		const srcPath = join(src, entry.name);
-		const destPath = join(dest, entry.name);
-
-		if (entry.isDirectory()) {
-			copyDirRecursive(srcPath, destPath);
-		} else {
-			copyFileSync(srcPath, destPath);
-		}
-	}
-}
-
-function isBuiltinSkillDir(skillDir: string): boolean {
-	const skillMdPath = join(skillDir, "SKILL.md");
-	if (!existsSync(skillMdPath)) {
-		return false;
-	}
-
-	try {
-		const content = readFileSync(skillMdPath, "utf-8");
-		const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-		if (!frontmatter) {
-			return false;
-		}
-
-		return /^builtin:\s*true$/m.test(frontmatter[1]);
-	} catch {
-		return false;
-	}
-}
-
-function syncBuiltinSkills(
-	skillsSourceDir: string,
-	basePath: string,
-): {
-	installed: string[];
-	updated: string[];
-	skipped: string[];
-} {
-	const skillsSource = skillsSourceDir;
-	const skillsDest = join(basePath, "skills");
-	const result = {
-		installed: [] as string[],
-		updated: [] as string[],
-		skipped: [] as string[],
-	};
-
-	if (!existsSync(skillsSource)) {
-		return result;
-	}
-
-	mkdirSync(skillsDest, { recursive: true });
-
-	const entries = readdirSync(skillsSource, { withFileTypes: true }).filter((d) => d.isDirectory());
-
-	for (const entry of entries) {
-		const src = join(skillsSource, entry.name);
-		const dest = join(skillsDest, entry.name);
-
-		if (!existsSync(dest)) {
-			copyDirRecursive(src, dest);
-			result.installed.push(entry.name);
-			continue;
-		}
-
-		try {
-			const destStat = lstatSync(dest);
-			if (destStat.isSymbolicLink() || !destStat.isDirectory()) {
-				result.skipped.push(entry.name);
-				continue;
-			}
-		} catch {
-			result.skipped.push(entry.name);
-			continue;
-		}
-
-		if (!isBuiltinSkillDir(dest)) {
-			result.skipped.push(entry.name);
-			continue;
-		}
-
-		copyDirRecursive(src, dest);
-		result.updated.push(entry.name);
-	}
-
-	return result;
 }
 
 // ============================================================================
