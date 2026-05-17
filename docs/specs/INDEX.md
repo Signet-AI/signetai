@@ -145,7 +145,7 @@ and market subdirectories). Reference repos live in `references/`.
 | `predictive-memory-scorer` | MSAM-COMPARISON | How should scoring balance structural vs behavioral signals? |
 | `desire-paths-epic`, `retroactive-supersession` | RESEARCH-COMPETITIVE-SYSTEMS | What retrieval, lifecycle, and integration patterns from competing systems should be adopted? |
 | `ontology-evolution-core`, `ontology-governance-workflow` | RESEARCH-ONTOLOGY-EVOLUTION | How should ontology schema and governance evolve without losing local-first simplicity? |
-| `ontology-proposal-loop` | RESEARCH-ONTOLOGY-EVOLUTION, memory-md-rolling-window-lineage, dreaming-memory-consolidation, model-provider-router | How should extraction and consolidation propose ontology changes without directly mutating semantic state? |
+| `ontology-proposal-loop` | RESEARCH-ONTOLOGY-EVOLUTION, memory-md-rolling-window-lineage, dreaming-memory-consolidation, model-provider-router | How should extraction and consolidation expose reviewable ontology changes while direct maintenance paths use the same audited operation handlers? |
 | `ssm-foundation-evaluation`, `ssm-temporal-backbone`, `ssm-graph-traversal-model` | RESEARCH-SSM-INTEGRATION, SSM-GRAPH-INTERSECTION, SSM-LITERATURE-REVIEW, SYNTHETIC-DATA-GENERATION | How should SSM research translate into benchmarked, staged deployment without violating retrieval invariants? |
 | `engram-informed-predictor-track` | arxiv:2601.07372, RESEARCH-SSM-INTEGRATION, ssm-foundation-evaluation | How should Engram design patterns be translated into Signet scorer and SSM architecture decisions? |
 | `macos-sqlite-runtime-discovery` | RESEARCH-MACOS-SQLITE-RUNTIME-DISCOVERY | How should Signet select a compatible SQLite runtime on macOS so Bun can load sqlite-vec? |
@@ -773,7 +773,7 @@ Legend:
 | `sub-agent-context-continuity` | approved | `docs/specs/approved/sub-agent-context-continuity.md` | `session-continuity-protocol`, `multi-agent-support` | - | Parent transcript query + deterministic sub-agent inheritance (issue #315) |
 | `ontology-evolution-core` | planning | `docs/specs/planning/ontology-evolution-core.md` | `knowledge-architecture-schema`, `desire-paths-epic` | `ontology-governance-workflow` | Confidence/provenance edges, co-occurrence signals, typed relationships, temporal lineage |
 | `ontology-governance-workflow` | planning | `docs/specs/planning/ontology-governance-workflow.md` | `ontology-evolution-core`, `knowledge-architecture-schema` | - | Proposal/review workflow for ontology-impacting schema changes |
-| `ontology-proposal-loop` | approved | `docs/specs/approved/ontology-proposal-loop.md` | `knowledge-architecture-schema`, `memory-md-rolling-window-lineage` | - | Agent-scoped proposal storage and explicit apply/reject loop for reviewable ontology maintenance |
+| `ontology-proposal-loop` | approved | `docs/specs/approved/ontology-proposal-loop.md` | `knowledge-architecture-schema`, `memory-md-rolling-window-lineage` | - | Agent-scoped proposal storage plus shared audited operation handlers for reviewable and direct ontology maintenance |
 | `ssm-foundation-evaluation` | planning | `docs/specs/planning/ssm-foundation-evaluation.md` | `predictive-memory-scorer`, `desire-paths-epic` | `ssm-temporal-backbone` | Benchmark harness and canary gates for SSM adoption |
 | `engram-informed-predictor-track` | planning | `docs/specs/planning/engram-informed-predictor-track.md` | `predictive-memory-scorer` | `ssm-temporal-backbone` | Engram-pattern translation lane for scorer ablations and SSM handoff contracts |
 | `ssm-temporal-backbone` | planning | `docs/specs/planning/ssm-temporal-backbone.md` | `ssm-foundation-evaluation`, `ontology-evolution-core`, `session-continuity-protocol` | `ssm-graph-traversal-model` | Shadow-mode temporal state model with fallback |
@@ -801,7 +801,7 @@ Legend:
 | `postinstall-behavior-migration-audit` | planning | `docs/specs/planning/postinstall-behavior-migration-audit.md` | `memory-pipeline-v2` | - | Stub: ensure post-install behavior is daemon/CLI-owned |
 | `docker-self-hosting-stack` | planning | `docs/specs/planning/docker-self-hosting-stack.md` | `signet-runtime` | - | First-party Docker image + Compose + Caddy deployment contract with team-mode bootstrap path and operations runbook |
 | `system-prompt-extraction` | approved | `docs/specs/approved/system-prompt-extraction.md` | - | - | Move Signet system prompt injection to session-start runtime context and keep AGENTS.md as user-owned identity content |
-| `dreaming-memory-consolidation` | approved | `docs/specs/approved/dreaming-memory-consolidation.md` | `memory-pipeline-v2`, `knowledge-architecture-schema` | - | Phase 1 (consolidation engine, trigger, config, API, CLI) delivered in PR #442. Phase 2 (dreaming-as-session, incremental deltas, V2 exclusion, chunked compaction, dashboard, identity context) deferred. |
+| `dreaming-memory-consolidation` | approved | `docs/specs/approved/dreaming-memory-consolidation.md` | `memory-pipeline-v2`, `knowledge-architecture-schema` | - | Phase 1 (consolidation engine, trigger, config, API, CLI) delivered in PR #442. Source-backed attribute promotion uses direct audited operations outside Pipeline V2. Phase 2 (dreaming-as-session, incremental deltas, V2 exclusion, chunked compaction, dashboard, identity context) deferred. |
 | `ci-changed-files-selective` | planning | `docs/specs/planning/ci-changed-files-selective.md` | `memory-pipeline-v2` | - | Stub: selective PR CI by changed package graph |
 | `ci-contract-invariants-lane` | planning | `docs/specs/planning/ci-contract-invariants-lane.md` | `knowledge-architecture-schema` | - | Stub: mandatory fast invariant contract checks, including frozen lockfile integrity |
 | `ci-flaky-test-quarantine` | planning | `docs/specs/planning/ci-flaky-test-quarantine.md` | `ci-contract-invariants-lane` | - | Stub: flaky detection, quarantine, threshold policy |
@@ -873,10 +873,10 @@ constraint surfacing and agent scoping invariants.
 proposal/review metadata, compatibility notes, and rollback guidance with
 INDEX/dependency consistency checks in CI.
 
-**ontology-proposal-loop**: Extraction and consolidation produce durable,
-agent-scoped proposal objects before ontology mutation. Operators and agents
-can inspect, apply, or reject proposed semantic changes with evidence and audit
-metadata preserved.
+**ontology-proposal-loop**: Extraction and consolidation can produce durable,
+agent-scoped proposal objects before ontology mutation. Direct maintenance
+paths such as dreaming promotion use the same audited operation handlers,
+with evidence and audit metadata preserved.
 
 **ssm-foundation-evaluation**: SSM benchmarks and canary suites produce
 reproducible, decision-grade comparisons against current scorer behavior.
@@ -897,11 +897,12 @@ constraint surfacing invariants.
 **dreaming-memory-consolidation**: Entity graph density increases after
 a dreaming pass. Duplicate and near-duplicate entities are merged
 automatically. Stale or junk attributes are pruned without manual
-intervention. Token spend per pass is bounded and configurable. Phase 1
-(mechanical consolidation engine) is delivered. Phase 2 (dreaming as a
-session, incremental deltas, pipeline mutual exclusion, chunked
-compaction, dashboard observability, identity context injection) is
-required before spec moves to `complete`.
+intervention. Source-backed evidence can be promoted into update-in-place
+attribute slots without Pipeline V2 extraction. Token spend per pass is
+bounded and configurable. Phase 1 (mechanical consolidation engine) is
+delivered. Phase 2 (dreaming as a session, incremental deltas, pipeline mutual
+exclusion, chunked compaction, dashboard observability, identity context
+injection) is required before spec moves to `complete`.
 
 **wave-9 strategic stubs**: The strategic backlog items listed in Wave 9
 are intentionally tracked as planning stubs and require dedicated planning

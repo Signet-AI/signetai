@@ -1,10 +1,18 @@
 # Dreaming Skill Runbook
 
-This is the first runnable proposal-first dreaming path for ontology
-maintenance. It uses existing daemon-backed CLI surfaces and the built-in
-`dreaming` skill instructions.
+This is the runnable dreaming path for promoting source-backed evidence into
+the ontology. Raw memories, transcripts, and source artifacts remain immutable
+evidence. Dreaming promotes only explicit, high-confidence statements into
+current attribute slots through apply-first audited operations. In the default
+non-provider path, plain
+natural-language preference extraction is limited to confidence-bearing memory
+rows. Memory artifacts and transcripts are still readable evidence sources, but
+embedded `set_claim_value` or `claim_values` JSON is preview-only because raw
+source JSON cannot self-attest confidence for direct apply. Plain prose in
+artifacts or transcripts needs `--use-provider`, an explicit assertion import,
+or a refactor proposal when the change is too broad to apply directly.
 
-## Proposal-First Path
+## Attribute Promotion Path
 
 Inspect the current graph write gates:
 
@@ -12,52 +20,55 @@ Inspect the current graph write gates:
 signet ontology pipeline explain --json
 ```
 
-Collect graph hygiene and proposal context:
+Preview promotions from all source evidence:
 
 ```bash
-signet knowledge hygiene --json > dreaming-hygiene.json
-signet ontology proposals --status pending --json > dreaming-pending.json
-signet ontology proposals --status applied --limit 50 --json > dreaming-applied-recent.json
-signet ontology proposals --status rejected --limit 50 --json > dreaming-rejected-recent.json
-signet dream status > dreaming-status.txt
+signet dream promote --from all --json
 ```
 
-Extract candidate proposals from a specific evidence artifact or transcript:
+Preview a narrower source:
 
 ```bash
-signet ontology extract --from transcript:<session-key> --json > dreaming-extract.json
+signet dream promote --from memories:recent --json
+signet dream promote --from memory:<id> --json
+signet dream promote --from artifact:<id> --json
+signet dream promote --from transcript:<session-key> --json
 ```
 
-Consolidate pending proposal candidates without mutation:
+Apply accepted explicit promotions:
 
 ```bash
-signet ontology consolidate --proposals pending --json > dreaming-consolidate.json
+signet dream promote --from all --apply --json
 ```
 
-Convert accepted candidates into operation JSONL, keeping one object per line:
+The promotion endpoint emits direct `set_claim_value` operations. That
+operation updates the current value for a stable `(entity, aspect, group,
+claim, kind)` slot and supersedes the older active value in place.
 
-```json
-{"operation":"set_claim_value","payload":{"entity":"Signet","aspect":"architecture","group_key":"ontology","claim_key":"mutation_policy","value":"Generated ontology maintenance emits proposals before graph mutation."},"reason":"Consolidated from cited transcript evidence.","evidence":[{"source_kind":"transcript","source_id":"<session-key>","quote":"..."}]}
-```
+Low-confidence or ambiguous evidence is skipped or returned as a question. It
+is not stored as a pending proposal by default.
 
-Validate without writing:
+## Epistemic Assertion Path
+
+Use epistemic assertions when the source records who claimed, believed,
+observed, decided, preferred, denied, or questioned something. Assertions keep
+attribution and provenance without making the assertion current ontology truth.
 
 ```bash
-signet ontology stream apply proposals.jsonl --dry-run --json
+signet ontology assertion create \
+  --entity "Signet" \
+  --predicate claims \
+  --speaker "Nicholai" \
+  --content "Signet should preserve attributed claims separately from current truth." \
+  --confidence 0.91 \
+  --source-kind transcript \
+  --source-id session-key
 ```
 
-Write pending proposals for review:
+For batches, write `{ "assertions": [...] }` JSON and run:
 
 ```bash
-signet ontology stream apply proposals.jsonl --propose --json
-signet ontology proposals --status pending --json
-```
-
-After human/operator review, apply or reject proposals explicitly:
-
-```bash
-signet ontology apply <proposal-id> --actor operator --json
-signet ontology reject <proposal-id> --reason "weak evidence" --actor operator --json
+signet ontology assertion import --file assertions.json --json
 ```
 
 Inspect versioned claim evidence:
@@ -68,10 +79,46 @@ signet ontology claim show <entity> <aspect> <group> <claim> --version 1 --json
 signet ontology claim-evidence <entity> <aspect> <group> <claim> --status all --json
 ```
 
+## Entity Merge Path
+
+Use direct audited merges for clear duplicate cleanup:
+
+```bash
+signet ontology entity merge "Canonical Entity" "Duplicate Entity" \
+  --reason "Same source-backed entity after canonicalization" \
+  --evidence-file evidence.json \
+  --json
+```
+
+Use merge planning to inspect impact or to prepare a broad graph-refactor
+proposal:
+
+```bash
+signet ontology entity merge-plan "Canonical Entity" "Duplicate Entity" --json
+signet ontology entity merge-plan "Canonical Entity" "Duplicate Entity" --propose --json
+```
+
+## Refactor Proposal Path
+
+Use pending proposals when a human wants a durable review queue for massive
+knowledge-graph refactors, risky/destructive changes, or broad merge campaigns:
+
+```bash
+signet ontology extract --from transcript:<session-key> --json
+signet ontology consolidate --proposals pending --json
+signet ontology stream apply proposals.jsonl --propose --json
+signet ontology apply <proposal-id> --actor operator --json
+signet ontology reject <proposal-id> --reason "weak evidence" --actor operator --json
+```
+
 ## Rules
 
-- LLM-generated dreaming output uses `--dry-run` or `--propose` by default.
-- Raw memories, transcripts, and source artifacts are evidence only; do not
-  rewrite them when graph claims change.
-- Direct apply is reserved for exact operator-authored operations.
-- Every successful mutation must pass through `ontology_proposals`.
+- Dreaming promotion never rewrites raw memories, transcripts, or source
+  artifacts.
+- The default `signet dream promote` mode is a preview.
+- `--apply` uses audited ontology operation handlers, not Pipeline V2.
+- Ambiguous generated output is skipped or surfaced as a question.
+- Pending proposals are for broad graph refactors and explicit review queues,
+  not the default dreaming promotion path.
+- Use epistemic assertions for attributed statements that should not become
+  current truth yet.

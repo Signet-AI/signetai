@@ -60,7 +60,7 @@ describe("repo skills frontmatter", () => {
 	});
 
 	it.skipIf(!hasSkillsDir)("builtin skills have builtin: true in frontmatter", () => {
-		const expectedBuiltin = ["memory-debug", "onboarding", "recall", "remember", "signet"];
+		const expectedBuiltin = ["dreaming", "memory-debug", "onboarding", "recall", "remember", "signet"];
 
 		for (const name of expectedBuiltin) {
 			const skillMd = join(skillsRoot, name, "SKILL.md");

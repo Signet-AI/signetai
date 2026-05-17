@@ -294,9 +294,11 @@ summary-heavy.
 A CLI command triggers it explicitly:
 
 ```bash
-signet dream --compact    # run compaction now
-signet dream --status     # show dreaming state
-signet dream --trigger    # force a dreaming pass now
+signet dream trigger --compact    # run compaction now
+signet dream status               # show dreaming state
+signet dream trigger              # force a dreaming pass now
+signet dream promote --from all    # preview source-backed attribute promotion
+signet dream promote --from all --apply
 ```
 
 
@@ -432,7 +434,18 @@ The mechanical consolidation engine is complete:
   provider config -- avoids duplication and supports all synthesis
   backends including `claude-code`, `codex`, `opencode`, etc.).
 - **API.** `GET /api/dream/status`, `POST /api/dream/trigger`.
-- **CLI.** `signet dream status`, `signet dream trigger [--compact]`.
+- **Source-backed promotion.** `POST /api/dream/promote` reads saved
+  memories, memory artifacts, and transcripts as evidence and emits direct
+  `set_claim_value` operations. Default mechanical natural-language promotion
+  is limited to confidence-bearing memory rows; memory artifacts and
+  transcripts can provide structured operation JSON for preview, but raw source
+  JSON cannot self-attest confidence for direct apply. Plain prose in artifacts
+  or transcripts requires provider extraction or the proposal review path. The
+  route previews by default and applies only when requested; it does not use
+  Pipeline V2 extraction and does not create pending proposals as the default
+  path.
+- **CLI.** `signet dream status`, `signet dream trigger [--compact]`,
+  `signet dream promote [--from <source>] [--apply]`.
 - **DB migration 055.** `dreaming_state` (per-agent PK) and
   `dreaming_passes` (audit log with applied/skipped/failed counts).
 - **Graph safety.** LIMIT caps on entity graph queries (2000 entities,

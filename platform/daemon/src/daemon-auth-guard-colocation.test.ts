@@ -238,6 +238,15 @@ describe("auth guard co-location", () => {
 		});
 	});
 
+	describe("dream routes need guards", () => {
+		it("POST /api/dream/promote returns 403 without auth", async () => {
+			const app = await makeApp();
+			const { registerPipelineRoutes } = await import("./routes/pipeline-routes");
+			registerPipelineRoutes(app);
+			expect(await status(app, "POST", "/api/dream/promote")).toBe(403);
+		});
+	});
+
 	describe("connector routes need guards", () => {
 		it("POST /api/connectors returns 403 without auth", async () => {
 			const app = await makeApp();

@@ -20,6 +20,8 @@ export {
 	TASK_STATUSES,
 	ONTOLOGY_PROPOSAL_STATUSES,
 	ONTOLOGY_PROPOSAL_OPERATIONS,
+	EPISTEMIC_ASSERTION_PREDICATES,
+	EPISTEMIC_ASSERTION_STATUSES,
 	TASK_HARNESSES,
 	DEFAULT_PROVIDER_RATE_LIMIT,
 } from "./types";
@@ -77,6 +79,9 @@ export type {
 	OntologyProposalStatus,
 	OntologyProposalOperation,
 	OntologyProposal,
+	EpistemicAssertionPredicate,
+	EpistemicAssertionStatus,
+	EpistemicAssertion,
 	TaskHarness,
 	EntityAspect,
 	EntityAttribute,
