@@ -121,20 +121,48 @@ interface ConflictsResponse {
 interface RepairDuplicateEntity {
 	readonly name?: string;
 	readonly id?: string;
+	readonly entityType?: string;
 	readonly mentions?: number;
+	readonly pinned?: boolean;
 }
 
 interface RepairDuplicateItem {
 	readonly canonicalName?: string;
 	readonly target?: RepairDuplicateEntity;
 	readonly sources?: readonly RepairDuplicateEntity[];
+	readonly impact?: EntityMergeImpact;
+	readonly warnings?: readonly string[];
+	readonly blocked?: boolean;
+	readonly risk?: string;
 	readonly rationale?: string;
 }
 
 interface RepairDuplicatesResponse {
 	readonly items?: readonly RepairDuplicateItem[];
 	readonly writtenCount?: number;
+	readonly skippedCount?: number;
 	readonly dryRun?: boolean;
+}
+
+interface EntityMergeImpact {
+	readonly sourceMentions?: number;
+	readonly memoryMentions?: number;
+	readonly aspects?: number;
+	readonly attributes?: number;
+	readonly dependencies?: number;
+	readonly relations?: number;
+}
+
+interface EntityMergePlanResponse {
+	readonly target?: RepairDuplicateEntity;
+	readonly sources?: readonly RepairDuplicateEntity[];
+	readonly impact?: EntityMergeImpact;
+	readonly warnings?: readonly string[];
+	readonly blocked?: boolean;
+	readonly risk?: string;
+	readonly rationale?: string;
+	readonly dryRun?: boolean;
+	readonly proposal?: ProposalListItem;
 }
 
 interface ProposalImportInput {
@@ -561,6 +589,7 @@ function printDuplicateRepairs(data: unknown): void {
 	const record = asRecord(data) as RepairDuplicatesResponse;
 	const items = record.items ?? [];
 	const writtenCount = record.writtenCount ?? 0;
+	const skippedCount = record.skippedCount ?? 0;
 	if (items.length === 0) {
 		console.log(chalk.dim("  No duplicate entity merge candidates found"));
 		return;
@@ -571,10 +600,55 @@ function printDuplicateRepairs(data: unknown): void {
 	for (const item of items) {
 		const target = item.target?.name ?? "unknown";
 		const sources = (item.sources ?? []).map((source) => source.name ?? source.id ?? "unknown").join(", ");
-		console.log(`  ${chalk.yellow(item.canonicalName ?? "unknown")} ${chalk.cyan(target)} <- ${sources}`);
+		const marker = item.blocked ? chalk.red("blocked") : item.risk ? chalk.dim(item.risk) : "";
+		console.log(`  ${chalk.yellow(item.canonicalName ?? "unknown")} ${chalk.cyan(target)} <- ${sources} ${marker}`);
+		if (item.impact) {
+			console.log(
+				chalk.dim(
+					`    ${item.impact.aspects ?? 0} aspects · ${item.impact.attributes ?? 0} attributes · ${
+						item.impact.memoryMentions ?? 0
+					} mentions`,
+				),
+			);
+		}
+		for (const warning of item.warnings ?? []) console.log(chalk.yellow(`    warning ${warning}`));
 		if (item.rationale) console.log(chalk.dim(`    ${item.rationale}`));
 	}
 	if (writtenCount > 0) console.log(chalk.green(`\n  Created ${writtenCount} pending merge proposals`));
+	if (skippedCount > 0) console.log(chalk.yellow(`  Skipped ${skippedCount} blocked merge candidate(s)`));
+	console.log();
+}
+
+function printEntityMergePlan(data: unknown): void {
+	const result = asRecord(data) as EntityMergePlanResponse;
+	const target = result.target?.name ?? result.target?.id ?? "unknown";
+	const sources = result.sources ?? [];
+	const title = result.blocked
+		? chalk.red("Entity Merge Blocked")
+		: result.proposal
+			? "Entity Merge Proposal"
+			: "Entity Merge Plan";
+	console.log(chalk.bold(`\n  ${title}\n`));
+	console.log(
+		`  ${chalk.cyan(target)} <- ${sources.map((source) => source.name ?? source.id ?? "unknown").join(", ")}`,
+	);
+	if (result.target?.id) console.log(chalk.dim(`    target ${result.target.id}`));
+	for (const source of sources) {
+		if (source.id)
+			console.log(chalk.dim(`    source ${source.id}${source.entityType ? ` (${source.entityType})` : ""}`));
+	}
+	if (result.impact) {
+		console.log(
+			chalk.dim(
+				`    ${result.impact.aspects ?? 0} aspects · ${result.impact.attributes ?? 0} attributes · ${
+					result.impact.dependencies ?? 0
+				} links · ${result.impact.memoryMentions ?? 0} mentions`,
+			),
+		);
+	}
+	for (const warning of result.warnings ?? []) console.log(chalk.yellow(`    warning ${warning}`));
+	if (result.rationale) console.log(chalk.dim(`    ${result.rationale}`));
+	if (result.proposal?.id) console.log(chalk.green(`\n  Created pending proposal ${result.proposal.id}`));
 	console.log();
 }
 
@@ -969,6 +1043,32 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 			options,
 		);
 		printOperationResult(data, options, "entity merge");
+	});
+	addCommonOptions(
+		entity
+			.command("merge-plan")
+			.description("Preview an entity merge and optionally create a pending proposal")
+			.argument("<target>", "Target entity selector")
+			.argument("<source...>", "Source entity selectors")
+			.option("--propose", "Create a pending merge proposal")
+			.option("--force", "Allow pinned or mixed-type source entities")
+			.option("--created-by <name>", "Audit creator", "ontology-merge-plan")
+			.option("--rationale <text>", "Short rationale")
+			.option("--evidence-file <path>", "JSON evidence file, array or single object"),
+	).action(async (target: string, source: readonly string[], options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await apiPost(deps, "/api/ontology/proposals/repair/merge-plan", {
+			agent_id: options.agent,
+			target_entity: target,
+			source_entities: source,
+			force: options.force === true,
+			write_proposal: options.propose === true,
+			created_by: options.createdBy,
+			rationale: options.rationale,
+			evidence: readEvidenceFile(typeof options.evidenceFile === "string" ? options.evidenceFile : undefined),
+		});
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printEntityMergePlan(data);
 	});
 	addOperationOptions(
 		entity

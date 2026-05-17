@@ -16,6 +16,7 @@ import {
 	applyOntologyOperation,
 	applyOntologyOperationBatch,
 	applyOntologyProposal,
+	createEntityMergePlan,
 	createOntologyProposal,
 	createOntologyProposals,
 	getClaimVersion,
@@ -62,6 +63,14 @@ function readBoolean(record: Record<string, unknown>, key: string): boolean | un
 function readArray(record: Record<string, unknown>, key: string): readonly unknown[] | undefined {
 	const value = record[key];
 	return Array.isArray(value) ? value : undefined;
+}
+
+function readStringArray(record: Record<string, unknown>, key: string): readonly string[] | undefined {
+	const value = readArray(record, key);
+	if (!value) return undefined;
+	return value
+		.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+		.map((item) => item.trim());
 }
 
 async function readJsonRecord(c: Context): Promise<Record<string, unknown>> {
@@ -161,6 +170,30 @@ export function registerOntologyRoutes(app: Hono): void {
 					limit: readNumber(body, "limit"),
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
 					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
+				}),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/proposals/repair/merge-plan", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		try {
+			return c.json(
+				createEntityMergePlan(getDbAccessor(), {
+					agentId: scoped.agentId,
+					targetEntity: readString(body, "target_entity") ?? readString(body, "target"),
+					targetEntityId: readString(body, "target_entity_id") ?? readString(body, "target_id"),
+					sourceEntities: readStringArray(body, "source_entities") ?? readStringArray(body, "sources"),
+					sourceEntityIds: readStringArray(body, "source_entity_ids") ?? readStringArray(body, "source_ids"),
+					force: readBoolean(body, "force") ?? false,
+					writeProposal: readBoolean(body, "write_proposal") ?? readBoolean(body, "write_proposals") ?? false,
+					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-merge-plan",
+					rationale: readString(body, "rationale") ?? readString(body, "reason"),
+					evidence: readArray(body, "evidence"),
 				}),
 			);
 		} catch (err) {

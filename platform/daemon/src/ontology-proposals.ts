@@ -110,10 +110,13 @@ export interface DuplicateEntityMergeCandidate {
 	readonly target: DuplicateEntityRef;
 	readonly sources: readonly DuplicateEntityRef[];
 	readonly payload: Readonly<Record<string, unknown>>;
+	readonly impact: EntityMergeImpact;
+	readonly warnings: readonly string[];
+	readonly blocked: boolean;
 	readonly confidence: number;
 	readonly rationale: string;
 	readonly evidence: readonly unknown[];
-	readonly risk: "low";
+	readonly risk: "low" | "review_required" | "blocked";
 }
 
 export interface DuplicateEntityMergeResult {
@@ -121,7 +124,46 @@ export interface DuplicateEntityMergeResult {
 	readonly proposals: readonly OntologyProposal[];
 	readonly count: number;
 	readonly writtenCount: number;
+	readonly skippedCount: number;
 	readonly dryRun: boolean;
+}
+
+export interface EntityMergeImpact {
+	readonly sourceMentions: number;
+	readonly memoryMentions: number;
+	readonly aspects: number;
+	readonly attributes: number;
+	readonly dependencies: number;
+	readonly relations: number;
+}
+
+export interface EntityMergePlanParams {
+	readonly agentId: string;
+	readonly targetEntity?: string;
+	readonly targetEntityId?: string;
+	readonly sourceEntities?: readonly string[];
+	readonly sourceEntityIds?: readonly string[];
+	readonly force?: boolean;
+	readonly writeProposal?: boolean;
+	readonly createdBy?: string;
+	readonly rationale?: string;
+	readonly evidence?: readonly unknown[];
+}
+
+export interface EntityMergePlanResult {
+	readonly operation: "merge_entities";
+	readonly target: DuplicateEntityRef;
+	readonly sources: readonly DuplicateEntityRef[];
+	readonly payload: Readonly<Record<string, unknown>>;
+	readonly impact: EntityMergeImpact;
+	readonly warnings: readonly string[];
+	readonly blocked: boolean;
+	readonly confidence: number;
+	readonly rationale: string;
+	readonly evidence: readonly unknown[];
+	readonly risk: "low" | "review_required" | "blocked";
+	readonly dryRun: boolean;
+	readonly proposal?: OntologyProposal;
 }
 
 export interface ListOntologyProposalsParams {
@@ -1124,38 +1166,37 @@ function applyMergeEntities(
 	agentId: string,
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-	const target = readString(payload, "target_entity") ?? readString(payload, "target");
-	const rawSources = [
-		...readStringArray(payload, "source_entities"),
-		...readStringArray(payload, "sources"),
-		...(readString(payload, "source_entity") ? [readString(payload, "source_entity") as string] : []),
-		...(readString(payload, "source") ? [readString(payload, "source") as string] : []),
-	];
-	const sources = unique(rawSources);
-	if (target === null) throw new OntologyProposalError("payload.target_entity is required", 400);
-	if (sources.length === 0) throw new OntologyProposalError("payload.source_entities is required", 400);
-
-	const targetId = resolveEntity(db, agentId, target);
-	if (targetId === null) throw new OntologyProposalError("payload.target_entity was not found", 400);
+	const sources = sourceMergeSpecs(payload);
+	const plan = buildEntityMergePlan(db, {
+		agentId,
+		targetEntity: readString(payload, "target_entity") ?? readString(payload, "target") ?? undefined,
+		targetEntityId: readString(payload, "target_entity_id") ?? readString(payload, "target_id") ?? undefined,
+		sourceEntities: sources.map((spec) => spec.selector).filter((selector): selector is string => selector !== null),
+		sourceEntityIds: sources.map((spec) => spec.id).filter((id): id is string => id !== null),
+		force: truthy(payload.force),
+	});
+	if (plan.blocked) throw new OntologyProposalError(`Merge blocked: ${plan.warnings.join("; ")}`, 409);
 
 	const merged: Array<{ readonly name: string; readonly entityId: string; readonly movedAspects: number }> = [];
-	for (const source of sources) {
-		const sourceId = resolveEntity(db, agentId, source);
-		if (sourceId === null) throw new OntologyProposalError(`source entity not found: ${source}`, 400);
-		if (sourceId === targetId) continue;
-		const movedAspects = mergeEntityAspects(db, agentId, sourceId, targetId);
-		mergeEntityEdges(db, agentId, sourceId, targetId);
+	for (const source of plan.sources) {
+		const movedAspects = mergeEntityAspects(db, agentId, source.id, plan.target.id);
+		mergeEntityEdges(db, agentId, source.id, plan.target.id);
 		db.prepare(
 			`UPDATE entities
 			 SET mentions = COALESCE(mentions, 0) + COALESCE((SELECT mentions FROM entities WHERE id = ?), 0),
 			     updated_at = datetime('now')
 			 WHERE id = ? AND agent_id = ?`,
-		).run(sourceId, targetId, agentId);
-		db.prepare("DELETE FROM entities WHERE id = ? AND agent_id = ?").run(sourceId, agentId);
-		merged.push({ name: source, entityId: sourceId, movedAspects });
+		).run(source.id, plan.target.id, agentId);
+		db.prepare("DELETE FROM entities WHERE id = ? AND agent_id = ?").run(source.id, agentId);
+		merged.push({ name: source.name, entityId: source.id, movedAspects });
 	}
 	if (merged.length === 0) throw new OntologyProposalError("No distinct source entities to merge", 400);
-	return { targetEntityId: targetId, mergedEntities: merged };
+	return {
+		targetEntityId: plan.target.id,
+		targetEntityName: plan.target.name,
+		mergedEntities: merged,
+		warnings: plan.warnings,
+	};
 }
 
 function applyCreateLink(
@@ -1601,6 +1642,231 @@ function toDuplicateEntityRef(row: DuplicateEntityRow, key: string): DuplicateEn
 	};
 }
 
+function entityRowToRef(row: DuplicateEntityRow): DuplicateEntityRef {
+	return toDuplicateEntityRef(row, canonical(row.canonical_name ?? row.name));
+}
+
+function getEntityRefById(db: ReadDb, agentId: string, id: string): DuplicateEntityRef | null {
+	const row = db
+		.prepare(
+			`SELECT id, name, canonical_name, entity_type,
+			        COALESCE(mentions, 0) AS mentions,
+			        COALESCE(pinned, 0) AS pinned,
+			        updated_at
+			 FROM entities
+			 WHERE agent_id = ?
+			   AND COALESCE(status, 'active') = 'active'
+			   AND id = ?
+			 LIMIT 1`,
+		)
+		.get(agentId, id) as DuplicateEntityRow | undefined;
+	return row ? entityRowToRef(row) : null;
+}
+
+function resolveEntityRefStrict(db: ReadDb, agentId: string, selector: string): DuplicateEntityRef {
+	const key = canonical(selector);
+	const rows = db
+		.prepare(
+			`SELECT id, name, canonical_name, entity_type,
+			        COALESCE(mentions, 0) AS mentions,
+			        COALESCE(pinned, 0) AS pinned,
+			        updated_at
+			 FROM entities
+			 WHERE agent_id = ?
+			   AND COALESCE(status, 'active') = 'active'
+			   AND (id = ? OR COALESCE(canonical_name, LOWER(name)) = ? OR LOWER(name) = ?)
+			 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC, name ASC`,
+		)
+		.all(agentId, selector, key, key, selector) as DuplicateEntityRow[];
+	if (rows.length === 0) throw new OntologyProposalError(`Entity not found: ${selector}`, 404);
+	if (rows.length > 1) throw new OntologyProposalError(`Entity selector is ambiguous: ${selector}. Use an id.`, 409);
+	return entityRowToRef(rows[0] as DuplicateEntityRow);
+}
+
+function resolveMergeEntityRef(
+	db: ReadDb,
+	agentId: string,
+	field: string,
+	selector: string | null,
+	id: string | null,
+): DuplicateEntityRef {
+	if (id !== null) {
+		const byId = getEntityRefById(db, agentId, id);
+		if (byId === null) throw new OntologyProposalError(`${field}_id was not found: ${id}`, 404);
+		if (selector !== null && !selectorMatchesEntityRef(selector, byId)) {
+			throw new OntologyProposalError(`${field}_id does not match ${field}`, 409);
+		}
+		return byId;
+	}
+	if (selector === null) throw new OntologyProposalError(`${field} is required`, 400);
+	return resolveEntityRefStrict(db, agentId, selector);
+}
+
+function selectorMatchesEntityRef(selector: string, entity: DuplicateEntityRef): boolean {
+	const key = canonical(selector);
+	return selector === entity.id || key === canonical(entity.name) || key === canonical(entity.canonicalName);
+}
+
+function sourceMergeSpecs(payload: Readonly<Record<string, unknown>>): Array<{
+	readonly selector: string | null;
+	readonly id: string | null;
+}> {
+	const selectors = unique([
+		...readStringArray(payload, "source_entities"),
+		...readStringArray(payload, "sources"),
+		...(readString(payload, "source_entity") ? [readString(payload, "source_entity") as string] : []),
+		...(readString(payload, "source") ? [readString(payload, "source") as string] : []),
+	]);
+	const ids = unique([
+		...readStringArray(payload, "source_entity_ids"),
+		...readStringArray(payload, "source_ids"),
+		...(readString(payload, "source_entity_id") ? [readString(payload, "source_entity_id") as string] : []),
+		...(readString(payload, "source_id") ? [readString(payload, "source_id") as string] : []),
+	]);
+	if (ids.length > 0) {
+		if (selectors.length > ids.length) {
+			throw new OntologyProposalError("payload.source_entities and payload.source_entity_ids must match", 400);
+		}
+		return ids.map((id, index) => ({ id, selector: selectors[index] ?? null }));
+	}
+	return selectors.map((selector) => ({ selector, id: null }));
+}
+
+function entityMergeImpact(db: ReadDb, agentId: string, sources: readonly DuplicateEntityRef[]): EntityMergeImpact {
+	const ids = sources.map((source) => source.id);
+	if (ids.length === 0) {
+		return { sourceMentions: 0, memoryMentions: 0, aspects: 0, attributes: 0, dependencies: 0, relations: 0 };
+	}
+	const placeholders = ids.map(() => "?").join(", ");
+	const sourceMentions = sources.reduce((sum, source) => sum + source.mentions, 0);
+	const aspects = db
+		.prepare(`SELECT COUNT(*) AS count FROM entity_aspects WHERE agent_id = ? AND entity_id IN (${placeholders})`)
+		.get(agentId, ...ids) as { count: number };
+	const attributes = db
+		.prepare(
+			`SELECT COUNT(*) AS count
+			 FROM entity_attributes attr
+			 JOIN entity_aspects asp ON asp.id = attr.aspect_id
+			 WHERE attr.agent_id = ? AND asp.entity_id IN (${placeholders})`,
+		)
+		.get(agentId, ...ids) as { count: number };
+	const dependencies = db
+		.prepare(
+			`SELECT COUNT(*) AS count
+			 FROM entity_dependencies
+			 WHERE agent_id = ? AND (source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders}))`,
+		)
+		.get(agentId, ...ids, ...ids) as { count: number };
+	const relations = db
+		.prepare(
+			`SELECT COUNT(*) AS count
+			 FROM relations
+			 WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
+		)
+		.get(...ids, ...ids) as { count: number };
+	const memoryMentions = db
+		.prepare(`SELECT COUNT(*) AS count FROM memory_entity_mentions WHERE entity_id IN (${placeholders})`)
+		.get(...ids) as { count: number };
+	return {
+		sourceMentions,
+		memoryMentions: memoryMentions.count,
+		aspects: aspects.count,
+		attributes: attributes.count,
+		dependencies: dependencies.count,
+		relations: relations.count,
+	};
+}
+
+function mergeWarnings(
+	target: DuplicateEntityRef,
+	sources: readonly DuplicateEntityRef[],
+	force: boolean,
+): {
+	readonly warnings: readonly string[];
+	readonly blocked: boolean;
+	readonly risk: "low" | "review_required" | "blocked";
+} {
+	const warnings: string[] = [];
+	for (const source of sources) {
+		if (source.pinned) warnings.push(`source entity "${source.name}" is pinned`);
+		if (source.entityType !== target.entityType) {
+			warnings.push(
+				`source entity "${source.name}" type ${source.entityType} differs from target type ${target.entityType}`,
+			);
+		}
+	}
+	if (warnings.length === 0) return { warnings, blocked: false, risk: "low" };
+	return { warnings, blocked: !force, risk: force ? "review_required" : "blocked" };
+}
+
+function mergePlanPayload(
+	target: DuplicateEntityRef,
+	sources: readonly DuplicateEntityRef[],
+	force: boolean,
+): Readonly<Record<string, unknown>> {
+	return {
+		repair_kind: "manual_entity_merge",
+		target_entity: target.name,
+		target_entity_id: target.id,
+		source_entities: sources.map((source) => source.name),
+		source_entity_ids: sources.map((source) => source.id),
+		...(force ? { force: true } : {}),
+	};
+}
+
+function buildEntityMergePlan(
+	db: ReadDb,
+	params: EntityMergePlanParams,
+	payloadKind = "manual_entity_merge",
+): Omit<EntityMergePlanResult, "dryRun" | "proposal"> {
+	const agentId = requireText(params.agentId, "agentId");
+	const targetSelector = params.targetEntity?.trim() || null;
+	const targetId = params.targetEntityId?.trim() || null;
+	const target = resolveMergeEntityRef(db, agentId, "payload.target_entity", targetSelector, targetId);
+	const specs = params.sourceEntityIds?.length
+		? params.sourceEntityIds.map((id, index) => ({ id, selector: params.sourceEntities?.[index] ?? null }))
+		: (params.sourceEntities ?? []).map((selector) => ({ selector, id: null }));
+	if (params.sourceEntityIds?.length && (params.sourceEntities?.length ?? 0) > params.sourceEntityIds.length) {
+		throw new OntologyProposalError("sourceEntities and sourceEntityIds must match", 400);
+	}
+	if (specs.length === 0) throw new OntologyProposalError("source entities are required", 400);
+	const resolved = specs.map((spec) =>
+		resolveMergeEntityRef(db, agentId, "payload.source_entity", spec.selector, spec.id),
+	);
+	const sourceMap = new Map(resolved.map((source) => [source.id, source]));
+	sourceMap.delete(target.id);
+	const sources = [...sourceMap.values()];
+	if (sources.length === 0) throw new OntologyProposalError("No distinct source entities to merge", 400);
+	const force = params.force === true;
+	const safety = mergeWarnings(target, sources, force);
+	const payload = {
+		...mergePlanPayload(target, sources, force),
+		repair_kind: payloadKind,
+	};
+	const evidence = params.evidence ?? [
+		{
+			source_kind: "ontology_index",
+			source_id: `entities:${target.canonicalName}`,
+			quote: `Merge ${sources.map((source) => source.name).join(", ")} into ${target.name}.`,
+		},
+	];
+	return {
+		operation: "merge_entities",
+		target,
+		sources,
+		payload,
+		impact: entityMergeImpact(db, agentId, sources),
+		warnings: safety.warnings,
+		blocked: safety.blocked,
+		confidence: safety.risk === "low" ? 0.86 : 0.72,
+		rationale:
+			params.rationale?.trim() ||
+			`Merge ${sources.map((source) => `"${source.name}"`).join(", ")} into "${target.name}".`,
+		evidence,
+		risk: safety.risk,
+	};
+}
+
 function timeRank(value: string): number {
 	const parsed = Date.parse(value);
 	return Number.isFinite(parsed) ? parsed : 0;
@@ -1653,6 +1919,7 @@ function duplicateMergeCandidates(
 			        updated_at
 			 FROM entities
 			 WHERE agent_id = ?
+			   AND COALESCE(status, 'active') = 'active'
 			 ORDER BY COALESCE(canonical_name, LOWER(name)), COALESCE(mentions, 0) DESC, updated_at DESC`,
 		)
 		.all(agentId) as DuplicateEntityRow[];
@@ -1668,16 +1935,6 @@ function duplicateMergeCandidates(
 			const ordered = [...group].sort(compareDuplicateTargets);
 			const target = ordered[0];
 			const sources = ordered.slice(1);
-			const refs = sources.map((row) => toDuplicateEntityRef(row, key));
-			const targetRef = toDuplicateEntityRef(target, key);
-			const payload = {
-				repair_kind: "duplicate_entities",
-				canonical_name: key,
-				target_entity: target.name,
-				target_entity_id: target.id,
-				source_entities: refs.map((ref) => ref.name),
-				source_entity_ids: refs.map((ref) => ref.id),
-			};
 			const evidence = [
 				{
 					source_kind: "ontology_index",
@@ -1685,16 +1942,33 @@ function duplicateMergeCandidates(
 					quote: `Duplicate canonical_name "${key}" appears on ${ordered.map((row) => row.name).join(", ")}.`,
 				},
 			];
+			const plan = buildEntityMergePlan(
+				db,
+				{
+					agentId,
+					targetEntityId: target.id,
+					sourceEntityIds: sources.map((row) => row.id),
+					rationale: `Entities share canonical_name "${key}" in the same agent scope.`,
+					evidence,
+				},
+				"duplicate_entities",
+			);
 			return {
 				operation: "merge_entities" as const,
 				canonicalName: key,
-				target: targetRef,
-				sources: refs,
-				payload,
-				confidence: 0.86,
-				rationale: `Entities share canonical_name "${key}" in the same agent scope.`,
-				evidence,
-				risk: "low" as const,
+				target: plan.target,
+				sources: plan.sources,
+				payload: {
+					...plan.payload,
+					canonical_name: key,
+				},
+				impact: plan.impact,
+				warnings: plan.warnings,
+				blocked: plan.blocked,
+				confidence: plan.confidence,
+				rationale: plan.rationale,
+				evidence: plan.evidence,
+				risk: plan.risk,
 			};
 		})
 		.sort((a, b) => b.sources.length - a.sources.length || a.canonicalName.localeCompare(b.canonicalName))
@@ -1710,12 +1984,23 @@ export function proposeDuplicateEntityMerges(
 	const items = accessor.withReadDb((db) => duplicateMergeCandidates(db, agentId, limit));
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
-		return { items, proposals: [], count: items.length, writtenCount: 0, dryRun };
+		return {
+			items,
+			proposals: [],
+			count: items.length,
+			writtenCount: 0,
+			skippedCount: items.filter((item) => item.blocked).length,
+			dryRun,
+		};
+	}
+	const writableItems = items.filter((item) => !item.blocked);
+	if (writableItems.length === 0) {
+		return { items, proposals: [], count: items.length, writtenCount: 0, skippedCount: items.length, dryRun };
 	}
 
 	const written = createOntologyProposals(
 		accessor,
-		items.map((item) => ({
+		writableItems.map((item) => ({
 			agentId,
 			operation: item.operation,
 			payload: item.payload,
@@ -1733,8 +2018,29 @@ export function proposeDuplicateEntityMerges(
 		proposals: written.items,
 		count: items.length,
 		writtenCount: written.count,
+		skippedCount: items.length - writableItems.length,
 		dryRun: false,
 	};
+}
+
+export function createEntityMergePlan(accessor: DbAccessor, params: EntityMergePlanParams): EntityMergePlanResult {
+	const agentId = requireText(params.agentId, "agentId");
+	const dryRun = params.writeProposal !== true;
+	const plan = accessor.withReadDb((db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"));
+	if (dryRun || plan.blocked) return { ...plan, dryRun };
+	const proposal = createOntologyProposal(accessor, {
+		agentId,
+		operation: plan.operation,
+		payload: plan.payload,
+		confidence: plan.confidence,
+		rationale: plan.rationale,
+		evidence: plan.evidence,
+		risk: plan.risk,
+		sourceKind: "ontology_index",
+		sourceId: `entities:${plan.target.id}`,
+		createdBy: params.createdBy?.trim() || "ontology-merge-plan",
+	});
+	return { ...plan, dryRun: false, proposal };
 }
 
 export function applyOntologyProposal(accessor: DbAccessor, params: ApplyOntologyProposalParams): OntologyProposal {

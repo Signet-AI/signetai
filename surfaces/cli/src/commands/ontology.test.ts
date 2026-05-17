@@ -30,7 +30,9 @@ describe("registerOntologyCommands", () => {
 
 		const names = (parent: Command, name: string): readonly string[] =>
 			parent.commands.find((cmd) => cmd.name() === name)?.commands.map((cmd) => cmd.name()) ?? [];
-		expect(names(ontology, "entity")).toEqual(expect.arrayContaining(["create", "rename", "merge", "archive"]));
+		expect(names(ontology, "entity")).toEqual(
+			expect.arrayContaining(["create", "rename", "merge", "merge-plan", "archive"]),
+		);
 		expect(names(ontology, "claim")).toEqual(expect.arrayContaining(["set", "versions", "show", "archive", "restore"]));
 		expect(names(ontology, "aspect")).toEqual(expect.arrayContaining(["create", "rename", "archive"]));
 		expect(names(ontology, "link")).toEqual(expect.arrayContaining(["create", "update", "archive"]));
@@ -433,6 +435,65 @@ describe("registerOntologyCommands", () => {
 		]);
 		expect(lines.join("\n")).toContain("Duplicate Merge Candidates");
 		expect(lines.join("\n")).toContain("Signet <- SIGNET");
+	});
+
+	test("entity merge-plan posts a read-only merge preview request", async () => {
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (method, path, body) => {
+				calls.push({ method, path, body });
+				return {
+					ok: true,
+					data: {
+						dryRun: true,
+						target: { id: "entity-signet", name: "Signet", entityType: "project" },
+						sources: [{ id: "entity-alias", name: "Signet Alias", entityType: "project" }],
+						impact: { aspects: 1, attributes: 2, dependencies: 0, memoryMentions: 3 },
+						warnings: [],
+						blocked: false,
+						rationale: "Merge duplicate Signet aliases.",
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"entity",
+			"merge-plan",
+			"entity-signet",
+			"entity-alias",
+			"--agent",
+			"ant",
+		]);
+
+		expect(calls).toEqual([
+			{
+				method: "POST",
+				path: "/api/ontology/proposals/repair/merge-plan",
+				body: {
+					agent_id: "ant",
+					target_entity: "entity-signet",
+					source_entities: ["entity-alias"],
+					force: false,
+					write_proposal: false,
+					created_by: "ontology-merge-plan",
+					rationale: undefined,
+					evidence: undefined,
+				},
+			},
+		]);
+		expect(lines.join("\n")).toContain("Entity Merge Plan");
+		expect(lines.join("\n")).toContain("Signet <- Signet Alias");
 	});
 
 	test("import-proposals maps extraction output to batch proposal creation", async () => {
