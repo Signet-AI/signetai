@@ -48,6 +48,7 @@ import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import { type NativeMemoryBridgeHandle, startNativeMemoryBridge } from "./native-memory-sources";
+import { type GitHubSourceBridgeHandle, startGitHubSourceBridge, purgeGitHubSource } from "./github-source-bridge";
 import { DEFAULT_RETENTION, ensureRetentionWorker, setDreamingWorker, startPipeline, stopPipeline } from "./pipeline";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
 import type { WorkerInit } from "./pipeline/extraction-thread-protocol";
@@ -243,6 +244,7 @@ setupDashboardRoutes(app);
 
 let watcher: ReturnType<typeof watch> | null = null;
 let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
+let githubSourceBridge: GitHubSourceBridgeHandle | null = null;
 
 // Track ingested files to avoid re-processing (path -> content hash)
 const ingestedMemoryFiles = new Map<string, string>();
@@ -1608,6 +1610,24 @@ async function main() {
 				.finally(() => {
 					for (const sourceId of startupSourceJobs.keys()) clearSourceIndexInFlight(sourceId);
 				});
+		}
+
+		const githubSources = loadSourcesConfig(AGENTS_DIR).sources.filter(
+			(source) => source.enabled && source.kind === "github",
+		);
+		if (githubSources.length > 0 && !githubSourceBridge) {
+			githubSourceBridge = startGitHubSourceBridge(githubSources, {
+				agentsDir: AGENTS_DIR,
+				pollIntervalMs: 300_000,
+			});
+			githubSourceBridge.sync().catch((e) => {
+				logger.error(
+					"daemon",
+					"Failed to sync GitHub sources",
+					undefined,
+					e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) },
+				);
+			});
 		}
 
 		const startupCfg = loadMemoryConfig(AGENTS_DIR);

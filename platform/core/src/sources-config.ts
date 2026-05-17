@@ -3,8 +3,22 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
-export type SignetSourceKind = "obsidian";
+export type SignetSourceKind = "obsidian" | "github";
 export type SignetSourceMode = "read-only";
+
+export interface GitHubSourceSettings {
+	readonly repos: readonly string[];
+	readonly tokenRef?: string;
+	readonly resourceTypes: readonly ("issues" | "pulls" | "discussions" | "docs")[];
+	readonly state?: "open" | "closed" | "all";
+	readonly includeComments?: boolean;
+	readonly labels?: readonly string[];
+	readonly docPaths?: readonly string[];
+	readonly maxItemsPerRepo?: number;
+}
+
+export const DEFAULT_GITHUB_RESOURCE_TYPES = ["issues", "pulls", "discussions", "docs"] as const;
+export const DEFAULT_GITHUB_DOC_PATHS = ["README.md", "CHANGELOG.md"] as const;
 
 export interface SignetSourceEntry {
 	readonly id: string;
@@ -17,6 +31,7 @@ export interface SignetSourceEntry {
 	readonly updatedAt: string;
 	readonly lastIndexedAt?: string;
 	readonly excludeGlobs?: readonly string[];
+	readonly settings?: Readonly<Record<string, unknown>>;
 }
 
 export const DEFAULT_OBSIDIAN_EXCLUDE_GLOBS = [
@@ -36,6 +51,19 @@ export interface AddObsidianSourceInput {
 	readonly root: string;
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
+	readonly now?: string;
+}
+
+export interface AddGitHubSourceInput {
+	readonly repos: readonly string[];
+	readonly name?: string;
+	readonly tokenRef?: string;
+	readonly resourceTypes?: readonly ("issues" | "pulls" | "discussions" | "docs")[];
+	readonly state?: "open" | "closed" | "all";
+	readonly includeComments?: boolean;
+	readonly labels?: readonly string[];
+	readonly docPaths?: readonly string[];
+	readonly maxItemsPerRepo?: number;
 	readonly now?: string;
 }
 
@@ -163,6 +191,99 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 	return { ok: true, source, created: true };
 }
 
+export function addGitHubSource(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addGitHubSourceUnlocked(input, agentsDir));
+}
+
+function addGitHubSourceUnlocked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	try {
+		return addGitHubSourceChecked(input, agentsDir);
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
+function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	const repos = input.repos.map((r) => r.trim()).filter(Boolean);
+	if (repos.length === 0) return { ok: false, error: "At least one repo (owner/repo or owner/*) is required" };
+	for (const repo of repos) {
+		if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_*.-]+$/.test(repo)) {
+			return { ok: false, error: `Invalid repo pattern: ${repo}. Expected owner/repo or owner/*` };
+		}
+	}
+
+	const now = input.now ?? new Date().toISOString();
+	const cfg = loadSourcesConfigForWrite(agentsDir);
+	const settingsKey = repos.sort().join(",");
+	const existing = cfg.sources.find((source) => source.kind === "github" && (source.settings?.repos as string[])?.sort().join(",") === settingsKey);
+
+	if (existing) {
+		const updated: SignetSourceEntry = {
+			...existing,
+			name: cleanName(input.name) ?? existing.name,
+			enabled: true,
+			updatedAt: now,
+			settings: buildGitHubSettings(input),
+		};
+		saveSourcesConfig(
+			{ version: SOURCES_CONFIG_VERSION, sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)) },
+			agentsDir,
+		);
+		return { ok: true, source: updated, created: false };
+	}
+
+	const source: SignetSourceEntry = {
+		id: `github:${createHash("sha256").update(settingsKey).digest("hex").slice(0, 16)}`,
+		kind: "github",
+		name: cleanName(input.name) ?? repos[0],
+		root: "",
+		enabled: true,
+		mode: "read-only",
+		createdAt: now,
+		updatedAt: now,
+		settings: buildGitHubSettings(input),
+	};
+	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
+	return { ok: true, source, created: true };
+}
+
+function buildGitHubSettings(input: AddGitHubSourceInput): Readonly<Record<string, unknown>> {
+	return {
+		repos: input.repos,
+		tokenRef: input.tokenRef,
+		resourceTypes: input.resourceTypes ?? [...DEFAULT_GITHUB_RESOURCE_TYPES],
+		state: input.state ?? "all",
+		includeComments: input.includeComments ?? true,
+		labels: input.labels,
+		docPaths: input.docPaths ?? [...DEFAULT_GITHUB_DOC_PATHS],
+		maxItemsPerRepo: input.maxItemsPerRepo ?? 500,
+	};
+}
+
+export function parseGitHubSettings(raw: Readonly<Record<string, unknown>> | undefined): GitHubSourceSettings {
+	if (!raw) {
+		return { repos: [], resourceTypes: [...DEFAULT_GITHUB_RESOURCE_TYPES] };
+	}
+	const repos = Array.isArray(raw.repos) && raw.repos.every((r) => typeof r === "string") ? raw.repos as string[] : [];
+	const resourceTypes = Array.isArray(raw.resourceTypes) && raw.resourceTypes.every((t) => typeof t === "string")
+		? (raw.resourceTypes as string[]).filter((t): t is "issues" | "pulls" | "discussions" | "docs" =>
+			["issues", "pulls", "discussions", "docs"].includes(t))
+		: [...DEFAULT_GITHUB_RESOURCE_TYPES];
+	return {
+		repos,
+		tokenRef: typeof raw.tokenRef === "string" ? raw.tokenRef : undefined,
+		resourceTypes,
+		state: raw.state === "open" || raw.state === "closed" || raw.state === "all" ? raw.state : "all",
+		includeComments: typeof raw.includeComments === "boolean" ? raw.includeComments : true,
+		labels: Array.isArray(raw.labels) && raw.labels.every((l) => typeof l === "string") ? raw.labels as string[] : undefined,
+		docPaths: Array.isArray(raw.docPaths) && raw.docPaths.every((p) => typeof p === "string")
+			? raw.docPaths as string[]
+			: [...DEFAULT_GITHUB_DOC_PATHS],
+		maxItemsPerRepo: typeof raw.maxItemsPerRepo === "number" && raw.maxItemsPerRepo > 0 ? raw.maxItemsPerRepo : 500,
+	};
+}
+
 export function markSourceIndexed(
 	sourceId: string,
 	indexedAt = new Date().toISOString(),
@@ -272,7 +393,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isSourceEntry(value: unknown): value is SignetSourceEntry {
 	return (
 		isRecord(value) &&
-		value.kind === "obsidian" &&
+		(value.kind === "obsidian" || value.kind === "github") &&
 		typeof value.id === "string" &&
 		typeof value.name === "string" &&
 		typeof value.root === "string" &&
@@ -282,6 +403,7 @@ function isSourceEntry(value: unknown): value is SignetSourceEntry {
 		typeof value.updatedAt === "string" &&
 		(value.lastIndexedAt === undefined || typeof value.lastIndexedAt === "string") &&
 		(value.excludeGlobs === undefined ||
-			(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string")))
+			(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string"))) &&
+		(value.settings === undefined || isRecord(value.settings))
 	);
 }
