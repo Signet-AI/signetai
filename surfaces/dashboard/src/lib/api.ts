@@ -2877,12 +2877,24 @@ export interface ConstellationAttribute {
 	kind: "attribute" | "constraint";
 	importance: number;
 	memoryId: string | null;
+	status?: "active" | "superseded" | "deleted";
+	version?: number;
+	versionRootId?: string | null;
+	previousAttributeId?: string | null;
+	groupKey?: string | null;
+	claimKey?: string | null;
+	sourceKind?: string | null;
+	sourcePath?: string | null;
+	proposalId?: string | null;
+	proposalEvidenceCount?: number;
 }
 
 export interface ConstellationAspect {
 	id: string;
 	name: string;
 	weight: number;
+	status?: "active" | "archived";
+	proposalId?: string | null;
 	attributes: ConstellationAttribute[];
 }
 
@@ -2892,6 +2904,8 @@ export interface ConstellationEntity {
 	entityType: string;
 	mentions: number;
 	pinned: boolean;
+	status?: "active" | "archived";
+	proposalId?: string | null;
 	aspects: ConstellationAspect[];
 }
 
@@ -2900,16 +2914,69 @@ export interface ConstellationDependency {
 	targetEntityId: string;
 	dependencyType: string;
 	strength: number;
+	status?: "active" | "archived";
+	proposalId?: string | null;
+	proposalEvidenceCount?: number;
+}
+
+export interface ConstellationProposal {
+	id: string;
+	operation: string;
+	confidence: number;
+	rationale: string;
+	evidenceCount: number;
+	sourceKind: string | null;
+	sourcePath: string | null;
+	updatedAt: string;
+	targetEntityId: string | null;
+	targetEntityName: string | null;
+	targetAspectName: string | null;
+	preview: string | null;
+}
+
+export interface ConstellationDreamingSummary {
+	tokensSinceLastPass: number;
+	consecutiveFailures: number;
+	lastPassAt: string | null;
+	lastPassId: string | null;
+	lastPassMode: string | null;
+	latestPass: {
+		id: string;
+		mode: string;
+		status: string;
+		completedAt: string | null;
+		mutationsApplied: number | null;
+		mutationsSkipped: number | null;
+		mutationsFailed: number | null;
+	} | null;
+}
+
+export interface ConstellationProposalSummary {
+	pending: number;
+	appliedRecent: number;
+	failedRecent: number;
 }
 
 export interface ConstellationGraph {
 	entities: ConstellationEntity[];
 	dependencies: ConstellationDependency[];
+	proposals?: ConstellationProposal[];
+	metadata?: {
+		dreaming: ConstellationDreamingSummary;
+		proposals: ConstellationProposalSummary;
+	};
 }
 
 export async function getConstellationOverlay(agentId: string): Promise<ConstellationGraph | null> {
 	try {
-		const path = `${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(agentId)}&limit=150&max_aspects_per_entity=6&max_attributes_per_aspect=4&dependency_limit=500`;
+		const params = new URLSearchParams({
+			agent_id: agentId,
+			limit: "120",
+			max_aspects_per_entity: "20",
+			max_attributes_per_aspect: "150",
+			dependency_limit: "800",
+		});
+		const path = `${API_BASE}/api/knowledge/constellation?${params.toString()}`;
 		const res = await fetch(path);
 		if (!res.ok) return null;
 		return (await res.json()) as ConstellationGraph;

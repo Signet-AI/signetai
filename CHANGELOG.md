@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-17
-- Features: native bundle system with zero-prereq installer; add epistemic assertions; add safe entity merge planning.
+- Features: improve constellation ontology navigation; native bundle system with zero-prereq installer; add epistemic assertions; add safe entity merge planning.
 - Bug fixes: repair native bundle regressions; sync built-in dreaming skill.
 
 ### 2026-05-16
@@ -35,6 +35,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: enforce concrete semantic objects; refresh stale web content index; replace placeholder images with original vault artwork; prebuild tray before typecheck; disable electron-builder auto publish.
 
 ## Release Ledger
+
+## [0.123.0] - 2026-05-17
+
+Release summary: 1 feature.
+Tag range: `v0.122.1..v0.123.0`.
+
+### Features
+
+- **dashboard**: improve constellation ontology navigation (#722)
 
 ## [0.122.1] - 2026-05-17
 
