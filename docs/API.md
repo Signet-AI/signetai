@@ -3702,6 +3702,8 @@ parameters match assertion creation plus `agent_id`. Omitting `predicate`
 preserves the old assertion predicate; pass a predicate only when the epistemic
 meaning is intentionally changing. Omitting source fields inherits source
 provenance from the old assertion, but replacement content is still required.
+Supersede keeps the old subject entity; use a new assertion when the subject
+entity changes.
 
 CLI equivalents:
 

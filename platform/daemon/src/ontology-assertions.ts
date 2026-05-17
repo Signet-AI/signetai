@@ -432,9 +432,15 @@ export function supersedeEpistemicAssertion(
 			)
 			.get(input.oldAssertionId, input.agentId) as Record<string, unknown> | undefined;
 		if (!old) throw new OntologyAssertionError("assertion was not found", 404);
+		if (trim(input.entityId) !== null || trim(input.entity) !== null) {
+			const subject = resolveSubject(accessor, db, input);
+			if (subject.id !== old.subject_entity_id) {
+				throw new OntologyAssertionError("supersede cannot change assertion subject entity", 409);
+			}
+		}
 		const next = insertAssertion(accessor, db, {
 			...input,
-			entityId: input.entityId ?? (old.subject_entity_id as string),
+			entityId: old.subject_entity_id as string,
 			predicate: input.predicate || (old.predicate as string),
 			speaker: input.speaker ?? (typeof old.speaker === "string" ? old.speaker : null),
 			sourceKind: input.sourceKind ?? (typeof old.source_kind === "string" ? old.source_kind : null),

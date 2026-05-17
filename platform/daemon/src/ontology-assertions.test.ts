@@ -34,6 +34,11 @@ describe("epistemic assertions", () => {
 				 VALUES ('entity-other', 'Other', 'other', 'project', 'dot', 1, ?, ?)`,
 			).run("2026-05-16T00:00:00.000Z", "2026-05-16T00:00:00.000Z");
 			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-rival', 'Rival', 'rival', 'project', 'ant', 1, ?, ?)`,
+			).run("2026-05-16T00:00:00.000Z", "2026-05-16T00:00:00.000Z");
+			db.prepare(
 				`INSERT INTO entity_aspects
 				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
 				 VALUES ('aspect-signet', 'entity-signet', 'ant', 'architecture', 'architecture', 0.7, ?, ?)`,
@@ -183,6 +188,31 @@ describe("epistemic assertions", () => {
 		});
 		expect(archived.status).toBe("archived");
 		expect(archived.evidence).toEqual([{ quote: "who believes what" }]);
+	});
+
+	it("rejects supersede requests that change the subject entity", () => {
+		const first = createEpistemicAssertion(getDbAccessor(), {
+			agentId: "ant",
+			entity: "Signet",
+			predicate: "believes",
+			content: "Signet should keep assertion history entity-scoped.",
+			evidence: [{ quote: "entity-scoped history" }],
+			sourceKind: "transcript",
+		});
+
+		expect(() =>
+			supersedeEpistemicAssertion(getDbAccessor(), {
+				agentId: "ant",
+				oldAssertionId: first.id,
+				entityId: "entity-rival",
+				predicate: "believes",
+				content: "Rival should not enter Signet's assertion history.",
+				evidence: [{ quote: "different entity" }],
+				sourceKind: "transcript",
+			}),
+		).toThrow(OntologyAssertionError);
+
+		expect(getEpistemicAssertion(getDbAccessor(), { agentId: "ant", id: first.id })?.status).toBe("active");
 	});
 
 	it("preserves the old predicate when route supersede omits a replacement predicate", async () => {
