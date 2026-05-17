@@ -405,7 +405,7 @@ jobs:
           bun run build:daemon
           bun run stage:runtime
           bun run build:main
-          npx electron-builder --mac dmg --${{ matrix.electron_arch }} --publish never
+          npx electron-builder --mac --${{ matrix.electron_arch }} --publish never
           mkdir -p "$ARTIFACT_DIR"
           if ! ls release/*.dmg >/dev/null 2>&1; then
             echo "::error::Electron build produced no macOS DMG"

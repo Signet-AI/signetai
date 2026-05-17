@@ -117,6 +117,8 @@ describe("check-publish-manifests", () => {
 
 		expect(workflow).toContain("Electron build produced no macOS DMG");
 		expect(workflow).toContain("Electron build produced no macOS zip");
+		expect(workflow).toContain("npx electron-builder --mac --${{ matrix.electron_arch }} --publish never");
+		expect(workflow).not.toContain("npx electron-builder --mac dmg");
 		expect(workflow).not.toContain('cp release/*.dmg "$ARTIFACT_DIR/" 2>/dev/null || true');
 		expect(workflow).not.toContain('cp release/*.zip "$ARTIFACT_DIR/" 2>/dev/null || true');
 	});
