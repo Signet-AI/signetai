@@ -829,6 +829,20 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const ONTOLOGY_PROPOSAL_STATUSES = ["pending", "applied", "rejected", "failed"] as const;
 export type OntologyProposalStatus = (typeof ONTOLOGY_PROPOSAL_STATUSES)[number];
 
+export const EPISTEMIC_ASSERTION_PREDICATES = [
+	"claims",
+	"believes",
+	"observed",
+	"decided",
+	"prefers",
+	"denies",
+	"questions",
+] as const;
+export type EpistemicAssertionPredicate = (typeof EPISTEMIC_ASSERTION_PREDICATES)[number];
+
+export const EPISTEMIC_ASSERTION_STATUSES = ["active", "archived", "superseded"] as const;
+export type EpistemicAssertionStatus = (typeof EPISTEMIC_ASSERTION_STATUSES)[number];
+
 export const ONTOLOGY_PROPOSAL_OPERATIONS = [
 	"create_entity",
 	"add_claim_value",
@@ -943,6 +957,33 @@ export interface EntityDependency {
 	readonly sourceRoot: string | null;
 	readonly proposalId: string | null;
 	readonly proposalEvidence: readonly unknown[];
+	readonly createdAt: string;
+	readonly updatedAt: string;
+}
+
+export interface EpistemicAssertion {
+	readonly id: string;
+	readonly agentId: string;
+	readonly subjectEntityId: string;
+	readonly subjectEntityName: string | null;
+	readonly claimAttributeId: string | null;
+	readonly predicate: EpistemicAssertionPredicate;
+	readonly content: string;
+	readonly normalizedContent: string;
+	readonly speaker: string | null;
+	readonly assertedAt: string;
+	readonly confidence: number;
+	readonly evidence: readonly unknown[];
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
+	readonly sourcePath: string | null;
+	readonly sourceRoot: string | null;
+	readonly status: EpistemicAssertionStatus;
+	readonly supersedesAssertionId: string | null;
+	readonly archivedAt: string | null;
+	readonly archivedBy: string | null;
+	readonly archiveReason: string | null;
+	readonly createdBy: string;
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }

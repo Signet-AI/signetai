@@ -100,6 +100,25 @@ interface ClaimEvidenceResponse {
 	readonly items?: readonly ClaimEvidenceValue[];
 }
 
+interface EpistemicAssertionItem {
+	readonly id?: string;
+	readonly subjectEntityName?: string | null;
+	readonly predicate?: string;
+	readonly content?: string;
+	readonly speaker?: string | null;
+	readonly assertedAt?: string;
+	readonly confidence?: number;
+	readonly status?: string;
+	readonly sourceKind?: string | null;
+	readonly sourceId?: string | null;
+	readonly sourcePath?: string | null;
+	readonly claimAttributeId?: string | null;
+}
+
+interface EpistemicAssertionsResponse {
+	readonly items?: readonly EpistemicAssertionItem[];
+}
+
 interface ConflictValue {
 	readonly proposalId?: string;
 	readonly value?: string;
@@ -148,8 +167,11 @@ interface ProposalImportInput {
 
 interface ExtractionResponse {
 	readonly proposals?: readonly ProposalImportInput[];
+	readonly assertions?: readonly EpistemicAssertionItem[];
 	readonly count?: number;
 	readonly writtenCount?: number;
+	readonly assertionCount?: number;
+	readonly writtenAssertionCount?: number;
 	readonly dryRun?: boolean;
 	readonly extractionMode?: string;
 	readonly providerName?: string | null;
@@ -537,6 +559,30 @@ function printClaimEvidence(data: unknown): void {
 	console.log();
 }
 
+function printAssertions(data: unknown, title = "Epistemic Assertions"): void {
+	const record = asRecord(data);
+	const items = (((record as EpistemicAssertionsResponse).items as readonly EpistemicAssertionItem[] | undefined) ??
+		(record.id ? ([record as EpistemicAssertionItem] as const) : [])) as readonly EpistemicAssertionItem[];
+	if (items.length === 0) {
+		console.log(chalk.dim("  No epistemic assertions found"));
+		return;
+	}
+	console.log(chalk.bold(`\n  ${title}\n`));
+	for (const item of items) {
+		const confidence = typeof item.confidence === "number" ? ` · ${item.confidence.toFixed(2)}` : "";
+		const status = item.status ? chalk.dim(` ${item.status}`) : "";
+		console.log(
+			`  ${chalk.cyan(item.id ?? "unknown")}${status} ${chalk.yellow(item.predicate ?? "claims")}${confidence}`,
+		);
+		const actor = item.speaker ?? item.sourcePath ?? item.sourceId ?? item.sourceKind;
+		const when = item.assertedAt ? ` · ${item.assertedAt}` : "";
+		console.log(chalk.dim(`    ${item.subjectEntityName ?? "unknown"}${actor ? ` · ${actor}` : ""}${when}`));
+		if (item.content) console.log(chalk.dim(`    ${item.content}`));
+		if (item.claimAttributeId) console.log(chalk.dim(`    claim ${item.claimAttributeId}`));
+	}
+	console.log();
+}
+
 function printConflicts(data: unknown): void {
 	const items = ((asRecord(data) as ConflictsResponse).items ?? []) as readonly ConflictItem[];
 	if (items.length === 0) {
@@ -587,6 +633,13 @@ function printExtraction(data: unknown): void {
 	console.log(chalk.dim(`  mode ${result.extractionMode ?? "unknown"}`));
 	if (result.providerName) console.log(chalk.dim(`  provider ${result.providerName}`));
 	console.log(chalk.dim(`  ${result.writtenCount ?? 0} written · ${result.count ?? proposals.length} candidate(s)`));
+	if ((result.assertionCount ?? 0) > 0 || (result.writtenAssertionCount ?? 0) > 0) {
+		console.log(
+			chalk.dim(
+				`  ${result.writtenAssertionCount ?? 0} assertions written · ${result.assertionCount ?? 0} assertion candidate(s)`,
+			),
+		);
+	}
 	for (const warning of result.warnings ?? []) {
 		console.log(chalk.yellow(`  warning ${warning}`));
 	}
@@ -791,11 +844,214 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		else printConflicts(data);
 	});
 
+	addCommonOptions(
+		ontology
+			.command("assertions")
+			.description("List source-attributed epistemic assertions")
+			.option("--entity <name>", "Filter by entity name")
+			.option("--entity-id <id>", "Filter by entity id")
+			.option("--predicate <predicate>", "Filter by predicate")
+			.option("--status <status>", "Filter by status", "active")
+			.option("--speaker <name>", "Filter by speaker")
+			.option("--source-kind <kind>", "Filter by source kind")
+			.option("--source-id <id>", "Filter by source id")
+			.option("--query <text>", "Filter assertion text")
+			.option("-l, --limit <n>", "Max assertions to return", Number.parseInt),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		for (const [key, value] of [
+			["entity", options.entity],
+			["entity_id", options.entityId],
+			["predicate", options.predicate],
+			["status", options.status],
+			["speaker", options.speaker],
+			["source_kind", options.sourceKind],
+			["source_id", options.sourceId],
+			["query", options.query],
+		] as const) {
+			if (typeof value === "string" && value.length > 0) params.set(key, value);
+		}
+		if (typeof options.limit === "number") params.set("limit", String(options.limit));
+		appendAgent(params, options.agent);
+		const data = await apiGet(deps, "/api/ontology/assertions", params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data);
+	});
+
+	const assertion = ontology.command("assertion").description("Inspect and maintain epistemic assertions");
+
+	addCommonOptions(
+		assertion.command("show").description("Show one epistemic assertion").argument("<id>", "Assertion id"),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const data = await apiGet(deps, `/api/ontology/assertions/${encodeURIComponent(id)}`, params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("create")
+			.description("Create a source-attributed epistemic assertion")
+			.option("--entity <name>", "Subject entity name")
+			.option("--entity-id <id>", "Subject entity id")
+			.requiredOption("--predicate <predicate>", "claims|believes|observed|decided|prefers|denies|questions")
+			.requiredOption("--content <text>", "Assertion content")
+			.option("--speaker <name>", "Speaker or claimant")
+			.option("--asserted-at <iso>", "When the assertion was made")
+			.option("--confidence <n>", "Assertion confidence", Number.parseFloat)
+			.option("--source-kind <kind>", "Evidence source kind")
+			.option("--source-id <id>", "Evidence source id")
+			.option("--source-path <path>", "Evidence source path")
+			.option("--source-root <path>", "Evidence source root")
+			.option("--claim-attribute-id <id>", "Applied claim attribute this assertion supports")
+			.option("--evidence-file <path>", "JSON evidence file, array or single object")
+			.option("--created-by <name>", "Audit creator", "operator"),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		if (!options.entity && !options.entityId) {
+			console.error(chalk.red("--entity or --entity-id is required"));
+			process.exit(1);
+		}
+		const body = {
+			agent_id: options.agent,
+			entity: options.entity,
+			entity_id: options.entityId,
+			predicate: options.predicate,
+			content: options.content,
+			speaker: options.speaker,
+			asserted_at: options.assertedAt,
+			confidence: options.confidence,
+			source_kind: options.sourceKind,
+			source_id: options.sourceId,
+			source_path: options.sourcePath,
+			source_root: options.sourceRoot,
+			claim_attribute_id: options.claimAttributeId,
+			evidence: readEvidenceFile(options.evidenceFile),
+			created_by: options.createdBy,
+		};
+		const data = await apiPost(deps, "/api/ontology/assertions", body);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Created Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("link-claim")
+			.description("Link an epistemic assertion to an applied claim attribute")
+			.argument("<id>", "Assertion id")
+			.requiredOption("--attribute-id <id>", "Claim attribute id"),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const query = params.toString();
+		const data = await apiPost(
+			deps,
+			`/api/ontology/assertions/${encodeURIComponent(id)}/link-claim${query ? `?${query}` : ""}`,
+			{ attribute_id: options.attributeId },
+		);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Linked Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("archive")
+			.description("Archive an epistemic assertion")
+			.argument("<id>", "Assertion id")
+			.option("--reason <text>", "Archive reason")
+			.option("--actor <name>", "Audit actor", "operator"),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const query = params.toString();
+		const data = await apiPost(
+			deps,
+			`/api/ontology/assertions/${encodeURIComponent(id)}/archive${query ? `?${query}` : ""}`,
+			{ reason: options.reason, actor: options.actor },
+		);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Archived Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("supersede")
+			.description("Supersede an epistemic assertion with a newer assertion")
+			.argument("<id>", "Assertion id")
+			.requiredOption("--content <text>", "Replacement assertion content")
+			.option("--predicate <predicate>", "Replacement predicate", "claims")
+			.option("--speaker <name>", "Speaker or claimant")
+			.option("--asserted-at <iso>", "When the replacement assertion was made")
+			.option("--confidence <n>", "Assertion confidence", Number.parseFloat)
+			.option("--source-kind <kind>", "Evidence source kind")
+			.option("--source-id <id>", "Evidence source id")
+			.option("--source-path <path>", "Evidence source path")
+			.option("--source-root <path>", "Evidence source root")
+			.option("--evidence-file <path>", "JSON evidence file, array or single object")
+			.option("--created-by <name>", "Audit creator", "operator"),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const query = params.toString();
+		const data = await apiPost(
+			deps,
+			`/api/ontology/assertions/${encodeURIComponent(id)}/supersede${query ? `?${query}` : ""}`,
+			{
+				predicate: options.predicate,
+				content: options.content,
+				speaker: options.speaker,
+				asserted_at: options.assertedAt,
+				confidence: options.confidence,
+				source_kind: options.sourceKind,
+				source_id: options.sourceId,
+				source_path: options.sourcePath,
+				source_root: options.sourceRoot,
+				evidence: readEvidenceFile(options.evidenceFile),
+				created_by: options.createdBy,
+			},
+		);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Superseding Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("import")
+			.description("Import epistemic assertions from JSON")
+			.requiredOption("--file <path>", "JSON assertion array or { assertions }")
+			.option("--created-by <name>", "Audit creator", "operator"),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const raw = readJsonFile(options.file);
+		const assertions = Array.isArray(raw) ? raw : (readArray(asRecord(raw), "assertions") ?? []);
+		const written: unknown[] = [];
+		for (const item of assertions) {
+			const assertionRecord = asRecord(item);
+			const data = await apiPost(deps, "/api/ontology/assertions", {
+				...assertionRecord,
+				agent_id: options.agent,
+				created_by: readString(assertionRecord, "created_by") ?? options.createdBy,
+			});
+			written.push(data);
+		}
+		const data = { items: written, count: written.length };
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Imported Epistemic Assertions");
+	});
+
 	ontology
 		.command("extract")
 		.description("Extract candidate ontology proposals from a transcript or artifact")
 		.requiredOption("--from <source>", "Source ref, e.g. transcript:<id>, artifact:<path>, or source:<path>")
 		.option("--write-proposals", "Persist extracted candidates as pending proposals")
+		.option("--write-assertions", "Persist extracted epistemic assertions")
 		.option("--dry-run", "Preview candidates without writing", true)
 		.option("--use-provider", "Use the configured memory extraction inference workload")
 		.option("--provider-timeout-ms <n>", "Provider extraction timeout in milliseconds", Number.parseInt)
@@ -813,6 +1069,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 					agent_id: options.agent,
 					from: options.from,
 					write_proposals: options.writeProposals === true,
+					...(options.writeAssertions === true ? { write_assertions: true } : {}),
 					use_provider: options.useProvider === true,
 					provider_timeout_ms: options.providerTimeoutMs,
 					provider_max_tokens: options.providerMaxTokens,

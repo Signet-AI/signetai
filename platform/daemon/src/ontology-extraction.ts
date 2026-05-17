@@ -1,6 +1,7 @@
-import type { LlmProvider, OntologyProposal } from "@signet/core";
+import type { EpistemicAssertion, LlmProvider, OntologyProposal } from "@signet/core";
 import type { DbAccessor, ReadDb } from "./db-accessor";
-import { createOntologyProposals } from "./ontology-proposals";
+import { type CreateEpistemicAssertionInput, createEpistemicAssertionsInTx } from "./ontology-assertions";
+import { type CreateOntologyProposalInput, createOntologyProposalsInTx } from "./ontology-proposals";
 import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";
 
 type ProposalDraft = {
@@ -14,7 +15,24 @@ type ProposalDraft = {
 
 type ParsedProposalJson = {
 	readonly proposals: readonly ProposalDraft[];
+	readonly assertions: readonly AssertionDraft[];
 	readonly questions: readonly string[];
+};
+
+type AssertionDraft = {
+	readonly entity?: string;
+	readonly entity_id?: string;
+	readonly predicate: string;
+	readonly content: string;
+	readonly speaker?: string | null;
+	readonly asserted_at?: string | null;
+	readonly confidence?: number;
+	readonly evidence?: readonly unknown[];
+	readonly source_kind?: string | null;
+	readonly source_id?: string | null;
+	readonly source_path?: string | null;
+	readonly source_root?: string | null;
+	readonly claim_attribute_id?: string | null;
 };
 
 type SourceRecord = {
@@ -42,6 +60,7 @@ export interface ExtractOntologyParams {
 	readonly agentId: string;
 	readonly from: string;
 	readonly writeProposals?: boolean;
+	readonly writeAssertions?: boolean;
 	readonly createdBy?: string;
 	readonly limit?: number;
 	readonly useProvider?: boolean;
@@ -54,8 +73,12 @@ export interface OntologyExtractionResult {
 	readonly source: OntologyExtractionSourceInfo;
 	readonly proposals: readonly ProposalDraft[];
 	readonly items: readonly OntologyProposal[];
+	readonly assertions: readonly AssertionDraft[];
+	readonly assertionItems: readonly EpistemicAssertion[];
 	readonly count: number;
 	readonly writtenCount: number;
+	readonly assertionCount: number;
+	readonly writtenAssertionCount: number;
 	readonly dryRun: boolean;
 	readonly extractionMode: "mechanical" | "provider" | "mixed";
 	readonly providerName: string | null;
@@ -228,19 +251,49 @@ function normalizeExtractionPolicies(root: Readonly<Record<string, unknown>>): P
 		.filter((proposal): proposal is ProposalDraft => proposal !== null);
 }
 
+function normalizeExtractionAssertions(root: Readonly<Record<string, unknown>>): AssertionDraft[] {
+	return readArray(root, "assertions").flatMap((raw): AssertionDraft[] => {
+		if (!isRecord(raw)) return [];
+		const entity = readString(raw, "entity");
+		const entityId = readString(raw, "entity_id");
+		const predicate = readString(raw, "predicate") ?? "claims";
+		const content = readString(raw, "content") ?? readString(raw, "value");
+		if ((!entity && !entityId) || !content) return [];
+		return [
+			{
+				entity: entity ?? undefined,
+				entity_id: entityId ?? undefined,
+				predicate,
+				content,
+				speaker: readString(raw, "speaker"),
+				asserted_at: readString(raw, "asserted_at") ?? readString(raw, "when"),
+				confidence: readNumber(raw, "confidence"),
+				evidence: readArray(raw, "evidence"),
+				source_kind: readString(raw, "source_kind"),
+				source_id: readString(raw, "source_id"),
+				source_path: readString(raw, "source_path"),
+				source_root: readString(raw, "source_root"),
+				claim_attribute_id: readString(raw, "claim_attribute_id"),
+			},
+		];
+	});
+}
+
 function normalizeProposalJson(raw: unknown): ParsedProposalJson {
 	if (Array.isArray(raw))
 		return {
 			proposals: raw.map(normalizeExplicitProposal).filter((proposal): proposal is ProposalDraft => proposal !== null),
+			assertions: [],
 			questions: [],
 		};
-	if (!isRecord(raw)) return { proposals: [], questions: [] };
+	if (!isRecord(raw)) return { proposals: [], assertions: [], questions: [] };
 	const explicit = readArray(raw, "proposals");
 	if (explicit.length > 0) {
 		return {
 			proposals: explicit
 				.map(normalizeExplicitProposal)
 				.filter((proposal): proposal is ProposalDraft => proposal !== null),
+			assertions: normalizeExtractionAssertions(raw),
 			questions: readStringArray(raw, "questions"),
 		};
 	}
@@ -251,6 +304,7 @@ function normalizeProposalJson(raw: unknown): ParsedProposalJson {
 			...normalizeExtractionLinks(raw),
 			...normalizeExtractionPolicies(raw),
 		],
+		assertions: normalizeExtractionAssertions(raw),
 		questions: readStringArray(raw, "questions"),
 	};
 }
@@ -258,6 +312,7 @@ function normalizeProposalJson(raw: unknown): ParsedProposalJson {
 function mergeParsedProposalJson(items: readonly ParsedProposalJson[]): ParsedProposalJson {
 	return {
 		proposals: items.flatMap((item) => item.proposals),
+		assertions: items.flatMap((item) => item.assertions),
 		questions: [...new Set(items.flatMap((item) => item.questions))],
 	};
 }
@@ -348,33 +403,34 @@ function mechanicalClaimProposals(source: SourceRecord): ProposalDraft[] {
 	];
 	const seen = new Set<string>();
 	return matches
-		.map((match) => {
+		.flatMap((match): ProposalDraft[] => {
 			const entity = normalizeName(match[1] ?? "");
 			const verb = normalizeName(match[2] ?? "");
 			const rest = normalizeName(match[3] ?? "");
 			const first = entity.split(/\s+/)[0] ?? "";
-			if (blocked.has(first) || entity.length < 2 || rest.length < 12) return null;
+			if (blocked.has(first) || entity.length < 2 || rest.length < 12) return [];
 			const value = `${entity} ${verb} ${rest}.`;
 			const key = `${entity.toLowerCase()}:${value.toLowerCase()}`;
-			if (seen.has(key)) return null;
+			if (seen.has(key)) return [];
 			seen.add(key);
-			return {
-				operation: "add_claim_value",
-				payload: {
-					entity,
-					entity_type: "concept",
-					aspect: "extracted",
-					group_key: "transcript",
-					claim_key: claimKeyFor(`${verb} ${rest}`),
-					value,
+			return [
+				{
+					operation: "add_claim_value",
+					payload: {
+						entity,
+						entity_type: "concept",
+						aspect: "extracted",
+						group_key: "transcript",
+						claim_key: claimKeyFor(`${verb} ${rest}`),
+						value,
+					},
+					confidence: 0.55,
+					rationale: "Detected explicit sentence-level claim in source text.",
+					evidence: evidence(source, value),
+					risk: "medium",
 				},
-				confidence: 0.55,
-				rationale: "Detected explicit sentence-level claim in source text.",
-				evidence: evidence(source, value),
-				risk: "medium",
-			} satisfies ProposalDraft;
+			];
 		})
-		.filter((proposal): proposal is ProposalDraft => proposal !== null)
 		.slice(0, 50);
 }
 
@@ -397,32 +453,33 @@ function mechanicalLinkProposals(source: SourceRecord): ProposalDraft[] {
 	];
 	const seen = new Set<string>();
 	return matches
-		.map((match) => {
+		.flatMap((match): ProposalDraft[] => {
 			const sourceEntity = normalizeName(match[1] ?? "");
 			const linkType = normalizeName(match[2] ?? "");
 			const targetEntity = normalizeName(match[3] ?? "");
-			if (!linkTypes.has(linkType) || sourceEntity.length < 2 || targetEntity.length < 2) return null;
+			if (!linkTypes.has(linkType) || sourceEntity.length < 2 || targetEntity.length < 2) return [];
 			const key = `${sourceEntity.toLowerCase()}:${linkType}:${targetEntity.toLowerCase()}`;
-			if (seen.has(key)) return null;
+			if (seen.has(key)) return [];
 			seen.add(key);
 			const quote = `${sourceEntity} ${linkType} ${targetEntity}`;
-			return {
-				operation: "create_link",
-				payload: {
-					source_entity: sourceEntity,
-					source_type: "concept",
-					link_type: linkType === "supports" ? "supports_claim" : linkType,
-					target_entity: targetEntity,
-					target_type: "concept",
-					reason: "Detected explicit relationship statement in source text.",
+			return [
+				{
+					operation: "create_link",
+					payload: {
+						source_entity: sourceEntity,
+						source_type: "concept",
+						link_type: linkType === "supports" ? "supports_claim" : linkType,
+						target_entity: targetEntity,
+						target_type: "concept",
+						reason: "Detected explicit relationship statement in source text.",
+					},
+					confidence: 0.58,
+					rationale: "Detected explicit relationship statement in source text.",
+					evidence: evidence(source, quote),
+					risk: "medium",
 				},
-				confidence: 0.58,
-				rationale: "Detected explicit relationship statement in source text.",
-				evidence: evidence(source, quote),
-				risk: "medium",
-			} satisfies ProposalDraft;
+			];
 		})
-		.filter((proposal): proposal is ProposalDraft => proposal !== null)
 		.slice(0, 50);
 }
 
@@ -525,6 +582,17 @@ Return ONLY JSON with this shape:
       "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
     }
   ],
+  "assertions": [
+    {
+      "entity": "string",
+      "predicate": "claims|believes|observed|decided|prefers|denies|questions",
+      "content": "what the source says, believes, asks, denies, decides, or observes",
+      "speaker": "person/tool/source name|null",
+      "asserted_at": "ISO timestamp if available|null",
+      "confidence": 0.0,
+      "evidence": [{ "source_kind": "${source.sourceKind}", "source_id": "${source.sourceId}", "source_path": ${JSON.stringify(source.sourcePath)}, "quote": "short exact quote" }]
+    }
+  ],
   "questions": ["uncertainties that need review"]
 }
 
@@ -538,6 +606,7 @@ async function extractProviderProposals(
 	params: Pick<ExtractOntologyParams, "providerTimeoutMs" | "providerMaxTokens">,
 ): Promise<{
 	readonly proposals: readonly ProposalDraft[];
+	readonly assertions: readonly AssertionDraft[];
 	readonly questions: readonly string[];
 	readonly warnings: readonly string[];
 }> {
@@ -550,12 +619,17 @@ async function extractProviderProposals(
 		const parsed = parseOntologyJsonOutput(raw);
 		return {
 			proposals: parsed.proposals,
+			assertions: parsed.assertions,
 			questions: parsed.questions,
-			warnings: parsed.proposals.length > 0 ? [] : [`Provider ${provider.name} returned no valid ontology proposals.`],
+			warnings:
+				parsed.proposals.length > 0 || parsed.assertions.length > 0
+					? []
+					: [`Provider ${provider.name} returned no valid ontology proposals or assertions.`],
 		};
 	} catch (err) {
 		return {
 			proposals: [],
+			assertions: [],
 			questions: [],
 			warnings: [`Provider ${provider.name} extraction failed: ${err instanceof Error ? err.message : String(err)}`],
 		};
@@ -683,14 +757,17 @@ export async function extractOntologyProposals(
 	const source = readSource(accessor, params);
 	const explicitParsed = mergeParsedProposalJson(extractJsonBlocks(source.content).map(normalizeProposalJson));
 	const explicit = explicitParsed.proposals;
+	const explicitAssertions = explicitParsed.assertions;
 	const mechanical = extractProposals(source, limit);
 	const warnings: string[] = [];
 	let providerProposals: readonly ProposalDraft[] = [];
+	let providerAssertions: readonly AssertionDraft[] = [];
 	let providerQuestions: readonly string[] = [];
 	if (params.useProvider) {
 		if (params.provider) {
 			const provider = await extractProviderProposals(source, params.provider, params);
 			providerProposals = provider.proposals;
+			providerAssertions = provider.assertions;
 			providerQuestions = provider.questions;
 			warnings.push(...provider.warnings);
 		} else {
@@ -701,6 +778,7 @@ export async function extractOntologyProposals(
 		params.useProvider && providerProposals.length > 0
 			? dedupeProposals([...explicit, ...providerProposals], limit)
 			: mechanical;
+	const assertions = [...explicitAssertions, ...providerAssertions].slice(0, limit);
 	const proposals = raw.map((proposal) => ({
 		...proposal,
 		evidence: proposal.evidence && proposal.evidence.length > 0 ? proposal.evidence : evidence(source, source.id),
@@ -712,13 +790,50 @@ export async function extractOntologyProposals(
 				? "provider"
 				: "mechanical";
 	const questions = [...new Set([...explicitParsed.questions, ...providerQuestions])];
-	if (!params.writeProposals || proposals.length === 0) {
+	const proposalInputs: readonly CreateOntologyProposalInput[] = proposals.map((proposal) => ({
+		agentId: params.agentId,
+		operation: proposal.operation,
+		payload: proposal.payload,
+		confidence: proposal.confidence,
+		rationale: proposal.rationale,
+		evidence: proposal.evidence,
+		risk: proposal.risk,
+		sourceKind: source.sourceKind,
+		sourceId: source.sourceId,
+		sourcePath: source.sourcePath,
+		createdBy: params.createdBy ?? "ontology-extract",
+	}));
+	const assertionInputs: readonly CreateEpistemicAssertionInput[] = assertions.map((assertion) => ({
+		agentId: params.agentId,
+		entity: assertion.entity,
+		entityId: assertion.entity_id,
+		predicate: assertion.predicate,
+		content: assertion.content,
+		speaker: assertion.speaker ?? null,
+		assertedAt: assertion.asserted_at ?? null,
+		confidence: assertion.confidence,
+		evidence:
+			assertion.evidence && assertion.evidence.length > 0 ? assertion.evidence : evidence(source, assertion.content),
+		sourceKind: assertion.source_kind ?? source.sourceKind,
+		sourceId: assertion.source_id ?? source.sourceId,
+		sourcePath: assertion.source_path ?? source.sourcePath,
+		sourceRoot: assertion.source_root ?? null,
+		claimAttributeId: assertion.claim_attribute_id ?? null,
+		createdBy: params.createdBy ?? "ontology-extract",
+	}));
+	const shouldWriteProposals = params.writeProposals === true && proposalInputs.length > 0;
+	const shouldWriteAssertions = params.writeAssertions === true && assertionInputs.length > 0;
+	if (!shouldWriteProposals && !shouldWriteAssertions) {
 		return {
 			source: sourceInfo(source),
 			proposals,
 			items: [],
+			assertions,
+			assertionItems: [],
 			count: proposals.length,
 			writtenCount: 0,
+			assertionCount: assertions.length,
+			writtenAssertionCount: 0,
 			dryRun: true,
 			extractionMode,
 			providerName: params.useProvider ? (params.provider?.name ?? null) : null,
@@ -727,29 +842,24 @@ export async function extractOntologyProposals(
 		};
 	}
 
-	const written = createOntologyProposals(
-		accessor,
-		proposals.map((proposal) => ({
-			agentId: params.agentId,
-			operation: proposal.operation,
-			payload: proposal.payload,
-			confidence: proposal.confidence,
-			rationale: proposal.rationale,
-			evidence: proposal.evidence,
-			risk: proposal.risk,
-			sourceKind: source.sourceKind,
-			sourceId: source.sourceId,
-			sourcePath: source.sourcePath,
-			createdBy: params.createdBy ?? "ontology-extract",
-		})),
-	);
+	const written = accessor.withWriteTx((db) => {
+		const proposalResult = shouldWriteProposals
+			? createOntologyProposalsInTx(db, proposalInputs)
+			: { items: [] as readonly OntologyProposal[], count: 0 };
+		const assertionItems = shouldWriteAssertions ? createEpistemicAssertionsInTx(accessor, db, assertionInputs) : [];
+		return { proposalResult, assertionItems };
+	});
 
 	return {
 		source: sourceInfo(source),
 		proposals,
-		items: written.items,
+		items: written.proposalResult.items,
+		assertions,
+		assertionItems: written.assertionItems,
 		count: proposals.length,
-		writtenCount: written.count,
+		writtenCount: written.proposalResult.count,
+		assertionCount: assertions.length,
+		writtenAssertionCount: written.assertionItems.length,
 		dryRun: false,
 		extractionMode,
 		providerName: params.useProvider ? (params.provider?.name ?? null) : null,

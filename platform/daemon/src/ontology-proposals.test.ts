@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { listEpistemicAssertions } from "./ontology-assertions";
 import { getOntologyClaimEvidence } from "./ontology-claim-evidence";
 import { consolidateOntologyProposals } from "./ontology-consolidation";
 import { extractOntologyProposals } from "./ontology-extraction";
@@ -268,6 +269,102 @@ describe("ontology proposals", () => {
 		expect(written.writtenCount).toBe(2);
 		expect(written.items.map((item) => item.createdBy)).toEqual(["test-extractor", "test-extractor"]);
 		expect(written.items.every((item) => item.sourceKind === "transcript")).toBe(true);
+	});
+
+	it("writes extracted assertions without marking the response as a dry run", async () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 1);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"assertion-extract",
+				JSON.stringify({
+					assertions: [
+						{
+							entity: "Signet",
+							predicate: "believes",
+							content: "Signet should model who believes what over time.",
+							speaker: "Nicholai",
+							confidence: 0.91,
+							evidence: [{ quote: "who believes what" }],
+						},
+					],
+				}),
+				"codex",
+				"/tmp/signet",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:01:00.000Z",
+			);
+		});
+
+		const result = await extractOntologyProposals(getDbAccessor(), {
+			agentId: "ant",
+			from: "transcript:assertion-extract",
+			writeAssertions: true,
+		});
+
+		expect(result.dryRun).toBe(false);
+		expect(result.writtenCount).toBe(0);
+		expect(result.writtenAssertionCount).toBe(1);
+		expect(result.assertionItems[0]?.predicate).toBe("believes");
+	});
+
+	it("rolls back proposal and assertion extraction when one assertion is invalid", async () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 1);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"invalid-assertion-extract",
+				JSON.stringify({
+					proposals: [
+						{
+							operation: "create_entity",
+							payload: { name: "Rollback Candidate", entity_type: "concept" },
+							confidence: 0.7,
+							rationale: "Candidate from source evidence.",
+							evidence: [{ quote: "candidate" }],
+						},
+					],
+					assertions: [
+						{
+							entity: "Signet",
+							predicate: "claims",
+							content: "Signet keeps attributed assertions.",
+							evidence: [{ quote: "attributed assertions" }],
+						},
+						{
+							entity: "Signet",
+							predicate: "maybe",
+							content: "This invalid assertion should roll back the batch.",
+							evidence: [{ quote: "invalid assertion" }],
+						},
+					],
+				}),
+				"codex",
+				"/tmp/signet",
+				"ant",
+				"2026-05-06T00:00:00.000Z",
+				"2026-05-06T00:01:00.000Z",
+			);
+		});
+
+		await expect(
+			extractOntologyProposals(getDbAccessor(), {
+				agentId: "ant",
+				from: "transcript:invalid-assertion-extract",
+				writeProposals: true,
+				writeAssertions: true,
+			}),
+		).rejects.toThrow("predicate is invalid");
+
+		expect(listOntologyProposals(getDbAccessor(), { agentId: "ant" }).items).toHaveLength(0);
+		expect(listEpistemicAssertions(getDbAccessor(), { agentId: "ant", status: "all" }).items).toHaveLength(0);
 	});
 
 	it("mechanically extracts conservative proposals from plain transcript text", async () => {

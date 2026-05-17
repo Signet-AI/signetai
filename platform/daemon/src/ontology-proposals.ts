@@ -1370,11 +1370,18 @@ export function createOntologyProposals(
 ): CreateOntologyProposalsResult {
 	if (inputs.length === 0) throw new OntologyProposalError("proposals are required", 400);
 	if (inputs.length > 500) throw new OntologyProposalError("cannot create more than 500 proposals at once", 400);
+	return accessor.withWriteTx((db) => createOntologyProposalsInTx(db, inputs));
+}
+
+export function createOntologyProposalsInTx(
+	db: WriteDb,
+	inputs: readonly CreateOntologyProposalInput[],
+): CreateOntologyProposalsResult {
+	if (inputs.length === 0) throw new OntologyProposalError("proposals are required", 400);
+	if (inputs.length > 500) throw new OntologyProposalError("cannot create more than 500 proposals at once", 400);
 	const ts = now();
-	return accessor.withWriteTx((db) => {
-		const items = inputs.map((input) => insertProposalInTx(db, input, ts));
-		return { items, count: items.length };
-	});
+	const items = inputs.map((input) => insertProposalInTx(db, input, ts));
+	return { items, count: items.length };
 }
 
 export function getOntologyProposal(accessor: DbAccessor, id: string, agentId: string): OntologyProposal | null {

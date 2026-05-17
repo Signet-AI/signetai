@@ -25,7 +25,7 @@ describe("registerOntologyCommands", () => {
 		expect(ontology).toBeDefined();
 		if (!ontology) throw new Error("ontology command was not registered");
 		expect(ontology?.commands.map((cmd) => cmd.name())).toEqual(
-			expect.arrayContaining(["entity", "claim", "aspect", "link", "stream"]),
+			expect.arrayContaining(["entity", "claim", "aspect", "link", "stream", "assertions", "assertion"]),
 		);
 
 		const names = (parent: Command, name: string): readonly string[] =>
@@ -35,6 +35,9 @@ describe("registerOntologyCommands", () => {
 		expect(names(ontology, "aspect")).toEqual(expect.arrayContaining(["create", "rename", "archive"]));
 		expect(names(ontology, "link")).toEqual(expect.arrayContaining(["create", "update", "archive"]));
 		expect(names(ontology, "stream")).toEqual(expect.arrayContaining(["apply"]));
+		expect(names(ontology, "assertion")).toEqual(
+			expect.arrayContaining(["show", "create", "link-claim", "archive", "supersede", "import"]),
+		);
 	});
 
 	test("objects lists ontology objects through knowledge navigation", async () => {
@@ -772,6 +775,86 @@ describe("registerOntologyCommands", () => {
 		await program.parseAsync(["node", "test", "ontology", "pipeline", "explain"]);
 
 		expect(capturedPath).toBe("/api/status");
+	});
+
+	test("assertion commands use epistemic assertion endpoints", async () => {
+		const calls: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+		let daemonChecks = 0;
+		console.log = () => {};
+		const program = new Command();
+		registerOntologyCommands(program, {
+			ensureDaemonForSecrets: async () => {
+				daemonChecks += 1;
+				return true;
+			},
+			secretApiCall: async (method, path, body) => {
+				calls.push({ method, path, body });
+				return {
+					ok: true,
+					data: {
+						id: "assertion-1",
+						subjectEntityName: "Signet",
+						predicate: "claims",
+						content: "Signet tracks attributed claims.",
+						confidence: 0.9,
+						status: "active",
+					},
+				};
+			},
+		});
+
+		await program.parseAsync(["node", "test", "ontology", "assertions", "--entity", "Signet", "--agent", "ant"]);
+		await program.parseAsync(["node", "test", "ontology", "assertion", "show", "assertion-1", "--agent", "ant"]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"assertion",
+			"create",
+			"--entity",
+			"Signet",
+			"--predicate",
+			"claims",
+			"--content",
+			"Signet tracks attributed claims.",
+			"--source-kind",
+			"transcript",
+			"--confidence",
+			"0.9",
+		]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"assertion",
+			"link-claim",
+			"assertion-1",
+			"--attribute-id",
+			"attr-1",
+		]);
+		await program.parseAsync(["node", "test", "ontology", "assertion", "archive", "assertion-1", "--reason", "stale"]);
+		await program.parseAsync([
+			"node",
+			"test",
+			"ontology",
+			"assertion",
+			"supersede",
+			"assertion-1",
+			"--content",
+			"Signet tracks attributed assertions.",
+			"--source-kind",
+			"transcript",
+		]);
+
+		expect(calls[0]?.path).toBe("/api/ontology/assertions?entity=Signet&status=active&agent_id=ant");
+		expect(calls[1]?.path).toBe("/api/ontology/assertions/assertion-1?agent_id=ant");
+		expect(calls[2]?.path).toBe("/api/ontology/assertions");
+		expect((calls[2]?.body as { readonly predicate?: string; readonly confidence?: number }).predicate).toBe("claims");
+		expect((calls[2]?.body as { readonly confidence?: number }).confidence).toBe(0.9);
+		expect(calls[3]?.path).toBe("/api/ontology/assertions/assertion-1/link-claim");
+		expect(calls[4]?.path).toBe("/api/ontology/assertions/assertion-1/archive");
+		expect(calls[5]?.path).toBe("/api/ontology/assertions/assertion-1/supersede");
+		expect(daemonChecks).toBe(calls.length);
 	});
 
 	test("config show makes the audited operation surface explicit", async () => {
