@@ -2,6 +2,7 @@
 name: dreaming
 description: "Maintain Signet's living ontology and memory substrate from transcripts, memory artifacts, source artifacts, notes, summaries, and imported records."
 version: 1.0.0
+builtin: true
 ---
 
 # Dreaming

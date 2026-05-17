@@ -67,18 +67,32 @@ function pidFile(agentsDir: string): string {
 	return join(agentsDir, ".daemon", "pid");
 }
 
-function daemonPaths(): string[] {
+export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
+	const bundledNativeDaemon = env.SIGNET_DIR
+		? join(env.SIGNET_DIR, "runtime", "daemon-rs", process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon")
+		: null;
+	const bundledJsDaemon = env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null;
 	return [
+		bundledNativeDaemon,
+		bundledJsDaemon,
 		join(__dirname, "daemon.js"),
 		join(cliDir, "daemon.js"),
 		join(pkgDir, "..", "daemon", "dist", "daemon.js"),
 		join(pkgDir, "..", "daemon", "src", "daemon.ts"),
-	].filter((path, index, items) => items.indexOf(path) === index);
+	]
+		.filter((path): path is string => path !== null)
+		.filter((path, index, items) => items.indexOf(path) === index);
+}
+
+function daemonPaths(): string[] {
+	return resolveDaemonPaths();
 }
 
 function daemonMarks(paths: readonly string[]): string[] {
 	return [
 		...paths,
+		"/runtime/daemon-rs/signet-daemon",
+		"\\runtime\\daemon-rs\\signet-daemon.exe",
 		"/signetai/dist/daemon.js",
 		"/platform/daemon/dist/daemon.js",
 		"/platform/daemon/src/daemon.ts",
@@ -240,6 +254,29 @@ function readCmd(pid: number): string | null {
 	}
 }
 
+function findDaemonProcessPids(paths: readonly string[] = daemonPaths()): number[] {
+	try {
+		const proc = spawnSync("ps", ["-axo", "pid=,command="], {
+			encoding: "utf-8",
+			windowsHide: true,
+		});
+		if (proc.status !== 0) return [];
+		return proc.stdout
+			.split("\n")
+			.flatMap((line) => {
+				const match = line.trimStart().match(/^(\d+)\s+(.+)$/);
+				if (!match) return [];
+				const pid = Number.parseInt(match[1] ?? "", 10);
+				const cmd = match[2] ?? "";
+				if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return [];
+				return matchesDaemon(cmd, paths) ? [pid] : [];
+			})
+			.filter((pid, index, items) => items.indexOf(pid) === index);
+	} catch {
+		return [];
+	}
+}
+
 export function readManagedDaemonPid(agentsDir: string = AGENTS_DIR, deps: DaemonProbeDeps = {}): number | null {
 	const path = pidFile(agentsDir);
 	if (!existsSync(path)) {
@@ -289,9 +326,10 @@ export async function getDaemonStatus(): Promise<{
 	const instances = await getDaemonInstances();
 	if (instances.length > 0) {
 		const preferred = instances.find((instance) => typeof instance.uptime === "number") ?? instances[0];
+		const fallbackPid = typeof preferred.pid === "number" ? null : (findDaemonProcessPids()[0] ?? null);
 		return {
 			running: true,
-			pid: preferred.pid,
+			pid: preferred.pid ?? fallbackPid,
 			uptime: preferred.uptime,
 			version: preferred.version,
 			host: preferred.host,
@@ -406,8 +444,8 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		`--setenv=SIGNET_HOST=${input.host}`,
 		`--setenv=SIGNET_BIND=${input.bind}`,
 		`--setenv=SIGNET_PATH=${input.agentsDir}`,
-		processRuntimeCommand(),
-		input.daemonPath,
+		"--setenv=SIGNET_DAEMON_ENTRYPOINT=1",
+		...resolveDaemonLaunchCommand(input.daemonPath),
 	];
 }
 
@@ -498,11 +536,32 @@ function findExecutableOnPath(name: string, pathValue: string | undefined = proc
 	return null;
 }
 
-function processRuntimeCommand(): string {
-	if (basename(process.execPath).startsWith("bun")) return process.execPath;
-	const found = findExecutableOnPath("bun");
+export function resolveDaemonRuntimeCommand(
+	env: NodeJS.ProcessEnv = process.env,
+	execPath: string = process.execPath,
+	pathValue: string | undefined = process.env.PATH,
+): string {
+	if (env.SIGNET_DIR) {
+		const nodeName = process.platform === "win32" ? "node.exe" : "node";
+		const bundledNode = join(env.SIGNET_DIR, "runtime", "node", "bin", nodeName);
+		if (existsSync(bundledNode)) return bundledNode;
+	}
+
+	if (basename(execPath).startsWith("bun")) return execPath;
+	const found = findExecutableOnPath("bun", pathValue);
 	if (found) return found;
 	throw new Error("bun executable not found on PATH. Reinstall bun or run signet with bun.");
+}
+
+function isJavaScriptDaemonPath(path: string): boolean {
+	return path.endsWith(".js") || path.endsWith(".ts");
+}
+
+export function resolveDaemonLaunchCommand(daemonPath: string, env: NodeJS.ProcessEnv = process.env): string[] {
+	if (!isJavaScriptDaemonPath(daemonPath)) {
+		return [daemonPath];
+	}
+	return [resolveDaemonRuntimeCommand(env), daemonPath];
 }
 
 function xmlEscape(value: string): string {
@@ -527,11 +586,20 @@ export function launchdDaemonPlistPath(_agentsDir: string, home: string = homedi
 
 export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string {
 	const label = input.label ?? LAUNCHD_DAEMON_LABEL;
+	const programArguments = resolveDaemonLaunchCommand(input.daemonPath)
+		.map(
+			(arg) => `
+		<string>${xmlEscape(arg)}</string>`,
+		)
+		.join("");
 	const env = {
 		SIGNET_PORT: String(input.port),
 		SIGNET_HOST: input.host,
 		SIGNET_BIND: input.bind,
 		SIGNET_PATH: input.agentsDir,
+		SIGNET_DAEMON_ENTRYPOINT: "1",
+		...(process.env.SIGNET_DIR ? { SIGNET_DIR: process.env.SIGNET_DIR } : {}),
+		...(process.env.SIGNET_DASHBOARD_DIR ? { SIGNET_DASHBOARD_DIR: process.env.SIGNET_DASHBOARD_DIR } : {}),
 		HOME: process.env.HOME ?? homedir(),
 		PATH: process.env.PATH ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 	};
@@ -551,8 +619,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 	<string>${xmlEscape(label)}</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>${xmlEscape(processRuntimeCommand())}</string>
-		<string>${xmlEscape(input.daemonPath)}</string>
+${programArguments}
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>${envEntries}
@@ -651,6 +718,7 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		SIGNET_HOST: net.host,
 		SIGNET_BIND: net.bind,
 		SIGNET_PATH: agentsDir,
+		SIGNET_DAEMON_ENTRYPOINT: "1",
 	};
 
 	// `detached: true` only creates a new process group; it does not escape the
@@ -740,7 +808,8 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	}
 
 	if (!startedByServiceManager) {
-		const proc = spawn(processRuntimeCommand(), [daemonPath], {
+		const [command, ...args] = resolveDaemonLaunchCommand(daemonPath);
+		const proc = spawn(command, args, {
 			detached: true,
 			stdio: ["ignore", "ignore", stderrTarget],
 			windowsHide: true,
@@ -761,6 +830,14 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 		proc.on("exit", () => {
 			procExited = true;
 		});
+
+		if (typeof proc.pid === "number") {
+			try {
+				writeFileSync(pidFile(agentsDir), `${proc.pid}\n`);
+			} catch {
+				// Best effort.
+			}
+		}
 
 		proc.unref();
 	}
@@ -818,6 +895,9 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolea
 		if (typeof instance.pid === "number" && instance.pid > 0) {
 			pids.add(instance.pid);
 		}
+	}
+	for (const pid of findDaemonProcessPids()) {
+		pids.add(pid);
 	}
 
 	for (const pid of pids) {

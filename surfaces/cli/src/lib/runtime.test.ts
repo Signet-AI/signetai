@@ -13,12 +13,51 @@ import {
 	launchdDaemonPlistPath,
 	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
+	resolveDaemonLaunchCommand,
+	resolveDaemonPaths,
+	resolveDaemonRuntimeCommand,
 } from "./runtime.js";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
+});
+
+describe("resolveDaemonPaths", () => {
+	it("prefers the native bundle daemon path when SIGNET_DIR is set", () => {
+		const paths = resolveDaemonPaths({ SIGNET_DIR: "/opt/signet" });
+		expect(paths[0]).toBe("/opt/signet/runtime/daemon-rs/signet-daemon");
+		expect(paths).toContain("/opt/signet/runtime/daemon-js/daemon.js");
+	});
+});
+
+describe("resolveDaemonRuntimeCommand", () => {
+	it("uses the bundled Node runtime when SIGNET_DIR points at a native bundle install", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-node-"));
+		const nodePath = join(root, "runtime", "node", "bin", "node");
+		mkdirSync(join(root, "runtime", "node", "bin"), { recursive: true });
+		writeFileSync(nodePath, "");
+
+		expect(resolveDaemonRuntimeCommand({ SIGNET_DIR: root }, "/usr/bin/node", "")).toBe(nodePath);
+
+		rmSync(root, { recursive: true, force: true });
+	});
+});
+
+describe("resolveDaemonLaunchCommand", () => {
+	it("launches native daemon binaries directly", () => {
+		expect(resolveDaemonLaunchCommand("/opt/signet/runtime/daemon-rs/signet-daemon")).toEqual([
+			"/opt/signet/runtime/daemon-rs/signet-daemon",
+		]);
+	});
+
+	it("launches JavaScript daemon scripts through the runtime command", () => {
+		expect(resolveDaemonLaunchCommand("/opt/signet/runtime/daemon-js/daemon.js")).toEqual([
+			process.execPath,
+			"/opt/signet/runtime/daemon-js/daemon.js",
+		]);
+	});
 });
 
 describe("buildSystemdDaemonStartArgs", () => {
@@ -39,6 +78,7 @@ describe("buildSystemdDaemonStartArgs", () => {
 		expect(args).toContain("--setenv=SIGNET_HOST=127.0.0.1");
 		expect(args).toContain("--setenv=SIGNET_BIND=0.0.0.0");
 		expect(args).toContain("--setenv=SIGNET_PATH=/home/user/.agents");
+		expect(args).toContain("--setenv=SIGNET_DAEMON_ENTRYPOINT=1");
 		expect(args).toContain("--property=StandardError=append:/home/user/.agents/.daemon/logs/startup.log");
 		expect(args.slice(-2)).toEqual([process.execPath, "/opt/signet/dist/daemon.js"]);
 	});
@@ -71,6 +111,8 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<string>0.0.0.0</string>");
 		expect(plist).toContain("<key>SIGNET_PATH</key>");
 		expect(plist).toContain("<string>/Users/user/.agents</string>");
+		expect(plist).toContain("<key>SIGNET_DAEMON_ENTRYPOINT</key>");
+		expect(plist).toContain("<string>1</string>");
 		expect(plist).toContain("<key>HOME</key>");
 		expect(plist).toContain("<key>RunAtLoad</key>");
 		expect(plist).toContain("<true/>");

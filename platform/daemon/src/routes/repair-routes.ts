@@ -27,6 +27,7 @@ import {
 	resyncVectorIndex,
 	structuralBackfill,
 } from "../repair-actions.js";
+import { which } from "../which.js";
 import { AGENTS_DIR, authConfig, repairLimiter } from "./state.js";
 
 function resolveRepairContext(c: Context): RepairContext {
@@ -564,7 +565,7 @@ export function registerRepairRoutes(app: Hono): void {
 		}
 
 		const [bin, args] = cmd;
-		const resolved = Bun.which(bin);
+		const resolved = which(bin);
 		if (!resolved) {
 			return c.json({ error: `Binary not found: ${bin}` }, 500);
 		}

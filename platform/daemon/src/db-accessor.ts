@@ -6,7 +6,6 @@
  * opened on demand (SQLite WAL mode allows concurrent readers).
  */
 
-import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import {
 	copyFileSync,
 	existsSync,
@@ -29,6 +28,35 @@ import {
 	recreateMemoriesFts,
 	runMigrations,
 } from "@signet/core";
+
+const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
+
+type SqliteStatement = {
+	run(...params: unknown[]): void;
+	get(...params: unknown[]): Record<string, unknown> | undefined;
+	all(...params: unknown[]): Record<string, unknown>[];
+};
+
+type SqliteDatabase = {
+	prepare(sql: string): SqliteStatement;
+	exec(sql: string): void;
+	close(): void;
+};
+
+let Database: new (path: string, opts?: Record<string, unknown>) => SqliteDatabase;
+
+if (isBun) {
+	const { createRequire } = await import("node:module");
+	// eslint-disable-next-line @typescript-eslint/no-require-imports
+	const mod = createRequire(import.meta.url)("bun:sqlite");
+	Database = mod.Database;
+} else {
+	const { createRequire } = await import("node:module");
+	// eslint-disable-next-line @typescript-eslint/no-require-imports
+	Database = createRequire(import.meta.url)("better-sqlite3");
+}
+
+type SQLQueryBindings = unknown;
 
 const HOMEBREW_SQLITE_PATHS = [
 	"/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
@@ -58,16 +86,16 @@ interface SqliteRuntimeConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Public interfaces — thin wrappers over the bun:sqlite Database surface
+// Public interfaces — thin wrappers over the Database surface
 // ---------------------------------------------------------------------------
 
 export interface WriteDb {
 	exec(sql: string): void;
-	prepare(sql: string): Statement;
+	prepare(sql: string): SqliteStatement;
 }
 
 export interface ReadDb {
-	prepare(sql: string): Statement;
+	prepare(sql: string): SqliteStatement;
 }
 
 export interface DbAccessor {
@@ -97,7 +125,7 @@ let vecLoadError: string | null = null;
 // Initialisation
 // ---------------------------------------------------------------------------
 
-function configurePragmas(db: Database): void {
+function configurePragmas(db: SqliteDatabase): void {
 	db.exec("PRAGMA journal_mode = WAL");
 	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec("PRAGMA synchronous = NORMAL");
@@ -109,7 +137,7 @@ function toRecordOrUndefined(row: unknown): Record<string, unknown> | undefined 
 	return row as Record<string, unknown>;
 }
 
-function toMigrationDb(db: Database): {
+function toMigrationDb(db: SqliteDatabase): {
 	exec(sql: string): void;
 	prepare(sql: string): {
 		run(...args: unknown[]): void;
@@ -141,7 +169,7 @@ function toMigrationDb(db: Database): {
 	};
 }
 
-export function toFtsSchemaQueryDb(db: { prepare(sql: string): Statement }): {
+export function toFtsSchemaQueryDb(db: { prepare(sql: string): SqliteStatement }): {
 	prepare(sql: string): {
 		get(...args: SQLQueryBindings[]): Record<string, unknown> | undefined;
 	};
@@ -274,7 +302,13 @@ export function resolveSqliteRuntimeConfig(opts?: {
 
 	const env = opts?.env ?? process.env;
 	const exists = opts?.exists ?? existsSync;
-	const set = opts?.set ?? ((path: string) => Database.setCustomSQLite(path));
+	const set =
+		opts?.set ??
+		((path: string) => {
+			if (typeof (Database as Record<string, unknown>).setCustomSQLite === "function") {
+				(Database as { setCustomSQLite(p: string): void }).setCustomSQLite(path);
+			}
+		});
 	const agentsDir = opts?.agentsDir ?? resolveSqliteAgentsDir({ env });
 	const envPath = env.SIGNET_SQLITE_PATH;
 	if (envPath && !exists(envPath)) {
@@ -349,7 +383,7 @@ function configureCustomSqlite(agentsDir?: string): void {
 	}
 }
 
-function loadVecExtension(db: Database): void {
+function loadVecExtension(db: SqliteDatabase): void {
 	if (vecExtPath === undefined) {
 		vecExtPath = findSqliteVecExtension();
 		if (!vecExtPath) {
@@ -643,7 +677,7 @@ export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string
  * tokenizer. Older installs can carry a legacy porter-tokenized table,
  * which silently harms lexical recall quality for conversational cues.
  */
-export function ensureFtsTable(db: Database): void {
+export function ensureFtsTable(db: SqliteDatabase): void {
 	const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 
 	if (sql === null) {
@@ -667,7 +701,7 @@ export function ensureFtsTable(db: Database): void {
 // Vec table creation + backfill
 // ---------------------------------------------------------------------------
 
-function ensureVecTable(db: Database): void {
+function ensureVecTable(db: SqliteDatabase): void {
 	// Check if vec_embeddings exists and has the correct schema (TEXT id).
 	// If it exists without an id column, drop and recreate.
 	const existing = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get() as
@@ -692,7 +726,7 @@ function ensureVecTable(db: Database): void {
 	`);
 }
 
-function backfillVecEmbeddings(db: Database): void {
+function backfillVecEmbeddings(db: SqliteDatabase): void {
 	// Directly query for missing rows instead of comparing counts.
 	// Count comparison is racy — a row can exist in embeddings but not
 	// vec_embeddings even when counts match (e.g. after a crash mid-sync).
@@ -764,15 +798,15 @@ function backfillVecEmbeddings(db: Database): void {
 const READ_POOL_SIZE = 4;
 const MAX_READ_CONNECTIONS = 16;
 
-function createAccessor(writeConn: Database): DbAccessor {
+function createAccessor(writeConn: SqliteDatabase): DbAccessor {
 	let closed = false;
 
 	// Small pool of reusable read connections. Recall does 3 reads per
 	// request so opening/closing every time adds measurable overhead.
-	const readPool: Database[] = [];
-	const readInUse = new Set<Database>();
+	const readPool: SqliteDatabase[] = [];
+	const readInUse = new Set<SqliteDatabase>();
 
-	function acquireRead(): Database {
+	function acquireRead(): SqliteDatabase {
 		if (dbPath === null) throw new Error("DbAccessor not initialised");
 		const pooled = readPool.pop();
 		if (pooled) {
@@ -790,7 +824,7 @@ function createAccessor(writeConn: Database): DbAccessor {
 		return conn;
 	}
 
-	function releaseRead(conn: Database): void {
+	function releaseRead(conn: SqliteDatabase): void {
 		readInUse.delete(conn);
 		if (readPool.length < READ_POOL_SIZE) {
 			readPool.push(conn);

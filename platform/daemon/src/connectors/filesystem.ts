@@ -6,10 +6,9 @@
  * embedding, and indexing are handled downstream by the document worker.
  */
 
-import { readFileSync } from "node:fs";
-import { access, stat, constants } from "node:fs/promises";
-import { join, basename, resolve } from "node:path";
-import { Glob } from "bun";
+import { readFileSync, readdirSync } from "node:fs";
+import { constants, access, stat } from "node:fs/promises";
+import { basename, join, relative, resolve } from "node:path";
 import type {
 	ConnectorConfig,
 	ConnectorResource,
@@ -19,8 +18,8 @@ import type {
 	SyncResult,
 } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
-import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 import { logger } from "../logger";
+import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -68,51 +67,108 @@ interface DiscoveredFile {
 	readonly size: number;
 }
 
-async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
-	const { rootPath, patterns, ignorePatterns, maxFileSize } = settings;
+async function* walkDir(
+	dir: string,
+	ignorePatterns: readonly string[],
+	relativePrefix = "",
+	dot = false,
+): AsyncGenerator<string> {
+	let entries: ReturnType<typeof readdirSync>;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		if (!dot && entry.name.startsWith(".")) continue;
+		const relativePath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
+		if (ignorePatterns.some((p) => entry.name === p || relativePath === p || relativePath.startsWith(`${p}/`)))
+			continue;
+		const fullPath = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			yield* walkDir(fullPath, ignorePatterns, relativePath, dot);
+		} else if (entry.isFile()) {
+			yield fullPath;
+		}
+	}
+}
+
+export function matchGlob(pattern: string, path: string): boolean {
+	const regex = globToRegex(pattern);
+	return regex.test(path);
+}
+
+function hasDotSegment(path: string): boolean {
+	return path.split("/").some((part) => part.startsWith("."));
+}
+
+function patternAllowsDotSegment(pattern: string): boolean {
+	return pattern.split("/").some((part) => part.startsWith("."));
+}
+
+export function matchConnectorPattern(pattern: string, path: string): boolean {
+	if (hasDotSegment(path) && !patternAllowsDotSegment(pattern)) return false;
+	return matchGlob(pattern, path);
+}
+
+export function globToRegex(pattern: string): RegExp {
+	const normalized = pattern
+		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+		.replace(/\*\*/g, "{{GLOBSTAR}}")
+		.replace(/\*/g, "[^/]*")
+		.replace(/\?/g, "[^/]")
+		.replace(/\/\{\{GLOBSTAR\}\}/g, "(?:/.*)?")
+		.replace(/\{\{GLOBSTAR\}\}\//g, "(?:.*/)?")
+		.replace(/\{\{GLOBSTAR\}\}/g, ".*");
+	const anchored = `^${normalized}$`;
+	if (!pattern.includes("/") && !pattern.includes("*") && !pattern.includes("?")) {
+		return new RegExp(`^${normalized}$`, "i");
+	}
+	if (!pattern.includes("/") && !pattern.includes("{{GLOBSTAR}}")) {
+		return new RegExp(`(?:^|/)${normalized}$`, "i");
+	}
+	return new RegExp(anchored, "i");
+}
+
+export async function discoverFiles(settings: FilesystemSettings): Promise<readonly DiscoveredFile[]> {
+	const { patterns, ignorePatterns, maxFileSize } = settings;
+	const resolvedRoot = resolve(settings.rootPath);
 	const seen = new Set<string>();
 	const results: DiscoveredFile[] = [];
 
-	for (const pattern of patterns) {
-		const glob = new Glob(pattern);
-		for await (const rel of glob.scan({ cwd: rootPath, dot: false })) {
-			if (seen.has(rel)) continue;
+	const wantsDot = patterns.some(patternAllowsDotSegment);
+	for await (const absolutePath of walkDir(resolvedRoot, ignorePatterns, "", wantsDot)) {
+		const rel = relative(resolvedRoot, absolutePath);
+		if (!rel || rel.startsWith("..")) continue;
+		const matches = patterns.some((p) => matchConnectorPattern(p, rel));
+		if (!matches) continue;
+		if (seen.has(rel)) continue;
 
-			// Check against ignore patterns — skip if any segment matches
-			const segments = rel.split("/");
-			const ignored = ignorePatterns.some(
-				(ig) => segments.some((seg) => seg === ig) || rel.startsWith(ig + "/") || rel === ig,
-			);
-			if (ignored) continue;
-
-			const absolutePath = join(rootPath, rel);
-			let fileStat: Awaited<ReturnType<typeof stat>>;
-			try {
-				fileStat = await stat(absolutePath);
-			} catch {
-				// File disappeared between scan and stat — skip
-				continue;
-			}
-
-			if (!fileStat.isFile()) continue;
-			if (fileStat.size > maxFileSize) {
-				logger.debug("pipeline", "Skipping oversized file", {
-					path: rel,
-					size: fileStat.size,
-					maxFileSize,
-				});
-				continue;
-			}
-
-			seen.add(rel);
-			results.push({
-				absolutePath,
-				relativePath: rel,
-				name: basename(rel),
-				mtime: fileStat.mtime,
-				size: fileStat.size,
-			});
+		let fileStat: Awaited<ReturnType<typeof stat>>;
+		try {
+			fileStat = await stat(absolutePath);
+		} catch {
+			continue;
 		}
+
+		if (!fileStat.isFile()) continue;
+		if (fileStat.size > maxFileSize) {
+			logger.debug("pipeline", "Skipping oversized file", {
+				path: rel,
+				size: fileStat.size,
+				maxFileSize,
+			});
+			continue;
+		}
+
+		seen.add(rel);
+		results.push({
+			absolutePath,
+			relativePath: rel,
+			name: basename(rel),
+			mtime: fileStat.mtime,
+			size: fileStat.size,
+		});
 	}
 
 	return results;
@@ -356,8 +412,18 @@ class FilesystemConnector implements ConnectorRuntime {
 	}
 
 	async replay(resourceId: string): Promise<SyncResult> {
-		// resourceId is the relative path from listResources
-		const absolutePath = join(resolve(this.settings.rootPath), resourceId);
+		const resolvedRoot = resolve(this.settings.rootPath);
+		const absolutePath = resolve(resolvedRoot, resourceId);
+		const rel = relative(resolvedRoot, absolutePath);
+		if (!rel || rel.startsWith("..") || resolve(rel) === rel) {
+			return {
+				documentsAdded: 0,
+				documentsUpdated: 0,
+				documentsRemoved: 0,
+				errors: [{ resourceId, message: "Path escapes connector root", retryable: false }],
+				cursor: { lastSyncAt: new Date().toISOString() },
+			};
+		}
 
 		let fileStat: Awaited<ReturnType<typeof stat>>;
 		try {

@@ -80,6 +80,8 @@ export interface Harness {
 	lastSeen: string | null;
 }
 
+const HARNESS_DISCOVERY_TIMEOUT_MS = 1_000;
+
 export interface DocumentConnector {
 	id: string;
 	provider: string;
@@ -1105,14 +1107,18 @@ export async function getEmbeddingGapStats(): Promise<EmbeddingGapStats | null> 
 	}
 }
 
-export async function getHarnesses(): Promise<Harness[]> {
+export async function getHarnesses(timeoutMs = HARNESS_DISCOVERY_TIMEOUT_MS): Promise<Harness[]> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		const response = await fetch(`${API_BASE}/api/harnesses`);
+		const response = await fetch(`${API_BASE}/api/harnesses`, { signal: controller.signal });
 		if (!response.ok) throw new Error("Failed to fetch harnesses");
 		const data = await response.json();
 		return data.harnesses || [];
 	} catch {
 		return [];
+	} finally {
+		clearTimeout(timeout);
 	}
 }
 
