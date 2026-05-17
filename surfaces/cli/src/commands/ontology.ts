@@ -1670,9 +1670,11 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 				operationsUsable: true,
 				operationSurface: {
 					applyFirst: true,
+					propose: true,
 					dryRun: true,
 					refactorProposals: true,
 					provenanceRequired: true,
+					auditedThrough: "ontology_proposals",
 					auditLedger: "ontology_proposals.applied",
 				},
 				policyFile: {

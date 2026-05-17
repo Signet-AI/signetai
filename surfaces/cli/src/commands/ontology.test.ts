@@ -945,15 +945,19 @@ describe("registerOntologyCommands", () => {
 			readonly operationsUsable?: boolean;
 			readonly operationSurface?: {
 				readonly applyFirst?: boolean;
+				readonly propose?: boolean;
 				readonly refactorProposals?: boolean;
 				readonly provenanceRequired?: boolean;
+				readonly auditedThrough?: string;
 			};
 			readonly policyFile?: { readonly active?: boolean };
 		};
 		expect(data.operationsUsable).toBe(true);
 		expect(data.operationSurface?.applyFirst).toBe(true);
+		expect(data.operationSurface?.propose).toBe(true);
 		expect(data.operationSurface?.refactorProposals).toBe(true);
 		expect(data.operationSurface?.provenanceRequired).toBe(true);
+		expect(data.operationSurface?.auditedThrough).toBe("ontology_proposals");
 		expect(data.policyFile?.active).toBe(false);
 	});
 });
