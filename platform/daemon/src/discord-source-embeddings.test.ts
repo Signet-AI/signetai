@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildDiscordSourceChunks, DISCORD_CHUNK_SOURCE_TYPE } from "./discord-source-embeddings";
+import { buildDiscordSourceChunks } from "./discord-source-embeddings";
 import type { DiscordMessage } from "./discord-source-fetch";
 
 function makeMessage(id: string, content: string, author: string, timestamp: string): DiscordMessage {

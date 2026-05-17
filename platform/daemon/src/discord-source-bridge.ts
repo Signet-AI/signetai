@@ -67,7 +67,7 @@ export async function syncDiscordSource(
 	});
 
 	for (const guildId of settings.guildIds) {
-		let guildName = `Guild ${guildId}`;
+		let guildName: string;
 		try {
 			const guild = await fetchGuild(config, guildId);
 			if (!guild) {
