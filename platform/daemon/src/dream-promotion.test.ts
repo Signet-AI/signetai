@@ -19,13 +19,19 @@ describe("dreaming evidence promotion", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	function insertMemory(id: string, content: string, agentId = "ant", updatedAt = "2026-05-16T10:00:00.000Z"): void {
+	function insertMemory(
+		id: string,
+		content: string,
+		agentId = "ant",
+		updatedAt = "2026-05-16T10:00:00.000Z",
+		confidence = 0.9,
+	): void {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memories
 				 (id, type, content, confidence, importance, project, created_at, updated_at, updated_by, agent_id)
-				 VALUES (?, 'preference', ?, 0.9, 0.8, '/tmp/signet', ?, ?, 'test', ?)`,
-			).run(id, content, updatedAt, updatedAt, agentId);
+				 VALUES (?, 'preference', ?, ?, 0.8, '/tmp/signet', ?, ?, 'test', ?)`,
+			).run(id, content, confidence, updatedAt, updatedAt, agentId);
 		});
 	}
 
@@ -195,6 +201,32 @@ describe("dreaming evidence promotion", () => {
 		expect(rows).toHaveLength(0);
 	});
 
+	it("skips mechanical preference extraction from low-confidence memories", async () => {
+		insertMemory(
+			"mem-low-confidence-text",
+			"Nicholai prefers weakly supported memories when we're testing.",
+			"ant",
+			"2026-05-16T12:06:00.000Z",
+			0.1,
+		);
+
+		const result = await promoteDreamingEvidence(getDbAccessor(), {
+			agentId: "ant",
+			from: "memory:mem-low-confidence-text",
+			apply: true,
+		});
+
+		expect(result.count).toBe(0);
+		expect(result.appliedCount).toBe(0);
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT content FROM entity_attributes WHERE agent_id = ?").all("ant") as Array<{
+					content: string;
+				}>,
+		);
+		expect(rows).toHaveLength(0);
+	});
+
 	it("does not split the all-source candidate limit across source classes", async () => {
 		insertMemory(
 			"mem-all-1",
@@ -266,9 +298,12 @@ describe("dreaming evidence promotion", () => {
 		});
 
 		expect(result.sources.map((source) => source.kind).sort()).toEqual(["artifact", "memory", "transcript"]);
+		expect(result.sources.map((source) => source.sourceId)).toContain("mem-all");
+		expect(result.sources.map((source) => source.sourcePath)).toContain("memory/artifact.md");
+		expect(result.sources.map((source) => source.sourcePath)).not.toContain("memory/deleted.md");
+		expect(result.sources.map((source) => source.sourcePath)).not.toContain("memory/other.md");
+		expect(result.sources.map((source) => source.sourceId)).toContain("sess-transcript");
 		expect(result.operations.map((operation) => operation.sourceId)).toContain("mem-all");
-		expect(result.operations.map((operation) => operation.sourcePath)).toContain("memory/artifact.md");
-		expect(result.operations.map((operation) => operation.sourceId)).toContain("sess-transcript");
 		expect(result.operations.map((operation) => operation.sourceId)).not.toContain("mem-other");
 		expect(result.operations.map((operation) => operation.sourcePath)).not.toContain("memory/deleted.md");
 		expect(result.operations.map((operation) => operation.sourcePath)).not.toContain("memory/other.md");

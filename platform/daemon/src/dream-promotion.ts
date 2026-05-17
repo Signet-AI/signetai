@@ -15,6 +15,7 @@ type SourceRecord = {
 	readonly project: string | null;
 	readonly harness: string | null;
 	readonly capturedAt: string;
+	readonly confidence: number | null;
 };
 
 export interface DreamPromotionSourceInfo {
@@ -119,6 +120,10 @@ function isBlockedRisk(value: string | null): boolean {
 	return value?.toLowerCase() === "high";
 }
 
+function meetsPromotionConfidence(value: number | null): value is number {
+	return value !== null && value >= MIN_EXPLICIT_CONFIDENCE && value <= 1;
+}
+
 function readArray(record: Readonly<Record<string, unknown>>, key: string): readonly unknown[] {
 	const value = record[key];
 	return Array.isArray(value) ? value : [];
@@ -169,7 +174,7 @@ function readMemorySource(db: ReadDb, agentId: string, id: string): SourceRecord
 	const placeholders = ids.map(() => "?").join(", ");
 	const row = db
 		.prepare(
-			`SELECT id, content, project, created_at, updated_at
+			`SELECT id, content, project, confidence, created_at, updated_at
 			 FROM memories
 			 WHERE agent_id = ?
 			   AND COALESCE(is_deleted, 0) = 0
@@ -184,6 +189,7 @@ function readMemorySource(db: ReadDb, agentId: string, id: string): SourceRecord
 				readonly project: string | null;
 				readonly created_at: string;
 				readonly updated_at: string;
+				readonly confidence: number | null;
 		  }
 		| undefined;
 	if (!row) return null;
@@ -197,13 +203,14 @@ function readMemorySource(db: ReadDb, agentId: string, id: string): SourceRecord
 		project: row.project,
 		harness: null,
 		capturedAt: row.updated_at ?? row.created_at,
+		confidence: row.confidence,
 	};
 }
 
 function readRecentMemorySources(db: ReadDb, agentId: string, limit: number): SourceRecord[] {
 	return db
 		.prepare(
-			`SELECT id, content, project, created_at, updated_at
+			`SELECT id, content, project, confidence, created_at, updated_at
 			 FROM memories
 			 WHERE agent_id = ?
 			   AND COALESCE(is_deleted, 0) = 0
@@ -218,6 +225,7 @@ function readRecentMemorySources(db: ReadDb, agentId: string, limit: number): So
 				readonly project: string | null;
 				readonly created_at: string;
 				readonly updated_at: string;
+				readonly confidence: number | null;
 			};
 			return {
 				kind: "memory",
@@ -229,6 +237,7 @@ function readRecentMemorySources(db: ReadDb, agentId: string, limit: number): So
 				project: memory.project,
 				harness: null,
 				capturedAt: memory.updated_at ?? memory.created_at,
+				confidence: memory.confidence,
 			} satisfies SourceRecord;
 		});
 }
@@ -265,6 +274,7 @@ function readTranscriptSource(db: ReadDb, agentId: string, id: string): SourceRe
 		project: row.project,
 		harness: row.harness,
 		capturedAt: row.updated_at ?? row.created_at,
+		confidence: null,
 	};
 }
 
@@ -297,6 +307,7 @@ function readRecentTranscriptSources(db: ReadDb, agentId: string, limit: number)
 				project: transcript.project,
 				harness: transcript.harness,
 				capturedAt: transcript.updated_at ?? transcript.created_at,
+				confidence: null,
 			} satisfies SourceRecord;
 		});
 }
@@ -347,6 +358,7 @@ function readArtifactSource(db: ReadDb, agentId: string, id: string): SourceReco
 		project: row.project,
 		harness: row.harness,
 		capturedAt: row.captured_at ?? row.updated_at,
+		confidence: null,
 	};
 }
 
@@ -386,6 +398,7 @@ function readRecentArtifactSources(db: ReadDb, agentId: string, limit: number): 
 				project: artifact.project,
 				harness: artifact.harness,
 				capturedAt: artifact.captured_at ?? artifact.updated_at,
+				confidence: null,
 			} satisfies SourceRecord;
 		});
 }
@@ -475,6 +488,7 @@ function claimTarget(object: string): string {
 }
 
 function mechanicalPreferenceOperations(source: SourceRecord): DreamPromotionOperation[] {
+	if (!meetsPromotionConfidence(source.confidence)) return [];
 	const seen = new Set<string>();
 	const operations: DreamPromotionOperation[] = [];
 	for (const sentence of source.content.split(/(?<=[.!?])\s+|\n+/).map(normalizeSentence)) {
@@ -499,9 +513,9 @@ function mechanicalPreferenceOperations(source: SourceRecord): DreamPromotionOpe
 				claim_key: claimKey,
 				value: normalizeSentence(`${parts.entity} ${claim}`),
 				kind: "attribute",
-				confidence: 0.88,
+				confidence: source.confidence,
 			},
-			confidence: 0.88,
+			confidence: source.confidence,
 			reason: "Dreaming promoted an explicit user preference into an update-in-place attribute slot.",
 			evidence: evidence(source, sentence),
 			risk: "low",
