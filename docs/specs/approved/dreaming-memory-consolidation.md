@@ -436,9 +436,12 @@ The mechanical consolidation engine is complete:
 - **API.** `GET /api/dream/status`, `POST /api/dream/trigger`.
 - **Source-backed promotion.** `POST /api/dream/promote` reads saved
   memories, memory artifacts, and transcripts as evidence and emits direct
-  `set_claim_value` operations. The route previews by default and applies only
-  when requested; it does not use Pipeline V2 extraction and does not create
-  pending proposals as the default path.
+  `set_claim_value` operations. Default mechanical natural-language promotion
+  is limited to confidence-bearing memory rows; memory artifacts and
+  transcripts must provide structured high-confidence operation JSON or opt into
+  provider extraction. The route previews by default and applies only when
+  requested; it does not use Pipeline V2 extraction and does not create pending
+  proposals as the default path.
 - **CLI.** `signet dream status`, `signet dream trigger [--compact]`,
   `signet dream promote [--from <source>] [--apply]`.
 - **DB migration 055.** `dreaming_state` (per-agent PK) and

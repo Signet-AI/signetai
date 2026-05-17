@@ -160,9 +160,12 @@ It writes pending proposals only when `write_proposals` is true.
 
 `/api/dream/promote` is a direct applied maintenance path for the dreaming
 skill. It reads memories, memory artifacts, and transcripts as evidence and
-emits `set_claim_value` operations. The default mode is dry-run. When `apply`
-is true, the route uses the same audited operation handlers and stores applied
-lineage, but it does not create pending proposal work items.
+emits `set_claim_value` operations. The default non-provider path only
+mechanically promotes natural-language statements from confidence-bearing memory
+rows; artifacts and transcripts need structured high-confidence operation JSON
+or provider extraction. The default mode is dry-run. When `apply` is true, the
+route uses the same audited operation handlers and stores applied lineage, but
+it does not create pending proposal work items.
 
 ## CLI contract
 

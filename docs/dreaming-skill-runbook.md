@@ -3,7 +3,11 @@
 This is the runnable dreaming path for promoting source-backed evidence into
 the ontology. Raw memories, transcripts, and source artifacts remain immutable
 evidence. Dreaming promotes only explicit, high-confidence statements into
-current attribute slots.
+current attribute slots. In the default non-provider path, plain
+natural-language preference extraction is limited to confidence-bearing memory
+rows. Memory artifacts and transcripts are still readable evidence sources, but
+they must contain structured high-confidence `set_claim_value` or
+`claim_values` JSON unless the caller opts into `--use-provider`.
 
 ## Attribute Promotion Path
 
