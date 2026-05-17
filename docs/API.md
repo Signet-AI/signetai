@@ -3703,6 +3703,18 @@ preserves the old assertion predicate; pass a predicate only when the epistemic
 meaning is intentionally changing. Omitting source fields inherits source
 provenance from the old assertion, but replacement content is still required.
 
+CLI equivalents:
+
+```bash
+signet ontology assertions --entity Signet --predicate believes --speaker Nicholai
+signet ontology assertion create --entity Signet --predicate believes --content "Signet should model attributed beliefs." --source-kind transcript
+signet ontology assertion show <assertion-id>
+signet ontology assertion link-claim <assertion-id> --attribute-id <claim-attribute-id>
+signet ontology assertion archive <assertion-id> --reason "superseded by newer evidence"
+signet ontology assertion supersede <assertion-id> --content "Updated attributed belief." --source-kind transcript
+signet ontology assertion import --file assertions.json
+```
+
 ### POST /api/ontology/extract
 
 Extract candidate ontology proposals and source-attributed assertions from an
