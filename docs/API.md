@@ -3682,13 +3682,13 @@ Create a source-attributed epistemic assertion. Body parameters: `agent_id`,
 
 Every assertion must include either structured `evidence` or source provenance
 fields. If `claim_attribute_id` is supplied, the referenced applied claim value
-must belong to the same agent and subject entity.
+must be active and belong to the same agent and subject entity.
 
 ### POST /api/ontology/assertions/:id/link-claim
 
 Link an existing assertion to an applied claim attribute. Body parameters:
 `agent_id` and `attribute_id`. The daemon rejects cross-agent and cross-entity
-links.
+links, and it only accepts active claim attribute rows.
 
 ### POST /api/ontology/assertions/:id/archive
 

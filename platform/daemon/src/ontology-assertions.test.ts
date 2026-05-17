@@ -45,6 +45,20 @@ describe("epistemic assertions", () => {
 				 VALUES ('attr-signet', 'aspect-signet', 'ant', 'attribute', 'Signet has epistemic assertions.',
 				  'signet has epistemic assertions.', 0.9, 0.8, 'active', 'ontology', 'epistemic_assertions', ?, ?)`,
 			).run("2026-05-16T00:00:00.000Z", "2026-05-16T00:00:00.000Z");
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance,
+				  status, group_key, claim_key, created_at, updated_at)
+				 VALUES ('attr-superseded', 'aspect-signet', 'ant', 'attribute', 'Old assertion claim.',
+				  'old assertion claim.', 0.5, 0.4, 'superseded', 'ontology', 'epistemic_assertions', ?, ?),
+				 ('attr-deleted', 'aspect-signet', 'ant', 'attribute', 'Deleted assertion claim.',
+				  'deleted assertion claim.', 0.5, 0.4, 'deleted', 'ontology', 'epistemic_assertions', ?, ?)`,
+			).run(
+				"2026-05-16T00:00:00.000Z",
+				"2026-05-16T00:00:00.000Z",
+				"2026-05-16T00:00:00.000Z",
+				"2026-05-16T00:00:00.000Z",
+			);
 		});
 	});
 
@@ -103,6 +117,37 @@ describe("epistemic assertions", () => {
 				agentId: "dot",
 				id: assertion.id,
 				attributeId: "attr-signet",
+			}),
+		).toThrow(OntologyAssertionError);
+	});
+
+	it("rejects links to inactive claim attribute versions", () => {
+		const assertion = createEpistemicAssertion(getDbAccessor(), {
+			agentId: "ant",
+			entityId: "entity-signet",
+			predicate: "claims",
+			content: "Signet has active assertion claims.",
+			evidence: [{ source_kind: "test", quote: "active claim" }],
+		});
+
+		for (const attributeId of ["attr-superseded", "attr-deleted"]) {
+			expect(() =>
+				linkEpistemicAssertionClaim(getDbAccessor(), {
+					agentId: "ant",
+					id: assertion.id,
+					attributeId,
+				}),
+			).toThrow(OntologyAssertionError);
+		}
+
+		expect(() =>
+			createEpistemicAssertion(getDbAccessor(), {
+				agentId: "ant",
+				entityId: "entity-signet",
+				predicate: "claims",
+				content: "Signet should not point new assertions at inactive claim rows.",
+				evidence: [{ source_kind: "test", quote: "inactive claim" }],
+				claimAttributeId: "attr-superseded",
 			}),
 		).toThrow(OntologyAssertionError);
 	});

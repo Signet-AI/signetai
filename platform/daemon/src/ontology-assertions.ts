@@ -186,7 +186,7 @@ function readClaimAttributeEntityId(db: ReadDb | WriteDb, agentId: string, attri
 			`SELECT asp.entity_id
 			 FROM entity_attributes attr
 			 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
-			 WHERE attr.id = ? AND attr.agent_id = ?`,
+			 WHERE attr.id = ? AND attr.agent_id = ? AND attr.status = 'active'`,
 		)
 		.get(attributeId, agentId) as { entity_id: string } | undefined;
 	return row?.entity_id ?? null;
