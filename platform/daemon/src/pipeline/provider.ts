@@ -1315,7 +1315,7 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 		},
 		async available(): Promise<boolean> {
 			const bin = config.bin ?? "npx";
-			return bin.includes("/") || which(bin) !== null;
+			return which(bin) !== null;
 		},
 	};
 }
@@ -1385,7 +1385,7 @@ export function createCommandLineProvider(config: CommandLineProviderConfig): Ll
 			});
 		},
 		async available(): Promise<boolean> {
-			return config.bin.includes("/") || which(config.bin) !== null;
+			return which(config.bin) !== null;
 		},
 	};
 }

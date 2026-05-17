@@ -3,21 +3,25 @@ import { isAbsolute, resolve, sep } from "node:path";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 
-export function which(bin: string): string | null {
-	if (isBun) {
-		return (globalThis.Bun as { which(b: string): string | null }).which(bin);
+function isExecutableFile(file: string): boolean {
+	try {
+		accessSync(file, constants.X_OK);
+		return statSync(file).isFile();
+	} catch {
+		return false;
+	}
+}
+
+function hasPathSeparator(bin: string): boolean {
+	return bin.includes("/") || (sep === "\\" && bin.includes("\\"));
+}
+
+export function whichWithoutBun(bin: string, pathEnv = process.env.PATH ?? ""): string | null {
+	if (isAbsolute(bin) || hasPathSeparator(bin)) {
+		const candidate = resolve(bin);
+		return isExecutableFile(candidate) ? candidate : null;
 	}
 
-	if (isAbsolute(bin)) {
-		try {
-			accessSync(bin, constants.X_OK);
-			return statSync(bin).isFile() ? bin : null;
-		} catch {
-			return null;
-		}
-	}
-
-	const pathEnv = process.env.PATH ?? "";
 	const pathSep = sep === "\\" ? ";" : ":";
 	const exts = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""];
 
@@ -25,12 +29,17 @@ export function which(bin: string): string | null {
 		if (!dir) continue;
 		for (const ext of exts) {
 			const candidate = resolve(dir, `${bin}${ext}`);
-			try {
-				accessSync(candidate, constants.X_OK);
-				if (statSync(candidate).isFile()) return candidate;
-			} catch {}
+			if (isExecutableFile(candidate)) return candidate;
 		}
 	}
 
 	return null;
+}
+
+export function which(bin: string): string | null {
+	if (isBun) {
+		return (globalThis.Bun as { which(b: string): string | null }).which(bin);
+	}
+
+	return whichWithoutBun(bin);
 }

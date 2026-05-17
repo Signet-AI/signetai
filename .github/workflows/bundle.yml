@@ -684,7 +684,7 @@ jobs:
             done
           done
 
-      - name: Upload manifests
+      - name: Upload manifests and latest helpers
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -693,4 +693,13 @@ jobs:
           # bundle-latest is the stable pointer. It only advances after immutable assets exist.
           find /tmp/release-staging -type f -name 'manifest-*.json' | while read -r f; do
             gh release upload "$TAG" "$f" --repo "$REPO" --clobber
+          done
+          for script in install.sh update.sh uninstall.sh; do
+            for helper_asset in "/tmp/release-staging/$script" "/tmp/release-staging/$script.sha256"; do
+              if [ ! -f "$helper_asset" ]; then
+                echo "::error::Missing staged latest helper asset: $(basename "$helper_asset")"
+                exit 1
+              fi
+              gh release upload "$TAG" "$helper_asset" --repo "$REPO" --clobber
+            done
           done

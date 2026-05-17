@@ -552,11 +552,11 @@ WRAPPER
   chmod +x "${bindir}/signet-mcp"
 
   if download_verified_script "uninstall.sh" "${bindir}/_uninstall.sh"; then
-    cat > "${bindir}/signet-uninstall" << WRAPPER
+    cat > "${bindir}/signet-uninstall" << 'WRAPPER'
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export SIGNET_INSTALL_DIR
-exec "\$SIGNET_INSTALL_DIR/bin/_uninstall.sh" "\$@"
+exec "$SIGNET_INSTALL_DIR/bin/_uninstall.sh" "$@"
 WRAPPER
     chmod +x "${bindir}/signet-uninstall"
   else
@@ -565,11 +565,11 @@ WRAPPER
   fi
 
   if download_verified_script "update.sh" "${bindir}/_update.sh"; then
-    cat > "${bindir}/signet-update" << WRAPPER
+    cat > "${bindir}/signet-update" << 'WRAPPER'
 #!/usr/bin/env bash
 SIGNET_INSTALL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 export SIGNET_INSTALL_DIR
-exec "\$SIGNET_INSTALL_DIR/bin/_update.sh" "\$@"
+exec "$SIGNET_INSTALL_DIR/bin/_update.sh" "$@"
 WRAPPER
     chmod +x "${bindir}/signet-update"
   else
