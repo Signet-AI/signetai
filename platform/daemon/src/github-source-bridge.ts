@@ -37,6 +37,7 @@ export interface GitHubSourceBridgeOptions {
 	readonly embeddingConfig?: EmbeddingConfig;
 	readonly fetchEmbedding?: SourceEmbeddingFetch;
 	readonly agentsDir?: string;
+	readonly sourceActiveCheck?: () => boolean;
 }
 
 interface ResolvedRepo {
@@ -90,6 +91,7 @@ export async function syncGitHubSource(
 	const agentsDir = options.agentsDir ?? process.env.SIGNET_PATH ?? `${homedir()}/.agents`;
 	const isSourceActive = (): boolean =>
 		loadSourcesConfig(agentsDir).sources.some((s) => s.id === source.id && s.enabled);
+	const syncOpts: GitHubSourceBridgeOptions = { ...options, sourceActiveCheck: isSourceActive };
 
 	for (const repo of repos) {
 		const config: GitHubFetchConfig = { owner: repo.owner, repo: repo.repo, token };
@@ -112,7 +114,7 @@ export async function syncGitHubSource(
 						settings.includeComments && resource.commentsCount > 0
 							? await fetchIssueComments(config, resource.number ?? 0)
 							: undefined;
-					await indexResource(source.id, repo.fullName, resource, comments, agentId, options);
+					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
 					repoIndexed++;
 					await yielder();
 				}
@@ -129,7 +131,7 @@ export async function syncGitHubSource(
 						settings.includeComments && resource.commentsCount > 0
 							? await fetchIssueComments(config, resource.number ?? 0)
 							: undefined;
-					await indexResource(source.id, repo.fullName, resource, comments, agentId, options);
+					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
 					repoIndexed++;
 					await yielder();
 				}
@@ -153,7 +155,7 @@ export async function syncGitHubSource(
 						body: c.body,
 						createdAt: c.created_at,
 					}));
-					await indexResource(source.id, repo.fullName, resource, comments, agentId, options);
+					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
 					repoIndexed++;
 					await yielder();
 				}
@@ -166,7 +168,7 @@ export async function syncGitHubSource(
 				const result = await fetchRepoDocs(config, docPaths, repo.defaultBranch);
 				for (const resource of result.resources) {
 					seenKeys.add(resourceKey(resource));
-					await indexResource(source.id, repo.fullName, resource, undefined, agentId, options);
+					await indexResource(source.id, repo.fullName, resource, undefined, agentId, syncOpts);
 					repoIndexed++;
 					await yielder();
 				}
@@ -201,6 +203,9 @@ async function indexResource(
 	agentId: string,
 	options: GitHubSourceBridgeOptions,
 ): Promise<void> {
+	if (options.sourceActiveCheck && !options.sourceActiveCheck()) {
+		throw new Error(`Source ${sourceId} removed during sync`);
+	}
 	indexGitHubSourceStructure({
 		agentId,
 		sourceId,
