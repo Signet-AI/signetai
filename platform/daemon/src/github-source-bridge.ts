@@ -124,10 +124,12 @@ export async function syncGitHubSource(
 			}
 
 			if (settings.resourceTypes.includes("pulls")) {
-				const result = await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
+				const result = await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo);
 				if (!isSourceActive()) break;
 				const capped = result.resources.length >= settings.maxItemsPerRepo;
+				const labelSet = settings.labels?.length ? new Set(settings.labels) : null;
 				for (const resource of result.resources) {
+					if (labelSet && !resource.labels.some((l) => labelSet.has(l))) continue;
 					seenKeys.add(resourceKey(resource));
 					const comments =
 						settings.includeComments && resource.commentsCount > 0

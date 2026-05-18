@@ -141,7 +141,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 	});
 
-	app.post("/api/sources/github", async (c) => {
+	app.post("/api/sources/github", requirePermission("admin", authConfig), async (c) => {
 		let body: AddGitHubSourceBody = {};
 		try {
 			body = (await c.req.json()) as AddGitHubSourceBody;
