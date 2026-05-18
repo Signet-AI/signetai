@@ -1616,9 +1616,12 @@ async function main() {
 			(source) => source.enabled && source.kind === "github",
 		);
 		if (githubSources.length > 0 && !githubSourceBridge) {
+			const embeddingCfg = memoryCfg.embedding.provider !== "none" ? memoryCfg.embedding : undefined;
 			githubSourceBridge = startGitHubSourceBridge(githubSources, {
 				agentsDir: AGENTS_DIR,
 				pollIntervalMs: 300_000,
+				embeddingConfig: embeddingCfg,
+				fetchEmbedding: embeddingCfg ? fetchEmbedding : undefined,
 			});
 			githubSourceBridge.sync().catch((e) => {
 				logger.error(

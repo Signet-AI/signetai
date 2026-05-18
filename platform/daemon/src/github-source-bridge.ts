@@ -15,6 +15,10 @@ import {
 	fetchRepoInfo,
 } from "./github-source-fetch";
 import { indexGitHubSourceStructure, purgeGitHubSourceStructure } from "./github-source-graph";
+import {
+	indexGitHubSourceEmbeddings,
+	purgeGitHubSourceEmbeddings,
+} from "./github-source-embeddings";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import type { SourceEmbeddingFetch } from "./obsidian-source-embeddings";
@@ -36,7 +40,7 @@ interface ResolvedRepo {
 	readonly owner: string;
 	readonly repo: string;
 	readonly fullName: string;
-	readonly defaultBranch: string;
+	defaultBranch: string;
 }
 
 export async function resolveRepos(settings: GitHubSourceSettings, token?: string): Promise<ResolvedRepo[]> {

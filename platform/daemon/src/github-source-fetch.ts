@@ -466,8 +466,9 @@ export async function fetchDiscussions(
 			});
 			fetched++;
 		}
-		if (!discussions.pageInfo.hasNextPage || !cursor) break;
+		if (!discussions.pageInfo.hasNextPage) break;
 		cursor = discussions.pageInfo.endCursor;
+		if (!cursor) break;
 	}
 	return { resources, rateLimitRemaining, rateLimitReset, errors };
 }

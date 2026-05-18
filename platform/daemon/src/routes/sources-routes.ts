@@ -15,7 +15,9 @@ import {
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
+import { fetchEmbedding } from "../embedding-fetch";
 import { purgeGitHubSource, syncGitHubSource } from "../github-source-bridge";
+import { loadMemoryConfig } from "../memory-config";
 import {
 	type NativeMemoryBridgeHandle,
 	obsidianNativeMemorySource,
@@ -166,7 +168,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		);
 		if (result.ok === false) return c.json({ error: result.error }, 400);
 
-		syncGitHubSource(result.source, { agentsDir }).catch((err) => {
+		const embeddingCfg = loadMemoryConfig(agentsDir);
+		const ec = embeddingCfg.embedding.provider !== "none" ? embeddingCfg.embedding : undefined;
+		syncGitHubSource(result.source, {
+			agentsDir,
+			embeddingConfig: ec,
+			fetchEmbedding: ec ? fetchEmbedding : undefined,
+		}).catch((err) => {
 			logger.warn(
 				"sources",
 				"Background GitHub source sync failed",
