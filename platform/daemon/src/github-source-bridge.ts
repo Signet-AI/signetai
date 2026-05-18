@@ -74,10 +74,15 @@ export async function resolveRepos(settings: GitHubSourceSettings, token?: strin
 	return resolved;
 }
 
+export interface GitHubSourceSyncResult {
+	readonly indexed: number;
+	readonly hadErrors: boolean;
+}
+
 export async function syncGitHubSource(
 	source: SignetSourceEntry,
 	options: GitHubSourceBridgeOptions = {},
-): Promise<number> {
+): Promise<GitHubSourceSyncResult> {
 	const agentId = options.agentId ?? resolveDaemonAgentId();
 	const settings = parseGitHubSettings(source.settings);
 	if (settings.repos.length === 0) {
@@ -85,10 +90,11 @@ export async function syncGitHubSource(
 			sourceId: source.id,
 			hasSettings: !!source.settings,
 		});
-		return 0;
+		return { indexed: 0, hadErrors: false };
 	}
 	const token = settings.tokenRef ? await resolveToken(settings.tokenRef, options.agentsDir) : undefined;
 	let totalIndexed = 0;
+	let hadErrors = false;
 
 	const repos = await resolveRepos(settings, token);
 	logger.info("github-source", "Starting GitHub source sync", {
@@ -134,6 +140,7 @@ export async function syncGitHubSource(
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "issues", result.resources.length, result.errors);
+				if (result.errors.length > 0) hadErrors = true;
 				if (!capped && result.errors.length === 0) completeTypes.add("issues");
 			}
 
@@ -161,6 +168,7 @@ export async function syncGitHubSource(
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "pulls", result.resources.length, result.errors);
+				if (result.errors.length > 0) hadErrors = true;
 				if (!capped && result.errors.length === 0) completeTypes.add("pulls");
 			}
 
@@ -186,6 +194,7 @@ export async function syncGitHubSource(
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "discussions", result.resources.length, result.errors);
+				if (result.errors.length > 0) hadErrors = true;
 				if (!capped && result.errors.length === 0) completeTypes.add("discussions");
 			}
 
@@ -200,11 +209,13 @@ export async function syncGitHubSource(
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "docs", result.resources.length, result.errors);
+				if (result.errors.length > 0) hadErrors = true;
 				if (result.errors.length === 0) completeTypes.add("docs");
 			}
 
 			await reconcileStaleResources(source.id, repo.fullName, seenKeys, completeTypes, agentId);
 		} catch (err) {
+			hadErrors = true;
 			logger.warn("github-source", "Failed to sync repo", {
 				sourceId: source.id,
 				repo: repo.fullName,
@@ -219,7 +230,7 @@ export async function syncGitHubSource(
 		});
 		totalIndexed += repoIndexed;
 	}
-	return totalIndexed;
+	return { indexed: totalIndexed, hadErrors };
 }
 
 async function indexResource(

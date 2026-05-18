@@ -297,10 +297,10 @@ async function runGitHubSourceIndexJob(
 	job: SourceIndexJob,
 ): Promise<void> {
 	try {
-		const indexed = await syncGitHubSource(source, options);
+		const result = await syncGitHubSource(source, options);
 		if (!isCurrentSourceIndexJob(source.id, job.id)) return;
-		markSourceIndexed(source.id, undefined, options.agentsDir);
-		completeSourceIndexJob(source.id, job.id, indexed);
+		if (!result.hadErrors) markSourceIndexed(source.id, undefined, options.agentsDir);
+		completeSourceIndexJob(source.id, job.id, result.indexed);
 	} catch (err) {
 		if (!isCurrentSourceIndexJob(source.id, job.id)) return;
 		failSourceIndexJob(source.id, job.id, err);
