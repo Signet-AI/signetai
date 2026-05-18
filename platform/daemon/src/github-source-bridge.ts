@@ -368,7 +368,9 @@ export function startGitHubSourceBridge(
 	};
 }
 
-export function purgeGitHubSource(sourceId: string, agentId?: string): void {
-	purgeGitHubSourceEmbeddings({ sourceId, agentId: agentId ?? resolveDaemonAgentId() });
-	purgeGitHubSourceStructure({ sourceId, agentId });
+export function purgeGitHubSource(sourceId: string, agentId?: string): number {
+	const id = agentId ?? resolveDaemonAgentId();
+	const embeddings = purgeGitHubSourceEmbeddings({ sourceId, agentId: id });
+	const structure = purgeGitHubSourceStructure({ sourceId, agentId: id });
+	return embeddings + structure;
 }

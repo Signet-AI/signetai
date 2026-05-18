@@ -201,8 +201,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				sourceAgentId,
 			);
 		} else if (result.source.kind === "github") {
-			await purgeGitHubSource(result.source.id, sourceAgentId);
-			purged = 0;
+			purged = await purgeGitHubSource(result.source.id, sourceAgentId);
 		}
 		if (!isSourceIndexInFlight(result.source.id))
 			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
