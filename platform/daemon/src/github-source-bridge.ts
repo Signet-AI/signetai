@@ -1,5 +1,6 @@
 import type { GitHubSourceSettings, SignetSourceEntry } from "@signet/core";
-import { parseGitHubSettings } from "@signet/core";
+import { loadSourcesConfig, parseGitHubSettings } from "@signet/core";
+import { homedir } from "node:os";
 import { resolveDaemonAgentId } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
 import { yieldEvery } from "./async-yield";
@@ -86,6 +87,10 @@ export async function syncGitHubSource(
 		resourceTypes: settings.resourceTypes,
 	});
 
+	const agentsDir = options.agentsDir ?? process.env.SIGNET_PATH ?? `${homedir()}/.agents`;
+	const isSourceActive = (): boolean =>
+		loadSourcesConfig(agentsDir).sources.some((s) => s.id === source.id && s.enabled);
+
 	for (const repo of repos) {
 		const config: GitHubFetchConfig = { owner: repo.owner, repo: repo.repo, token };
 		const yielder = yieldEvery(5);
@@ -94,6 +99,10 @@ export async function syncGitHubSource(
 		const completeTypes = new Set<string>();
 
 		try {
+			if (!isSourceActive()) {
+				logger.info("github-source", "Source removed during sync, aborting", { sourceId: source.id });
+				break;
+			}
 			if (settings.resourceTypes.includes("issues")) {
 				const result = await fetchIssues(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
 				const capped = result.resources.length >= settings.maxItemsPerRepo;
@@ -135,10 +144,15 @@ export async function syncGitHubSource(
 				for (const resource of result.resources) {
 					if (labelSet && !resource.labels.some((l) => labelSet.has(l))) continue;
 					seenKeys.add(resourceKey(resource));
-					const comments =
+					const rawComments =
 						settings.includeComments && resource.commentsCount > 0
 							? await fetchDiscussionComments(config, resource.number ?? 0)
 							: undefined;
+					const comments = rawComments?.map((c) => ({
+						author: typeof c.author === "string" ? c.author : c.author?.login ?? null,
+						body: c.body,
+						createdAt: c.created_at,
+					}));
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, options);
 					repoIndexed++;
 					await yielder();
