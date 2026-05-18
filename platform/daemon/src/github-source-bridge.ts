@@ -113,10 +113,15 @@ export async function syncGitHubSource(
 				const capped = result.resources.length >= settings.maxItemsPerRepo;
 				for (const resource of result.resources) {
 					seenKeys.add(resourceKey(resource));
-					const comments =
-						settings.includeComments && resource.commentsCount > 0
-							? await fetchIssueComments(config, resource.number ?? 0)
-							: undefined;
+					let comments: { author: string | null; body: string; createdAt: string }[] | undefined;
+					if (settings.includeComments && resource.commentsCount > 0) {
+						const rawComments = await fetchIssueComments(config, resource.number ?? 0);
+						comments = rawComments.map((c) => ({
+							author: c.user?.login ?? null,
+							body: c.body,
+							createdAt: c.created_at,
+						}));
+					}
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
 					repoIndexed++;
 					await yielder();
