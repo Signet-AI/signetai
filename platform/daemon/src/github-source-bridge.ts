@@ -250,7 +250,7 @@ function logErrors(
 }
 
 function resourceKey(resource: GitHubResource): string {
-	if (resource.type === "doc" && resource.path) return `doc:${resource.path}`;
+	if (resource.type === "doc" && resource.path) return `docs:${resource.path}`;
 	return `${resource.type}:${resource.number}`;
 }
 

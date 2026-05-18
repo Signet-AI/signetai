@@ -647,7 +647,7 @@ async function fetchTreeDocs(config: GitHubFetchConfig, globPath: string, branch
 		const content = Buffer.from(data.content, "base64").toString("utf-8");
 		resources.push({
 			type: "doc",
-			path: entry.path,
+			path: dir ? `${dir}/${entry.path}` : entry.path,
 			title: (data.name ?? entry.path).replace(/\.[^.]+$/, ""),
 			body: content,
 			state: "open",
