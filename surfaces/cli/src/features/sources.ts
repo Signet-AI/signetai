@@ -74,6 +74,11 @@ export async function addGitHubRepoSource(
 			return;
 		}
 	}
+	if (options.state && !["open", "closed", "all"].includes(options.state)) {
+		console.error(chalk.red(`✗ Invalid state: ${options.state}. Must be one of: open, closed, all`));
+		process.exitCode = 1;
+		return;
+	}
 	const maxItems = options.maxItems ? Number(options.maxItems) : undefined;
 
 	const result = addGitHubSource(
