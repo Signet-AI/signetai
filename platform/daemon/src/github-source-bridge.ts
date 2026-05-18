@@ -280,13 +280,15 @@ async function reconcileStaleResources(
 		if (!key.startsWith(repoPrefix)) continue;
 		const localKey = key.slice(repoPrefix.length);
 		if (seenKeys.has(localKey)) continue;
-		const type = localKey.split(":")[0] ?? "";
+		const rawType = localKey.split(":")[0] ?? "";
+		const isDoc = rawType === "docs";
+		const type = isDoc ? "doc" : rawType;
 		if (!completeTypes.has(type === "pull" ? "pulls" : type === "issue" ? "issues" : type === "discussion" ? "discussions" : "docs")) continue;
-		const numOrPath = localKey.slice(type.length + 1);
+		const numOrPath = localKey.slice(rawType.length + 1);
 		const resource: GitHubResource = {
 			type: type as GitHubResource["type"],
-			number: type !== "doc" ? Number(numOrPath) || 0 : undefined,
-			path: type === "doc" ? numOrPath : undefined,
+			number: !isDoc ? Number(numOrPath) || 0 : undefined,
+			path: isDoc ? numOrPath : undefined,
 			title: "",
 			body: "",
 			state: "",
