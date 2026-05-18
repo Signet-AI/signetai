@@ -188,7 +188,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		return c.json({ source: result.source, created: result.created, queued: true }, 202);
 	});
 
-	app.delete("/api/sources/:sourceId", async (c) => {
+	app.delete("/api/sources/:sourceId", requirePermission("admin", authConfig), async (c) => {
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 404);

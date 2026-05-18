@@ -230,15 +230,16 @@ export async function fetchRepoInfo(config: GitHubFetchConfig): Promise<GitHubRe
 
 export async function expandRepoGlob(owner: string, pattern: string, token?: string): Promise<string[]> {
 	if (!pattern.includes("*")) return [`${owner}/${pattern}`];
-	const url = `${GITHUB_API_BASE}/users/${owner}/repos?per_page=100&type=all`;
-	const response = await githubRequest(url, token);
-	if (response.status !== 200) {
-		logger.warn("github-source", "Failed to expand repo glob", { owner, status: response.status });
-		return [];
+	for (const prefix of [`/orgs/${owner}/repos`, `/users/${owner}/repos`]) {
+		const url = `${GITHUB_API_BASE}${prefix}?per_page=100&type=all`;
+		const response = await githubRequest(url, token);
+		if (response.status !== 200) continue;
+		const repos = response.body as Array<{ full_name: string; name: string }>;
+		const regex = new RegExp(`^${pattern.replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
+		return repos.filter((r) => regex.test(r.name)).map((r) => r.full_name);
 	}
-	const repos = response.body as Array<{ full_name: string; name: string }>;
-	const regex = new RegExp(`^${pattern.replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
-	return repos.filter((r) => regex.test(r.name)).map((r) => r.full_name);
+	logger.warn("github-source", "Failed to expand repo glob", { owner });
+	return [];
 }
 
 export async function fetchIssues(
