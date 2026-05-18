@@ -260,6 +260,10 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 			now,
 		});
 
+		db.prepare(
+			"DELETE FROM entity_dependencies WHERE source_entity_id = ? AND agent_id = ? AND source_id = ? AND type IN ('tagged_with', 'wiki_link')",
+		).run(resourceEntityId, input.agentId, input.sourceId);
+
 		for (const label of input.resource.labels) {
 			const labelEntityId = idFor(input.agentId, input.sourceId, "label", label);
 			upsertEntity(db, {
