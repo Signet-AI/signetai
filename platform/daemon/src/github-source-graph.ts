@@ -193,7 +193,7 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 		});
 
 		const repoEntityId = idFor(input.agentId, input.sourceId, "repo", input.repo);
-		const repoCanonical = `github:${input.repo}`;
+		const repoCanonical = `github:${input.sourceId}:${input.repo}`;
 		upsertEntity(db, {
 			id: repoEntityId,
 			name: input.repo,
@@ -265,7 +265,7 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 			upsertEntity(db, {
 				id: labelEntityId,
 				name: label,
-				canonicalName: `github:${input.repo}:label:${label}`,
+				canonicalName: `github:${input.sourceId}:${input.repo}:label:${label}`,
 				entityType: "source_document_reference",
 				agentId: input.agentId,
 				sourceId: input.sourceId,
@@ -292,7 +292,7 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 			upsertEntity(db, {
 				id: refEntityId,
 				name: `${ref.type} #${ref.number}`,
-				canonicalName: `github:${input.repo}:${ref.type}:${ref.number}`,
+				canonicalName: `github:${input.sourceId}:${input.repo}:${ref.type}:${ref.number}`,
 				entityType: "source_document_reference",
 				agentId: input.agentId,
 				sourceId: input.sourceId,

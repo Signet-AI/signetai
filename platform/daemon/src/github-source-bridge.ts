@@ -1,6 +1,7 @@
 import type { GitHubSourceSettings, SignetSourceEntry } from "@signet/core";
 import { parseGitHubSettings } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
+import { getDbAccessor } from "./db-accessor";
 import { yieldEvery } from "./async-yield";
 import type { GitHubResource } from "./github-source-fetch";
 import {
@@ -89,11 +90,13 @@ export async function syncGitHubSource(
 		const config: GitHubFetchConfig = { owner: repo.owner, repo: repo.repo, token };
 		const yielder = yieldEvery(5);
 		let repoIndexed = 0;
+		const seenKeys = new Set<string>();
 
 		try {
 			if (settings.resourceTypes.includes("issues")) {
 				const result = await fetchIssues(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
 				for (const resource of result.resources) {
+					seenKeys.add(resourceKey(resource));
 					const comments =
 						settings.includeComments && resource.commentsCount > 0
 							? await fetchIssueComments(config, resource.number ?? 0)
@@ -108,6 +111,7 @@ export async function syncGitHubSource(
 			if (settings.resourceTypes.includes("pulls")) {
 				const result = await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
 				for (const resource of result.resources) {
+					seenKeys.add(resourceKey(resource));
 					const comments =
 						settings.includeComments && resource.commentsCount > 0
 							? await fetchIssueComments(config, resource.number ?? 0)
@@ -124,6 +128,7 @@ export async function syncGitHubSource(
 				const labelSet = settings.labels?.length ? new Set(settings.labels) : null;
 				for (const resource of result.resources) {
 					if (labelSet && !resource.labels.some((l) => labelSet.has(l))) continue;
+					seenKeys.add(resourceKey(resource));
 					const comments =
 						settings.includeComments && resource.commentsCount > 0
 							? await fetchDiscussionComments(config, resource.number ?? 0)
@@ -139,12 +144,15 @@ export async function syncGitHubSource(
 				const docPaths = settings.docPaths ?? ["README.md", "CHANGELOG.md"];
 				const result = await fetchRepoDocs(config, docPaths, repo.defaultBranch);
 				for (const resource of result.resources) {
+					seenKeys.add(resourceKey(resource));
 					await indexResource(source.id, repo.fullName, resource, undefined, agentId, options);
 					repoIndexed++;
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "docs", result.resources.length, result.errors);
 			}
+
+			await reconcileStaleResources(source.id, repo.fullName, seenKeys, agentId);
 		} catch (err) {
 			logger.warn("github-source", "Failed to sync repo", {
 				sourceId: source.id,
@@ -216,6 +224,64 @@ function logErrors(
 			fetched: count,
 			errors: errors.length,
 		});
+	}
+}
+
+function resourceKey(resource: GitHubResource): string {
+	if (resource.type === "doc" && resource.path) return `doc:${resource.path}`;
+	return `${resource.type}:${resource.number}`;
+}
+
+async function reconcileStaleResources(
+	sourceId: string,
+	repo: string,
+	seenKeys: Set<string>,
+	agentId: string,
+): Promise<void> {
+	if (seenKeys.size === 0) return;
+	const { purgeGitHubResourceEmbeddings } = await import("./github-source-embeddings");
+	const { purgeGitHubResourceStructure } = await import("./github-source-graph");
+	const db = getDbAccessor();
+	const prefix = `${sourceId}:`;
+	const rows = db.withReadDb((d) =>
+		d
+			.prepare(
+				"SELECT source_id, source_path FROM entities WHERE source_id >= ? AND source_id < ? AND agent_id = ? AND entity_type = 'source_document'",
+			)
+			.all(prefix, `${prefix}\uffff`, agentId),
+	) as Array<{ source_id: string; source_path: string }>;
+	let purged = 0;
+	for (const row of rows) {
+		const sp = row.source_path;
+		const key = sp.startsWith("github:") ? sp.slice("github:".length) : sp;
+		const repoPrefix = `${repo}:`;
+		if (!key.startsWith(repoPrefix)) continue;
+		const localKey = key.slice(repoPrefix.length);
+		if (seenKeys.has(localKey)) continue;
+		const type = localKey.split(":")[0] ?? "";
+		const numOrPath = localKey.slice(type.length + 1);
+		const resource: GitHubResource = {
+			type: type as GitHubResource["type"],
+			number: type !== "doc" ? Number(numOrPath) || 0 : undefined,
+			path: type === "doc" ? numOrPath : undefined,
+			title: "",
+			body: "",
+			state: "",
+			labels: [],
+			author: null,
+			createdAt: "",
+			updatedAt: "",
+			closedAt: null,
+			mergedAt: null,
+			commentsCount: 0,
+			extra: {},
+		};
+		purgeGitHubResourceEmbeddings({ sourceId, repo, agentId, resource });
+		purgeGitHubResourceStructure({ sourceId, agentId });
+		purged++;
+	}
+	if (purged > 0) {
+		logger.info("github-source", "Reconciled stale resources", { sourceId, repo, purged });
 	}
 }
 

@@ -226,7 +226,7 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 			name: cleanName(input.name) ?? existing.name,
 			enabled: true,
 			updatedAt: now,
-			settings: buildGitHubSettings(input),
+			settings: buildGitHubSettings(input, repos),
 		};
 		saveSourcesConfig(
 			{
@@ -247,15 +247,15 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 		mode: "read-only",
 		createdAt: now,
 		updatedAt: now,
-		settings: buildGitHubSettings(input),
+		settings: buildGitHubSettings(input, repos),
 	};
 	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
 	return { ok: true, source, created: true };
 }
 
-function buildGitHubSettings(input: AddGitHubSourceInput): Readonly<Record<string, unknown>> {
+function buildGitHubSettings(input: AddGitHubSourceInput, repos: readonly string[]): Readonly<Record<string, unknown>> {
 	return {
-		repos: input.repos,
+		repos: repos,
 		tokenRef: input.tokenRef,
 		resourceTypes: input.resourceTypes ?? [...DEFAULT_GITHUB_RESOURCE_TYPES],
 		state: input.state ?? "all",

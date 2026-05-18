@@ -1191,6 +1191,11 @@ async function cleanup() {
 		nativeMemoryBridge = null;
 	}
 
+	if (githubSourceBridge) {
+		await githubSourceBridge.close();
+		githubSourceBridge = null;
+	}
+
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
 		heartbeatTimer = undefined;
