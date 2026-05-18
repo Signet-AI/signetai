@@ -80,6 +80,13 @@ export async function syncGitHubSource(
 ): Promise<number> {
 	const agentId = options.agentId ?? resolveDaemonAgentId();
 	const settings = parseGitHubSettings(source.settings);
+	if (settings.repos.length === 0) {
+		logger.warn("github-source", "Source has no repos — skipping. Settings may be malformed.", {
+			sourceId: source.id,
+			hasSettings: !!source.settings,
+		});
+		return 0;
+	}
 	const token = settings.tokenRef ? await resolveToken(settings.tokenRef, options.agentsDir) : undefined;
 	let totalIndexed = 0;
 
