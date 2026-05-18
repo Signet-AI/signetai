@@ -261,7 +261,7 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 		});
 
 		db.prepare(
-			"DELETE FROM entity_dependencies WHERE source_entity_id = ? AND agent_id = ? AND source_id = ? AND type IN ('tagged_with', 'wiki_link')",
+			"DELETE FROM entity_dependencies WHERE source_entity_id = ? AND agent_id = ? AND source_id = ? AND dependency_type IN ('tagged_with', 'wiki_link')",
 		).run(resourceEntityId, input.agentId, input.sourceId);
 
 		for (const label of input.resource.labels) {
