@@ -172,20 +172,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 
 		const embeddingCfg = loadMemoryConfig(agentsDir);
 		const ec = embeddingCfg.embedding.provider !== "none" ? embeddingCfg.embedding : undefined;
-		syncGitHubSource(result.source, {
+		const job = enqueueGitHubSourceIndexJob(result.source, {
 			agentsDir,
 			embeddingConfig: ec,
 			fetchEmbedding: ec ? fetchEmbedding : undefined,
-		}).catch((err) => {
-			logger.warn(
-				"sources",
-				"Background GitHub source sync failed",
-				undefined,
-				err instanceof Error ? { message: err.message } : { error: String(err) },
-			);
 		});
 
-		return c.json({ source: result.source, created: result.created, queued: true }, 202);
+		return c.json({ source: result.source, created: result.created, queued: true, job }, 202);
 	});
 
 	app.delete("/api/sources/:sourceId", requirePermission("admin", authConfig), async (c) => {
@@ -275,6 +268,45 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		void runSourceIndexJob(input, job);
 	}, delayMs).unref?.();
+}
+
+function enqueueGitHubSourceIndexJob(
+	source: SignetSourceEntry,
+	options: GitHubSourceBridgeOptions,
+): SourceIndexJob {
+	const job = beginSourceIndexJob(source.id, "github-source-index");
+	setTimeout(() => {
+		if (!isCurrentSourceIndexJob(source.id, job.id)) return;
+		if (isSourceIndexInFlight(source.id)) {
+			setTimeout(() => void runGitHubSourceIndexJob(source, options, job), 50).unref?.();
+			return;
+		}
+		markSourceIndexInFlight(source.id);
+		if (!markSourceIndexJobRunning(source.id, job.id)) {
+			clearSourceIndexInFlight(source.id);
+			return;
+		}
+		void runGitHubSourceIndexJob(source, options, job);
+	}, 0).unref?.();
+	return job;
+}
+
+async function runGitHubSourceIndexJob(
+	source: SignetSourceEntry,
+	options: GitHubSourceBridgeOptions,
+	job: SourceIndexJob,
+): Promise<void> {
+	try {
+		const indexed = await syncGitHubSource(source, options);
+		if (!isCurrentSourceIndexJob(source.id, job.id)) return;
+		markSourceIndexed(source.id, undefined, options.agentsDir);
+		completeSourceIndexJob(source.id, job.id, indexed);
+	} catch (err) {
+		if (!isCurrentSourceIndexJob(source.id, job.id)) return;
+		failSourceIndexJob(source.id, job.id, err);
+	} finally {
+		clearSourceIndexInFlight(source.id);
+	}
 }
 
 function cleanupSourceDeletionTombstones(
