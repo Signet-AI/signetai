@@ -59,13 +59,18 @@ export async function addGitHubRepoSource(
 		process.exitCode = 1;
 		return;
 	}
+	const validTypes = new Set(["issues", "pulls", "discussions", "docs"]);
 	const resourceTypes = options.types
 		? options.types
 				.split(",")
-				.filter((t): t is "issues" | "pulls" | "discussions" | "docs" =>
-					["issues", "pulls", "discussions", "docs"].includes(t.trim()),
-				)
+				.map((t) => t.trim())
+				.filter((t): t is "issues" | "pulls" | "discussions" | "docs" => validTypes.has(t))
 		: undefined;
+	if (options.types && resourceTypes && resourceTypes.length === 0) {
+		console.error(chalk.red("✗ --types must contain at least one valid type: issues, pulls, discussions, docs"));
+		process.exitCode = 1;
+		return;
+	}
 	const maxItems = options.maxItems ? Number(options.maxItems) : undefined;
 
 	const result = addGitHubSource(
