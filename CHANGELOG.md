@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-18
+- Bug fixes: load updater through cjs interop.
+
 ### 2026-05-17
 - Features: improve constellation ontology navigation; native bundle system with zero-prereq installer; add epistemic assertions; add safe entity merge planning.
 - Bug fixes: build mac zip artifacts; preserve root-only filesystem globs; repair native bundle regressions; sync built-in dreaming skill.
@@ -30,11 +33,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: add configurable identity presets.
 - Docs: correct stale documentation claims.
 
-### 2026-05-11
-- Features: add header images for three new essays; add three new essays on memory architecture and sovereignty.
-- Bug fixes: enforce concrete semantic objects; refresh stale web content index; replace placeholder images with original vault artwork; prebuild tray before typecheck; disable electron-builder auto publish.
-
 ## Release Ledger
+
+## [0.123.3] - 2026-05-18
+
+Release summary: 1 bug fix.
+Tag range: `v0.123.2..v0.123.3`.
+
+### Bug Fixes
+
+- **desktop**: load updater through cjs interop (#726)
 
 ## [0.123.2] - 2026-05-17
 
