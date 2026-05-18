@@ -297,7 +297,7 @@ async function reconcileStaleResources(
 	completeTypes: Set<string>,
 	agentId: string,
 ): Promise<void> {
-	if (seenKeys.size === 0 || completeTypes.size === 0) return;
+	if (completeTypes.size === 0) return;
 	const { purgeGitHubResourceEmbeddings } = await import("./github-source-embeddings");
 	const { purgeGitHubResourceStructure } = await import("./github-source-graph");
 	const db = getDbAccessor();
