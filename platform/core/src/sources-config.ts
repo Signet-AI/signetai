@@ -278,12 +278,13 @@ export function parseGitHubSettings(raw: Readonly<Record<string, unknown>> | und
 	}
 	const repos =
 		Array.isArray(raw.repos) && raw.repos.every((r) => typeof r === "string") ? (raw.repos as string[]) : [];
-	const resourceTypes =
+	let resourceTypes =
 		Array.isArray(raw.resourceTypes) && raw.resourceTypes.every((t) => typeof t === "string")
 			? (raw.resourceTypes as string[]).filter((t): t is "issues" | "pulls" | "discussions" | "docs" =>
 					["issues", "pulls", "discussions", "docs"].includes(t),
 				)
 			: [...DEFAULT_GITHUB_RESOURCE_TYPES];
+	if (resourceTypes.length === 0) resourceTypes = [...DEFAULT_GITHUB_RESOURCE_TYPES];
 	return {
 		repos,
 		tokenRef: typeof raw.tokenRef === "string" ? raw.tokenRef : undefined,

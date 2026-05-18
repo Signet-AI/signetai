@@ -107,6 +107,7 @@ export async function syncGitHubSource(
 			}
 			if (settings.resourceTypes.includes("issues")) {
 				const result = await fetchIssues(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
+				if (!isSourceActive()) break;
 				const capped = result.resources.length >= settings.maxItemsPerRepo;
 				for (const resource of result.resources) {
 					seenKeys.add(resourceKey(resource));
@@ -124,6 +125,7 @@ export async function syncGitHubSource(
 
 			if (settings.resourceTypes.includes("pulls")) {
 				const result = await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
+				if (!isSourceActive()) break;
 				const capped = result.resources.length >= settings.maxItemsPerRepo;
 				for (const resource of result.resources) {
 					seenKeys.add(resourceKey(resource));
@@ -141,6 +143,7 @@ export async function syncGitHubSource(
 
 			if (settings.resourceTypes.includes("discussions")) {
 				const result = await fetchDiscussions(config, undefined, settings.maxItemsPerRepo);
+				if (!isSourceActive()) break;
 				const capped = result.resources.length >= settings.maxItemsPerRepo;
 				const labelSet = settings.labels?.length ? new Set(settings.labels) : null;
 				for (const resource of result.resources) {
@@ -166,6 +169,7 @@ export async function syncGitHubSource(
 			if (settings.resourceTypes.includes("docs")) {
 				const docPaths = settings.docPaths ?? ["README.md", "CHANGELOG.md"];
 				const result = await fetchRepoDocs(config, docPaths, repo.defaultBranch);
+				if (!isSourceActive()) break;
 				for (const resource of result.resources) {
 					seenKeys.add(resourceKey(resource));
 					await indexResource(source.id, repo.fullName, resource, undefined, agentId, syncOpts);
