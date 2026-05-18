@@ -91,10 +91,12 @@ export async function syncGitHubSource(
 		const yielder = yieldEvery(5);
 		let repoIndexed = 0;
 		const seenKeys = new Set<string>();
+		const completeTypes = new Set<string>();
 
 		try {
 			if (settings.resourceTypes.includes("issues")) {
 				const result = await fetchIssues(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
+				const capped = result.resources.length >= settings.maxItemsPerRepo;
 				for (const resource of result.resources) {
 					seenKeys.add(resourceKey(resource));
 					const comments =
@@ -106,10 +108,12 @@ export async function syncGitHubSource(
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "issues", result.resources.length, result.errors);
+				if (!capped && result.errors.length === 0) completeTypes.add("issues");
 			}
 
 			if (settings.resourceTypes.includes("pulls")) {
 				const result = await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
+				const capped = result.resources.length >= settings.maxItemsPerRepo;
 				for (const resource of result.resources) {
 					seenKeys.add(resourceKey(resource));
 					const comments =
@@ -121,10 +125,12 @@ export async function syncGitHubSource(
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "pulls", result.resources.length, result.errors);
+				if (!capped && result.errors.length === 0) completeTypes.add("pulls");
 			}
 
 			if (settings.resourceTypes.includes("discussions")) {
 				const result = await fetchDiscussions(config, undefined, settings.maxItemsPerRepo);
+				const capped = result.resources.length >= settings.maxItemsPerRepo;
 				const labelSet = settings.labels?.length ? new Set(settings.labels) : null;
 				for (const resource of result.resources) {
 					if (labelSet && !resource.labels.some((l) => labelSet.has(l))) continue;
@@ -138,6 +144,7 @@ export async function syncGitHubSource(
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "discussions", result.resources.length, result.errors);
+				if (!capped && result.errors.length === 0) completeTypes.add("discussions");
 			}
 
 			if (settings.resourceTypes.includes("docs")) {
@@ -150,9 +157,10 @@ export async function syncGitHubSource(
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "docs", result.resources.length, result.errors);
+				if (result.errors.length === 0) completeTypes.add("docs");
 			}
 
-			await reconcileStaleResources(source.id, repo.fullName, seenKeys, agentId);
+			await reconcileStaleResources(source.id, repo.fullName, seenKeys, completeTypes, agentId);
 		} catch (err) {
 			logger.warn("github-source", "Failed to sync repo", {
 				sourceId: source.id,
@@ -236,9 +244,10 @@ async function reconcileStaleResources(
 	sourceId: string,
 	repo: string,
 	seenKeys: Set<string>,
+	completeTypes: Set<string>,
 	agentId: string,
 ): Promise<void> {
-	if (seenKeys.size === 0) return;
+	if (seenKeys.size === 0 || completeTypes.size === 0) return;
 	const { purgeGitHubResourceEmbeddings } = await import("./github-source-embeddings");
 	const { purgeGitHubResourceStructure } = await import("./github-source-graph");
 	const db = getDbAccessor();
@@ -258,6 +267,7 @@ async function reconcileStaleResources(
 		const localKey = key.slice(repoPrefix.length);
 		if (seenKeys.has(localKey)) continue;
 		const type = localKey.split(":")[0] ?? "";
+		if (!completeTypes.has(type === "pull" ? "pulls" : type === "issue" ? "issues" : type === "discussion" ? "discussions" : "docs")) continue;
 		const numOrPath = localKey.slice(type.length + 1);
 		const resource: GitHubResource = {
 			type: type as GitHubResource["type"],
