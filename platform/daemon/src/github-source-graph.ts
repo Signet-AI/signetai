@@ -233,7 +233,7 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 			input.resource.type,
 			String(input.resource.number ?? input.resource.path),
 		);
-		const resourceCanonical = `github:${sourcePath}`;
+		const resourceCanonical = `github:${input.sourceId}:${sourcePath}`;
 		upsertEntity(db, {
 			id: resourceEntityId,
 			name: resourceDisplayName(input.resource),

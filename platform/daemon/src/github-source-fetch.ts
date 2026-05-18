@@ -196,6 +196,22 @@ async function githubRequest(url: string, token?: string, method = "GET", body?:
 	throw lastError ?? new Error("GitHub API request failed after retries");
 }
 
+async function githubRawFetch(url: string, token?: string): Promise<{ status: number; text: string }> {
+	const headers: Record<string, string> = {
+		Accept: "application/vnd.github.v3.raw",
+		"User-Agent": "signet-daemon",
+	};
+	if (token) headers.Authorization = `Bearer ${token}`;
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+	try {
+		const response = await fetch(url, { headers, signal: controller.signal });
+		return { status: response.status, text: await response.text() };
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 export async function fetchRepoInfo(config: GitHubFetchConfig): Promise<GitHubRepoInfo | null> {
 	const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}`;
 	const response = await githubRequest(url, config.token);
@@ -616,7 +632,7 @@ async function fetchTreeDocs(config: GitHubFetchConfig, globPath: string, branch
 	const matching = entries.filter((e) => e.type === "file" && matcher(e.path));
 	for (const entry of matching) {
 		if (!entry.download_url) continue;
-		const fileResponse = await githubRequest(entry.download_url, config.token);
+		const fileResponse = await githubRawFetch(entry.download_url, config.token);
 		if (fileResponse.status !== 200) {
 			errors.push({ message: `File fetch failed: ${entry.path}`, retryable: true });
 			continue;
@@ -625,7 +641,7 @@ async function fetchTreeDocs(config: GitHubFetchConfig, globPath: string, branch
 			type: "doc",
 			path: entry.path,
 			title: entry.name.replace(/\.[^.]+$/, ""),
-			body: typeof fileResponse.body === "string" ? fileResponse.body : String(fileResponse.body),
+			body: fileResponse.text,
 			state: "open",
 			labels: [],
 			author: null,
