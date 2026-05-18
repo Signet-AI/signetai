@@ -11,6 +11,12 @@ describe("desktop update packaging", () => {
 		expect(mainSource).not.toContain('ipcMain.handle("desktop:checkForUpdate", () => null)');
 	});
 
+	test("loads electron-updater through CommonJS interop for packaged ESM", () => {
+		const updateSource = readFileSync(join(import.meta.dir, "desktop-updates.ts"), "utf8");
+		expect(updateSource).toContain("createRequire(import.meta.url)");
+		expect(updateSource).not.toContain('autoUpdater } from "electron-updater"');
+	});
+
 	test("publishes metadata and mac zip artifacts required by electron-updater", () => {
 		const packageJson = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
 		expect(packageJson.dependencies["electron-updater"]).toBeString();
