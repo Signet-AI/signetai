@@ -418,7 +418,7 @@ export async function fetchPullRequests(
 
 export async function fetchPullRequestsBySearch(
 	config: GitHubFetchConfig,
-	labels: string[],
+	labels: readonly string[],
 	since?: string,
 	state = "all",
 	maxItems = 500,
