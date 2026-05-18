@@ -324,6 +324,21 @@ export async function fetchIssueComments(config: GitHubFetchConfig, issueNumber:
 	return comments;
 }
 
+export async function fetchPullRequestComments(config: GitHubFetchConfig, pullNumber: number): Promise<GitHubComment[]> {
+	const comments: GitHubComment[] = [];
+	let page = 1;
+	while (true) {
+		const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/pulls/${pullNumber}/comments?per_page=${PER_PAGE}&page=${page}`;
+		const response = await githubRequest(url, config.token);
+		if (response.status !== 200) break;
+		const batch = response.body as GitHubComment[];
+		comments.push(...batch);
+		if (batch.length < PER_PAGE) break;
+		page++;
+	}
+	return comments;
+}
+
 export async function fetchPullRequests(
 	config: GitHubFetchConfig,
 	since?: string,

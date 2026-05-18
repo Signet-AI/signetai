@@ -12,6 +12,7 @@ import {
 	fetchDiscussions,
 	fetchIssueComments,
 	fetchIssues,
+	fetchPullRequestComments,
 	fetchPullRequests,
 	fetchRepoDocs,
 	fetchRepoInfo,
@@ -131,10 +132,16 @@ export async function syncGitHubSource(
 				for (const resource of result.resources) {
 					if (labelSet && !resource.labels.some((l) => labelSet.has(l))) continue;
 					seenKeys.add(resourceKey(resource));
-					const comments =
-						settings.includeComments && resource.commentsCount > 0
-							? await fetchIssueComments(config, resource.number ?? 0)
-							: undefined;
+					let comments: { author: string | null; body: string; createdAt: string }[] | undefined;
+					if (settings.includeComments && resource.commentsCount > 0) {
+						const issueComments = await fetchIssueComments(config, resource.number ?? 0);
+						const reviewComments = await fetchPullRequestComments(config, resource.number ?? 0);
+						comments = [...issueComments, ...reviewComments].map((c) => ({
+							author: c.user?.login ?? null,
+							body: c.body,
+							createdAt: c.created_at,
+						}));
+					}
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
 					repoIndexed++;
 					await yielder();
@@ -233,13 +240,12 @@ async function indexResource(
 	}
 }
 
-async function resolveToken(tokenRef: string, _agentsDir?: string): Promise<string | undefined> {
+async function resolveToken(tokenRef: string, _agentsDir?: string): Promise<string> {
 	try {
 		return await getSecret(tokenRef);
-	} catch {
-		logger.warn("github-source", "Failed to resolve token from secrets", { tokenRef });
+	} catch (err) {
+		throw new Error(`Failed to resolve token ref '${tokenRef}': ${err instanceof Error ? err.message : String(err)}`);
 	}
-	return undefined;
 }
 
 function logErrors(
