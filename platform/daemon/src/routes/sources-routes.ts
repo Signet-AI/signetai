@@ -12,7 +12,9 @@ import {
 	markSourceIndexed,
 	removeSource,
 } from "@signet/core";
+import { requirePermission } from "../auth/middleware";
 import type { Hono } from "hono";
+import { authConfig } from "./state.js";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";

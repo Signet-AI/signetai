@@ -292,7 +292,7 @@ export function indexGitHubSourceStructure(input: IndexGitHubSourceStructureInpu
 			upsertEntity(db, {
 				id: refEntityId,
 				name: `${ref.type} #${ref.number}`,
-				canonicalName: `github:${input.sourceId}:${input.repo}:${ref.type}:${ref.number}`,
+				canonicalName: `github:${input.sourceId}:github:${input.repo}:${ref.type}:${ref.number}`,
 				entityType: "source_document_reference",
 				agentId: input.agentId,
 				sourceId: input.sourceId,

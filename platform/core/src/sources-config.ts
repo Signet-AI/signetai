@@ -220,6 +220,13 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 		}
 	}
 
+	if (input.resourceTypes && input.resourceTypes.length > 0) {
+		const invalid = input.resourceTypes.filter((t) => !VALID_GITHUB_RESOURCE_TYPES.has(t));
+		if (invalid.length > 0) {
+			return { ok: false, error: `Invalid resource types: ${invalid.join(", ")}. Must be one of: ${[...DEFAULT_GITHUB_RESOURCE_TYPES].join(", ")}` };
+		}
+	}
+
 	const now = input.now ?? new Date().toISOString();
 	const cfg = loadSourcesConfigForWrite(agentsDir);
 	const settingsKey = repos.sort().join(",");
@@ -261,12 +268,11 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 }
 
 function buildGitHubSettings(input: AddGitHubSourceInput, repos: readonly string[]): Readonly<Record<string, unknown>> {
-	const rawTypes = input.resourceTypes ?? [...DEFAULT_GITHUB_RESOURCE_TYPES];
-	const resourceTypes = rawTypes.filter((t) => VALID_GITHUB_RESOURCE_TYPES.has(t));
+	const resourceTypes = input.resourceTypes ?? [...DEFAULT_GITHUB_RESOURCE_TYPES];
 	return {
 		repos: repos,
 		tokenRef: input.tokenRef,
-		resourceTypes: resourceTypes.length > 0 ? resourceTypes : [...DEFAULT_GITHUB_RESOURCE_TYPES],
+		resourceTypes,
 		state: input.state ?? "all",
 		includeComments: input.includeComments ?? true,
 		labels: input.labels,
