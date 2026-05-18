@@ -165,6 +165,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				labels: body.labels,
 				docPaths: body.docPaths,
 				maxItemsPerRepo: body.maxItemsPerRepo,
+				agentId: resolveDaemonAgentId(),
 			},
 			agentsDir,
 		);
@@ -185,9 +186,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 404);
+		const currentAgentId = resolveDaemonAgentId();
+		if (result.source.agentId && result.source.agentId !== currentAgentId) {
+			return c.json({ error: "Source is owned by a different agent" }, 403);
+		}
 		cancelSourceIndexJob(result.source.id);
 
-		const sourceAgentId = resolveDaemonAgentId();
+		const sourceAgentId = currentAgentId;
 		recordSourceDeletionTombstone(result.source, sourceAgentId, agentsDir);
 		let purged = 0;
 		if (result.source.kind === "obsidian") {

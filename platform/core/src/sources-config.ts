@@ -33,6 +33,7 @@ export interface SignetSourceEntry {
 	readonly lastIndexedAt?: string;
 	readonly excludeGlobs?: readonly string[];
 	readonly settings?: Readonly<Record<string, unknown>>;
+	readonly agentId?: string;
 }
 
 export const DEFAULT_OBSIDIAN_EXCLUDE_GLOBS = [
@@ -66,6 +67,7 @@ export interface AddGitHubSourceInput {
 	readonly docPaths?: readonly string[];
 	readonly maxItemsPerRepo?: number;
 	readonly now?: string;
+	readonly agentId?: string;
 }
 
 export type AddSourceResult =
@@ -262,6 +264,7 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 		createdAt: now,
 		updatedAt: now,
 		settings: buildGitHubSettings(input, repos),
+		agentId: input.agentId,
 	};
 	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
 	return { ok: true, source, created: true };

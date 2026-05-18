@@ -412,6 +412,7 @@ export function startGitHubSourceBridge(
 			const sources = loadSources();
 			for (const source of sources) {
 				if (!source.enabled || source.kind !== "github") continue;
+				if (source.agentId && source.agentId !== agentId) continue;
 				if (isSourceIndexInFlight(source.id)) continue;
 				markSourceIndexInFlight(source.id);
 				try {
