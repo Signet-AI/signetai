@@ -238,8 +238,9 @@ export async function expandRepoGlob(owner: string, pattern: string, token?: str
 		logger.warn("github-source", "Failed to expand repo glob", { owner, status: response.status });
 		return [];
 	}
-	const repos = response.body as Array<{ full_name: string }>;
-	return repos.map((r) => r.full_name);
+	const repos = response.body as Array<{ full_name: string; name: string }>;
+	const regex = new RegExp(`^${pattern.replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
+	return repos.filter((r) => regex.test(r.name)).map((r) => r.full_name);
 }
 
 export async function fetchIssues(

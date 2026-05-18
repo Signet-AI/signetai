@@ -242,14 +242,13 @@ async function reconcileStaleResources(
 	const { purgeGitHubResourceEmbeddings } = await import("./github-source-embeddings");
 	const { purgeGitHubResourceStructure } = await import("./github-source-graph");
 	const db = getDbAccessor();
-	const prefix = `${sourceId}:`;
 	const rows = db.withReadDb((d) =>
 		d
 			.prepare(
-				"SELECT source_id, source_path FROM entities WHERE source_id >= ? AND source_id < ? AND agent_id = ? AND entity_type = 'source_document'",
+				"SELECT source_path FROM entities WHERE source_id = ? AND agent_id = ? AND entity_type = 'source_document'",
 			)
-			.all(prefix, `${prefix}\uffff`, agentId),
-	) as Array<{ source_id: string; source_path: string }>;
+			.all(sourceId, agentId),
+	) as Array<{ source_path: string }>;
 	let purged = 0;
 	for (const row of rows) {
 		const sp = row.source_path;
