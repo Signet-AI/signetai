@@ -64,12 +64,15 @@ export async function addGitHubRepoSource(
 		? options.types
 				.split(",")
 				.map((t) => t.trim())
-				.filter((t): t is "issues" | "pulls" | "discussions" | "docs" => validTypes.has(t))
+				.filter(Boolean)
 		: undefined;
-	if (options.types && resourceTypes && resourceTypes.length === 0) {
-		console.error(chalk.red("✗ --types must contain at least one valid type: issues, pulls, discussions, docs"));
-		process.exitCode = 1;
-		return;
+	if (resourceTypes && resourceTypes.length > 0) {
+		const invalid = resourceTypes.filter((t) => !validTypes.has(t));
+		if (invalid.length > 0) {
+			console.error(chalk.red(`✗ Invalid resource types: ${invalid.join(", ")}. Must be one of: issues, pulls, discussions, docs`));
+			process.exitCode = 1;
+			return;
+		}
 	}
 	const maxItems = options.maxItems ? Number(options.maxItems) : undefined;
 

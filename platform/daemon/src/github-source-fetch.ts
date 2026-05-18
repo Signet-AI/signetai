@@ -133,6 +133,7 @@ export interface GitHubRepoInfo {
 const GITHUB_API_BASE = "https://api.github.com";
 const GRAPHQL_URL = "https://api.github.com/graphql";
 const PER_PAGE = 100;
+const MAX_COMMENTS_PER_RESOURCE = 200;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
@@ -311,7 +312,7 @@ export async function fetchIssues(
 export async function fetchIssueComments(config: GitHubFetchConfig, issueNumber: number): Promise<GitHubComment[]> {
 	const comments: GitHubComment[] = [];
 	let page = 1;
-	while (true) {
+	while (comments.length < MAX_COMMENTS_PER_RESOURCE) {
 		const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/issues/${issueNumber}/comments?per_page=${PER_PAGE}&page=${page}`;
 		const response = await githubRequest(url, config.token);
 		if (response.status !== 200) break;
@@ -320,13 +321,13 @@ export async function fetchIssueComments(config: GitHubFetchConfig, issueNumber:
 		if (batch.length < PER_PAGE) break;
 		page++;
 	}
-	return comments;
+	return comments.slice(0, MAX_COMMENTS_PER_RESOURCE);
 }
 
 export async function fetchPullRequestComments(config: GitHubFetchConfig, pullNumber: number): Promise<GitHubComment[]> {
 	const comments: GitHubComment[] = [];
 	let page = 1;
-	while (true) {
+	while (comments.length < MAX_COMMENTS_PER_RESOURCE) {
 		const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/pulls/${pullNumber}/comments?per_page=${PER_PAGE}&page=${page}`;
 		const response = await githubRequest(url, config.token);
 		if (response.status !== 200) break;
@@ -335,7 +336,7 @@ export async function fetchPullRequestComments(config: GitHubFetchConfig, pullNu
 		if (batch.length < PER_PAGE) break;
 		page++;
 	}
-	return comments;
+	return comments.slice(0, MAX_COMMENTS_PER_RESOURCE);
 }
 
 export async function fetchPullRequests(
@@ -633,10 +634,10 @@ export async function fetchDiscussionComments(
 			});
 		}
 		const pageInfo = data.data?.repository?.discussion?.comments?.pageInfo;
-		if (!pageInfo?.hasNextPage) break;
+		if (!pageInfo?.hasNextPage || comments.length >= MAX_COMMENTS_PER_RESOURCE) break;
 		cursor = pageInfo.endCursor;
 	}
-	return comments;
+	return comments.slice(0, MAX_COMMENTS_PER_RESOURCE);
 }
 
 export async function fetchRepoDocs(
