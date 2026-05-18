@@ -220,9 +220,10 @@ function logErrors(
 }
 
 export function startGitHubSourceBridge(
-	sources: readonly SignetSourceEntry[],
+	sourcesOrLoader: readonly SignetSourceEntry[] | (() => readonly SignetSourceEntry[]),
 	options: GitHubSourceBridgeOptions = {},
 ): GitHubSourceBridgeHandle {
+	const loadSources = typeof sourcesOrLoader === "function" ? sourcesOrLoader : () => sourcesOrLoader;
 	const agentId = options.agentId ?? resolveDaemonAgentId();
 	let syncInFlight: Promise<number> | null = null;
 
@@ -230,6 +231,7 @@ export function startGitHubSourceBridge(
 		if (syncInFlight) return syncInFlight;
 		syncInFlight = (async () => {
 			let total = 0;
+			const sources = loadSources();
 			for (const source of sources) {
 				if (!source.enabled || source.kind !== "github") continue;
 				try {

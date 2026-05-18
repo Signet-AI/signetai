@@ -615,33 +615,40 @@ export async function fetchRepoDocs(
 async function fetchTreeDocs(config: GitHubFetchConfig, globPath: string, branch?: string): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
 	const errors: { message: string; retryable: boolean }[] = [];
-	const ref = branch ? `?ref=${branch}` : "";
+	const isRecursive = globPath.includes("**");
 	const dir = globPath.replace(/\/\*\*\/.*$/, "").replace(/\/\*.*$/, "");
-	const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/contents/${dir}${ref}`;
-	const response = await githubRequest(url, config.token);
-	if (response.status !== 200) {
-		errors.push({ message: `Tree fetch failed for ${dir}: ${response.status}`, retryable: response.status >= 500 });
-		return { resources, rateLimitRemaining: 5000, rateLimitReset: 0, errors };
-	}
-	const entries = response.body as Array<{ path: string; name: string; type: string; download_url: string | null }>;
 	const matcher = globPath.includes("**/*.md")
 		? (p: string) => p.endsWith(".md")
 		: globPath.includes("*.md")
 			? (p: string) => p.endsWith(".md") && !p.includes("/")
 			: () => false;
-	const matching = entries.filter((e) => e.type === "file" && matcher(e.path));
-	for (const entry of matching) {
-		if (!entry.download_url) continue;
-		const fileResponse = await githubRawFetch(entry.download_url, config.token);
+
+	const sha = branch || "HEAD";
+	const treeUrl = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/git/trees/${sha}${dir ? `:${dir}` : ""}?recursive=1`;
+	const treeResponse = await githubRequest(treeUrl, config.token);
+	if (treeResponse.status !== 200) {
+		errors.push({ message: `Tree fetch failed for ${dir}: ${treeResponse.status}`, retryable: treeResponse.status >= 500 });
+		return { resources, rateLimitRemaining: 5000, rateLimitReset: 0, errors };
+	}
+	const treeData = treeResponse.body as { tree?: Array<{ path: string; type: string }> };
+	const entries = (treeData.tree ?? []).filter((e) => e.type === "blob" && matcher(e.path));
+	const refParam = branch ? `?ref=${branch}` : "";
+
+	for (const entry of entries.slice(0, 100)) {
+		const fileUrl = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/contents/${dir ? `${dir}/` : ""}${entry.path}${refParam}`;
+		const fileResponse = await githubRequest(fileUrl, config.token);
 		if (fileResponse.status !== 200) {
 			errors.push({ message: `File fetch failed: ${entry.path}`, retryable: true });
 			continue;
 		}
+		const data = fileResponse.body as { content?: string; sha?: string; name?: string };
+		if (!data.content) continue;
+		const content = Buffer.from(data.content, "base64").toString("utf-8");
 		resources.push({
 			type: "doc",
 			path: entry.path,
-			title: entry.name.replace(/\.[^.]+$/, ""),
-			body: fileResponse.text,
+			title: (data.name ?? entry.path).replace(/\.[^.]+$/, ""),
+			body: content,
 			state: "open",
 			labels: [],
 			author: null,
@@ -650,7 +657,7 @@ async function fetchTreeDocs(config: GitHubFetchConfig, globPath: string, branch
 			closedAt: null,
 			mergedAt: null,
 			commentsCount: 0,
-			extra: { path: entry.path },
+			extra: { sha: data.sha, path: entry.path },
 		});
 	}
 	return { resources, rateLimitRemaining: 5000, rateLimitReset: 0, errors };

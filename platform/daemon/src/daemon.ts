@@ -1612,17 +1612,17 @@ async function main() {
 				});
 		}
 
-		const githubSources = loadSourcesConfig(AGENTS_DIR).sources.filter(
-			(source) => source.enabled && source.kind === "github",
-		);
-		if (githubSources.length > 0 && !githubSourceBridge) {
+		if (!githubSourceBridge) {
 			const embeddingCfg = memoryCfg.embedding.provider !== "none" ? memoryCfg.embedding : undefined;
-			githubSourceBridge = startGitHubSourceBridge(githubSources, {
-				agentsDir: AGENTS_DIR,
-				pollIntervalMs: 300_000,
-				embeddingConfig: embeddingCfg,
-				fetchEmbedding: embeddingCfg ? fetchEmbedding : undefined,
-			});
+			githubSourceBridge = startGitHubSourceBridge(
+				() => loadSourcesConfig(AGENTS_DIR).sources.filter((s) => s.enabled && s.kind === "github"),
+				{
+					agentsDir: AGENTS_DIR,
+					pollIntervalMs: 300_000,
+					embeddingConfig: embeddingCfg,
+					fetchEmbedding: embeddingCfg ? fetchEmbedding : undefined,
+				},
+			);
 			githubSourceBridge.sync().catch((e) => {
 				logger.error(
 					"daemon",
