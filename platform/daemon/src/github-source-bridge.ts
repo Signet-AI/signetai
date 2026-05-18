@@ -4,6 +4,11 @@ import { homedir } from "node:os";
 import { resolveDaemonAgentId } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
 import { yieldEvery } from "./async-yield";
+import {
+	clearSourceIndexInFlight,
+	isSourceIndexInFlight,
+	markSourceIndexInFlight,
+} from "./source-index-progress";
 import type { GitHubResource } from "./github-source-fetch";
 import {
 	type GitHubFetchConfig,
@@ -384,6 +389,8 @@ export function startGitHubSourceBridge(
 			const sources = loadSources();
 			for (const source of sources) {
 				if (!source.enabled || source.kind !== "github") continue;
+				if (isSourceIndexInFlight(source.id)) continue;
+				markSourceIndexInFlight(source.id);
 				try {
 					const result = await syncGitHubSource(source, { ...options, agentId });
 					total += result.indexed;
@@ -392,6 +399,8 @@ export function startGitHubSourceBridge(
 						sourceId: source.id,
 						error: err instanceof Error ? err.message : String(err),
 					});
+				} finally {
+					clearSourceIndexInFlight(source.id);
 				}
 			}
 			return total;
