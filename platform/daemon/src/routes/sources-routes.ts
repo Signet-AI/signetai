@@ -18,7 +18,7 @@ import { authConfig } from "./state.js";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";
-import { purgeGitHubSource, syncGitHubSource } from "../github-source-bridge";
+import { type GitHubSourceBridgeOptions, purgeGitHubSource, syncGitHubSource } from "../github-source-bridge";
 import { loadMemoryConfig } from "../memory-config";
 import {
 	type NativeMemoryBridgeHandle,

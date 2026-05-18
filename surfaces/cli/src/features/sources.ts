@@ -60,20 +60,21 @@ export async function addGitHubRepoSource(
 		return;
 	}
 	const validTypes = new Set(["issues", "pulls", "discussions", "docs"]);
-	const resourceTypes = options.types
+	const rawTypes = options.types
 		? options.types
 				.split(",")
 				.map((t) => t.trim())
 				.filter(Boolean)
 		: undefined;
-	if (resourceTypes && resourceTypes.length > 0) {
-		const invalid = resourceTypes.filter((t) => !validTypes.has(t));
+	if (rawTypes && rawTypes.length > 0) {
+		const invalid = rawTypes.filter((t) => !validTypes.has(t));
 		if (invalid.length > 0) {
 			console.error(chalk.red(`✗ Invalid resource types: ${invalid.join(", ")}. Must be one of: issues, pulls, discussions, docs`));
 			process.exitCode = 1;
 			return;
 		}
 	}
+	const resourceTypes = rawTypes as ("issues" | "pulls" | "discussions" | "docs")[] | undefined;
 	if (options.state && !["open", "closed", "all"].includes(options.state)) {
 		console.error(chalk.red(`✗ Invalid state: ${options.state}. Must be one of: open, closed, all`));
 		process.exitCode = 1;
