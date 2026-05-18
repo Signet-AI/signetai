@@ -271,6 +271,25 @@ function resourceKey(resource: GitHubResource): string {
 	return `${resource.type}:${resource.number}`;
 }
 
+function resourceTypePlural(type: string): string {
+	switch (type) {
+		case "issue": return "issues";
+		case "pull": return "pulls";
+		case "discussion": return "discussions";
+		case "docs": return "docs";
+		default: return type;
+	}
+}
+
+function sourcePathToLocalKey(sourcePath: string, repo: string): { localKey: string; rawType: string } | null {
+	const key = sourcePath.startsWith("github:") ? sourcePath.slice("github:".length) : sourcePath;
+	const repoPrefix = `${repo}:`;
+	if (!key.startsWith(repoPrefix)) return null;
+	const localKey = key.slice(repoPrefix.length);
+	const rawType = localKey.split(":")[0] ?? "";
+	return { localKey, rawType };
+}
+
 async function reconcileStaleResources(
 	sourceId: string,
 	repo: string,
@@ -291,16 +310,13 @@ async function reconcileStaleResources(
 	) as Array<{ source_path: string }>;
 	let purged = 0;
 	for (const row of rows) {
-		const sp = row.source_path;
-		const key = sp.startsWith("github:") ? sp.slice("github:".length) : sp;
-		const repoPrefix = `${repo}:`;
-		if (!key.startsWith(repoPrefix)) continue;
-		const localKey = key.slice(repoPrefix.length);
+		const parsed = sourcePathToLocalKey(row.source_path, repo);
+		if (!parsed) continue;
+		const { localKey, rawType } = parsed;
 		if (seenKeys.has(localKey)) continue;
-		const rawType = localKey.split(":")[0] ?? "";
+		if (!completeTypes.has(resourceTypePlural(rawType === "docs" ? "doc" : rawType))) continue;
 		const isDoc = rawType === "docs";
 		const type = isDoc ? "doc" : rawType;
-		if (!completeTypes.has(type === "pull" ? "pulls" : type === "issue" ? "issues" : type === "discussion" ? "discussions" : "docs")) continue;
 		const numOrPath = localKey.slice(rawType.length + 1);
 		const resource: GitHubResource = {
 			type: type as GitHubResource["type"],
