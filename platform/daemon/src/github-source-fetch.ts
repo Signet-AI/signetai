@@ -413,7 +413,7 @@ export async function fetchDiscussions(
 				discussions(first: $first, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
 					pageInfo { hasNextPage endCursor }
 					nodes {
-						number title body state url
+						number title body url
 						author { login }
 						labels(first: 20) { nodes { name } }
 						createdAt updatedAt
@@ -446,6 +446,7 @@ export async function fetchDiscussions(
 			break;
 		}
 		const data = response.body as {
+			errors?: Array<{ message: string }>;
 			data?: {
 				repository?: {
 					discussions?: {
@@ -467,6 +468,12 @@ export async function fetchDiscussions(
 				};
 			};
 		};
+		if (data.errors && data.errors.length > 0) {
+			for (const gqlErr of data.errors) {
+				errors.push({ message: `GraphQL: ${gqlErr.message}`, retryable: false });
+			}
+			break;
+		}
 		const discussions = data.data?.repository?.discussions;
 		if (!discussions?.nodes?.length) break;
 		for (const d of discussions.nodes) {
@@ -479,7 +486,7 @@ export async function fetchDiscussions(
 				number: d.number,
 				title: d.title,
 				body: d.body ?? "",
-				state: d.state,
+				state: "open",
 				labels: d.labels?.nodes?.map((l) => l.name) ?? [],
 				author: d.author?.login ?? null,
 				createdAt: d.createdAt,
