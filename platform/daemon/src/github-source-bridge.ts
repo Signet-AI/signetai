@@ -125,6 +125,7 @@ export async function syncGitHubSource(
 				logger.info("github-source", "Source removed during sync, aborting", { sourceId: source.id });
 				break;
 			}
+			let commentFetchFailed = false;
 			if (settings.resourceTypes.includes("issues")) {
 				const result = await fetchIssues(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
 				if (!isSourceActive()) break;
@@ -133,12 +134,16 @@ export async function syncGitHubSource(
 					seenKeys.add(resourceKey(resource));
 					let comments: { author: string | null; body: string; createdAt: string }[] | undefined;
 					if (settings.includeComments && resource.commentsCount > 0) {
-						const rawComments = await fetchIssueComments(config, resource.number ?? 0);
-						comments = rawComments.map((c) => ({
-							author: c.user?.login ?? null,
-							body: c.body,
-							createdAt: c.created_at,
-						}));
+						try {
+							const rawComments = await fetchIssueComments(config, resource.number ?? 0);
+							comments = rawComments.map((c) => ({
+								author: c.user?.login ?? null,
+								body: c.body,
+								createdAt: c.created_at,
+							}));
+						} catch {
+							commentFetchFailed = true;
+						}
 					}
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
 					repoIndexed++;
@@ -146,7 +151,7 @@ export async function syncGitHubSource(
 				}
 				logErrors(source.id, repo.fullName, "issues", result.resources.length, result.errors);
 				if (result.errors.length > 0) hadErrors = true;
-				if (!capped && result.errors.length === 0) completeTypes.add("issues");
+				if (!capped && result.errors.length === 0 && !commentFetchFailed) completeTypes.add("issues");
 			}
 
 			if (settings.resourceTypes.includes("pulls")) {
@@ -160,13 +165,17 @@ export async function syncGitHubSource(
 					seenKeys.add(resourceKey(resource));
 					let comments: { author: string | null; body: string; createdAt: string }[] | undefined;
 					if (settings.includeComments && resource.commentsCount > 0) {
-						const issueComments = await fetchIssueComments(config, resource.number ?? 0);
-						const reviewComments = await fetchPullRequestComments(config, resource.number ?? 0);
-						comments = [...issueComments, ...reviewComments].map((c) => ({
-							author: c.user?.login ?? null,
-							body: c.body,
-							createdAt: c.created_at,
-						}));
+						try {
+							const issueComments = await fetchIssueComments(config, resource.number ?? 0);
+							const reviewComments = await fetchPullRequestComments(config, resource.number ?? 0);
+							comments = [...issueComments, ...reviewComments].map((c) => ({
+								author: c.user?.login ?? null,
+								body: c.body,
+								createdAt: c.created_at,
+							}));
+						} catch {
+							commentFetchFailed = true;
+						}
 					}
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
 					repoIndexed++;
@@ -174,7 +183,7 @@ export async function syncGitHubSource(
 				}
 				logErrors(source.id, repo.fullName, "pulls", result.resources.length, result.errors);
 				if (result.errors.length > 0) hadErrors = true;
-				if (!capped && result.errors.length === 0) completeTypes.add("pulls");
+				if (!capped && result.errors.length === 0 && !commentFetchFailed) completeTypes.add("pulls");
 			}
 
 			if (settings.resourceTypes.includes("discussions")) {
@@ -185,22 +194,26 @@ export async function syncGitHubSource(
 				for (const resource of result.resources) {
 					if (labelSet && !resource.labels.some((l) => labelSet.has(l))) continue;
 					seenKeys.add(resourceKey(resource));
-					const rawComments =
-						settings.includeComments && resource.commentsCount > 0
-							? await fetchDiscussionComments(config, resource.number ?? 0)
-							: undefined;
-					const comments = rawComments?.map((c) => ({
-						author: typeof c.author === "string" ? c.author : c.author?.login ?? null,
-						body: c.body,
-						createdAt: c.created_at,
-					}));
+					let comments: { author: string | null; body: string; createdAt: string }[] | undefined;
+					if (settings.includeComments && resource.commentsCount > 0) {
+						try {
+							const rawComments = await fetchDiscussionComments(config, resource.number ?? 0);
+							comments = rawComments.map((c) => ({
+								author: typeof c.author === "string" ? c.author : c.author?.login ?? null,
+								body: c.body,
+								createdAt: c.created_at,
+							}));
+						} catch {
+							commentFetchFailed = true;
+						}
+					}
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
 					repoIndexed++;
 					await yielder();
 				}
 				logErrors(source.id, repo.fullName, "discussions", result.resources.length, result.errors);
 				if (result.errors.length > 0) hadErrors = true;
-				if (!capped && result.errors.length === 0) completeTypes.add("discussions");
+				if (!capped && result.errors.length === 0 && !commentFetchFailed) completeTypes.add("discussions");
 			}
 
 			if (settings.resourceTypes.includes("docs")) {
