@@ -189,6 +189,12 @@ export async function syncGitHubSource(
 			}
 
 			if (settings.resourceTypes.includes("discussions")) {
+				if (!config.token) {
+					logger.warn("github-source", "Discussions require a token (GraphQL API) — skipping", {
+						sourceId: source.id,
+						repo: repo.fullName,
+					});
+				} else {
 				const result = await fetchDiscussions(config, undefined, settings.maxItemsPerRepo);
 				if (!isSourceActive()) break;
 				const capped = result.resources.length >= settings.maxItemsPerRepo;
@@ -217,6 +223,7 @@ export async function syncGitHubSource(
 				logErrors(source.id, repo.fullName, "discussions", result.resources.length, result.errors);
 				if (result.errors.length > 0) hadErrors = true;
 				if (!capped && result.errors.length === 0 && !commentFetchFailed) completeTypes.add("discussions");
+				}
 			}
 
 			if (settings.resourceTypes.includes("docs")) {
