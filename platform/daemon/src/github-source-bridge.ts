@@ -22,6 +22,7 @@ import {
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import type { SourceEmbeddingFetch } from "./obsidian-source-embeddings";
+import { getSecret } from "./secrets";
 
 export interface GitHubSourceBridgeHandle {
 	readonly sync: () => Promise<number>;
@@ -91,7 +92,7 @@ export async function syncGitHubSource(
 
 		try {
 			if (settings.resourceTypes.includes("issues")) {
-				const result = await fetchIssues(config, undefined, settings.state, settings.maxItemsPerRepo);
+				const result = await fetchIssues(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
 				for (const resource of result.resources) {
 					const comments =
 						settings.includeComments && resource.commentsCount > 0
@@ -101,11 +102,11 @@ export async function syncGitHubSource(
 					repoIndexed++;
 					await yielder();
 				}
-				logErrors(source.id, repo.fullName, "issues", result.resources.length, []);
+				logErrors(source.id, repo.fullName, "issues", result.resources.length, result.errors);
 			}
 
 			if (settings.resourceTypes.includes("pulls")) {
-				const result = await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo);
+				const result = await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
 				for (const resource of result.resources) {
 					const comments =
 						settings.includeComments && resource.commentsCount > 0
@@ -115,12 +116,14 @@ export async function syncGitHubSource(
 					repoIndexed++;
 					await yielder();
 				}
-				logErrors(source.id, repo.fullName, "pulls", result.resources.length, []);
+				logErrors(source.id, repo.fullName, "pulls", result.resources.length, result.errors);
 			}
 
 			if (settings.resourceTypes.includes("discussions")) {
 				const result = await fetchDiscussions(config, undefined, settings.maxItemsPerRepo);
+				const labelSet = settings.labels?.length ? new Set(settings.labels) : null;
 				for (const resource of result.resources) {
+					if (labelSet && !resource.labels.some((l) => labelSet.has(l))) continue;
 					const comments =
 						settings.includeComments && resource.commentsCount > 0
 							? await fetchDiscussionComments(config, resource.number ?? 0)
@@ -129,7 +132,7 @@ export async function syncGitHubSource(
 					repoIndexed++;
 					await yielder();
 				}
-				logErrors(source.id, repo.fullName, "discussions", result.resources.length, []);
+				logErrors(source.id, repo.fullName, "discussions", result.resources.length, result.errors);
 			}
 
 			if (settings.resourceTypes.includes("docs")) {
@@ -140,7 +143,7 @@ export async function syncGitHubSource(
 					repoIndexed++;
 					await yielder();
 				}
-				logErrors(source.id, repo.fullName, "docs", result.resources.length, []);
+				logErrors(source.id, repo.fullName, "docs", result.resources.length, result.errors);
 			}
 		} catch (err) {
 			logger.warn("github-source", "Failed to sync repo", {
@@ -191,13 +194,7 @@ async function indexResource(
 
 async function resolveToken(tokenRef: string, _agentsDir?: string): Promise<string | undefined> {
 	try {
-		const response = await fetch(`http://localhost:3850/api/secrets/${encodeURIComponent(tokenRef)}`, {
-			headers: { "Content-Type": "application/json" },
-		});
-		if (response.status === 200) {
-			const data = (await response.json()) as { value?: string };
-			return data.value;
-		}
+		return await getSecret(tokenRef);
 	} catch {
 		logger.warn("github-source", "Failed to resolve token from secrets", { tokenRef });
 	}

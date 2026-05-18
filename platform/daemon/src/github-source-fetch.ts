@@ -231,6 +231,7 @@ export async function fetchIssues(
 	since?: string,
 	state = "all",
 	maxItems = 500,
+	labels?: readonly string[],
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
 	const errors: { message: string; retryable: boolean }[] = [];
@@ -248,6 +249,9 @@ export async function fetchIssues(
 			page: String(page),
 		});
 		if (since) params.set("since", since);
+		if (labels && labels.length > 0) {
+			for (const label of labels) params.append("labels", label);
+		}
 		const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/issues?${params}`;
 		const response = await githubRequest(url, config.token);
 		const rl = parseRateLimit(response.headers);
@@ -308,6 +312,7 @@ export async function fetchPullRequests(
 	since?: string,
 	state = "all",
 	maxItems = 500,
+	labels?: readonly string[],
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
 	const errors: { message: string; retryable: boolean }[] = [];
@@ -324,6 +329,9 @@ export async function fetchPullRequests(
 			direction: "desc",
 			page: String(page),
 		});
+		if (labels && labels.length > 0) {
+			for (const label of labels) params.append("labels", label);
+		}
 		const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/pulls?${params}`;
 		const response = await githubRequest(url, config.token);
 		const rl = parseRateLimit(response.headers);
