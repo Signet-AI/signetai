@@ -18,6 +18,7 @@ export interface GitHubSourceSettings {
 }
 
 export const DEFAULT_GITHUB_RESOURCE_TYPES = ["issues", "pulls", "discussions", "docs"] as const;
+const VALID_GITHUB_RESOURCE_TYPES = new Set<string>(DEFAULT_GITHUB_RESOURCE_TYPES);
 export const DEFAULT_GITHUB_DOC_PATHS = ["README.md", "CHANGELOG.md"] as const;
 
 export interface SignetSourceEntry {
@@ -260,10 +261,12 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 }
 
 function buildGitHubSettings(input: AddGitHubSourceInput, repos: readonly string[]): Readonly<Record<string, unknown>> {
+	const rawTypes = input.resourceTypes ?? [...DEFAULT_GITHUB_RESOURCE_TYPES];
+	const resourceTypes = rawTypes.filter((t) => VALID_GITHUB_RESOURCE_TYPES.has(t));
 	return {
 		repos: repos,
 		tokenRef: input.tokenRef,
-		resourceTypes: input.resourceTypes ?? [...DEFAULT_GITHUB_RESOURCE_TYPES],
+		resourceTypes: resourceTypes.length > 0 ? resourceTypes : [...DEFAULT_GITHUB_RESOURCE_TYPES],
 		state: input.state ?? "all",
 		includeComments: input.includeComments ?? true,
 		labels: input.labels,

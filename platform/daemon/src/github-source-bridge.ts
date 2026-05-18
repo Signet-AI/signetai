@@ -14,6 +14,7 @@ import {
 	fetchIssues,
 	fetchPullRequestComments,
 	fetchPullRequests,
+	fetchPullRequestsBySearch,
 	fetchRepoDocs,
 	fetchRepoInfo,
 } from "./github-source-fetch";
@@ -125,12 +126,13 @@ export async function syncGitHubSource(
 			}
 
 			if (settings.resourceTypes.includes("pulls")) {
-				const result = await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo);
+				const hasLabels = settings.labels && settings.labels.length > 0;
+				const result = hasLabels
+					? await fetchPullRequestsBySearch(config, settings.labels, undefined, settings.state, settings.maxItemsPerRepo)
+					: await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo);
 				if (!isSourceActive()) break;
 				const capped = result.resources.length >= settings.maxItemsPerRepo;
-				const labelSet = settings.labels?.length ? new Set(settings.labels) : null;
 				for (const resource of result.resources) {
-					if (labelSet && !resource.labels.some((l) => labelSet.has(l))) continue;
 					seenKeys.add(resourceKey(resource));
 					let comments: { author: string | null; body: string; createdAt: string }[] | undefined;
 					if (settings.includeComments && resource.commentsCount > 0) {

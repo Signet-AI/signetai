@@ -54,6 +54,19 @@ export interface GitHubPullRequest {
 	readonly changed_files: number;
 }
 
+export interface GitHubSearchIssue {
+	readonly number: number;
+	readonly title: string;
+	readonly body: string | null;
+	readonly state: string;
+	readonly html_url: string;
+	readonly user: { readonly login: string } | null;
+	readonly labels: readonly ({ readonly name: string } | string)[];
+	readonly created_at: string;
+	readonly updated_at: string;
+	readonly comments: number;
+}
+
 export interface GitHubDiscussion {
 	readonly number: number;
 	readonly title: string;
@@ -344,7 +357,6 @@ export async function fetchPullRequests(
 	since?: string,
 	state = "all",
 	maxItems = 500,
-	labels?: readonly string[],
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
 	const errors: { message: string; retryable: boolean }[] = [];
@@ -361,9 +373,7 @@ export async function fetchPullRequests(
 			direction: "desc",
 			page: String(page),
 		});
-		if (labels && labels.length > 0) {
-			for (const label of labels) params.append("labels", label);
-		}
+		if (since) params.set("since", since);
 		const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/pulls?${params}`;
 		const response = await githubRequest(url, config.token);
 		const rl = parseRateLimit(response.headers);
@@ -407,6 +417,65 @@ export async function fetchPullRequests(
 		}
 		if (pulls.length < PER_PAGE) break;
 		if (since && pulls[pulls.length - 1]?.updated_at < since) break;
+		page++;
+	}
+	return { resources, rateLimitRemaining, rateLimitReset, errors };
+}
+
+export async function fetchPullRequestsBySearch(
+	config: GitHubFetchConfig,
+	labels: string[],
+	since?: string,
+	state = "all",
+	maxItems = 500,
+): Promise<GitHubFetchResult> {
+	const resources: GitHubResource[] = [];
+	const errors: { message: string; retryable: boolean }[] = [];
+	let rateLimitRemaining = 30;
+	let rateLimitReset = 0;
+	let page = 1;
+
+	const labelQuery = labels.map((l) => `label:"${l}"`).join(" ");
+	const stateQuery = state === "all" ? "" : ` is:${state}`;
+	const q = `repo:${config.owner}/${config.repo} type:pr${stateQuery} ${labelQuery}`;
+
+	while (resources.length < maxItems) {
+		const params = new URLSearchParams({
+			q: q.trim(),
+			per_page: String(Math.min(PER_PAGE, maxItems - resources.length)),
+			sort: "updated",
+			order: "desc",
+			page: String(page),
+		});
+		const url = `${GITHUB_API_BASE}/search/issues?${params}`;
+		const response = await githubRequest(url, config.token);
+		const rl = parseRateLimit(response.headers);
+		rateLimitRemaining = rl.remaining;
+		rateLimitReset = rl.reset;
+		if (response.status !== 200) {
+			errors.push({ message: `PR search fetch failed: ${response.status}`, retryable: response.status >= 500 });
+			break;
+		}
+		const data = response.body as { items: GitHubSearchIssue[]; total_count: number };
+		if (!data.items || data.items.length === 0) break;
+		for (const item of data.items) {
+			if (since && item.updated_at < since) break;
+			resources.push({
+				type: "pull",
+				number: item.number,
+				title: item.title,
+				body: item.body ?? "",
+				state: item.state === "open" ? "open" : "closed",
+				labels: item.labels.map((l) => (typeof l === "string" ? l : l.name)),
+				author: item.user?.login ?? null,
+				createdAt: item.created_at,
+				updatedAt: item.updated_at,
+				commentsCount: item.comments,
+				htmlUrl: item.html_url,
+			});
+		}
+		if (data.items.length < PER_PAGE) break;
+		if (data.total_count <= resources.length) break;
 		page++;
 	}
 	return { resources, rateLimitRemaining, rateLimitReset, errors };
