@@ -385,7 +385,8 @@ export function startGitHubSourceBridge(
 			for (const source of sources) {
 				if (!source.enabled || source.kind !== "github") continue;
 				try {
-					total += await syncGitHubSource(source, { ...options, agentId });
+					const result = await syncGitHubSource(source, { ...options, agentId });
+					total += result.indexed;
 				} catch (err) {
 					logger.warn("github-source", "Source sync failed", {
 						sourceId: source.id,
