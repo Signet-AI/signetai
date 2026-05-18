@@ -267,7 +267,7 @@ export async function fetchIssues(
 		});
 		if (since) params.set("since", since);
 		if (labels && labels.length > 0) {
-			for (const label of labels) params.append("labels", label);
+			params.set("labels", labels.join(","));
 		}
 		const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/issues?${params}`;
 		const response = await githubRequest(url, config.token);
