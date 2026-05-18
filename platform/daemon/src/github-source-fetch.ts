@@ -210,22 +210,6 @@ async function githubRequest(url: string, token?: string, method = "GET", body?:
 	throw lastError ?? new Error("GitHub API request failed after retries");
 }
 
-async function githubRawFetch(url: string, token?: string): Promise<{ status: number; text: string }> {
-	const headers: Record<string, string> = {
-		Accept: "application/vnd.github.v3.raw",
-		"User-Agent": "signet-daemon",
-	};
-	if (token) headers.Authorization = `Bearer ${token}`;
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-	try {
-		const response = await fetch(url, { headers, signal: controller.signal });
-		return { status: response.status, text: await response.text() };
-	} finally {
-		clearTimeout(timeout);
-	}
-}
-
 export async function fetchRepoInfo(config: GitHubFetchConfig): Promise<GitHubRepoInfo | null> {
 	const url = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}`;
 	const response = await githubRequest(url, config.token);
@@ -710,7 +694,6 @@ export async function fetchRepoDocs(
 async function fetchTreeDocs(config: GitHubFetchConfig, globPath: string, branch?: string): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
 	const errors: { message: string; retryable: boolean }[] = [];
-	const isRecursive = globPath.includes("**");
 	const dir = globPath.replace(/\/\*\*\/.*$/, "").replace(/\/\*.*$/, "");
 	const matcher = globPath.includes("**/*.md")
 		? (p: string) => p.endsWith(".md")

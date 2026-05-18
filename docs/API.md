@@ -1687,6 +1687,51 @@ and source chunk embeddings. Source files are not modified.
 }
 ```
 
+### POST /api/sources/github
+
+Add or update a GitHub source. Queues an async sync that indexes issues, pull
+requests, discussions, and/or docs from one or more repos into the knowledge
+graph and embedding store. Requires `admin` permission.
+
+**Request body**
+
+```json
+{
+  "name": "Signet Issues",
+  "tokenRef": "GITHUB_TOKEN",
+  "repos": ["Signet-AI/signetai"],
+  "resourceTypes": ["issues", "pulls", "discussions", "docs"],
+  "state": "all",
+  "includeComments": true,
+  "labels": ["bug", "feature"],
+  "maxItemsPerRepo": 500,
+  "docPaths": ["README.md", "CHANGELOG.md"]
+}
+```
+
+**Response**
+
+```json
+{
+  "source": { "id": "github:abc123def456", "kind": "github" },
+  "created": true
+}
+```
+
+### DELETE /api/sources/:sourceId
+
+Remove a source config and purge Signet-owned source artifacts, graph rows,
+and source chunk embeddings. Source files are not modified.
+
+**Response**
+
+```json
+{
+  "source": { "id": "obsidian:abc123", "kind": "obsidian" },
+  "purged": 150
+}
+```
+
 ### POST /api/sources/pick-directory
 
 Best-effort local directory picker used by dashboard/browser flows. It returns
@@ -4385,6 +4430,7 @@ silently disappear from the API reference.
 | GET | `/api/sources` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/pick-directory` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/obsidian` | platform/daemon/src/routes/sources-routes.ts |
+| POST | `/api/sources/github` | platform/daemon/src/routes/sources-routes.ts |
 | DELETE | `/api/sources/:sourceId` | platform/daemon/src/routes/sources-routes.ts |
 | GET | `/api/knowledge/entities` | platform/daemon/src/routes/knowledge-routes.ts |
 | POST | `/api/knowledge/entities/:id/pin` | platform/daemon/src/routes/knowledge-routes.ts |

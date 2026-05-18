@@ -278,6 +278,7 @@ function resourceTypePlural(type: string): string {
 		case "issue": return "issues";
 		case "pull": return "pulls";
 		case "discussion": return "discussions";
+		case "doc": return "docs";
 		case "docs": return "docs";
 		default: return type;
 	}
