@@ -276,7 +276,7 @@ async function reconcileStaleResources(
 			extra: {},
 		};
 		purgeGitHubResourceEmbeddings({ sourceId, repo, agentId, resource });
-		purgeGitHubResourceStructure({ sourceId, agentId });
+		purgeGitHubResourceStructure({ sourceId, repo, agentId, resource });
 		purged++;
 	}
 	if (purged > 0) {

@@ -385,3 +385,25 @@ export function purgeGitHubSourceStructure(input: PurgeGitHubSourceStructureInpu
 		return entities + attrs + deps + communities;
 	});
 }
+
+export interface PurgeGitHubResourceStructureInput {
+	readonly sourceId: string;
+	readonly repo: string;
+	readonly agentId: string;
+	readonly resource: GitHubResource;
+}
+
+export function purgeGitHubResourceStructure(input: PurgeGitHubResourceStructureInput): number {
+	const sourcePath = resourceSourcePath(input.repo, input.resource);
+	const canonicalName = `github:${input.sourceId}:${sourcePath}`;
+	return getDbAccessor().withWriteTx((db) => {
+		const entity = db
+			.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
+			.get(canonicalName, input.agentId) as { id: string } | undefined;
+		if (!entity) return 0;
+		const attrs = db.prepare("DELETE FROM entity_attributes WHERE entity_id = ? AND agent_id = ?").run(entity.id, input.agentId).changes;
+		const deps = db.prepare("DELETE FROM entity_dependencies WHERE (source_entity_id = ? OR target_entity_id = ?) AND agent_id = ?").run(entity.id, entity.id, input.agentId).changes;
+		const entities = db.prepare("DELETE FROM entities WHERE id = ? AND agent_id = ?").run(entity.id, input.agentId).changes;
+		return entities + attrs + deps;
+	});
+}

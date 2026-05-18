@@ -213,6 +213,12 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 		}
 	}
 
+	if (input.maxItemsPerRepo !== undefined) {
+		if (!Number.isFinite(input.maxItemsPerRepo) || input.maxItemsPerRepo < 1 || input.maxItemsPerRepo > 10000) {
+			return { ok: false, error: "maxItemsPerRepo must be between 1 and 10000" };
+		}
+	}
+
 	const now = input.now ?? new Date().toISOString();
 	const cfg = loadSourcesConfigForWrite(agentsDir);
 	const settingsKey = repos.sort().join(",");
