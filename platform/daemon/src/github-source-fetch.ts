@@ -64,6 +64,7 @@ export interface GitHubSearchIssue {
 	readonly labels: readonly ({ readonly name: string } | string)[];
 	readonly created_at: string;
 	readonly updated_at: string;
+	readonly closed_at: string | null;
 	readonly comments: number;
 }
 
@@ -470,8 +471,10 @@ export async function fetchPullRequestsBySearch(
 				author: item.user?.login ?? null,
 				createdAt: item.created_at,
 				updatedAt: item.updated_at,
+				closedAt: item.closed_at ?? null,
+				mergedAt: null,
 				commentsCount: item.comments,
-				htmlUrl: item.html_url,
+				extra: { html_url: item.html_url },
 			});
 		}
 		if (data.items.length < PER_PAGE) break;
