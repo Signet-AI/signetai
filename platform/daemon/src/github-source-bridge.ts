@@ -143,6 +143,7 @@ export async function syncGitHubSource(
 							}));
 						} catch {
 							commentFetchFailed = true;
+							hadErrors = true;
 						}
 					}
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
@@ -175,6 +176,7 @@ export async function syncGitHubSource(
 							}));
 						} catch {
 							commentFetchFailed = true;
+							hadErrors = true;
 						}
 					}
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);
@@ -205,6 +207,7 @@ export async function syncGitHubSource(
 							}));
 						} catch {
 							commentFetchFailed = true;
+							hadErrors = true;
 						}
 					}
 					await indexResource(source.id, repo.fullName, resource, comments, agentId, syncOpts);

@@ -75,7 +75,7 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 		.requiredOption("--repos <repos...>", "Repo patterns (owner/repo or owner/*)")
 		.option("--name <name>", "Display name for this source")
 		.option("--token-ref <ref>", "Signet secret reference for GitHub PAT")
-		.option("--types <types>", "Resource types: issues,pulls,discussions,docs", "issues,pulls,discussions,docs")
+		.option("--types <types>", "Resource types: issues,pulls,discussions,docs (discussions requires --token-ref)", "issues,pulls,docs")
 		.option("--state <state>", "Filter by state: open, closed, all", "all")
 		.option("--no-comments", "Skip fetching comments")
 		.option("--doc-paths <paths...>", "Doc file paths to index", ["README.md", "CHANGELOG.md"])
