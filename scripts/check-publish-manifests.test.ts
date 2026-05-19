@@ -256,6 +256,10 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/bin/signet" mcp --help >/dev/null');
 		expect(workflow).toContain('SMOKE_PORT="$(python3 -c');
 		expect(workflow).toContain('SIGNET_DAEMON_ENTRYPOINT="1"');
+		expect(workflow).toContain('cat > "$CHECK_DIR/smoke-agents/agent.yaml" <<\'YAML\'');
+		expect(workflow).toContain("embedding:\n                provider: none");
+		expect(workflow).toContain("pipelineV2:\n                  paused: true");
+		expect(workflow).toContain("embeddingTracker:\n                    enabled: false");
 		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/daemon-js/daemon.js" > "$SMOKE_LOG" 2>&1 &');
 		expect(workflow).toContain('curl -fsS "http://127.0.0.1:${SMOKE_PORT}/health"');
 		expect(workflow).toContain("Bundled Node daemon did not become healthy");
