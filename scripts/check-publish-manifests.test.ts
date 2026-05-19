@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,21 @@ import {
 
 function writeJson(file: string, value: unknown): void {
 	writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function extractWorkflowRunBlock(workflow: string, step: string): string {
+	const marker = `      - name: ${step}\n        `;
+	const start = workflow.indexOf(marker);
+	expect(start).toBeGreaterThanOrEqual(0);
+	const runStart = workflow.indexOf("run: |\n", start);
+	expect(runStart).toBeGreaterThanOrEqual(0);
+	const contentStart = runStart + "run: |\n".length;
+	const nextStep = workflow.indexOf("\n      - name:", contentStart);
+	const block = workflow.slice(contentStart, nextStep === -1 ? undefined : nextStep);
+	return block
+		.split("\n")
+		.map((line) => (line.startsWith("          ") ? line.slice(10) : line))
+		.join("\n");
 }
 
 describe("check-publish-manifests", () => {
@@ -256,16 +272,34 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('"$CHECK_DIR/bin/signet" mcp --help >/dev/null');
 		expect(workflow).toContain('SMOKE_PORT="$(python3 -c');
 		expect(workflow).toContain('SIGNET_DAEMON_ENTRYPOINT="1"');
-		expect(workflow).toContain('cat > "$CHECK_DIR/smoke-agents/agent.yaml" <<\'YAML\'');
-		expect(workflow).toContain("embedding:\n                provider: none");
-		expect(workflow).toContain("pipelineV2:\n                  paused: true");
-		expect(workflow).toContain("embeddingTracker:\n                    enabled: false");
+		expect(workflow).toContain('} > "$CHECK_DIR/smoke-agents/agent.yaml"');
+		expect(workflow).toContain("printf '%s\\n' 'embedding:'");
+		expect(workflow).toContain("printf '%s\\n' '  provider: none'");
+		expect(workflow).toContain("printf '%s\\n' '  pipelineV2:'");
+		expect(workflow).toContain("printf '%s\\n' '    paused: true'");
+		expect(workflow).toContain("printf '%s\\n' '    embeddingTracker:'");
+		expect(workflow).not.toContain("<<'YAML'");
 		expect(workflow).toContain('"$CHECK_DIR/runtime/node/bin/node" "$CHECK_DIR/runtime/daemon-js/daemon.js" > "$SMOKE_LOG" 2>&1 &');
 		expect(workflow).toContain('curl -fsS "http://127.0.0.1:${SMOKE_PORT}/health"');
 		expect(workflow).toContain("Bundled Node daemon did not become healthy");
 		expect(workflow).toContain('trap \'if [ -n "${SMOKE_PID:-}" ]; then kill "$SMOKE_PID"');
 		expect(workflow).not.toContain('if [ "$PLATFORM" = "linux-x64" ]; then\n              # Import the daemon package API entrypoint');
 		expect(workflow).not.toContain("import(process.env.SIGNET_DAEMON_SMOKE)");
+	});
+
+	test("keeps bundle release manifest shell script syntactically valid", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+		const script = extractWorkflowRunBlock(workflow, "Generate manifests");
+		const dir = mkdtempSync(join(tmpdir(), "signet-bundle-workflow-"));
+		const file = join(dir, "generate-manifests.sh");
+
+		try {
+			writeFileSync(file, script);
+			execFileSync("bash", ["-n", file], { stdio: "pipe" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	test("fails release staging when duplicate asset names have different content", () => {

@@ -574,21 +574,21 @@ jobs:
                 printf '%s\n' 'exec "$SIGNET_DIR/runtime/node/bin/node" "$SIGNET_DIR/runtime/cli/cli.js" "$@"'
               } > "$CHECK_DIR/bin/signet"
               chmod +x "$CHECK_DIR/bin/signet"
-              cat > "$CHECK_DIR/smoke-agents/agent.yaml" <<'YAML'
-              embedding:
-                provider: none
-              memory:
-                pipelineV2:
-                  paused: true
-                  synthesis:
-                    enabled: false
-                  procedural:
-                    enabled: false
-                  embeddingTracker:
-                    enabled: false
-                  modelRegistry:
-                    enabled: false
-              YAML
+              {
+                printf '%s\n' 'embedding:'
+                printf '%s\n' '  provider: none'
+                printf '%s\n' 'memory:'
+                printf '%s\n' '  pipelineV2:'
+                printf '%s\n' '    paused: true'
+                printf '%s\n' '    synthesis:'
+                printf '%s\n' '      enabled: false'
+                printf '%s\n' '    procedural:'
+                printf '%s\n' '      enabled: false'
+                printf '%s\n' '    embeddingTracker:'
+                printf '%s\n' '      enabled: false'
+                printf '%s\n' '    modelRegistry:'
+                printf '%s\n' '      enabled: false'
+              } > "$CHECK_DIR/smoke-agents/agent.yaml"
               "$CHECK_DIR/bin/signet" --help >/dev/null
               "$CHECK_DIR/bin/signet" setup --help >/dev/null
               "$CHECK_DIR/bin/signet" dashboard --help >/dev/null
