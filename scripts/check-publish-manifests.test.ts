@@ -149,6 +149,16 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("github.ref == 'refs/heads/main'");
 	});
 
+	test("installs Bun before release manifest generation", () => {
+		const root = join(import.meta.dir, "..");
+		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
+		const release = workflow.slice(workflow.indexOf("  release:"));
+
+		expect(release).toContain("- uses: oven-sh/setup-bun@v2");
+		expect(release.indexOf("- uses: oven-sh/setup-bun@v2")).toBeLessThan(release.indexOf("- name: Generate manifests"));
+		expect(release).toContain("bun deploy/bundle/scripts/generate-manifest.ts");
+	});
+
 	test("retries transient bundle dependency install failures", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "bundle.yml"), "utf-8");
