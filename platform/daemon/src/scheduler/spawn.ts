@@ -1,11 +1,12 @@
 /**
  * Process spawning for scheduled task execution.
- * Uses Bun.spawn to run Claude Code or OpenCode CLI processes.
+ * Uses node:child_process to run Claude Code or OpenCode CLI processes.
  */
 
-import type { TaskHarness } from "@signet/core";
 import { spawn as nodeSpawn } from "node:child_process";
+import type { TaskHarness } from "@signet/core";
 import { logger } from "../logger";
+import { which } from "../which";
 
 const MAX_OUTPUT_CHARS = 1_048_576;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
@@ -49,7 +50,7 @@ function buildCommand(harness: TaskHarness, prompt: string, model?: string): rea
 /** Check if the CLI binary for a harness is available on PATH. */
 export function isHarnessAvailable(harness: TaskHarness): boolean {
 	const [bin] = buildCommand(harness, "");
-	return Bun.which(bin) !== null;
+	return which(bin) !== null;
 }
 
 /** Spawn a CLI process for a scheduled task and capture output. */
@@ -62,7 +63,7 @@ export async function spawnTask(
 	model?: string,
 ): Promise<SpawnResult> {
 	const [bin, args] = buildCommand(harness, prompt, model);
-	const resolvedBin = Bun.which(bin);
+	const resolvedBin = which(bin);
 
 	if (resolvedBin === null) {
 		return {

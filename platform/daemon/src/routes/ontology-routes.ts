@@ -3,6 +3,17 @@ import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
 import { getInferenceProviderOrNull } from "../llm";
 import {
+	OntologyAssertionError,
+	archiveEpistemicAssertion,
+	createEpistemicAssertion,
+	getEpistemicAssertion,
+	linkEpistemicAssertionClaim,
+	listEpistemicAssertions,
+	parseEpistemicAssertionPredicate,
+	parseEpistemicAssertionStatus,
+	supersedeEpistemicAssertion,
+} from "../ontology-assertions";
+import {
 	OntologyClaimEvidenceError,
 	getOntologyClaimEvidence,
 	parseOntologyClaimAttributeKind,
@@ -13,11 +24,16 @@ import { OntologyExtractionError, extractOntologyProposals } from "../ontology-e
 import { OntologyLinkEvidenceError, getOntologyLinkEvidence } from "../ontology-link-evidence";
 import {
 	OntologyProposalError,
+	applyOntologyOperation,
+	applyOntologyOperationBatch,
 	applyOntologyProposal,
+	createEntityMergePlan,
 	createOntologyProposal,
 	createOntologyProposals,
+	getClaimVersion,
 	getOntologyProposal,
 	getOntologyProposalEvidence,
+	listClaimVersions,
 	listOntologyProposalConflicts,
 	listOntologyProposals,
 	parseOntologyProposalStatus,
@@ -60,6 +76,14 @@ function readArray(record: Record<string, unknown>, key: string): readonly unkno
 	return Array.isArray(value) ? value : undefined;
 }
 
+function readStringArray(record: Record<string, unknown>, key: string): readonly string[] | undefined {
+	const value = readArray(record, key);
+	if (!value) return undefined;
+	return value
+		.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+		.map((item) => item.trim());
+}
+
 async function readJsonRecord(c: Context): Promise<Record<string, unknown>> {
 	try {
 		return asRecord(await c.req.json());
@@ -74,6 +98,7 @@ function statusForError(err: unknown): 400 | 404 | 409 | 500 {
 	if (err instanceof OntologyLinkEvidenceError) return err.status;
 	if (err instanceof OntologyExtractionError) return err.status;
 	if (err instanceof OntologyConsolidationError) return err.status;
+	if (err instanceof OntologyAssertionError) return err.status;
 	return 500;
 }
 
@@ -106,11 +131,22 @@ export function registerOntologyRoutes(app: Hono): void {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
 	});
+	app.use("/api/ontology/operations/*", async (c, next) => {
+		return requirePermission("modify", authConfig)(c, next);
+	});
 	app.use("/api/ontology/claims/*", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
 	});
 	app.use("/api/ontology/links/*", async (c, next) => {
+		const permission = c.req.method === "GET" ? "recall" : "modify";
+		return requirePermission(permission, authConfig)(c, next);
+	});
+	app.use("/api/ontology/assertions", async (c, next) => {
+		const permission = c.req.method === "GET" ? "recall" : "modify";
+		return requirePermission(permission, authConfig)(c, next);
+	});
+	app.use("/api/ontology/assertions/*", async (c, next) => {
 		const permission = c.req.method === "GET" ? "recall" : "modify";
 		return requirePermission(permission, authConfig)(c, next);
 	});
@@ -161,6 +197,30 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
+	app.post("/api/ontology/proposals/repair/merge-plan", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		try {
+			return c.json(
+				createEntityMergePlan(getDbAccessor(), {
+					agentId: scoped.agentId,
+					targetEntity: readString(body, "target_entity") ?? readString(body, "target"),
+					targetEntityId: readString(body, "target_entity_id") ?? readString(body, "target_id"),
+					sourceEntities: readStringArray(body, "source_entities") ?? readStringArray(body, "sources"),
+					sourceEntityIds: readStringArray(body, "source_entity_ids") ?? readStringArray(body, "source_ids"),
+					force: readBoolean(body, "force") ?? false,
+					writeProposal: readBoolean(body, "write_proposal") ?? readBoolean(body, "write_proposals") ?? false,
+					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-merge-plan",
+					rationale: readString(body, "rationale") ?? readString(body, "reason"),
+					evidence: readArray(body, "evidence"),
+				}),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
 	app.post("/api/ontology/extract", async (c) => {
 		const body = await readJsonRecord(c);
 		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
@@ -174,6 +234,7 @@ export function registerOntologyRoutes(app: Hono): void {
 					agentId: scoped.agentId,
 					from,
 					writeProposals: readBoolean(body, "write_proposals") ?? false,
+					writeAssertions: readBoolean(body, "write_assertions") ?? false,
 					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "ontology-extract",
 					limit: readNumber(body, "limit"),
 					useProvider,
@@ -257,11 +318,262 @@ export function registerOntologyRoutes(app: Hono): void {
 		}
 	});
 
+	app.get("/api/ontology/claims/versions", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		const claim = c.req.query("claim")?.trim();
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		if (!claim) return c.json({ error: "claim is required" }, 400);
+		const kind = parseOntologyClaimAttributeKind(c.req.query("kind"));
+		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
+		try {
+			return c.json(
+				listClaimVersions(getDbAccessor(), { agentId: scoped.agentId, entity, aspect, group, claim, kind }),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.get("/api/ontology/claims/version", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const entity = c.req.query("entity")?.trim();
+		const aspect = c.req.query("aspect")?.trim();
+		const group = c.req.query("group")?.trim();
+		const claim = c.req.query("claim")?.trim();
+		const version = parseBoundedInt(c.req.query("version"), 0, 1, 1_000_000);
+		if (!entity) return c.json({ error: "entity is required" }, 400);
+		if (!aspect) return c.json({ error: "aspect is required" }, 400);
+		if (!group) return c.json({ error: "group is required" }, 400);
+		if (!claim) return c.json({ error: "claim is required" }, 400);
+		if (version === 0) return c.json({ error: "version is required" }, 400);
+		const kind = parseOntologyClaimAttributeKind(c.req.query("kind"));
+		if (c.req.query("kind") && !kind) return c.json({ error: "kind is invalid" }, 400);
+		try {
+			const item = getClaimVersion(getDbAccessor(), {
+				agentId: scoped.agentId,
+				entity,
+				aspect,
+				group,
+				claim,
+				kind,
+				version,
+			});
+			if (item === null) return c.json({ error: "Claim version not found" }, 404);
+			return c.json(item);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
 	app.get("/api/ontology/links/:id/evidence", (c) => {
 		const scoped = resolveAgent(c, c.req.query("agent_id"));
 		if (scoped.response) return scoped.response;
 		try {
 			return c.json(getOntologyLinkEvidence(getDbAccessor(), { agentId: scoped.agentId, id: c.req.param("id") }));
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.get("/api/ontology/assertions", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const predicate = parseEpistemicAssertionPredicate(c.req.query("predicate"));
+		if (c.req.query("predicate") && !predicate) return c.json({ error: "predicate is invalid" }, 400);
+		const status = parseEpistemicAssertionStatus(c.req.query("status"));
+		if (c.req.query("status") && !status) return c.json({ error: "status is invalid" }, 400);
+		return c.json(
+			listEpistemicAssertions(getDbAccessor(), {
+				agentId: scoped.agentId,
+				entity: c.req.query("entity"),
+				entityId: c.req.query("entity_id"),
+				predicate,
+				status,
+				speaker: c.req.query("speaker"),
+				sourceKind: c.req.query("source_kind"),
+				sourceId: c.req.query("source_id"),
+				query: c.req.query("query"),
+				limit: parseBoundedInt(c.req.query("limit"), 50, 1, 200),
+				offset: parseBoundedInt(c.req.query("offset"), 0, 0, 10_000),
+			}),
+		);
+	});
+
+	app.get("/api/ontology/assertions/:id", (c) => {
+		const scoped = resolveAgent(c, c.req.query("agent_id"));
+		if (scoped.response) return scoped.response;
+		const assertion = getEpistemicAssertion(getDbAccessor(), { agentId: scoped.agentId, id: c.req.param("id") });
+		if (assertion === null) return c.json({ error: "Assertion not found" }, 404);
+		return c.json(assertion);
+	});
+
+	app.post("/api/ontology/assertions", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		try {
+			return c.json(
+				createEpistemicAssertion(getDbAccessor(), {
+					agentId: scoped.agentId,
+					entity: readString(body, "entity"),
+					entityId: readString(body, "entity_id"),
+					predicate: readString(body, "predicate") ?? "",
+					content: readString(body, "content") ?? "",
+					speaker: readString(body, "speaker") ?? null,
+					assertedAt: readString(body, "asserted_at") ?? null,
+					confidence: readNumber(body, "confidence"),
+					evidence: readArray(body, "evidence"),
+					sourceKind: readString(body, "source_kind") ?? null,
+					sourceId: readString(body, "source_id") ?? null,
+					sourcePath: readString(body, "source_path") ?? null,
+					sourceRoot: readString(body, "source_root") ?? null,
+					claimAttributeId: readString(body, "claim_attribute_id") ?? null,
+					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
+				}),
+				201,
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/assertions/:id/link-claim", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		const attributeId = readString(body, "attribute_id");
+		if (!attributeId) return c.json({ error: "attribute_id is required" }, 400);
+		try {
+			return c.json(
+				linkEpistemicAssertionClaim(getDbAccessor(), {
+					agentId: scoped.agentId,
+					id: c.req.param("id"),
+					attributeId,
+				}),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/assertions/:id/archive", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		try {
+			return c.json(
+				archiveEpistemicAssertion(getDbAccessor(), {
+					agentId: scoped.agentId,
+					id: c.req.param("id"),
+					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",
+					reason: readString(body, "reason") ?? null,
+				}),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/assertions/:id/supersede", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		try {
+			return c.json(
+				supersedeEpistemicAssertion(getDbAccessor(), {
+					agentId: scoped.agentId,
+					oldAssertionId: c.req.param("id"),
+					entity: readString(body, "entity"),
+					entityId: readString(body, "entity_id"),
+					predicate: readString(body, "predicate") ?? "",
+					content: readString(body, "content") ?? "",
+					speaker: readString(body, "speaker") ?? null,
+					assertedAt: readString(body, "asserted_at") ?? null,
+					confidence: readNumber(body, "confidence"),
+					evidence: readArray(body, "evidence"),
+					sourceKind: readString(body, "source_kind") ?? null,
+					sourceId: readString(body, "source_id") ?? null,
+					sourcePath: readString(body, "source_path") ?? null,
+					sourceRoot: readString(body, "source_root") ?? null,
+					claimAttributeId: readString(body, "claim_attribute_id") ?? null,
+					createdBy: readString(body, "created_by") ?? c.req.header("x-signet-actor") ?? "operator",
+				}),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/operations/apply", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		const operation = readString(body, "operation");
+		if (!operation) return c.json({ error: "operation is required" }, 400);
+		const payload = asRecord(body.payload);
+		if (Object.keys(payload).length === 0) return c.json({ error: "payload object is required" }, 400);
+		try {
+			return c.json(
+				applyOntologyOperation(getDbAccessor(), {
+					agentId: scoped.agentId,
+					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator",
+					operation,
+					payload,
+					reason: readString(body, "reason") ?? readString(body, "rationale"),
+					evidence: readArray(body, "evidence"),
+					confidence: readNumber(body, "confidence"),
+					risk: readString(body, "risk") ?? null,
+					sourceKind: readString(body, "source_kind") ?? null,
+					sourceId: readString(body, "source_id") ?? null,
+					sourcePath: readString(body, "source_path") ?? null,
+					sourceRoot: readString(body, "source_root") ?? null,
+					dryRun: readBoolean(body, "dry_run") ?? false,
+					propose: readBoolean(body, "propose") ?? false,
+				}),
+			);
+		} catch (err) {
+			return c.json({ error: messageForError(err) }, statusForError(err));
+		}
+	});
+
+	app.post("/api/ontology/operations/batch", async (c) => {
+		const body = await readJsonRecord(c);
+		const scoped = resolveAgent(c, c.req.query("agent_id") ?? readString(body, "agent_id"));
+		if (scoped.response) return scoped.response;
+		const operations = readArray(body, "operations") ?? readArray(body, "items") ?? [];
+		if (operations.length === 0) return c.json({ error: "operations are required" }, 400);
+		const actor = readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "operator";
+		try {
+			return c.json(
+				applyOntologyOperationBatch(getDbAccessor(), {
+					agentId: scoped.agentId,
+					actor,
+					dryRun: readBoolean(body, "dry_run") ?? false,
+					propose: readBoolean(body, "propose") ?? false,
+					operations: operations.map((raw) => {
+						const op = asRecord(raw);
+						return {
+							operation: readString(op, "operation") ?? "",
+							payload: asRecord(op.payload),
+							reason: readString(op, "reason") ?? readString(op, "rationale"),
+							evidence: readArray(op, "evidence"),
+							confidence: readNumber(op, "confidence"),
+							risk: readString(op, "risk") ?? null,
+							sourceKind: readString(op, "source_kind") ?? readString(body, "source_kind") ?? null,
+							sourceId: readString(op, "source_id") ?? readString(body, "source_id") ?? null,
+							sourcePath: readString(op, "source_path") ?? readString(body, "source_path") ?? null,
+							sourceRoot: readString(op, "source_root") ?? readString(body, "source_root") ?? null,
+						};
+					}),
+				}),
+			);
 		} catch (err) {
 			return c.json({ error: messageForError(err) }, statusForError(err));
 		}

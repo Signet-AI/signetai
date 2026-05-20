@@ -3,7 +3,7 @@ import { extname, normalize, relative, sep } from "node:path";
 import { BrowserWindow, Menu, type OpenDialogOptions, app, dialog, ipcMain, protocol, shell } from "electron";
 import { DaemonManager } from "./daemon-manager.js";
 import { checkForDesktopUpdate, configureDesktopUpdates } from "./desktop-updates.js";
-import { dashboardRoot, preloadPath } from "./paths.js";
+import { dashboardRoot, iconPath, preloadPath } from "./paths.js";
 import { daemonRouteTarget, isDaemonRouteUrl } from "./protocol-routes.js";
 import { DesktopTray } from "./tray.js";
 import { applyDesktopWorkspaceEnv, resolveDesktopWorkspace } from "./workspace.js";
@@ -316,6 +316,10 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.setName("Signet");
+
+if (process.platform === "darwin" && app.dock) {
+	app.dock.setIcon(iconPath("icon.png"));
+}
 
 app.whenReady().then(async () => {
 	Menu.setApplicationMenu(null);

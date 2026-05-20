@@ -185,8 +185,10 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 	if (report.daemon.running) {
 		const ver = report.daemon.version && report.daemon.version !== "0.0.0" ? ` v${report.daemon.version}` : "";
 		console.log(`  ${chalk.green("●")} Daemon ${chalk.green("running")}${chalk.dim(ver)}`);
-		console.log(chalk.dim(`    PID: ${report.daemon.pid}`));
-		console.log(chalk.dim(`    Uptime: ${deps.formatUptime(report.daemon.uptime || 0)}`));
+		console.log(chalk.dim(`    PID: ${report.daemon.pid ?? "unknown"}`));
+		console.log(
+			chalk.dim(`    Uptime: ${report.daemon.uptime === null ? "unknown" : deps.formatUptime(report.daemon.uptime)}`),
+		);
 		for (const line of daemonAccessLines(deps.defaultPort, report.daemon)) {
 			console.log(chalk.dim(`    ${line}`));
 		}

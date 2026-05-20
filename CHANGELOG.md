@@ -6,35 +6,224 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-20
+- Bug fixes: preserve constellation pointer input; expose row provenance on read; persist remember row provenance; repair bundled node daemon startup; avoid heredoc in bundle smoke config.
+
+### 2026-05-19
+- Bug fixes: minimize bundle release smoke workspace; install bun in bundle release job.
+
+### 2026-05-18
+- Bug fixes: load updater through cjs interop.
+
+### 2026-05-17
+- Features: improve constellation ontology navigation; native bundle system with zero-prereq installer; add epistemic assertions; add safe entity merge planning.
+- Bug fixes: build mac zip artifacts; preserve root-only filesystem globs; repair native bundle regressions; sync built-in dreaming skill.
+
+### 2026-05-16
+- Features: add audited control plane.
+
+### 2026-05-15
+- Features: make constellation graph usable.
+- Bug fixes: surface unhealthy diagnostics domains.
+
 ### 2026-05-14
-- Bug fixes: reap acpx process trees.
-
-### 2026-05-13
-- Features: daily reflections with dashboard card.
-- Bug fixes: prune migration backups for disk headroom; use checked LLM model catalog; support latest memory provider lifecycle; generate Daily Brief on dashboard open; keep dependency descriptions in sync; isolate ollama setup validation tests.
-
-### 2026-05-12
-- Features: add Bitwarden provider.
-- Bug fixes: add HOME to launchd daemon plist env; register secret exec status in tool inventory; bound and queue secret exec; normalize acpx claude setup alias; add ACPX quick setup; degrade bounded git workspace operations; persist global bin paths; verify public ghcr pulls after publish; add most-used memories parity route.
-- Refactoring: add configurable identity presets.
-- Docs: correct stale documentation claims.
-
-### 2026-05-11
-- Features: add header images for three new essays; add three new essays on memory architecture and sovereignty.
-- Bug fixes: enforce concrete semantic objects; refresh stale web content index; replace placeholder images with original vault artwork; prebuild tray before typecheck; disable electron-builder auto publish.
-
-### 2026-05-10
-- Bug fixes: sync source before install; add embeddings status parity route; add packaged app updates; match feature flag response shape.
-
-### 2026-05-09
-- Bug fixes: hide deleted rows from list endpoint; add auth whoami parity route; disable embeddings in mutation api route tests; add batch memory forget route parity; isolate background acpx summaries; use claude connector for Claude Code.
-
-### 2026-05-08
-- Features: capture ACPX JSON events; add proposal maintenance loop; split stable and nightly channels.
-- Bug fixes: restore knowledge graph mentions schema; bound ontology constellation graph reads; avoid resumed summary artifact collisions; stream logs without EventSource; align release commits with version sync; match connector list schema; keep dev workspace links local; prune migration backups before copy; catch release version sync regression; harden recent regression surfaces.
-- Docs: update ACPX integration architecture.
+- Bug fixes: surface daemon start journal diagnostics; clean up detached codex acp processes; reap acpx process trees.
 
 ## Release Ledger
+
+## [0.123.12] - 2026-05-20
+
+Release summary: 1 bug fix.
+Tag range: `bundle-0.123.11-22a3766a9b1d108d193b9da92c6ab1c9b91b5a4d..v0.123.12`.
+
+### Bug Fixes
+
+- **dashboard**: preserve constellation pointer input (#736)
+
+## [0.123.11] - 2026-05-20
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `bundle-0.123.10-4b4b6339dc0d36559ab0368d1ff81421d12dfbcb..v0.123.11`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.123.10] - 2026-05-20
+
+Release summary: 1 bug fix.
+Tag range: `bundle-0.123.8-25cc668bdbaf8964a2a3f7ce559244ac9895652e..v0.123.10`.
+
+### Bug Fixes
+
+- **memory**: expose row provenance on read (#734)
+
+## [0.123.9] - 2026-05-20
+
+Release summary: 1 bug fix.
+Tag range: `bundle-0.123.7-548059babd6f52f9d786d7aa18fd1de43a958683..v0.123.9`.
+
+### Bug Fixes
+
+- **memory**: persist remember row provenance (#733)
+
+## [0.123.8] - 2026-05-20
+
+Release summary: 1 bug fix.
+Tag range: `v0.123.7..v0.123.8`.
+
+### Bug Fixes
+
+- **ci**: repair bundled node daemon startup (#735)
+
+## [0.123.7] - 2026-05-20
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.123.6..v0.123.7`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.123.6] - 2026-05-20
+
+Release summary: 1 bug fix.
+Tag range: `v0.123.5..v0.123.6`.
+
+### Bug Fixes
+
+- **ci**: avoid heredoc in bundle smoke config (#731)
+
+## [0.123.5] - 2026-05-19
+
+Release summary: 1 bug fix.
+Tag range: `v0.123.4..v0.123.5`.
+
+### Bug Fixes
+
+- **ci**: minimize bundle release smoke workspace (#730)
+
+## [0.123.4] - 2026-05-19
+
+Release summary: 1 bug fix.
+Tag range: `v0.123.3..v0.123.4`.
+
+### Bug Fixes
+
+- **ci**: install bun in bundle release job (#729)
+
+## [0.123.3] - 2026-05-18
+
+Release summary: 1 bug fix.
+Tag range: `v0.123.2..v0.123.3`.
+
+### Bug Fixes
+
+- **desktop**: load updater through cjs interop (#726)
+
+## [0.123.2] - 2026-05-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.123.1..v0.123.2`.
+
+### Bug Fixes
+
+- **bundle**: build mac zip artifacts (#725)
+
+## [0.123.1] - 2026-05-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.123.0..v0.123.1`.
+
+### Bug Fixes
+
+- **daemon**: preserve root-only filesystem globs (#724)
+
+## [0.123.0] - 2026-05-17
+
+Release summary: 1 feature.
+Tag range: `v0.122.1..v0.123.0`.
+
+### Features
+
+- **dashboard**: improve constellation ontology navigation (#722)
+
+## [0.122.1] - 2026-05-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.122.0..v0.122.1`.
+
+### Bug Fixes
+
+- **bundle**: repair native bundle regressions (#723)
+
+## [0.122.0] - 2026-05-17
+
+Release summary: 1 feature.
+Tag range: `v0.121.2..v0.122.0`.
+
+### Features
+
+- **bundle**: native bundle system with zero-prereq installer (#713)
+
+## [0.121.2] - 2026-05-17
+
+Release summary: 1 bug fix.
+Tag range: `v0.121.1..v0.121.2`.
+
+### Bug Fixes
+
+- **cli**: sync built-in dreaming skill (#721)
+
+## [0.121.1] - 2026-05-17
+
+Release summary: internal maintenance release with no conventional commit entries captured.
+Tag range: `v0.121.0..v0.121.1`.
+
+No notable changes were captured from conventional commit subjects for this release.
+
+## [0.121.0] - 2026-05-17
+
+Release summary: 2 features.
+Tag range: `v0.120.0..v0.121.0`.
+
+### Features
+
+- **ontology**: add epistemic assertions (#717)
+- **ontology**: add safe entity merge planning (#719)
+
+## [0.120.0] - 2026-05-16
+
+Release summary: 1 feature.
+Tag range: `v0.119.1..v0.120.0`.
+
+### Features
+
+- **ontology**: add audited control plane (#716)
+
+## [0.119.1] - 2026-05-15
+
+Release summary: 1 bug fix.
+Tag range: `v0.119.0..v0.119.1`.
+
+### Bug Fixes
+
+- **daemon**: surface unhealthy diagnostics domains (#711)
+
+## [0.119.0] - 2026-05-15
+
+Release summary: 1 feature.
+Tag range: `v0.118.5..v0.119.0`.
+
+### Features
+
+- **dashboard**: make constellation graph usable (#715)
+
+## [0.118.5] - 2026-05-14
+
+Release summary: 2 bug fixes.
+Tag range: `v0.118.4..v0.118.5`.
+
+### Bug Fixes
+
+- **cli**: surface daemon start journal diagnostics (#710)
+- **daemon**: clean up detached codex acp processes (#709)
 
 ## [0.118.4] - 2026-05-14
 

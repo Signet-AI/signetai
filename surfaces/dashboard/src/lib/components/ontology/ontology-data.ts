@@ -110,7 +110,7 @@ export interface OntologyEdge {
 // ---------------------------------------------------------------------------
 
 export const TABLE_NODE_FILTER: Record<string, ReadonlySet<OntologyNodeKind>> = {
-	entities: new Set(["entity"]),
+	entities: new Set(["entity", "aspect", "attribute"]),
 	entity_aspects: new Set(["entity", "aspect"]),
 	entity_attributes: new Set(["entity", "aspect", "attribute"]),
 	entity_dependencies: new Set(["entity"]),
@@ -118,7 +118,7 @@ export const TABLE_NODE_FILTER: Record<string, ReadonlySet<OntologyNodeKind>> = 
 };
 
 export const TABLE_EDGE_FILTER: Record<string, ReadonlySet<OntologyEdgeKind>> = {
-	entities: new Set(["dependency"]),
+	entities: new Set(["dependency", "has_aspect", "has_attribute"]),
 	entity_aspects: new Set(["dependency", "has_aspect"]),
 	entity_attributes: new Set(["dependency", "has_aspect", "has_attribute"]),
 	entity_dependencies: new Set(["dependency"]),
@@ -126,8 +126,12 @@ export const TABLE_EDGE_FILTER: Record<string, ReadonlySet<OntologyEdgeKind>> = 
 };
 
 /** Default filters for tables not in the core ontology group */
-export const DEFAULT_NODE_FILTER: ReadonlySet<OntologyNodeKind> = new Set(["entity"]);
-export const DEFAULT_EDGE_FILTER: ReadonlySet<OntologyEdgeKind> = new Set(["dependency"]);
+export const DEFAULT_NODE_FILTER: ReadonlySet<OntologyNodeKind> = new Set(["entity", "aspect", "attribute"]);
+export const DEFAULT_EDGE_FILTER: ReadonlySet<OntologyEdgeKind> = new Set([
+	"dependency",
+	"has_aspect",
+	"has_attribute",
+]);
 
 // ---------------------------------------------------------------------------
 // Node colors (theme-consistent)

@@ -789,6 +789,9 @@ Body-level fields override prefix-parsed values.
   "pinned": false,
   "sourceType": "manual",
   "sourceId": "optional-external-id",
+  "sourcePath": "/absolute/or/original/source.md",
+  "runtimePath": "memory/MEMORY.md",
+  "idempotencyKey": "stable-import-key",
   "createdAt": "2026-02-21T10:00:00.000Z",
   "agentId": "alice",
   "visibility": "global"
@@ -806,6 +809,15 @@ Only `content` is required. Multi-agent fields:
 memory is sourced from an older conversation or imported artifact so structured
 currentness and supersession can compare facts by source time instead of ingest
 time.
+
+Row-level provenance fields are optional: `sourcePath`/`source_path` stores the
+original source path, `runtimePath`/`runtime_path` stores the runtime-relative
+path, and `idempotencyKey`/`idempotency_key` stores a stable import key. When an
+`idempotencyKey` is supplied, remember checks it before content-hash dedupe;
+retries with the same key return the existing row instead of inserting a
+duplicate within the same `agentId`, `visibility`, and `scope` tuple. Importers
+may also supply the snake_case names inside a `metadata` object for
+compatibility.
 
 Structured callers may also pass `structured.entities`, `structured.aspects`,
 and `structured.hints`. Aspect attributes are persisted directly under
@@ -838,9 +850,9 @@ or update the knowledge graph.
 }
 ```
 
-If an identical memory (by content hash or `sourceId`) already exists,
-`deduped: true` is returned with the existing record — no duplicate is
-created.
+If an identical memory (by `sourceId`, `idempotencyKey`, or content hash) already
+exists in the relevant scope, `deduped: true` is returned with the existing
+record — no duplicate is created.
 
 ### POST /api/memory/save
 
@@ -856,6 +868,11 @@ compatibility. Requires `remember` permission.
 
 Get a single memory by ID. Returns deleted memories only if the query
 explicitly requests them; by default, soft-deleted records return `404`.
+Direct reads are filtered through the same resolved agent read policy used by
+recall/search. Pass `agentId`/`agent_id`, `x-signet-agent-id`, or an
+`x-signet-session-key` that resolves to an agent when reading non-default
+agent memories; cross-agent or private memories outside that read scope return
+`404` without provenance fields.
 
 Requires `recall` permission.
 
@@ -870,7 +887,14 @@ Requires `recall` permission.
   "tags": "preference,editor",
   "pinned": 0,
   "who": "claude-code",
+  "source_id": "optional-external-id",
   "source_type": "manual",
+  "source_path": "/absolute/or/original/source.md",
+  "runtime_path": "memory/MEMORY.md",
+  "idempotency_key": "stable-import-key",
+  "sourcePath": "/absolute/or/original/source.md",
+  "runtimePath": "memory/MEMORY.md",
+  "idempotencyKey": "stable-import-key",
   "project": null,
   "session_id": null,
   "confidence": null,
@@ -886,6 +910,10 @@ Requires `recall` permission.
   "updated_by": "operator"
 }
 ```
+
+`sourcePath`, `runtimePath`, and `idempotencyKey` are camelCase aliases for
+`source_path`, `runtime_path`, and `idempotency_key` so import provenance written
+through `POST /api/memory/remember` is visible on direct reads.
 
 ### GET /api/memory/:id/history
 
@@ -3178,6 +3206,63 @@ Diagnostic data for a single domain. Known domains: `database`, `pipeline`,
 
 Returns `400` for unknown domains.
 
+### GET /api/diagnostics/database/schema
+
+Read-only SQLite schema explorer data for the dashboard database table view.
+Returns live table metadata grouped by conceptual area, with row counts,
+columns, indexes, foreign keys, and whether sample rows are available.
+
+**Response**
+
+```json
+{
+  "generatedAt": "2026-05-15T12:00:00.000Z",
+  "groups": { "core": 8, "provenance": 6, "runtime": 12, "internal": 3, "other": 1 },
+  "tables": [
+    {
+      "name": "entities",
+      "group": "core",
+      "kind": "table",
+      "rowCount": 42,
+      "sampleAllowed": true,
+      "columns": [
+        { "cid": 0, "name": "id", "type": "TEXT", "notNull": false, "defaultValue": null, "primaryKey": true }
+      ],
+      "indexes": [],
+      "foreignKeys": [],
+      "sql": "CREATE TABLE entities (...)"
+    }
+  ]
+}
+```
+
+### GET /api/diagnostics/database/tables/:table/sample
+
+Returns a bounded read-only sample for a validated table name. The daemon
+derives valid table names from SQLite metadata before constructing SQL.
+Internal index and virtual tables can return `400` with an explanatory error.
+
+Query parameters:
+
+| Name | Default | Notes |
+|------|---------|-------|
+| `limit` | `25` | Clamped to `1..100`. |
+| `offset` | `0` | Clamped to non-negative values. |
+
+**Response**
+
+```json
+{
+  "table": "entities",
+  "columns": ["id", "name", "entity_type"],
+  "rows": [{ "id": "entity-1", "name": "Signet", "entity_type": "system" }],
+  "limit": 25,
+  "offset": 0,
+  "rowCount": 42,
+  "hasMore": true
+}
+```
+
 
 Repair
 ------
@@ -3595,18 +3680,88 @@ Resolve evidence for an already-applied ontology link from stored dependency
 provenance. Links applied through proposals include the applying proposal id and
 copied proposal evidence before broader source fallback evidence.
 
+### GET /api/ontology/assertions
+
+List source-attributed epistemic assertions. Assertions record who claimed,
+believed, observed, decided, preferred, denied, or questioned something about an
+entity without promoting that statement into current ontology truth. Query
+parameters: `agent_id`, `entity`, `entity_id`, `predicate`, `status`,
+`speaker`, `source_kind`, `source_id`, `query`, `limit`, and `offset`.
+
+Valid predicates are `claims`, `believes`, `observed`, `decided`, `prefers`,
+`denies`, and `questions`. Valid statuses are `active`, `archived`,
+`superseded`, and `all` for list reads.
+
+```text
+/api/ontology/assertions?entity=Signet&predicate=believes&speaker=Nicholai
+```
+
+### GET /api/ontology/assertions/:id
+
+Return one epistemic assertion by id, scoped to the resolved `agent_id`.
+Returns `404` when the assertion does not exist in that agent scope.
+
+### POST /api/ontology/assertions
+
+Create a source-attributed epistemic assertion. Body parameters: `agent_id`,
+`entity` or `entity_id`, `predicate`, `content`, `speaker`, `asserted_at`,
+`confidence`, `evidence`, `source_kind`, `source_id`, `source_path`,
+`source_root`, `claim_attribute_id`, and `created_by`.
+
+Every assertion must include either structured `evidence` or source provenance
+fields. If `claim_attribute_id` is supplied, the referenced applied claim value
+must be active and belong to the same agent and subject entity.
+
+### POST /api/ontology/assertions/:id/link-claim
+
+Link an existing assertion to an applied claim attribute. Body parameters:
+`agent_id` and `attribute_id`. The daemon rejects cross-agent and cross-entity
+links, and it only accepts active claim attribute rows.
+
+### POST /api/ontology/assertions/:id/archive
+
+Archive an assertion without deleting evidence. Body parameters: `agent_id`,
+`actor`, and `reason`.
+
+### POST /api/ontology/assertions/:id/supersede
+
+Create a replacement assertion and mark the old assertion `superseded`. Body
+parameters match assertion creation plus `agent_id`. Omitting `predicate`
+preserves the old assertion predicate; pass a predicate only when the epistemic
+meaning is intentionally changing. Omitting source fields inherits source
+provenance from the old assertion, but replacement content is still required.
+Supersede keeps the old subject entity; use a new assertion when the subject
+entity changes.
+
+CLI equivalents:
+
+```bash
+signet ontology assertions --entity Signet --predicate believes --speaker Nicholai
+signet ontology assertion create --entity Signet --predicate believes --content "Signet should model attributed beliefs." --source-kind transcript
+signet ontology assertion show <assertion-id>
+signet ontology assertion link-claim <assertion-id> --attribute-id <claim-attribute-id>
+signet ontology assertion archive <assertion-id> --reason "superseded by newer evidence"
+signet ontology assertion supersede <assertion-id> --content "Updated attributed belief." --source-kind transcript
+signet ontology assertion import --file assertions.json
+```
+
 ### POST /api/ontology/extract
 
-Extract candidate ontology proposals from an agent-scoped transcript or memory
-artifact. Body parameters: `from`, `agent_id`, `write_proposals`, `created_by`,
-`limit`, `use_provider`, `provider_timeout_ms`, and `provider_max_tokens`.
-`from` accepts refs such as `transcript:<id>`, `artifact:<source_path>`, or
-`source:<source_path>`. The route dry-runs by default and writes pending
-proposals only when `write_proposals` is true. When `use_provider` is true, the
-route uses the configured `memory_extraction` inference workload and falls back
-to deterministic extraction if no valid provider proposals are returned.
-Provider-returned `questions` are surfaced in the response for review; this
-route does not persist first-class question objects yet.
+Extract candidate ontology proposals and source-attributed assertions from an
+agent-scoped transcript or memory artifact. Body parameters: `from`, `agent_id`,
+`write_proposals`, `write_assertions`, `created_by`, `limit`, `use_provider`,
+`provider_timeout_ms`, and `provider_max_tokens`. `from` accepts refs such as
+`transcript:<id>`, `artifact:<source_path>`, or `source:<source_path>`.
+
+The route dry-runs by default. It writes pending proposals only when
+`write_proposals` is true and writes epistemic assertions only when
+`write_assertions` is true. If both write flags are set, proposal and assertion
+inserts share one transaction and roll back together on invalid extracted
+items. When `use_provider` is true, the route uses the configured
+`memory_extraction` inference workload and falls back to deterministic
+extraction if no valid provider proposals are returned. Provider-returned
+`questions` are surfaced in the response for review; this route does not persist
+first-class question objects yet.
 
 ### POST /api/ontology/consolidate
 
@@ -4310,6 +4465,8 @@ silently disappear from the API reference.
 | GET | `/api/os/agent-sessions` | platform/daemon/src/routes/os-agent.ts |
 | POST | `/api/os/chat` | platform/daemon/src/routes/os-chat.ts |
 | GET | `/api/home/greeting` | platform/daemon/src/routes/pipeline-routes.ts |
+| GET | `/api/diagnostics/database/schema` | platform/daemon/src/routes/database-diagnostics.ts |
+| GET | `/api/diagnostics/database/tables/:table/sample` | platform/daemon/src/routes/database-diagnostics.ts |
 | POST | `/api/diagnostics/openclaw/heartbeat` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/diagnostics/openclaw` | platform/daemon/src/routes/pipeline-routes.ts |
 | POST | `/api/pipeline/nudge` | platform/daemon/src/routes/pipeline-routes.ts |

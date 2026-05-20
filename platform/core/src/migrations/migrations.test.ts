@@ -12,6 +12,7 @@ import { readMemoriesFtsSql } from "../fts-schema";
 import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
 import { up as threadHeadsMigration } from "./048-thread-heads";
+import { up as ontologyControlPlaneState } from "./070-ontology-control-plane-state";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -642,6 +643,81 @@ describe("migration framework", () => {
 		expect(indexes.map((row) => row.name)).toContain("idx_memory_artifacts_agent_deleted");
 	});
 
+	test("migration 070 adds ontology control-plane status and version state safely", () => {
+		db = createFreshDb();
+		db.exec(`
+			CREATE TABLE entities (
+				id TEXT PRIMARY KEY,
+				agent_id TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE entity_aspects (
+				id TEXT PRIMARY KEY,
+				entity_id TEXT NOT NULL,
+				agent_id TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE entity_attributes (
+				id TEXT PRIMARY KEY,
+				aspect_id TEXT NOT NULL,
+				agent_id TEXT NOT NULL,
+				group_key TEXT,
+				claim_key TEXT,
+				status TEXT NOT NULL DEFAULT 'active',
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE entity_dependencies (
+				id TEXT PRIMARY KEY,
+				source_entity_id TEXT NOT NULL,
+				target_entity_id TEXT NOT NULL,
+				agent_id TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			INSERT INTO entities (id, agent_id, updated_at) VALUES ('entity-1', 'ant', '2026-05-16T00:00:00.000Z');
+			INSERT INTO entity_aspects (id, entity_id, agent_id, updated_at)
+			VALUES ('aspect-1', 'entity-1', 'ant', '2026-05-16T00:00:00.000Z');
+			INSERT INTO entity_attributes (id, aspect_id, agent_id, updated_at)
+			VALUES ('attr-1', 'aspect-1', 'ant', '2026-05-16T00:00:00.000Z');
+			INSERT INTO entity_dependencies (id, source_entity_id, target_entity_id, agent_id, updated_at)
+			VALUES ('dep-1', 'entity-1', 'entity-1', 'ant', '2026-05-16T00:00:00.000Z');
+		`);
+
+		ontologyControlPlaneState(db);
+
+		const entity = db.query("SELECT status, archived_at FROM entities WHERE id = 'entity-1'").get() as {
+			status: string;
+			archived_at: string | null;
+		};
+		const aspect = db.query("SELECT status, archive_reason FROM entity_aspects WHERE id = 'aspect-1'").get() as {
+			status: string;
+			archive_reason: string | null;
+		};
+		const attr = db
+			.query(
+				"SELECT version, version_root_id, previous_attribute_id, archived_at FROM entity_attributes WHERE id = 'attr-1'",
+			)
+			.get() as {
+			version: number;
+			version_root_id: string;
+			previous_attribute_id: string | null;
+			archived_at: string | null;
+		};
+		const dep = db.query("SELECT status, archived_by FROM entity_dependencies WHERE id = 'dep-1'").get() as {
+			status: string;
+			archived_by: string | null;
+		};
+
+		expect(entity).toEqual({ status: "active", archived_at: null });
+		expect(aspect).toEqual({ status: "active", archive_reason: null });
+		expect(attr).toEqual({
+			version: 1,
+			version_root_id: "attr-1",
+			previous_attribute_id: null,
+			archived_at: null,
+		});
+		expect(dep).toEqual({ status: "active", archived_by: null });
+	});
+
 	test("entities table has pinning columns after migration 022", () => {
 		db = createFreshDb();
 		runMigrations(db);
@@ -697,6 +773,66 @@ describe("migration framework", () => {
 			`INSERT INTO memories (id, content, content_hash, is_deleted, type, agent_id, scope, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
 		).run("f", "deleted", "hash1", "fact", "default", null, now, now, "test");
+	});
+
+	test("unique partial index on idempotency_key is agent-, visibility-, and scope-aware", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("a", "first import", "import-key", "fact", "default", "global", null, now, now, "test");
+
+		expect(() =>
+			db
+				.prepare(
+					`INSERT INTO memories
+					 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				)
+				.run("b", "same tuple import", "import-key", "fact", "default", "global", null, now, now, "test"),
+		).toThrow();
+
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("c", "other agent import", "import-key", "fact", "agent-a", "global", null, now, now, "test");
+
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("d", "private import", "import-key", "fact", "default", "private", null, now, now, "test");
+
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("e", "scoped import", "import-key", "fact", "default", "global", "bench:run-1", now, now, "test");
+
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, is_deleted, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("f", "deleted import", "import-key", "fact", "default", "global", null, now, now, "test");
+	});
+
+	test("migration 072 repairs missing runtime_path on partial provenance schemas", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		db.exec("ALTER TABLE memories DROP COLUMN runtime_path");
+		db.prepare("DELETE FROM schema_migrations WHERE version = 72").run();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
+		const colNames = cols.map((c) => c.name);
+		expect(colNames).toContain("idempotency_key");
+		expect(colNames).toContain("runtime_path");
 	});
 
 	test("migration 003 deduplicates existing content hashes", () => {

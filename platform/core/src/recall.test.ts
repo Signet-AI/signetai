@@ -61,6 +61,9 @@ describe("recall surface helpers", () => {
 	it("normalizes legacy structured aspect tuples for remember callers", () => {
 		const body = buildRememberRequestBody("Remember this", {
 			tags: ["graph", "parity"],
+			sourcePath: "/tmp/source.md",
+			runtimePath: "memory/source.md",
+			idempotencyKey: "stable-import-key",
 			structured: {
 				aspects: [
 					{
@@ -76,6 +79,9 @@ describe("recall surface helpers", () => {
 		});
 
 		expect(body.tags).toBe("graph,parity");
+		expect(body.sourcePath).toBe("/tmp/source.md");
+		expect(body.runtimePath).toBe("memory/source.md");
+		expect(body.idempotencyKey).toBe("stable-import-key");
 		expect(body.structured).toEqual({
 			aspects: [
 				{

@@ -8,29 +8,9 @@ This file: AGENTS.md (canonical), `CLAUDE.md -> AGENTS.md`
 ---
 
 This file guides AI assistants working on this repository. Prefer durable,
-spec-aligned, maintainable changes over local fixes or convenience hacks.
+ maintainable changes over local fixes or convenience hacks.
 
 ## Required workflow
-
-### Spec-governed work
-
-Use the spec pipeline for major features, architectural changes,
-schema/API boundaries, cross-package coordination, dependency changes, or
-other roadmap-level capabilities.
-
-Before coding spec-governed work, you must:
-
-1. Read `docs/specs/INDEX.md`.
-2. Validate `docs/specs/dependencies.yaml`.
-3. Confirm the target spec status. Do not implement major feature work
-   from `planning`; it must be `approved` first.
-4. Keep `INDEX.md` and `dependencies.yaml` in sync when adding or
-   changing spec work.
-5. Re-check integration contracts and invariants in `INDEX.md` before
-   finishing.
-
-Skip the planning tier for routine bug fixes, narrow refactors, tests,
-and docs-only edits that stay within existing contracts.
 
 ### Incident -> guardrail loop
 
@@ -38,8 +18,7 @@ A bug fix is not complete until it adds at least one durable prevention
 mechanism:
 
 1. Regression test, invariant check, or CI guard.
-2. Spec/index/dependency update if behavior or sequencing changed.
-3. `AGENTS.md` rule or checklist refinement if the failure was process
+2. `AGENTS.md` rule or checklist refinement if the failure was process
    related.
 
 Every incident should make the same failure mode harder to repeat.
@@ -65,10 +44,9 @@ Prevent these proactively:
    - For retries or refresh loops, enforce timeout floors,
      single-flight/serialization, and timer cleanup.
 
-4. **Doc/spec drift**
+4. **Docs drift**
    - Update behavior, API, schema, and status docs in the same PR.
-   - Keep `docs/API.md`, `docs/specs/INDEX.md`, and
-     `docs/specs/dependencies.yaml` accurate when affected.
+   - Keep `docs/API.md`, accurate when affected.
    - Root docs duplicated into `docs/` are generated artifacts. Edit the
      root source, then run `bun scripts/sync-root-docs.ts`. Do not hand-edit
      `docs/CONTRIBUTING.md` or `docs/ROADMAP.md`.
@@ -108,13 +86,11 @@ cd surfaces/dashboard && bun run check
 
 Before opening a PR, verify:
 
-- Spec alignment is checked (`INDEX.md` + `dependencies.yaml`) when the
-  change touches spec-governed behavior.
 - Agent scoping is correct on all changed data queries.
 - Input/config validation and bounds checks were added.
 - Error handling and fallback paths are tested.
 - Security checks exist on admin or mutation endpoints.
-- Docs were updated for API, spec, schema, or status changes.
+- Docs were updated for API, schema, or status changes.
 - Publish manifests were validated if the PR changes a package that gets
   published to npm.
 - Each bug fix has a regression test.
@@ -424,46 +400,6 @@ OPENAI_API_KEY   used when embedding provider is OpenAI
 - Python scripts are optional batch tools; the daemon is the primary
   memory pipeline.
 - Connectors are idempotent and safe to install multiple times.
-
-## Spec pipeline
-
-The spec pipeline is for major product capabilities, architectural work,
-schema changes, API contracts, dependency sequencing, and other
-research-backed decisions.
-
-Tiers:
-
-```text
-research -> planning -> approved -> complete
-```
-
-- **`docs/research/`**: raw research and prior art. Every research doc
-  must state the question it answers in frontmatter.
-- **`docs/specs/planning/`**: design exploration. Must include
-  `informed_by` links to research. Not an implementation contract.
-- **`docs/specs/approved/`**: frozen implementation contract accepted by
-  the INDEX, with integration contracts and plain-language success
-  criteria.
-- **`docs/specs/complete/`**: shipped work. Move the spec here when done.
-
-### Spec rules
-
-1. No spec without research.
-2. No major feature implementation without approval.
-3. Move specs between tiers; do not copy them.
-4. Success criteria must describe observable outcomes, not compilation.
-5. The INDEX is the EPIC and source of integration contracts and build
-   sequencing.
-6. Sprint briefs live in `docs/specs/sprints/` and break down approved
-   specs; they are not standalone specs.
-
-### Dependency tracking
-
-- Source of truth: `docs/specs/dependencies.yaml`
-- Validator: `bun scripts/spec-deps-check.ts`
-- Every new spec needs a stable ID and dependency entry.
-- Hard dependencies block merging; soft dependencies can proceed in
-  parallel once interfaces are locked.
 
 ## Reference docs
 

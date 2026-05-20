@@ -5,9 +5,10 @@
  * schema without hitting disk.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { runMigrations } from "../../core/src/migrations";
+import type { ReadDb } from "./db-accessor";
 import {
 	createProviderTracker,
 	getDiagnostics,
@@ -17,7 +18,6 @@ import {
 	getQueueHealth,
 	getStorageHealth,
 } from "./diagnostics";
-import type { ReadDb } from "./db-accessor";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -334,19 +334,22 @@ describe("getDiagnostics", () => {
 		expect(typeof report.timestamp).toBe("string");
 	});
 
-	test("composite degrades when a domain degrades", () => {
-		// Degrade queue health: insert 51 pending jobs
+	test("composite status reflects worst unhealthy domain", () => {
 		for (let i = 0; i < 51; i++) {
-			const memId = `mem-comp-${i}`;
+			const memId = `mem-comp-unhealthy-${i}`;
 			insertMemory(db, memId);
-			insertJob(db, `job-comp-${i}`, memId, "pending");
+			insertJob(db, `job-comp-unhealthy-${i}`, memId, "pending");
 		}
+		insertMemory(db, "mem-comp-dead");
+		insertJob(db, "job-comp-dead", "mem-comp-dead", "dead");
 
 		const tracker = createProviderTracker();
 		const report = getDiagnostics(asReadDb(db), tracker);
 
-		// Queue degrades by 0.3 x weight 0.3 = -0.09 off the composite
-		expect(report.composite.score).toBeLessThan(1);
-		expect(report.queue.status).not.toBe("healthy");
+		expect(report.queue.depth).toBe(51);
+		expect(report.queue.deadRate).toBeGreaterThan(0.01);
+		expect(report.queue.status).toBe("unhealthy");
+		expect(report.composite.score).toBeGreaterThanOrEqual(0.8);
+		expect(report.composite.status).toBe("unhealthy");
 	});
 });

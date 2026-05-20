@@ -8,13 +8,12 @@
 // On Windows, use node:child_process spawn with windowsHide to prevent
 // console window flashing. Bun.spawn doesn't support windowsHide.
 import { spawn as nodeSpawn } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import {
 	DEFAULT_PROVIDER_RATE_LIMIT,
-	defaultPipelineModel,
 	type LlmGenerateResult,
 	type LlmProvider,
 	type LlmUsage,
@@ -22,9 +21,11 @@ import {
 	OPENCODE_PIPELINE_SYSTEM_PROMPT,
 	type PipelineExtractionConfig,
 	type ProviderRateLimitConfig,
+	defaultPipelineModel,
 } from "@signet/core";
 import { logger } from "../logger";
 import { bypassSession } from "../session-tracker";
+import { which } from "../which";
 import { trimTrailingSlash } from "./url";
 
 // ---------------------------------------------------------------------------
@@ -539,10 +540,10 @@ const toWebStream = (nodeStream: import("node:stream").Readable): ReadableStream
 	Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
 
 function spawnHidden(cmd: string[], options?: { env?: Record<string, string | undefined> }): SpawnResult {
-	// Resolve the binary via Bun.which() so that .cmd wrappers on Windows
+	// Resolve the binary via which() so that .cmd wrappers on Windows
 	// are found correctly (mirrors scheduler/spawn.ts pattern).
 	const [bin, ...args] = cmd;
-	const resolvedBin = Bun.which(bin);
+	const resolvedBin = which(bin);
 	if (resolvedBin === null) {
 		throw new Error(`spawnHidden: binary "${bin}" not found on PATH`);
 	}
@@ -600,29 +601,31 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		};
 	}
 
-	// Non-Windows: use Bun.spawn directly for reliable I/O.
-	const proc = Bun.spawn([resolvedBin, ...args], {
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
+	// Non-Windows: use node:child_process with piped stdio.
+	const child = nodeSpawn(resolvedBin, args, {
+		stdio: ["ignore", "pipe", "pipe"],
 		env: options?.env ? sanitizedEnv : undefined,
 	});
 
-	if (!proc.stdout || !proc.stderr) {
+	if (!child.stdout || !child.stderr) {
 		throw new Error("spawnHidden: stdout/stderr unexpectedly null despite pipe mode");
 	}
 
+	const exitPromise = new Promise<number>((resolve, reject) => {
+		child.on("exit", (code) => resolve(code ?? 1));
+		child.on("error", (err) => reject(err));
+	});
+
 	return {
-		stdout: proc.stdout,
-		stderr: proc.stderr,
-		exited: proc.exited,
+		stdout: toWebStream(child.stdout),
+		stderr: toWebStream(child.stderr),
+		exited: exitPromise,
 		kill(signal?: string) {
-			const sigMap: Record<string, number | undefined> = { SIGTERM: 15, SIGKILL: 9 };
-			const sigNum = signal ? sigMap[signal] : 15;
-			if (signal && sigNum === undefined) {
-				logger.warn("pipeline", `Unknown signal "${signal}", defaulting to SIGTERM`);
+			if (signal === "SIGKILL") {
+				child.kill("SIGKILL");
+			} else {
+				child.kill("SIGTERM");
 			}
-			proc.kill(sigNum ?? 15);
 		},
 	};
 }
@@ -1000,13 +1003,14 @@ function acpxPermissionArgs(mode: AcpxPermissionMode | undefined): string[] {
 	}
 }
 
-function acpxEnv(hooks: AcpxHooksMode | undefined): NodeJS.ProcessEnv {
+function acpxEnv(hooks: AcpxHooksMode | undefined, runId?: string): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	if (hooks === "disabled") {
 		env.SIGNET_NO_HOOKS = "1";
 	} else if (hooks === "enabled") {
 		env.SIGNET_NO_HOOKS = undefined;
 	}
+	if (runId) env.SIGNET_ACPX_RUN_ID = runId;
 	return env;
 }
 
@@ -1133,6 +1137,74 @@ function terminateChildProcessTreeWithEscalation(child: ReturnType<typeof nodeSp
 	child.once("close", () => clearTimeout(escalation));
 }
 
+function acpxAgentProcessBasenames(agent: string): string[] {
+	switch (normalizeAcpxAgent(agent).toLowerCase()) {
+		case "codex":
+			return ["codex-acp"];
+		default:
+			return [];
+	}
+}
+
+function acpxProcRoot(): string {
+	return process.env.SIGNET_ACPX_PROC_ROOT || "/proc";
+}
+
+function procEnvContainsRunId(procRoot: string, pid: string, runId: string): boolean {
+	try {
+		const environ = readFileSync(`${procRoot}/${pid}/environ`, "utf8");
+		return environ.includes(`SIGNET_ACPX_RUN_ID=${runId}`);
+	} catch {
+		return false;
+	}
+}
+
+function procCommandMatchesAgent(procRoot: string, pid: string, basenames: ReadonlySet<string>): boolean {
+	try {
+		const cmdline = readFileSync(`${procRoot}/${pid}/cmdline`, "utf8");
+		return cmdline
+			.split("\0")
+			.filter(Boolean)
+			.some((arg) => basenames.has(arg.split("/").pop() ?? ""));
+	} catch {
+		return false;
+	}
+}
+
+function cleanupAcpxAgentProcesses(agent: string, runId: string): void {
+	if (process.platform !== "linux") return;
+	const basenames = new Set(acpxAgentProcessBasenames(agent));
+	if (basenames.size === 0) return;
+	const procRoot = acpxProcRoot();
+	let procEntries: string[];
+	try {
+		procEntries = readdirSync(procRoot);
+	} catch {
+		return;
+	}
+	const pids = procEntries
+		.filter((pid) => /^\d+$/.test(pid))
+		.filter((pid) => procCommandMatchesAgent(procRoot, pid, basenames))
+		.filter((pid) => procEnvContainsRunId(procRoot, pid, runId))
+		.map((pid) => Number(pid))
+		.filter((pid) => Number.isFinite(pid) && pid > 0);
+	for (const pid of pids) {
+		try {
+			process.kill(pid, "SIGTERM");
+		} catch {
+			// Already gone or not ours to signal.
+		}
+		const escalation = setTimeout(() => {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {
+				// Already exited.
+			}
+		}, 1000);
+		escalation.unref?.();
+	}
+}
+
 function parseAcpxJsonOutput(
 	stdout: string,
 	config: Pick<AcpxProviderConfig, "agent" | "captureEvents" | "maxCapturedEvents" | "onEvent">,
@@ -1186,13 +1258,14 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 			const timeoutMs = opts?.timeoutMs ?? config.timeoutMs ?? 60_000;
 			const { bin, args, cwd } = buildAcpxCommand(config, timeoutMs);
 			const outputFormat = resolveAcpxFormat(config);
+			const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 			return new Promise<string>((resolve, reject) => {
 				let stdout = "";
 				let stderr = "";
 				let settled = false;
 				const child = nodeSpawn(bin, args, {
 					cwd,
-					env: acpxEnv(config.hooks),
+					env: acpxEnv(config.hooks, runId),
 					stdio: ["pipe", "pipe", "pipe"],
 					detached: process.platform !== "win32",
 					windowsHide: true,
@@ -1201,6 +1274,7 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 					if (settled) return;
 					settled = true;
 					clearTimeout(timer);
+					cleanupAcpxAgentProcesses(config.agent, runId);
 					fn();
 				};
 				const timer = setTimeout(() => {
@@ -1241,7 +1315,7 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 		},
 		async available(): Promise<boolean> {
 			const bin = config.bin ?? "npx";
-			return bin.includes("/") || Bun.which(bin) !== null;
+			return which(bin) !== null;
 		},
 	};
 }
@@ -1311,7 +1385,7 @@ export function createCommandLineProvider(config: CommandLineProviderConfig): Ll
 			});
 		},
 		async available(): Promise<boolean> {
-			return config.bin.includes("/") || Bun.which(config.bin) !== null;
+			return which(config.bin) !== null;
 		},
 	};
 }
@@ -2489,8 +2563,8 @@ const DEFAULT_OPENCODE_CONFIG: OpenCodeProviderConfig = {
  * then falls back to the well-known install location.
  */
 function resolveOpenCodeBin(): string | null {
-	// Check PATH first (Bun.which works cross-platform)
-	const found = Bun.which("opencode");
+	// Check PATH first (which works cross-platform)
+	const found = which("opencode");
 	if (found) return found;
 
 	// Fall back to ~/.opencode/bin/opencode
@@ -2502,7 +2576,7 @@ function resolveOpenCodeBin(): string | null {
 
 /** Tracked child process so we can kill it on daemon shutdown. */
 let openCodeChild: {
-	readonly process: ReturnType<typeof Bun.spawn>;
+	readonly process: import("node:child_process").ChildProcess;
 	readonly port: number;
 } | null = null;
 
@@ -2538,9 +2612,8 @@ export async function ensureOpenCodeServer(port: number): Promise<boolean> {
 	}
 
 	logger.info("pipeline", "Starting OpenCode server", { port, bin });
-	const child = Bun.spawn([bin, "serve", "--port", String(port)], {
-		stdout: "ignore",
-		stderr: "pipe",
+	const child = nodeSpawn(bin, ["serve", "--port", String(port)], {
+		stdio: ["ignore", "ignore", "pipe"],
 	});
 
 	// Wait up to 8s for the server to become healthy
@@ -2561,7 +2634,7 @@ export async function ensureOpenCodeServer(port: number): Promise<boolean> {
 
 	if (!healthy) {
 		child.kill();
-		const stderr = await new Response(child.stderr).text();
+		const stderr = child.stderr ? await new Response(toWebStream(child.stderr)).text() : "";
 		logger.warn("pipeline", "OpenCode server failed to start", {
 			stderr: stderr.slice(0, 300),
 		});

@@ -1,16 +1,17 @@
+import { createHash } from "node:crypto";
 import { vectorSearch } from "@signet/core";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { normalizeAndHashContent } from "../content-normalization";
-import { getDbAccessor } from "../db-accessor";
+import { type WriteDb, getDbAccessor } from "../db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
 import { linkMemoryToEntities } from "../inline-entity-linker";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
-import { type RecallParams, hybridRecall } from "../memory-search";
+import { type RecallParams, buildAgentScopeClause, hybridRecall } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
@@ -78,6 +79,218 @@ function parseOptionalIsoTimestamp(value: unknown): string | null {
 	if (!trimmed) return null;
 	const ts = new Date(trimmed);
 	return Number.isNaN(ts.getTime()) ? null : ts.toISOString();
+}
+
+interface RememberRowProvenance {
+	readonly sourcePath?: string;
+	readonly runtimePath?: string;
+	readonly idempotencyKey?: string;
+}
+
+interface RememberDedupeScope {
+	readonly agentId: string;
+	readonly visibility: "global" | "private" | "archived";
+	readonly scope: string | null;
+}
+
+interface RememberDedupeRow {
+	readonly id: string;
+	readonly type: string;
+	readonly tags: string | null;
+	readonly pinned: number;
+	readonly importance: number;
+	readonly content: string;
+}
+
+interface RememberDedupeIdRow {
+	readonly id: string;
+	readonly sourceId: string | null;
+}
+
+interface RememberChunkDedupeRow extends RememberDedupeIdRow {
+	readonly contentHash: string | null;
+	readonly idempotencyKey: string;
+}
+
+function pickOptionalString(...values: readonly unknown[]): string | undefined {
+	for (const value of values) {
+		const parsed = parseOptionalString(value);
+		if (parsed) return parsed;
+	}
+	return undefined;
+}
+
+function parseRememberRowProvenance(body: Record<string, unknown>): RememberRowProvenance {
+	const metadata = toRecord(body.metadata) ?? {};
+	return {
+		sourcePath: pickOptionalString(
+			body.sourcePath,
+			body.source_path,
+			body.source,
+			metadata.sourcePath,
+			metadata.source_path,
+			metadata.source,
+		),
+		runtimePath: pickOptionalString(body.runtimePath, body.runtime_path, metadata.runtimePath, metadata.runtime_path),
+		idempotencyKey: pickOptionalString(
+			body.idempotencyKey,
+			body.idempotency_key,
+			metadata.idempotencyKey,
+			metadata.idempotency_key,
+		),
+	};
+}
+
+function idempotencyKeyForChunk(baseKey: string | undefined, index: number): string | undefined {
+	return baseKey ? `${baseKey}:chunk:${index + 1}` : undefined;
+}
+
+function chunkGroupIdForIdempotencyKey(baseKey: string | undefined, input: RememberDedupeScope): string | undefined {
+	if (!baseKey) return undefined;
+	const hash = createHash("sha256")
+		.update(input.agentId || "default")
+		.update("\0")
+		.update(input.visibility)
+		.update("\0")
+		.update(input.scope ?? "__NULL__")
+		.update("\0")
+		.update(baseKey)
+		.digest("hex")
+		.slice(0, 32);
+	return `chunk-group:${hash}`;
+}
+
+function escapeSqlLike(value: string): string {
+	return value.replace(/[\\%_]/g, "\\$&");
+}
+
+function chunkIdempotencyIndex(baseKey: string, key: string): number | null {
+	const prefix = `${baseKey}:chunk:`;
+	if (!key.startsWith(prefix)) return null;
+	const index = Number.parseInt(key.slice(prefix.length), 10);
+	return Number.isSafeInteger(index) && index > 0 ? index - 1 : null;
+}
+
+function scopedMemoryPredicate(input: RememberDedupeScope): {
+	readonly sql: string;
+	readonly params: readonly string[];
+} {
+	return {
+		sql: `
+			COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			AND COALESCE(visibility, 'global') = ?
+			AND COALESCE(scope, '__NULL__') = ?
+		`,
+		params: [input.agentId || "default", input.visibility, input.scope ?? "__NULL__"],
+	};
+}
+
+function scopedContentHashPredicate(input: RememberDedupeScope): {
+	readonly sql: string;
+	readonly params: readonly string[];
+} {
+	return {
+		sql: `
+			COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			AND COALESCE(scope, '__NULL__') = ?
+		`,
+		params: [input.agentId || "default", input.scope ?? "__NULL__"],
+	};
+}
+
+function getScopedIdempotencyMemoryId(
+	db: WriteDb,
+	key: string | undefined,
+	input: RememberDedupeScope,
+): RememberDedupeIdRow | undefined {
+	if (!key) return undefined;
+	const scoped = scopedMemoryPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, source_id AS sourceId
+			 FROM memories
+			 WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(key, ...scoped.params) as RememberDedupeIdRow | undefined;
+}
+
+function getScopedIdempotencyDedupeRow(
+	db: WriteDb,
+	key: string | undefined,
+	input: RememberDedupeScope,
+): RememberDedupeRow | undefined {
+	if (!key) return undefined;
+	const scoped = scopedMemoryPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, type, tags, pinned, importance, content
+			 FROM memories
+			 WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(key, ...scoped.params) as RememberDedupeRow | undefined;
+}
+
+function getScopedContentHashMemoryId(
+	db: WriteDb,
+	contentHash: string,
+	input: RememberDedupeScope,
+): { readonly id: string } | undefined {
+	const scoped = scopedContentHashPredicate(input);
+	return db
+		.prepare(
+			`SELECT id
+			 FROM memories
+			 WHERE content_hash = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(contentHash, ...scoped.params) as { readonly id: string } | undefined;
+}
+
+function isMemoryContentHashUniqueError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	return err.message.includes("idx_memories_content_hash_unique") || err.message.includes("memories.content_hash");
+}
+
+function getScopedContentHashDedupeRow(
+	db: WriteDb,
+	contentHash: string,
+	input: RememberDedupeScope,
+): RememberDedupeRow | undefined {
+	const scoped = scopedContentHashPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, type, tags, pinned, importance, content
+			 FROM memories
+			 WHERE content_hash = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(contentHash, ...scoped.params) as RememberDedupeRow | undefined;
+}
+
+function getScopedChunkIdempotencyRows(
+	db: WriteDb,
+	baseKey: string | undefined,
+	input: RememberDedupeScope,
+): readonly RememberChunkDedupeRow[] {
+	if (!baseKey) return [];
+	const scoped = scopedMemoryPredicate(input);
+	return (
+		db
+			.prepare(
+				`SELECT id, source_id AS sourceId, content_hash AS contentHash, idempotency_key AS idempotencyKey
+				 FROM memories
+				 WHERE idempotency_key LIKE ? ESCAPE '\\' AND ${scoped.sql} AND is_deleted = 0`,
+			)
+			.all(`${escapeSqlLike(baseKey)}:chunk:%`, ...scoped.params) as RememberChunkDedupeRow[]
+	)
+		.filter((row) => chunkIdempotencyIndex(baseKey, row.idempotencyKey) !== null)
+		.sort((left, right) => {
+			const leftIndex = chunkIdempotencyIndex(baseKey, left.idempotencyKey);
+			const rightIndex = chunkIdempotencyIndex(baseKey, right.idempotencyKey);
+			return (leftIndex ?? 0) - (rightIndex ?? 0);
+		});
 }
 
 function hasMemoriesSessionIdColumn(db: any): boolean {
@@ -475,6 +688,14 @@ export function registerMemoryRoutes(app: Hono): void {
 			scope?: string | null;
 			agentId?: string;
 			visibility?: "global" | "private" | "archived";
+			sourcePath?: string;
+			source_path?: string;
+			source?: string;
+			runtimePath?: string;
+			runtime_path?: string;
+			idempotencyKey?: string;
+			idempotency_key?: string;
+			metadata?: Record<string, unknown>;
 			hints?: string[];
 			transcript?: string;
 			structured?: {
@@ -515,8 +736,10 @@ export function registerMemoryRoutes(app: Hono): void {
 			return c.json({ error: "createdAt must be a valid ISO timestamp" }, 400);
 		}
 		const scope = body.scope ?? null;
+		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
 		const visibility = body.visibility === "private" ? "private" : "global";
+		const dedupeScope = { agentId, visibility, scope };
 		const hasBodyTags = Object.prototype.hasOwnProperty.call(body, "tags");
 		const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
 		if (hasBodyTags && bodyTags === undefined) {
@@ -548,57 +771,127 @@ export function registerMemoryRoutes(app: Hono): void {
 			const tags = hasBodyTags ? bodyTags : parsedPrefixes.tags;
 			const pipelineEnqueueEnabled = pipelineCfg.enabled;
 
-			const groupId = crypto.randomUUID();
-			const now = new Date().toISOString();
-			const chunkIds: string[] = [];
+			const chunkPlans = chunks
+				.map((chunk, index) => {
+					const normalized = normalizeAndHashContent(chunk);
+					if (!normalized.storageContent) return null;
+					return {
+						chunk,
+						contentForInsert:
+							normalized.normalizedContent.length > 0 ? normalized.normalizedContent : normalized.hashBasis,
+						idempotencyKey: idempotencyKeyForChunk(rowProvenance.idempotencyKey, index),
+						memType: inferType(chunk),
+						normalized,
+					};
+				})
+				.filter((plan): plan is NonNullable<typeof plan> => plan !== null);
+			if (chunkPlans.length === 0) {
+				return c.json({ error: "content produced no valid chunks" }, 400);
+			}
 
-			// Create chunk group entity
+			const baseIdempotencyMemory = getDbAccessor().withReadDb((db) =>
+				getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
+			);
+			if (baseIdempotencyMemory) {
+				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
+			}
+
+			const existingChunks = getDbAccessor().withReadDb((db) =>
+				getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
+			);
+			if (existingChunks.length > 0) {
+				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
+				const matchesExistingPlan =
+					groupIds.size === 1 &&
+					existingChunks.length === chunkPlans.length &&
+					existingChunks.every((row, index) => {
+						const plan = chunkPlans[index];
+						return row.idempotencyKey === plan.idempotencyKey && row.contentHash === plan.normalized.contentHash;
+					});
+				if (!matchesExistingPlan) {
+					return c.json({ error: "idempotencyKey already used for different chunked content" }, 409);
+				}
+
+				return c.json({
+					chunked: true,
+					chunk_count: existingChunks.length,
+					ids: existingChunks.map((row) => row.id),
+					group_id: Array.from(groupIds)[0],
+					deduped: true,
+				});
+			}
+			const contentHashes = new Set<string>();
+			for (const plan of chunkPlans) {
+				if (contentHashes.has(plan.normalized.contentHash)) {
+					return c.json({ error: "chunked content contains duplicate chunks" }, 409);
+				}
+				contentHashes.add(plan.normalized.contentHash);
+				const byHash = getDbAccessor().withReadDb((db) =>
+					getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
+				);
+				if (byHash) {
+					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+				}
+			}
+
+			const groupId = chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
+			const now = new Date().toISOString();
+			const plannedChunkIds = chunkPlans.map(() => crypto.randomUUID());
+			type ChunkInsertResult =
+				| { readonly ids: readonly string[]; readonly status: "inserted" }
+				| { readonly groupId: string | undefined; readonly ids: readonly string[]; readonly status: "deduped" }
+				| { readonly status: "chunk_idempotency_conflict" }
+				| { readonly status: "content_conflict" }
+				| { readonly status: "non_chunk_idempotency_conflict" };
+
 			try {
-				getDbAccessor().withWriteTx((db) => {
+				const result: ChunkInsertResult = getDbAccessor().withWriteTx((db) => {
+					const baseMemory = getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope);
+					if (baseMemory) return { status: "non_chunk_idempotency_conflict" };
+
+					const txExistingChunks = getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope);
+					if (txExistingChunks.length > 0) {
+						const groupIds = new Set(txExistingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
+						const matchesExistingPlan =
+							groupIds.size === 1 &&
+							txExistingChunks.length === chunkPlans.length &&
+							txExistingChunks.every((row, index) => {
+								const plan = chunkPlans[index];
+								return row.idempotencyKey === plan.idempotencyKey && row.contentHash === plan.normalized.contentHash;
+							});
+						if (!matchesExistingPlan) return { status: "chunk_idempotency_conflict" };
+
+						return {
+							groupId: Array.from(groupIds)[0],
+							ids: txExistingChunks.map((row) => row.id),
+							status: "deduped",
+						};
+					}
+
+					for (const plan of chunkPlans) {
+						const byHash = getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope);
+						if (byHash) return { status: "content_conflict" };
+					}
+
 					db.prepare(
-						`INSERT INTO entities
+						`INSERT OR IGNORE INTO entities
 						 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 						 VALUES (?, ?, ?, 'chunk_group', ?, 0, ?, ?)`,
 					).run(groupId, `chunk-group:${groupId}`, `chunk-group:${groupId}`, agentId, now, now);
-				});
-			} catch (e) {
-				logger.error("memory", "Failed to create chunk group entity", e as Error);
-				return c.json({ error: "Failed to create chunk group" }, 500);
-			}
 
-			for (const chunk of chunks) {
-				const chunkNormalized = normalizeAndHashContent(chunk);
-				if (!chunkNormalized.storageContent) continue;
-
-				const chunkId = crypto.randomUUID();
-				const chunkContentForInsert =
-					chunkNormalized.normalizedContent.length > 0 ? chunkNormalized.normalizedContent : chunkNormalized.hashBasis;
-				const memType = inferType(chunk);
-
-				try {
-					const inserted = getDbAccessor().withWriteTx((db) => {
-						const byHash =
-							scope !== null
-								? (db
-										.prepare("SELECT id FROM memories WHERE content_hash = ? AND scope = ? AND is_deleted = 0 LIMIT 1")
-										.get(chunkNormalized.contentHash, scope) as { id: string } | undefined)
-								: (db
-										.prepare(
-											"SELECT id FROM memories WHERE content_hash = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1",
-										)
-										.get(chunkNormalized.contentHash) as { id: string } | undefined);
-						if (byHash) return false;
-
+					for (let chunkIndex = 0; chunkIndex < chunkPlans.length; chunkIndex += 1) {
+						const plan = chunkPlans[chunkIndex];
+						const chunkId = plannedChunkIds[chunkIndex];
 						txIngestEnvelope(db, {
 							id: chunkId,
-							content: chunkNormalized.storageContent,
-							normalizedContent: chunkContentForInsert,
-							contentHash: chunkNormalized.contentHash,
+							content: plan.normalized.storageContent,
+							normalizedContent: plan.contentForInsert,
+							contentHash: plan.normalized.contentHash,
 							who,
 							why: pinned ? "explicit-critical" : "explicit",
 							project,
 							importance,
-							type: memType,
+							type: plan.memType,
 							tags: tags ?? null,
 							pinned,
 							isDeleted: 0,
@@ -608,6 +901,9 @@ export function registerMemoryRoutes(app: Hono): void {
 							updatedBy: who,
 							sourceType: "chunk",
 							sourceId: groupId,
+							sourcePath: rowProvenance.sourcePath ?? null,
+							runtimePath: rowProvenance.runtimePath ?? null,
+							idempotencyKey: plan.idempotencyKey ?? null,
 							scope,
 							agentId,
 							visibility,
@@ -620,16 +916,38 @@ export function registerMemoryRoutes(app: Hono): void {
 							 (memory_id, entity_id, mention_text, confidence, created_at)
 							 VALUES (?, ?, 'chunk', 1.0, ?)`,
 						).run(chunkId, groupId, now);
+					}
 
-						return true;
+					return { ids: plannedChunkIds, status: "inserted" };
+				});
+
+				if (result.status === "non_chunk_idempotency_conflict") {
+					return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
+				}
+				if (result.status === "chunk_idempotency_conflict") {
+					return c.json({ error: "idempotencyKey already used for different chunked content" }, 409);
+				}
+				if (result.status === "content_conflict") {
+					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+				}
+				if (result.status === "deduped") {
+					return c.json({
+						chunked: true,
+						chunk_count: result.ids.length,
+						ids: result.ids,
+						group_id: result.groupId,
+						deduped: true,
 					});
+				}
 
-					if (!inserted) continue;
-					chunkIds.push(chunkId);
+				const savedChunkIds = [...result.ids];
 
+				for (let chunkIndex = 0; chunkIndex < chunkPlans.length; chunkIndex += 1) {
+					const plan = chunkPlans[chunkIndex];
+					const chunkId = savedChunkIds[chunkIndex];
 					// Generate embedding async
 					try {
-						const vec = await fetchEmbedding(chunkNormalized.storageContent, fullCfg.embedding);
+						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding);
 						if (vec) {
 							if (vec.length !== fullCfg.embedding.dimensions) {
 								logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
@@ -640,7 +958,7 @@ export function registerMemoryRoutes(app: Hono): void {
 							} else {
 								const embId = crypto.randomUUID();
 								const blob = vectorToBlob(vec);
-								const embHash = scope ? `${chunkNormalized.contentHash}:${scope}` : chunkNormalized.contentHash;
+								const embHash = scope ? `${plan.normalized.contentHash}:${scope}` : plan.normalized.contentHash;
 								getDbAccessor().withWriteTx((db) => {
 									syncVecDeleteBySourceId(db, "memory", chunkId);
 									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
@@ -648,7 +966,7 @@ export function registerMemoryRoutes(app: Hono): void {
 										INSERT INTO embeddings
 										  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 										VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-									`).run(embId, embHash, blob, vec.length, chunkId, chunkNormalized.storageContent, now);
+									`).run(embId, embHash, blob, vec.length, chunkId, plan.normalized.storageContent, now);
 									syncVecInsert(db, embId, vec);
 									db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(
 										fullCfg.embedding.model,
@@ -667,7 +985,7 @@ export function registerMemoryRoutes(app: Hono): void {
 					// Inline entity linking for chunk
 					try {
 						getDbAccessor().withWriteTx((db) => {
-							linkMemoryToEntities(db, chunkId, chunk, agentId);
+							linkMemoryToEntities(db, chunkId, plan.chunk, agentId);
 						});
 					} catch {
 						// Non-fatal — pipeline extraction handles deeper linking
@@ -684,25 +1002,29 @@ export function registerMemoryRoutes(app: Hono): void {
 							});
 						}
 					}
-				} catch (e) {
-					logger.warn("memory", "Failed to save chunk", {
-						chunkId,
-						error: String(e),
-					});
 				}
+
+				logger.info("memory", "Chunked memory saved", {
+					groupId,
+					chunkCount: savedChunkIds.length,
+				});
+
+				return c.json({
+					chunked: true,
+					chunk_count: savedChunkIds.length,
+					ids: savedChunkIds,
+					group_id: groupId,
+				});
+			} catch (e) {
+				if (isMemoryContentHashUniqueError(e)) {
+					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+				}
+				logger.warn("memory", "Failed to save chunked memory", {
+					groupId,
+					error: String(e),
+				});
+				return c.json({ error: "Failed to save chunks" }, 500);
 			}
-
-			logger.info("memory", "Chunked memory saved", {
-				groupId,
-				chunkCount: chunkIds.length,
-			});
-
-			return c.json({
-				chunked: true,
-				chunk_count: chunkIds.length,
-				ids: chunkIds,
-				group_id: groupId,
-			});
 		}
 
 		const who = body.who ?? "daemon";
@@ -730,15 +1052,17 @@ export function registerMemoryRoutes(app: Hono): void {
 				: normalizedContent.hashBasis;
 		const contentHash = normalizedContent.contentHash;
 		const pipelineEnqueueEnabled = pipelineCfg.enabled;
+		const chunkedIdempotencyMemory =
+			rowProvenance.idempotencyKey === undefined
+				? []
+				: getDbAccessor().withReadDb((db) =>
+						getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
+					);
+		if (chunkedIdempotencyMemory.length > 0) {
+			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
+		}
 
-		type DedupeRow = {
-			id: string;
-			type: string;
-			tags: string | null;
-			pinned: number;
-			importance: number;
-			content: string;
-		};
+		type DedupeRow = RememberDedupeRow;
 
 		try {
 			const result = getDbAccessor().withWriteTx((db) => {
@@ -762,22 +1086,11 @@ export function registerMemoryRoutes(app: Hono): void {
 					if (bySource) return { deduped: true as const, row: bySource };
 				}
 
-				// Check content_hash dedupe (scope-aware)
-				const byHash = (
-					scope !== null
-						? db
-								.prepare(
-									`SELECT id, type, tags, pinned, importance, content
-					 FROM memories WHERE content_hash = ? AND scope = ? AND is_deleted = 0 LIMIT 1`,
-								)
-								.get(contentHash, scope)
-						: db
-								.prepare(
-									`SELECT id, type, tags, pinned, importance, content
-					 FROM memories WHERE content_hash = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1`,
-								)
-								.get(contentHash)
-				) as DedupeRow | undefined;
+				const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
+				if (byIdempotencyKey) return { deduped: true as const, row: byIdempotencyKey };
+
+				// Check content_hash dedupe using the same agent/scope tuple as the unique index.
+				const byHash = getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 				if (byHash) return { deduped: true as const, row: byHash };
 
 				// No duplicate — insert
@@ -805,6 +1118,9 @@ export function registerMemoryRoutes(app: Hono): void {
 					updatedBy: who,
 					sourceType,
 					sourceId,
+					sourcePath: rowProvenance.sourcePath ?? null,
+					runtimePath: rowProvenance.runtimePath ?? null,
+					idempotencyKey: rowProvenance.idempotencyKey ?? null,
 					scope,
 					agentId,
 					visibility,
@@ -828,16 +1144,11 @@ export function registerMemoryRoutes(app: Hono): void {
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : "";
 			if (msg.includes("UNIQUE constraint")) {
-				const existing = getDbAccessor().withReadDb(
-					(db) =>
-						db
-							.prepare(
-								`SELECT id, type, tags, pinned, importance, content
-						 FROM memories
-						 WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
-							)
-							.get(contentHash) as DedupeRow | undefined,
-				);
+				const existing = getDbAccessor().withReadDb((db) => {
+					const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
+					if (byIdempotencyKey) return byIdempotencyKey;
+					return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
+				});
 				if (existing) {
 					return c.json({
 						id: existing.id,
@@ -1096,19 +1407,33 @@ export function registerMemoryRoutes(app: Hono): void {
 			return c.json({ error: "memory id is required" }, 400);
 		}
 
+		const sessionKeyRaw = c.req.header("x-signet-session-key");
+		const agentId = resolveAgentId({
+			agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+			sessionKey: sessionKeyRaw,
+		});
+		const agentScope = getAgentScope(agentId);
+		const access = buildAgentScopeClause(agentId, agentScope.readPolicy, agentScope.policyGroup);
+		const scopeProject = c.get("auth")?.claims?.scope?.project;
+		const projectSql = scopeProject ? " AND m.project = ?" : "";
 		const row = getDbAccessor().withReadDb((db) => {
-			const sessionSelect = hasMemoriesSessionIdColumn(db) ? "session_id," : "NULL AS session_id,";
+			const sessionSelect = hasMemoriesSessionIdColumn(db) ? "m.session_id," : "NULL AS session_id,";
 
 			return db
 				.prepare(
-					`SELECT id, content, type, importance, tags, pinned, who,
-					        source_id, source_type, project, ${sessionSelect} confidence,
-					        access_count, last_accessed, is_deleted, deleted_at,
-					        extraction_status, embedding_model, version,
-					        created_at, updated_at, updated_by
-					 FROM memories WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)`,
+					`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.who,
+					        m.source_id, m.source_type, m.source_path, m.runtime_path,
+					        m.idempotency_key, m.project, ${sessionSelect} m.confidence,
+					        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
+					        m.extraction_status, m.embedding_model, m.version,
+					        m.created_at, m.updated_at, m.updated_by
+					 FROM memories m
+					 WHERE m.id = ?
+					   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)
+					   ${access.sql}
+					   ${projectSql}`,
 				)
-				.get(memoryId) as Record<string, unknown> | undefined;
+				.get(memoryId, ...access.args, ...(scopeProject ? [scopeProject] : [])) as Record<string, unknown> | undefined;
 		});
 
 		if (!row) {
@@ -1126,6 +1451,9 @@ export function registerMemoryRoutes(app: Hono): void {
 
 		return c.json({
 			...row,
+			sourcePath: row.source_path,
+			runtimePath: row.runtime_path,
+			idempotencyKey: row.idempotency_key,
 			sessionId,
 		});
 	});

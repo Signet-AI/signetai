@@ -5,7 +5,8 @@ import type { Context, Hono } from "hono";
 import { resolveAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
-import { getLlmProvider } from "../llm.js";
+import { DreamPromotionError, promoteDreamingEvidence } from "../dream-promotion.js";
+import { getInferenceProviderOrNull, getLlmProvider } from "../llm.js";
 import { loadMemoryConfig } from "../memory-config.js";
 import {
 	getDreamingPasses,
@@ -56,13 +57,38 @@ import {
 } from "./state.js";
 import { STATUS_CACHE_TTL, cachedEmbeddingStatus, statusCacheTime } from "./utils.js";
 
-const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | void> => {
+const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | undefined> => {
 	const permDenied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
 	if (permDenied) return permDenied;
 	const rateDenied = await requireRateLimit("admin", authAdminLimiter, authConfig)(c, () => Promise.resolve());
 	if (rateDenied) return rateDenied;
 	await next();
 };
+
+function asRecord(value: unknown): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	return value as Record<string, unknown>;
+}
+
+function readString(record: Readonly<Record<string, unknown>>, key: string): string | undefined {
+	const value = record[key];
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readNumber(record: Readonly<Record<string, unknown>>, key: string): number | undefined {
+	const value = record[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readBoolean(record: Readonly<Record<string, unknown>>, key: string): boolean | undefined {
+	const value = record[key];
+	if (typeof value === "boolean") return value;
+	if (value === "true") return true;
+	if (value === "false") return false;
+	return undefined;
+}
 
 async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
 	if (pipelineTransition) {
@@ -94,7 +120,11 @@ async function togglePipelinePause(c: Context, paused: boolean): Promise<Respons
 		});
 	} catch (err) {
 		const { logger } = await import("../logger.js");
-		logger.error("pipeline", paused ? "Failed to pause pipeline" : "Failed to resume pipeline", err instanceof Error ? err : new Error(String(err)));
+		logger.error(
+			"pipeline",
+			paused ? "Failed to pause pipeline" : "Failed to resume pipeline",
+			err instanceof Error ? err : new Error(String(err)),
+		);
 		return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
 	} finally {
 		setPipelineTransition(false);
@@ -340,7 +370,6 @@ export function registerPipelineRoutes(app: Hono): void {
 		const pipelineV2 = cfg.pipelineV2;
 		const mode = readPipelineMode(pipelineV2);
 
-
 		return c.json({
 			workers: getPipelineWorkerStatus(),
 			queues: dbData.queues,
@@ -436,6 +465,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		});
 	});
 
+	app.use("/api/dream/promote", pipelineAdminGuard);
 	app.use("/api/dream/*", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
 	});
@@ -465,6 +495,37 @@ export function registerPipelineRoutes(app: Hono): void {
 			},
 			passes,
 		});
+	});
+
+	app.post("/api/dream/promote", async (c) => {
+		const raw: unknown = await c.req.json().catch(() => null);
+		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
+		const body = asRecord(raw);
+		const agentId = resolveAgentId({
+			agentId: readString(body, "agent_id") ?? c.req.header("x-signet-agent-id"),
+		});
+		const from = readString(body, "from");
+		if (!from) return c.json({ error: "from is required" }, 400);
+		const useProvider = readBoolean(body, "use_provider") ?? false;
+		try {
+			return c.json(
+				await promoteDreamingEvidence(getDbAccessor(), {
+					agentId,
+					from,
+					apply: readBoolean(body, "apply") ?? false,
+					actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "dreaming-promote",
+					limit: readNumber(body, "limit"),
+					useProvider,
+					provider: useProvider ? getInferenceProviderOrNull("memoryExtraction") : null,
+					providerTimeoutMs: readNumber(body, "provider_timeout_ms"),
+					providerMaxTokens: readNumber(body, "provider_max_tokens"),
+				}),
+			);
+		} catch (err) {
+			if (err instanceof DreamPromotionError) return c.json({ error: err.message }, err.status);
+			const message = err instanceof Error ? err.message : String(err);
+			return c.json({ error: message }, 500);
+		}
 	});
 
 	app.post("/api/dream/trigger", async (c) => {
@@ -498,5 +559,4 @@ export function registerPipelineRoutes(app: Hono): void {
 		}
 		return c.json({ accepted: true, passId, status: "running", mode }, 202);
 	});
-
 }

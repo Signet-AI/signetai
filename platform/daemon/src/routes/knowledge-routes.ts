@@ -316,7 +316,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			getKnowledgeGraphForConstellation(getDbAccessor(), agentId, {
 				limit: parseNavigationLimit(c.req.query("limit"), 150, 300),
 				maxAspectsPerEntity: parseNavigationLimit(c.req.query("max_aspects_per_entity"), 6, 25),
-				maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 20),
+				maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 250),
 				dependencyLimit: parseNavigationLimit(c.req.query("dependency_limit"), 500, 2000),
 			}),
 		);

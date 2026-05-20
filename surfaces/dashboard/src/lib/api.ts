@@ -80,6 +80,8 @@ export interface Harness {
 	lastSeen: string | null;
 }
 
+const HARNESS_DISCOVERY_TIMEOUT_MS = 1_000;
+
 export interface DocumentConnector {
 	id: string;
 	provider: string;
@@ -231,6 +233,77 @@ export interface SessionBypassResponse {
 }
 
 // ============================================================================
+// Database Diagnostics Types
+// ============================================================================
+
+export type DatabaseSchemaGroup = "core" | "provenance" | "runtime" | "internal" | "other";
+
+export interface DatabaseColumnInfo {
+	readonly cid: number;
+	readonly name: string;
+	readonly type: string;
+	readonly notNull: boolean;
+	readonly defaultValue: unknown;
+	readonly primaryKey: boolean;
+}
+
+export interface DatabaseIndexColumnInfo {
+	readonly seqno: number;
+	readonly cid: number;
+	readonly name: string;
+}
+
+export interface DatabaseIndexInfo {
+	readonly name: string;
+	readonly unique: boolean;
+	readonly origin: string;
+	readonly partial: boolean;
+	readonly columns: readonly DatabaseIndexColumnInfo[];
+}
+
+export interface DatabaseForeignKeyInfo {
+	readonly id: number;
+	readonly seq: number;
+	readonly table: string;
+	readonly from: string;
+	readonly to: string;
+	readonly onUpdate: string;
+	readonly onDelete: string;
+	readonly match: string;
+}
+
+export interface DatabaseTableInfo {
+	readonly name: string;
+	readonly group: DatabaseSchemaGroup;
+	readonly kind: string;
+	readonly rowCount: number | null;
+	readonly sampleAllowed: boolean;
+	readonly sampleBlockedReason?: string;
+	readonly columns: readonly DatabaseColumnInfo[];
+	readonly indexes: readonly DatabaseIndexInfo[];
+	readonly foreignKeys: readonly DatabaseForeignKeyInfo[];
+	readonly sql: string | null;
+}
+
+export interface DatabaseSchemaResponse {
+	readonly generatedAt: string;
+	readonly tables: readonly DatabaseTableInfo[];
+	readonly groups: Record<DatabaseSchemaGroup, number>;
+	readonly error?: string;
+}
+
+export interface DatabaseTableSampleResponse {
+	readonly table: string;
+	readonly columns: readonly string[];
+	readonly rows: readonly Record<string, unknown>[];
+	readonly limit: number;
+	readonly offset: number;
+	readonly rowCount: number | null;
+	readonly hasMore: boolean;
+	readonly error?: string;
+}
+
+// ============================================================================
 // API Functions
 // ============================================================================
 
@@ -260,6 +333,71 @@ export async function fetchSessions(): Promise<SessionListResponse> {
 		return await response.json();
 	} catch {
 		return { sessions: [], count: 0 };
+	}
+}
+
+export async function getDatabaseSchema(): Promise<DatabaseSchemaResponse | null> {
+	try {
+		const response = await fetch(`${API_BASE}/api/diagnostics/database/schema`);
+		if (!response.ok) {
+			return {
+				generatedAt: new Date().toISOString(),
+				tables: [],
+				groups: { core: 0, provenance: 0, runtime: 0, internal: 0, other: 0 },
+				error:
+					response.status === 404
+						? "Database diagnostics route is not available on the running daemon. Restart the daemon from this branch."
+						: `Database diagnostics request failed with HTTP ${response.status}.`,
+			};
+		}
+		return await response.json();
+	} catch (err) {
+		return {
+			generatedAt: new Date().toISOString(),
+			tables: [],
+			groups: { core: 0, provenance: 0, runtime: 0, internal: 0, other: 0 },
+			error: err instanceof Error ? err.message : "Could not reach daemon.",
+		};
+	}
+}
+
+export async function getDatabaseTableSample(
+	table: string,
+	options: { limit?: number; offset?: number } = {},
+): Promise<DatabaseTableSampleResponse> {
+	try {
+		const params = new URLSearchParams();
+		if (typeof options.limit === "number") params.set("limit", String(options.limit));
+		if (typeof options.offset === "number") params.set("offset", String(options.offset));
+		const suffix = params.toString();
+		const response = await fetch(
+			`${API_BASE}/api/diagnostics/database/tables/${encodeURIComponent(table)}/sample${suffix ? `?${suffix}` : ""}`,
+		);
+		const body = (await response.json().catch(() => ({}))) as Partial<DatabaseTableSampleResponse>;
+		if (!response.ok) {
+			return {
+				table,
+				columns: [],
+				rows: [],
+				limit: options.limit ?? 25,
+				offset: options.offset ?? 0,
+				rowCount: null,
+				hasMore: false,
+				error: typeof body.error === "string" ? body.error : "Failed to fetch table sample",
+			};
+		}
+		return body as DatabaseTableSampleResponse;
+	} catch (err) {
+		return {
+			table,
+			columns: [],
+			rows: [],
+			limit: options.limit ?? 25,
+			offset: options.offset ?? 0,
+			rowCount: null,
+			hasMore: false,
+			error: err instanceof Error ? err.message : "Failed to fetch table sample",
+		};
 	}
 }
 
@@ -969,14 +1107,18 @@ export async function getEmbeddingGapStats(): Promise<EmbeddingGapStats | null> 
 	}
 }
 
-export async function getHarnesses(): Promise<Harness[]> {
+export async function getHarnesses(timeoutMs = HARNESS_DISCOVERY_TIMEOUT_MS): Promise<Harness[]> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		const response = await fetch(`${API_BASE}/api/harnesses`);
+		const response = await fetch(`${API_BASE}/api/harnesses`, { signal: controller.signal });
 		if (!response.ok) throw new Error("Failed to fetch harnesses");
 		const data = await response.json();
 		return data.harnesses || [];
 	} catch {
 		return [];
+	} finally {
+		clearTimeout(timeout);
 	}
 }
 
@@ -2735,12 +2877,24 @@ export interface ConstellationAttribute {
 	kind: "attribute" | "constraint";
 	importance: number;
 	memoryId: string | null;
+	status?: "active" | "superseded" | "deleted";
+	version?: number;
+	versionRootId?: string | null;
+	previousAttributeId?: string | null;
+	groupKey?: string | null;
+	claimKey?: string | null;
+	sourceKind?: string | null;
+	sourcePath?: string | null;
+	proposalId?: string | null;
+	proposalEvidenceCount?: number;
 }
 
 export interface ConstellationAspect {
 	id: string;
 	name: string;
 	weight: number;
+	status?: "active" | "archived";
+	proposalId?: string | null;
 	attributes: ConstellationAttribute[];
 }
 
@@ -2750,6 +2904,8 @@ export interface ConstellationEntity {
 	entityType: string;
 	mentions: number;
 	pinned: boolean;
+	status?: "active" | "archived";
+	proposalId?: string | null;
 	aspects: ConstellationAspect[];
 }
 
@@ -2758,16 +2914,69 @@ export interface ConstellationDependency {
 	targetEntityId: string;
 	dependencyType: string;
 	strength: number;
+	status?: "active" | "archived";
+	proposalId?: string | null;
+	proposalEvidenceCount?: number;
+}
+
+export interface ConstellationProposal {
+	id: string;
+	operation: string;
+	confidence: number;
+	rationale: string;
+	evidenceCount: number;
+	sourceKind: string | null;
+	sourcePath: string | null;
+	updatedAt: string;
+	targetEntityId: string | null;
+	targetEntityName: string | null;
+	targetAspectName: string | null;
+	preview: string | null;
+}
+
+export interface ConstellationDreamingSummary {
+	tokensSinceLastPass: number;
+	consecutiveFailures: number;
+	lastPassAt: string | null;
+	lastPassId: string | null;
+	lastPassMode: string | null;
+	latestPass: {
+		id: string;
+		mode: string;
+		status: string;
+		completedAt: string | null;
+		mutationsApplied: number | null;
+		mutationsSkipped: number | null;
+		mutationsFailed: number | null;
+	} | null;
+}
+
+export interface ConstellationProposalSummary {
+	pending: number;
+	appliedRecent: number;
+	failedRecent: number;
 }
 
 export interface ConstellationGraph {
 	entities: ConstellationEntity[];
 	dependencies: ConstellationDependency[];
+	proposals?: ConstellationProposal[];
+	metadata?: {
+		dreaming: ConstellationDreamingSummary;
+		proposals: ConstellationProposalSummary;
+	};
 }
 
 export async function getConstellationOverlay(agentId: string): Promise<ConstellationGraph | null> {
 	try {
-		const path = `${API_BASE}/api/knowledge/constellation?agent_id=${encodeURIComponent(agentId)}&limit=150&max_aspects_per_entity=6&max_attributes_per_aspect=4&dependency_limit=500`;
+		const params = new URLSearchParams({
+			agent_id: agentId,
+			limit: "120",
+			max_aspects_per_entity: "20",
+			max_attributes_per_aspect: "150",
+			dependency_limit: "800",
+		});
+		const path = `${API_BASE}/api/knowledge/constellation?${params.toString()}`;
 		const res = await fetch(path);
 		if (!res.ok) return null;
 		return (await res.json()) as ConstellationGraph;

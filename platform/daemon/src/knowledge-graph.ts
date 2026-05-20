@@ -55,6 +55,12 @@ function rowToEntity(r: Record<string, unknown>): Entity {
 		mentions: typeof r.mentions === "number" ? r.mentions : undefined,
 		pinned: r.pinned === 1,
 		pinnedAt: typeof r.pinned_at === "string" ? r.pinned_at : null,
+		status: r.status === "archived" ? "archived" : "active",
+		archivedAt: typeof r.archived_at === "string" ? r.archived_at : null,
+		archivedBy: typeof r.archived_by === "string" ? r.archived_by : null,
+		archiveReason: typeof r.archive_reason === "string" ? r.archive_reason : null,
+		proposalId: typeof r.proposal_id === "string" ? r.proposal_id : null,
+		proposalEvidence: parseJsonArray(r.proposal_evidence),
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
@@ -72,6 +78,12 @@ function rowToAspect(r: Record<string, unknown>): EntityAspect {
 		name: r.name as string,
 		canonicalName: r.canonical_name as string,
 		weight: r.weight as number,
+		status: r.status === "archived" ? "archived" : "active",
+		archivedAt: typeof r.archived_at === "string" ? r.archived_at : null,
+		archivedBy: typeof r.archived_by === "string" ? r.archived_by : null,
+		archiveReason: typeof r.archive_reason === "string" ? r.archive_reason : null,
+		proposalId: typeof r.proposal_id === "string" ? r.proposal_id : null,
+		proposalEvidence: parseJsonArray(r.proposal_evidence),
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
@@ -93,6 +105,12 @@ function rowToAttribute(r: Record<string, unknown>): EntityAttribute {
 		importance: r.importance as number,
 		status: r.status as AttributeStatus,
 		supersededBy: (r.superseded_by as string) ?? null,
+		version: typeof r.version === "number" ? r.version : 1,
+		versionRootId: typeof r.version_root_id === "string" ? r.version_root_id : (r.id as string),
+		previousAttributeId: typeof r.previous_attribute_id === "string" ? r.previous_attribute_id : null,
+		archivedAt: typeof r.archived_at === "string" ? r.archived_at : null,
+		archivedBy: typeof r.archived_by === "string" ? r.archived_by : null,
+		archiveReason: typeof r.archive_reason === "string" ? r.archive_reason : null,
 		sourceKind: (r.source_kind as string) ?? null,
 		sourceId: (r.source_id as string) ?? null,
 		sourcePath: (r.source_path as string) ?? null,
@@ -116,6 +134,10 @@ function rowToDependency(r: Record<string, unknown>): EntityDependency {
 		strength: r.strength as number,
 		confidence: typeof r.confidence === "number" ? r.confidence : 0.7,
 		reason: typeof r.reason === "string" ? r.reason : null,
+		status: r.status === "archived" ? "archived" : "active",
+		archivedAt: typeof r.archived_at === "string" ? r.archived_at : null,
+		archivedBy: typeof r.archived_by === "string" ? r.archived_by : null,
+		archiveReason: typeof r.archive_reason === "string" ? r.archive_reason : null,
 		sourceKind: (r.source_kind as string) ?? null,
 		sourceId: (r.source_id as string) ?? null,
 		sourcePath: (r.source_path as string) ?? null,
@@ -184,6 +206,7 @@ export function getAspectsForEntity(accessor: DbAccessor, entityId: string, agen
 			.prepare(
 				`SELECT * FROM entity_aspects
 				 WHERE entity_id = ? AND agent_id = ?
+				   AND COALESCE(status, 'active') = 'active'
 				 ORDER BY weight DESC`,
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
@@ -297,6 +320,7 @@ export function getConstraintsForEntity(
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
 				 WHERE asp.entity_id = ? AND asp.agent_id = ?
 				   AND ea.agent_id = ?
+				   AND COALESCE(asp.status, 'active') = 'active'
 				   AND ea.kind = 'constraint'
 				   AND ea.status = 'active'
 				 ORDER BY ea.importance DESC`,
@@ -459,8 +483,14 @@ export function getDependenciesFrom(
 	return accessor.withReadDb((db) => {
 		const rows = db
 			.prepare(
-				`SELECT * FROM entity_dependencies
-				 WHERE source_entity_id = ? AND agent_id = ?`,
+				`SELECT dep.*
+				 FROM entity_dependencies dep
+				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+				 WHERE dep.source_entity_id = ? AND dep.agent_id = ?
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'`,
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToDependency);
@@ -475,8 +505,14 @@ export function getDependenciesTo(
 	return accessor.withReadDb((db) => {
 		const rows = db
 			.prepare(
-				`SELECT * FROM entity_dependencies
-				 WHERE target_entity_id = ? AND agent_id = ?`,
+				`SELECT dep.*
+				 FROM entity_dependencies dep
+				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+				 WHERE dep.target_entity_id = ? AND dep.agent_id = ?
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'`,
 			)
 			.all(entityId, agentId) as Array<Record<string, unknown>>;
 		return rows.map(rowToDependency);
@@ -526,6 +562,7 @@ export function getPinnedEntities(accessor: DbAccessor, agentId: string): Readon
 				 FROM entities
 				 WHERE agent_id = ?
 				   AND pinned = 1
+				   AND COALESCE(status, 'active') = 'active'
 				 ORDER BY pinned_at DESC, updated_at DESC, name ASC`,
 			)
 			.all(agentId) as Array<Record<string, unknown>>;
@@ -797,6 +834,7 @@ export function resolveNamedEntity(
 					END AS match_rank
 				 FROM entities
 				 WHERE agent_id = ?
+				   AND COALESCE(status, 'active') = 'active'
 				   AND (
 						COALESCE(canonical_name, LOWER(name)) = ?
 						OR LOWER(name) = ?
@@ -859,6 +897,7 @@ function resolveAspectByName(
 			 FROM entity_aspects
 			 WHERE entity_id = ?
 			   AND agent_id = ?
+			   AND COALESCE(status, 'active') = 'active'
 			   AND (canonical_name = ? OR LOWER(name) = ?)
 			 ORDER BY weight DESC, updated_at DESC
 			 LIMIT 1`,
@@ -884,6 +923,7 @@ function resolveEntityRecordByName(
 			`SELECT *
 			 FROM entities
 			 WHERE agent_id = ?
+			   AND COALESCE(status, 'active') = 'active'
 			   AND (
 					COALESCE(canonical_name, LOWER(name)) = ?
 					OR LOWER(name) = ?
@@ -995,6 +1035,7 @@ export function getEntityKnowledgeTree(
 				 LEFT JOIN entity_attributes attr
 				   ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
 				 WHERE asp.entity_id = ? AND asp.agent_id = ?
+				   AND COALESCE(asp.status, 'active') = 'active'
 				 GROUP BY asp.id
 				 ORDER BY asp.weight DESC, asp.name ASC
 				 LIMIT ?`,
@@ -1308,6 +1349,7 @@ export function listKnowledgeEntities(
 	return accessor.withReadDb((db) => {
 		const conditions = ["e.agent_id = ?"];
 		const args: Array<string | number> = [params.agentId];
+		conditions.push("COALESCE(e.status, 'active') = 'active'");
 		if (params.type) {
 			conditions.push("e.entity_type = ?");
 			args.push(params.type);
@@ -1335,12 +1377,14 @@ export function listKnowledgeEntities(
 					(
 						SELECT COUNT(*) FROM entity_aspects asp
 						WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 					) AS aspect_count,
 					(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
 						WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'attribute'
 						  AND attr.status = 'active'
@@ -1350,13 +1394,19 @@ export function listKnowledgeEntities(
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
 						WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'constraint'
 						  AND attr.status = 'active'
 					) AS constraint_count,
 					(
 						SELECT COUNT(*) FROM entity_dependencies dep
+						JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+						JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
 						WHERE dep.agent_id = e.agent_id
+						  AND COALESCE(dep.status, 'active') = 'active'
+						  AND COALESCE(src.status, 'active') = 'active'
+						  AND COALESCE(dst.status, 'active') = 'active'
 						  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
 					) AS dependency_count
 				 FROM page p
@@ -1391,13 +1441,15 @@ export function getKnowledgeEntityDetail(
 					e.*,
 					(
 						SELECT COUNT(*) FROM entity_aspects asp
-						WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+						  WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+						    AND COALESCE(asp.status, 'active') = 'active'
 					) AS aspect_count,
 					(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
-						WHERE asp.entity_id = e.id
+						  WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'attribute'
 						  AND attr.status = 'active'
@@ -1405,22 +1457,32 @@ export function getKnowledgeEntityDetail(
 					(
 						SELECT COUNT(*) FROM entity_attributes attr
 						JOIN entity_aspects asp ON asp.id = attr.aspect_id
-						WHERE asp.entity_id = e.id
+						  WHERE asp.entity_id = e.id
 						  AND asp.agent_id = e.agent_id
+						  AND COALESCE(asp.status, 'active') = 'active'
 						  AND attr.agent_id = e.agent_id
 						  AND attr.kind = 'constraint'
 						  AND attr.status = 'active'
 					) AS constraint_count,
 					(
 						SELECT COUNT(*) FROM entity_dependencies dep
-						WHERE dep.agent_id = e.agent_id AND dep.source_entity_id = e.id
+						JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+						WHERE dep.agent_id = e.agent_id
+						  AND COALESCE(dep.status, 'active') = 'active'
+						  AND COALESCE(dst.status, 'active') = 'active'
+						  AND dep.source_entity_id = e.id
 					) AS outgoing_dependency_count,
 					(
 						SELECT COUNT(*) FROM entity_dependencies dep
-						WHERE dep.agent_id = e.agent_id AND dep.target_entity_id = e.id
+						JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+						WHERE dep.agent_id = e.agent_id
+						  AND COALESCE(dep.status, 'active') = 'active'
+						  AND COALESCE(src.status, 'active') = 'active'
+						  AND dep.target_entity_id = e.id
 					) AS incoming_dependency_count
 				 FROM entities e
-				 WHERE e.id = ? AND e.agent_id = ?`,
+				 WHERE e.id = ? AND e.agent_id = ?
+				   AND COALESCE(e.status, 'active') = 'active'`,
 			)
 			.get(entityId, agentId) as Record<string, unknown> | undefined;
 
@@ -1462,6 +1524,7 @@ export function getEntityAspectsWithCounts(
 				 LEFT JOIN entity_attributes attr
 				   ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
 				 WHERE asp.entity_id = ? AND asp.agent_id = ?
+				   AND COALESCE(asp.status, 'active') = 'active'
 				 GROUP BY asp.id
 				 ORDER BY asp.weight DESC, asp.name ASC`,
 			)
@@ -1488,7 +1551,14 @@ export function getAttributesForAspectFiltered(
 	},
 ): readonly EntityAttribute[] {
 	return accessor.withReadDb((db) => {
-		const conditions = ["asp.entity_id = ?", "asp.id = ?", "asp.agent_id = ?", "ea.agent_id = ?"];
+		const conditions = [
+			"asp.entity_id = ?",
+			"asp.id = ?",
+			"asp.agent_id = ?",
+			"ea.agent_id = ?",
+			"COALESCE(e.status, 'active') = 'active'",
+			"COALESCE(asp.status, 'active') = 'active'",
+		];
 		const args: Array<string | number> = [params.entityId, params.aspectId, params.agentId, params.agentId];
 		if (params.kind) {
 			conditions.push("ea.kind = ?");
@@ -1504,6 +1574,7 @@ export function getAttributesForAspectFiltered(
 				`SELECT ea.*
 				 FROM entity_attributes ea
 				 JOIN entity_aspects asp ON asp.id = ea.aspect_id
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 				 WHERE ${conditions.join(" AND ")}
 				 ORDER BY ea.importance DESC, ea.created_at DESC
 				 LIMIT ? OFFSET ?`,
@@ -1540,6 +1611,9 @@ export function getEntityDependenciesDetailed(
 				 JOIN entities dst ON dst.id = dep.target_entity_id
 				 WHERE dep.agent_id = ?
 				   AND (${directionClauses.join(" OR ")})
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'
 				 ORDER BY dep.strength DESC, dep.updated_at DESC`,
 			)
 			.all(
@@ -1576,37 +1650,72 @@ export function getKnowledgeStats(accessor: DbAccessor, agentId: string): Knowle
 				`SELECT COUNT(DISTINCT mem.memory_id) as n
 				 FROM memory_entity_mentions mem
 				 JOIN entities e ON e.id = mem.entity_id AND e.agent_id = ?
-				 JOIN memories m ON m.id = mem.memory_id AND m.is_deleted = 0`,
+				 JOIN memories m ON m.id = mem.memory_id AND m.is_deleted = 0
+				 WHERE COALESCE(e.status, 'active') = 'active'`,
 			)
 			.get(agentId) as { n: number };
-		const entityCount = db.prepare("SELECT COUNT(*) as n FROM entities WHERE agent_id = ?").get(agentId) as {
-			n: number;
-		};
-		const aspectCount = db.prepare("SELECT COUNT(*) as n FROM entity_aspects WHERE agent_id = ?").get(agentId) as {
-			n: number;
-		};
+		const entityCount = db
+			.prepare("SELECT COUNT(*) as n FROM entities WHERE agent_id = ? AND COALESCE(status, 'active') = 'active'")
+			.get(agentId) as { n: number };
+		const aspectCount = db
+			.prepare(
+				`SELECT COUNT(*) as n
+				 FROM entity_aspects asp
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE asp.agent_id = ?
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
+			)
+			.get(agentId) as { n: number };
 		const attributeCount = db
 			.prepare(
-				`SELECT COUNT(*) as n FROM entity_attributes
-				 WHERE agent_id = ? AND kind = 'attribute' AND status = 'active'`,
+				`SELECT COUNT(*) as n
+				 FROM entity_attributes attr
+				 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE attr.agent_id = ?
+				   AND attr.kind = 'attribute'
+				   AND attr.status = 'active'
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
 			)
 			.get(agentId) as { n: number };
 		const constraintCount = db
 			.prepare(
-				`SELECT COUNT(*) as n FROM entity_attributes
-				 WHERE agent_id = ? AND kind = 'constraint' AND status = 'active'`,
+				`SELECT COUNT(*) as n
+				 FROM entity_attributes attr
+				 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE attr.agent_id = ?
+				   AND attr.kind = 'constraint'
+				   AND attr.status = 'active'
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
 			)
 			.get(agentId) as { n: number };
 		const dependencyCount = db
-			.prepare("SELECT COUNT(*) as n FROM entity_dependencies WHERE agent_id = ?")
+			.prepare(
+				`SELECT COUNT(*) as n
+				 FROM entity_dependencies dep
+				 JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
+				 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
+				 WHERE dep.agent_id = ?
+				   AND COALESCE(dep.status, 'active') = 'active'
+				   AND COALESCE(src.status, 'active') = 'active'
+				   AND COALESCE(dst.status, 'active') = 'active'`,
+			)
 			.get(agentId) as { n: number };
 		const assignedMemoryCount = db
 			.prepare(
-				`SELECT COUNT(DISTINCT memory_id) as n
-				 FROM entity_attributes
-				 WHERE agent_id = ?
-				   AND status = 'active'
-				   AND memory_id IS NOT NULL`,
+				`SELECT COUNT(DISTINCT attr.memory_id) as n
+				 FROM entity_attributes attr
+				 JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE attr.agent_id = ?
+				   AND attr.status = 'active'
+				   AND attr.memory_id IS NOT NULL
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
 			)
 			.get(agentId) as { n: number };
 		const feedbackStats = db
@@ -1617,10 +1726,13 @@ export function getKnowledgeStats(accessor: DbAccessor, agentId: string): Knowle
 					COUNT(CASE WHEN weight >= 1.0 THEN 1 END) AS max_weight_count,
 					COUNT(CASE WHEN weight <= 0.1 THEN 1 END) AS min_weight_count,
 					COUNT(CASE
-						WHEN updated_at >= datetime('now', '-7 days') THEN 1
+						WHEN asp.updated_at >= datetime('now', '-7 days') THEN 1
 					END) AS updated_last_7_days
-				 FROM entity_aspects
-				 WHERE agent_id = ?`,
+				 FROM entity_aspects asp
+				 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+				 WHERE asp.agent_id = ?
+				   AND COALESCE(e.status, 'active') = 'active'
+				   AND COALESCE(asp.status, 'active') = 'active'`,
 			)
 			.get(agentId) as {
 			aspect_count: number;
@@ -1778,12 +1890,24 @@ export interface ConstellationAttribute {
 	readonly kind: "attribute" | "constraint";
 	readonly importance: number;
 	readonly memoryId: string | null;
+	readonly status: AttributeStatus;
+	readonly version: number;
+	readonly versionRootId: string | null;
+	readonly previousAttributeId: string | null;
+	readonly groupKey: string | null;
+	readonly claimKey: string | null;
+	readonly sourceKind: string | null;
+	readonly sourcePath: string | null;
+	readonly proposalId: string | null;
+	readonly proposalEvidenceCount: number;
 }
 
 export interface ConstellationAspect {
 	readonly id: string;
 	readonly name: string;
 	readonly weight: number;
+	readonly status: "active" | "archived";
+	readonly proposalId: string | null;
 	readonly attributes: readonly ConstellationAttribute[];
 }
 
@@ -1793,6 +1917,8 @@ export interface ConstellationEntity {
 	readonly entityType: string;
 	readonly mentions: number;
 	readonly pinned: boolean;
+	readonly status: "active" | "archived";
+	readonly proposalId: string | null;
 	readonly aspects: readonly ConstellationAspect[];
 }
 
@@ -1801,11 +1927,57 @@ export interface ConstellationDependency {
 	readonly targetEntityId: string;
 	readonly dependencyType: string;
 	readonly strength: number;
+	readonly status: "active" | "archived";
+	readonly proposalId: string | null;
+	readonly proposalEvidenceCount: number;
+}
+
+export interface ConstellationProposal {
+	readonly id: string;
+	readonly operation: string;
+	readonly confidence: number;
+	readonly rationale: string;
+	readonly evidenceCount: number;
+	readonly sourceKind: string | null;
+	readonly sourcePath: string | null;
+	readonly updatedAt: string;
+	readonly targetEntityId: string | null;
+	readonly targetEntityName: string | null;
+	readonly targetAspectName: string | null;
+	readonly preview: string | null;
+}
+
+export interface ConstellationDreamingSummary {
+	readonly tokensSinceLastPass: number;
+	readonly consecutiveFailures: number;
+	readonly lastPassAt: string | null;
+	readonly lastPassId: string | null;
+	readonly lastPassMode: string | null;
+	readonly latestPass: {
+		readonly id: string;
+		readonly mode: string;
+		readonly status: string;
+		readonly completedAt: string | null;
+		readonly mutationsApplied: number | null;
+		readonly mutationsSkipped: number | null;
+		readonly mutationsFailed: number | null;
+	} | null;
+}
+
+export interface ConstellationProposalSummary {
+	readonly pending: number;
+	readonly appliedRecent: number;
+	readonly failedRecent: number;
 }
 
 export interface ConstellationGraph {
 	readonly entities: readonly ConstellationEntity[];
 	readonly dependencies: readonly ConstellationDependency[];
+	readonly proposals: readonly ConstellationProposal[];
+	readonly metadata: {
+		readonly dreaming: ConstellationDreamingSummary;
+		readonly proposals: ConstellationProposalSummary;
+	};
 }
 
 export interface ConstellationGraphOptions {
@@ -1823,6 +1995,123 @@ function placeholders(count: number): string {
 	return Array.from({ length: count }, () => "?").join(", ");
 }
 
+function parseJsonRecord(value: unknown): Record<string, unknown> {
+	if (typeof value !== "string") return {};
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: {};
+	} catch {
+		return {};
+	}
+}
+
+function readStringValue(record: Record<string, unknown>, keys: readonly string[]): string | null {
+	for (const key of keys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim().length > 0) return value.trim();
+	}
+	return null;
+}
+
+function previewFromProposalPayload(payload: Record<string, unknown>): string | null {
+	const value = readStringValue(payload, ["value", "content", "name", "target", "reason"]);
+	if (!value) return null;
+	return value.length > 140 ? `${value.slice(0, 137)}...` : value;
+}
+
+function resolveProposalTargetEntity(
+	payload: Record<string, unknown>,
+	entitiesById: ReadonlyMap<string, string>,
+	entitiesByName: ReadonlyMap<string, string>,
+): { readonly id: string | null; readonly name: string | null } {
+	const id = readStringValue(payload, ["entity_id", "target_entity_id", "target_id"]);
+	if (id && entitiesById.has(id)) return { id, name: entitiesById.get(id) ?? null };
+
+	const name = readStringValue(payload, ["entity", "target_entity", "name", "target"]);
+	if (!name) return { id: null, name: null };
+	return { id: entitiesByName.get(toCanonicalName(name)) ?? null, name };
+}
+
+function getConstellationDreamingSummary(db: ReadDb, agentId: string): ConstellationDreamingSummary {
+	const state = db
+		.prepare(
+			`SELECT tokens_since_last_pass, consecutive_failures, last_pass_at, last_pass_id, last_pass_mode
+			 FROM dreaming_state WHERE agent_id = ?`,
+		)
+		.get(agentId) as
+		| {
+				tokens_since_last_pass: number;
+				consecutive_failures: number;
+				last_pass_at: string | null;
+				last_pass_id: string | null;
+				last_pass_mode: string | null;
+		  }
+		| undefined;
+	const latestPass = db
+		.prepare(
+			`SELECT id, mode, status, completed_at, mutations_applied, mutations_skipped, mutations_failed
+			 FROM dreaming_passes
+			 WHERE agent_id = ?
+			 ORDER BY created_at DESC
+			 LIMIT 1`,
+		)
+		.get(agentId) as
+		| {
+				id: string;
+				mode: string;
+				status: string;
+				completed_at: string | null;
+				mutations_applied: number | null;
+				mutations_skipped: number | null;
+				mutations_failed: number | null;
+		  }
+		| undefined;
+
+	return {
+		tokensSinceLastPass: Math.max(0, state?.tokens_since_last_pass ?? 0),
+		consecutiveFailures: Math.max(0, state?.consecutive_failures ?? 0),
+		lastPassAt: state?.last_pass_at ?? null,
+		lastPassId: state?.last_pass_id ?? null,
+		lastPassMode: state?.last_pass_mode ?? null,
+		latestPass: latestPass
+			? {
+					id: latestPass.id,
+					mode: latestPass.mode,
+					status: latestPass.status,
+					completedAt: latestPass.completed_at,
+					mutationsApplied: latestPass.mutations_applied,
+					mutationsSkipped: latestPass.mutations_skipped,
+					mutationsFailed: latestPass.mutations_failed,
+				}
+			: null,
+	};
+}
+
+function getConstellationProposalSummary(db: ReadDb, agentId: string): ConstellationProposalSummary {
+	const pending = db
+		.prepare("SELECT COUNT(*) AS n FROM ontology_proposals WHERE agent_id = ? AND status = 'pending'")
+		.get(agentId) as { n: number } | undefined;
+	const applied = db
+		.prepare(
+			`SELECT COUNT(*) AS n FROM ontology_proposals
+			 WHERE agent_id = ? AND status = 'applied' AND updated_at >= datetime('now', '-7 days')`,
+		)
+		.get(agentId) as { n: number } | undefined;
+	const failed = db
+		.prepare(
+			`SELECT COUNT(*) AS n FROM ontology_proposals
+			 WHERE agent_id = ? AND status = 'failed' AND updated_at >= datetime('now', '-7 days')`,
+		)
+		.get(agentId) as { n: number } | undefined;
+	return {
+		pending: Math.max(0, pending?.n ?? 0),
+		appliedRecent: Math.max(0, applied?.n ?? 0),
+		failedRecent: Math.max(0, failed?.n ?? 0),
+	};
+}
+
 export function getKnowledgeGraphForConstellation(
 	accessor: DbAccessor,
 	agentId: string,
@@ -1830,7 +2119,7 @@ export function getKnowledgeGraphForConstellation(
 ): ConstellationGraph {
 	const limit = boundedInteger(options.limit, 150, 1, 300);
 	const maxAspectsPerEntity = boundedInteger(options.maxAspectsPerEntity, 6, 1, 25);
-	const maxAttributesPerAspect = boundedInteger(options.maxAttributesPerAspect, 4, 1, 20);
+	const maxAttributesPerAspect = boundedInteger(options.maxAttributesPerAspect, 4, 1, 250);
 	const dependencyLimit = boundedInteger(options.dependencyLimit, 500, 1, 2000);
 
 	return accessor.withReadDb((db) => {
@@ -1840,9 +2129,10 @@ export function getKnowledgeGraphForConstellation(
 		// event-loop/RSS spike big enough for systemd to SIGKILL the daemon.
 		const entityRows = db
 			.prepare(
-				`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned
+				`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id
 				 FROM entities e
 				 WHERE e.agent_id = ?
+				   AND COALESCE(e.status, 'active') = 'active'
 				   AND (e.mentions > 0 OR e.pinned = 1)
 				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC
 				 LIMIT ?`,
@@ -1852,19 +2142,34 @@ export function getKnowledgeGraphForConstellation(
 		const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
 
 		if (entityIds.length === 0) {
-			return { entities: [], dependencies: [] };
+			return {
+				entities: [],
+				dependencies: [],
+				proposals: [],
+				metadata: {
+					dreaming: getConstellationDreamingSummary(db, agentId),
+					proposals: getConstellationProposalSummary(db, agentId),
+				},
+			};
 		}
 
 		const entityIdSet = new Set(entityIds);
 		const entityIdPlaceholders = placeholders(entityIds.length);
 		const aspectRows = db
 			.prepare(
-				`SELECT id, entity_id, name, weight
-				 FROM entity_aspects
-				 WHERE agent_id = ? AND entity_id IN (${entityIdPlaceholders})
+				`SELECT id, entity_id, name, weight, status, proposal_id
+				 FROM (
+				   SELECT id, entity_id, name, weight, status, proposal_id,
+				          ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY weight DESC, name ASC) AS rn
+				   FROM entity_aspects
+				   WHERE agent_id = ?
+				     AND COALESCE(status, 'active') = 'active'
+				     AND entity_id IN (${entityIdPlaceholders})
+				 ) ranked_aspects
+				 WHERE rn <= ?
 				 ORDER BY entity_id ASC, weight DESC, name ASC`,
 			)
-			.all(agentId, ...entityIds) as Array<Record<string, unknown>>;
+			.all(agentId, ...entityIds, maxAspectsPerEntity) as Array<Record<string, unknown>>;
 
 		const aspectsByEntity = new Map<
 			string,
@@ -1872,6 +2177,8 @@ export function getKnowledgeGraphForConstellation(
 				id: string;
 				name: string;
 				weight: number;
+				status: "active" | "archived";
+				proposalId: string | null;
 			}>
 		>();
 		const aspectIds: string[] = [];
@@ -1887,6 +2194,8 @@ export function getKnowledgeGraphForConstellation(
 				id: aspectId,
 				name: row.name as string,
 				weight: Number(row.weight ?? 0.5),
+				status: row.status === "archived" ? "archived" : "active",
+				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
 			});
 			aspectsByEntity.set(entityId, bucket);
 		}
@@ -1897,12 +2206,23 @@ export function getKnowledgeGraphForConstellation(
 			const aspectIdPlaceholders = placeholders(aspectIds.length);
 			const attrRows = db
 				.prepare(
-					`SELECT id, aspect_id, content, kind, importance, memory_id
-					 FROM entity_attributes
-					 WHERE agent_id = ? AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
+					`SELECT id, aspect_id, content, kind, importance, memory_id, status,
+					        version, version_root_id, previous_attribute_id,
+					        group_key, claim_key, source_kind, source_path,
+					        proposal_id, proposal_evidence
+					 FROM (
+					   SELECT id, aspect_id, content, kind, importance, memory_id, status,
+					          version, version_root_id, previous_attribute_id,
+					          group_key, claim_key, source_kind, source_path,
+					          proposal_id, proposal_evidence,
+					          ROW_NUMBER() OVER (PARTITION BY aspect_id ORDER BY importance DESC, id ASC) AS rn
+					   FROM entity_attributes
+					   WHERE agent_id = ? AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
+					 ) ranked_attributes
+					 WHERE rn <= ?
 					 ORDER BY aspect_id ASC, importance DESC`,
 				)
-				.all(agentId, ...aspectIds) as Array<Record<string, unknown>>;
+				.all(agentId, ...aspectIds, maxAttributesPerAspect) as Array<Record<string, unknown>>;
 
 			for (const row of attrRows) {
 				const aspectId = row.aspect_id as string;
@@ -1915,34 +2235,54 @@ export function getKnowledgeGraphForConstellation(
 					kind: row.kind as "attribute" | "constraint",
 					importance: Number(row.importance ?? 0.5),
 					memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
+					status: row.status as AttributeStatus,
+					version: typeof row.version === "number" ? row.version : 1,
+					versionRootId: typeof row.version_root_id === "string" ? row.version_root_id : null,
+					previousAttributeId: typeof row.previous_attribute_id === "string" ? row.previous_attribute_id : null,
+					groupKey: typeof row.group_key === "string" ? row.group_key : null,
+					claimKey: typeof row.claim_key === "string" ? row.claim_key : null,
+					sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+					sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+					proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
 				});
 				attrsByAspect.set(aspectId, bucket);
 			}
 		}
 
+		const entitiesById = new Map<string, string>();
+		const entitiesByName = new Map<string, string>();
 		const entities: ConstellationEntity[] = entityRows.map((row) => {
 			const eid = row.id as string;
+			const name = row.name as string;
+			entitiesById.set(eid, name);
+			entitiesByName.set(toCanonicalName(name), eid);
 			const aspects: ConstellationAspect[] = (aspectsByEntity.get(eid) ?? []).map((asp) => ({
 				id: asp.id,
 				name: asp.name,
 				weight: asp.weight,
+				status: asp.status,
+				proposalId: asp.proposalId,
 				attributes: attrsByAspect.get(asp.id) ?? [],
 			}));
 			return {
 				id: eid,
-				name: row.name as string,
+				name,
 				entityType: row.entity_type as string,
 				mentions: typeof row.mentions === "number" ? row.mentions : 0,
 				pinned: row.pinned === 1,
+				status: row.status === "archived" ? "archived" : "active",
+				proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
 				aspects,
 			};
 		});
 
 		const depRows = db
 			.prepare(
-				`SELECT source_entity_id, target_entity_id, dependency_type, strength
+				`SELECT source_entity_id, target_entity_id, dependency_type, strength, status, proposal_id, proposal_evidence
 				 FROM entity_dependencies
 				 WHERE agent_id = ?
+				   AND COALESCE(status, 'active') = 'active'
 				   AND source_entity_id IN (${entityIdPlaceholders})
 				   AND target_entity_id IN (${entityIdPlaceholders})
 				 ORDER BY strength DESC
@@ -1955,9 +2295,49 @@ export function getKnowledgeGraphForConstellation(
 			targetEntityId: row.target_entity_id as string,
 			dependencyType: row.dependency_type as string,
 			strength: Number(row.strength ?? 0.5),
+			status: row.status === "archived" ? "archived" : "active",
+			proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+			proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
 		}));
 
-		return { entities, dependencies };
+		const proposalRows = db
+			.prepare(
+				`SELECT id, operation, payload, confidence, rationale, evidence,
+				        source_kind, source_path, updated_at
+				 FROM ontology_proposals
+				 WHERE agent_id = ? AND status = 'pending'
+				 ORDER BY updated_at DESC
+				 LIMIT 80`,
+			)
+			.all(agentId) as Array<Record<string, unknown>>;
+		const proposals: ConstellationProposal[] = proposalRows.map((row) => {
+			const payload = parseJsonRecord(row.payload);
+			const target = resolveProposalTargetEntity(payload, entitiesById, entitiesByName);
+			return {
+				id: row.id as string,
+				operation: row.operation as string,
+				confidence: Number(row.confidence ?? 0),
+				rationale: typeof row.rationale === "string" ? row.rationale : "",
+				evidenceCount: parseJsonArray(row.evidence).length,
+				sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+				sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+				updatedAt: row.updated_at as string,
+				targetEntityId: target.id,
+				targetEntityName: target.name,
+				targetAspectName: readStringValue(payload, ["aspect", "target_aspect", "aspect_name"]),
+				preview: previewFromProposalPayload(payload),
+			};
+		});
+
+		return {
+			entities,
+			dependencies,
+			proposals,
+			metadata: {
+				dreaming: getConstellationDreamingSummary(db, agentId),
+				proposals: getConstellationProposalSummary(db, agentId),
+			},
+		};
 	});
 }
 

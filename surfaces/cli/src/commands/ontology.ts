@@ -100,6 +100,25 @@ interface ClaimEvidenceResponse {
 	readonly items?: readonly ClaimEvidenceValue[];
 }
 
+interface EpistemicAssertionItem {
+	readonly id?: string;
+	readonly subjectEntityName?: string | null;
+	readonly predicate?: string;
+	readonly content?: string;
+	readonly speaker?: string | null;
+	readonly assertedAt?: string;
+	readonly confidence?: number;
+	readonly status?: string;
+	readonly sourceKind?: string | null;
+	readonly sourceId?: string | null;
+	readonly sourcePath?: string | null;
+	readonly claimAttributeId?: string | null;
+}
+
+interface EpistemicAssertionsResponse {
+	readonly items?: readonly EpistemicAssertionItem[];
+}
+
 interface ConflictValue {
 	readonly proposalId?: string;
 	readonly value?: string;
@@ -121,20 +140,48 @@ interface ConflictsResponse {
 interface RepairDuplicateEntity {
 	readonly name?: string;
 	readonly id?: string;
+	readonly entityType?: string;
 	readonly mentions?: number;
+	readonly pinned?: boolean;
 }
 
 interface RepairDuplicateItem {
 	readonly canonicalName?: string;
 	readonly target?: RepairDuplicateEntity;
 	readonly sources?: readonly RepairDuplicateEntity[];
+	readonly impact?: EntityMergeImpact;
+	readonly warnings?: readonly string[];
+	readonly blocked?: boolean;
+	readonly risk?: string;
 	readonly rationale?: string;
 }
 
 interface RepairDuplicatesResponse {
 	readonly items?: readonly RepairDuplicateItem[];
 	readonly writtenCount?: number;
+	readonly skippedCount?: number;
 	readonly dryRun?: boolean;
+}
+
+interface EntityMergeImpact {
+	readonly sourceMentions?: number;
+	readonly memoryMentions?: number;
+	readonly aspects?: number;
+	readonly attributes?: number;
+	readonly dependencies?: number;
+	readonly relations?: number;
+}
+
+interface EntityMergePlanResponse {
+	readonly target?: RepairDuplicateEntity;
+	readonly sources?: readonly RepairDuplicateEntity[];
+	readonly impact?: EntityMergeImpact;
+	readonly warnings?: readonly string[];
+	readonly blocked?: boolean;
+	readonly risk?: string;
+	readonly rationale?: string;
+	readonly dryRun?: boolean;
+	readonly proposal?: ProposalListItem;
 }
 
 interface ProposalImportInput {
@@ -148,8 +195,11 @@ interface ProposalImportInput {
 
 interface ExtractionResponse {
 	readonly proposals?: readonly ProposalImportInput[];
+	readonly assertions?: readonly EpistemicAssertionItem[];
 	readonly count?: number;
 	readonly writtenCount?: number;
+	readonly assertionCount?: number;
+	readonly writtenAssertionCount?: number;
 	readonly dryRun?: boolean;
 	readonly extractionMode?: string;
 	readonly providerName?: string | null;
@@ -226,6 +276,31 @@ function readEvidenceFile(path: string | undefined): readonly unknown[] | undefi
 
 function readProposalFile(path: string): readonly ProposalImportInput[] {
 	return normalizeProposalFile(readJsonFile(path));
+}
+
+function readTextFileOrStdin(path: string): string {
+	if (path === "-") return readFileSync(0, "utf8");
+	return readFileSync(path, "utf8");
+}
+
+function readOperationJsonl(path: string): readonly Record<string, unknown>[] {
+	return readTextFileOrStdin(path)
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+		.map((line, index) => {
+			try {
+				const parsed: unknown = JSON.parse(line);
+				if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+					return parsed as Record<string, unknown>;
+				}
+				throw new Error("line is not an object");
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				console.error(chalk.red(`Invalid JSONL operation on line ${index + 1}: ${message}`));
+				process.exit(1);
+			}
+		});
 }
 
 function proposalInput(
@@ -512,6 +587,30 @@ function printClaimEvidence(data: unknown): void {
 	console.log();
 }
 
+function printAssertions(data: unknown, title = "Epistemic Assertions"): void {
+	const record = asRecord(data);
+	const items = (((record as EpistemicAssertionsResponse).items as readonly EpistemicAssertionItem[] | undefined) ??
+		(record.id ? ([record as EpistemicAssertionItem] as const) : [])) as readonly EpistemicAssertionItem[];
+	if (items.length === 0) {
+		console.log(chalk.dim("  No epistemic assertions found"));
+		return;
+	}
+	console.log(chalk.bold(`\n  ${title}\n`));
+	for (const item of items) {
+		const confidence = typeof item.confidence === "number" ? ` · ${item.confidence.toFixed(2)}` : "";
+		const status = item.status ? chalk.dim(` ${item.status}`) : "";
+		console.log(
+			`  ${chalk.cyan(item.id ?? "unknown")}${status} ${chalk.yellow(item.predicate ?? "claims")}${confidence}`,
+		);
+		const actor = item.speaker ?? item.sourcePath ?? item.sourceId ?? item.sourceKind;
+		const when = item.assertedAt ? ` · ${item.assertedAt}` : "";
+		console.log(chalk.dim(`    ${item.subjectEntityName ?? "unknown"}${actor ? ` · ${actor}` : ""}${when}`));
+		if (item.content) console.log(chalk.dim(`    ${item.content}`));
+		if (item.claimAttributeId) console.log(chalk.dim(`    claim ${item.claimAttributeId}`));
+	}
+	console.log();
+}
+
 function printConflicts(data: unknown): void {
 	const items = ((asRecord(data) as ConflictsResponse).items ?? []) as readonly ConflictItem[];
 	if (items.length === 0) {
@@ -536,20 +635,66 @@ function printDuplicateRepairs(data: unknown): void {
 	const record = asRecord(data) as RepairDuplicatesResponse;
 	const items = record.items ?? [];
 	const writtenCount = record.writtenCount ?? 0;
+	const skippedCount = record.skippedCount ?? 0;
 	if (items.length === 0) {
 		console.log(chalk.dim("  No duplicate entity merge candidates found"));
 		return;
 	}
 
-	const mode = record.dryRun === false ? "Duplicate Merge Proposals" : "Duplicate Merge Candidates";
+	const mode = record.dryRun === false ? "Duplicate Merge Refactor Proposals" : "Duplicate Merge Candidates";
 	console.log(chalk.bold(`\n  ${mode}\n`));
 	for (const item of items) {
 		const target = item.target?.name ?? "unknown";
 		const sources = (item.sources ?? []).map((source) => source.name ?? source.id ?? "unknown").join(", ");
-		console.log(`  ${chalk.yellow(item.canonicalName ?? "unknown")} ${chalk.cyan(target)} <- ${sources}`);
+		const marker = item.blocked ? chalk.red("blocked") : item.risk ? chalk.dim(item.risk) : "";
+		console.log(`  ${chalk.yellow(item.canonicalName ?? "unknown")} ${chalk.cyan(target)} <- ${sources} ${marker}`);
+		if (item.impact) {
+			console.log(
+				chalk.dim(
+					`    ${item.impact.aspects ?? 0} aspects · ${item.impact.attributes ?? 0} attributes · ${
+						item.impact.memoryMentions ?? 0
+					} mentions`,
+				),
+			);
+		}
+		for (const warning of item.warnings ?? []) console.log(chalk.yellow(`    warning ${warning}`));
 		if (item.rationale) console.log(chalk.dim(`    ${item.rationale}`));
 	}
-	if (writtenCount > 0) console.log(chalk.green(`\n  Created ${writtenCount} pending merge proposals`));
+	if (writtenCount > 0) console.log(chalk.green(`\n  Created ${writtenCount} pending merge refactor proposals`));
+	if (skippedCount > 0) console.log(chalk.yellow(`  Skipped ${skippedCount} blocked merge candidate(s)`));
+	console.log();
+}
+
+function printEntityMergePlan(data: unknown): void {
+	const result = asRecord(data) as EntityMergePlanResponse;
+	const target = result.target?.name ?? result.target?.id ?? "unknown";
+	const sources = result.sources ?? [];
+	const title = result.blocked
+		? chalk.red("Entity Merge Blocked")
+		: result.proposal
+			? "Entity Merge Refactor Proposal"
+			: "Entity Merge Plan";
+	console.log(chalk.bold(`\n  ${title}\n`));
+	console.log(
+		`  ${chalk.cyan(target)} <- ${sources.map((source) => source.name ?? source.id ?? "unknown").join(", ")}`,
+	);
+	if (result.target?.id) console.log(chalk.dim(`    target ${result.target.id}`));
+	for (const source of sources) {
+		if (source.id)
+			console.log(chalk.dim(`    source ${source.id}${source.entityType ? ` (${source.entityType})` : ""}`));
+	}
+	if (result.impact) {
+		console.log(
+			chalk.dim(
+				`    ${result.impact.aspects ?? 0} aspects · ${result.impact.attributes ?? 0} attributes · ${
+					result.impact.dependencies ?? 0
+				} links · ${result.impact.memoryMentions ?? 0} mentions`,
+			),
+		);
+	}
+	for (const warning of result.warnings ?? []) console.log(chalk.yellow(`    warning ${warning}`));
+	if (result.rationale) console.log(chalk.dim(`    ${result.rationale}`));
+	if (result.proposal?.id) console.log(chalk.green(`\n  Created pending proposal ${result.proposal.id}`));
 	console.log();
 }
 
@@ -562,6 +707,13 @@ function printExtraction(data: unknown): void {
 	console.log(chalk.dim(`  mode ${result.extractionMode ?? "unknown"}`));
 	if (result.providerName) console.log(chalk.dim(`  provider ${result.providerName}`));
 	console.log(chalk.dim(`  ${result.writtenCount ?? 0} written · ${result.count ?? proposals.length} candidate(s)`));
+	if ((result.assertionCount ?? 0) > 0 || (result.writtenAssertionCount ?? 0) > 0) {
+		console.log(
+			chalk.dim(
+				`  ${result.writtenAssertionCount ?? 0} assertions written · ${result.assertionCount ?? 0} assertion candidate(s)`,
+			),
+		);
+	}
 	for (const warning of result.warnings ?? []) {
 		console.log(chalk.yellow(`  warning ${warning}`));
 	}
@@ -614,6 +766,57 @@ function printConsolidation(data: unknown): void {
 
 function addCommonOptions(cmd: Command): Command {
 	return cmd.option("--agent <name>", "Agent scope, default default").option("--json", "Output as JSON");
+}
+
+function addOperationOptions(cmd: Command): Command {
+	return addCommonOptions(cmd)
+		.option("--dry-run", "Validate and preview without writing")
+		.option("--propose", "Create a pending proposal for large refactor review instead of applying")
+		.option("--actor <name>", "Audit actor", "operator")
+		.option("--reason <text>", "Audit reason")
+		.option("--evidence-file <path>", "JSON evidence file, array or single object");
+}
+
+function operationBody(
+	operation: string,
+	payload: Record<string, unknown>,
+	options: Record<string, unknown>,
+): Record<string, unknown> {
+	return {
+		agent_id: options.agent,
+		actor: options.actor,
+		operation,
+		payload,
+		reason: options.reason,
+		evidence: readEvidenceFile(typeof options.evidenceFile === "string" ? options.evidenceFile : undefined),
+		dry_run: options.dryRun === true,
+		propose: options.propose === true,
+	};
+}
+
+async function postOperation(
+	deps: OntologyDeps,
+	operation: string,
+	payload: Record<string, unknown>,
+	options: Record<string, unknown>,
+): Promise<unknown> {
+	if (options.dryRun && options.propose) {
+		console.error(chalk.red("--dry-run and --propose cannot be used together"));
+		process.exit(1);
+	}
+	return apiPost(deps, "/api/ontology/operations/apply", operationBody(operation, payload, options));
+}
+
+function printOperationResult(data: unknown, options: Record<string, unknown>, label: string): void {
+	if (options.json) {
+		console.log(JSON.stringify(data, null, 2));
+		return;
+	}
+	const record = asRecord(data);
+	const proposal = asRecord(record.proposal);
+	const id = typeof proposal.id === "string" ? proposal.id : "";
+	const mode = record.dryRun === true ? "Dry-run validated" : record.proposed === true ? "Proposed" : "Applied";
+	console.log(chalk.green(`${mode} ${label}${id ? ` (${id})` : ""}`));
 }
 
 export function registerOntologyCommands(program: Command, deps: OntologyDeps): void {
@@ -715,11 +918,214 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		else printConflicts(data);
 	});
 
+	addCommonOptions(
+		ontology
+			.command("assertions")
+			.description("List source-attributed epistemic assertions")
+			.option("--entity <name>", "Filter by entity name")
+			.option("--entity-id <id>", "Filter by entity id")
+			.option("--predicate <predicate>", "Filter by predicate")
+			.option("--status <status>", "Filter by status", "active")
+			.option("--speaker <name>", "Filter by speaker")
+			.option("--source-kind <kind>", "Filter by source kind")
+			.option("--source-id <id>", "Filter by source id")
+			.option("--query <text>", "Filter assertion text")
+			.option("-l, --limit <n>", "Max assertions to return", Number.parseInt),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		for (const [key, value] of [
+			["entity", options.entity],
+			["entity_id", options.entityId],
+			["predicate", options.predicate],
+			["status", options.status],
+			["speaker", options.speaker],
+			["source_kind", options.sourceKind],
+			["source_id", options.sourceId],
+			["query", options.query],
+		] as const) {
+			if (typeof value === "string" && value.length > 0) params.set(key, value);
+		}
+		if (typeof options.limit === "number") params.set("limit", String(options.limit));
+		appendAgent(params, options.agent);
+		const data = await apiGet(deps, "/api/ontology/assertions", params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data);
+	});
+
+	const assertion = ontology.command("assertion").description("Inspect and maintain epistemic assertions");
+
+	addCommonOptions(
+		assertion.command("show").description("Show one epistemic assertion").argument("<id>", "Assertion id"),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const data = await apiGet(deps, `/api/ontology/assertions/${encodeURIComponent(id)}`, params);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("create")
+			.description("Create a source-attributed epistemic assertion")
+			.option("--entity <name>", "Subject entity name")
+			.option("--entity-id <id>", "Subject entity id")
+			.requiredOption("--predicate <predicate>", "claims|believes|observed|decided|prefers|denies|questions")
+			.requiredOption("--content <text>", "Assertion content")
+			.option("--speaker <name>", "Speaker or claimant")
+			.option("--asserted-at <iso>", "When the assertion was made")
+			.option("--confidence <n>", "Assertion confidence", Number.parseFloat)
+			.option("--source-kind <kind>", "Evidence source kind")
+			.option("--source-id <id>", "Evidence source id")
+			.option("--source-path <path>", "Evidence source path")
+			.option("--source-root <path>", "Evidence source root")
+			.option("--claim-attribute-id <id>", "Applied claim attribute this assertion supports")
+			.option("--evidence-file <path>", "JSON evidence file, array or single object")
+			.option("--created-by <name>", "Audit creator", "operator"),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		if (!options.entity && !options.entityId) {
+			console.error(chalk.red("--entity or --entity-id is required"));
+			process.exit(1);
+		}
+		const body = {
+			agent_id: options.agent,
+			entity: options.entity,
+			entity_id: options.entityId,
+			predicate: options.predicate,
+			content: options.content,
+			speaker: options.speaker,
+			asserted_at: options.assertedAt,
+			confidence: options.confidence,
+			source_kind: options.sourceKind,
+			source_id: options.sourceId,
+			source_path: options.sourcePath,
+			source_root: options.sourceRoot,
+			claim_attribute_id: options.claimAttributeId,
+			evidence: readEvidenceFile(options.evidenceFile),
+			created_by: options.createdBy,
+		};
+		const data = await apiPost(deps, "/api/ontology/assertions", body);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Created Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("link-claim")
+			.description("Link an epistemic assertion to an applied claim attribute")
+			.argument("<id>", "Assertion id")
+			.requiredOption("--attribute-id <id>", "Claim attribute id"),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const query = params.toString();
+		const data = await apiPost(
+			deps,
+			`/api/ontology/assertions/${encodeURIComponent(id)}/link-claim${query ? `?${query}` : ""}`,
+			{ attribute_id: options.attributeId },
+		);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Linked Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("archive")
+			.description("Archive an epistemic assertion")
+			.argument("<id>", "Assertion id")
+			.option("--reason <text>", "Archive reason")
+			.option("--actor <name>", "Audit actor", "operator"),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const query = params.toString();
+		const data = await apiPost(
+			deps,
+			`/api/ontology/assertions/${encodeURIComponent(id)}/archive${query ? `?${query}` : ""}`,
+			{ reason: options.reason, actor: options.actor },
+		);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Archived Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("supersede")
+			.description("Supersede an epistemic assertion with a newer assertion")
+			.argument("<id>", "Assertion id")
+			.requiredOption("--content <text>", "Replacement assertion content")
+			.option("--predicate <predicate>", "Replacement predicate")
+			.option("--speaker <name>", "Speaker or claimant")
+			.option("--asserted-at <iso>", "When the replacement assertion was made")
+			.option("--confidence <n>", "Assertion confidence", Number.parseFloat)
+			.option("--source-kind <kind>", "Evidence source kind")
+			.option("--source-id <id>", "Evidence source id")
+			.option("--source-path <path>", "Evidence source path")
+			.option("--source-root <path>", "Evidence source root")
+			.option("--evidence-file <path>", "JSON evidence file, array or single object")
+			.option("--created-by <name>", "Audit creator", "operator"),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams();
+		appendAgent(params, options.agent);
+		const query = params.toString();
+		const data = await apiPost(
+			deps,
+			`/api/ontology/assertions/${encodeURIComponent(id)}/supersede${query ? `?${query}` : ""}`,
+			{
+				predicate: options.predicate,
+				content: options.content,
+				speaker: options.speaker,
+				asserted_at: options.assertedAt,
+				confidence: options.confidence,
+				source_kind: options.sourceKind,
+				source_id: options.sourceId,
+				source_path: options.sourcePath,
+				source_root: options.sourceRoot,
+				evidence: readEvidenceFile(options.evidenceFile),
+				created_by: options.createdBy,
+			},
+		);
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Superseding Epistemic Assertion");
+	});
+
+	addCommonOptions(
+		assertion
+			.command("import")
+			.description("Import epistemic assertions from JSON")
+			.requiredOption("--file <path>", "JSON assertion array or { assertions }")
+			.option("--created-by <name>", "Audit creator", "operator"),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const raw = readJsonFile(options.file);
+		const assertions = Array.isArray(raw) ? raw : (readArray(asRecord(raw), "assertions") ?? []);
+		const written: unknown[] = [];
+		for (const item of assertions) {
+			const assertionRecord = asRecord(item);
+			const data = await apiPost(deps, "/api/ontology/assertions", {
+				...assertionRecord,
+				agent_id: options.agent,
+				created_by: readString(assertionRecord, "created_by") ?? options.createdBy,
+			});
+			written.push(data);
+		}
+		const data = { items: written, count: written.length };
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printAssertions(data, "Imported Epistemic Assertions");
+	});
+
 	ontology
 		.command("extract")
 		.description("Extract candidate ontology proposals from a transcript or artifact")
 		.requiredOption("--from <source>", "Source ref, e.g. transcript:<id>, artifact:<path>, or source:<path>")
-		.option("--write-proposals", "Persist extracted candidates as pending proposals")
+		.option("--write-proposals", "Persist extracted candidates as pending proposals for explicit review")
+		.option("--write-assertions", "Persist extracted epistemic assertions")
 		.option("--dry-run", "Preview candidates without writing", true)
 		.option("--use-provider", "Use the configured memory extraction inference workload")
 		.option("--provider-timeout-ms <n>", "Provider extraction timeout in milliseconds", Number.parseInt)
@@ -737,6 +1143,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 					agent_id: options.agent,
 					from: options.from,
 					write_proposals: options.writeProposals === true,
+					...(options.writeAssertions === true ? { write_assertions: true } : {}),
 					use_provider: options.useProvider === true,
 					provider_timeout_ms: options.providerTimeoutMs,
 					provider_max_tokens: options.providerMaxTokens,
@@ -753,7 +1160,7 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		.command("consolidate")
 		.description("Consolidate pending ontology proposals into higher-confidence proposals")
 		.option("--proposals <status>", "Proposal status to consolidate", "pending")
-		.option("--write-proposals", "Persist consolidated candidates as pending proposals")
+		.option("--write-proposals", "Persist consolidated candidates as pending proposals for explicit review")
 		.option("--dry-run", "Preview consolidated candidates without writing", true)
 		.option("--use-provider", "Use the configured memory extraction inference workload")
 		.option("--provider-timeout-ms <n>", "Provider consolidation timeout in milliseconds", Number.parseInt)
@@ -855,13 +1262,460 @@ export function registerOntologyCommands(program: Command, deps: OntologyDeps): 
 		else printOntologyClaims(data);
 	});
 
+	const entity = ontology.command("entity").description("Apply audited entity operations");
+	addOperationOptions(
+		entity
+			.command("create")
+			.description("Create an entity")
+			.argument("<name>", "Entity name")
+			.requiredOption("--type <type>"),
+	).action(async (name: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "create_entity", { name, entity_type: options.type }, options);
+		printOperationResult(data, options, "entity create");
+	});
+	addOperationOptions(
+		entity
+			.command("rename")
+			.description("Rename an entity")
+			.argument("<selector>", "Entity id or exact canonical name")
+			.argument("<new-name>", "New entity name"),
+	).action(async (selector: string, newName: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "rename_entity", { selector, new_name: newName }, options);
+		printOperationResult(data, options, "entity rename");
+	});
+	addOperationOptions(
+		entity
+			.command("merge")
+			.description("Merge source entities into a target entity")
+			.argument("<target>", "Target entity selector")
+			.argument("<source...>", "Source entity selectors"),
+	).action(async (target: string, source: readonly string[], options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"merge_entities",
+			{ target_entity: target, source_entities: source },
+			options,
+		);
+		printOperationResult(data, options, "entity merge");
+	});
+	addCommonOptions(
+		entity
+			.command("merge-plan")
+			.description("Preview merge impact; optionally create a large-refactor proposal")
+			.argument("<target>", "Target entity selector")
+			.argument("<source...>", "Source entity selectors")
+			.option("--propose", "Create a pending merge proposal for large refactor review")
+			.option("--force", "Allow pinned or mixed-type source entities")
+			.option("--created-by <name>", "Audit creator", "ontology-merge-plan")
+			.option("--rationale <text>", "Short rationale")
+			.option("--evidence-file <path>", "JSON evidence file, array or single object"),
+	).action(async (target: string, source: readonly string[], options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await apiPost(deps, "/api/ontology/proposals/repair/merge-plan", {
+			agent_id: options.agent,
+			target_entity: target,
+			source_entities: source,
+			force: options.force === true,
+			write_proposal: options.propose === true,
+			created_by: options.createdBy,
+			rationale: options.rationale,
+			evidence: readEvidenceFile(typeof options.evidenceFile === "string" ? options.evidenceFile : undefined),
+		});
+		if (options.json) console.log(JSON.stringify(data, null, 2));
+		else printEntityMergePlan(data);
+	});
+	addOperationOptions(
+		entity
+			.command("archive")
+			.description("Archive an entity")
+			.argument("<selector>", "Entity id or exact canonical name"),
+	).action(async (selector: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "archive_entity", { selector, reason: options.reason }, options);
+		printOperationResult(data, options, "entity archive");
+	});
+
+	const claim = ontology.command("claim").description("Apply audited claim/version operations");
+	addOperationOptions(
+		claim
+			.command("set")
+			.description("Set the current value for a claim")
+			.argument("<entity>", "Entity selector")
+			.argument("<aspect>", "Aspect name")
+			.argument("<group>", "Group key")
+			.argument("<claim>", "Claim key")
+			.requiredOption("--value <text>", "Claim value")
+			.option("--kind <kind>", "attribute or constraint"),
+	).action(async (entityName: string, aspect: string, group: string, claimKey: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"set_claim_value",
+			{
+				entity: entityName,
+				aspect,
+				group_key: group,
+				claim_key: claimKey,
+				value: options.value,
+				kind: options.kind,
+			},
+			options,
+		);
+		printOperationResult(data, options, "claim set");
+	});
+	addCommonOptions(
+		claim
+			.command("versions")
+			.description("List versions for a claim")
+			.argument("<entity>", "Entity selector")
+			.argument("<aspect>", "Aspect name")
+			.argument("<group>", "Group key")
+			.argument("<claim>", "Claim key")
+			.option("--kind <kind>", "attribute or constraint"),
+	).action(async (entityName: string, aspect: string, group: string, claimKey: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams({ entity: entityName, aspect, group, claim: claimKey });
+		appendAgent(params, options.agent);
+		if (options.kind) params.set("kind", options.kind);
+		const data = await apiGet(deps, "/api/ontology/claims/versions", params);
+		console.log(JSON.stringify(data, null, 2));
+	});
+	addCommonOptions(
+		claim
+			.command("show")
+			.description("Show one claim version")
+			.argument("<entity>", "Entity selector")
+			.argument("<aspect>", "Aspect name")
+			.argument("<group>", "Group key")
+			.argument("<claim>", "Claim key")
+			.requiredOption("--version <n>", "Version number", Number.parseInt)
+			.option("--kind <kind>", "attribute or constraint"),
+	).action(async (entityName: string, aspect: string, group: string, claimKey: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const params = new URLSearchParams({
+			entity: entityName,
+			aspect,
+			group,
+			claim: claimKey,
+			version: String(options.version),
+		});
+		appendAgent(params, options.agent);
+		if (options.kind) params.set("kind", options.kind);
+		const data = await apiGet(deps, "/api/ontology/claims/version", params);
+		console.log(JSON.stringify(data, null, 2));
+	});
+	addOperationOptions(
+		claim.command("archive").description("Archive a claim value").requiredOption("--attribute-id <id>"),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"archive_claim_value",
+			{ attribute_id: options.attributeId, reason: options.reason },
+			options,
+		);
+		printOperationResult(data, options, "claim archive");
+	});
+	addOperationOptions(
+		claim.command("restore").description("Restore a claim version").requiredOption("--attribute-id <id>"),
+	).action(async (options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "restore_claim_version", { attribute_id: options.attributeId }, options);
+		printOperationResult(data, options, "claim restore");
+	});
+
+	const aspect = ontology.command("aspect").description("Apply audited aspect operations");
+	addOperationOptions(
+		aspect
+			.command("create")
+			.description("Create an aspect")
+			.argument("<entity>", "Entity selector")
+			.argument("<name>", "Aspect name"),
+	).action(async (entityName: string, name: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(deps, "create_aspect", { entity: entityName, name }, options);
+		printOperationResult(data, options, "aspect create");
+	});
+	addOperationOptions(
+		aspect
+			.command("rename")
+			.description("Rename an aspect")
+			.argument("<entity>", "Entity selector")
+			.argument("<selector>", "Aspect selector")
+			.argument("<new-name>", "New aspect name"),
+	).action(async (entityName: string, selector: string, newName: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"rename_aspect",
+			{ entity: entityName, selector, new_name: newName },
+			options,
+		);
+		printOperationResult(data, options, "aspect rename");
+	});
+	addOperationOptions(
+		aspect
+			.command("archive")
+			.description("Archive an aspect")
+			.argument("<entity>", "Entity selector")
+			.argument("<selector>", "Aspect selector"),
+	).action(async (entityName: string, selector: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"archive_aspect",
+			{ entity: entityName, selector, reason: options.reason },
+			options,
+		);
+		printOperationResult(data, options, "aspect archive");
+	});
+
+	const link = ontology.command("link").description("Apply audited link operations");
+	addOperationOptions(
+		link
+			.command("create")
+			.description("Create a link")
+			.argument("<source>", "Source entity selector")
+			.argument("<type>", "Dependency/link type")
+			.argument("<target>", "Target entity selector")
+			.option("--source-type <type>")
+			.option("--target-type <type>")
+			.option("--strength <n>", "Strength from 0 to 1", Number.parseFloat)
+			.option("--confidence <n>", "Confidence from 0 to 1", Number.parseFloat),
+	).action(async (source: string, type: string, target: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"create_link",
+			{
+				source_entity: source,
+				link_type: type,
+				target_entity: target,
+				source_type: options.sourceType,
+				target_type: options.targetType,
+				strength: options.strength,
+				confidence: options.confidence,
+				reason: options.reason,
+			},
+			options,
+		);
+		printOperationResult(data, options, "link create");
+	});
+	addOperationOptions(
+		link
+			.command("update")
+			.description("Update a link")
+			.argument("<id>", "Link id")
+			.option("--type <type>", "Dependency/link type")
+			.option("--strength <n>", "Strength from 0 to 1", Number.parseFloat)
+			.option("--confidence <n>", "Confidence from 0 to 1", Number.parseFloat),
+	).action(async (id: string, options) => {
+		if (!(await deps.ensureDaemonForSecrets())) return;
+		const data = await postOperation(
+			deps,
+			"update_link",
+			{
+				id,
+				link_type: options.type,
+				strength: options.strength,
+				confidence: options.confidence,
+				reason: options.reason,
+			},
+			options,
+		);
+		printOperationResult(data, options, "link update");
+	});
+	addOperationOptions(link.command("archive").description("Archive a link").argument("<id>", "Link id")).action(
+		async (id: string, options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const data = await postOperation(deps, "archive_link", { id, reason: options.reason }, options);
+			printOperationResult(data, options, "link archive");
+		},
+	);
+
+	const stream = ontology.command("stream").description("Apply JSONL operation streams");
+	stream
+		.command("apply")
+		.description("Apply, dry-run, or propose a JSONL operation stream")
+		.argument("<path>", "JSONL path or - for stdin")
+		.option("--dry-run", "Validate and preview without writing")
+		.option("--propose", "Create pending proposals for large refactor review instead of applying")
+		.option("--agent <name>", "Agent scope, default default")
+		.option("--actor <name>", "Audit actor", "operator")
+		.option("--json", "Output as JSON")
+		.action(async (path: string, options) => {
+			if (options.dryRun && options.propose) {
+				console.error(chalk.red("--dry-run and --propose cannot be used together"));
+				process.exit(1);
+			}
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const operations = readOperationJsonl(path);
+			const data = await apiPost(deps, "/api/ontology/operations/batch", {
+				agent_id: options.agent,
+				actor: options.actor,
+				dry_run: options.dryRun === true,
+				propose: options.propose === true,
+				operations,
+			});
+			if (options.json) console.log(JSON.stringify(data, null, 2));
+			else printOperationResult(data, options, "operation stream");
+		});
+
+	const pipeline = ontology.command("pipeline").description("Inspect Pipeline V2 graph mutation state");
+	pipeline
+		.command("status")
+		.description("Show graph-related Pipeline V2 status")
+		.option("--json", "Output as JSON")
+		.action(async (options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const status = asRecord(await apiGet(deps, "/api/status", new URLSearchParams()));
+			const pipe = asRecord(status.pipelineV2);
+			const data = {
+				enabled: pipe.enabled,
+				paused: pipe.paused,
+				graphEnabled: asRecord(pipe.graph).enabled,
+				traversal: pipe.traversal,
+				shadowMode: pipe.shadowMode,
+				mutationsFrozen: pipe.mutationsFrozen,
+				autonomousEnabled: asRecord(pipe.autonomous).enabled,
+				allowUpdateDelete: asRecord(pipe.autonomous).allowUpdateDelete,
+				extraction: pipe.extraction,
+				dampening: pipe.dampening,
+				writeGates: {
+					shadowMode: pipe.shadowMode,
+					mutationsFrozen: pipe.mutationsFrozen,
+					minFactConfidenceForWrite: pipe.minFactConfidenceForWrite,
+					allowUpdateDelete: asRecord(pipe.autonomous).allowUpdateDelete,
+				},
+			};
+			if (options.json) console.log(JSON.stringify(data, null, 2));
+			else {
+				console.log(chalk.bold("\n  Ontology Pipeline Status\n"));
+				console.log(chalk.dim(`  Pipeline V2: ${data.enabled ? "enabled" : "disabled"}`));
+				console.log(chalk.dim(`  Graph:       ${data.graphEnabled ? "enabled" : "disabled"}`));
+				console.log(chalk.dim(`  Traversal:   ${asRecord(data.traversal).enabled ? "enabled" : "disabled"}`));
+				console.log(chalk.dim(`  Shadow:      ${data.shadowMode ? "on" : "off"}`));
+				console.log(chalk.dim(`  Frozen:      ${data.mutationsFrozen ? "yes" : "no"}`));
+				console.log(chalk.dim(`  Autonomous:  ${data.autonomousEnabled ? "enabled" : "disabled"}`));
+				console.log(chalk.dim(`  Update/del:  ${data.allowUpdateDelete ? "allowed" : "blocked"}`));
+				console.log();
+			}
+		});
+	pipeline
+		.command("config")
+		.description("Show graph-related Pipeline V2 config")
+		.option("--json", "Output as JSON")
+		.action(async (options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const status = asRecord(await apiGet(deps, "/api/status", new URLSearchParams()));
+			const pipe = asRecord(status.pipelineV2);
+			const data = {
+				pipelineV2: {
+					enabled: pipe.enabled,
+					paused: pipe.paused,
+					graph: pipe.graph,
+					traversal: pipe.traversal,
+					reranker: pipe.reranker,
+					dampening: pipe.dampening,
+					shadowMode: pipe.shadowMode,
+					mutationsFrozen: pipe.mutationsFrozen,
+					autonomous: pipe.autonomous,
+					extraction: pipe.extraction,
+					hints: pipe.hints,
+				},
+			};
+			console.log(JSON.stringify(data, null, 2));
+		});
+	pipeline
+		.command("explain")
+		.description("Explain what can currently mutate or shape the graph")
+		.option("--json", "Output as JSON")
+		.action(async (options) => {
+			if (!(await deps.ensureDaemonForSecrets())) return;
+			const status = asRecord(await apiGet(deps, "/api/status", new URLSearchParams()));
+			const pipe = asRecord(status.pipelineV2);
+			const graph = asRecord(pipe.graph);
+			const autonomous = asRecord(pipe.autonomous);
+			const data = {
+				directOperations:
+					"signet ontology entity/claim/aspect/link/stream commands apply first through audited operation handlers with provenance.",
+				generatedChanges:
+					"dreaming and ordinary graph maintenance should apply high-confidence operations with evidence; use pending proposals only for large refactors or explicit review.",
+				pipelineWrites:
+					pipe.enabled === true && pipe.shadowMode !== true && pipe.mutationsFrozen !== true
+						? "Pipeline V2 controlled writes may add memories; graph extraction writes depend on graph config."
+						: "Pipeline V2 direct writes are blocked by disabled, shadow, or frozen mode.",
+				graphExtractionWrites: graph.extractionWritesEnabled,
+				traversalShapesRecall: asRecord(pipe.traversal).enabled === true,
+				autonomousMaintenance: autonomous.enabled === true && autonomous.frozen !== true,
+				allowUpdateDelete: autonomous.allowUpdateDelete === true,
+			};
+			if (options.json) console.log(JSON.stringify(data, null, 2));
+			else {
+				console.log(chalk.bold("\n  What Can Shape The Knowledge Graph\n"));
+				for (const [key, value] of Object.entries(data)) console.log(`  ${chalk.dim(`${key}:`)} ${value}`);
+				console.log();
+			}
+		});
+
+	const config = ontology.command("config").description("Inspect ontology control-plane config");
+	config
+		.command("show")
+		.option("--json", "Output as JSON")
+		.action(async () => {
+			const data = {
+				operationsUsable: true,
+				operationSurface: {
+					applyFirst: true,
+					propose: true,
+					dryRun: true,
+					refactorProposals: true,
+					provenanceRequired: true,
+					auditedThrough: "ontology_proposals",
+					auditLedger: "ontology_proposals.applied",
+				},
+				policyFile: {
+					path: "$SIGNET_WORKSPACE/ontology/graph.yaml",
+					active: false,
+					note: "No separate graph.yaml policy gate is active; audited daemon operation tools are usable without it.",
+				},
+			};
+			console.log(JSON.stringify(data, null, 2));
+		});
+	config
+		.command("validate")
+		.option("--json", "Output as JSON")
+		.action(async () => {
+			const data = {
+				valid: true,
+				operationsUsable: true,
+				policyFileActive: false,
+				warnings: ["No external ontology graph.yaml policy gate is active."],
+			};
+			console.log(JSON.stringify(data, null, 2));
+		});
+	config
+		.command("explain")
+		.option("--json", "Output as JSON")
+		.action(async () => {
+			const data = {
+				hiddenMutationPaths: false,
+				explanation:
+					"Dreaming and normal graph maintenance apply first through audited daemon operation endpoints with provenance; pending proposals are reserved for large graph refactors or explicit review.",
+			};
+			console.log(JSON.stringify(data, null, 2));
+		});
+
 	ontology
 		.command("repair")
-		.description("Find ontology repair candidates and optionally write proposals")
+		.description("Find ontology repair candidates and optionally write large-refactor proposals")
 		.option("--duplicates", "Detect duplicate entities with the same canonical name")
 		.option("--orphans", "Reserved for orphan repair candidates")
-		.option("--dry-run", "Preview repair proposals without writing them")
-		.option("--write-proposals", "Write pending repair proposals")
+		.option("--dry-run", "Preview repair candidates without writing them")
+		.option("--write-proposals", "Write pending repair proposals for broad graph refactors")
 		.option("-l, --limit <n>", "Max repair candidates to return", Number.parseInt)
 		.option("--agent <name>", "Agent scope, default default")
 		.option("--created-by <name>", "Audit creator", "ontology-repair")

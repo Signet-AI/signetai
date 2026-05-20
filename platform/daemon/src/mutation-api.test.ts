@@ -1,9 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { chunkBySentence } from "./routes/utils";
 import { txIngestEnvelope } from "./transactions";
 
 let app: Hono;
@@ -52,6 +54,20 @@ function seedMemory(args: {
 			db.prepare("UPDATE memories SET version = ? WHERE id = ?").run(args.version, args.id);
 		}
 	});
+}
+
+function chunkGroupIdForDefaultScope(baseKey: string): string {
+	const hash = createHash("sha256")
+		.update("default")
+		.update("\0")
+		.update("global")
+		.update("\0")
+		.update("__NULL__")
+		.update("\0")
+		.update(baseKey)
+		.digest("hex")
+		.slice(0, 32);
+	return `chunk-group:${hash}`;
 }
 
 describe("mutation API routes", () => {
@@ -143,6 +159,503 @@ memory:
 			expect(res.status).toBe(400);
 			expect(json.error).toBe("tags must be a string, string array, or null");
 		}
+	});
+
+	it("POST /api/memory/remember persists row-level provenance from metadata", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Provenance-backed imported memory",
+				who: "soulvessel.tests",
+				sourceType: "hermes-memory",
+				sourceId: "hermes-doc-provenance-test",
+				metadata: {
+					source_path: "/tmp/signet-provenance/MEMORY.md",
+					runtime_path: "memories/MEMORY.md",
+					idempotency_key: "hermes:provenance-test",
+				},
+			}),
+		});
+		const json = (await res.json()) as { id?: string; sourceId?: string };
+
+		expect(res.status).toBe(200);
+		expect(json.id).toBeString();
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_type, source_id, source_path, runtime_path, idempotency_key
+						 FROM memories WHERE id = ?`,
+					)
+					.get(json.id) as
+					| {
+							source_type: string | null;
+							source_id: string | null;
+							source_path: string | null;
+							runtime_path: string | null;
+							idempotency_key: string | null;
+					  }
+					| undefined,
+		);
+		expect(row).toEqual({
+			source_type: "hermes-memory",
+			source_id: "hermes-doc-provenance-test",
+			source_path: "/tmp/signet-provenance/MEMORY.md",
+			runtime_path: "memories/MEMORY.md",
+			idempotency_key: "hermes:provenance-test",
+		});
+
+		const retry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Different retry content with the same stable import key",
+				who: "soulvessel.tests",
+				idempotencyKey: "hermes:provenance-test",
+			}),
+		});
+		const retryJson = (await retry.json()) as { id?: string; deduped?: boolean };
+		expect(retry.status).toBe(200);
+		expect(retryJson).toMatchObject({ id: json.id, deduped: true });
+	});
+
+	it("POST /api/memory/remember scopes idempotency-key dedupe by agent and visibility", async () => {
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Default global provenance import",
+				who: "soulvessel.tests",
+				idempotencyKey: "shared-import-key",
+			}),
+		});
+		const firstJson = (await first.json()) as { id?: string; deduped?: boolean };
+		expect(first.status).toBe(200);
+		expect(firstJson.id).toBeString();
+		expect(firstJson.deduped).toBeUndefined();
+
+		const otherAgent = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Default global provenance import",
+				who: "soulvessel.tests",
+				agentId: "agent-a",
+				idempotencyKey: "shared-import-key",
+			}),
+		});
+		const otherAgentJson = (await otherAgent.json()) as { id?: string; deduped?: boolean };
+		expect(otherAgent.status).toBe(200);
+		expect(otherAgentJson.id).toBeString();
+		expect(otherAgentJson.id).not.toBe(firstJson.id);
+		expect(otherAgentJson.deduped).toBeUndefined();
+
+		const privateVisibility = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Default private provenance import",
+				who: "soulvessel.tests",
+				visibility: "private",
+				idempotencyKey: "shared-import-key",
+			}),
+		});
+		const privateJson = (await privateVisibility.json()) as { id?: string; deduped?: boolean };
+		expect(privateVisibility.status).toBe(200);
+		expect(privateJson.id).toBeString();
+		expect(privateJson.id).not.toBe(firstJson.id);
+		expect(privateJson.deduped).toBeUndefined();
+
+		const retry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Default global provenance import retry",
+				who: "soulvessel.tests",
+				idempotencyKey: "shared-import-key",
+			}),
+		});
+		const retryJson = (await retry.json()) as { id?: string; deduped?: boolean };
+		expect(retry.status).toBe(200);
+		expect(retryJson).toMatchObject({ id: firstJson.id, deduped: true });
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM memories WHERE idempotency_key = ?").get("shared-import-key") as
+					| { count: number }
+					| undefined,
+		);
+		expect(row?.count).toBe(3);
+	});
+
+	it("POST /api/memory/remember matches normalized idempotency-key index scope", async () => {
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Legacy normalized idempotency row",
+				who: "soulvessel.tests",
+				idempotencyKey: "legacy-normalized-key",
+			}),
+		});
+		const firstJson = (await first.json()) as { id?: string };
+		expect(first.status).toBe(200);
+		expect(firstJson.id).toBeString();
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memories SET agent_id = '', visibility = NULL WHERE id = ?").run(firstJson.id);
+		});
+
+		const retry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Different retry content for normalized idempotency row",
+				who: "soulvessel.tests",
+				idempotencyKey: "legacy-normalized-key",
+			}),
+		});
+		const retryJson = (await retry.json()) as { id?: string; deduped?: boolean };
+		expect(retry.status).toBe(200);
+		expect(retryJson).toMatchObject({ id: firstJson.id, deduped: true });
+	});
+
+	it("POST /api/memory/remember returns existing chunk ids on idempotent oversized retries", async () => {
+		const content = Array.from(
+			{ length: 90 },
+			(_, index) => `Chunked provenance sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		expect(content.length).toBeGreaterThan(800);
+
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-import-key",
+			}),
+		});
+		const firstJson = (await first.json()) as {
+			chunked?: boolean;
+			chunk_count?: number;
+			ids?: string[];
+			group_id?: string;
+		};
+		expect(first.status).toBe(200);
+		expect(firstJson.chunked).toBe(true);
+		expect(firstJson.ids?.length).toBeGreaterThan(1);
+
+		const retry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-import-key",
+			}),
+		});
+		const retryJson = (await retry.json()) as {
+			chunked?: boolean;
+			chunk_count?: number;
+			deduped?: boolean;
+			ids?: string[];
+			group_id?: string;
+		};
+		expect(retry.status).toBe(200);
+		expect(retryJson).toMatchObject({
+			chunked: true,
+			chunk_count: firstJson.chunk_count,
+			deduped: true,
+			group_id: firstJson.group_id,
+			ids: firstJson.ids,
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM entities WHERE entity_type = 'chunk_group'").get() as
+					| { count: number }
+					| undefined,
+		);
+		expect(row?.count).toBe(1);
+	});
+
+	it("POST /api/memory/remember rejects changed oversized content for an existing idempotency key", async () => {
+		const content = Array.from(
+			{ length: 90 },
+			(_, index) => `Stable chunked import sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		const changed = Array.from(
+			{ length: 92 },
+			(_, index) => `Changed chunked import sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		expect(content.length).toBeGreaterThan(800);
+		expect(changed.length).toBeGreaterThan(800);
+
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-import-conflict-key",
+			}),
+		});
+		const firstJson = (await first.json()) as { ids?: string[] };
+		expect(first.status).toBe(200);
+		expect(firstJson.ids?.length).toBeGreaterThan(1);
+
+		const conflict = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: changed,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-import-conflict-key",
+			}),
+		});
+		const conflictJson = (await conflict.json()) as { error?: string };
+		expect(conflict.status).toBe(409);
+		expect(conflictJson.error).toContain("different chunked content");
+
+		const rows = getDbAccessor().withReadDb((db) => ({
+			groups: (
+				db.prepare("SELECT COUNT(*) AS count FROM entities WHERE entity_type = 'chunk_group'").get() as
+					| { count: number }
+					| undefined
+			)?.count,
+			chunks: (
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM memories WHERE idempotency_key LIKE 'chunked-import-conflict-key:chunk:%'",
+					)
+					.get() as { count: number } | undefined
+			)?.count,
+		}));
+		expect(rows.groups).toBe(1);
+		expect(rows.chunks).toBe(firstJson.ids?.length);
+	});
+
+	it("POST /api/memory/remember rejects mixed chunked and non-chunk idempotency-key reuse", async () => {
+		const oversized = Array.from(
+			{ length: 90 },
+			(_, index) => `Mixed idempotency chunk sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		expect(oversized.length).toBeGreaterThan(800);
+
+		const small = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Small memory using a key before a chunked import.",
+				who: "soulvessel.tests",
+				idempotencyKey: "mixed-small-first-key",
+			}),
+		});
+		expect(small.status).toBe(200);
+
+		const chunkAfterSmall = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: oversized,
+				who: "soulvessel.tests",
+				idempotencyKey: "mixed-small-first-key",
+			}),
+		});
+		const chunkAfterSmallJson = (await chunkAfterSmall.json()) as { error?: string };
+		expect(chunkAfterSmall.status).toBe(409);
+		expect(chunkAfterSmallJson.error).toContain("non-chunk content");
+
+		const chunkFirst = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: oversized,
+				who: "soulvessel.tests",
+				idempotencyKey: "mixed-chunk-first-key",
+			}),
+		});
+		expect(chunkFirst.status).toBe(200);
+
+		const smallAfterChunk = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Small memory using a key after a chunked import.",
+				who: "soulvessel.tests",
+				idempotencyKey: "mixed-chunk-first-key",
+			}),
+		});
+		const smallAfterChunkJson = (await smallAfterChunk.json()) as { error?: string };
+		expect(smallAfterChunk.status).toBe(409);
+		expect(smallAfterChunkJson.error).toContain("chunked content");
+	});
+
+	it("POST /api/memory/remember rejects chunked imports that would reuse unrelated content rows", async () => {
+		const oversized = Array.from(
+			{ length: 90 },
+			(_, index) => `Existing chunk hash sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		const firstChunk = chunkBySentence(oversized, 600)[0];
+		expect(oversized.length).toBeGreaterThan(800);
+		expect(firstChunk.length).toBeLessThan(800);
+
+		const existing = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: firstChunk,
+				who: "soulvessel.tests",
+				idempotencyKey: "existing-normal-chunk-content-key",
+			}),
+		});
+		expect(existing.status).toBe(200);
+
+		const chunked = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: oversized,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-existing-content-key",
+			}),
+		});
+		const chunkedJson = (await chunked.json()) as { error?: string };
+		expect(chunked.status).toBe(409);
+		expect(chunkedJson.error).toContain("chunk content already exists");
+	});
+
+	it("POST /api/memory/remember resolves concurrent chunk hash collisions as conflicts", async () => {
+		const oversized = Array.from(
+			{ length: 90 },
+			(_, index) => `Concurrent chunk hash sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		expect(oversized.length).toBeGreaterThan(800);
+
+		const keys = ["concurrent-chunk-content-key-a", "concurrent-chunk-content-key-b"] as const;
+		const [first, second] = await Promise.all(
+			keys.map((idempotencyKey) =>
+				app.request("http://localhost/api/memory/remember", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						content: oversized,
+						who: "soulvessel.tests",
+						idempotencyKey,
+					}),
+				}),
+			),
+		);
+		const statuses = [first.status, second.status].sort((a, b) => a - b);
+		expect(statuses).toEqual([200, 409]);
+
+		const conflict = first.status === 409 ? first : second;
+		const conflictJson = (await conflict.json()) as { error?: string };
+		expect(conflictJson.error).toContain("chunk content already exists");
+
+		const losingKey = first.status === 409 ? keys[0] : keys[1];
+		const losingGroupId = chunkGroupIdForDefaultScope(losingKey);
+		const partial = getDbAccessor().withReadDb((db) => {
+			const rows = db
+				.prepare("SELECT id FROM memories WHERE idempotency_key LIKE ?")
+				.all(`${losingKey}:chunk:%`) as Array<{
+				id: string;
+			}>;
+			const group = db.prepare("SELECT id FROM entities WHERE id = ?").get(losingGroupId) as { id: string } | null;
+			return { group, rows };
+		});
+		expect(partial.rows).toHaveLength(0);
+		expect(partial.group).toBeNull();
+	});
+
+	it("GET /api/memory/:id returns row-level provenance for remembered rows", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "HTTP-visible provenance memory",
+				who: "soulvessel.tests",
+				sourceType: "hermes-memory",
+				sourceId: "hermes-doc-http-provenance-test",
+				sourcePath: "/tmp/signet-provenance/HTTP.md",
+				runtimePath: "memories/HTTP.md",
+				idempotencyKey: "hermes:http-provenance-test",
+			}),
+		});
+		const remembered = (await res.json()) as { id?: string };
+
+		expect(res.status).toBe(200);
+		expect(remembered.id).toBeString();
+
+		const read = await app.request(`http://localhost/api/memory/${remembered.id}`);
+		const json = (await read.json()) as {
+			id?: string;
+			source_id?: string | null;
+			source_type?: string | null;
+			source_path?: string | null;
+			runtime_path?: string | null;
+			idempotency_key?: string | null;
+			sourcePath?: string | null;
+			runtimePath?: string | null;
+			idempotencyKey?: string | null;
+		};
+
+		expect(read.status).toBe(200);
+		expect(json).toMatchObject({
+			id: remembered.id,
+			source_type: "hermes-memory",
+			source_id: "hermes-doc-http-provenance-test",
+			source_path: "/tmp/signet-provenance/HTTP.md",
+			runtime_path: "memories/HTTP.md",
+			idempotency_key: "hermes:http-provenance-test",
+			sourcePath: "/tmp/signet-provenance/HTTP.md",
+			runtimePath: "memories/HTTP.md",
+			idempotencyKey: "hermes:http-provenance-test",
+		});
+	});
+
+	it("GET /api/memory/:id applies agent scope before returning provenance", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Private scoped provenance memory",
+				agentId: "direct-read-agent-a",
+				visibility: "private",
+				who: "soulvessel.tests",
+				sourceType: "hermes-memory",
+				sourceId: "hermes-doc-private-provenance-test",
+				sourcePath: "/tmp/signet-provenance/private.md",
+				runtimePath: "memories/private.md",
+				idempotencyKey: "hermes:private-provenance-test",
+			}),
+		});
+		const remembered = (await res.json()) as { id?: string };
+
+		expect(res.status).toBe(200);
+		expect(remembered.id).toBeString();
+
+		const crossAgent = await app.request(`http://localhost/api/memory/${remembered.id}?agentId=direct-read-agent-b`);
+		const crossAgentJson = (await crossAgent.json()) as { error?: string; source_path?: string | null };
+		expect(crossAgent.status).toBe(404);
+		expect(crossAgentJson.error).toBe("not found");
+		expect(crossAgentJson.source_path).toBeUndefined();
+
+		const sameAgent = await app.request(`http://localhost/api/memory/${remembered.id}?agentId=direct-read-agent-a`);
+		const sameAgentJson = (await sameAgent.json()) as {
+			id?: string;
+			source_path?: string | null;
+			idempotency_key?: string | null;
+		};
+		expect(sameAgent.status).toBe(200);
+		expect(sameAgentJson).toMatchObject({
+			id: remembered.id,
+			source_path: "/tmp/signet-provenance/private.md",
+			idempotency_key: "hermes:private-provenance-test",
+		});
 	});
 
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {

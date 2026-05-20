@@ -8,8 +8,10 @@ import { logger } from "../logger";
 function getDashboardCandidates(): string[] {
 	const __filename = fileURLToPath(import.meta.url);
 	const __dirname = dirname(__filename);
+	const envDashboardDir = process.env.SIGNET_DASHBOARD_DIR;
 
 	return [
+		...(envDashboardDir ? [envDashboardDir] : []),
 		// Development monorepo path from platform/daemon/src/routes or platform/daemon/dist/routes.
 		join(__dirname, "..", "..", "..", "..", "surfaces", "dashboard", "build"),
 		// Published package paths.

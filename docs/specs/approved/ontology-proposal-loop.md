@@ -17,9 +17,9 @@ soft_depends_on:
 success_criteria:
   - "Extraction and consolidation can persist proposed ontology operations without mutating ontology state"
   - "Operators and agents can list, inspect, apply, and reject proposals through daemon API and CLI surfaces"
-  - "Applied proposals record audit metadata and mutate ontology state only through explicit operation handlers"
+  - "Applied proposals and direct applied operations record audit metadata and mutate ontology state only through explicit operation handlers"
   - "All proposal reads and writes are agent-scoped and preserve evidence references for later lineage inspection"
-scope_boundary: "Defines the first reviewable mutation loop for ontology maintenance. It does not define the full object-type/interface ontology, node-graph UI, or ACPX provider backend."
+scope_boundary: "Defines the first reviewable mutation loop for ontology maintenance and the shared operation handlers used by direct applied maintenance paths. It does not define the full object-type/interface ontology, node-graph UI, or ACPX provider backend."
 ---
 
 # Ontology Proposal Loop
@@ -31,8 +31,8 @@ source-backed artifacts, and graph traversal. The missing first-class object is
 the reviewable semantic proposal: a durable record that says, "based on this
 evidence, here is an ontology change worth making."
 
-Without proposal objects, extraction and consolidation have only two bad
-choices:
+Without proposal objects and audited operation handlers, extraction and
+consolidation have only two bad choices:
 
 1. write directly into ontology state and risk promoting weak evidence into
    truth; or
@@ -40,11 +40,14 @@ choices:
 
 The proposal loop gives Signet a middle path. Agents can reason over
 transcripts and source artifacts, emit candidate ontology operations, inspect
-them, and apply or reject them explicitly.
+them, and apply or reject them explicitly. The same operation handlers are
+also the allowed path for direct dreaming promotion when evidence is explicit
+enough to skip a pending review queue.
 
 ## Goals
 
-1. Make ontology maintenance proposal-first instead of write-first.
+1. Make reviewable ontology maintenance proposal-first instead of ad hoc
+   writes.
 2. Keep the daemon responsible for durable storage, agent scoping, API
    contracts, and explicit mutation application.
 3. Keep inference providers and harness-backed reasoning outside this first
@@ -111,6 +114,7 @@ The first implementation supports a small, safe set:
 - `create_entity`
 - `merge_entities`
 - `add_claim_value`
+- `set_claim_value`
 - `supersede_claim_value`
 - `create_link`
 
@@ -141,6 +145,8 @@ POST /api/ontology/proposals/batch
 POST /api/ontology/proposals/repair/duplicates
 POST /api/ontology/proposals/:id/apply
 POST /api/ontology/proposals/:id/reject
+POST /api/ontology/operations/batch
+POST /api/dream/promote
 ```
 
 Read routes require recall permission. Mutation routes require modify
@@ -151,6 +157,17 @@ scope when absent.
 entities for duplicate `canonical_name` values, picks the strongest existing
 entity as the merge target, and returns candidate `merge_entities` operations.
 It writes pending proposals only when `write_proposals` is true.
+
+`/api/dream/promote` is a direct applied maintenance path for the dreaming
+skill. It reads memories, memory artifacts, and transcripts as evidence and
+emits `set_claim_value` operations. The default non-provider path only
+mechanically promotes natural-language statements from confidence-bearing memory
+rows; artifacts and transcripts can provide structured operation JSON for
+preview, but raw source JSON cannot self-attest confidence for direct apply.
+Plain prose in artifacts or transcripts requires provider extraction or the
+proposal review path. The default mode is dry-run. When `apply` is true, the
+route uses the same audited operation handlers and stores applied lineage, but it
+does not create pending proposal work items.
 
 ## CLI contract
 
@@ -177,6 +194,8 @@ signet ontology repair --duplicates --dry-run
 signet ontology repair --duplicates --write-proposals
 signet ontology apply <id>
 signet ontology reject <id> --reason "weak evidence"
+signet dream promote --from all
+signet dream promote --from all --apply
 ```
 
 The CLI is a thin wrapper over the daemon API. It should not apply ontology
@@ -206,7 +225,9 @@ without introducing a second read model before typed object interfaces exist.
 
 or the extraction-output shape from this spec's prompt examples
 (`entities`, `claim_values`, `links`, and `actions_or_policies`). Importing
-only creates pending proposals. It does not apply them.
+only creates pending proposals. It does not apply them. Dreaming promotion is
+intentionally separate: it previews direct operations by default and only
+applies them when called with `--apply`.
 
 Provider extraction may also return `questions`. This slice surfaces those
 questions in the extraction result for operator or later stronger-model review;

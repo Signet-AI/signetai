@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { syncTemplates } from "./sync.js";
+import { syncBuiltinSkills, syncTemplates } from "./sync.js";
 
 const originalHome = process.env.HOME;
 const originalOpenClawConfig = process.env.OPENCLAW_CONFIG_PATH;
@@ -144,6 +144,58 @@ describe("syncTemplates workspace detection", () => {
 			expect(output).not.toContain("hooks re-registered for opencode");
 		} finally {
 			console.log = origLog;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("syncBuiltinSkills", () => {
+	it("refreshes an existing skill when the source is now a built-in", () => {
+		const root = mkdtempSync(join(tmpdir(), "sync-builtin-skills-"));
+		const source = join(root, "source");
+		const basePath = join(root, "agents");
+
+		try {
+			mkdirSync(join(source, "dreaming"), { recursive: true });
+			mkdirSync(join(basePath, "skills", "dreaming"), { recursive: true });
+			writeFileSync(
+				join(source, "dreaming", "SKILL.md"),
+				"---\nname: dreaming\ndescription: Dreaming\nbuiltin: true\n---\n\n# Dreaming\n\ncurrent",
+			);
+			writeFileSync(
+				join(basePath, "skills", "dreaming", "SKILL.md"),
+				"---\nname: dreaming\ndescription: Dreaming\n---\n\n# Dreaming\n\nstale",
+			);
+
+			const result = syncBuiltinSkills(source, basePath);
+
+			expect(result).toEqual({ installed: [], updated: ["dreaming"], skipped: [] });
+			expect(readFileSync(join(basePath, "skills", "dreaming", "SKILL.md"), "utf-8")).toContain("current");
+			expect(readFileSync(join(basePath, "skills", "dreaming", "SKILL.md"), "utf-8")).toContain("builtin: true");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not overwrite user-owned skills when the source is not a built-in", () => {
+		const root = mkdtempSync(join(tmpdir(), "sync-user-skills-"));
+		const source = join(root, "source");
+		const basePath = join(root, "agents");
+
+		try {
+			mkdirSync(join(source, "custom"), { recursive: true });
+			mkdirSync(join(basePath, "skills", "custom"), { recursive: true });
+			writeFileSync(join(source, "custom", "SKILL.md"), "---\nname: custom\ndescription: Official\n---\n\nsource");
+			writeFileSync(
+				join(basePath, "skills", "custom", "SKILL.md"),
+				"---\nname: custom\ndescription: User\n---\n\nuser",
+			);
+
+			const result = syncBuiltinSkills(source, basePath);
+
+			expect(result).toEqual({ installed: [], updated: [], skipped: ["custom"] });
+			expect(readFileSync(join(basePath, "skills", "custom", "SKILL.md"), "utf-8")).toContain("user");
+		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
