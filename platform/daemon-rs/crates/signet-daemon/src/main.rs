@@ -338,30 +338,29 @@ async fn main() -> anyhow::Result<()> {
             "/api/hooks/session-checkpoint-extract",
             axum::routing::post(routes::hooks::session_checkpoint_extract),
         )
-        // Inference compatibility routes
-        .route(
-            "/api/inference/status",
-            get(routes::compat::inference_status),
-        )
-        .route(
-            "/api/inference/history",
-            get(routes::compat::inference_history),
-        )
+        // Inference routes
+        .route("/api/inference/status", get(routes::inference::status))
+        .route("/api/inference/history", get(routes::inference::history))
         .route(
             "/api/inference/explain",
-            axum::routing::post(routes::compat::inference_explain),
+            axum::routing::post(routes::inference::explain),
         )
         .route(
             "/api/inference/execute",
-            axum::routing::post(routes::compat::inference_execute),
+            axum::routing::post(routes::inference::execute),
         )
         .route(
             "/api/inference/stream",
-            axum::routing::post(routes::compat::inference_stream),
+            axum::routing::post(routes::inference::stream),
         )
         .route(
             "/api/inference/requests/{id}",
-            axum::routing::delete(routes::compat::inference_request_delete),
+            axum::routing::delete(routes::inference::request_delete),
+        )
+        .route("/v1/models", get(routes::inference::gateway_models))
+        .route(
+            "/v1/chat/completions",
+            axum::routing::post(routes::inference::gateway_chat_completions),
         )
         // Agent roster routes (multi-agent support — migration 043)
         .route(

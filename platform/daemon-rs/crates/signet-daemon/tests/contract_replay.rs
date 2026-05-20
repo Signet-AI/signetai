@@ -57,7 +57,19 @@ impl TestServer {
         Self::start_with_auth_mode(Some("team")).await
     }
 
+    async fn start_team_auth_with_agent_yaml(yaml: &str) -> Self {
+        Self::start_with_agent_yaml(Some("team"), yaml).await
+    }
+
     async fn start_with_auth_mode(auth_mode: Option<&str>) -> Self {
+        let auth_yaml = auth_mode
+            .map(|mode| format!("auth:\n  method: token\n  mode: {mode}\n"))
+            .unwrap_or_default();
+        let yaml = format!("agent:\n  name: test-agent\n  version: 1\n{}", auth_yaml);
+        Self::start_with_agent_yaml(auth_mode, &yaml).await
+    }
+
+    async fn start_with_agent_yaml(auth_mode: Option<&str>, yaml: &str) -> Self {
         let tmpdir = tempfile::tempdir().expect("failed to create tmpdir");
         let port = ephemeral_port();
         let base = format!("http://127.0.0.1:{port}");
@@ -72,12 +84,7 @@ impl TestServer {
             std::fs::write(tmpdir.path().join(".daemon/auth-secret"), AUTH_SECRET).unwrap();
         }
 
-        // Write a minimal agent.yaml
-        let auth_yaml = auth_mode
-            .map(|mode| format!("auth:\n  method: token\n  mode: {mode}\n"))
-            .unwrap_or_default();
-        let yaml = format!("agent:\n  name: test-agent\n  version: 1\n{}", auth_yaml);
-        std::fs::write(tmpdir.path().join("agent.yaml"), &yaml).unwrap();
+        std::fs::write(tmpdir.path().join("agent.yaml"), yaml).unwrap();
 
         // Spawn daemon in background
         let port_str = port.to_string();
@@ -369,6 +376,52 @@ fn daemon_binary() -> String {
     // Fall back to PATH
     "signet-daemon".to_string()
 }
+
+const INFERENCE_REPLAY_YAML: &str = r#"agent:
+  name: test-agent
+  version: 1
+auth:
+  method: token
+  mode: team
+memory:
+  pipelineV2:
+    extraction:
+      provider: none
+inference:
+  defaultPolicy: auto
+  targets:
+    remote:
+      executor: openrouter
+      endpoint: https://openrouter.ai/api/v1
+      models:
+        sonnet:
+          model: anthropic/claude-sonnet-4-6
+          reasoning: medium
+          toolUse: true
+          streaming: true
+    local:
+      executor: ollama
+      endpoint: http://127.0.0.1:11434
+      models:
+        gemma:
+          model: gemma4
+          reasoning: medium
+          streaming: true
+  policies:
+    auto:
+      mode: automatic
+      defaultTargets:
+        - remote/sonnet
+        - local/gemma
+  agents:
+    rose:
+      defaultPolicy: auto
+      roster:
+        - local/gemma
+  workloads:
+    interactive:
+      policy: auto
+"#;
 
 // ---------------------------------------------------------------------------
 // Tests organized by endpoint category
@@ -959,36 +1012,147 @@ async fn sources_endpoints() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
-async fn inference_compat_endpoints() {
-    let server = TestServer::start().await;
+async fn inference_native_endpoints_cover_ts_hardening_contract() {
+    let server = TestServer::start_team_auth_with_agent_yaml(INFERENCE_REPLAY_YAML).await;
+    let admin = TestServer::scoped_role_token("default", "admin");
+    let operator = TestServer::scoped_role_token("default", "operator");
+    let rose = TestServer::scoped_role_token("rose", "agent");
 
-    let resp = server.get("/api/inference/status").await;
+    let resp = server.get_bearer("/api/inference/status", &operator).await;
     assert_eq!(resp.status(), 200);
     let body = server.json(resp).await;
-    assert_eq!(body["runtime"], "rust");
+    assert_eq!(body["enabled"], true);
+    assert_eq!(body["source"], "explicit");
+    assert!(
+        body["targetRefs"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("local/gemma"))
+    );
+    assert!(
+        body["policies"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("auto"))
+    );
 
     let resp = server
-        .get("/api/inference/history?failures=1&limit=10")
+        .get_bearer("/api/inference/history?failures=1&limit=10", &operator)
         .await;
     assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["enabled"], false);
 
     let resp = server
-        .post(
+        .post_bearer(
             "/api/inference/explain",
-            json!({"taskClass": "interactive"}),
+            json!({"agentId": "miles", "operation": "interactive"}),
+            &rose,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    let body = server.json(resp).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("scope restricted to agent 'rose'")
+    );
+
+    let resp = server
+        .post_bearer(
+            "/api/inference/explain",
+            json!({"operation": "interactive", "explicitTargets": ["remote/sonnet"]}),
+            &rose,
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Explicit target overrides are not allowed")
+    );
+
+    let resp = server
+        .post_bearer(
+            "/api/inference/execute",
+            json!({"prompt": "hello"}),
+            &operator,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = server
+        .post_bearer(
+            "/api/inference/execute",
+            json!({"prompt": "x".repeat(200_001), "operation": "interactive"}),
+            &admin,
+        )
+        .await;
+    assert_eq!(resp.status(), 413);
+
+    let resp = server
+        .post_bearer(
+            "/api/inference/execute",
+            json!({"prompt": "hello", "operation": "interactive"}),
+            &admin,
+        )
+        .await;
+    assert_eq!(resp.status(), 503);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "inference router not initialized");
+
+    let resp = server
+        .post_bearer(
+            "/api/inference/stream",
+            json!({"prompt": "hello", "operation": "interactive"}),
+            &admin,
         )
         .await;
     assert_eq!(resp.status(), 503);
 
     let resp = server
-        .post("/api/inference/execute", json!({"prompt": "hello"}))
+        .delete_bearer("/api/inference/requests/missing", &admin)
         .await;
-    assert_eq!(resp.status(), 503);
+    assert_eq!(resp.status(), 404);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"], "inference request not found");
+
+    let resp = server.get_bearer("/v1/models", &admin).await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"signet:auto"));
+    assert!(ids.contains(&"policy:auto"));
+    assert!(ids.contains(&"local/gemma"));
 
     let resp = server
-        .post("/api/inference/stream", json!({"prompt": "hello"}))
-        .await;
-    assert_eq!(resp.status(), 503);
+        .client
+        .post(format!("{}/v1/chat/completions", server.base))
+        .bearer_auth(&admin)
+        .header("x-signet-agent-id", "bad value!")
+        .json(&json!({
+            "model": "signet:auto",
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("x-signet-agent-id contains unsupported characters")
+    );
 }
 
 #[tokio::test]

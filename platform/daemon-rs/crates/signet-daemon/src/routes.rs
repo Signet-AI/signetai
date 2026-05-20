@@ -2,7 +2,6 @@
 
 pub mod agents;
 pub mod auth;
-pub mod compat;
 pub mod config;
 pub mod connectors;
 pub mod crossagent;
@@ -11,6 +10,7 @@ pub mod documents;
 pub mod git;
 pub mod harnesses;
 pub mod hooks;
+pub mod inference;
 pub mod knowledge;
 pub mod marketplace;
 pub mod marketplace_reviews;
