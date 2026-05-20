@@ -11,7 +11,10 @@ use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use signet_services::graph;
 
-use crate::auth::middleware::{authenticate_headers, resolve_scoped_agent};
+use crate::auth::{
+    middleware::{authenticate_headers, require_permission_guard, resolve_scoped_agent},
+    types::Permission,
+};
 use crate::state::AppState;
 
 fn escape_like(text: &str) -> String {
@@ -417,6 +420,8 @@ fn scoped_agent_or_response(
         is_local,
     )
     .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, Permission::Recall, state.auth_mode, is_local)
+        .map_err(|resp| *resp)?;
     resolve_scoped_agent(&auth, state.auth_mode, is_local, requested).map_err(|reason| {
         (
             StatusCode::FORBIDDEN,

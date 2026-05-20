@@ -1497,6 +1497,19 @@ async fn knowledge_expand_enforces_authenticated_agent_scope() {
     let other_agent_token = TestServer::scoped_token("other-agent");
 
     let resp = server
+        .post("/api/knowledge/expand", json!({"entity": "Signet"}))
+        .await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server
+        .post(
+            "/api/knowledge/expand/session",
+            json!({"entityName": "Signet", "sessionId": "session-signet-expand"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server
         .post_bearer(
             "/api/knowledge/expand",
             json!({"entity": "Signet"}),
