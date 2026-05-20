@@ -6,7 +6,7 @@ success_criteria:
   - "Temporal index entries in MEMORY.md synthesis include a content preview line"
   - "OpenClaw plugin compiles and passes tests against the typed hook interfaces"
   - "Mid-session checkpoint extraction fires after N turns for long-lived sessions"
-  - "Rust daemon implements cursor-reading parity for session-checkpoint-extract (advance deferred to Phase 5)"
+  - "Rust daemon implements cursor-tracking and summary job parity for session-checkpoint-extract"
 scope_boundary: "OpenClaw adapter, TS/Rust daemon hooks, temporal synthesis — no OpenClaw core changes"
 ---
 
@@ -53,12 +53,11 @@ daemon, 033 in Rust daemon). The cursor is advanced AFTER
 `enqueueSummaryJob` succeeds so a crash causes redundant re-extraction
 rather than a silent data-loss window.
 
-Rust daemon reads cursor and transcript, checks the delta threshold, and
-returns `{queued: false}` when a valid delta is found (cursor NOT
-advanced — no job to pair it with). Summary job queueing and cursor
-advance are Phase 5 (same TODO in Rust `session_end`). The `{queued:
-false}` response is a documented API variant meaning "delta found, job
-deferred"; callers treat it the same as `{skipped: true}` for retry.
+Rust daemon reads cursor and transcript, checks the delta threshold,
+enqueues a `checkpoint_extract` summary job for the delta, then advances
+the cursor. Summary job queueing and cursor advancement now match the TS
+daemon contract: if enqueue fails, the cursor is not advanced and the
+delta is retried on the next checkpoint attempt.
 
 ## Delivered
 

@@ -1636,20 +1636,20 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(2);
 	});
 
-	it("does NOT restore counter on queued:false (Rust stub success response)", async () => {
-		// queued:false is the Rust Phase 5 stub's way of saying "valid delta seen,
-		// no actual job queued yet". Treating it as success (no counter restoration)
-		// prevents per-turn checkpoint spam once a session exceeds 20 turns.
-		checkpointResponse = { queued: false };
+	it("does NOT restore counter on queued success responses", async () => {
+		// Treating successful checkpoint responses as success (no counter
+		// restoration) prevents per-turn checkpoint spam once a session exceeds
+		// 20 turns.
+		checkpointResponse = { queued: true, jobId: "checkpoint-job" };
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
 
 		const beforePromptBuild = hooks.get("before_prompt_build");
 		expect(beforePromptBuild).toBeDefined();
 
-		const ctx = { sessionKey: "rust-stub-session", agentId: "rust-agent" };
+		const ctx = { sessionKey: "checkpoint-success-session", agentId: "rust-agent" };
 
-		// Fire 20 turns — checkpoint fires and returns queued:false (Rust stub)
+		// Fire 20 turns — checkpoint fires and returns a successful queue response.
 		for (let i = 0; i < 20; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1673,7 +1673,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			);
 		}
 		await Bun.sleep(0);
-		// Still 1 hit — no spam from the queued:false path
+		// Still 1 hit — no spam from the success path
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 

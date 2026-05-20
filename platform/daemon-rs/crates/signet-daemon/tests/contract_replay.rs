@@ -1021,6 +1021,97 @@ async fn session_endpoints() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn checkpoint_extract_queues_summary_and_advances_cursor() {
+    let server = TestServer::start().await;
+    let session = "agent:ant:checkpoint-replay";
+    let initial = "checkpoint replay transcript ".repeat(24);
+    let extended = format!("{initial}{}", "second delta ".repeat(48));
+
+    let first = server
+        .post(
+            "/api/hooks/session-checkpoint-extract",
+            json!({
+                "harness": "test",
+                "sessionKey": session,
+                "agentId": "ant",
+                "project": "/workspace/signetai",
+                "transcript": initial
+            }),
+        )
+        .await;
+    assert_eq!(first.status(), 200);
+    let body = server.json(first).await;
+    assert_eq!(body["queued"], true);
+    assert!(body["jobId"].is_string());
+
+    let replay = server
+        .post(
+            "/api/hooks/session-checkpoint-extract",
+            json!({
+                "harness": "test",
+                "sessionKey": session,
+                "agentId": "ant",
+                "project": "/workspace/signetai",
+                "transcript": initial
+            }),
+        )
+        .await;
+    assert_eq!(replay.status(), 200);
+    let body = server.json(replay).await;
+    assert_eq!(body["skipped"], true);
+
+    let second = server
+        .post(
+            "/api/hooks/session-checkpoint-extract",
+            json!({
+                "harness": "test",
+                "sessionKey": session,
+                "agentId": "ant",
+                "project": "/workspace/signetai",
+                "transcript": extended
+            }),
+        )
+        .await;
+    assert_eq!(second.status(), 200);
+    let body = server.json(second).await;
+    assert_eq!(body["queued"], true);
+    assert!(body["jobId"].is_string());
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    let jobs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM summary_jobs
+             WHERE session_key = ?1 AND agent_id = 'ant' AND trigger = 'checkpoint_extract'",
+            [session],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let cursor: i64 = conn
+        .query_row(
+            "SELECT last_offset FROM session_extract_cursors
+             WHERE session_key = ?1 AND agent_id = 'ant'",
+            [session],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let latest_len: i64 = conn
+        .query_row(
+            "SELECT length(transcript) FROM summary_jobs
+             WHERE session_key = ?1 AND agent_id = 'ant' AND trigger = 'checkpoint_extract'
+             ORDER BY created_at DESC LIMIT 1",
+            [session],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(jobs, 2);
+    assert_eq!(cursor, extended.len() as i64);
+    assert_eq!(latest_len, (extended.len() - initial.len()) as i64);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn version_endpoint() {
     let server = TestServer::start().await;
     let resp = server.get("/api/version").await;

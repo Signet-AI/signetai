@@ -1984,8 +1984,7 @@ const signetPlugin = {
 				// Fire-and-forget — don't block the hook response.
 				// Counter restore policy (CAS-guarded):
 				//   skipped:true  → restore to threshold-1 (nothing extracted, retry next turn)
-				//   queued:false  → treat as success (Rust Phase 5 stub: delta found, no job yet;
-				//                   counter stays at 0 to prevent per-turn retries against stub)
+				//   any other 2xx success → keep counter at 0 so checkpoints stay rate-limited
 				//   HTTP error    → restore to threshold-1 (retry next turn)
 				void daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
 					method: "POST",
@@ -2002,10 +2001,9 @@ const signetPlugin = {
 				})
 					.then((resp) => {
 						// Restore counter only on skipped:true (nothing extracted — delta
-						// too small, no transcript, or bypassed). queued:false is the Rust
-						// Phase 5 stub response meaning "valid delta seen, no job queued"
-						// — treat it as success (counter stays at 0) so the next trigger
-						// waits another N turns rather than firing on every subsequent turn.
+						// too small, no transcript, or bypassed). Other successful
+						// responses keep the counter at 0 so the next checkpoint waits
+						// another N turns rather than firing on every subsequent turn.
 						if (isRecord(resp) && resp.skipped === true) {
 							// CAS guard: only restore if the counter hasn't advanced past
 							// threshold-1 by new turns arriving during the async round-trip.

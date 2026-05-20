@@ -2730,16 +2730,6 @@ artifacts.
 Returned when delta < 500 chars, no transcript is available, or the
 session is bypassed.
 
-```json
-{ "queued": false }
-```
-
-Returned by daemon implementations where summary job enqueueing is not
-yet available (Phase 5). The delta was found and is above the threshold
-but no job was enqueued. Callers may treat this identically to
-`{skipped: true}` for retry purposes — the content is not consumed and
-will be re-evaluated on the next call.
-
 ### GET /api/hooks/synthesis/config
 
 Return the current synthesis configuration (thresholds, model, schedule).
