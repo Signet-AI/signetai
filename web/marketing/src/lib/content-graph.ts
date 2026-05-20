@@ -97,12 +97,16 @@ export function buildContentIndex(docsDir: string, blogDir: string): ContentInde
 	DOC_SLUGS.clear();
 	BLOG_SLUGS.clear();
 
-	const docFiles = readdirSync(docsDir).filter((f) => f.endsWith(".md"));
+	const docFiles = readdirSync(docsDir)
+		.filter((f) => f.endsWith(".md"))
+		.sort();
 	for (const file of docFiles) {
 		DOC_SLUGS.add(file.replace(/\.md$/, "").toLowerCase());
 	}
 
-	const blogFiles = readdirSync(blogDir).filter((f) => f.endsWith(".mdx"));
+	const blogFiles = readdirSync(blogDir)
+		.filter((f) => f.endsWith(".mdx"))
+		.sort();
 	for (const file of blogFiles) {
 		BLOG_SLUGS.add(file.replace(/\.mdx$/, ""));
 	}

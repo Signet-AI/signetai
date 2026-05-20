@@ -398,6 +398,27 @@
     "links": [],
     "collection": "docs"
   },
+  "docs/dreaming-skill-runbook": {
+    "title": "dreaming-skill-runbook",
+    "url": "/docs/dreaming-skill-runbook/",
+    "tags": [],
+    "links": [],
+    "collection": "docs"
+  },
+  "docs/knowledge-graph-control-plane": {
+    "title": "knowledge-graph-control-plane",
+    "url": "/docs/knowledge-graph-control-plane/",
+    "tags": [],
+    "links": [],
+    "collection": "docs"
+  },
+  "docs/ontology-control-plane-progress": {
+    "title": "ontology-control-plane-progress",
+    "url": "/docs/ontology-control-plane-progress/",
+    "tags": [],
+    "links": [],
+    "collection": "docs"
+  },
   "blog/bring-both-kinds-of-memory": {
     "title": "Bring Both Kinds of Memory",
     "url": "/blog/bring-both-kinds-of-memory/",
