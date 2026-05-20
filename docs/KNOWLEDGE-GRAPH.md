@@ -1,274 +1,450 @@
 ---
 title: "Knowledge Graph"
-description: "Structural memory layer organizing entities, aspects, attributes, and dependencies."
+description: "Implementation reference for Signet's scoped ontology and graph traversal layer."
 order: 3
 section: "Core Concepts"
 ---
 
 # Knowledge Graph
 
-The knowledge graph is the structural layer of Signet's memory system. It organizes
-raw memories into a navigable hierarchy of entities, aspects, attributes, and
-dependencies, enabling deterministic context retrieval without relying solely on
-embedding similarity. When the pipeline identifies what a session is about, the
-graph is walked rather than searched — producing bounded, structurally coherent
-context.
+The knowledge graph is Signet's scoped ontology storage and traversal layer. It
+organizes raw memories, structured remember payloads, source artifacts, and
+reviewed ontology operations into entities, aspects, grouped claim slots,
+attributes, dependencies, proposals, and assertions.
 
-## Data Model
+For the conceptual model, see
+[KNOWLEDGE-ARCHITECTURE.md](./KNOWLEDGE-ARCHITECTURE.md). This document is the
+implementation reference.
 
-### Entity Hierarchy
+## Core Tables
 
-The graph uses a three-tier hierarchy beneath each entity node:
+The base graph schema starts in migration 019 and is extended by later
+migrations.
 
-```
-entity
-  └── aspect (named dimension of the entity)
-        ├── attribute (an atomic fact, kind = 'attribute')
-        └── constraint (a non-negotiable rule, kind = 'constraint')
-```
+### `entities`
 
-Memory nodes attach at the attribute level: each `entity_attribute` row carries an
-optional `memory_id` foreign key linking it back to the source `memories` row.
+Top-level graph nodes. Important fields include:
 
-**Tables:**
+- `id`
+- `name`
+- `canonical_name`
+- `entity_type`
+- `agent_id`
+- `description`
+- `mentions`
+- `pinned`
+- `pinned_at`
+- `status`
+- `archived_at`, `archived_by`, `archive_reason`
+- `proposal_id`
+- `proposal_evidence`
+- `last_synthesized_at`
+- timestamps
 
-`entities` — top-level nodes. Fields include `id`, `name`, `canonical_name`,
-`entity_type`, `agent_id`, `description`, `mentions` (incremented on each pipeline
-extraction hit), `pinned`, `pinned_at`, `created_at`, `updated_at`.
+`ENTITY_TYPES` is defined in `platform/core/src/types.ts` and currently includes
+people, projects, systems, tools, concepts, skills, tasks, sources, artifacts,
+agents, policies, actions, workflows, events, object types, interfaces,
+observations, claim slots, claim values, and `unknown`.
 
-`entity_aspects` — named dimensions of an entity. Unique on
-`(entity_id, canonical_name)`. Key fields:
-- `weight` (REAL, default 0.5) — learned salience of this aspect; updated by the
-  behavioral feedback loop
-- `canonical_name` — lowercased, whitespace-normalized form of `name`; used for
-  deduplication
+List queries filter to `agent_id` and active rows, then sort pinned entities
+first:
 
-`entity_attributes` — facts and constraints attached to an aspect. Key fields:
-- `kind` (TEXT) — either `'attribute'` (informational) or `'constraint'`
-  (non-negotiable; always surfaced during traversal regardless of weight)
-- `status` (TEXT) — `'active'`, `'superseded'`, or `'deleted'`
-- `superseded_by` (TEXT, nullable) — ID of the attribute that replaced this one
-- `memory_id` (TEXT, nullable) — source memory row
-- `confidence` (REAL, default 0.0), `importance` (REAL, default 0.5)
-
-`memory_entity_mentions` — join table linking memories to entities mentioned by
-them. Structured writes create these links via `txPersistEntities`; the default
-remember path may also add mention links to already-known entities for the same
-`agent_id`. The default path does not create new entities or attributes from raw
-text. Fields: `memory_id`, `entity_id`, `mention_text`, `confidence`,
-`created_at`.
-
-Background extraction graph writes are separately gated by
-`memory.pipelineV2.graph.extractionWritesEnabled`, which defaults to `false`.
-Keeping `graph.enabled=true` allows traversal and recall boosting without
-letting the async extractor author graph structure.
-
-### Entity Dependencies
-
-`entity_dependencies` — directed edges between entities. Unique on
-`(source_entity_id, target_entity_id, dependency_type)`. Key fields:
-- `dependency_type` (TEXT) — the type of relationship. Values come from the
-  `DependencyType` union in `@signet/core` (e.g. `'uses'`, `'depends_on'`,
-  `'related_to'`, `'part_of'`)
-- `strength` (REAL, default 0.5) — edge weight; used by traversal to filter
-  low-confidence hops
-- `confidence` (REAL, default 0.7) — how trustworthy the edge is
-- `reason` (TEXT, nullable except for `related_to`) — short human-readable
-  explanation for why the edge exists
-- `aspect_id` (TEXT, nullable) — the aspect on the source entity that motivated
-  this dependency, if known
-
-`entity_dependency_history` — append-only audit log for dependency edge changes.
-Every create, update, delete, and migration backfill for dependency edges writes
-an immutable row with `event`, `changed_by`, `reason`, optional metadata, and
-timestamp. `related_to` inserts/updates are rejected unless they include a
-non-empty reason.
-
-During traversal, the graph follows outgoing dependency edges from focal entities,
-collecting attributes from neighbors whose `strength >= minDependencyStrength`
-(default 0.3).
-
-### Entity Pinning
-
-Pinning is stored directly on the `entities` table (migration 022):
-- `pinned` (INTEGER, default 0) — boolean flag
-- `pinned_at` (TEXT, nullable) — ISO timestamp of when the entity was pinned
-
-Pinned entities are always included as focal entities during traversal, regardless
-of project path matching or query token matching. They are collected first by
-`resolveFocalEntities` before any other resolution strategy runs, and the final
-focal set is the union of pinned IDs and context-resolved IDs.
-
-In list queries (`listKnowledgeEntities`), pinned entities sort to the top:
-`ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC`.
-
-## Graph Traversal
-
-Source: `platform/daemon/src/pipeline/graph-traversal.ts`
-
-### Focal Entity Resolution
-
-Before walking the graph, traversal resolves a set of focal entities from
-available signals, in priority order:
-
-1. **Checkpoint entity IDs** — if a session checkpoint carried entity IDs forward
-   from a prior session, those are used directly (source = `"checkpoint"`)
-2. **Project path** — path components of the current project directory are matched
-   against entity `canonical_name` / `name` with `LIKE` queries, filtered to
-   `entity_type = 'project'`, ordered by `mentions DESC`, limit 5
-   (source = `"project"`)
-3. **Query tokens** — normalized tokens from the recall query are matched across
-   all entity types, limit 20 (source = `"query"`)
-4. **Session key** — fallback label when nothing else resolves
-   (source = `"session_key"`)
-
-Pinned entities are fetched independently and merged into the focal set regardless
-of which resolution path fired.
-
-### Walk Algorithm
-
-`traverseKnowledgeGraph` takes the focal entity IDs and walks the graph within
-a configurable budget:
-
-| Config field | Default | Description |
-|---|---|---|
-| `maxAspectsPerEntity` | 10 | Aspects per entity, ordered by `weight DESC` |
-| `maxAttributesPerAspect` | 20 | Attributes per aspect, ordered by `importance DESC` |
-| `maxDependencyHops` | 30 | One-hop neighbor expansions |
-| `minDependencyStrength` | 0.3 | Minimum edge strength to follow |
-| `timeoutMs` | 500 | Hard deadline for the entire walk |
-
-For each focal entity, the walk:
-1. Collects all `kind = 'constraint'` attributes across all aspects (no
-   aspect-count limit — constraints always surface)
-2. Fetches top-N aspects by `weight DESC`
-3. For each aspect, collects top-M attribute `memory_id` values
-4. After all focal entities are processed, expands one hop via outgoing
-   `entity_dependencies` edges where `strength >= minDependencyStrength`,
-   ordered by `strength DESC`, capped at `maxDependencyHops`
-5. Runs `collectForEntity` on each neighbor (visited-entity deduplication
-   prevents cycles)
-
-The walk returns a `TraversalResult` containing the collected `memoryIds` set,
-the `constraints` array (sorted by importance descending), the count of traversed
-entities, whether the timeout fired, and the `activeAspectIds` list. The calling
-code merges `memoryIds` with vector/FTS search results before ranking.
-
-A module-level `traversalTablesAvailableCache` flag (invalidated via
-`invalidateTraversalCache()`) prevents redundant `sqlite_master` checks after the
-tables are confirmed present.
-
-## Behavioral Feedback Loop
-
-Source: `platform/daemon/src/pipeline/aspect-feedback.ts`
-
-The feedback loop adjusts aspect weights based on actual usage signals at session
-end. Two mechanisms run:
-
-### FTS Overlap Feedback (`applyFtsOverlapFeedback`)
-
-After a session, the pipeline queries `session_memories` for rows belonging to
-that session where `fts_hit_count > 0`. These are memories that were both
-injected at session-start and later hit in a full-text search — behavioral
-confirmation that the injection was useful.
-
-For each confirmed memory, the code looks up its associated `aspect_id` via
-`entity_attributes` (one per memory, status = `'active'`). It accumulates
-confirmation counts per aspect, then applies:
-
-```
-new_weight = clamp(
-  current_weight + delta * confirmations,
-  minWeight,
-  maxWeight
-)
+```sql
+ORDER BY e.pinned DESC, e.pinned_at DESC, e.mentions DESC, e.updated_at DESC, e.name ASC
 ```
 
-Default `delta` is configured in `PipelineV2Config`; `maxWeight` caps at 1.0
-and `minWeight` floors at 0.1. Aspects with more FTS confirmations receive
-larger weight increases.
+### `entity_aspects`
 
-### Aspect Decay (`decayAspectWeights`)
+Named dimensions under an entity. Important fields include:
 
-Aspects that haven't been updated within `staleDays` days and have weight above
-`minWeight` are decayed:
+- `id`
+- `entity_id`
+- `agent_id`
+- `name`
+- `canonical_name`
+- `weight`
+- `status`
+- archive fields
+- proposal fields
+- timestamps
 
+Aspects are unique on `(entity_id, canonical_name)`. Traversal reads active
+aspects ordered by `weight DESC`.
+
+### `entity_attributes`
+
+Stored facts and constraints under an aspect. Important fields include:
+
+- `id`
+- `aspect_id`
+- `agent_id`
+- `memory_id`
+- `kind`: `attribute` or `constraint`
+- `content`
+- `normalized_content`
+- `group_key`
+- `claim_key`
+- `confidence`
+- `importance`
+- `status`: `active`, `superseded`, or `deleted`
+- `superseded_by`
+- `version`
+- `version_root_id`
+- `previous_attribute_id`
+- archive fields
+- source provenance fields
+- proposal fields
+- timestamps
+
+`group_key` and `claim_key` are the navigation and update identity layer:
+
+```text
+entity -> aspect -> group_key -> claim_key -> attribute versions
 ```
-new_weight = max(minWeight, current_weight - decayRate)
+
+When `group_key` is missing, navigation treats the row as part of `general`.
+When `claim_key` is present, claim history and supersession are scoped to that
+specific claim slot instead of the whole aspect.
+
+### `entity_dependencies`
+
+Directed cross-entity edges. Important fields include:
+
+- `id`
+- `source_entity_id`
+- `target_entity_id`
+- `agent_id`
+- `aspect_id`
+- `dependency_type`
+- `strength`
+- `confidence`
+- `reason`
+- `status`
+- archive fields
+- source provenance fields
+- proposal fields
+- timestamps
+
+`DependencyType` is defined in `platform/core/src/types.ts`. Traversal currently
+uses outgoing dependency edges and gates them by both:
+
+```text
+confidence * strength >= minDependencyStrength
+confidence >= minConfidence
 ```
 
-Decay runs on a configurable interval (checked via `shouldRunSessionDecay` which
-throttles to every N sessions per agent). This ensures weights drift down over
-time for aspects that are no longer confirmed by actual usage.
+`related_to` edges require a non-empty reason. Migration 050 adds
+`entity_dependency_history`, an append-only audit table populated by triggers
+for dependency insert, update, and delete events.
 
-Both functions record telemetry via `recordFeedbackTelemetry`, accessible
-through `getFeedbackTelemetry()`.
+### `task_meta`
 
-## Graph Persistence
+Task lifecycle metadata keyed by `entity_id`. It stores `status`, `expires_at`,
+`retention_until`, and `completed_at` for entities whose lifecycle should behave
+like a task rather than durable background knowledge.
+
+## Audit and Control Tables
+
+### `ontology_proposals`
+
+Proposal and operation history. Pending proposals are review queues; applied
+rows are audit records for direct operation handlers. Fields include:
+
+- `operation`
+- `status`: `pending`, `applied`, `rejected`, or `failed`
+- `payload`
+- `confidence`
+- `rationale`
+- `evidence`
+- `risk`
+- source provenance
+- `created_by`, `applied_by`, `rejected_by`
+- `result`
+- timestamps
+
+The daemon operation handlers can run in three modes:
+
+- dry-run: validate and preview without mutation
+- apply: mutate graph rows and write an applied proposal row
+- propose: write pending proposal rows for later review
+
+### `epistemic_assertions`
+
+Attribution records for statements that should not automatically become current
+ontology truth. Fields include:
+
+- `subject_entity_id`
+- optional `claim_attribute_id`
+- `predicate`: `claims`, `believes`, `observed`, `decided`, `prefers`,
+  `denies`, or `questions`
+- `content`
+- `speaker`
+- `asserted_at`
+- `confidence`
+- `evidence`
+- source provenance
+- `status`: `active`, `archived`, or `superseded`
+- `supersedes_assertion_id`
+- archive fields
+- timestamps
+
+Assertions can be linked to current claim attributes, but they remain a
+separate evidence/attribution layer.
+
+## Write Paths
+
+### Structured Remember Payloads
 
 Source: `platform/daemon/src/pipeline/graph-transactions.ts`
 
-Two transaction closures handle the write path for the extraction pipeline:
+`txPersistStructured` writes caller-provided structured data from the remember
+API. It:
 
-**`txPersistEntities(db, input)`** — called after the LLM extraction step produces
-entity triples. For each triple:
-- Upserts source and target entities by `canonical_name` (names shorter than 4
-  characters are rejected). On conflict, increments `mentions` and optionally
-  upgrades `entity_type` from `'extracted'` to a more specific type
-- Upserts the relation between source and target in the `relations` table, updating
-  confidence via running average on conflict
-- Inserts `memory_entity_mentions` rows linking both entities to the source memory
-  (`INSERT OR IGNORE` for idempotency)
+1. persists extracted entity triples through `txPersistEntities`;
+2. upserts mentioned entities;
+3. upserts aspects by `(entity_id, canonical_name)`;
+4. inserts attributes with optional `groupKey` and `claimKey`;
+5. links rows to the source memory through `memory_id` and
+   `memory_entity_mentions`;
+6. supersedes likely conflicting sibling attributes in the same
+   `aspect_id + group_key + claim_key` slot;
+7. creates low-strength `related_to` dependencies between co-occurring
+   structured entities.
 
-**`txDecrementEntityMentions(db, input)`** — called when memories are purged.
-Decrements `mentions` for affected entities (floor at 0), then deletes entities
-whose mentions reach 0, cleaning up dangling `relations` and
-`memory_entity_mentions` rows in the same transaction.
+If the source memory is decision-like, structured attributes are promoted to
+`kind = 'constraint'`; otherwise they are normal attributes.
 
-Both closures are designed to run inside a `withWriteTx` wrapper; they take a
-`WriteDb` handle rather than a `DbAccessor` so they can participate in a larger
-transaction.
+### Extracted Entity Mentions
 
-The higher-level CRUD layer (`knowledge-graph.ts`) uses `upsertAspect`,
-`createAttribute`, and `upsertDependency` for manual and pipeline writes.
-Attribute lifecycle transitions (supersede, delete) are soft: status is set to
-`'superseded'` or `'deleted'` rather than row deletion. `propagateMemoryStatus`
-sweeps attributes whose `memory_id` refers to a deleted memory and marks them
-`'superseded'`.
+`txPersistEntities` persists extracted source/relationship/target triples into
+`entities`, the older `relations` table, and `memory_entity_mentions`.
+
+This path links memories to entities and maintains mention counts. It does not
+create aspect or attribute rows by itself.
+
+### Pipeline Graph Writes
+
+Background extraction graph writes are controlled by
+`memory.pipelineV2.graph.extractionWritesEnabled`, which defaults to `false`.
+Keeping graph traversal enabled does not necessarily mean the async extractor is
+allowed to author ontology structure.
+
+### Ontology Operation Handlers
+
+Source: `platform/daemon/src/ontology-proposals.ts`
+
+The control plane applies or proposes graph operations such as:
+
+- `create_entity`
+- `add_claim_value`
+- `set_claim_value`
+- `rename_entity`
+- `archive_entity`
+- `create_aspect`
+- `rename_aspect`
+- `archive_aspect`
+- `archive_claim_value`
+- `restore_claim_version`
+- `create_link`
+- `update_link`
+- `archive_link`
+- `merge_entities`
+- `supersede_claim_value`
+- policy, action type, and interface operations
+
+These handlers are the preferred path for explicit ontology maintenance because
+they validate inputs, preserve provenance, update version lineage, and leave an
+audit row.
+
+## Traversal
+
+Source: `platform/daemon/src/pipeline/graph-traversal.ts`
+
+Traversal resolves focal entities, walks a bounded subgraph, and returns memory
+IDs plus structural metadata for recall.
+
+### Focal Resolution
+
+`resolveFocalEntities` gathers entities in this order:
+
+1. pinned entities, unless disabled;
+2. checkpoint entity IDs, when supplied;
+3. project-path matches against project entities;
+4. query-token matches using `entities_fts` when available, with LIKE fallback;
+5. session-key fallback as source metadata when no entity resolves.
+
+Pinned entities are merged into the focal set, not used as a replacement for
+query or project matches.
+
+### Walk Budget
+
+`TraversalConfig` controls the walk:
+
+| Field | Meaning |
+|---|---|
+| `scope` | Optional memory scope filter |
+| `maxAspectsPerEntity` | Active aspects per entity, ordered by weight |
+| `maxAttributesPerAspect` | Attribute memory IDs per aspect |
+| `maxDependencyHops` | Historical config field; current walk uses branching and path budgets |
+| `minDependencyStrength` | Minimum combined `confidence * strength` |
+| `maxBranching` | Max outgoing edges per focal entity |
+| `maxTraversalPaths` | Total memory ID budget |
+| `minConfidence` | Minimum edge confidence |
+| `timeoutMs` | Hard deadline |
+| `aspectFilter` | Optional aspect-name filter for on-demand expansion |
+
+### Collection Rules
+
+For each entity, traversal:
+
+1. collects active constraints across all active aspects;
+2. fetches top active aspects by `weight DESC`;
+3. collects active attribute `memory_id` values by `importance DESC`;
+4. falls back to `memory_entity_mentions` if attributes do not yield enough
+   memory IDs;
+5. follows qualifying outgoing dependencies from the focal entity set;
+6. records memory paths for feedback propagation and telemetry.
+
+The result includes:
+
+- `memoryIds`
+- `memoryScores`
+- `memoryPaths`
+- `constraints`
+- `entityCount`
+- `timedOut`
+- `activeAspectIds`
+- `focalEntityIds`
+
+Recall merges this graph result with vector, FTS, hint, structured-evidence,
+reranker, dampening, and context-construction stages.
+
+## Feedback and Maintenance
+
+Source: `platform/daemon/src/pipeline/aspect-feedback.ts`
+
+Aspect feedback is driven by session outcomes. FTS overlap can increase aspect
+weights when previously injected memories later match full-text searches.
+Aspect decay lowers stale weights toward a configured floor.
+
+Source: `platform/daemon/src/pipeline/supersession.ts`
 
 ### Retroactive Supersession
 
-Beyond orphaned-memory cleanup, `supersession.ts` detects contradictions
-between active sibling attributes on the same aspect and claim slot. Structured
-remember supersedes within `entity + aspect + group_key + claim_key` at write
-time. If structural workers are explicitly enabled, an additional pass can run
-after `structural_classify` populates `aspect_id`, and the maintenance worker can
-catch pre-existing contradictions across sessions. Detection uses a four-signal
-heuristic (negation polarity, antonym pairs, value conflict, temporal markers);
-the semantic LLM fallback is disabled by default. Attributes with
-`kind='constraint'` are never auto-superseded. See the
-[retroactive supersession spec](./specs/planning/retroactive-supersession.md)
-for full design details.
+Supersession detects and marks conflicting active sibling attributes. Structured
+remember does this at write time for matching claim slots. Maintenance can also
+catch older contradictions. Constraints are not automatically superseded by this
+heuristic.
 
-## API
+Source: `platform/daemon/src/knowledge-graph-hygiene.ts`
 
-Graph data is surfaced through these HTTP API endpoints on the daemon:
+Hygiene reporting is read-only. It surfaces suspicious entities, duplicate
+canonical groups, missing group/claim/source fields, and safe known-entity
+mention candidates.
 
-| Endpoint | Method | Description |
+## HTTP API
+
+Read-oriented graph endpoints live in `platform/daemon/src/routes/knowledge-routes.ts`.
+
+| Endpoint | Method | Purpose |
 |---|---|---|
-| `/api/embeddings/projection` | GET | UMAP 2D/3D projection; constellation view fetches this to position memory nodes. Graph overlay data (`/api/knowledge/constellation`) is fetched separately |
-| `/api/memory/recall` | POST | Hybrid search; traversal results are merged with vector/FTS candidates before reranking |
-| `/api/memory/search` | GET | Keyword search; entity context is injected into results |
+| `/api/knowledge/entities` | GET | List active entities with structural counts |
+| `/api/knowledge/navigation/entities` | GET | Alias for paginated entity navigation |
+| `/api/knowledge/navigation/entity` | GET | Resolve an entity by name |
+| `/api/knowledge/navigation/tree` | GET | Entity -> aspect -> group -> claim outline |
+| `/api/knowledge/navigation/aspects` | GET | List aspects for an entity |
+| `/api/knowledge/navigation/groups` | GET | List groups under an entity/aspect |
+| `/api/knowledge/navigation/claims` | GET | List claims under an entity/aspect/group |
+| `/api/knowledge/navigation/attributes` | GET | List attributes for a claim path |
+| `/api/knowledge/entities/:id` | GET | Entity detail and counts |
+| `/api/knowledge/entities/:id/aspects` | GET | Aspect counts |
+| `/api/knowledge/entities/:id/aspects/:aspectId/attributes` | GET | Attributes for an aspect |
+| `/api/knowledge/entities/:id/dependencies` | GET | Incoming and outgoing dependencies |
+| `/api/knowledge/entities/:id/pin` | POST | Pin an entity, requires `modify` |
+| `/api/knowledge/entities/:id/pin` | DELETE | Unpin an entity, requires `modify` |
+| `/api/knowledge/entities/pinned` | GET | List pinned entities |
+| `/api/knowledge/entities/health` | GET | Predictor comparison health by entity |
+| `/api/knowledge/hygiene` | GET | Read-only hygiene report |
+| `/api/knowledge/stats` | GET | Graph coverage and feedback stats |
+| `/api/knowledge/communities` | GET | Community summaries |
+| `/api/knowledge/traversal/status` | GET | Last traversal telemetry |
+| `/api/knowledge/constellation` | GET | Dashboard graph payload |
+| `/api/knowledge/expand` | POST | Entity expansion with related memory/session context |
+| `/api/knowledge/expand/session` | POST | Session-summary expansion |
 
-The constellation overlay is served by `getKnowledgeGraphForConstellation` in
-`knowledge-graph.ts`. It fetches up to 500 entities (filtered to those with
-`mentions > 0`, `pinned = 1`, or at least one aspect), their aspects and active
-attributes, and all dependencies where both endpoints are in the fetched set.
+Ontology-control endpoints live in `platform/daemon/src/routes/ontology-routes.ts`.
+
+| Endpoint family | Purpose |
+|---|---|
+| `/api/ontology/operations/*` | Apply, dry-run, or batch explicit ontology operations |
+| `/api/ontology/proposals/*` | List, create, apply, reject, and inspect proposals |
+| `/api/ontology/proposals/repair/*` | Duplicate and merge-plan helpers |
+| `/api/ontology/claims/*` | Claim evidence, versions, and version reads |
+| `/api/ontology/links/*` | Link evidence |
+| `/api/ontology/assertions/*` | Epistemic assertion CRUD and lifecycle |
+| `/api/ontology/extract` | Extract proposals/assertions from a source |
+| `/api/ontology/consolidate` | Consolidate proposals with optional provider support |
+
+Mutation endpoints require `modify` permission. Read endpoints require recall
+permission when auth is enabled.
+
+Recall-related endpoints also use graph data:
+
+| Endpoint | Method | Graph role |
+|---|---|---|
+| `/api/memory/recall` | POST | Merges traversal candidates with recall candidates |
+| `/api/memory/search` | GET | Search with entity context |
+| `/api/embeddings/projection` | GET | Dashboard memory projection; graph overlay comes from `/api/knowledge/constellation` |
+
+## CLI Surfaces
+
+Read navigation:
+
+```bash
+signet knowledge entities
+signet knowledge tree <entity>
+signet knowledge aspects <entity>
+signet knowledge groups <entity> <aspect>
+signet knowledge claims <entity> <aspect> <group>
+signet knowledge attributes <entity> <aspect> <group> <claim>
+signet knowledge hygiene
+```
+
+Control plane:
+
+```bash
+signet ontology entity ...
+signet ontology claim ...
+signet ontology aspect ...
+signet ontology link ...
+signet ontology stream apply ...
+signet ontology assertion ...
+signet ontology proposals ...
+signet ontology extract ...
+signet ontology consolidate ...
+```
+
+Use `--json` on either command family for automation.
+
+## Dashboard Payload
+
+`getKnowledgeGraphForConstellation` in `platform/daemon/src/knowledge-graph.ts`
+builds the dashboard graph. It fetches active entities, aspects, attributes,
+dependencies, proposal overlays, and dreaming summaries within bounded limits.
+The dashboard then converts that payload into entity, aspect, attribute, memory,
+proposal, and relationship nodes.
+
+## Agent Scope
+
+Every graph read or write must be scoped by `agent_id`. Existing route defaults
+to `"default"` are compatibility defaults at the boundary; internal logic should
+thread the resolved agent ID through queries and mutations rather than relying
+on a global graph.
 
 ## See Also
 
-- [KNOWLEDGE-ARCHITECTURE.md](./KNOWLEDGE-ARCHITECTURE.md) — conceptual design and
-  rationale for the entity/aspect/constraint model
-- [DASHBOARD.md](./DASHBOARD.md) — constellation visualization that renders the
-  graph
-- [PIPELINE.md](./PIPELINE.md) — how the graph is populated during extraction
+- [KNOWLEDGE-ARCHITECTURE.md](./KNOWLEDGE-ARCHITECTURE.md)
+- [PIPELINE.md](./PIPELINE.md)
+- [API.md](./API.md)
+- [dreaming-skill-runbook.md](./dreaming-skill-runbook.md)
+- [knowledge-graph-control-plane.md](./knowledge-graph-control-plane.md)

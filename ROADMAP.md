@@ -10,53 +10,82 @@ Status markers: `[done]` shipped, `[wip]` in progress, `[next]` planned,
 `[stub]` intentionally tracked but not fully planned, `[idea]` exploring.
 
 
-Current Focus (0.98.x)
+Current Focus (0.124.x)
 ---
 
 - [wip] Public positioning and documentation correctness
   - align README, docs, and website language around portable agent state,
-    local ownership, and behavioral context portability
-- [wip] Connector and harness reliability
-  - harden Claude Code, OpenCode, OpenClaw, Codex, Pi, and Hermes Agent
-    integrations with smoke tests and clearer install diagnostics
-- [wip] Multi-agent runtime hardening
-  - scoped memory policies, runtime adapter stability, session routing,
-    and visibility correctness across named agents
-- [wip] Memory quality and provenance
-  - extraction-first memory, transcript-backed verification, entity graph
-    cleanup, recall provenance, and lower-noise context injection
-- [wip] Permissions, auth, and secrets boundary
-  - agent-blind secrets, RBAC, token policy, rate limits, and capability
-    scoping for tool and MCP access
+    local ownership, source truth, and behavioral context portability
+- [wip] Source-native substrate
+  - preserve source artifacts as ground truth, derive semantic memory with
+    provenance, and make claims rebuildable from their evidence
+- [wip] Source events as agent triggers
+  - treat sources as live event surfaces, not only passive recall inputs:
+    events should carry source truth, policy, context, and a result artifact
+- [wip] Skills over substrate
+  - keep deterministic substrate in Signet and move repeated cognition into
+    loadable, inspectable, portable skills with their own working trails
+- [wip] Proving-ground loop
+  - use one source ecosystem, one recurring job-to-be-done, one visible
+    metric, and one tight loop where bad memory visibly hurts
+- [wip] Reliability and performance as product integrity
+  - reduce daemon fragility, runtime cost, and resource waste because local
+    ownership should not push access debt back onto users
+- [wip] Authority, permissions, and secrets boundary
+  - agent-blind secrets, RBAC, token policy, rate limits, capability scoping,
+    and source-backed authority across protocols and MCP tools
 
 
 Planned Next
 ---
 
-- [next] Behavioral context portability / OAS working draft
-  - define export/import expectations for identity, memory, provenance,
-    skills, and secrets metadata without tying the standard to one harness
+- [next] Universal source layer
+  - make it easy for an agent to connect Obsidian, repos, transcripts,
+    Discord, Fitbit, servers, devices, and other sources through one common
+    source-artifact contract
+- [next] Pipeline V3 as skills over substrate
+  - run scheduled and event-triggered skill sessions over source artifacts,
+    transcripts, failures, and prior decisions; emit proposed graph, memory,
+    identity, skill, source, or authority changes with provenance
+- [next] Dreaming as background semantic QA
+  - judge memory maintenance by downstream behavior: fewer repeated
+    investigations, fewer repeated mistakes, cleaner source-backed memory,
+    better entity density, and visible mutation diffs
+- [next] Obsidian proving ground
+  - harden the clipping-to-literature workflow as the first bathtub: raw
+    source, adversarial intake, provenance, synthesis, backlinks, indexes,
+    operations logs, skill formation, and user taste in one inspectable loop
 - [next] Hermes Agent production hardening
   - validate real install flows, gateway session routing, and cross-platform
-    memory continuity before broader migration guidance
+    memory continuity; borrow the stronger skill layer where it fits Signet
 - [next] Capability-scoped tool permissions
   - distinguish read-only, destructive, credentialed, and approval-gated
     actions across harnesses and MCP tools
+- [next] Signet Cloud baseline inference and sync
+  - keep the open-source product complete while exploring managed sync,
+    background inference, and stronger embedding models as hosted help
 - [next] Rust daemon parity + primary runtime cutover
-  - parity first, cutover second, with divergence logging and rollback
-    paths preserved until confidence is boring
-- [next] Deep memory search as an optional escalation path
-  - multi-agent or LLM-assisted search only when primary retrieval cannot
-    answer with enough confidence
+  - parity first, cutover second, with divergence logging, rollback paths,
+    and performance wins validated before the TypeScript daemon gives way
 
 
 Strategic Stub Backlog (tracked, planning incomplete)
 ---
 
+- [stub] Behavioral context portability / OAS working draft
+  - define export/import expectations for identity, memory, provenance,
+    skills, source metadata, and secrets metadata without tying the standard
+    to one harness
 - [stub] Distributed harness and multi-remote orchestration
 - [stub] First-party Signet harness while continuing connector support
   - reference direction: Hermes Agent and Forge-style native runtime work
 - [stub] Remember/Recall skill parity refresh with current schema
+- [stub] Per-user neural query surface
+  - train a disposable small model on a user's artifact history as a future
+    query layer, while keeping source artifacts underneath as ground truth
+- [stub] Deep memory search as an optional escalation path
+  - multi-agent or LLM-assisted search only when primary retrieval cannot
+    answer with enough confidence
 - [stub] MCP CLI bridge + usage analytics in dashboard
   - reference direction: MC Porter-style command visibility
 - [stub] Git-based marketplace monorepo for skills + MCP servers

@@ -37,8 +37,9 @@ change. The agent keeps its footing.
 
 The job is simple: bring your own context to the agents you already use,
 then keep that context inspectable and under your control. Signet runs
-beneath Claude Code, OpenCode, OpenClaw, Codex, Hermes Agent, and other
-harnesses so the durable layer survives the tool of the week.
+beneath Forge, Claude Code, OpenCode, OpenClaw, Codex, Gemini CLI, Pi,
+Oh My Pi, Hermes Agent, and other harnesses so the durable layer survives
+the tool of the week.
 
 Memory is ambient. Signet captures useful context between sessions,
 preserves the raw record, indexes it for recall, and injects relevant
@@ -54,14 +55,15 @@ Why teams adopt it:
 ## Quick start (about 5 minutes)
 
 ```bash
-bun add -g signetai        # or: npm install -g signetai
+npm install -g signetai    # or: bun add -g signetai
 signet setup               # interactive setup wizard
 signet status              # confirm daemon + pipeline health
 signet dashboard           # open memory + retrieval inspector
 ```
 
-If you already use Claude Code, OpenCode, OpenClaw, Codex, or Hermes
-Agent, keep your existing harness. Signet installs under it.
+If you already use Claude Code, OpenCode, OpenClaw, Codex, Gemini CLI,
+Pi, Oh My Pi, or Hermes Agent, keep your existing harness. Signet installs
+under it.
 
 ### Docker self-hosting
 
@@ -122,7 +124,7 @@ These are the product surface areas Signet is optimized around:
 | 🗂️ Source-backed context | Raw transcripts and workspace files remain available beneath summaries and recall results |
 | 🎯 Inspectable recall | Hybrid search, graph traversal, provenance, scopes, and ranking signals explain why context surfaced |
 | 🏠 Local-first substrate | Data lives on your machine in SQLite and markdown, portable by default |
-| 🤝 Cross-harness continuity | Claude Code, OpenCode, OpenClaw, Codex, Pi, Hermes Agent, one shared context layer |
+| 🤝 Cross-harness continuity | Forge, Claude Code, OpenCode, OpenClaw, Codex, Gemini CLI, Pi, Oh My Pi, Hermes Agent, one shared context layer |
 | 🧩 SDK-first extensibility | Typed SDKs, middleware, and plugin surfaces let builders shape Signet around their own agents |
 
 ## Is Signet right for you?
@@ -201,9 +203,9 @@ Signet is built to support:
 ## Harness support
 
 Signet is not a harness. It doesn't replace Claude Code, OpenClaw,
-OpenCode, Pi, or Hermes Agent — it runs alongside them as an enhancement.
-Bring the harness you already use. Signet handles the memory layer
-underneath it.
+OpenCode, Codex, Gemini CLI, Pi, Oh My Pi, or Hermes Agent - it runs
+alongside them as an enhancement. Bring the harness you already use.
+Signet handles the memory layer underneath it.
 
 | Harness | Status | Integration |
 |---|---|---|
@@ -214,6 +216,7 @@ underneath it.
 | [Codex](https://github.com/openai/codex) | **Supported** | Hooks + MCP server |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | **Supported** | Memory provider plugin |
 | [Pi](https://github.com/mariozechner/pi-coding-agent) | **Supported** | Extension + Hooks |
+| Oh My Pi | **Supported** | Managed extension |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | **Supported** | MCP server + GEMINI.md sync |
 
 
@@ -236,7 +239,7 @@ methodology, scoring note, and run workflow.
 ## Install (detailed)
 
 ```bash
-bun add -g signetai        # or: npm install -g signetai
+npm install -g signetai    # or: bun add -g signetai
 signet setup               # interactive setup wizard
 ```
 
@@ -355,7 +358,8 @@ SDK (@signet/sdk)
   typed client, React hooks, Vercel/OpenAI helpers, plugin-facing primitives
 
 Connectors
-  claude-code, opencode, openclaw, codex, oh-my-pi, pi, hermes-agent, forge
+  claude-code, opencode, openclaw, codex, gemini, oh-my-pi, pi,
+  hermes-agent, forge
 ```
 
 ## Packages
@@ -365,6 +369,7 @@ Connectors
 | [`@signet/core`](./platform/core) | Types, identity, SQLite, hybrid + graph search |
 | [`@signet/cli`](./surfaces/cli) | CLI, setup wizard, dashboard |
 | [`@signet/daemon`](./platform/daemon) | API server, distillation layer, auth, analytics, diagnostics |
+| [`platform/daemon-rs`](./platform/daemon-rs) | Rust shadow runtime and parity logging |
 | [`signet-dashboard`](./surfaces/dashboard) | Svelte dashboard built to static assets and served by the daemon |
 | [`@signet/sdk`](./libs/sdk) | Typed client, React hooks, Vercel AI SDK middleware |
 | [`runtimes/forge`](./runtimes/forge) | Forge native terminal harness and reference runtime implementation |
@@ -438,15 +443,16 @@ bun run lint
 ```
 
 ```bash
-cd platform/daemon && bun run dev        # Daemon dev (watch mode)
-cd surfaces/dashboard && bun run dev # Dashboard dev
+cd platform/daemon && bun run dev     # Daemon dev (watch mode)
+cd surfaces/dashboard && bun run dev  # Dashboard dev
 ```
 
 Requirements:
 
 - Node.js 18+ or Bun
 - macOS or Linux
-- Optional for harness integrations: Claude Code, Codex, OpenCode, or OpenClaw
+- Optional for harness integrations: Claude Code, Codex, OpenCode, OpenClaw,
+  Gemini CLI, Pi, Oh My Pi, or Hermes Agent
 
 Embeddings (choose one):
 
@@ -474,7 +480,7 @@ contributing significant features. Read the
 
 ## Contributors
 
-<a href="https://github.com/NicholaiVogel"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/217880623?v=4&s=48" width="48" height="48" alt="NicholaiVogel" title="NicholaiVogel" /></a> <a href="https://github.com/BusyBee3333"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/241850310?v=4&s=48" width="48" height="48" alt="BusyBee3333" title="BusyBee3333" /></a> <a href="https://github.com/stephenwoska2-cpu"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/258141506?v=4&s=48" width="48" height="48" alt="stephenwoska2-cpu" title="stephenwoska2-cpu" /></a> <a href="https://github.com/PatchyToes"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/256889430?v=4&s=48" width="48" height="48" alt="PatchyToes" title="PatchyToes" /></a> <a href="https://github.com/aaf2tbz"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/260091788?v=4&s=48" width="48" height="48" alt="aaf2tbz" title="aaf2tbz" /></a> <a href="https://github.com/ddasgupta4"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/ddasgupta4?v=4&s=48" width="48" height="48" alt="ddasgupta4" title="ddasgupta4" /></a> <a href="https://github.com/alcar2364"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/alcar2364?v=4&s=48" width="48" height="48" alt="alcar2364" title="alcar2364" /></a> <a href="https://github.com/maximhar"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/maximhar?v=4&s=48" width="48" height="48" alt="maximhar" title="maximhar" /></a> <a href="https://github.com/lost-orchard"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/lost-orchard?v=4&s=48" width="48" height="48" alt="lost-orchard" title="lost-orchard" /></a> <a href="https://github.com/Ostico"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/8008416?v=4&s=48" width="48" height="48" alt="Ostico" title="Ostico" /></a> <a href="https://github.com/gpzack"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/271398594?v=4&s=48" width="48" height="48" alt="gpzack" title="gpzack" /></a> <a href="https://github.com/LeuciRemi"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/44776125?v=4&s=48" width="48" height="48" alt="LeuciRemi" title="LeuciRemi" /></a> <a href="https://github.com/nyashkn"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/1158551?v=4&s=48" width="48" height="48" alt="nyashkn" title="nyashkn" /></a>
+<a href="https://github.com/NicholaiVogel"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/217880623?v=4&s=48" width="48" height="48" alt="NicholaiVogel" title="NicholaiVogel" /></a> <a href="https://github.com/BusyBee3333"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/241850310?v=4&s=48" width="48" height="48" alt="BusyBee3333" title="BusyBee3333" /></a> <a href="https://github.com/stephenwoska2-cpu"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/258141506?v=4&s=48" width="48" height="48" alt="stephenwoska2-cpu" title="stephenwoska2-cpu" /></a> <a href="https://github.com/PatchyToes"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/256889430?v=4&s=48" width="48" height="48" alt="PatchyToes" title="PatchyToes" /></a> <a href="https://github.com/aaf2tbz"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/260091788?v=4&s=48" width="48" height="48" alt="aaf2tbz" title="aaf2tbz" /></a> <a href="https://github.com/ddasgupta4"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/ddasgupta4?v=4&s=48" width="48" height="48" alt="ddasgupta4" title="ddasgupta4" /></a> <a href="https://github.com/alcar2364"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/alcar2364?v=4&s=48" width="48" height="48" alt="alcar2364" title="alcar2364" /></a> <a href="https://github.com/maximhar"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/maximhar?v=4&s=48" width="48" height="48" alt="maximhar" title="maximhar" /></a> <a href="https://github.com/lost-orchard"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/lost-orchard?v=4&s=48" width="48" height="48" alt="lost-orchard" title="lost-orchard" /></a> <a href="https://github.com/Ostico"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/8008416?v=4&s=48" width="48" height="48" alt="Ostico" title="Ostico" /></a> <a href="https://github.com/gpzack"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/271398594?v=4&s=48" width="48" height="48" alt="gpzack" title="gpzack" /></a> <a href="https://github.com/LeuciRemi"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/44776125?v=4&s=48" width="48" height="48" alt="LeuciRemi" title="LeuciRemi" /></a> <a href="https://github.com/nyashkn"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/1158551?v=4&s=48" width="48" height="48" alt="nyashkn" title="nyashkn" /></a> <a href="https://github.com/dragontvstaff"><img align="left" hspace="4" src="https://avatars.githubusercontent.com/u/279829920?v=4&s=48" width="48" height="48" alt="dragontvstaff" title="dragontvstaff" /></a>
 <br clear="left" />
 
 Made with love by members of Dashore Incubator & friends of Jake Shore and Nicholai Vogel.
