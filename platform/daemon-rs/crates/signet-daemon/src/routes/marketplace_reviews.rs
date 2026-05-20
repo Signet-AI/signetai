@@ -19,7 +19,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{auth::middleware::authenticate_headers, state::AppState, workspace_paths};
+use crate::{
+    auth::{
+        middleware::{authenticate_headers, require_permission_guard},
+        types::Permission,
+    },
+    state::AppState,
+    workspace_paths,
+};
 
 const REVIEWS_SYNC_URL: &str = "https://reviews.signetai.sh/api/reviews/sync";
 static REVIEWS_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -269,16 +276,17 @@ fn require_authenticated_or_response(
     state: &AppState,
     peer: SocketAddr,
     headers: &HeaderMap,
+    permission: Permission,
 ) -> Result<(), Response> {
     let is_local = peer.ip().is_loopback();
-    authenticate_headers(
+    let auth = authenticate_headers(
         state.auth_mode,
         state.auth_secret.as_deref(),
         headers,
         is_local,
     )
-    .map(|_| ())
-    .map_err(|resp| *resp)
+    .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, permission, state.auth_mode, is_local).map_err(|resp| *resp)
 }
 
 /// GET /api/marketplace/reviews
@@ -288,7 +296,8 @@ pub async fn list(
     headers: HeaderMap,
     Query(query): Query<ListReviewsQuery>,
 ) -> Response {
-    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers) {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers, Permission::Recall)
+    {
         return resp;
     }
     let target_type = parse_target_type(query.target_type);
@@ -341,7 +350,8 @@ pub async fn create(
     headers: HeaderMap,
     Json(body): Json<CreateReviewBody>,
 ) -> Response {
-    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers) {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers, Permission::Modify)
+    {
         return resp;
     }
     let target_type = parse_target_type(body.target_type);
@@ -426,7 +436,8 @@ pub async fn get_config(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers) {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers, Permission::Recall)
+    {
         return resp;
     }
     let config = read_config(&state);
@@ -457,7 +468,8 @@ pub async fn patch_config(
     headers: HeaderMap,
     Json(body): Json<PatchConfigBody>,
 ) -> Response {
-    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers) {
+    if let Err(resp) = require_authenticated_or_response(&state, peer, &headers, Permission::Modify)
+    {
         return resp;
     }
     let current = read_config(&state);

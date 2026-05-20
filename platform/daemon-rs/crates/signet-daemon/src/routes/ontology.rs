@@ -21,7 +21,10 @@ use signet_core::{db::Priority, error::CoreError};
 use uuid::Uuid;
 
 use crate::{
-    auth::middleware::{authenticate_headers, resolve_scoped_agent},
+    auth::{
+        middleware::{authenticate_headers, require_permission_guard, resolve_scoped_agent},
+        types::Permission,
+    },
     state::AppState,
 };
 
@@ -459,6 +462,7 @@ fn scoped_agent_or_response(
     peer: SocketAddr,
     headers: &HeaderMap,
     requested: Option<&str>,
+    permission: Permission,
 ) -> Result<String, Response> {
     let is_local = peer.ip().is_loopback();
     let auth = authenticate_headers(
@@ -468,6 +472,7 @@ fn scoped_agent_or_response(
         is_local,
     )
     .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, permission, state.auth_mode, is_local).map_err(|resp| *resp)?;
     resolve_scoped_agent(&auth, state.auth_mode, is_local, requested)
         .map_err(|reason| (StatusCode::FORBIDDEN, Json(json!({"error": reason}))).into_response())
 }
@@ -485,7 +490,13 @@ pub async fn list(
         )
             .into_response();
     }
-    let agent = match scoped_agent_or_response(&state, peer, &headers, query.agent_id.as_deref()) {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -539,7 +550,13 @@ pub async fn get(
     Path(id): Path<String>,
     Query(query): Query<ProposalQuery>,
 ) -> Response {
-    let agent = match scoped_agent_or_response(&state, peer, &headers, query.agent_id.as_deref()) {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -594,10 +611,12 @@ pub async fn create(
             .into_response();
     }
     let requested_agent = body.agent_id.as_deref();
-    let agent = match scoped_agent_or_response(&state, peer, &headers, requested_agent) {
-        Ok(id) => id,
-        Err(resp) => return resp,
-    };
+    let agent =
+        match scoped_agent_or_response(&state, peer, &headers, requested_agent, Permission::Modify)
+        {
+            Ok(id) => id,
+            Err(resp) => return resp,
+        };
     let result = state
         .pool
         .write_tx(
@@ -621,7 +640,13 @@ pub async fn batch(
     headers: HeaderMap,
     Json(body): Json<ProposalBody>,
 ) -> Response {
-    let agent = match scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        body.agent_id.as_deref(),
+        Permission::Modify,
+    ) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -741,7 +766,13 @@ pub async fn apply(
     Path(id): Path<String>,
     Json(body): Json<ProposalBody>,
 ) -> Response {
-    let agent = match scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        body.agent_id.as_deref(),
+        Permission::Modify,
+    ) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -755,7 +786,13 @@ pub async fn reject(
     Path(id): Path<String>,
     Json(body): Json<ProposalBody>,
 ) -> Response {
-    let agent = match scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        body.agent_id.as_deref(),
+        Permission::Modify,
+    ) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -769,7 +806,13 @@ pub async fn evidence(
     Path(id): Path<String>,
     Query(query): Query<ProposalQuery>,
 ) -> Response {
-    let agent = match scoped_agent_or_response(&state, peer, &headers, query.agent_id.as_deref()) {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -818,7 +861,13 @@ pub async fn conflicts(
     headers: HeaderMap,
     Query(query): Query<ProposalQuery>,
 ) -> Response {
-    let agent = match scoped_agent_or_response(&state, peer, &headers, query.agent_id.as_deref()) {
+    let agent = match scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        query.agent_id.as_deref(),
+        Permission::Recall,
+    ) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -858,7 +907,7 @@ pub async fn repair_duplicates(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None) {
+    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None, Permission::Modify) {
         return resp;
     }
     (
@@ -874,7 +923,13 @@ pub async fn extract(
     headers: HeaderMap,
     Json(body): Json<ProposalBody>,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+    if let Err(resp) = scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        body.agent_id.as_deref(),
+        Permission::Modify,
+    ) {
         return resp;
     }
     (StatusCode::OK, Json(json!({"items": [], "proposals": [], "count": 0, "writtenCount": 0, "dryRun": !body.write_proposals.unwrap_or(false)}))).into_response()
@@ -886,7 +941,13 @@ pub async fn consolidate(
     headers: HeaderMap,
     Json(body): Json<ProposalBody>,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, body.agent_id.as_deref()) {
+    if let Err(resp) = scoped_agent_or_response(
+        &state,
+        peer,
+        &headers,
+        body.agent_id.as_deref(),
+        Permission::Modify,
+    ) {
         return resp;
     }
     if body.limit.is_some_and(|l| l < 0) {
@@ -904,7 +965,7 @@ pub async fn claim_evidence(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None) {
+    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None, Permission::Recall) {
         return resp;
     }
     (StatusCode::OK, Json(json!({"items": [], "count": 0}))).into_response()
@@ -915,7 +976,7 @@ pub async fn link_evidence(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None) {
+    if let Err(resp) = scoped_agent_or_response(&state, peer, &headers, None, Permission::Recall) {
         return resp;
     }
     (StatusCode::OK, Json(json!({"items": [], "count": 0}))).into_response()

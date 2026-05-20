@@ -285,11 +285,15 @@ impl TestServer {
     }
 
     fn scoped_token(agent: &str) -> String {
+        Self::scoped_role_token(agent, "agent")
+    }
+
+    fn scoped_role_token(agent: &str, role: &str) -> String {
         let now = chrono::Utc::now().timestamp();
         let payload = json!({
             "sub": format!("test-{agent}"),
             "scope": {"agent": agent},
-            "role": "agent",
+            "role": role,
             "iat": now,
             "exp": now + 3600,
         });
@@ -1217,6 +1221,7 @@ async fn workspace_file_mutations_enforce_team_admin_auth() {
 async fn marketplace_reviews_enforces_team_auth_on_mutations() {
     let server = TestServer::start_team_auth().await;
     let token = TestServer::scoped_token("default");
+    let readonly_token = TestServer::scoped_role_token("default", "readonly");
 
     let review_body = json!({
         "targetType": "skill",
@@ -1231,6 +1236,20 @@ async fn marketplace_reviews_enforces_team_auth_on_mutations() {
         .post("/api/marketplace/reviews", review_body.clone())
         .await;
     assert_eq!(resp.status(), 401);
+
+    let resp = server
+        .get_bearer("/api/marketplace/reviews", &readonly_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post_bearer(
+            "/api/marketplace/reviews",
+            review_body.clone(),
+            &readonly_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
 
     let resp = server
         .post_bearer("/api/marketplace/reviews", review_body, &token)
@@ -1250,6 +1269,15 @@ async fn marketplace_reviews_enforces_team_auth_on_mutations() {
         )
         .await;
     assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .patch_bearer(
+            "/api/marketplace/reviews/config",
+            json!({"enabled": false}),
+            &readonly_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
 }
 
 #[tokio::test]
@@ -1698,6 +1726,73 @@ async fn ontology_proposals_enforce_authenticated_agent_scope() {
             &format!("/api/ontology/proposals/{id}/apply"),
             json!({"agentId": "default", "actor": "operator"}),
             &other_agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn ontology_proposals_require_modify_permission_for_mutations() {
+    let server = TestServer::start_team_auth().await;
+    let token = TestServer::scoped_token("default");
+    let readonly_token = TestServer::scoped_role_token("default", "readonly");
+    let proposal_body = json!({
+        "operation": "create_entity",
+        "payload": {"name": "Readonly Blocked Entity"}
+    });
+
+    let resp = server
+        .get_bearer("/api/ontology/proposals", &readonly_token)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = server
+        .post_bearer(
+            "/api/ontology/proposals",
+            proposal_body.clone(),
+            &readonly_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = server
+        .post_bearer("/api/ontology/proposals", proposal_body, &token)
+        .await;
+    assert_eq!(resp.status(), 201);
+    let body = server.json(resp).await;
+    let id = body["id"].as_str().unwrap().to_string();
+
+    for path in [
+        "/api/ontology/proposals/batch",
+        "/api/ontology/proposals/repair/duplicates",
+        "/api/ontology/extract",
+        "/api/ontology/consolidate",
+    ] {
+        let resp = server
+            .post_bearer(
+                path,
+                json!({"proposals": [], "writeProposals": true}),
+                &readonly_token,
+            )
+            .await;
+        assert_eq!(resp.status(), 403, "{path}");
+    }
+
+    let resp = server
+        .post_bearer(
+            &format!("/api/ontology/proposals/{id}/apply"),
+            json!({"actor": "readonly"}),
+            &readonly_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = server
+        .post_bearer(
+            &format!("/api/ontology/proposals/{id}/reject"),
+            json!({"actor": "readonly"}),
+            &readonly_token,
         )
         .await;
     assert_eq!(resp.status(), 403);
