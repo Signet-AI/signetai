@@ -101,6 +101,11 @@ interface RememberDedupeRow {
 	readonly content: string;
 }
 
+interface RememberDedupeIdRow {
+	readonly id: string;
+	readonly sourceId: string | null;
+}
+
 function pickOptionalString(...values: readonly unknown[]): string | undefined {
 	for (const value of values) {
 		const parsed = parseOptionalString(value);
@@ -138,27 +143,31 @@ function scopedMemoryPredicate(input: RememberDedupeScope): {
 	readonly sql: string;
 	readonly params: readonly string[];
 } {
-	return input.scope === null
-		? {
-				sql: "agent_id = ? AND visibility = ? AND scope IS NULL",
-				params: [input.agentId, input.visibility],
-			}
-		: {
-				sql: "agent_id = ? AND visibility = ? AND scope = ?",
-				params: [input.agentId, input.visibility, input.scope],
-			};
+	return {
+		sql: `
+			COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			AND COALESCE(visibility, 'global') = ?
+			AND COALESCE(scope, '__NULL__') = ?
+		`,
+		params: [input.agentId || "default", input.visibility, input.scope ?? "__NULL__"],
+	};
 }
 
 function getScopedIdempotencyMemoryId(
 	db: WriteDb,
 	key: string | undefined,
 	input: RememberDedupeScope,
-): { readonly id: string } | undefined {
+): RememberDedupeIdRow | undefined {
 	if (!key) return undefined;
 	const scoped = scopedMemoryPredicate(input);
 	return db
-		.prepare(`SELECT id FROM memories WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0 LIMIT 1`)
-		.get(key, ...scoped.params) as { readonly id: string } | undefined;
+		.prepare(
+			`SELECT id, source_id AS sourceId
+			 FROM memories
+			 WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(key, ...scoped.params) as RememberDedupeIdRow | undefined;
 }
 
 function getScopedIdempotencyDedupeRow(
@@ -656,7 +665,45 @@ export function registerMemoryRoutes(app: Hono): void {
 			const tags = hasBodyTags ? bodyTags : parsedPrefixes.tags;
 			const pipelineEnqueueEnabled = pipelineCfg.enabled;
 
-			const groupId = crypto.randomUUID();
+			const chunkPlans = chunks
+				.map((chunk, index) => {
+					const normalized = normalizeAndHashContent(chunk);
+					if (!normalized.storageContent) return null;
+					return {
+						chunk,
+						contentForInsert:
+							normalized.normalizedContent.length > 0 ? normalized.normalizedContent : normalized.hashBasis,
+						idempotencyKey: idempotencyKeyForChunk(rowProvenance.idempotencyKey, index),
+						memType: inferType(chunk),
+						normalized,
+					};
+				})
+				.filter((plan): plan is NonNullable<typeof plan> => plan !== null);
+			if (chunkPlans.length === 0) {
+				return c.json({ error: "content produced no valid chunks" }, 400);
+			}
+
+			const existingChunks = getDbAccessor().withReadDb((db) => {
+				const rows = new Map<number, RememberDedupeIdRow>();
+				for (let index = 0; index < chunkPlans.length; index += 1) {
+					const row = getScopedIdempotencyMemoryId(db, chunkPlans[index].idempotencyKey, dedupeScope);
+					if (row) rows.set(index, row);
+				}
+				return rows;
+			});
+			const existingGroupId = Array.from(existingChunks.values()).find((row) => row.sourceId)?.sourceId ?? null;
+			if (existingChunks.size === chunkPlans.length) {
+				const ids = chunkPlans.map((_, index) => existingChunks.get(index)?.id).filter((id): id is string => !!id);
+				return c.json({
+					chunked: true,
+					chunk_count: ids.length,
+					ids,
+					group_id: existingGroupId,
+					deduped: true,
+				});
+			}
+
+			const groupId = existingGroupId ?? crypto.randomUUID();
 			const now = new Date().toISOString();
 			const chunkIds: string[] = [];
 
@@ -664,7 +711,7 @@ export function registerMemoryRoutes(app: Hono): void {
 			try {
 				getDbAccessor().withWriteTx((db) => {
 					db.prepare(
-						`INSERT INTO entities
+						`INSERT OR IGNORE INTO entities
 						 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 						 VALUES (?, ?, ?, 'chunk_group', ?, 0, ?, ?)`,
 					).run(groupId, `chunk-group:${groupId}`, `chunk-group:${groupId}`, agentId, now, now);
@@ -674,43 +721,38 @@ export function registerMemoryRoutes(app: Hono): void {
 				return c.json({ error: "Failed to create chunk group" }, 500);
 			}
 
-			for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
-				const chunk = chunks[chunkIndex];
-				const chunkNormalized = normalizeAndHashContent(chunk);
-				if (!chunkNormalized.storageContent) continue;
-
+			for (let chunkIndex = 0; chunkIndex < chunkPlans.length; chunkIndex += 1) {
+				const plan = chunkPlans[chunkIndex];
 				const chunkId = crypto.randomUUID();
-				const chunkIdempotencyKey = idempotencyKeyForChunk(rowProvenance.idempotencyKey, chunkIndex);
-				const chunkContentForInsert =
-					chunkNormalized.normalizedContent.length > 0 ? chunkNormalized.normalizedContent : chunkNormalized.hashBasis;
-				const memType = inferType(chunk);
 
 				try {
-					const inserted = getDbAccessor().withWriteTx((db) => {
-						if (getScopedIdempotencyMemoryId(db, chunkIdempotencyKey, dedupeScope)) return false;
+					const result = getDbAccessor().withWriteTx((db) => {
+						const byIdempotencyKey =
+							existingChunks.get(chunkIndex) ?? getScopedIdempotencyMemoryId(db, plan.idempotencyKey, dedupeScope);
+						if (byIdempotencyKey) return { id: byIdempotencyKey.id, inserted: false as const };
 
 						const byHash =
 							scope !== null
 								? (db
 										.prepare("SELECT id FROM memories WHERE content_hash = ? AND scope = ? AND is_deleted = 0 LIMIT 1")
-										.get(chunkNormalized.contentHash, scope) as { id: string } | undefined)
+										.get(plan.normalized.contentHash, scope) as { id: string } | undefined)
 								: (db
 										.prepare(
 											"SELECT id FROM memories WHERE content_hash = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1",
 										)
-										.get(chunkNormalized.contentHash) as { id: string } | undefined);
-						if (byHash) return false;
+										.get(plan.normalized.contentHash) as { id: string } | undefined);
+						if (byHash) return { id: byHash.id, inserted: false as const };
 
 						txIngestEnvelope(db, {
 							id: chunkId,
-							content: chunkNormalized.storageContent,
-							normalizedContent: chunkContentForInsert,
-							contentHash: chunkNormalized.contentHash,
+							content: plan.normalized.storageContent,
+							normalizedContent: plan.contentForInsert,
+							contentHash: plan.normalized.contentHash,
 							who,
 							why: pinned ? "explicit-critical" : "explicit",
 							project,
 							importance,
-							type: memType,
+							type: plan.memType,
 							tags: tags ?? null,
 							pinned,
 							isDeleted: 0,
@@ -722,7 +764,7 @@ export function registerMemoryRoutes(app: Hono): void {
 							sourceId: groupId,
 							sourcePath: rowProvenance.sourcePath ?? null,
 							runtimePath: rowProvenance.runtimePath ?? null,
-							idempotencyKey: chunkIdempotencyKey ?? null,
+							idempotencyKey: plan.idempotencyKey ?? null,
 							scope,
 							agentId,
 							visibility,
@@ -736,38 +778,38 @@ export function registerMemoryRoutes(app: Hono): void {
 							 VALUES (?, ?, 'chunk', 1.0, ?)`,
 						).run(chunkId, groupId, now);
 
-						return true;
+						return { id: chunkId, inserted: true as const };
 					});
 
-					if (!inserted) continue;
-					chunkIds.push(chunkId);
+					chunkIds.push(result.id);
+					if (!result.inserted) continue;
 
 					// Generate embedding async
 					try {
-						const vec = await fetchEmbedding(chunkNormalized.storageContent, fullCfg.embedding);
+						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding);
 						if (vec) {
 							if (vec.length !== fullCfg.embedding.dimensions) {
 								logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
 									got: vec.length,
 									expected: fullCfg.embedding.dimensions,
-									memoryId: chunkId,
+									memoryId: result.id,
 								});
 							} else {
 								const embId = crypto.randomUUID();
 								const blob = vectorToBlob(vec);
-								const embHash = scope ? `${chunkNormalized.contentHash}:${scope}` : chunkNormalized.contentHash;
+								const embHash = scope ? `${plan.normalized.contentHash}:${scope}` : plan.normalized.contentHash;
 								getDbAccessor().withWriteTx((db) => {
-									syncVecDeleteBySourceId(db, "memory", chunkId);
-									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
+									syncVecDeleteBySourceId(db, "memory", result.id);
+									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(result.id);
 									db.prepare(`
 										INSERT INTO embeddings
 										  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 										VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-									`).run(embId, embHash, blob, vec.length, chunkId, chunkNormalized.storageContent, now);
+									`).run(embId, embHash, blob, vec.length, result.id, plan.normalized.storageContent, now);
 									syncVecInsert(db, embId, vec);
 									db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(
 										fullCfg.embedding.model,
-										chunkId,
+										result.id,
 									);
 								});
 							}
@@ -782,7 +824,7 @@ export function registerMemoryRoutes(app: Hono): void {
 					// Inline entity linking for chunk
 					try {
 						getDbAccessor().withWriteTx((db) => {
-							linkMemoryToEntities(db, chunkId, chunk, agentId);
+							linkMemoryToEntities(db, result.id, plan.chunk, agentId);
 						});
 					} catch {
 						// Non-fatal — pipeline extraction handles deeper linking
@@ -791,10 +833,10 @@ export function registerMemoryRoutes(app: Hono): void {
 					// Enqueue pipeline extraction if enabled
 					if (pipelineEnqueueEnabled) {
 						try {
-							queueExtractionJob(chunkId);
+							queueExtractionJob(result.id);
 						} catch (e) {
 							logger.warn("pipeline", "Failed to enqueue chunk extraction", {
-								chunkId,
+								chunkId: result.id,
 								error: String(e),
 							});
 						}

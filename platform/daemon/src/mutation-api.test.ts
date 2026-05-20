@@ -274,6 +274,98 @@ memory:
 		expect(row?.count).toBe(3);
 	});
 
+	it("POST /api/memory/remember matches normalized idempotency-key index scope", async () => {
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Legacy normalized idempotency row",
+				who: "soulvessel.tests",
+				idempotencyKey: "legacy-normalized-key",
+			}),
+		});
+		const firstJson = (await first.json()) as { id?: string };
+		expect(first.status).toBe(200);
+		expect(firstJson.id).toBeString();
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memories SET agent_id = '', visibility = NULL WHERE id = ?").run(firstJson.id);
+		});
+
+		const retry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Different retry content for normalized idempotency row",
+				who: "soulvessel.tests",
+				idempotencyKey: "legacy-normalized-key",
+			}),
+		});
+		const retryJson = (await retry.json()) as { id?: string; deduped?: boolean };
+		expect(retry.status).toBe(200);
+		expect(retryJson).toMatchObject({ id: firstJson.id, deduped: true });
+	});
+
+	it("POST /api/memory/remember returns existing chunk ids on idempotent oversized retries", async () => {
+		const content = Array.from(
+			{ length: 90 },
+			(_, index) => `Chunked provenance sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		expect(content.length).toBeGreaterThan(800);
+
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-import-key",
+			}),
+		});
+		const firstJson = (await first.json()) as {
+			chunked?: boolean;
+			chunk_count?: number;
+			ids?: string[];
+			group_id?: string;
+		};
+		expect(first.status).toBe(200);
+		expect(firstJson.chunked).toBe(true);
+		expect(firstJson.ids?.length).toBeGreaterThan(1);
+
+		const retry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-import-key",
+			}),
+		});
+		const retryJson = (await retry.json()) as {
+			chunked?: boolean;
+			chunk_count?: number;
+			deduped?: boolean;
+			ids?: string[];
+			group_id?: string;
+		};
+		expect(retry.status).toBe(200);
+		expect(retryJson).toMatchObject({
+			chunked: true,
+			chunk_count: firstJson.chunk_count,
+			deduped: true,
+			group_id: firstJson.group_id,
+			ids: firstJson.ids,
+		});
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM entities WHERE entity_type = 'chunk_group'").get() as
+					| { count: number }
+					| undefined,
+		);
+		expect(row?.count).toBe(1);
+	});
+
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",
