@@ -73,9 +73,6 @@ GitHub, email, browser history, source code, or `remember(...)`.
 Why artifacts matter
 --------------------
 
-The important lesson from Supermemory is not that Signet should copy their
-product. It is that artifacts give the system a strong spine.
-
 An artifact is easy to reason about. It has a boundary. It has authorship. It
 has time. It can be reprocessed. It can be cited. It can supersede another
 artifact. It can contain many facts without forcing the system to decide all of
@@ -249,9 +246,9 @@ Questions should appear when:
 - a policy or permission boundary is unclear;
 - an action depends on a claim that lacks evidence.
 
-This is where Supermemory's product lesson is strongest. Their graph feels
-useful because uncertainty becomes a user-facing loop. Signet should do the
-same, but with stronger provenance and agent-operational structure.
+This is where uncertainty should become a user-facing loop. Signet should ask
+targeted questions with provenance and agent-operational structure instead of
+letting unclear evidence silently harden into current truth.
 
 The question is not a random chatbot prompt. It is an ontology maintenance
 object.
@@ -268,33 +265,45 @@ Result: user answer becomes a new artifact and updates the reducer
 The user's answer is also an artifact. It should be saved, linked to the
 question, and used to update the relevant claim slot.
 
-Proposals before mutation
--------------------------
+Audited mutation and review queues
+----------------------------------
 
-Extraction and consolidation should produce proposals before they mutate the
-ontology.
+Explicit, bounded ontology maintenance should apply through audited operation
+handlers. That is the default path for ordinary dreaming and graph cleanup:
+validate selectors, preserve evidence, write an applied operation record, and
+update the graph in one controlled transaction.
+
+Pending proposals are still important, but they are not the default for every
+small update. They belong where review is valuable: broad graph refactors,
+risky or destructive changes, duplicate merge campaigns, low-confidence
+generated maintenance, and cases where the operator explicitly asks for a
+review queue.
 
 This matters because LLMs are useful but not sacred. A model can extract the
 wrong entity, over-merge two projects, summarize away an important caveat, or
 mark a value superseded when it is only context-specific. If raw artifacts are
-preserved and mutations are proposals, Signet can rerun extraction with a better
-model, inspect the diff, and apply only what makes sense.
+preserved and risky generated changes can become proposals, Signet can rerun
+extraction with a better model, inspect the diff, and apply only what makes
+sense.
 
 The daemon should stay boring where reliability matters. It should capture,
 persist, index, expose APIs, track lineage, and keep recall fast. Semantic
 maintenance can happen through agents, CLI tools, scheduled jobs, or explicit
 user actions.
 
-A practical command shape might look like this:
+The current command shape is:
 
 ```text
-signet ontology extract --from artifact:<id> --dry-run
-signet ontology consolidate --entity Nicholai --since 30d --dry-run
-signet ontology proposals list
-signet ontology proposal show <id>
+signet ontology extract --from artifact:<id> --json
+signet ontology extract --from transcript:<id> --write-proposals --json
+signet ontology consolidate --proposals pending --json
+signet ontology proposals --status pending --json
+signet ontology proposal <id>
 signet ontology apply <proposal-id>
-signet ontology reject <proposal-id>
-signet ontology evidence <claim-slot-id>
+signet ontology reject <proposal-id> --reason "weak evidence"
+signet ontology claim-evidence <entity> <aspect> <group> <claim> --status all --json
+signet ontology entity merge-plan "Canonical Entity" "Duplicate Entity" --propose --json
+signet ontology stream apply ops.jsonl --json
 ```
 
 The important part is not the exact CLI. The important part is that ontology
@@ -333,8 +342,10 @@ artifact, then extract observations and propose updates.
 
 Dreaming should become consolidation over evidence, not hidden direct mutation.
 It should reason over artifacts, observations, old claim values, current
-reducers, conflicts, and user answers. Its output should be proposals and
-questions first.
+reducers, conflicts, and user answers. Its normal output should be audited
+operations with provenance, epistemic assertions for attributed statements, and
+questions where evidence is weak. Pending proposals remain the right output for
+large refactors, risky generated maintenance, or explicit review queues.
 
 The low-touch path stays
 ------------------------
@@ -367,8 +378,10 @@ This gives Signet a cleaner product shape.
 A user connects sources. Signet indexes their artifacts as evidence. The
 ontology shows people, projects, artifacts, tasks, policies, and claims. Agents
 operate through current views, not raw chunks. When evidence changes, Signet
-proposes updates. When evidence conflicts, Signet asks targeted questions. When
-the user answers, that answer becomes a new artifact with lineage.
+applies clear source-backed updates through the control plane and proposes
+risky updates for review. When evidence conflicts, Signet asks targeted
+questions. When the user answers, that answer becomes a new artifact with
+lineage.
 
 This also gives Signet a cleaner engineering path.
 
@@ -381,14 +394,15 @@ artifact-derived claim lifecycle:
 3. Map observations to existing entity/aspect/group/claim slots.
 4. Store multiple claim values per slot with provenance.
 5. Use reducers to choose current values.
-6. Emit proposals when a new value should supersede or conflict with an old one.
-7. Emit questions when the system needs user judgment.
-8. Show evidence lineage from current value back to the original artifact.
+6. Apply clear source-backed updates with audit metadata.
+7. Emit proposals when a risky new value should supersede or conflict with an
+   old one.
+8. Emit questions when the system needs user judgment.
+9. Show evidence lineage from current value back to the original artifact.
 
 That is the north star: Signet as an artifact-backed operational ontology.
 
-Not a memory pile. Not a decorative graph. Not a filesystem trend with better
-marketing.
+Not a memory pile. Not a decorative graph. Not a trend with better marketing.
 
 A world model agents can act through, with artifacts underneath and reviewable
 change on top.
