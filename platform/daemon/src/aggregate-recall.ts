@@ -189,7 +189,7 @@ function uniqueEvidence(rows: readonly RecallResult[]): RecallResult[] {
 }
 
 function evidenceCanSaveAsGlobalAggregate(rows: readonly RecallResult[]): boolean {
-	return rows.every((row) => (row.visibility ?? "global") === "global" && (row.scope ?? null) === null);
+	return rows.every((row) => row.visibility === "global" && row.scope === null);
 }
 
 function aggregateKey(input: {
@@ -259,7 +259,7 @@ function loadAggregateByKey(
 			 FROM memories
 			 WHERE idempotency_key = ?
 			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
-			   AND COALESCE(visibility, 'global') = 'global'
+			   AND visibility = 'global'
 			   AND scope IS NULL
 			   AND is_deleted = 0
 			 LIMIT 1`,
@@ -289,8 +289,7 @@ function loadMemoryByContentHash(
 	if (!row) return null;
 	return {
 		row: rowToRecallResult(row),
-		visibleForAggregate:
-			(row.visibility ?? "global") === "global" && (input.project === null || row.project === input.project),
+		visibleForAggregate: row.visibility === "global" && (input.project === null || row.project === input.project),
 		aggregateRecallMemory: row.source_type === "aggregate-recall",
 	};
 }

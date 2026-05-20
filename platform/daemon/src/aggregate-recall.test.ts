@@ -30,6 +30,8 @@ function row(
 		who: "test",
 		project: null,
 		created_at: now,
+		visibility: "global",
+		scope: null,
 		...opts,
 	};
 }
@@ -294,6 +296,42 @@ describe("aggregateRecall", () => {
 		});
 		const count = getDbAccessor().withReadDb(
 			(db) => db.prepare("SELECT COUNT(*) AS n FROM memories WHERE id = ?").get("aggregate-private") as { n: number },
+		);
+		expect(count.n).toBe(0);
+	});
+
+	it("does not save aggregate memories when evidence lacks explicit global scope metadata", async () => {
+		const result = await aggregateRecall(
+			{
+				query: "legacy history",
+				aggregate: true,
+				agentId: "agent-legacy",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				idFactory: () => "aggregate-legacy",
+				hybridRecall: async (params: RecallParams) =>
+					response(params.query, [
+						row("mem-legacy", "Legacy evidence without scope metadata", {
+							visibility: undefined,
+							scope: undefined,
+						}),
+					]),
+			},
+		);
+
+		expect(result.results[0].id).toStartWith("aggregate-recall:");
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: null,
+			saved: false,
+			deduped: false,
+			stoppedReason: "complete",
+		});
+		const count = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS n FROM memories WHERE id = ?").get("aggregate-legacy") as { n: number },
 		);
 		expect(count.n).toBe(0);
 	});
