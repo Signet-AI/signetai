@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     Json,
@@ -10,6 +12,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde_json::{Map, Value, json};
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 use crate::auth::{
     middleware::{AuthState, authenticate_headers, require_permission_guard, resolve_scoped_agent},
@@ -34,11 +39,13 @@ struct InferenceConfig {
     target_refs: Vec<String>,
     policies: Vec<String>,
     agents: Value,
+    raw: Option<serde_yml::Value>,
 }
 
 #[derive(Debug)]
 struct RouteRequest {
     agent_id: String,
+    operation: Option<String>,
     privacy: Option<String>,
     explicit_targets: Vec<String>,
 }
@@ -317,6 +324,7 @@ fn load_inference_config(state: &AppState) -> Result<InferenceConfig, Response> 
         target_refs,
         policies: yaml_keys(yaml_mapping_field(inference, "policies")),
         agents,
+        raw: Some(serde_yml::Value::Mapping(inference.clone())),
     })
 }
 
@@ -413,6 +421,7 @@ fn build_route_request(
     let agent_id =
         resolve_scoped_agent(auth, state.auth_mode, is_local(peer), requested.as_deref())
             .map_err(|reason| error(StatusCode::FORBIDDEN, reason))?;
+    let operation = parse_hint(body.get("operation"), "operation")?;
     let privacy = parse_hint(body.get("privacy"), "privacy")?;
     let mut explicit_targets = parse_explicit_targets(body)?;
     if let Some(target) = header_explicit_target {
@@ -429,6 +438,7 @@ fn build_route_request(
     }
     let req = RouteRequest {
         agent_id,
+        operation,
         privacy,
         explicit_targets,
     };
@@ -441,6 +451,192 @@ fn validate_execute_options(body: &Map<String, Value>) -> Result<(), Response> {
     let _ = parse_bounded_number(body.get("maxTokens"), "maxTokens", MAX_RESPONSE_TOKENS)?;
     let _ = parse_bool(body.get("refresh"), "refresh")?;
     Ok(())
+}
+
+fn yaml_string(mapping: &serde_yml::Mapping, key: &str) -> Option<String> {
+    mapping
+        .get(serde_yml::Value::String(key.to_string()))?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn yaml_string_array(mapping: &serde_yml::Mapping, key: &str) -> Vec<String> {
+    mapping
+        .get(serde_yml::Value::String(key.to_string()))
+        .and_then(serde_yml::Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_yml::Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn yaml_string_map(mapping: &serde_yml::Mapping, key: &str) -> Vec<(String, String)> {
+    mapping
+        .get(serde_yml::Value::String(key.to_string()))
+        .and_then(serde_yml::Value::as_mapping)
+        .into_iter()
+        .flat_map(|mapping| mapping.iter())
+        .filter_map(|(key, value)| Some((key.as_str()?.to_string(), value.as_str()?.to_string())))
+        .collect()
+}
+
+fn raw_mapping(config: &InferenceConfig) -> Option<&serde_yml::Mapping> {
+    config.raw.as_ref()?.as_mapping()
+}
+
+fn mapping_child<'a>(mapping: &'a serde_yml::Mapping, key: &str) -> Option<&'a serde_yml::Mapping> {
+    mapping
+        .get(serde_yml::Value::String(key.to_string()))?
+        .as_mapping()
+}
+
+fn resolve_policy_targets(config: &InferenceConfig, policy_id: &str) -> Vec<String> {
+    let Some(inference) = raw_mapping(config) else {
+        return Vec::new();
+    };
+    let Some(policies) = mapping_child(inference, "policies") else {
+        return Vec::new();
+    };
+    let Some(policy) = policies
+        .get(serde_yml::Value::String(policy_id.to_string()))
+        .and_then(serde_yml::Value::as_mapping)
+    else {
+        return Vec::new();
+    };
+    yaml_string_array(policy, "defaultTargets")
+}
+
+fn resolve_default_target_ref(config: &InferenceConfig, req: &RouteRequest) -> Option<String> {
+    if let Some(target) = req.explicit_targets.first() {
+        return Some(target.clone());
+    }
+    let inference = raw_mapping(config)?;
+    let operation = req.operation.as_deref().unwrap_or("default");
+    let workload_policy = mapping_child(inference, "workloads")
+        .and_then(|workloads| workloads.get(serde_yml::Value::String(operation.to_string())))
+        .and_then(serde_yml::Value::as_mapping)
+        .and_then(|workload| yaml_string(workload, "policy"));
+    let policy = workload_policy.or_else(|| yaml_string(inference, "defaultPolicy"))?;
+    resolve_policy_targets(config, &policy).into_iter().next()
+}
+
+fn target_mapping<'a>(
+    config: &'a InferenceConfig,
+    target_ref: &str,
+) -> Option<(&'a serde_yml::Mapping, String)> {
+    let (target_id, model_id) = target_ref.split_once('/')?;
+    let inference = raw_mapping(config)?;
+    let targets = mapping_child(inference, "targets")?;
+    let target = targets
+        .get(serde_yml::Value::String(target_id.to_string()))?
+        .as_mapping()?;
+    Some((target, model_id.to_string()))
+}
+
+fn replace_prompt_tokens(value: &str, prompt: &str) -> String {
+    value
+        .replace("$PROMPT", prompt)
+        .replace("{{prompt}}", prompt)
+}
+
+async fn execute_command_target(
+    state: &AppState,
+    target_ref: &str,
+    target: &serde_yml::Mapping,
+    prompt: &str,
+    timeout_ms: u64,
+) -> Result<Response, Response> {
+    if yaml_string(target, "executor").as_deref() != Some("command") {
+        return Err(unavailable("inference router not initialized"));
+    }
+    let Some(command) = mapping_child(target, "command") else {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("Missing command config for target {target_ref}"),
+        ));
+    };
+    let Some(bin) = yaml_string(command, "bin") else {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("Missing command bin for target {target_ref}"),
+        ));
+    };
+    let mut child = Command::new(bin);
+    child.args(
+        yaml_string_array(command, "args")
+            .into_iter()
+            .map(|arg| replace_prompt_tokens(&arg, prompt)),
+    );
+    if let Some(cwd) = yaml_string(command, "cwd") {
+        let path = std::path::PathBuf::from(&cwd);
+        child.current_dir(if path.is_absolute() {
+            path
+        } else {
+            state.config.base_path.join(path)
+        });
+    }
+    child.env("SIGNET_PROMPT", prompt);
+    for (key, value) in yaml_string_map(command, "env") {
+        child.env(key, replace_prompt_tokens(&value, prompt));
+    }
+    child.stdin(Stdio::piped());
+    child.stdout(Stdio::piped());
+    child.stderr(Stdio::piped());
+
+    let mut child = child.spawn().map_err(|err| {
+        error(
+            StatusCode::BAD_GATEWAY,
+            format!("command:{target_ref} failed to start: {err}"),
+        )
+    })?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(prompt.as_bytes()).await.map_err(|err| {
+            error(
+                StatusCode::BAD_GATEWAY,
+                format!("command:{target_ref} failed to write prompt: {err}"),
+            )
+        })?;
+    }
+    let output = timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
+        .await
+        .map_err(|_| {
+            error(
+                StatusCode::GATEWAY_TIMEOUT,
+                format!("command:{target_ref} timeout"),
+            )
+        })?
+        .map_err(|err| {
+            error(
+                StatusCode::BAD_GATEWAY,
+                format!("command:{target_ref} failed: {err}"),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(error(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "command:{target_ref} exited {:?}: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+                    .chars()
+                    .take(300)
+                    .collect::<String>()
+            ),
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        return Err(error(
+            StatusCode::BAD_GATEWAY,
+            format!("command:{target_ref} returned empty response"),
+        ));
+    }
+    Ok(Json(json!({
+        "text": text,
+        "decision": {"targetRef": target_ref},
+    }))
+    .into_response())
 }
 
 pub async fn status(
@@ -525,20 +721,36 @@ pub async fn execute(
         Ok(body) => body,
         Err(resp) => return resp,
     };
-    if let Err(resp) = parse_prompt(&body) {
-        return resp;
-    }
+    let prompt = match parse_prompt(&body) {
+        Ok(prompt) => prompt,
+        Err(resp) => return resp,
+    };
     let config = match load_inference_config(&state) {
         Ok(config) => config,
         Err(resp) => return resp,
     };
-    if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config, None, None) {
-        return resp;
-    }
+    let req = match build_route_request(&state, peer, &auth, &body, &config, None, None) {
+        Ok(req) => req,
+        Err(resp) => return resp,
+    };
     if let Err(resp) = validate_execute_options(&body) {
         return resp;
     }
-    unavailable("inference router not initialized")
+    let timeout_ms = match parse_bounded_number(body.get("timeoutMs"), "timeoutMs", MAX_TIMEOUT_MS)
+    {
+        Ok(value) => value.unwrap_or(60_000),
+        Err(resp) => return resp,
+    };
+    let Some(target_ref) = resolve_default_target_ref(&config, &req) else {
+        return unavailable("inference router not initialized");
+    };
+    let Some((target, _model_id)) = target_mapping(&config, &target_ref) else {
+        return unavailable("inference router not initialized");
+    };
+    match execute_command_target(&state, &target_ref, target, &prompt, timeout_ms).await {
+        Ok(resp) => resp,
+        Err(resp) => resp,
+    }
 }
 
 pub async fn stream(

@@ -423,6 +423,40 @@ inference:
       policy: auto
 "#;
 
+const COMMAND_INFERENCE_REPLAY_YAML: &str = r#"agent:
+  name: test-agent
+  version: 1
+auth:
+  method: token
+  mode: team
+memory:
+  pipelineV2:
+    extraction:
+      provider: none
+inference:
+  defaultPolicy: auto
+  targets:
+    localCli:
+      executor: command
+      command:
+        bin: /bin/sh
+        args:
+          - -c
+          - 'printf "cli:%s\n" "$SIGNET_PROMPT"'
+      models:
+        default:
+          model: local-cli
+          reasoning: low
+  policies:
+    auto:
+      mode: strict
+      defaultTargets:
+        - localCli/default
+  workloads:
+    default:
+      policy: auto
+"#;
+
 // ---------------------------------------------------------------------------
 // Tests organized by endpoint category
 // ---------------------------------------------------------------------------
@@ -1170,6 +1204,25 @@ async fn inference_native_endpoints_cover_ts_hardening_contract() {
     assert_eq!(resp.status(), 400);
     let body = server.json(resp).await;
     assert_eq!(body["error"]["message"], "scope violation");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn inference_command_execute_replays_ts_contract() {
+    let server = TestServer::start_team_auth_with_agent_yaml(COMMAND_INFERENCE_REPLAY_YAML).await;
+    let admin = TestServer::scoped_role_token("default", "admin");
+
+    let resp = server
+        .post_bearer(
+            "/api/inference/execute",
+            json!({"prompt": "bring your own cli", "operation": "default"}),
+            &admin,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["text"], "cli:bring your own cli");
+    assert_eq!(body["decision"]["targetRef"], "localCli/default");
 }
 
 #[tokio::test]
