@@ -1,5 +1,6 @@
 //! Memory write route handlers (remember, modify, forget, recover).
 
+use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
@@ -14,7 +15,9 @@ use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use signet_core::CoreError;
+use signet_core::config::GuardrailsConfig;
 use signet_core::db::Priority;
+use signet_services::normalize::normalize_and_hash;
 use signet_services::session::SessionTracker;
 use signet_services::transactions;
 
@@ -77,6 +80,7 @@ pub struct RememberBody {
     pub visibility: Option<String>,
     pub scope: Option<String>,
     pub session_key: Option<String>,
+    pub structured: Option<Value>,
 }
 
 fn parse_remember_tags(value: Option<Value>) -> Result<Vec<String>, &'static str> {
@@ -159,6 +163,214 @@ struct RememberDedupeRow {
     pinned: bool,
     importance: f64,
     content: String,
+}
+
+#[derive(Debug)]
+struct ChunkRow {
+    id: String,
+    source_id: Option<String>,
+    content_hash: String,
+    idempotency_key: String,
+}
+
+#[derive(Debug)]
+struct ChunkPlan {
+    content: String,
+    hash: String,
+    idempotency_key: Option<String>,
+}
+
+fn chunk_by_sentence(text: &str, target_chars: usize) -> Vec<String> {
+    let target = target_chars.max(1);
+    let mut sentences = Vec::new();
+    let mut start = 0usize;
+    let mut chars = text.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        let split = matches!(ch, '.' | '!' | '?')
+            && chars
+                .peek()
+                .map(|(_, next)| next.is_whitespace())
+                .unwrap_or(true);
+        if split {
+            let end = idx + ch.len_utf8();
+            let sentence = text[start..end].trim();
+            if !sentence.is_empty() {
+                sentences.push(sentence.to_string());
+            }
+            while let Some((next_idx, next)) = chars.peek().copied() {
+                if !next.is_whitespace() {
+                    start = next_idx;
+                    break;
+                }
+                chars.next();
+                start = next_idx + next.len_utf8();
+            }
+        }
+    }
+    if start < text.len() {
+        let sentence = text[start..].trim();
+        if !sentence.is_empty() {
+            sentences.push(sentence.to_string());
+        }
+    }
+    if sentences.is_empty() {
+        sentences.push(text.trim().to_string());
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for sentence in sentences {
+        if sentence.len() > target * 2 {
+            if !current.trim().is_empty() {
+                chunks.push(current.trim().to_string());
+                current.clear();
+            }
+            let mut offset = 0usize;
+            while offset < sentence.len() {
+                let mut end = (offset + target).min(sentence.len());
+                while end < sentence.len() && !sentence.is_char_boundary(end) {
+                    end += 1;
+                }
+                let chunk = sentence[offset..end].trim();
+                if !chunk.is_empty() {
+                    chunks.push(chunk.to_string());
+                }
+                offset = end;
+            }
+            continue;
+        }
+
+        let combined = if current.is_empty() {
+            sentence.clone()
+        } else {
+            format!("{current} {sentence}")
+        };
+        if combined.len() > target && !current.is_empty() {
+            chunks.push(current.trim().to_string());
+            current = sentence;
+        } else {
+            current = combined;
+        }
+    }
+
+    if !current.trim().is_empty() {
+        chunks.push(current.trim().to_string());
+    }
+    chunks
+}
+
+fn chunk_idempotency_key(base: Option<&str>, index: usize) -> Option<String> {
+    base.map(|key| format!("{key}:chunk:{}", index + 1))
+}
+
+fn chunk_idempotency_index(base: &str, key: &str) -> Option<usize> {
+    let prefix = format!("{base}:chunk:");
+    let suffix = key.strip_prefix(&prefix)?;
+    let index = suffix.parse::<usize>().ok()?;
+    index.checked_sub(1)
+}
+
+fn chunk_group_id(base: &str, agent_id: &str, visibility: &str, scope: Option<&str>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(agent_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(visibility.as_bytes());
+    hasher.update([0]);
+    hasher.update(scope.unwrap_or("__NULL__").as_bytes());
+    hasher.update([0]);
+    hasher.update(base.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    format!("chunk-group:{}", &hash[..32])
+}
+
+fn scoped_chunk_rows(
+    conn: &rusqlite::Connection,
+    base_key: &str,
+    agent_id: &str,
+    visibility: &str,
+    scope: Option<&str>,
+) -> Result<Vec<ChunkRow>, rusqlite::Error> {
+    let prefix = format!("{base_key}:chunk:");
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, source_id, content_hash, idempotency_key
+         FROM memories
+         WHERE instr(idempotency_key, ?1) = 1
+           AND COALESCE(NULLIF(agent_id, ''), 'default') = ?2
+           AND COALESCE(visibility, 'global') = ?3
+           AND COALESCE(scope, '__NULL__') = ?4
+           AND is_deleted = 0",
+    )?;
+    let mut rows = stmt
+        .query_map(
+            params![prefix, agent_id, visibility, scope.unwrap_or("__NULL__")],
+            |row| {
+                Ok(ChunkRow {
+                    id: row.get(0)?,
+                    source_id: row.get(1)?,
+                    content_hash: row.get(2)?,
+                    idempotency_key: row.get(3)?,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.sort_by_key(|row| chunk_idempotency_index(base_key, &row.idempotency_key));
+    Ok(rows)
+}
+
+fn scoped_content_hash_row(
+    conn: &rusqlite::Connection,
+    hash: &str,
+    agent_id: &str,
+    scope: Option<&str>,
+) -> Result<Option<String>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT id
+         FROM memories
+         WHERE content_hash = ?1
+           AND COALESCE(NULLIF(agent_id, ''), 'default') = ?2
+           AND COALESCE(scope, '__NULL__') = ?3
+           AND is_deleted = 0
+         LIMIT 1",
+        params![hash, agent_id, scope.unwrap_or("__NULL__")],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn plan_chunks(
+    content: &str,
+    guardrails: &GuardrailsConfig,
+    base_key: Option<&str>,
+) -> Vec<ChunkPlan> {
+    chunk_by_sentence(content, guardrails.chunk_target_chars)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, chunk)| {
+            let normalized = normalize_and_hash(&chunk);
+            if normalized.storage.is_empty() {
+                return None;
+            }
+            Some(ChunkPlan {
+                content: normalized.storage,
+                hash: normalized.hash,
+                idempotency_key: chunk_idempotency_key(base_key, index),
+            })
+        })
+        .collect()
+}
+
+fn existing_chunks_match(base_key: &str, rows: &[ChunkRow], plans: &[ChunkPlan]) -> bool {
+    let group_ids = rows
+        .iter()
+        .filter_map(|row| row.source_id.as_deref())
+        .collect::<HashSet<_>>();
+    group_ids.len() == 1
+        && rows.len() == plans.len()
+        && rows.iter().zip(plans.iter()).all(|(row, plan)| {
+            chunk_idempotency_index(base_key, &row.idempotency_key).is_some()
+                && plan.idempotency_key.as_deref() == Some(row.idempotency_key.as_str())
+                && row.content_hash == plan.hash
+        })
 }
 
 fn scoped_idempotency_dedupe_row(
@@ -490,12 +702,215 @@ pub async fn remember(
         .map(|pipeline| i64::from(pipeline.worker.max_retries.max(1)))
         .unwrap_or(3);
     let tags_response = tags_csv(&tags);
+    let guardrails = state
+        .config
+        .manifest
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.pipeline_v2.as_ref())
+        .map(|pipeline| pipeline.guardrails.clone())
+        .unwrap_or_default();
+    let has_structured = body
+        .structured
+        .as_ref()
+        .is_some_and(|value| !value.is_null());
+
+    if !has_structured && content.chars().count() > guardrails.max_content_chars {
+        let chunk_plans = plan_chunks(&content, &guardrails, idempotency_key.as_deref());
+        if chunk_plans.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "content produced no valid chunks"})),
+            )
+                .into_response();
+        }
+
+        let result = state
+            .pool
+            .write_tx(Priority::High, {
+                let state = state.clone();
+                let tags = tags.clone();
+                let who = who.clone();
+                let project = project.clone();
+                let source_path = source_path.clone();
+                let runtime_path = runtime_path.clone();
+                let idempotency_key = idempotency_key.clone();
+                let agent_id = agent_id.clone();
+                let visibility = visibility.clone();
+                let scope = scope.clone();
+                move |conn| {
+                    if let Some(key) = idempotency_key.as_deref() {
+                        if scoped_idempotency_dedupe_row(
+                            conn,
+                            key,
+                            &agent_id,
+                            &visibility,
+                            scope.as_deref(),
+                        )?
+                        .is_some()
+                        {
+                            return Ok(serde_json::json!({
+                                "__status": 409,
+                                "error": "idempotencyKey already used for non-chunk content"
+                            }));
+                        }
+
+                        let existing = scoped_chunk_rows(
+                            conn,
+                            key,
+                            &agent_id,
+                            &visibility,
+                            scope.as_deref(),
+                        )?;
+                        if !existing.is_empty() {
+                            if !existing_chunks_match(key, &existing, &chunk_plans) {
+                                return Ok(serde_json::json!({
+                                    "__status": 409,
+                                    "error": "idempotencyKey already used for different chunked content"
+                                }));
+                            }
+                            let group_id = existing
+                                .iter()
+                                .find_map(|row| row.source_id.clone())
+                                .unwrap_or_default();
+                            return Ok(serde_json::json!({
+                                "chunked": true,
+                                "chunk_count": existing.len(),
+                                "ids": existing.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+                                "group_id": group_id,
+                                "deduped": true
+                            }));
+                        }
+                    }
+
+                    let mut hashes = HashSet::new();
+                    for plan in &chunk_plans {
+                        if !hashes.insert(plan.hash.as_str()) {
+                            return Ok(serde_json::json!({
+                                "__status": 409,
+                                "error": "chunked content contains duplicate chunks"
+                            }));
+                        }
+                        if scoped_content_hash_row(conn, &plan.hash, &agent_id, scope.as_deref())?
+                            .is_some()
+                        {
+                            return Ok(serde_json::json!({
+                                "__status": 409,
+                                "error": "chunk content already exists for this agent and scope"
+                            }));
+                        }
+                    }
+
+                    let group_id = idempotency_key
+                        .as_deref()
+                        .map(|key| chunk_group_id(key, &agent_id, &visibility, scope.as_deref()))
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                    let now = chrono::Utc::now().to_rfc3339();
+                    conn.execute(
+                        "INSERT OR IGNORE INTO entities
+                         (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+                         VALUES (?1, ?2, ?2, 'chunk_group', ?3, 0, ?4, ?4)",
+                        params![
+                            group_id,
+                            format!("chunk-group:{group_id}"),
+                            agent_id,
+                            now
+                        ],
+                    )?;
+
+                    let blocked_reason = blocked_extraction_reason_blocking(&state);
+                    let mut ids = Vec::with_capacity(chunk_plans.len());
+                    for plan in &chunk_plans {
+                        let r = ingest_remember_with_blocked_guard(
+                            conn,
+                            &transactions::IngestInput {
+                                content: &plan.content,
+                                memory_type: memory_type.as_str(),
+                                tags: tags.clone(),
+                                who: who.as_deref(),
+                                why: None,
+                                project: project.as_deref(),
+                                importance,
+                                pinned,
+                                source_type: Some("chunk"),
+                                source_id: Some(&group_id),
+                                source_path: source_path.as_deref(),
+                                idempotency_key: plan.idempotency_key.as_deref(),
+                                runtime_path: runtime_path.as_deref(),
+                                actor: "api",
+                                agent_id: &agent_id,
+                                visibility: &visibility,
+                                scope: scope.as_deref(),
+                            },
+                            blocked_reason.as_deref(),
+                            extraction_max_attempts,
+                        )?;
+                        if r.duplicate_of.is_some() {
+                            return Err(CoreError::Conflict(
+                                "chunk content already exists for this agent and scope".to_string(),
+                            ));
+                        }
+                        conn.execute(
+                            "INSERT OR IGNORE INTO memory_entity_mentions
+                             (memory_id, entity_id, mention_text, confidence, created_at)
+                             VALUES (?1, ?2, 'chunk', 1.0, ?3)",
+                            params![r.id, group_id, now],
+                        )?;
+                        ids.push(r.id);
+                    }
+
+                    Ok(serde_json::json!({
+                        "chunked": true,
+                        "chunk_count": ids.len(),
+                        "ids": ids,
+                        "group_id": group_id
+                    }))
+                }
+            })
+            .await;
+
+        return match result {
+            Ok(mut val) => {
+                let status = val
+                    .get("__status")
+                    .and_then(Value::as_u64)
+                    .and_then(|code| StatusCode::from_u16(code as u16).ok())
+                    .unwrap_or(StatusCode::OK);
+                if let Some(obj) = val.as_object_mut() {
+                    obj.remove("__status");
+                }
+                (status, Json(val)).into_response()
+            }
+            Err(CoreError::Conflict(msg)) => (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": msg})),
+            )
+                .into_response(),
+            Err(e) => {
+                warn!(err = %e, "remember chunked import failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to save chunks"})),
+                )
+                    .into_response()
+            }
+        };
+    }
 
     let result = state
         .pool
         .write_tx(Priority::High, {
             let state = state.clone();
             move |conn| {
+                if let Some(key) = idempotency_key.as_deref()
+                    && !scoped_chunk_rows(conn, key, &agent_id, &visibility, scope.as_deref())?
+                        .is_empty()
+                {
+                    return Ok(serde_json::json!({
+                        "__status": 409,
+                        "error": "idempotencyKey already used for chunked content"
+                    }));
+                }
                 if let Some(key) = idempotency_key.as_deref()
                     && let Some(row) = scoped_idempotency_dedupe_row(
                         conn,
@@ -565,7 +980,17 @@ pub async fn remember(
         .await;
 
     match result {
-        Ok(val) => (StatusCode::OK, Json(val)).into_response(),
+        Ok(mut val) => {
+            let status = val
+                .get("__status")
+                .and_then(Value::as_u64)
+                .and_then(|code| StatusCode::from_u16(code as u16).ok())
+                .unwrap_or(StatusCode::OK);
+            if let Some(obj) = val.as_object_mut() {
+                obj.remove("__status");
+            }
+            (status, Json(val)).into_response()
+        }
         Err(e) => {
             warn!(err = %e, "remember failed");
             (
@@ -1064,6 +1489,7 @@ mod tests {
                 visibility: None,
                 scope: None,
                 session_key: None,
+                structured: None,
             }),
         )
         .await;
@@ -1152,6 +1578,7 @@ mod tests {
                 visibility: None,
                 scope: None,
                 session_key: None,
+                structured: None,
             }),
         )
         .await;
@@ -1243,6 +1670,7 @@ mod tests {
                 visibility: None,
                 scope: None,
                 session_key: None,
+                structured: None,
             }),
         )
         .await;

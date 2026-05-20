@@ -635,6 +635,276 @@ async fn memory_remember_replays_ts_provenance_and_idempotency_contract() {
     assert_eq!(retry_body["tags"], "alpha,beta");
 }
 
+const CHUNK_REPLAY_YAML: &str = r#"agent:
+  name: test-agent
+  version: 1
+memory:
+  pipelineV2:
+    enabled: false
+    guardrails:
+      maxContentChars: 800
+      chunkTargetChars: 600
+"#;
+
+fn chunk_replay_content(prefix: &str, count: usize) -> String {
+    (0..count)
+        .map(|index| {
+            format!("{prefix} sentence {index} carries enough words to split predictably.")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_remember_chunks_oversized_idempotent_imports() {
+    let server = TestServer::start_with_agent_yaml(None, CHUNK_REPLAY_YAML).await;
+    let content = chunk_replay_content("Chunked provenance", 90);
+    assert!(content.len() > 800);
+
+    let first = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": content,
+                "who": "soulvessel.tests",
+                "idempotencyKey": "chunked-import-key"
+            }),
+        )
+        .await;
+    assert_eq!(first.status(), 200);
+    let first_body = server.json(first).await;
+    assert_eq!(first_body["chunked"], true);
+    let ids = first_body["ids"].as_array().expect("chunk ids");
+    assert!(ids.len() > 1);
+    let group_id = first_body["group_id"].as_str().expect("chunk group id");
+
+    let retry = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": content,
+                "who": "soulvessel.tests",
+                "idempotencyKey": "chunked-import-key"
+            }),
+        )
+        .await;
+    assert_eq!(retry.status(), 200);
+    let retry_body = server.json(retry).await;
+    assert_eq!(retry_body["chunked"], true);
+    assert_eq!(retry_body["deduped"], true);
+    assert_eq!(retry_body["ids"], first_body["ids"]);
+    assert_eq!(retry_body["group_id"], group_id);
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let groups: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM entities WHERE entity_type = 'chunk_group'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("chunk group count");
+    assert_eq!(groups, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_remember_rejects_chunk_idempotency_conflicts() {
+    let server = TestServer::start_with_agent_yaml(None, CHUNK_REPLAY_YAML).await;
+    let content = chunk_replay_content("Stable chunked import", 90);
+    let changed = chunk_replay_content("Changed chunked import", 92);
+
+    let first = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": content,
+                "who": "soulvessel.tests",
+                "idempotencyKey": "chunked-import-conflict-key"
+            }),
+        )
+        .await;
+    assert_eq!(first.status(), 200);
+
+    let conflict = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": changed,
+                "who": "soulvessel.tests",
+                "idempotencyKey": "chunked-import-conflict-key"
+            }),
+        )
+        .await;
+    assert_eq!(conflict.status(), 409);
+    let conflict_body = server.json(conflict).await;
+    assert!(
+        conflict_body["error"]
+            .as_str()
+            .expect("conflict error")
+            .contains("different chunked content")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_remember_rejects_mixed_chunked_and_small_idempotency_reuse() {
+    let server = TestServer::start_with_agent_yaml(None, CHUNK_REPLAY_YAML).await;
+    let oversized = chunk_replay_content("Mixed idempotency chunk", 90);
+
+    let small = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": "Small memory using a key before a chunked import.",
+                "who": "soulvessel.tests",
+                "idempotencyKey": "mixed-small-first-key"
+            }),
+        )
+        .await;
+    assert_eq!(small.status(), 200);
+
+    let chunk_after_small = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": oversized,
+                "who": "soulvessel.tests",
+                "idempotencyKey": "mixed-small-first-key"
+            }),
+        )
+        .await;
+    assert_eq!(chunk_after_small.status(), 409);
+    let chunk_after_small_body = server.json(chunk_after_small).await;
+    assert!(
+        chunk_after_small_body["error"]
+            .as_str()
+            .expect("non-chunk conflict error")
+            .contains("non-chunk content")
+    );
+
+    let chunk_first = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": chunk_replay_content("Mixed chunk first", 90),
+                "who": "soulvessel.tests",
+                "idempotencyKey": "mixed-chunk-first-key"
+            }),
+        )
+        .await;
+    assert_eq!(chunk_first.status(), 200);
+
+    let small_after_chunk = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": "Small memory using a key after a chunked import.",
+                "who": "soulvessel.tests",
+                "idempotencyKey": "mixed-chunk-first-key"
+            }),
+        )
+        .await;
+    assert_eq!(small_after_chunk.status(), 409);
+    let small_after_chunk_body = server.json(small_after_chunk).await;
+    assert!(
+        small_after_chunk_body["error"]
+            .as_str()
+            .expect("chunk conflict error")
+            .contains("chunked content")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_remember_rejects_chunked_imports_that_reuse_content_rows() {
+    let server = TestServer::start_with_agent_yaml(None, CHUNK_REPLAY_YAML).await;
+    let first_chunk = "A".repeat(600);
+    let oversized = format!("{}{}", first_chunk, "B".repeat(900));
+
+    let existing = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": first_chunk,
+                "who": "soulvessel.tests",
+                "idempotencyKey": "existing-normal-chunk-content-key"
+            }),
+        )
+        .await;
+    assert_eq!(existing.status(), 200);
+
+    let chunked = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": oversized,
+                "who": "soulvessel.tests",
+                "idempotencyKey": "chunked-existing-content-key"
+            }),
+        )
+        .await;
+    assert_eq!(chunked.status(), 409);
+    let chunked_body = server.json(chunked).await;
+    assert!(
+        chunked_body["error"]
+            .as_str()
+            .expect("content conflict error")
+            .contains("chunk content already exists")
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn memory_remember_resolves_concurrent_chunk_hash_collisions_as_conflicts() {
+    let server = TestServer::start_with_agent_yaml(None, CHUNK_REPLAY_YAML).await;
+    let oversized = chunk_replay_content("Concurrent chunk hash", 90);
+
+    let first = server.post(
+        "/api/memory/remember",
+        json!({
+            "content": oversized,
+            "who": "soulvessel.tests",
+            "idempotencyKey": "concurrent-chunk-content-key-a"
+        }),
+    );
+    let second = server.post(
+        "/api/memory/remember",
+        json!({
+            "content": chunk_replay_content("Concurrent chunk hash", 90),
+            "who": "soulvessel.tests",
+            "idempotencyKey": "concurrent-chunk-content-key-b"
+        }),
+    );
+    let (first, second) = tokio::join!(first, second);
+    let mut statuses = [first.status().as_u16(), second.status().as_u16()];
+    statuses.sort_unstable();
+    assert_eq!(statuses, [200, 409]);
+
+    let (losing_key, conflict) = if first.status().as_u16() == 409 {
+        ("concurrent-chunk-content-key-a", first)
+    } else {
+        ("concurrent-chunk-content-key-b", second)
+    };
+    let conflict_body = server.json(conflict).await;
+    assert!(
+        conflict_body["error"]
+            .as_str()
+            .expect("concurrent conflict error")
+            .contains("chunk content already exists")
+    );
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let partial: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM memories WHERE idempotency_key LIKE ?1",
+            [format!("{losing_key}:chunk:%")],
+            |row| row.get(0),
+        )
+        .expect("losing chunk count");
+    assert_eq!(partial, 0);
+}
+
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
 async fn config_endpoints() {
