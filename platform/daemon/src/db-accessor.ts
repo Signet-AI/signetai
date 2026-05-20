@@ -16,6 +16,7 @@ import {
 	statfsSync,
 	unlinkSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
@@ -30,6 +31,7 @@ import {
 } from "@signet/core";
 
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
+const require = createRequire(import.meta.url);
 
 type SqliteStatement = {
 	run(...params: unknown[]): void;
@@ -46,14 +48,12 @@ type SqliteDatabase = {
 let Database: new (path: string, opts?: Record<string, unknown>) => SqliteDatabase;
 
 if (isBun) {
-	const { createRequire } = await import("node:module");
 	// eslint-disable-next-line @typescript-eslint/no-require-imports
-	const mod = createRequire(import.meta.url)("bun:sqlite");
+	const mod = require("bun:sqlite");
 	Database = mod.Database;
 } else {
-	const { createRequire } = await import("node:module");
 	// eslint-disable-next-line @typescript-eslint/no-require-imports
-	Database = createRequire(import.meta.url)("better-sqlite3");
+	Database = require("better-sqlite3");
 }
 
 type SQLQueryBindings = unknown;

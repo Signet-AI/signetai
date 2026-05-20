@@ -1,5 +1,7 @@
+import { createRequire } from "node:module";
+
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
-const require = (await import("node:module")).createRequire(import.meta.url);
+const require = createRequire(import.meta.url);
 
 let Database: new (path: string, opts?: Record<string, unknown>) => unknown;
 

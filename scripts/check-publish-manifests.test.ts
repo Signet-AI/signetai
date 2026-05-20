@@ -68,8 +68,13 @@ describe("check-publish-manifests", () => {
 	test("keeps runtime split SQLite loader ESM-safe", () => {
 		const root = join(import.meta.dir, "..");
 		const dbSource = readFileSync(join(root, "platform", "daemon", "src", "db.ts"), "utf-8");
+		const dbAccessorSource = readFileSync(join(root, "platform", "daemon", "src", "db-accessor.ts"), "utf-8");
 
-		expect(dbSource).toContain("createRequire(import.meta.url)");
+		for (const source of [dbSource, dbAccessorSource]) {
+			expect(source).toContain('import { createRequire } from "node:module";');
+			expect(source).toContain("createRequire(import.meta.url)");
+			expect(source).not.toContain('await import("node:module")');
+		}
 		expect(dbSource).not.toContain('({ Database } = require("bun:sqlite"));');
 	});
 
@@ -191,6 +196,10 @@ describe("check-publish-manifests", () => {
 
 		expect(workflow).toContain("BUNDLE_NODE_VERSION: 20.19.5");
 		expect(workflow).toContain('NODE_VER="$BUNDLE_NODE_VERSION"');
+		expect(workflow).toContain('NODE_TARGET="$("$ARTIFACT_DIR/signet-node-$PLATFORM/bin/node" --version | sed \'s/^v//\')"');
+		expect(workflow).toContain('npm_config_target="$NODE_TARGET"');
+		expect(workflow).toContain('npm_config_platform="$NPM_PLATFORM"');
+		expect(workflow).toContain('npm_config_arch="$NPM_ARCH"');
 		expect(workflow).not.toContain("NODE_VER=\"$(node --version | sed 's/^v//')\"");
 	});
 

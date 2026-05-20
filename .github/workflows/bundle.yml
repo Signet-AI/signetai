@@ -276,13 +276,36 @@ jobs:
           SODIUM_VER="$(jq -r '.dependencies["libsodium-wrappers"] // "0.8.2"' package.json)"
           SQLITE_VEC_VER="0.1.9"
           SQLITE_VEC_NATIVE=""
+          NODE_TARGET="$("$ARTIFACT_DIR/signet-node-$PLATFORM/bin/node" --version | sed 's/^v//')"
+          NPM_PLATFORM=""
+          NPM_ARCH=""
           case "$PLATFORM" in
-            darwin-arm64) SQLITE_VEC_NATIVE="sqlite-vec-darwin-arm64@$SQLITE_VEC_VER" ;;
-            darwin-x64)   SQLITE_VEC_NATIVE="sqlite-vec-darwin-x64@$SQLITE_VEC_VER" ;;
-            linux-x64)    SQLITE_VEC_NATIVE="sqlite-vec-linux-x64@$SQLITE_VEC_VER" ;;
-            linux-arm64)  SQLITE_VEC_NATIVE="sqlite-vec-linux-arm64@$SQLITE_VEC_VER" ;;
+            darwin-arm64)
+              SQLITE_VEC_NATIVE="sqlite-vec-darwin-arm64@$SQLITE_VEC_VER"
+              NPM_PLATFORM="darwin"
+              NPM_ARCH="arm64"
+              ;;
+            darwin-x64)
+              SQLITE_VEC_NATIVE="sqlite-vec-darwin-x64@$SQLITE_VEC_VER"
+              NPM_PLATFORM="darwin"
+              NPM_ARCH="x64"
+              ;;
+            linux-x64)
+              SQLITE_VEC_NATIVE="sqlite-vec-linux-x64@$SQLITE_VEC_VER"
+              NPM_PLATFORM="linux"
+              NPM_ARCH="x64"
+              ;;
+            linux-arm64)
+              SQLITE_VEC_NATIVE="sqlite-vec-linux-arm64@$SQLITE_VEC_VER"
+              NPM_PLATFORM="linux"
+              NPM_ARCH="arm64"
+              ;;
           esac
-          npm install --prefix dist --no-save --no-package-lock \
+          npm_config_runtime=node \
+          npm_config_target="$NODE_TARGET" \
+          npm_config_platform="$NPM_PLATFORM" \
+          npm_config_arch="$NPM_ARCH" \
+            npm install --prefix dist --no-save --no-package-lock \
             "better-sqlite3@$BSQ3_VER" \
             "onnxruntime-node@$ONNX_VER" \
             "sqlite-vec@$SQLITE_VEC_VER" \
