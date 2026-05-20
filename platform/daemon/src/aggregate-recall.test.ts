@@ -299,6 +299,72 @@ describe("aggregateRecall", () => {
 		expect(aggregateRows.n).toBe(0);
 	});
 
+	it("does not reuse visible ordinary memories as saved aggregate dedupes", async () => {
+		const answer = "Aggregate answer from memory evidence.";
+		const normalized = normalizeAndHashContent(answer);
+		const now = "2026-05-20T12:00:00.000Z";
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, normalized_content, content_hash, who, project, type,
+					agent_id, visibility, source_type, created_at, updated_at, updated_by
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"ordinary-duplicate",
+				answer,
+				normalized.normalizedContent || normalized.hashBasis,
+				normalized.contentHash,
+				"test",
+				"current-project",
+				"semantic",
+				"agent-a",
+				"global",
+				"manual",
+				now,
+				now,
+				"test",
+			);
+		});
+
+		const result = await aggregateRecall(
+			{
+				query: "what happened",
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+				project: "current-project",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				idFactory: () => "aggregate-visible-conflict",
+				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
+			},
+		);
+
+		expect(result.results).toHaveLength(1);
+		expect(result.results[0].id).toStartWith("aggregate-recall:");
+		expect(result.results[0].id).not.toBe("ordinary-duplicate");
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: null,
+			saved: false,
+			deduped: true,
+			stoppedReason: "complete",
+		});
+		const rows = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(
+					`SELECT
+						(SELECT COUNT(*) FROM memories WHERE id = 'aggregate-visible-conflict') AS aggregate_count,
+						(SELECT COUNT(*) FROM aggregate_memory_sources WHERE aggregate_memory_id = 'ordinary-duplicate') AS link_count`,
+				)
+				.get(),
+		) as { aggregate_count: number; link_count: number };
+		expect(rows.aggregate_count).toBe(0);
+		expect(rows.link_count).toBe(0);
+	});
+
 	it("returns structured no-hit metadata when synthesis is unavailable", async () => {
 		const result = await aggregateRecall(
 			{

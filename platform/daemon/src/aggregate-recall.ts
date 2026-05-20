@@ -39,6 +39,7 @@ interface AggregateRecallLogger {
 interface AggregateMemoryRow {
 	readonly id: string;
 	readonly content: string;
+	readonly source_type?: string | null;
 	readonly source_id: string | null;
 	readonly type: string;
 	readonly tags: string | null;
@@ -53,6 +54,7 @@ interface AggregateMemoryRow {
 interface ContentHashMatch {
 	readonly row: RecallResult;
 	readonly visibleForAggregate: boolean;
+	readonly aggregateRecallMemory: boolean;
 }
 
 const BUDGET_QUERY_LIMITS: Record<AggregateRecallBudget, number> = {
@@ -235,7 +237,7 @@ function loadMemoryByContentHash(
 ): ContentHashMatch | null {
 	const row = db
 		.prepare(
-			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at
+			`SELECT id, content, source_type, source_id, type, tags, pinned, importance, who, project, visibility, created_at
 			 FROM memories
 			 WHERE content_hash = ?
 			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
@@ -249,6 +251,7 @@ function loadMemoryByContentHash(
 		row: rowToRecallResult(row),
 		visibleForAggregate:
 			(row.visibility ?? "global") === "global" && (input.project === null || row.project === input.project),
+		aggregateRecallMemory: row.source_type === "aggregate-recall",
 	};
 }
 
@@ -451,7 +454,7 @@ export async function aggregateRecall(
 			}
 			const duplicateContent = loadMemoryByContentHash(db, normalized.contentHash, { agentId, project });
 			if (duplicateContent) {
-				if (!duplicateContent.visibleForAggregate) {
+				if (!duplicateContent.visibleForAggregate || !duplicateContent.aggregateRecallMemory) {
 					deduped = true;
 					return unsavedAggregateResult(answer, key, project);
 				}
