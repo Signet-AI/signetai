@@ -152,6 +152,43 @@ describe("hybridRecall", () => {
 		}
 	});
 
+	it("refills capped recall responses after suppressing repeated session rows", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const stmt = db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', ?, 'default', ?, ?, 'test')`,
+			);
+			for (let index = 1; index <= 4; index++) {
+				stmt.run(
+					`mem-refill-${index}`,
+					`dedupe refill marker shared context ${index}`,
+					`sess-refill-${index}`,
+					now,
+					now,
+				);
+			}
+		});
+
+		const params = {
+			query: "dedupe refill marker shared context",
+			keywordQuery: "dedupe refill marker shared context",
+			sessionKey: "sess-refill",
+		} as const;
+
+		const first = await hybridRecall({ ...params, limit: 1 }, testCfg(), async () => null);
+		expect(first.results).toHaveLength(1);
+
+		const second = await hybridRecall({ ...params, limit: 2 }, testCfg(), async () => null);
+		expect(second.results).toHaveLength(2);
+		expect(second.results.map((row) => row.id)).not.toContain(first.results[0]?.id);
+		expect(second.meta.dedupe).toMatchObject({
+			enabled: true,
+			suppressed: 1,
+		});
+	});
+
 	it("skips source chunk vector fallback for project-scoped recall", async () => {
 		const now = new Date().toISOString();
 		const vec = unitVector();
