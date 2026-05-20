@@ -19,6 +19,8 @@ const TS_MEMORY_SEARCH_TELEMETRY_VERSION: u32 = 66;
 const TS_MEMORY_SEARCH_TELEMETRY_NAME: &str = "memory-search-telemetry";
 const TS_ONTOLOGY_PROPOSALS_VERSION: u32 = 67;
 const TS_ONTOLOGY_PROPOSALS_NAME: &str = "ontology-proposals";
+const TS_AGENT_SCOPED_IDEMPOTENCY_VERSION: u32 = 72;
+const TS_AGENT_SCOPED_IDEMPOTENCY_NAME: &str = "agent-scoped-idempotency-key";
 
 /// Simple checksum matching the TS implementation (hash of "version:name").
 fn checksum(version: u32, name: &str) -> String {
@@ -397,6 +399,12 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
     add_column_if_missing(conn, "entities", "pinned_at", "TEXT")?;
     add_column_if_missing(conn, "entities", "updated_at", "TEXT")?;
 
+    add_column_if_missing(conn, "memories", "agent_id", "TEXT DEFAULT 'default'")?;
+    add_column_if_missing(conn, "memories", "visibility", "TEXT DEFAULT 'global'")?;
+    add_column_if_missing(conn, "memories", "scope", "TEXT")?;
+    add_column_if_missing(conn, "memories", "idempotency_key", "TEXT")?;
+    add_column_if_missing(conn, "memories", "runtime_path", "TEXT")?;
+
     add_column_if_missing(
         conn,
         "connectors",
@@ -439,6 +447,18 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
     )?;
 
     conn.execute_batch(
+        "DROP INDEX IF EXISTS idx_memories_idempotency_key;
+         CREATE UNIQUE INDEX idx_memories_idempotency_key
+            ON memories(
+                idempotency_key,
+                COALESCE(NULLIF(agent_id, ''), 'default'),
+                COALESCE(visibility, 'global'),
+                COALESCE(scope, '__NULL__')
+            )
+            WHERE idempotency_key IS NOT NULL AND is_deleted = 0;",
+    )?;
+
+    conn.execute_batch(
         "UPDATE connectors
             SET settings_json = CASE
                 WHEN json_valid(config_json)
@@ -468,6 +488,11 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
         conn,
         TS_ONTOLOGY_PROPOSALS_VERSION,
         TS_ONTOLOGY_PROPOSALS_NAME,
+    )?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_AGENT_SCOPED_IDEMPOTENCY_VERSION,
+        TS_AGENT_SCOPED_IDEMPOTENCY_NAME,
     )?;
 
     Ok(())
@@ -1074,6 +1099,18 @@ mod tests {
             );
         }
 
+        let idempotency_stamped: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 72",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query schema_migrations");
+        assert_eq!(
+            idempotency_stamped, 1,
+            "migration 72 should be recorded in schema_migrations"
+        );
+
         for version in [40_i64, 41_i64] {
             let stamped: i64 = conn
                 .query_row(
@@ -1087,6 +1124,38 @@ mod tests {
                 "Rust must not stamp local parity DDL as TS migration {version}"
             );
         }
+    }
+
+    #[test]
+    fn repairs_idempotency_index_to_match_ts_scoped_contract() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        run(&conn).expect("initial migrations run");
+
+        conn.execute(
+            "INSERT INTO memories
+             (id, content, type, idempotency_key, agent_id, visibility, scope, created_at, updated_at, updated_by)
+             VALUES ('mem-global', 'global memory', 'fact', 'shared-key', 'default', 'global', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'test')",
+            [],
+        )
+        .expect("insert global idempotency row");
+        conn.execute(
+            "INSERT INTO memories
+             (id, content, type, idempotency_key, agent_id, visibility, scope, created_at, updated_at, updated_by)
+             VALUES ('mem-private', 'private memory', 'fact', 'shared-key', 'default', 'private', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'test')",
+            [],
+        )
+        .expect("same idempotency key should be allowed across visibility scopes");
+
+        let duplicate = conn.execute(
+            "INSERT INTO memories
+             (id, content, type, idempotency_key, agent_id, visibility, scope, created_at, updated_at, updated_by)
+             VALUES ('mem-duplicate', 'duplicate memory', 'fact', 'shared-key', 'default', 'global', NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'test')",
+            [],
+        );
+        assert!(
+            duplicate.is_err(),
+            "same idempotency key should remain unique within owner, visibility, and scope"
+        );
     }
 
     #[test]

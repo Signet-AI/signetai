@@ -7,6 +7,7 @@ use axum::Json;
 use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -63,6 +64,13 @@ pub struct RememberBody {
     pub pinned: Option<bool>,
     pub source_type: Option<String>,
     pub source_id: Option<String>,
+    #[serde(alias = "source_path", alias = "source")]
+    pub source_path: Option<String>,
+    #[serde(alias = "runtime_path")]
+    pub runtime_path: Option<String>,
+    #[serde(alias = "idempotency_key")]
+    pub idempotency_key: Option<String>,
+    pub metadata: Option<Value>,
     #[serde(rename = "type")]
     pub memory_type: Option<String>,
     pub agent_id: Option<String>,
@@ -108,6 +116,80 @@ fn normalize_scope(value: Option<String>) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn metadata_string(metadata: Option<&Value>, keys: &[&str]) -> Option<String> {
+    let obj = metadata.and_then(Value::as_object)?;
+    for key in keys {
+        if let Some(value) = obj.get(*key).and_then(Value::as_str) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn tags_csv(tags: &[String]) -> String {
+    tags.join(",")
+}
+
+fn stored_tags_to_csv(tags: Option<&str>) -> String {
+    let Some(tags) = tags else {
+        return String::new();
+    };
+    serde_json::from_str::<Vec<String>>(tags)
+        .map(|items| items.join(","))
+        .unwrap_or_else(|_| tags.to_string())
+}
+
+struct RememberDedupeRow {
+    id: String,
+    memory_type: String,
+    tags: Option<String>,
+    pinned: bool,
+    importance: f64,
+    content: String,
+}
+
+fn scoped_idempotency_dedupe_row(
+    conn: &rusqlite::Connection,
+    key: &str,
+    agent_id: &str,
+    visibility: &str,
+    scope: Option<&str>,
+) -> Result<Option<RememberDedupeRow>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT id, type, tags, pinned, importance, content
+         FROM memories
+         WHERE idempotency_key = ?1
+           AND COALESCE(NULLIF(agent_id, ''), 'default') = ?2
+           AND COALESCE(visibility, 'global') = ?3
+           AND COALESCE(scope, '__NULL__') = ?4
+           AND is_deleted = 0
+         LIMIT 1",
+        params![key, agent_id, visibility, scope.unwrap_or("__NULL__")],
+        |row| {
+            Ok(RememberDedupeRow {
+                id: row.get(0)?,
+                memory_type: row.get(1)?,
+                tags: row.get(2)?,
+                pinned: row.get::<_, i64>(3)? != 0,
+                importance: row.get(4)?,
+                content: row.get(5)?,
+            })
+        },
+    )
+    .optional()
 }
 
 fn parse_visibility(value: Option<&str>) -> Result<String, &'static str> {
@@ -341,12 +423,20 @@ pub async fn remember(
         }
     };
 
-    let who = body.who;
-    let project = body.project;
+    let metadata = body.metadata.clone();
+    let who = normalize_optional_string(body.who).or_else(|| Some("daemon".to_string()));
+    let project = normalize_optional_string(body.project);
     let importance = body.importance.unwrap_or(0.5);
     let pinned = body.pinned.unwrap_or(false);
-    let source_type = body.source_type;
-    let source_id = body.source_id;
+    let source_type =
+        normalize_optional_string(body.source_type).or_else(|| Some("manual".to_string()));
+    let source_id = normalize_optional_string(body.source_id);
+    let source_path = normalize_optional_string(body.source_path)
+        .or_else(|| metadata_string(metadata.as_ref(), &["sourcePath", "source_path", "source"]));
+    let runtime_path = normalize_optional_string(body.runtime_path)
+        .or_else(|| metadata_string(metadata.as_ref(), &["runtimePath", "runtime_path"]));
+    let idempotency_key = normalize_optional_string(body.idempotency_key)
+        .or_else(|| metadata_string(metadata.as_ref(), &["idempotencyKey", "idempotency_key"]));
     let memory_type = body.memory_type.unwrap_or_else(|| "fact".into());
     let session_key = body
         .session_key
@@ -399,12 +489,34 @@ pub async fn remember(
         .and_then(|memory| memory.pipeline_v2.as_ref())
         .map(|pipeline| i64::from(pipeline.worker.max_retries.max(1)))
         .unwrap_or(3);
+    let tags_response = tags_csv(&tags);
 
     let result = state
         .pool
         .write_tx(Priority::High, {
             let state = state.clone();
             move |conn| {
+                if let Some(key) = idempotency_key.as_deref()
+                    && let Some(row) = scoped_idempotency_dedupe_row(
+                        conn,
+                        key,
+                        &agent_id,
+                        &visibility,
+                        scope.as_deref(),
+                    )?
+                {
+                    return Ok(serde_json::json!({
+                        "id": row.id,
+                        "type": row.memory_type,
+                        "tags": stored_tags_to_csv(row.tags.as_deref()),
+                        "pinned": row.pinned,
+                        "importance": row.importance,
+                        "content": row.content,
+                        "embedded": true,
+                        "deduped": true,
+                    }));
+                }
+
                 let blocked_reason = blocked_extraction_reason_blocking(&state);
                 let r = ingest_remember_with_blocked_guard(
                     conn,
@@ -419,8 +531,9 @@ pub async fn remember(
                         pinned,
                         source_type: source_type.as_deref(),
                         source_id: source_id.as_deref(),
-                        idempotency_key: None,
-                        runtime_path: None,
+                        source_path: source_path.as_deref(),
+                        idempotency_key: idempotency_key.as_deref(),
+                        runtime_path: runtime_path.as_deref(),
                         actor: "api",
                         agent_id: &agent_id,
                         visibility: &visibility,
@@ -434,12 +547,19 @@ pub async fn remember(
                 } else {
                     "created"
                 };
-                Ok(serde_json::json!({
+                let mut response = serde_json::json!({
                     "id": r.id,
                     "status": status,
                     "hash": r.hash,
                     "duplicateOf": r.duplicate_of,
-                }))
+                    "tags": tags_response,
+                });
+                if r.duplicate_of.is_some()
+                    && let Some(obj) = response.as_object_mut()
+                {
+                    obj.insert("deduped".to_string(), Value::Bool(true));
+                }
+                Ok(response)
             }
         })
         .await;
@@ -935,6 +1055,10 @@ mod tests {
                 pinned: None,
                 source_type: None,
                 source_id: None,
+                source_path: None,
+                runtime_path: None,
+                idempotency_key: None,
+                metadata: None,
                 memory_type: None,
                 agent_id: None,
                 visibility: None,
@@ -1019,6 +1143,10 @@ mod tests {
                 pinned: None,
                 source_type: None,
                 source_id: None,
+                source_path: None,
+                runtime_path: None,
+                idempotency_key: None,
+                metadata: None,
                 memory_type: None,
                 agent_id: None,
                 visibility: None,
@@ -1064,6 +1192,7 @@ mod tests {
                         pinned: false,
                         source_type: None,
                         source_id: None,
+                        source_path: None,
                         idempotency_key: None,
                         runtime_path: None,
                         actor: "test",
@@ -1105,6 +1234,10 @@ mod tests {
                 pinned: None,
                 source_type: None,
                 source_id: None,
+                source_path: None,
+                runtime_path: None,
+                idempotency_key: None,
+                metadata: None,
                 memory_type: None,
                 agent_id: None,
                 visibility: None,

@@ -352,6 +352,7 @@ async fn process_summary(
                         pinned: false,
                         source_type: Some("session_end"),
                         source_id: session_key.as_deref(),
+                        source_path: None,
                         idempotency_key: None,
                         runtime_path: None,
                         actor: WORKER_ACTOR,

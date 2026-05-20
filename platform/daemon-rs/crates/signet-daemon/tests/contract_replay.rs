@@ -564,6 +564,79 @@ async fn memory_crud() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn memory_remember_replays_ts_provenance_and_idempotency_contract() {
+    let server = TestServer::start().await;
+
+    let resp = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": "Provenance-backed imported memory",
+                "who": "soulvessel.tests",
+                "sourceType": "hermes-memory",
+                "sourceId": "hermes-doc-provenance-test",
+                "tags": "alpha, beta",
+                "metadata": {
+                    "source_path": "/tmp/signet-provenance/MEMORY.md",
+                    "runtime_path": "memories/MEMORY.md",
+                    "idempotency_key": "hermes:provenance-test"
+                }
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    let id = body["id"].as_str().expect("created memory id");
+    assert_eq!(body["tags"], "alpha,beta");
+    assert!(body.get("deduped").is_none());
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    let row: (String, String, String, String, String) = conn
+        .query_row(
+            "SELECT source_type, source_id, source_path, runtime_path, idempotency_key
+             FROM memories WHERE id = ?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .expect("memory provenance row");
+    assert_eq!(
+        row,
+        (
+            "hermes-memory".to_string(),
+            "hermes-doc-provenance-test".to_string(),
+            "/tmp/signet-provenance/MEMORY.md".to_string(),
+            "memories/MEMORY.md".to_string(),
+            "hermes:provenance-test".to_string(),
+        )
+    );
+
+    let retry = server
+        .post(
+            "/api/memory/remember",
+            json!({
+                "content": "Different retry content with the same stable import key",
+                "who": "soulvessel.tests",
+                "idempotencyKey": "hermes:provenance-test"
+            }),
+        )
+        .await;
+    assert_eq!(retry.status(), 200);
+    let retry_body = server.json(retry).await;
+    assert_eq!(retry_body["id"], id);
+    assert_eq!(retry_body["deduped"], true);
+    assert_eq!(retry_body["tags"], "alpha,beta");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn config_endpoints() {
     let server = TestServer::start().await;
 

@@ -503,6 +503,7 @@ async fn exec_memory_store(state: &Arc<AppState>, args: &serde_json::Value) -> T
                 pinned,
                 source_type: None,
                 source_id: None,
+                source_path: None,
                 idempotency_key: None,
                 runtime_path: None,
                 actor: "mcp-server",
