@@ -67,9 +67,20 @@ interface AsyncState<T> {
 
 export function useMemorySearch(
 	query: string | null,
-	opts?: { readonly limit?: number; readonly type?: string },
+	opts?: {
+		readonly limit?: number;
+		readonly type?: string;
+		readonly aggregate?: boolean;
+		readonly aggregateBudget?: "small" | "medium" | "large";
+		readonly saveAggregate?: boolean;
+	},
 ): AsyncState<readonly RecallResult[]> {
 	const { client } = useSignet();
+	const limit = opts?.limit;
+	const type = opts?.type;
+	const aggregate = opts?.aggregate;
+	const aggregateBudget = opts?.aggregateBudget;
+	const saveAggregate = opts?.saveAggregate;
 	const [state, setState] = useState<AsyncState<readonly RecallResult[]>>({
 		data: null,
 		loading: false,
@@ -86,7 +97,7 @@ export function useMemorySearch(
 		setState((prev) => ({ ...prev, loading: true, error: null }));
 
 		client
-			.recall(query, opts)
+			.recall(query, { limit, type, aggregate, aggregateBudget, saveAggregate })
 			.then((response) => {
 				if (!controller.signal.aborted) {
 					setState({ data: response.results, loading: false, error: null });
@@ -103,7 +114,7 @@ export function useMemorySearch(
 			});
 
 		return () => controller.abort();
-	}, [client, query, opts?.limit, opts?.type]);
+	}, [client, query, limit, type, aggregate, aggregateBudget, saveAggregate]);
 
 	return state;
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { memoryToolDefinitions, executeMemoryTool } from "../openai.js";
 import { SignetError } from "../errors.js";
 import type { SignetClient } from "../index.js";
+import { executeMemoryTool, memoryToolDefinitions } from "../openai.js";
 
 // Lightweight mock that tracks calls to each method.
 interface MockCall {
@@ -54,6 +54,10 @@ describe("memoryToolDefinitions", () => {
 		const search = tools.find((t) => t.function.name === "memory_search");
 		const params = search?.function.parameters as Record<string, unknown>;
 		expect(params.required).toEqual(["query"]);
+		const properties = params.properties as Record<string, unknown>;
+		expect(properties.aggregate).toBeDefined();
+		expect(properties.aggregateBudget).toBeDefined();
+		expect(properties.saveAggregate).toBeDefined();
 	});
 
 	test("memory_store requires content", () => {
@@ -82,12 +86,21 @@ describe("executeMemoryTool", () => {
 			query: "preferences",
 			limit: 5,
 			type: "preference",
+			aggregate: true,
+			aggregateBudget: "medium",
+			saveAggregate: false,
 		});
 
 		expect(calls).toHaveLength(1);
 		expect(calls[0].method).toBe("recall");
 		expect(calls[0].args[0]).toBe("preferences");
-		expect(calls[0].args[1]).toEqual({ limit: 5, type: "preference" });
+		expect(calls[0].args[1]).toEqual({
+			limit: 5,
+			type: "preference",
+			aggregate: true,
+			aggregateBudget: "medium",
+			saveAggregate: false,
+		});
 	});
 
 	test("memory_store dispatches to client.remember()", async () => {

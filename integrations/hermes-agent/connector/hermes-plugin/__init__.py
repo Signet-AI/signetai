@@ -76,6 +76,19 @@ MEMORY_SEARCH_SCHEMA = {
                 "description": "Deprecated compatibility alias for importance_min; ignored when importance_min is set.",
             },
             "score_min": {"type": "number", "description": "Minimum recall score threshold, applied client-side."},
+            "aggregate": {
+                "type": "boolean",
+                "description": "Synthesize an aggregate answer from bounded recall evidence.",
+            },
+            "aggregate_budget": {
+                "type": "string",
+                "enum": ["small", "medium", "large"],
+                "description": "Aggregate recall budget.",
+            },
+            "save_aggregate": {
+                "type": "boolean",
+                "description": "Save aggregate answers as memories.",
+            },
             "agent_scoped": {
                 "type": "boolean",
                 "description": "When true, scope recall to SIGNET_AGENT_ID instead of searching shared effective memory.",
@@ -899,6 +912,11 @@ class SignetMemoryProvider(MemoryProvider):
                 until=str(search_args.get("until", "") or ""),
                 keyword_query=str(search_args.get("keyword_query", "") or ""),
                 score_min=_as_float(search_args.get("score_min")),
+                aggregate=bool(search_args.get("aggregate", False)),
+                aggregate_budget=str(search_args.get("aggregate_budget", "") or ""),
+                save_aggregate=search_args.get("save_aggregate")
+                if isinstance(search_args.get("save_aggregate"), bool)
+                else None,
                 agent_scoped=bool(search_args.get("agent_scoped", False)),
             )
             if not result:

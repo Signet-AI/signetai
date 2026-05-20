@@ -105,6 +105,9 @@ Advanced controls:
 | `importance_min` | number | no | Minimum memory importance threshold |
 | `min_score` | number | no | Deprecated compatibility alias for `importance_min` |
 | `score_min` | number | no | Minimum recall score threshold, applied client-side to returned rows |
+| `aggregate` | boolean | no | Synthesize one aggregate answer from bounded recall evidence |
+| `aggregate_budget` | `"small" \| "medium" \| "large"` | no | Aggregate recall budget; defaults to `small` |
+| `save_aggregate` | boolean | no | Save the aggregate answer as a normal memory; defaults to true when aggregate mode is enabled and requires `remember` permission |
 
 **Returns:** A formatted recall brief with primary matches, supporting
 context, and no-hit handling. The tool still reads from
@@ -118,7 +121,9 @@ context, and no-hit handling. The tool still reads from
   "project": "/home/user/myapp",
   "limit": 5,
   "type": "preference",
-  "score_min": 0.8
+  "score_min": 0.8,
+  "aggregate": true,
+  "aggregate_budget": "small"
 }
 ```
 

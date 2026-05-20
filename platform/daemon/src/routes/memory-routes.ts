@@ -2,12 +2,14 @@ import { createHash } from "node:crypto";
 import { vectorSearch } from "@signet/core";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
+import { aggregateRecall } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { normalizeAndHashContent } from "../content-normalization";
 import { type WriteDb, getDbAccessor } from "../db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
+import { getInferenceRouterOrNull } from "../inference-router";
 import { linkMemoryToEntities } from "../inline-entity-linker";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
@@ -2291,8 +2293,18 @@ export function registerMemoryRoutes(app: Hono): void {
 		const query = body.query?.trim() ?? "";
 		if (!query) return c.json({ error: "query is required" }, 400);
 
+		const aggregateSaveRequested =
+			body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
+		if (aggregateSaveRequested) {
+			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+		}
+
 		const cfg = loadMemoryConfig(AGENTS_DIR);
-		if (cfg.pipelineV2.reranker.enabled && cfg.pipelineV2.reranker.useExtractionModel && authConfig.mode !== "local") {
+		if (
+			((cfg.pipelineV2.reranker.enabled && cfg.pipelineV2.reranker.useExtractionModel) || body.aggregate === true) &&
+			authConfig.mode !== "local"
+		) {
 			const actor = c.get("auth")?.claims?.sub ?? "anonymous";
 			const check = authRecallLlmLimiter.check(actor);
 			if (!check.allowed) {
@@ -2315,7 +2327,13 @@ export function registerMemoryRoutes(app: Hono): void {
 				policyGroup: agentScope.policyGroup,
 				...(scopeProject ? { project: scopeProject } : {}),
 			};
-			const result = await hybridRecall(params, cfg, fetchEmbedding);
+			const result =
+				body.aggregate === true
+					? await aggregateRecall(params, cfg, {
+							router: getInferenceRouterOrNull(),
+							embedFn: fetchEmbedding,
+						})
+					: await hybridRecall(params, cfg, fetchEmbedding);
 			recordRecallQaTelemetry({
 				route: "POST /api/memory/recall",
 				agentId,

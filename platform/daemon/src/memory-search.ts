@@ -43,6 +43,11 @@ export interface RecallParams {
 	query: string;
 	keywordQuery?: string;
 	limit?: number;
+	aggregate?: boolean;
+	aggregateBudget?: "small" | "medium" | "large";
+	aggregate_budget?: "small" | "medium" | "large";
+	saveAggregate?: boolean;
+	save_aggregate?: boolean;
 	agentId?: string;
 	/** Agent read policy — 'isolated' | 'shared' | 'group'. When set with agentId, filters by visibility. */
 	readPolicy?: string;
@@ -90,6 +95,15 @@ export interface RecallResponse {
 		hasSupplementary: boolean;
 		noHits: boolean;
 		timings: RecallTimings;
+	};
+	aggregate?: {
+		savedMemoryId: string | null;
+		saved: boolean;
+		deduped: boolean;
+		budget: "small" | "medium" | "large";
+		queries: readonly string[];
+		sourceMemoryIds: readonly string[];
+		stoppedReason: "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
 	};
 	entities?: Array<{
 		name: string;

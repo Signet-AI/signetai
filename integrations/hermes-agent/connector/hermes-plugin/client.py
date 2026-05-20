@@ -362,6 +362,9 @@ class SignetClient:
         until: str = "",
         keyword_query: str = "",
         score_min: Optional[float] = None,
+        aggregate: bool = False,
+        aggregate_budget: str = "",
+        save_aggregate: Optional[bool] = None,
         agent_scoped: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Search memories via hybrid recall."""
@@ -387,6 +390,12 @@ class SignetClient:
             body["until"] = until
         if keyword_query:
             body["keywordQuery"] = keyword_query
+        if aggregate:
+            body["aggregate"] = True
+            if aggregate_budget in ("small", "medium", "large"):
+                body["aggregateBudget"] = aggregate_budget
+            if save_aggregate is not None:
+                body["saveAggregate"] = save_aggregate
         if agent_scoped and self._agent_id:
             body["agentId"] = self._agent_id
 

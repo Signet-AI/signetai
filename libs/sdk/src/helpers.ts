@@ -158,6 +158,9 @@ export class SignetClientHelpers {
 			readonly expand?: boolean;
 			readonly minScore?: number;
 			readonly agentId?: string;
+			readonly aggregate?: boolean;
+			readonly aggregateBudget?: "small" | "medium" | "large";
+			readonly saveAggregate?: boolean;
 		},
 	): Promise<RecallResponse> {
 		const result = applyRecallMinScore(

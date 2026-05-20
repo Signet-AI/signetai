@@ -802,6 +802,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.optional()
 					.describe("Deprecated compatibility alias for importance_min; ignored when importance_min is also set"),
 				score_min: z.number().optional().describe("Minimum recall score threshold (client-side)"),
+				aggregate: z.boolean().optional().describe("Synthesize an aggregate answer from bounded recall evidence"),
+				aggregate_budget: z.enum(["small", "medium", "large"]).optional().describe("Aggregate recall budget"),
+				save_aggregate: z.boolean().optional().describe("Save the aggregate answer as a memory"),
 			}),
 		},
 		async ({
@@ -818,6 +821,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			until,
 			min_score,
 			score_min,
+			aggregate,
+			aggregate_budget,
+			save_aggregate,
 		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
@@ -832,6 +838,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance_min: importance_min ?? min_score,
 					since,
 					until,
+					aggregate,
+					aggregate_budget,
+					save_aggregate,
 				}),
 			});
 

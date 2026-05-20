@@ -24,17 +24,26 @@ export async function memoryTools(client: SignetClient) {
 				query: z.string().describe("Search query"),
 				limit: z.number().optional().describe("Max results"),
 				type: z.string().optional().describe("Memory type filter"),
+				aggregate: z.boolean().optional().describe("Synthesize an aggregate answer from recall evidence"),
+				aggregateBudget: z.enum(["small", "medium", "large"]).optional().describe("Aggregate recall budget"),
+				saveAggregate: z.boolean().optional().describe("Save aggregate answers as memories"),
 			}),
 			execute: async ({
 				query,
 				limit,
 				type,
+				aggregate,
+				aggregateBudget,
+				saveAggregate,
 			}: {
 				query: string;
 				limit?: number;
 				type?: string;
+				aggregate?: boolean;
+				aggregateBudget?: "small" | "medium" | "large";
+				saveAggregate?: boolean;
 			}) => {
-				return client.recall(query, { limit, type });
+				return client.recall(query, { limit, type, aggregate, aggregateBudget, saveAggregate });
 			},
 		},
 

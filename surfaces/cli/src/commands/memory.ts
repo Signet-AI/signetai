@@ -95,10 +95,15 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("--importance-min <n>", "Only return memories at or above this importance", Number.parseFloat)
 		.option("--min-score <n>", "Minimum recall score threshold (client-side)", Number.parseFloat)
 		.option("--agent <name>", "Filter by agent ID")
+		.option("--aggregate", "Synthesize an aggregate answer from bounded recall evidence", false)
+		.option("--aggregate-budget <budget>", "Aggregate recall budget: small, medium, or large", "small")
+		.option("--no-save-aggregate", "Return the aggregate answer without saving it as a memory")
 		.option("--json", "Output as JSON")
 		.action(async (query: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
+			const aggregateRequested =
+				options.aggregate === true || options.aggregateBudget !== "small" || options.saveAggregate === false;
 			const spinner = ora("Searching memories...").start();
 			const { ok, data } = await deps.secretApiCall(
 				"POST",
@@ -115,6 +120,9 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					since: options.since,
 					until: options.until,
 					agentId: options.agent,
+					aggregate: aggregateRequested,
+					aggregateBudget: aggregateRequested ? options.aggregateBudget : undefined,
+					saveAggregate: aggregateRequested ? options.saveAggregate : undefined,
 				}),
 				MEMORY_RECALL_TIMEOUT_MS,
 			);

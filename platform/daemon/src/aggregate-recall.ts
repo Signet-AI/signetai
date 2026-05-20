@@ -1,0 +1,515 @@
+import { createHash, randomUUID } from "node:crypto";
+import type { RouteRequest, RouterResult } from "@signet/core";
+import { normalizeAndHashContent } from "./content-normalization";
+import { type WriteDb, getDbAccessor } from "./db-accessor";
+import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
+import { type EmbedFn, type RecallParams, type RecallResponse, type RecallResult, hybridRecall } from "./memory-search";
+import { txIngestEnvelope } from "./transactions";
+
+export type AggregateRecallBudget = "small" | "medium" | "large";
+export type AggregateRecallStoppedReason = "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
+
+interface AggregateInferenceResult {
+	readonly text: string;
+}
+
+export interface AggregateInferenceRouter {
+	execute(
+		request: RouteRequest,
+		prompt: string,
+		opts?: { readonly timeoutMs?: number; readonly maxTokens?: number; readonly refresh?: boolean },
+	): Promise<RouterResult<AggregateInferenceResult>>;
+}
+
+interface AggregateRecallDeps {
+	readonly hybridRecall?: typeof hybridRecall;
+	readonly router: AggregateInferenceRouter | null;
+	readonly embedFn: EmbedFn;
+	readonly now?: () => Date;
+	readonly idFactory?: () => string;
+}
+
+interface AggregateMemoryRow {
+	readonly id: string;
+	readonly content: string;
+	readonly source_id: string | null;
+	readonly type: string;
+	readonly tags: string | null;
+	readonly pinned: number;
+	readonly importance: number;
+	readonly who: string | null;
+	readonly project: string | null;
+	readonly visibility?: string | null;
+	readonly created_at: string;
+}
+
+interface ContentHashMatch {
+	readonly row: RecallResult;
+	readonly visibleForAggregate: boolean;
+}
+
+const BUDGET_QUERY_LIMITS: Record<AggregateRecallBudget, number> = {
+	small: 3,
+	medium: 5,
+	large: 8,
+};
+
+function normalizeBudget(raw: unknown): AggregateRecallBudget {
+	return raw === "medium" || raw === "large" ? raw : "small";
+}
+
+function emptyAggregateResponse(
+	params: RecallParams,
+	budget: AggregateRecallBudget,
+	queries: readonly string[],
+	sourceMemoryIds: readonly string[],
+	stoppedReason: AggregateRecallStoppedReason,
+): RecallResponse {
+	return {
+		results: [],
+		query: params.query,
+		method: "hybrid",
+		meta: {
+			totalReturned: 0,
+			hasSupplementary: false,
+			noHits: true,
+			timings: { totalMs: 0, stages: [] },
+		},
+		aggregate: {
+			savedMemoryId: null,
+			saved: false,
+			deduped: false,
+			budget,
+			queries,
+			sourceMemoryIds,
+			stoppedReason,
+		},
+	};
+}
+
+function normalizeQuery(value: string): string {
+	return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function uniqueQueries(query: string, candidates: readonly string[], max: number): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+	for (const candidate of [query, ...candidates]) {
+		const trimmed = candidate.trim();
+		const key = normalizeQuery(trimmed);
+		if (!trimmed || seen.has(key)) continue;
+		seen.add(key);
+		result.push(trimmed);
+		if (result.length >= max) break;
+	}
+	return result;
+}
+
+function parsePlannerQueries(raw: string): string[] {
+	const trimmed = raw.trim();
+	if (!trimmed) return [];
+	try {
+		const parsed = JSON.parse(trimmed) as unknown;
+		if (Array.isArray(parsed)) {
+			return parsed.filter((item): item is string => typeof item === "string");
+		}
+		if (typeof parsed === "object" && parsed !== null) {
+			const value = (parsed as { readonly queries?: unknown }).queries;
+			if (Array.isArray(value)) {
+				return value.filter((item): item is string => typeof item === "string");
+			}
+		}
+	} catch {
+		// Fall through to line parsing for permissive model output.
+	}
+	return trimmed
+		.split(/\r?\n/)
+		.map((line) => line.replace(/^[-*\d.\s]+/, "").trim())
+		.filter((line) => line.length > 0);
+}
+
+function isSourceMemoryRow(row: RecallResult): boolean {
+	return !row.id.startsWith("constructed:");
+}
+
+function uniqueEvidence(rows: readonly RecallResult[]): RecallResult[] {
+	const seen = new Set<string>();
+	const result: RecallResult[] = [];
+	for (const row of rows) {
+		if (!isSourceMemoryRow(row) || seen.has(row.id)) continue;
+		seen.add(row.id);
+		result.push(row);
+	}
+	return result;
+}
+
+function aggregateKey(input: {
+	readonly agentId: string;
+	readonly project: string | null;
+	readonly query: string;
+	readonly budget: AggregateRecallBudget;
+	readonly sourceMemoryIds: readonly string[];
+}): string {
+	const hash = createHash("sha256")
+		.update(input.agentId)
+		.update("\0")
+		.update(input.project ?? "")
+		.update("\0")
+		.update(normalizeQuery(input.query))
+		.update("\0")
+		.update(input.budget)
+		.update("\0")
+		.update([...input.sourceMemoryIds].sort().join("\0"))
+		.digest("hex");
+	return `aggregate-recall:${hash}`;
+}
+
+function sourceProject(params: RecallParams): string | null {
+	return typeof params.project === "string" && params.project.trim().length > 0 ? params.project : null;
+}
+
+function rowToRecallResult(row: AggregateMemoryRow): RecallResult {
+	const content = row.content;
+	return {
+		id: row.id,
+		content,
+		content_length: content.length,
+		truncated: false,
+		score: 1,
+		source: "aggregate-recall",
+		source_id: row.source_id ?? undefined,
+		type: row.type,
+		tags: row.tags,
+		pinned: row.pinned === 1,
+		importance: row.importance,
+		who: row.who ?? "",
+		project: row.project,
+		created_at: row.created_at,
+	};
+}
+
+function loadAggregateMemory(db: WriteDb, id: string): RecallResult | null {
+	const row = db
+		.prepare(
+			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, created_at
+			 FROM memories
+			 WHERE id = ? AND is_deleted = 0`,
+		)
+		.get(id) as AggregateMemoryRow | undefined;
+	return row ? rowToRecallResult(row) : null;
+}
+
+function loadAggregateByKey(
+	db: WriteDb,
+	key: string,
+	input: { readonly agentId: string; readonly project: string | null },
+): RecallResult | null {
+	const row = db
+		.prepare(
+			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, created_at
+			 FROM memories
+			 WHERE idempotency_key = ?
+			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND COALESCE(visibility, 'global') = 'global'
+			   AND scope IS NULL
+			   AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(key, input.agentId) as AggregateMemoryRow | undefined;
+	if (!row) return null;
+	if (input.project !== null && row.project !== input.project) return null;
+	return rowToRecallResult(row);
+}
+
+function loadMemoryByContentHash(
+	db: WriteDb,
+	contentHash: string,
+	input: { readonly agentId: string; readonly project: string | null },
+): ContentHashMatch | null {
+	const row = db
+		.prepare(
+			`SELECT id, content, source_id, type, tags, pinned, importance, who, project, visibility, created_at
+			 FROM memories
+			 WHERE content_hash = ?
+			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND scope IS NULL
+			   AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(contentHash, input.agentId) as AggregateMemoryRow | undefined;
+	if (!row) return null;
+	return {
+		row: rowToRecallResult(row),
+		visibleForAggregate:
+			(row.visibility ?? "global") === "global" && (input.project === null || row.project === input.project),
+	};
+}
+
+function linkAggregateSources(
+	db: WriteDb,
+	aggregateMemoryId: string,
+	sourceMemoryIds: readonly string[],
+	agentId: string,
+	now: string,
+): void {
+	for (const sourceMemoryId of sourceMemoryIds) {
+		db.prepare(
+			`INSERT OR IGNORE INTO aggregate_memory_sources
+			 (aggregate_memory_id, source_memory_id, agent_id, created_at)
+			 VALUES (?, ?, ?, ?)`,
+		).run(aggregateMemoryId, sourceMemoryId, agentId, now);
+	}
+}
+
+async function embedAggregateMemory(
+	memoryId: string,
+	content: string,
+	contentHash: string,
+	createdAt: string,
+	cfg: EmbeddingConfig,
+	embedFn: EmbedFn,
+): Promise<boolean> {
+	const vec = await embedFn(content, cfg);
+	if (!vec || vec.length !== cfg.dimensions) return false;
+	getDbAccessor().withWriteTx((db) => {
+		const embId = randomUUID();
+		syncVecDeleteBySourceId(db, "memory", memoryId);
+		db.prepare("DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?").run(memoryId);
+		db.prepare(`
+			INSERT INTO embeddings
+			  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+			VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+		`).run(embId, contentHash, vectorToBlob(vec), vec.length, memoryId, content, createdAt);
+		syncVecInsert(db, embId, vec);
+		db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(cfg.model, memoryId);
+	});
+	return true;
+}
+
+function unsavedAggregateResult(content: string, key: string, project: string | null): RecallResult {
+	const now = new Date().toISOString();
+	return {
+		id: `${key}:unsaved`,
+		content,
+		content_length: content.length,
+		truncated: false,
+		score: 1,
+		source: "aggregate-recall",
+		source_id: key,
+		type: "semantic",
+		tags: "aggregate,recall",
+		pinned: false,
+		importance: 0.75,
+		who: "signet",
+		project,
+		created_at: now,
+	};
+}
+
+async function planQueries(input: {
+	readonly router: AggregateInferenceRouter;
+	readonly params: RecallParams;
+	readonly budget: AggregateRecallBudget;
+	readonly maxQueries: number;
+	readonly initialRows: readonly RecallResult[];
+}): Promise<string[]> {
+	const remaining = input.maxQueries - 1;
+	if (remaining <= 0) return [];
+	const prompt = [
+		"Propose focused follow-up memory recall queries.",
+		'Return only JSON with this shape: {"queries":["..."]}.',
+		`Original query: ${input.params.query}`,
+		`Budget: ${input.budget}; maximum follow-up queries: ${remaining}.`,
+		"Current evidence:",
+		...input.initialRows.slice(0, 8).map((row, index) => `${index + 1}. ${row.content}`),
+	].join("\n");
+	const result = await input.router.execute(
+		{
+			agentId: input.params.agentId,
+			operation: "tool_planning",
+			promptPreview: input.params.query,
+			expectedOutputTokens: 300,
+		},
+		prompt,
+		{ maxTokens: 300, timeoutMs: 20_000 },
+	);
+	return result.ok ? parsePlannerQueries(result.value.text).slice(0, remaining) : [];
+}
+
+async function synthesize(input: {
+	readonly router: AggregateInferenceRouter;
+	readonly params: RecallParams;
+	readonly evidence: readonly RecallResult[];
+}): Promise<string | null> {
+	const prompt = [
+		"Synthesize a concise answer from the memory evidence below.",
+		"Use only the evidence. If the evidence is insufficient, say so briefly.",
+		`Question: ${input.params.query}`,
+		"",
+		"Evidence:",
+		...input.evidence.map((row, index) => {
+			const createdAt = row.created_at.slice(0, 10);
+			return `${index + 1}. [${row.id}; ${createdAt}; ${row.type}] ${row.content}`;
+		}),
+	].join("\n");
+	const result = await input.router.execute(
+		{
+			agentId: input.params.agentId,
+			operation: "tool_planning",
+			promptPreview: input.params.query,
+			expectedOutputTokens: 700,
+		},
+		prompt,
+		{ maxTokens: 700, timeoutMs: 30_000 },
+	);
+	if (!result.ok) return null;
+	const text = result.value.text.trim();
+	return text.length > 0 ? text : null;
+}
+
+export async function aggregateRecall(
+	params: RecallParams,
+	cfg: ResolvedMemoryConfig,
+	deps: AggregateRecallDeps,
+): Promise<RecallResponse> {
+	const budget = normalizeBudget(params.aggregateBudget ?? params.aggregate_budget);
+	const maxQueries = BUDGET_QUERY_LIMITS[budget];
+	const recall = deps.hybridRecall ?? hybridRecall;
+	const saveAggregate = params.saveAggregate !== false && params.save_aggregate !== false;
+	const first = await recall(params, cfg, deps.embedFn);
+
+	if (!deps.router) {
+		const sourceMemoryIds = uniqueEvidence(first.results).map((row) => row.id);
+		return emptyAggregateResponse(
+			params,
+			budget,
+			[params.query],
+			sourceMemoryIds,
+			sourceMemoryIds.length === 0 ? "no_evidence" : "router_unavailable",
+		);
+	}
+
+	const planned = await planQueries({
+		router: deps.router,
+		params,
+		budget,
+		maxQueries,
+		initialRows: first.results,
+	});
+	const queries = uniqueQueries(params.query, planned, maxQueries);
+	const recalls = [first];
+	for (const query of queries.slice(1)) {
+		recalls.push(
+			await recall(
+				{
+					...params,
+					query,
+					aggregate: false,
+				},
+				cfg,
+				deps.embedFn,
+			),
+		);
+	}
+
+	const evidence = uniqueEvidence(recalls.flatMap((result) => result.results));
+	const sourceMemoryIds = evidence.map((row) => row.id);
+	if (evidence.length === 0) {
+		return emptyAggregateResponse(params, budget, queries, [], "no_evidence");
+	}
+
+	const answer = await synthesize({ router: deps.router, params, evidence });
+	if (!answer) {
+		return emptyAggregateResponse(params, budget, queries, sourceMemoryIds, "synthesis_failed");
+	}
+
+	const agentId = params.agentId ?? "default";
+	const project = sourceProject(params);
+	const key = aggregateKey({ agentId, project, query: params.query, budget, sourceMemoryIds });
+	const now = (deps.now?.() ?? new Date()).toISOString();
+
+	let row: RecallResult | null;
+	let deduped = false;
+	let saved = false;
+	if (saveAggregate) {
+		const normalized = normalizeAndHashContent(answer);
+		row = getDbAccessor().withWriteTx((db) => {
+			const existing = loadAggregateByKey(db, key, { agentId, project });
+			if (existing) {
+				linkAggregateSources(db, existing.id, sourceMemoryIds, agentId, now);
+				deduped = true;
+				saved = true;
+				return existing;
+			}
+			const duplicateContent = loadMemoryByContentHash(db, normalized.contentHash, { agentId, project });
+			if (duplicateContent) {
+				if (!duplicateContent.visibleForAggregate) {
+					deduped = true;
+					return unsavedAggregateResult(answer, key, project);
+				}
+				linkAggregateSources(db, duplicateContent.row.id, sourceMemoryIds, agentId, now);
+				deduped = true;
+				saved = true;
+				return duplicateContent.row;
+			}
+			const id = deps.idFactory?.() ?? randomUUID();
+			txIngestEnvelope(db, {
+				id,
+				content: normalized.storageContent,
+				normalizedContent: normalized.normalizedContent || normalized.hashBasis,
+				contentHash: normalized.contentHash,
+				who: "signet",
+				why: "aggregate recall",
+				project,
+				importance: 0.75,
+				type: "semantic",
+				tags: "aggregate,recall",
+				pinned: 0,
+				isDeleted: 0,
+				extractionStatus: "none",
+				embeddingModel: null,
+				extractionModel: null,
+				updatedBy: "signet",
+				sourceType: "aggregate-recall",
+				sourceId: key,
+				idempotencyKey: key,
+				scope: null,
+				agentId,
+				visibility: "global",
+				createdAt: now,
+			});
+			linkAggregateSources(db, id, sourceMemoryIds, agentId, now);
+			saved = true;
+			return loadAggregateMemory(db, id);
+		});
+		if (row && !deduped) {
+			await embedAggregateMemory(row.id, row.content, normalized.contentHash, now, cfg.embedding, deps.embedFn).catch(
+				() => false,
+			);
+		}
+	} else {
+		row = unsavedAggregateResult(answer, key, project);
+	}
+
+	return {
+		results: row ? [row] : [],
+		query: params.query,
+		method: "hybrid",
+		meta: {
+			totalReturned: row ? 1 : 0,
+			hasSupplementary: false,
+			noHits: !row,
+			timings: { totalMs: 0, stages: [] },
+		},
+		aggregate: {
+			savedMemoryId: saved && row ? row.id : null,
+			saved,
+			deduped,
+			budget,
+			queries,
+			sourceMemoryIds,
+			stoppedReason: "complete",
+		},
+	};
+}

@@ -398,6 +398,8 @@ suppress the search.
 const { data: results, loading } = useMemorySearch("user preferences", {
   limit: 5,
   type: "preference",
+  aggregate: true,
+  aggregateBudget: "small",
 });
 ```
 
@@ -441,6 +443,8 @@ const result = await generateText({
 
 Each tool is a standard Vercel AI SDK tool with `description`,
 `parameters` (zod schema), and `execute` function.
+The `memory_search` tool accepts `aggregate`, `aggregateBudget`, and
+`saveAggregate` for explicit aggregate recall.
 
 **`getMemoryContext(client, userMessage, opts?)`** — Convenience helper
 that runs a recall search and formats the results as a markdown string

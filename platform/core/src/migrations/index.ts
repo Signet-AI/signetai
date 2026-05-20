@@ -78,6 +78,7 @@ import { up as dailyReflectionsMultipleInsights } from "./069-daily-reflections-
 import { up as ontologyControlPlaneState } from "./070-ontology-control-plane-state";
 import { up as epistemicAssertions } from "./071-epistemic-assertions";
 import { up as agentScopedIdempotencyKey } from "./072-agent-scoped-idempotency-key";
+import { up as aggregateMemoryLinks } from "./073-aggregate-memory-links";
 
 // -- Public interface consumed by Database.init() --
 
@@ -682,6 +683,14 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "memories", column: "idempotency_key" },
 				{ table: "memories", column: "runtime_path" },
 			],
+		},
+	},
+	{
+		version: 73,
+		name: "aggregate-memory-links",
+		up: aggregateMemoryLinks,
+		artifacts: {
+			tables: ["aggregate_memory_sources"],
 		},
 	},
 ];

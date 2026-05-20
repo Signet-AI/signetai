@@ -650,6 +650,9 @@ export async function memoryRecall(
 		limit?: number;
 		type?: string;
 		minScore?: number;
+		aggregate?: boolean;
+		aggregateBudget?: "small" | "medium" | "large";
+		saveAggregate?: boolean;
 	} = {},
 ): Promise<RecallPayload | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
@@ -658,6 +661,9 @@ export async function memoryRecall(
 		body: buildRecallRequestBody(query, {
 			limit: options.limit ?? 10,
 			type: options.type,
+			aggregate: options.aggregate,
+			aggregateBudget: options.aggregateBudget,
+			saveAggregate: options.saveAggregate,
 		}),
 		timeout: READ_TIMEOUT,
 	});
@@ -1577,13 +1583,29 @@ const signetPlugin = {
 								description: "Minimum relevance score threshold",
 							}),
 						),
+						aggregate: Type.Optional(
+							Type.Boolean({
+								description: "Synthesize an aggregate answer from recall evidence",
+							}),
+						),
+						aggregate_budget: Type.Optional(
+							Type.Union([Type.Literal("small"), Type.Literal("medium"), Type.Literal("large")]),
+						),
+						save_aggregate: Type.Optional(
+							Type.Boolean({
+								description: "Save aggregate answers as memories",
+							}),
+						),
 					}),
 					async execute(_toolCallId, params) {
-						const { query, limit, type, min_score } = params as {
+						const { query, limit, type, min_score, aggregate, aggregate_budget, save_aggregate } = params as {
 							query: string;
 							limit?: number;
 							type?: string;
 							min_score?: number;
+							aggregate?: boolean;
+							aggregate_budget?: "small" | "medium" | "large";
+							save_aggregate?: boolean;
 						};
 						try {
 							const recall = await memoryRecall(query, {
@@ -1591,6 +1613,9 @@ const signetPlugin = {
 								limit,
 								type,
 								minScore: min_score,
+								aggregate,
+								aggregateBudget: aggregate_budget,
+								saveAggregate: save_aggregate,
 							});
 							const parsed = parseRecallPayload(recall);
 							if (parsed.rows.length === 0) {

@@ -124,9 +124,12 @@ export async function recallMemories(
 		limit?: number;
 		agentId?: string;
 		scope?: "global" | "agent" | "session";
+		aggregate?: boolean;
+		aggregateBudget?: "small" | "medium" | "large";
+		saveAggregate?: boolean;
 	} = {},
 ): Promise<RecallPayload> {
-	const { limit = 10, agentId, scope } = options;
+	const { limit = 10, agentId, scope, aggregate, aggregateBudget, saveAggregate } = options;
 
 	const response = await fetch(`${daemonUrl}/api/memory/recall`, {
 		method: "POST",
@@ -136,6 +139,9 @@ export async function recallMemories(
 				limit,
 				agentId,
 				scope,
+				aggregate,
+				aggregateBudget,
+				saveAggregate,
 			}),
 		),
 		signal: AbortSignal.timeout(READ_TIMEOUT),

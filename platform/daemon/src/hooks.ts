@@ -530,6 +530,11 @@ export interface RecallRequest {
 	keywordQuery?: string;
 	project?: string;
 	limit?: number;
+	aggregate?: boolean;
+	aggregateBudget?: "small" | "medium" | "large";
+	aggregate_budget?: "small" | "medium" | "large";
+	saveAggregate?: boolean;
+	save_aggregate?: boolean;
 	type?: string;
 	tags?: string;
 	who?: string;

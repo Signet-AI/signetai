@@ -84,7 +84,13 @@ describe("SignetClient", () => {
 
 	test("recall() sends POST /api/memory/recall with query", async () => {
 		const { client } = mockDaemon();
-		await client.recall("dark mode", { limit: 5, type: "preference" });
+		await client.recall("dark mode", {
+			limit: 5,
+			type: "preference",
+			aggregate: true,
+			aggregateBudget: "medium",
+			saveAggregate: false,
+		});
 
 		const req = lastRequest();
 		expect(req.method).toBe("POST");
@@ -93,6 +99,9 @@ describe("SignetClient", () => {
 			query: "dark mode",
 			limit: 5,
 			type: "preference",
+			aggregate: true,
+			aggregateBudget: "medium",
+			saveAggregate: false,
 		});
 	});
 

@@ -58,6 +58,21 @@ describe("recall surface helpers", () => {
 		});
 	});
 
+	it("forwards aggregate recall options only when callers set them", () => {
+		expect(
+			buildRecallRequestBody("graph", {
+				aggregate: true,
+				aggregate_budget: "medium",
+				save_aggregate: false,
+			}),
+		).toEqual({
+			query: "graph",
+			aggregate: true,
+			aggregateBudget: "medium",
+			saveAggregate: false,
+		});
+	});
+
 	it("normalizes legacy structured aspect tuples for remember callers", () => {
 		const body = buildRememberRequestBody("Remember this", {
 			tags: ["graph", "parity"],

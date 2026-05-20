@@ -103,6 +103,8 @@ For critical:
 signet recall <query>
 signet recall <query> -l 5
 signet recall <query> --type decision --tags project
+signet recall <query> --aggregate --aggregate-budget small
+signet recall <query> --aggregate --no-save-aggregate
 
 # In harness
 /recall <query>
@@ -114,6 +116,8 @@ signet recall <query> --type decision --tags project
 - **Score display**: Shows relevance scores for transparency
 - **Rich results**: Content, tags, source, type, timestamps
 - **Filters**: Filter by type (`--type`), tags (`--tags`), who (`--who`)
+- **Aggregate recall**: `--aggregate` synthesizes one answer from bounded
+  evidence and saves it as a normal memory by default
 
 ### Examples
 
@@ -122,6 +126,7 @@ signet recall "signet architecture"
 signet recall "preferences" -l 5
 signet recall "API" --type decision --tags project
 signet recall "bun vs npm" --json
+signet recall "what did we decide about aggregate recall?" --aggregate
 ```
 
 ### Implementation
@@ -135,7 +140,7 @@ signet recall "search query" -l 10
 # Direct API call
 curl -X POST http://localhost:3850/api/memory/recall \
   -H "Content-Type: application/json" \
-  -d '{"query": "search query", "limit": 10}'
+  -d '{"query": "search query", "limit": 10, "aggregate": true}'
 ```
 
 ### Response Format

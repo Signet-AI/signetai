@@ -583,6 +583,7 @@ signet recall "release notes" --project /home/user/myapp
 signet recall "deploy process" --limit 5 --type decision
 signet recall "auth" --tags backend --who claude-code --since 2026-01-01
 signet recall "deploy checklist" --keyword-query "deploy OR rollback" --min-score 0.8
+signet recall "project history" --aggregate --aggregate-budget small
 signet recall "secrets" --json
 ```
 
@@ -612,6 +613,9 @@ Advanced controls:
 | `--importance-min <n>` | Only return memories at or above this importance |
 | `--min-score <n>` | Minimum recall score threshold, applied client-side |
 | `--agent <name>` | Filter by agent ID |
+| `--aggregate` | Synthesize one aggregate answer from bounded recall evidence |
+| `--aggregate-budget <budget>` | Aggregate recall budget: `small`, `medium`, or `large` |
+| `--no-save-aggregate` | Return the aggregate answer without saving it as a memory; saving requires `remember` permission |
 | `--json` | Print the recall response as JSON |
 
 ---

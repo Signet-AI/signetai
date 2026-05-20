@@ -519,6 +519,9 @@ describe("createMcpServer", () => {
 				since: "2026-01-01",
 				until: "2026-04-01",
 				score_min: 0.8,
+				aggregate: true,
+				aggregate_budget: "medium",
+				save_aggregate: false,
 			});
 
 			expect(cap.url).toBe("http://localhost:3850/api/memory/recall");
@@ -535,6 +538,9 @@ describe("createMcpServer", () => {
 			expect(body.since).toBe("2026-01-01");
 			expect(body.until).toBe("2026-04-01");
 			expect(body.expand).toBeUndefined();
+			expect(body.aggregate).toBe(true);
+			expect(body.aggregateBudget).toBe("medium");
+			expect(body.saveAggregate).toBe(false);
 			expect(body.min_score).toBeUndefined();
 			expect(body.score_min).toBeUndefined();
 			expect(result.isError).toBeUndefined();

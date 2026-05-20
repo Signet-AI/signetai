@@ -20,13 +20,28 @@ const DAEMON_OFFLINE_MSG = "Signet daemon not running. Start with: signet daemon
 
 async function searchMemory(
 	client: DaemonClient,
-	args: { readonly query: string; readonly limit?: number; readonly type?: string; readonly min_score?: number },
+	args: {
+		readonly query: string;
+		readonly limit?: number;
+		readonly type?: string;
+		readonly min_score?: number;
+		readonly aggregate?: boolean;
+		readonly aggregate_budget?: string;
+		readonly save_aggregate?: boolean;
+	},
 ): Promise<string> {
+	const aggregateBudget =
+		args.aggregate_budget === "medium" || args.aggregate_budget === "large" || args.aggregate_budget === "small"
+			? args.aggregate_budget
+			: undefined;
 	const result = await client.post<unknown>(
 		"/api/memory/recall",
 		buildRecallRequestBody(args.query, {
 			limit: args.limit ?? 10,
 			type: args.type,
+			aggregate: args.aggregate,
+			aggregate_budget: aggregateBudget,
+			save_aggregate: args.save_aggregate,
 		}),
 		READ_TIMEOUT,
 	);
@@ -101,6 +116,9 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				limit: tool.schema.number().optional().describe("Max results to return (default 10)"),
 				type: tool.schema.string().optional().describe("Filter by memory type"),
 				min_score: tool.schema.number().optional().describe("Minimum relevance score threshold"),
+				aggregate: tool.schema.boolean().optional().describe("Synthesize an aggregate answer from recall evidence"),
+				aggregate_budget: tool.schema.string().optional().describe("Aggregate recall budget: small, medium, or large"),
+				save_aggregate: tool.schema.boolean().optional().describe("Save aggregate answers as memories"),
 			},
 			async execute(args): Promise<string> {
 				return searchMemory(client, args);

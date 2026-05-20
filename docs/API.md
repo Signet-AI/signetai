@@ -1243,6 +1243,9 @@ permission. For the full execution model, see [Hybrid Recall](./MEMORY.md#hybrid
   "pinned": false,
   "importance_min": 0.5,
   "since": "2026-01-01T00:00:00Z",
+  "aggregate": false,
+  "aggregateBudget": "small",
+  "saveAggregate": true,
   "agentId": "alice"
 }
 ```
@@ -1289,6 +1292,40 @@ this call.
 is `true` when the response includes supporting context such as an LLM summary
 card or linked rationale context. `meta.noHits` is `true` when recall completed
 normally but found no matching results.
+
+Set `aggregate: true` to opt into bounded aggregate recall. The daemon first
+runs normal hybrid recall, optionally asks the inference router for follow-up
+recall queries, synthesizes one concise answer from unique evidence rows, and
+returns only that aggregate row. Normal recall ranking is unchanged when
+`aggregate` is omitted or `false`.
+
+Aggregate budgets cap total recall queries: `small` = 3, `medium` = 5,
+`large` = 8. `saveAggregate` defaults to `true`; saved aggregate answers are
+normal memories with `source_type: "aggregate-recall"` and tags
+`aggregate,recall`. Saving requires `remember` permission; recall-only callers
+can still use aggregate mode by sending `saveAggregate: false`. Repeating the
+same agent/query/project/budget/source-memory set returns the same saved memory
+through the aggregate idempotency key.
+
+When aggregate synthesis cannot complete, the response is a no-hit recall
+shape with `results: []` and `aggregate.stoppedReason` set to `no_evidence`,
+`router_unavailable`, or `synthesis_failed`.
+
+Successful aggregate responses include aggregate metadata:
+
+```json
+{
+  "aggregate": {
+    "savedMemoryId": "uuid",
+    "saved": true,
+    "deduped": false,
+    "budget": "small",
+    "queries": ["user preferences for editor"],
+    "sourceMemoryIds": ["source-memory-id"],
+    "stoppedReason": "complete"
+  }
+}
+```
 
 When `memory.pipelineV2.reranker.useExtractionModel` is enabled, an
 additional synthesized summary card may be prepended to results. This card
@@ -2574,6 +2611,9 @@ Explicit memory query from within a session. Requires `recall` permission.
   "who": "claude-code",
   "since": "2026-01-01T00:00:00Z",
   "until": "2026-04-01T00:00:00Z",
+  "aggregate": true,
+  "aggregateBudget": "small",
+  "saveAggregate": true,
   "sessionKey": "session-uuid",
   "runtimePath": "plugin"
 }
@@ -2583,7 +2623,8 @@ Explicit memory query from within a session. Requires `recall` permission.
 
 This route is a hook-oriented wrapper around `POST /api/memory/recall`. It
 accepts a narrower request surface, applies hook/session policy checks, and
-then forwards the supported recall filters into the shared hybrid recall path.
+then forwards the supported recall filters and explicit aggregate recall flags
+into the shared recall path.
 
 `project` on this route is forwarded as the memory `project` filter. It is not
 remapped to recall `scope`.

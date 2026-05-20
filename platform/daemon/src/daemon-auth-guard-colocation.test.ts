@@ -112,6 +112,34 @@ describe("auth guard co-location", () => {
 			registerMemoryRoutes(app);
 			expect(await status(app, "POST", "/api/memory/remember")).toBe(403);
 		});
+
+		it("POST /api/memory/recall aggregate save requires remember permission", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode recall test");
+
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerMemoryRoutes(app);
+			const token = createToken(secret, { sub: "readonly-recall", role: "readonly", scope: {} }, 60);
+			const res = await app.request("/api/memory/recall", {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					query: "aggregate save should need write permission",
+					aggregate: true,
+				}),
+			});
+
+			expect(res.status).toBe(403);
+			const body = (await res.json()) as { error?: string };
+			expect(body.error).toContain("remember");
+		});
 	});
 
 	describe("session routes need guards", () => {

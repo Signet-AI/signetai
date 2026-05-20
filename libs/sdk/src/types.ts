@@ -55,6 +55,16 @@ export interface RecallMeta {
 	readonly noHits: boolean;
 }
 
+export interface AggregateRecallMeta {
+	readonly savedMemoryId: string | null;
+	readonly saved: boolean;
+	readonly deduped: boolean;
+	readonly budget: "small" | "medium" | "large";
+	readonly queries: readonly string[];
+	readonly sourceMemoryIds: readonly string[];
+	readonly stoppedReason: "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
+}
+
 export interface RecallEntityAttribute {
 	readonly content: string;
 	readonly status: string;
@@ -77,6 +87,7 @@ export interface RecallResponse {
 	readonly query: string;
 	readonly method: "hybrid" | "keyword";
 	readonly meta: RecallMeta;
+	readonly aggregate?: AggregateRecallMeta;
 	readonly entities?: readonly RecallEntity[];
 	readonly sources?: Readonly<Record<string, string>>;
 }

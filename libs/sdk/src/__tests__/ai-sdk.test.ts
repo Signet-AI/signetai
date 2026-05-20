@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { SignetClient } from "../index.js";
 import { getMemoryContext, memoryTools } from "../ai-sdk.js";
+import { SignetClient } from "../index.js";
 
 let mockServer: ReturnType<typeof Bun.serve>;
 let port: number;
 
 // Track calls the mock client receives
 const calls: { method: string; args: unknown[] }[] = [];
+let lastRecallBody: Record<string, unknown> | null = null;
 
 function mockClient(): SignetClient {
 	const client = new SignetClient({ daemonUrl: `http://localhost:${port}` });
@@ -16,11 +17,12 @@ function mockClient(): SignetClient {
 beforeAll(() => {
 	mockServer = Bun.serve({
 		port: 0,
-		fetch(req) {
+		async fetch(req) {
 			const url = new URL(req.url);
 
 			// recall endpoint - used by memory_search and getMemoryContext
 			if (url.pathname === "/api/memory/recall") {
+				lastRecallBody = (await req.json().catch(() => null)) as Record<string, unknown> | null;
 				return Response.json({
 					results: [
 						{
@@ -106,10 +108,20 @@ describe("memoryTools", () => {
 			query: "test query",
 			limit: 3,
 			type: undefined,
+			aggregate: true,
+			aggregateBudget: "small",
+			saveAggregate: false,
 		});
 
 		expect(result).toHaveProperty("results");
 		expect(result).toHaveProperty("stats");
+		expect(lastRecallBody).toMatchObject({
+			query: "test query",
+			limit: 3,
+			aggregate: true,
+			aggregateBudget: "small",
+			saveAggregate: false,
+		});
 	});
 
 	test("memory_store executes remember", async () => {
