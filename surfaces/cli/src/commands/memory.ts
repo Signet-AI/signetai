@@ -102,8 +102,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.action(async (query: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
-			const aggregateRequested =
-				options.aggregate === true || options.aggregateBudget !== "small" || options.saveAggregate === false;
+			const aggregateRequested = options.aggregate === true || options.aggregateBudget !== "small";
 			const spinner = ora("Searching memories...").start();
 			const { ok, data } = await deps.secretApiCall(
 				"POST",

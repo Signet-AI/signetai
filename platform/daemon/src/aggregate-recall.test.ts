@@ -10,7 +10,11 @@ import { loadMemoryConfig } from "./memory-config";
 import type { RecallParams, RecallResponse, RecallResult } from "./memory-search";
 import { txIngestEnvelope } from "./transactions";
 
-function row(id: string, content: string): RecallResult {
+function row(
+	id: string,
+	content: string,
+	opts: { readonly visibility?: string | null; readonly scope?: string | null } = {},
+): RecallResult {
 	const now = "2026-05-20T12:00:00.000Z";
 	return {
 		id,
@@ -26,6 +30,7 @@ function row(id: string, content: string): RecallResult {
 		who: "test",
 		project: null,
 		created_at: now,
+		...opts,
 	};
 }
 
@@ -259,6 +264,37 @@ describe("aggregateRecall", () => {
 		const count = getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS n FROM memories").get()) as {
 			n: number;
 		};
+		expect(count.n).toBe(0);
+	});
+
+	it("does not save global aggregate memories from private evidence", async () => {
+		const result = await aggregateRecall(
+			{
+				query: "private history",
+				aggregate: true,
+				agentId: "agent-private",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				idFactory: () => "aggregate-private",
+				hybridRecall: async (params: RecallParams) =>
+					response(params.query, [row("mem-private", "Private evidence", { visibility: "private" })]),
+			},
+		);
+
+		expect(result.results[0].id).toStartWith("aggregate-recall:");
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: null,
+			saved: false,
+			deduped: false,
+			stoppedReason: "complete",
+		});
+		const count = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS n FROM memories WHERE id = ?").get("aggregate-private") as { n: number },
+		);
 		expect(count.n).toBe(0);
 	});
 

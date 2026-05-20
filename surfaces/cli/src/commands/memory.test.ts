@@ -220,4 +220,35 @@ describe("registerMemoryCommands recall", () => {
 			saveAggregate: false,
 		});
 	});
+
+	test("--no-save-aggregate does not enable aggregate recall by itself", async () => {
+		let capturedBody: unknown;
+		const program = new Command();
+		registerMemoryCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, _path, body) => {
+				capturedBody = body;
+				return {
+					ok: true,
+					data: {
+						query: "project history",
+						method: "hybrid",
+						results: [],
+						meta: {
+							totalReturned: 0,
+							hasSupplementary: false,
+							noHits: true,
+						},
+					},
+				};
+			},
+		});
+
+		await program.parseAsync(["node", "test", "recall", "project history", "--no-save-aggregate", "--json"]);
+
+		expect(capturedBody).toEqual({
+			query: "project history",
+			limit: 10,
+		});
+	});
 });

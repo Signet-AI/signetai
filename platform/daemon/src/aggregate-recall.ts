@@ -182,6 +182,10 @@ function uniqueEvidence(rows: readonly RecallResult[]): RecallResult[] {
 	return result;
 }
 
+function evidenceCanSaveAsGlobalAggregate(rows: readonly RecallResult[]): boolean {
+	return rows.every((row) => (row.visibility ?? "global") === "global" && (row.scope ?? null) === null);
+}
+
 function aggregateKey(input: {
 	readonly agentId: string;
 	readonly project: string | null;
@@ -506,7 +510,7 @@ export async function aggregateRecall(
 	let row: RecallResult | null;
 	let deduped = false;
 	let saved = false;
-	if (saveAggregate) {
+	if (saveAggregate && evidenceCanSaveAsGlobalAggregate(evidence)) {
 		const normalized = normalizeAndHashContent(answer);
 		row = getDbAccessor().withWriteTx((db) => {
 			const duplicate = resolveAggregateDuplicate(db, {

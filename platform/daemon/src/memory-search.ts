@@ -83,6 +83,8 @@ export interface RecallResult {
 	who: string;
 	project: string | null;
 	created_at: string;
+	visibility?: string | null;
+	scope?: string | null;
 	supplementary?: boolean;
 }
 
@@ -1875,7 +1877,7 @@ export async function hybridRecall(
 			(db) =>
 				db
 					.prepare(
-						`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at
+						`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
         FROM memories m
         WHERE m.id IN (${placeholders}) AND m.is_deleted = 0${filter.sql}`,
 					)
@@ -1890,6 +1892,8 @@ export async function hybridRecall(
 					who: string;
 					project: string | null;
 					created_at: string;
+					visibility: string | null;
+					scope: string | null;
 				}>,
 		),
 	);
@@ -1923,6 +1927,8 @@ export async function hybridRecall(
 						who: r.who,
 						project: r.project,
 						created_at: r.created_at,
+						visibility: r.visibility,
+						scope: r.scope,
 					},
 				];
 			}),
@@ -2089,7 +2095,7 @@ export async function hybridRecall(
 				return db
 					.prepare(
 						`SELECT DISTINCT m.id, m.content, m.type, m.tags, m.pinned,
-							        m.importance, m.who, m.project, m.created_at
+							        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
 							 FROM memory_entity_mentions mem
 							 JOIN memories m ON m.id = mem.memory_id
 							 WHERE mem.entity_id IN (${ePlaceholders})
@@ -2108,6 +2114,8 @@ export async function hybridRecall(
 					who: string;
 					project: string | null;
 					created_at: string;
+					visibility?: string | null;
+					scope?: string | null;
 				}>;
 			});
 
@@ -2130,6 +2138,8 @@ export async function hybridRecall(
 					who: r.who,
 					project: r.project,
 					created_at: r.created_at,
+					visibility: r.visibility,
+					scope: r.scope,
 					supplementary: true,
 				});
 			}
