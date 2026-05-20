@@ -15,6 +15,11 @@ struct Migration {
     sql: &'static str,
 }
 
+const TS_MEMORY_SEARCH_TELEMETRY_VERSION: u32 = 66;
+const TS_MEMORY_SEARCH_TELEMETRY_NAME: &str = "memory-search-telemetry";
+const TS_ONTOLOGY_PROPOSALS_VERSION: u32 = 67;
+const TS_ONTOLOGY_PROPOSALS_NAME: &str = "ontology-proposals";
+
 /// Simple checksum matching the TS implementation (hash of "version:name").
 fn checksum(version: u32, name: &str) -> String {
     let s = format!("{version}:{name}");
@@ -257,19 +262,9 @@ static MIGRATIONS: &[Migration] = &[
         name: "task-agent-scope",
         sql: include_str!("sql/039-task-agent-scope.sql"),
     },
-    Migration {
-        version: 40,
-        name: "memory-search-telemetry",
-        sql: include_str!("sql/040-memory-search-telemetry.sql"),
-    },
-    Migration {
-        version: 41,
-        name: "ontology-proposals",
-        sql: include_str!("sql/041-ontology-proposals.sql"),
-    },
 ];
 
-pub const LATEST_SCHEMA_VERSION: u32 = 41;
+pub const LATEST_SCHEMA_VERSION: u32 = 39;
 
 /// Ensure meta tables exist (safe on fresh DB).
 fn ensure_meta(conn: &Connection) -> Result<(), CoreError> {
@@ -388,6 +383,11 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
 fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError> {
     conn.execute_batch(include_str!("sql/040-memory-search-telemetry.sql"))?;
     conn.execute_batch(include_str!("sql/041-ontology-proposals.sql"))?;
+    stamp_typescript_parity_migration(
+        conn,
+        TS_MEMORY_SEARCH_TELEMETRY_VERSION,
+        TS_MEMORY_SEARCH_TELEMETRY_NAME,
+    )?;
     Ok(())
 }
 
@@ -431,6 +431,12 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
         "proposal_evidence",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_entity_attributes_proposal
+            ON entity_attributes(agent_id, proposal_id);
+         CREATE INDEX IF NOT EXISTS idx_entity_dependencies_proposal
+            ON entity_dependencies(agent_id, proposal_id);",
+    )?;
 
     conn.execute_batch(
         "UPDATE connectors
@@ -458,6 +464,43 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
             );",
     )?;
 
+    stamp_typescript_parity_migration(
+        conn,
+        TS_ONTOLOGY_PROPOSALS_VERSION,
+        TS_ONTOLOGY_PROPOSALS_NAME,
+    )?;
+
+    Ok(())
+}
+
+fn stamp_typescript_parity_migration(
+    conn: &Connection,
+    version: u32,
+    name: &str,
+) -> Result<(), CoreError> {
+    let already_stamped: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
+            [version],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)?;
+    if already_stamped {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let cs = checksum(version, name);
+    conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at, checksum)
+         VALUES (?1, ?2, ?3)",
+        rusqlite::params![version, now, cs],
+    )?;
+    conn.execute(
+        "INSERT INTO schema_migrations_audit (version, applied_at, duration_ms, checksum)
+         VALUES (?1, ?2, 0, ?3)",
+        rusqlite::params![version, now, cs],
+    )?;
     Ok(())
 }
 
@@ -998,13 +1041,13 @@ mod tests {
     }
 
     #[test]
-    fn records_rust_parity_migrations_in_schema_ledger() {
+    fn records_ts_parity_migrations_without_colliding_rust_versions() {
         let conn = Connection::open_in_memory().expect("open in-memory db");
         run(&conn).expect("initial migrations run");
 
         for (version, table) in [
-            (40_i64, "memory_search_telemetry"),
-            (41_i64, "ontology_proposals"),
+            (66_i64, "memory_search_telemetry"),
+            (67_i64, "ontology_proposals"),
         ] {
             let exists: i64 = conn
                 .query_row(
@@ -1030,10 +1073,24 @@ mod tests {
                 "migration {version} should be recorded in schema_migrations"
             );
         }
+
+        for version in [40_i64, 41_i64] {
+            let stamped: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE version = ?1",
+                    [version],
+                    |row| row.get(0),
+                )
+                .expect("query schema_migrations");
+            assert_eq!(
+                stamped, 0,
+                "Rust must not stamp local parity DDL as TS migration {version}"
+            );
+        }
     }
 
     #[test]
-    fn repairs_ts_created_ledger_collision_for_rust_parity_tables() {
+    fn repairs_ts_parity_tables_when_ledger_versions_are_already_stamped() {
         let conn = Connection::open_in_memory().expect("open in-memory db");
         run(&conn).expect("initial migrations run");
         conn.execute_batch(
@@ -1042,7 +1099,7 @@ mod tests {
         )
         .expect("simulate TS-created ledger with missing Rust parity tables");
 
-        run(&conn).expect("run migrations with colliding TS ledger versions");
+        run(&conn).expect("run migrations with TS parity versions already stamped");
 
         for table in ["memory_search_telemetry", "ontology_proposals"] {
             let exists: i64 = conn
