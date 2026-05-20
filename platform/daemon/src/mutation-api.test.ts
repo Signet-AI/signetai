@@ -224,7 +224,7 @@ memory:
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
-				content: "Other agent provenance import",
+				content: "Default global provenance import",
 				who: "soulvessel.tests",
 				agentId: "agent-a",
 				idempotencyKey: "shared-import-key",

@@ -821,6 +821,20 @@ describe("migration framework", () => {
 		).run("f", "deleted import", "import-key", "fact", "default", "global", null, now, now, "test");
 	});
 
+	test("migration 072 repairs missing runtime_path on partial provenance schemas", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		db.exec("ALTER TABLE memories DROP COLUMN runtime_path");
+		db.prepare("DELETE FROM schema_migrations WHERE version = 72").run();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
+		const colNames = cols.map((c) => c.name);
+		expect(colNames).toContain("idempotency_key");
+		expect(colNames).toContain("runtime_path");
+	});
+
 	test("migration 003 deduplicates existing content hashes", () => {
 		db = createFreshDb();
 

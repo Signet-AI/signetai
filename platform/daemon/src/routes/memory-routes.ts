@@ -169,6 +169,19 @@ function scopedMemoryPredicate(input: RememberDedupeScope): {
 	};
 }
 
+function scopedContentHashPredicate(input: RememberDedupeScope): {
+	readonly sql: string;
+	readonly params: readonly string[];
+} {
+	return {
+		sql: `
+			COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			AND COALESCE(scope, '__NULL__') = ?
+		`,
+		params: [input.agentId || "default", input.scope ?? "__NULL__"],
+	};
+}
+
 function getScopedIdempotencyMemoryId(
 	db: WriteDb,
 	key: string | undefined,
@@ -201,6 +214,38 @@ function getScopedIdempotencyDedupeRow(
 			 LIMIT 1`,
 		)
 		.get(key, ...scoped.params) as RememberDedupeRow | undefined;
+}
+
+function getScopedContentHashMemoryId(
+	db: WriteDb,
+	contentHash: string,
+	input: RememberDedupeScope,
+): { readonly id: string } | undefined {
+	const scoped = scopedContentHashPredicate(input);
+	return db
+		.prepare(
+			`SELECT id
+			 FROM memories
+			 WHERE content_hash = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(contentHash, ...scoped.params) as { readonly id: string } | undefined;
+}
+
+function getScopedContentHashDedupeRow(
+	db: WriteDb,
+	contentHash: string,
+	input: RememberDedupeScope,
+): RememberDedupeRow | undefined {
+	const scoped = scopedContentHashPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, type, tags, pinned, importance, content
+			 FROM memories
+			 WHERE content_hash = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(contentHash, ...scoped.params) as RememberDedupeRow | undefined;
 }
 
 function getScopedChunkIdempotencyRows(
@@ -775,16 +820,7 @@ export function registerMemoryRoutes(app: Hono): void {
 						const byIdempotencyKey = getScopedIdempotencyMemoryId(db, plan.idempotencyKey, dedupeScope);
 						if (byIdempotencyKey) return { id: byIdempotencyKey.id, inserted: false as const };
 
-						const byHash =
-							scope !== null
-								? (db
-										.prepare("SELECT id FROM memories WHERE content_hash = ? AND scope = ? AND is_deleted = 0 LIMIT 1")
-										.get(plan.normalized.contentHash, scope) as { id: string } | undefined)
-								: (db
-										.prepare(
-											"SELECT id FROM memories WHERE content_hash = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1",
-										)
-										.get(plan.normalized.contentHash) as { id: string } | undefined);
+						const byHash = getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope);
 						if (byHash) return { id: byHash.id, inserted: false as const };
 
 						txIngestEnvelope(db, {
@@ -964,22 +1000,8 @@ export function registerMemoryRoutes(app: Hono): void {
 				const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
 				if (byIdempotencyKey) return { deduped: true as const, row: byIdempotencyKey };
 
-				// Check content_hash dedupe (scope-aware)
-				const byHash = (
-					scope !== null
-						? db
-								.prepare(
-									`SELECT id, type, tags, pinned, importance, content
-					 FROM memories WHERE content_hash = ? AND scope = ? AND is_deleted = 0 LIMIT 1`,
-								)
-								.get(contentHash, scope)
-						: db
-								.prepare(
-									`SELECT id, type, tags, pinned, importance, content
-					 FROM memories WHERE content_hash = ? AND scope IS NULL AND is_deleted = 0 LIMIT 1`,
-								)
-								.get(contentHash)
-				) as DedupeRow | undefined;
+				// Check content_hash dedupe using the same agent/scope tuple as the unique index.
+				const byHash = getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 				if (byHash) return { deduped: true as const, row: byHash };
 
 				// No duplicate — insert
@@ -1036,13 +1058,7 @@ export function registerMemoryRoutes(app: Hono): void {
 				const existing = getDbAccessor().withReadDb((db) => {
 					const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
 					if (byIdempotencyKey) return byIdempotencyKey;
-					return db
-						.prepare(
-							`SELECT id, type, tags, pinned, importance, content
-						 FROM memories
-						 WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
-						)
-						.get(contentHash) as DedupeRow | undefined;
+					return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 				});
 				if (existing) {
 					return c.json({

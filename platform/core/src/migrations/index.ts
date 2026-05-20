@@ -677,6 +677,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 72,
 		name: "agent-scoped-idempotency-key",
 		up: agentScopedIdempotencyKey,
+		artifacts: {
+			columns: [
+				{ table: "memories", column: "idempotency_key" },
+				{ table: "memories", column: "runtime_path" },
+			],
+		},
 	},
 ];
 

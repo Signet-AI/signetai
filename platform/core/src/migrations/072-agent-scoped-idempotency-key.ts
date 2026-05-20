@@ -7,6 +7,7 @@ function ensureMemoriesScopeColumns(db: MigrationDb): void {
 	if (!names.has("visibility")) db.exec("ALTER TABLE memories ADD COLUMN visibility TEXT DEFAULT 'global'");
 	if (!names.has("scope")) db.exec("ALTER TABLE memories ADD COLUMN scope TEXT");
 	if (!names.has("idempotency_key")) db.exec("ALTER TABLE memories ADD COLUMN idempotency_key TEXT");
+	if (!names.has("runtime_path")) db.exec("ALTER TABLE memories ADD COLUMN runtime_path TEXT");
 }
 
 /**
