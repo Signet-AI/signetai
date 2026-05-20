@@ -374,6 +374,7 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
         info!(count, "migrations applied");
     }
 
+    ensure_cross_daemon_parity_tables(conn)?;
     ensure_cross_daemon_parity_columns(conn)?;
 
     Ok(())
@@ -384,6 +385,12 @@ pub fn run(conn: &Connection) -> Result<(), CoreError> {
 /// Some parity columns are required by current Rust route/query code but may be
 /// absent in fresh or TS-created databases whose historical migrations stamped
 /// versions before Rust learned about the extra columns.
+fn ensure_cross_daemon_parity_tables(conn: &Connection) -> Result<(), CoreError> {
+    conn.execute_batch(include_str!("sql/040-memory-search-telemetry.sql"))?;
+    conn.execute_batch(include_str!("sql/041-ontology-proposals.sql"))?;
+    Ok(())
+}
+
 fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError> {
     add_column_if_missing(conn, "entities", "mentions", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing(conn, "entities", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
@@ -940,6 +947,33 @@ mod tests {
             assert_eq!(
                 stamped, 1,
                 "migration {version} should be recorded in schema_migrations"
+            );
+        }
+    }
+
+    #[test]
+    fn repairs_ts_created_ledger_collision_for_rust_parity_tables() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        run(&conn).expect("initial migrations run");
+        conn.execute_batch(
+            "DROP TABLE memory_search_telemetry;
+             DROP TABLE ontology_proposals;",
+        )
+        .expect("simulate TS-created ledger with missing Rust parity tables");
+
+        run(&conn).expect("run migrations with colliding TS ledger versions");
+
+        for table in ["memory_search_telemetry", "ontology_proposals"] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("query sqlite_master");
+            assert_eq!(
+                exists, 1,
+                "{table} should be repaired even when Rust migration versions are pre-stamped"
             );
         }
     }

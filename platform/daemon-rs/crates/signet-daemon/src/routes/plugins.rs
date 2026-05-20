@@ -363,8 +363,13 @@ pub async fn prompt_contributions(State(state): State<Arc<AppState>>) -> Json<se
 /// GET /api/plugins/audit
 pub async fn audit(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(query): Query<AuditQuery>,
-) -> Json<serde_json::Value> {
+) -> Response {
+    if let Err(resp) = require_audit_read(&state, peer, &headers) {
+        return resp;
+    }
     let limit = parse_limit(query.limit.as_deref());
     let since = parse_time(query.since.as_deref());
     let until = parse_time(query.until.as_deref());
@@ -417,7 +422,7 @@ pub async fn audit(
             .cmp(&a.get("timestamp").and_then(|v| v.as_str()))
     });
     events.truncate(limit);
-    Json(serde_json::json!({"count": events.len(), "events": events}))
+    Json(serde_json::json!({"count": events.len(), "events": events})).into_response()
 }
 
 /// GET /api/plugins/:id/diagnostics
@@ -506,5 +511,22 @@ fn require_admin_mutation(
     )
     .map_err(|resp| *resp)?;
     require_permission_guard(&auth, Permission::Admin, state.auth_mode, is_local)
+        .map_err(|resp| *resp)
+}
+
+fn require_audit_read(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    let is_local = peer.ip().is_loopback();
+    let auth = authenticate_headers(
+        state.auth_mode,
+        state.auth_secret.as_deref(),
+        headers,
+        is_local,
+    )
+    .map_err(|resp| *resp)?;
+    require_permission_guard(&auth, Permission::Analytics, state.auth_mode, is_local)
         .map_err(|resp| *resp)
 }

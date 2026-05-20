@@ -1528,6 +1528,39 @@ async fn plugins_native_registry_prompt_and_audit() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn plugin_audit_requires_analytics_permission() {
+    let server = TestServer::start_team_auth().await;
+    server.seed_plugin_audit_fixture();
+    let agent_token = TestServer::scoped_token("default");
+    let operator_token = TestServer::scoped_role_token("default", "operator");
+
+    let resp = server
+        .get("/api/plugins/audit?pluginId=signet.secrets&limit=5")
+        .await;
+    assert_eq!(resp.status(), 401);
+
+    let resp = server
+        .get_bearer(
+            "/api/plugins/audit?pluginId=signet.secrets&limit=5",
+            &agent_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = server
+        .get_bearer(
+            "/api/plugins/audit?pluginId=signet.secrets&limit=5",
+            &operator_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["count"], 1);
+    assert_eq!(body["events"][0]["event"], "plugin.enabled");
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn ontology_native_proposal_lifecycle() {
     let server = TestServer::start().await;
 
