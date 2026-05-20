@@ -1583,13 +1583,31 @@ const signetPlugin = {
 								description: "Minimum relevance score threshold",
 							}),
 						),
+						session_key: Type.Optional(
+							Type.String({
+								description: "Session key for per-context recall dedupe",
+							}),
+						),
+						agent_id: Type.Optional(
+							Type.String({
+								description: "Agent ID for scoped recall dedupe",
+							}),
+						),
+						include_recalled: Type.Optional(
+							Type.Boolean({
+								description: "Include rows already recalled in this context",
+							}),
+						),
 					}),
 					async execute(_toolCallId, params) {
-						const { query, limit, type, min_score } = params as {
+						const { query, limit, type, min_score, session_key, agent_id, include_recalled } = params as {
 							query: string;
 							limit?: number;
 							type?: string;
 							min_score?: number;
+							session_key?: string;
+							agent_id?: string;
+							include_recalled?: boolean;
 						};
 						try {
 							const recall = await memoryRecall(query, {
@@ -1597,6 +1615,9 @@ const signetPlugin = {
 								limit,
 								type,
 								minScore: min_score,
+								sessionKey: session_key,
+								agentId: agent_id,
+								includeRecalled: include_recalled,
 							});
 							const parsed = parseRecallPayload(recall);
 							if (parsed.rows.length === 0) {

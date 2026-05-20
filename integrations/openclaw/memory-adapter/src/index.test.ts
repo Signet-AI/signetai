@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OpenClawPluginApi } from "./openclaw-types";
+import type { OpenClawPluginApi, OpenClawToolDefinition } from "./openclaw-types";
 
 // Import directly; tests seed a real temporary SIGNET_PATH instead of
 // mocking @signet/core globally, which otherwise leaks into later suites.
@@ -11,7 +11,7 @@ const signetPlugin = signet.default;
 const { memoryStore, sessionSearch, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
-type ToolRegistration = { name: string; label?: string; description?: string };
+type ToolRegistration = OpenClawToolDefinition;
 
 const originalFetch = globalThis.fetch;
 const originalSetInterval = globalThis.setInterval;
@@ -33,6 +33,7 @@ let lastPreCompactionBody: unknown = null;
 let lastCompactionBody: unknown = null;
 let lastSessionEndBody: unknown = null;
 let lastPromptSubmitBody: unknown = null;
+let lastMemoryRecallBody: unknown = null;
 let lastSessionSearchBody: unknown = null;
 let lastCheckpointBody: unknown = null;
 let warnMessages: string[] = [];
@@ -100,11 +101,7 @@ function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
 			},
 		},
 		registerTool(tool) {
-			tools.push({
-				name: tool.name,
-				label: tool.label,
-				description: tool.description,
-			});
+			tools.push(tool);
 		},
 		registerCli() {
 			// no-op
@@ -140,6 +137,7 @@ beforeEach(() => {
 	lastCompactionBody = null;
 	lastSessionEndBody = null;
 	lastPromptSubmitBody = null;
+	lastMemoryRecallBody = null;
 	lastSessionSearchBody = null;
 	lastCheckpointBody = null;
 	checkpointResponse = null;
@@ -198,6 +196,34 @@ beforeEach(() => {
 				case "/api/memory/remember":
 					lastRememberBody = init?.body ? JSON.parse(String(init.body)) : null;
 					return jsonResponse({ id: "mem-1" });
+				case "/api/memory/recall":
+					lastMemoryRecallBody = init?.body ? JSON.parse(String(init.body)) : null;
+					return jsonResponse({
+						query: "Juniper trunk ports",
+						method: "hybrid",
+						results: [
+							{
+								id: "mem-1",
+								content: "Juniper EX4300 trunk port audit notes",
+								score: 0.92,
+								source: "hybrid",
+								type: "fact",
+								created_at: "2026-03-25T10:05:00.000Z",
+								already_recalled: true,
+							},
+						],
+						meta: {
+							totalReturned: 1,
+							hasSupplementary: false,
+							noHits: false,
+							dedupe: {
+								enabled: true,
+								contextEpoch: 2,
+								suppressed: 3,
+								repeatedReturned: 1,
+							},
+						},
+					});
 				case "/api/hooks/session-checkpoint-extract":
 					lastCheckpointBody = init?.body ? JSON.parse(String(init.body)) : null;
 					if (checkpointResponse) {
@@ -307,6 +333,50 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			limit: 3,
 		});
 		expect(result).toMatchObject({ count: 1 });
+	});
+
+	it("forwards recall dedupe options from the memory_search tool", async () => {
+		const { api, tools } = createMockApi();
+		signetPlugin.register(api);
+
+		const tool = tools.find((item) => item.name === "memory_search");
+		expect(tool).toBeDefined();
+
+		const result = await tool?.execute("tool-call-1", {
+			query: "Juniper trunk ports",
+			limit: 2,
+			type: "fact",
+			min_score: 0.5,
+			session_key: "ctx-session",
+			agent_id: "agent-openclaw",
+			include_recalled: true,
+		});
+
+		expect(lastMemoryRecallBody).toEqual({
+			query: "Juniper trunk ports",
+			limit: 2,
+			type: "fact",
+			sessionKey: "ctx-session",
+			agentId: "agent-openclaw",
+			includeRecalled: true,
+		});
+		expect(result?.details).toMatchObject({
+			count: 1,
+			meta: {
+				dedupe: {
+					enabled: true,
+					contextEpoch: 2,
+					suppressed: 3,
+					repeatedReturned: 1,
+				},
+			},
+		});
+		expect(result?.details?.memories).toEqual([
+			expect.objectContaining({
+				id: "mem-1",
+				already_recalled: true,
+			}),
+		]);
 	});
 
 	it("prefers before_prompt_build and deduplicates legacy fallback for the same turn", async () => {

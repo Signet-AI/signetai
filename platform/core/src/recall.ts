@@ -202,6 +202,7 @@ export function applyRecallScoreThreshold(raw: unknown, minScore?: number): unkn
 			totalReturned: filtered.length,
 			hasSupplementary: filtered.some((row) => row.supplementary === true),
 			noHits: filtered.length === 0,
+			...(isRecord(payload.meta) && isRecord(payload.meta.dedupe) ? { dedupe: payload.meta.dedupe } : {}),
 		},
 	};
 }
