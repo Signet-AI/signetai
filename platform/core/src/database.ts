@@ -257,9 +257,10 @@ export class Database {
 			.prepare(
 				`INSERT INTO memories
 				 (id, type, category, content, confidence, source_id,
-				  source_type, tags, created_at, updated_at, updated_by,
-				  vector_clock, manual_override)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				  source_type, source_path, runtime_path, idempotency_key,
+				  tags, created_at, updated_at, updated_by, vector_clock,
+				  manual_override)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				id,
@@ -269,6 +270,9 @@ export class Database {
 				memory.confidence,
 				memory.sourceId ?? null,
 				memory.sourceType ?? null,
+				memory.sourcePath ?? null,
+				memory.runtimePath ?? null,
+				memory.idempotencyKey ?? null,
 				JSON.stringify(memory.tags),
 				now,
 				now,
@@ -312,6 +316,11 @@ export class Database {
 			extractionStatus: "extraction_status",
 			embeddingModel: "embedding_model",
 			extractionModel: "extraction_model",
+			sourceId: "source_id",
+			sourceType: "source_type",
+			sourcePath: "source_path",
+			runtimePath: "runtime_path",
+			idempotencyKey: "idempotency_key",
 			who: "who",
 		};
 
