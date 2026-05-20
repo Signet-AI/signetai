@@ -34,6 +34,7 @@ Environment variables:
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Hybrid memory search (keyword + semantic + knowledge graph) |
+| `session_search` | Search active or completed session transcripts |
 | `memory_store` | Store a fact, preference, or decision to memory |
 | `memory_get` | Retrieve a memory by ID |
 | `memory_list` | List memories with optional filters |

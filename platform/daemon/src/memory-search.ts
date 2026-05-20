@@ -99,7 +99,6 @@ export interface RecallResponse {
 			attributes: Array<{ content: string; status: string; importance: number }>;
 		}>;
 	}>;
-	sources?: Record<string, string>;
 }
 
 export type EmbedFn = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
@@ -597,14 +596,6 @@ function annotateCurrentness(content: string, info: CurrentnessInfo | undefined)
 	return `${lines.join("\n")}\n\n${content}`;
 }
 
-interface TranscriptRecallHit {
-	readonly sessionKey: string;
-	readonly project: string | null;
-	readonly updatedAt: string;
-	readonly excerpt: string;
-	readonly rank: number;
-}
-
 interface NativeArtifactRecallHit {
 	readonly rowid: number;
 	readonly sourcePath: string;
@@ -824,76 +815,6 @@ export function transcriptExcerpt(content: string, query: string, maxChars = 650
 	return `${prefix}${clean.slice(start, end).trim()}${suffix}`;
 }
 
-function buildTranscriptRecallHits(
-	params: RecallParams,
-	query: string,
-	existingSourceIds: Set<string>,
-): TranscriptRecallHit[] {
-	if (!params.expand) return [];
-	const fts = sanitizeFtsQuery(query);
-	if (fts.length === 0) return [];
-
-	try {
-		return getDbAccessor().withReadDb((db) => {
-			const table = db
-				.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts_fts'`)
-				.get();
-			if (!table) return [];
-
-			const parts = [
-				"SELECT st.session_key, st.project, COALESCE(st.updated_at, st.created_at) AS updated_at,",
-				`st.content, snippet(session_transcripts_fts, 0, '', '', ' … ', 36) AS excerpt,`,
-				"bm25(session_transcripts_fts) AS rank",
-				"FROM session_transcripts_fts",
-				"JOIN session_transcripts st ON st.rowid = session_transcripts_fts.rowid",
-				"WHERE session_transcripts_fts MATCH ?",
-				"AND st.agent_id = ?",
-			];
-			const args: unknown[] = [fts, params.agentId ?? "default"];
-			if (params.project) {
-				parts.push("AND st.project = ?");
-				args.push(params.project);
-			}
-			if (params.scope !== undefined && params.scope !== null) {
-				parts.push(`AND st.session_key LIKE ? ESCAPE '\\'`);
-				args.push(`${escapeLike(params.scope)}:%`);
-			}
-			if (existingSourceIds.size > 0) {
-				const placeholders = [...existingSourceIds].map(() => "?").join(", ");
-				parts.push(`AND st.session_key NOT IN (${placeholders})`);
-				args.push(...existingSourceIds);
-			}
-			parts.push("ORDER BY rank ASC, updated_at DESC LIMIT ?");
-			args.push(Math.max(2, Math.min(3, params.limit ?? 10)));
-
-			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
-				session_key: string;
-				project: string | null;
-				updated_at: string;
-				content: string;
-				excerpt: string | null;
-				rank: number;
-			}>;
-
-			const maxRank = rows.reduce((max, row) => Math.max(max, Math.abs(row.rank)), 1);
-			return rows
-				.map((row) => ({
-					sessionKey: row.session_key,
-					project: row.project,
-					updatedAt: row.updated_at,
-					excerpt: transcriptExcerpt(row.content || row.excerpt || "", query),
-					rank: maxRank > 0 ? Math.abs(row.rank) / maxRank : 0.2,
-				}))
-				.filter((row) => row.excerpt.length > 0);
-		});
-	} catch (e) {
-		logger.warn("memory", "Transcript recall fallback failed (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
-		return [];
-	}
-}
-
 function buildNativeArtifactRecallHits(
 	params: RecallParams,
 	query: string,
@@ -963,68 +884,6 @@ function buildNativeArtifactRecallHits(
 	}
 }
 
-function loadStructuredSummariesBySourceId(params: RecallParams, sourceIds: readonly string[]): Map<string, string> {
-	const unique = [...new Set(sourceIds.filter((sourceId) => sourceId.length > 0))];
-	if (unique.length === 0) return new Map();
-
-	try {
-		return getDbAccessor().withReadDb((db) => {
-			const placeholders = unique.map(() => "?").join(", ");
-			const scope = buildAgentScopeClause(
-				params.agentId ?? "default",
-				params.readPolicy ?? "isolated",
-				params.policyGroup ?? null,
-			);
-			const projectSql = params.project ? "AND m.project = ?" : "";
-			const projectArgs: unknown[] = params.project ? [params.project] : [];
-			const parts = [
-				"SELECT m.source_id, m.content",
-				"FROM memories m",
-				`WHERE m.source_id IN (${placeholders})`,
-				"AND COALESCE(m.is_deleted, 0) = 0",
-				"AND TRIM(m.content) != ''",
-				projectSql,
-				scope.sql,
-			];
-			const args: unknown[] = [...unique, ...projectArgs, ...scope.args];
-			parts.push("ORDER BY m.importance DESC, m.updated_at DESC, m.created_at DESC");
-
-			const rows = db.prepare(parts.join("\n")).all(...args) as Array<{
-				source_id: string | null;
-				content: string;
-			}>;
-
-			const summaries = new Map<string, string>();
-			for (const row of rows) {
-				if (!row.source_id || summaries.has(row.source_id)) continue;
-				summaries.set(row.source_id, row.content.trim());
-			}
-			return summaries;
-		});
-	} catch (e) {
-		logger.warn("memory", "Transcript summary hydration failed (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
-		return new Map();
-	}
-}
-
-function buildTranscriptFallbackContent(
-	excerpt: string,
-	summary: string | undefined,
-	recallTruncate: number,
-): { content: string; contentLength: number; truncated: boolean } {
-	const content = summary
-		? `[Structured memory summary]\n${summary}\n\n[Transcript excerpt]\n${excerpt}`
-		: `[Transcript excerpt]\n${excerpt}`;
-	const truncated = content.length > recallTruncate;
-	return {
-		content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-		contentLength: content.length,
-		truncated,
-	};
-}
-
 function cosineSimilarity(query: Float32Array, memory: Float32Array): number {
 	const len = Math.min(query.length, memory.length);
 	let dot = 0;
@@ -1060,7 +919,7 @@ const HINT_ONLY_SCORE_CAP = 0.75;
  *    graph traversal collect IDs and scores. These stages may over-fetch.
  * 2. Authorized content handling: after `authorize_candidates`, later stages
  *    may read content, call rerankers, apply dampening/currentness, hydrate
- *    results, expand transcripts, and update access counts.
+ *    results, and update access counts.
  *
  * Keep that boundary intact. It is what prevents high-recall channels such as
  * vector search and traversal from leaking out-of-scope content into model or
@@ -1980,51 +1839,6 @@ export async function hybridRecall(
 				},
 			});
 		}
-		const transcriptHits = timings.time("transcript_fallback", () =>
-			buildTranscriptRecallHits(params, expandedQuery, new Set()),
-		);
-		if (transcriptHits.length > 0) {
-			const transcriptSummaries = loadStructuredSummariesBySourceId(
-				params,
-				transcriptHits.map((hit) => hit.sessionKey),
-			);
-			const results = transcriptHits.slice(0, limit).map((hit): RecallResult => {
-				const sessionId = sessionIdFromSourceId(hit.sessionKey);
-				const assembled = buildTranscriptFallbackContent(
-					hit.excerpt,
-					transcriptSummaries.get(hit.sessionKey),
-					recallTruncate,
-				);
-				return {
-					id: `transcript:${hit.sessionKey}`,
-					content: assembled.content,
-					content_length: assembled.contentLength,
-					truncated: assembled.truncated,
-					score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
-					source: "transcript",
-					source_id: hit.sessionKey,
-					session_id: sessionId,
-					type: "transcript",
-					tags: params.scope ? `memorybench,${params.scope},${sessionId},transcript` : null,
-					pinned: false,
-					importance: 0.55,
-					who: "",
-					project: hit.project,
-					created_at: hit.updatedAt,
-					supplementary: true,
-				};
-			});
-			return finish({
-				results,
-				query,
-				method: "keyword",
-				meta: {
-					totalReturned: results.length,
-					hasSupplementary: true,
-					noHits: false,
-				},
-			});
-		}
 		return finish({
 			results: [],
 			query,
@@ -2456,111 +2270,6 @@ export async function hybridRecall(
 		}
 	}
 
-	// --- Transcript recall fallback ---
-	// When the caller asks for expansion, raw transcripts are an allowed
-	// lossless backing source. Use them as a mechanical rescue channel for
-	// cases where the extracted memory compressed away the exact detail.
-	if (params.expand) {
-		const transcriptExpansionStart = performance.now();
-		const sourceIds = new Set(
-			results
-				.map((result) => rowMap.get(result.id)?.source_id ?? result.source_id)
-				.filter((sourceId): sourceId is string => typeof sourceId === "string" && sourceId.length > 0),
-		);
-		const transcriptHits = buildTranscriptRecallHits(params, expandedQuery, sourceIds);
-		const transcriptSummaries = loadStructuredSummariesBySourceId(
-			params,
-			transcriptHits.map((hit) => hit.sessionKey),
-		);
-		const realScores = results.filter((row) => row.source !== "transcript").map((row) => row.score);
-		const maxTranscriptScore = realScores.length > 0 ? Math.max(0.01, Math.min(...realScores) - 0.01) : 0.5;
-		for (const hit of transcriptHits) {
-			const sessionId = sessionIdFromSourceId(hit.sessionKey);
-			const id = `transcript:${hit.sessionKey}`;
-			if (existingIds.has(id)) continue;
-			existingIds.add(id);
-			const assembled = buildTranscriptFallbackContent(
-				hit.excerpt,
-				transcriptSummaries.get(hit.sessionKey),
-				recallTruncate,
-			);
-			results.push({
-				id,
-				content: assembled.content,
-				content_length: assembled.contentLength,
-				truncated: assembled.truncated,
-				score: Math.round(Math.max(0.01, Math.min(maxTranscriptScore, hit.rank)) * 100) / 100,
-				source: "transcript",
-				source_id: hit.sessionKey,
-				session_id: sessionId,
-				type: "transcript",
-				tags: params.scope ? `memorybench,${params.scope},${sessionId},transcript` : null,
-				pinned: false,
-				importance: 0.55,
-				who: "",
-				project: hit.project,
-				created_at: hit.updatedAt,
-				supplementary: true,
-			});
-		}
-		if (transcriptHits.length > 0) {
-			results.sort((a, b) => b.score - a.score);
-			if (results.length > limit) results.length = limit;
-		}
-		timings.record("transcript_expansion", transcriptExpansionStart);
-	}
-
-	// --- Lossless expansion: fetch raw session transcripts ---
-	let sources: Record<string, string> | undefined;
-	if (params.expand) {
-		const sourceExpansionStart = performance.now();
-		try {
-			const keys = [
-				...new Set([...rowMap.values()].map((r) => r.source_id).filter((s): s is string => s !== null && s !== "")),
-			];
-			if (keys.length > 0) {
-				const ph = keys.map(() => "?").join(", ");
-				const agentId = params.agentId ?? "default";
-				const projectSql = params.project ? " AND project = ?" : "";
-				const projectArgs: unknown[] = params.project ? [params.project] : [];
-				const transcripts = getDbAccessor().withReadDb(
-					(db) =>
-						db
-							.prepare(
-								`SELECT session_key, content FROM session_transcripts
-								 WHERE agent_id = ? AND session_key IN (${ph})${projectSql}`,
-							)
-							.all(agentId, ...keys, ...projectArgs) as Array<{ session_key: string; content: string }>,
-				);
-				if (transcripts.length > 0) {
-					sources = {};
-					for (const t of transcripts) sources[t.session_key] = t.content;
-				}
-			}
-		} catch {
-			// Non-fatal — table may not exist pre-migration
-		} finally {
-			timings.record("source_expansion_fetch", sourceExpansionStart);
-		}
-	}
-
-	if (params.expand && sources) {
-		const sourceExcerptStart = performance.now();
-		for (const result of results.filter((row) => row.source !== "transcript").slice(0, Math.min(5, limit))) {
-			const sourceId = rowMap.get(result.id)?.source_id ?? result.source_id;
-			if (!sourceId) continue;
-			const transcript = sources[sourceId];
-			if (!transcript) continue;
-			const excerpt = transcriptExcerpt(transcript, expandedQuery);
-			if (!excerpt || result.content.includes(excerpt)) continue;
-			const content = `[Transcript excerpt]\n${excerpt}\n\n${result.content}`;
-			result.content = content.length > recallTruncate ? `${content.slice(0, recallTruncate)} [truncated]` : content;
-			result.content_length = content.length;
-			result.truncated = content.length > recallTruncate;
-		}
-		timings.record("source_excerpt_merge", sourceExcerptStart);
-	}
-
 	if (results.length > limit) results.length = limit;
 
 	return finish({
@@ -2573,6 +2282,5 @@ export async function hybridRecall(
 			noHits: results.length === 0,
 		},
 		entities: entityContext && entityContext.length > 0 ? entityContext : undefined,
-		sources,
 	});
 }
