@@ -750,7 +750,7 @@ export function registerMemoryRoutes(app: Hono): void {
 
 			const groupId = crypto.randomUUID();
 			const now = new Date().toISOString();
-			const chunkIds: string[] = [];
+			const chunkIds = Array<string | undefined>(chunkPlans.length);
 
 			// Create chunk group entity
 			try {
@@ -825,7 +825,7 @@ export function registerMemoryRoutes(app: Hono): void {
 						return { id: chunkId, inserted: true as const };
 					});
 
-					chunkIds.push(result.id);
+					chunkIds[chunkIndex] = result.id;
 					if (!result.inserted) continue;
 
 					// Generate embedding async
@@ -890,18 +890,23 @@ export function registerMemoryRoutes(app: Hono): void {
 						chunkId,
 						error: String(e),
 					});
+					return c.json({ error: "Failed to save chunk" }, 500);
 				}
+			}
+			const savedChunkIds = chunkIds.filter((id): id is string => !!id);
+			if (savedChunkIds.length !== chunkPlans.length) {
+				return c.json({ error: "Failed to save all chunks" }, 500);
 			}
 
 			logger.info("memory", "Chunked memory saved", {
 				groupId,
-				chunkCount: chunkIds.length,
+				chunkCount: savedChunkIds.length,
 			});
 
 			return c.json({
 				chunked: true,
-				chunk_count: chunkIds.length,
-				ids: chunkIds,
+				chunk_count: savedChunkIds.length,
+				ids: savedChunkIds,
 				group_id: groupId,
 			});
 		}
