@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RouteRequest, RouterResult } from "@signet/core";
-import { type AggregateInferenceRouter, aggregateRecall } from "./aggregate-recall";
+import { type AggregateInferenceRouter, InvalidAggregateRecallBudgetError, aggregateRecall } from "./aggregate-recall";
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { loadMemoryConfig } from "./memory-config";
@@ -87,6 +87,25 @@ describe("aggregateRecall", () => {
 			process.env.SIGNET_PATH = prevSignetPath;
 		}
 		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("rejects invalid aggregate budgets instead of falling back to small", async () => {
+		await expect(
+			aggregateRecall(
+				{
+					query: "what happened",
+					aggregate: true,
+					aggregateBudget: "maximum",
+				} as unknown as RecallParams,
+				loadMemoryConfig(dir),
+				{
+					router: new StaticRouter(),
+					embedFn: async () => null,
+					logger: quietLogger(),
+					hybridRecall: async () => response("what happened", []),
+				},
+			),
+		).rejects.toBeInstanceOf(InvalidAggregateRecallBudgetError);
 	});
 
 	it("synthesizes, saves one normal memory, and links evidence sources", async () => {

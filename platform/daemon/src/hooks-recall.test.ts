@@ -104,6 +104,24 @@ memory:
 		expect(resp.status).toBe(400);
 	});
 
+	it("rejects invalid aggregate budgets", async () => {
+		const resp = await app.request("/api/hooks/recall", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				harness: "openclaw",
+				query: "project history",
+				aggregate: true,
+				aggregate_budget: "maximum",
+				saveAggregate: false,
+			}),
+		});
+
+		expect(resp.status).toBe(400);
+		const body = (await resp.json()) as { error?: string };
+		expect(body.error).toContain("aggregateBudget");
+	});
+
 	it("returns the normalized no-op shape for internal calls", async () => {
 		const resp = await app.request("/api/hooks/recall", {
 			method: "POST",

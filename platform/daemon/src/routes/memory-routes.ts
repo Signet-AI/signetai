@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { vectorSearch } from "@signet/core";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
-import { aggregateRecall } from "../aggregate-recall";
+import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { normalizeAndHashContent } from "../content-normalization";
 import { type WriteDb, getDbAccessor } from "../db-accessor";
@@ -2303,6 +2303,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const query = body.query?.trim() ?? "";
 		if (!query) return c.json({ error: "query is required" }, 400);
+		const aggregateBudgetInput = readAggregateRecallBudgetInput(body);
+		const aggregateBudget = parseAggregateRecallBudget(aggregateBudgetInput);
+		if (aggregateBudgetInput !== undefined && aggregateBudget === null) {
+			return c.json({ error: "Invalid aggregateBudget. Expected one of: small, medium, large." }, 400);
+		}
 
 		const aggregateSaveRequested =
 			body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
@@ -2334,8 +2339,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				...body,
 				query,
 				aggregate: body.aggregate,
-				aggregateBudget: body.aggregateBudget ?? body.aggregate_budget,
-				aggregate_budget: body.aggregate_budget ?? body.aggregateBudget,
+				aggregateBudget,
+				aggregate_budget: aggregateBudget,
 				saveAggregate: body.saveAggregate ?? body.save_aggregate,
 				save_aggregate: body.save_aggregate ?? body.saveAggregate,
 				agentId,

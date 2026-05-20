@@ -69,8 +69,32 @@ const BUDGET_QUERY_LIMITS: Record<AggregateRecallBudget, number> = {
 	large: 8,
 };
 
+export class InvalidAggregateRecallBudgetError extends Error {
+	constructor() {
+		super("Invalid aggregateBudget. Expected one of: small, medium, large.");
+		this.name = "InvalidAggregateRecallBudgetError";
+	}
+}
+
+export function parseAggregateRecallBudget(raw: unknown): AggregateRecallBudget | null {
+	if (raw === undefined) return "small";
+	if (raw === "small" || raw === "medium" || raw === "large") return raw;
+	return null;
+}
+
+export function readAggregateRecallBudgetInput(input: {
+	readonly aggregateBudget?: unknown;
+	readonly aggregate_budget?: unknown;
+}): unknown {
+	if (Object.hasOwn(input, "aggregateBudget")) return input.aggregateBudget;
+	if (Object.hasOwn(input, "aggregate_budget")) return input.aggregate_budget;
+	return undefined;
+}
+
 function normalizeBudget(raw: unknown): AggregateRecallBudget {
-	return raw === "medium" || raw === "large" ? raw : "small";
+	const budget = parseAggregateRecallBudget(raw);
+	if (!budget) throw new InvalidAggregateRecallBudgetError();
+	return budget;
 }
 
 function emptyAggregateResponse(

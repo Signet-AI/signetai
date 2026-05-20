@@ -4,7 +4,7 @@ import { emptyHookRecallResponse, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
-import { aggregateRecall } from "../aggregate-recall";
+import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { requirePermission, requireRateLimit } from "../auth";
 import {
 	type AgentMessage,
@@ -508,6 +508,11 @@ function registerRecall(app: Hono): void {
 			if (!body.harness || !body.query) {
 				return c.json({ error: "harness and query are required" }, 400);
 			}
+			const aggregateBudgetInput = readAggregateRecallBudgetInput(body);
+			const aggregateBudget = parseAggregateRecallBudget(aggregateBudgetInput);
+			if (aggregateBudgetInput !== undefined && aggregateBudget === null) {
+				return c.json({ error: "Invalid aggregateBudget. Expected one of: small, medium, large." }, 400);
+			}
 
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
@@ -547,8 +552,10 @@ function registerRecall(app: Hono): void {
 				limit: body.limit,
 				project: body.project,
 				aggregate: body.aggregate,
-				aggregateBudget: body.aggregateBudget ?? body.aggregate_budget,
+				aggregateBudget,
+				aggregate_budget: aggregateBudget,
 				saveAggregate: body.saveAggregate ?? body.save_aggregate,
+				save_aggregate: body.save_aggregate ?? body.saveAggregate,
 				type: body.type,
 				tags: body.tags,
 				who: body.who,

@@ -209,6 +209,45 @@ describe("auth guard co-location", () => {
 			const body = (await res.json()) as RecallResponse;
 			expect(body.aggregate?.saved).toBe(false);
 		});
+
+		it("POST /api/memory/recall rejects invalid aggregate budgets before aggregation", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode recall test");
+
+			const aggregateRecallMock = mock(async (_params: RecallParams): Promise<RecallResponse> => {
+				throw new Error("aggregateRecall should not run for invalid budgets");
+			});
+
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerMemoryRoutes(app, {
+				aggregateRecall: aggregateRecallMock,
+				getInferenceRouterOrNull: () => null,
+				fetchEmbedding: async () => null,
+			});
+			const token = createToken(secret, { sub: "readonly-recall", role: "readonly", scope: {} }, 60);
+			const res = await app.request("/api/memory/recall", {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					query: "bad aggregate budget",
+					aggregate: true,
+					aggregateBudget: "maximum",
+					saveAggregate: false,
+				}),
+			});
+
+			expect(res.status).toBe(400);
+			expect(aggregateRecallMock).toHaveBeenCalledTimes(0);
+			const body = (await res.json()) as { error?: string };
+			expect(body.error).toContain("aggregateBudget");
+		});
 	});
 
 	describe("session routes need guards", () => {
