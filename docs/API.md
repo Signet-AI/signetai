@@ -868,6 +868,11 @@ compatibility. Requires `remember` permission.
 
 Get a single memory by ID. Returns deleted memories only if the query
 explicitly requests them; by default, soft-deleted records return `404`.
+Direct reads are filtered through the same resolved agent read policy used by
+recall/search. Pass `agentId`/`agent_id`, `x-signet-agent-id`, or an
+`x-signet-session-key` that resolves to an agent when reading non-default
+agent memories; cross-agent or private memories outside that read scope return
+`404` without provenance fields.
 
 Requires `recall` permission.
 

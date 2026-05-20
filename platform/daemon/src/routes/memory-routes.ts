@@ -11,7 +11,7 @@ import { buildEmbeddingHealth } from "../embedding-health";
 import { linkMemoryToEntities } from "../inline-entity-linker";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
-import { type RecallParams, hybridRecall } from "../memory-search";
+import { type RecallParams, buildAgentScopeClause, hybridRecall } from "../memory-search";
 import { recordMemorySearchTelemetry } from "../memory-search-telemetry";
 import { resolveMemorySearchTelemetryProject } from "../memory-search-telemetry-project";
 import { buildMemoryTimeline } from "../memory-timeline";
@@ -1407,20 +1407,33 @@ export function registerMemoryRoutes(app: Hono): void {
 			return c.json({ error: "memory id is required" }, 400);
 		}
 
+		const sessionKeyRaw = c.req.header("x-signet-session-key");
+		const agentId = resolveAgentId({
+			agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+			sessionKey: sessionKeyRaw,
+		});
+		const agentScope = getAgentScope(agentId);
+		const access = buildAgentScopeClause(agentId, agentScope.readPolicy, agentScope.policyGroup);
+		const scopeProject = c.get("auth")?.claims?.scope?.project;
+		const projectSql = scopeProject ? " AND m.project = ?" : "";
 		const row = getDbAccessor().withReadDb((db) => {
-			const sessionSelect = hasMemoriesSessionIdColumn(db) ? "session_id," : "NULL AS session_id,";
+			const sessionSelect = hasMemoriesSessionIdColumn(db) ? "m.session_id," : "NULL AS session_id,";
 
 			return db
 				.prepare(
-					`SELECT id, content, type, importance, tags, pinned, who,
-					        source_id, source_type, source_path, runtime_path,
-					        idempotency_key, project, ${sessionSelect} confidence,
-					        access_count, last_accessed, is_deleted, deleted_at,
-					        extraction_status, embedding_model, version,
-					        created_at, updated_at, updated_by
-					 FROM memories WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)`,
+					`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.who,
+					        m.source_id, m.source_type, m.source_path, m.runtime_path,
+					        m.idempotency_key, m.project, ${sessionSelect} m.confidence,
+					        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
+					        m.extraction_status, m.embedding_model, m.version,
+					        m.created_at, m.updated_at, m.updated_by
+					 FROM memories m
+					 WHERE m.id = ?
+					   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)
+					   ${access.sql}
+					   ${projectSql}`,
 				)
-				.get(memoryId) as Record<string, unknown> | undefined;
+				.get(memoryId, ...access.args, ...(scopeProject ? [scopeProject] : [])) as Record<string, unknown> | undefined;
 		});
 
 		if (!row) {

@@ -617,6 +617,47 @@ memory:
 		});
 	});
 
+	it("GET /api/memory/:id applies agent scope before returning provenance", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Private scoped provenance memory",
+				agentId: "direct-read-agent-a",
+				visibility: "private",
+				who: "soulvessel.tests",
+				sourceType: "hermes-memory",
+				sourceId: "hermes-doc-private-provenance-test",
+				sourcePath: "/tmp/signet-provenance/private.md",
+				runtimePath: "memories/private.md",
+				idempotencyKey: "hermes:private-provenance-test",
+			}),
+		});
+		const remembered = (await res.json()) as { id?: string };
+
+		expect(res.status).toBe(200);
+		expect(remembered.id).toBeString();
+
+		const crossAgent = await app.request(`http://localhost/api/memory/${remembered.id}?agentId=direct-read-agent-b`);
+		const crossAgentJson = (await crossAgent.json()) as { error?: string; source_path?: string | null };
+		expect(crossAgent.status).toBe(404);
+		expect(crossAgentJson.error).toBe("not found");
+		expect(crossAgentJson.source_path).toBeUndefined();
+
+		const sameAgent = await app.request(`http://localhost/api/memory/${remembered.id}?agentId=direct-read-agent-a`);
+		const sameAgentJson = (await sameAgent.json()) as {
+			id?: string;
+			source_path?: string | null;
+			idempotency_key?: string | null;
+		};
+		expect(sameAgent.status).toBe(200);
+		expect(sameAgentJson).toMatchObject({
+			id: remembered.id,
+			source_path: "/tmp/signet-provenance/private.md",
+			idempotency_key: "hermes:private-provenance-test",
+		});
+	});
+
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",
