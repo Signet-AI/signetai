@@ -836,38 +836,52 @@ export function registerMemoryRoutes(app: Hono): void {
 
 			const groupId = chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
 			const now = new Date().toISOString();
-			const chunkIds = Array<string | undefined>(chunkPlans.length);
+			const plannedChunkIds = chunkPlans.map(() => crypto.randomUUID());
 			type ChunkInsertResult =
-				| { readonly id: string; readonly status: "existing" }
-				| { readonly id: string; readonly status: "inserted" }
-				| { readonly status: "content_conflict" };
+				| { readonly ids: readonly string[]; readonly status: "inserted" }
+				| { readonly groupId: string | undefined; readonly ids: readonly string[]; readonly status: "deduped" }
+				| { readonly status: "chunk_idempotency_conflict" }
+				| { readonly status: "content_conflict" }
+				| { readonly status: "non_chunk_idempotency_conflict" };
 
-			// Create chunk group entity
 			try {
-				getDbAccessor().withWriteTx((db) => {
+				const result: ChunkInsertResult = getDbAccessor().withWriteTx((db) => {
+					const baseMemory = getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope);
+					if (baseMemory) return { status: "non_chunk_idempotency_conflict" };
+
+					const txExistingChunks = getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope);
+					if (txExistingChunks.length > 0) {
+						const groupIds = new Set(txExistingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
+						const matchesExistingPlan =
+							groupIds.size === 1 &&
+							txExistingChunks.length === chunkPlans.length &&
+							txExistingChunks.every((row, index) => {
+								const plan = chunkPlans[index];
+								return row.idempotencyKey === plan.idempotencyKey && row.contentHash === plan.normalized.contentHash;
+							});
+						if (!matchesExistingPlan) return { status: "chunk_idempotency_conflict" };
+
+						return {
+							groupId: Array.from(groupIds)[0],
+							ids: txExistingChunks.map((row) => row.id),
+							status: "deduped",
+						};
+					}
+
+					for (const plan of chunkPlans) {
+						const byHash = getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope);
+						if (byHash) return { status: "content_conflict" };
+					}
+
 					db.prepare(
 						`INSERT OR IGNORE INTO entities
 						 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 						 VALUES (?, ?, ?, 'chunk_group', ?, 0, ?, ?)`,
 					).run(groupId, `chunk-group:${groupId}`, `chunk-group:${groupId}`, agentId, now, now);
-				});
-			} catch (e) {
-				logger.error("memory", "Failed to create chunk group entity", e as Error);
-				return c.json({ error: "Failed to create chunk group" }, 500);
-			}
 
-			for (let chunkIndex = 0; chunkIndex < chunkPlans.length; chunkIndex += 1) {
-				const plan = chunkPlans[chunkIndex];
-				const chunkId = crypto.randomUUID();
-
-				try {
-					const result: ChunkInsertResult = getDbAccessor().withWriteTx((db) => {
-						const byIdempotencyKey = getScopedIdempotencyMemoryId(db, plan.idempotencyKey, dedupeScope);
-						if (byIdempotencyKey) return { id: byIdempotencyKey.id, status: "existing" };
-
-						const byHash = getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope);
-						if (byHash) return { status: "content_conflict" };
-
+					for (let chunkIndex = 0; chunkIndex < chunkPlans.length; chunkIndex += 1) {
+						const plan = chunkPlans[chunkIndex];
+						const chunkId = plannedChunkIds[chunkIndex];
 						txIngestEnvelope(db, {
 							id: chunkId,
 							content: plan.normalized.storageContent,
@@ -902,16 +916,35 @@ export function registerMemoryRoutes(app: Hono): void {
 							 (memory_id, entity_id, mention_text, confidence, created_at)
 							 VALUES (?, ?, 'chunk', 1.0, ?)`,
 						).run(chunkId, groupId, now);
-
-						return { id: chunkId, status: "inserted" };
-					});
-
-					if (result.status === "content_conflict") {
-						return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
 					}
-					chunkIds[chunkIndex] = result.id;
-					if (result.status !== "inserted") continue;
 
+					return { ids: plannedChunkIds, status: "inserted" };
+				});
+
+				if (result.status === "non_chunk_idempotency_conflict") {
+					return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
+				}
+				if (result.status === "chunk_idempotency_conflict") {
+					return c.json({ error: "idempotencyKey already used for different chunked content" }, 409);
+				}
+				if (result.status === "content_conflict") {
+					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+				}
+				if (result.status === "deduped") {
+					return c.json({
+						chunked: true,
+						chunk_count: result.ids.length,
+						ids: result.ids,
+						group_id: result.groupId,
+						deduped: true,
+					});
+				}
+
+				const savedChunkIds = [...result.ids];
+
+				for (let chunkIndex = 0; chunkIndex < chunkPlans.length; chunkIndex += 1) {
+					const plan = chunkPlans[chunkIndex];
+					const chunkId = savedChunkIds[chunkIndex];
 					// Generate embedding async
 					try {
 						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding);
@@ -920,24 +953,24 @@ export function registerMemoryRoutes(app: Hono): void {
 								logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
 									got: vec.length,
 									expected: fullCfg.embedding.dimensions,
-									memoryId: result.id,
+									memoryId: chunkId,
 								});
 							} else {
 								const embId = crypto.randomUUID();
 								const blob = vectorToBlob(vec);
 								const embHash = scope ? `${plan.normalized.contentHash}:${scope}` : plan.normalized.contentHash;
 								getDbAccessor().withWriteTx((db) => {
-									syncVecDeleteBySourceId(db, "memory", result.id);
-									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(result.id);
+									syncVecDeleteBySourceId(db, "memory", chunkId);
+									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
 									db.prepare(`
 										INSERT INTO embeddings
 										  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 										VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
-									`).run(embId, embHash, blob, vec.length, result.id, plan.normalized.storageContent, now);
+									`).run(embId, embHash, blob, vec.length, chunkId, plan.normalized.storageContent, now);
 									syncVecInsert(db, embId, vec);
 									db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(
 										fullCfg.embedding.model,
-										result.id,
+										chunkId,
 									);
 								});
 							}
@@ -952,7 +985,7 @@ export function registerMemoryRoutes(app: Hono): void {
 					// Inline entity linking for chunk
 					try {
 						getDbAccessor().withWriteTx((db) => {
-							linkMemoryToEntities(db, result.id, plan.chunk, agentId);
+							linkMemoryToEntities(db, chunkId, plan.chunk, agentId);
 						});
 					} catch {
 						// Non-fatal — pipeline extraction handles deeper linking
@@ -961,41 +994,37 @@ export function registerMemoryRoutes(app: Hono): void {
 					// Enqueue pipeline extraction if enabled
 					if (pipelineEnqueueEnabled) {
 						try {
-							queueExtractionJob(result.id);
+							queueExtractionJob(chunkId);
 						} catch (e) {
 							logger.warn("pipeline", "Failed to enqueue chunk extraction", {
-								chunkId: result.id,
+								chunkId,
 								error: String(e),
 							});
 						}
 					}
-				} catch (e) {
-					if (isMemoryContentHashUniqueError(e)) {
-						return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
-					}
-					logger.warn("memory", "Failed to save chunk", {
-						chunkId,
-						error: String(e),
-					});
-					return c.json({ error: "Failed to save chunk" }, 500);
 				}
-			}
-			const savedChunkIds = chunkIds.filter((id): id is string => !!id);
-			if (savedChunkIds.length !== chunkPlans.length) {
-				return c.json({ error: "Failed to save all chunks" }, 500);
-			}
 
-			logger.info("memory", "Chunked memory saved", {
-				groupId,
-				chunkCount: savedChunkIds.length,
-			});
+				logger.info("memory", "Chunked memory saved", {
+					groupId,
+					chunkCount: savedChunkIds.length,
+				});
 
-			return c.json({
-				chunked: true,
-				chunk_count: savedChunkIds.length,
-				ids: savedChunkIds,
-				group_id: groupId,
-			});
+				return c.json({
+					chunked: true,
+					chunk_count: savedChunkIds.length,
+					ids: savedChunkIds,
+					group_id: groupId,
+				});
+			} catch (e) {
+				if (isMemoryContentHashUniqueError(e)) {
+					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+				}
+				logger.warn("memory", "Failed to save chunked memory", {
+					groupId,
+					error: String(e),
+				});
+				return c.json({ error: "Failed to save chunks" }, 500);
+			}
 		}
 
 		const who = body.who ?? "daemon";

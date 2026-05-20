@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +54,20 @@ function seedMemory(args: {
 			db.prepare("UPDATE memories SET version = ? WHERE id = ?").run(args.version, args.id);
 		}
 	});
+}
+
+function chunkGroupIdForDefaultScope(baseKey: string): string {
+	const hash = createHash("sha256")
+		.update("default")
+		.update("\0")
+		.update("global")
+		.update("\0")
+		.update("__NULL__")
+		.update("\0")
+		.update(baseKey)
+		.digest("hex")
+		.slice(0, 32);
+	return `chunk-group:${hash}`;
 }
 
 describe("mutation API routes", () => {
@@ -520,8 +535,9 @@ memory:
 		).join(" ");
 		expect(oversized.length).toBeGreaterThan(800);
 
+		const keys = ["concurrent-chunk-content-key-a", "concurrent-chunk-content-key-b"] as const;
 		const [first, second] = await Promise.all(
-			["concurrent-chunk-content-key-a", "concurrent-chunk-content-key-b"].map((idempotencyKey) =>
+			keys.map((idempotencyKey) =>
 				app.request("http://localhost/api/memory/remember", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -539,6 +555,20 @@ memory:
 		const conflict = first.status === 409 ? first : second;
 		const conflictJson = (await conflict.json()) as { error?: string };
 		expect(conflictJson.error).toContain("chunk content already exists");
+
+		const losingKey = first.status === 409 ? keys[0] : keys[1];
+		const losingGroupId = chunkGroupIdForDefaultScope(losingKey);
+		const partial = getDbAccessor().withReadDb((db) => {
+			const rows = db
+				.prepare("SELECT id FROM memories WHERE idempotency_key LIKE ?")
+				.all(`${losingKey}:chunk:%`) as Array<{
+				id: string;
+			}>;
+			const group = db.prepare("SELECT id FROM entities WHERE id = ?").get(losingGroupId) as { id: string } | null;
+			return { group, rows };
+		});
+		expect(partial.rows).toHaveLength(0);
+		expect(partial.group).toBeNull();
 	});
 
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
