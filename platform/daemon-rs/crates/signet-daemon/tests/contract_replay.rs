@@ -1227,6 +1227,68 @@ async fn inference_command_execute_replays_ts_contract() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn inference_command_timeout_kills_child_process() {
+    let marker_dir = tempfile::tempdir().expect("failed to create marker tmpdir");
+    let marker = marker_dir.path().join("timed-out-command-ran");
+    let yaml = format!(
+        r#"agent:
+  name: test-agent
+  version: 1
+auth:
+  method: token
+  mode: team
+memory:
+  pipelineV2:
+    extraction:
+      provider: none
+inference:
+  defaultPolicy: auto
+  targets:
+    slowCli:
+      executor: command
+      command:
+        bin: /bin/sh
+        args:
+          - -c
+          - 'sleep 1; touch "$MARKER"; printf "late\n"'
+        env:
+          MARKER: "{}"
+      models:
+        default:
+          model: slow-cli
+          reasoning: low
+  policies:
+    auto:
+      mode: strict
+      defaultTargets:
+        - slowCli/default
+  workloads:
+    default:
+      policy: auto
+"#,
+        marker.to_string_lossy()
+    );
+    let server = TestServer::start_team_auth_with_agent_yaml(&yaml).await;
+    let admin = TestServer::scoped_role_token("default", "admin");
+
+    let resp = server
+        .post_bearer(
+            "/api/inference/execute",
+            json!({"prompt": "too slow", "operation": "default", "timeoutMs": 10}),
+            &admin,
+        )
+        .await;
+    assert_eq!(resp.status(), 504);
+
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(
+        !marker.exists(),
+        "timed out command target continued after request returned"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn knowledge_expand_native_graph_data() {
     let server = TestServer::start().await;
     server.seed_knowledge_expand_fixture();

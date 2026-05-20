@@ -583,6 +583,7 @@ async fn execute_command_target(
     child.stdin(Stdio::piped());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::piped());
+    child.kill_on_drop(true);
 
     let mut child = child.spawn().map_err(|err| {
         error(
