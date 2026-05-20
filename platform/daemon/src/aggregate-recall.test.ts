@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,6 +59,12 @@ class StaticRouter implements AggregateInferenceRouter {
 	}
 }
 
+function quietLogger(): { readonly warn: ReturnType<typeof mock> } {
+	return {
+		warn: mock((_category: string, _message: string, _data?: Record<string, unknown>) => {}),
+	};
+}
+
 describe("aggregateRecall", () => {
 	let dir = "";
 	let prevSignetPath: string | undefined;
@@ -97,6 +103,7 @@ describe("aggregateRecall", () => {
 			{
 				router,
 				embedFn: async () => null,
+				logger: quietLogger(),
 				now: () => new Date("2026-05-20T12:00:00.000Z"),
 				idFactory: () => "aggregate-1",
 				hybridRecall: async (params: RecallParams) => {
@@ -150,6 +157,7 @@ describe("aggregateRecall", () => {
 		const deps = {
 			router: new StaticRouter(),
 			embedFn: async () => null,
+			logger: quietLogger(),
 			now: () => new Date("2026-05-20T12:00:00.000Z"),
 			idFactory: () => "aggregate-1",
 			hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
@@ -165,6 +173,46 @@ describe("aggregateRecall", () => {
 		expect(first.results[0].id).toBe("aggregate-1");
 		expect(second.results[0].id).toBe("aggregate-1");
 		expect(second.aggregate?.deduped).toBe(true);
+	});
+
+	it("logs when a saved aggregate memory cannot be embedded", async () => {
+		const log = quietLogger();
+		const result = await aggregateRecall(
+			{
+				query: "what happened",
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				logger: log,
+				embedFn: async () => {
+					throw new Error("embedding provider unavailable");
+				},
+				now: () => new Date("2026-05-20T12:00:00.000Z"),
+				idFactory: () => "aggregate-embed-fail",
+				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
+			},
+		);
+
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: "aggregate-embed-fail",
+			saved: true,
+			stoppedReason: "complete",
+		});
+		expect(log.warn).toHaveBeenCalledTimes(1);
+		expect(log.warn).toHaveBeenCalledWith(
+			"memory",
+			"Aggregate recall memory saved without embedding",
+			expect.objectContaining({
+				memoryId: "aggregate-embed-fail",
+				agentId: "agent-a",
+				reason: "embedding_exception",
+				errorMessage: "embedding provider unavailable",
+			}),
+		);
 	});
 
 	it("returns an unsaved aggregate answer when saving is disabled", async () => {

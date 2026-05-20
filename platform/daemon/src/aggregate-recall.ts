@@ -3,6 +3,7 @@ import type { RouteRequest, RouterResult } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
 import { type EmbedFn, type RecallParams, type RecallResponse, type RecallResult, hybridRecall } from "./memory-search";
 import { txIngestEnvelope } from "./transactions";
@@ -28,6 +29,11 @@ interface AggregateRecallDeps {
 	readonly embedFn: EmbedFn;
 	readonly now?: () => Date;
 	readonly idFactory?: () => string;
+	readonly logger?: AggregateRecallLogger;
+}
+
+interface AggregateRecallLogger {
+	readonly warn: (category: "memory", message: string, data?: Record<string, unknown>) => void;
 }
 
 interface AggregateMemoryRow {
@@ -377,6 +383,7 @@ export async function aggregateRecall(
 	const maxQueries = BUDGET_QUERY_LIMITS[budget];
 	const recall = deps.hybridRecall ?? hybridRecall;
 	const saveAggregate = params.saveAggregate !== false && params.save_aggregate !== false;
+	const log = deps.logger ?? logger;
 	const first = await recall(params, cfg, deps.embedFn);
 
 	if (!deps.router) {
@@ -484,9 +491,34 @@ export async function aggregateRecall(
 			return loadAggregateMemory(db, id);
 		});
 		if (row && !deduped) {
-			await embedAggregateMemory(row.id, row.content, normalized.contentHash, now, cfg.embedding, deps.embedFn).catch(
-				() => false,
-			);
+			let embedded = false;
+			let embeddingError: unknown;
+			try {
+				embedded = await embedAggregateMemory(
+					row.id,
+					row.content,
+					normalized.contentHash,
+					now,
+					cfg.embedding,
+					deps.embedFn,
+				);
+			} catch (err) {
+				embeddingError = err;
+			}
+			if (!embedded) {
+				log.warn("memory", "Aggregate recall memory saved without embedding", {
+					memoryId: row.id,
+					agentId,
+					project,
+					sourceId: key,
+					contentHash: normalized.contentHash,
+					sourceMemoryIds,
+					reason: embeddingError instanceof Error ? "embedding_exception" : "embedding_unavailable",
+					...(embeddingError instanceof Error
+						? { errorName: embeddingError.name, errorMessage: embeddingError.message }
+						: {}),
+				});
+			}
 		}
 	} else {
 		row = unsavedAggregateResult(answer, key, project);
