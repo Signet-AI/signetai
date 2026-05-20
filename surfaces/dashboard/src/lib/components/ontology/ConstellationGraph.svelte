@@ -1401,6 +1401,7 @@ onMount(() => {
 
 <style>
 	.knowledge-map-zone {
+		-webkit-app-region: no-drag;
 		position: relative;
 		height: 100%;
 		min-height: 0;
@@ -1431,6 +1432,7 @@ onMount(() => {
 	}
 
 	.graph-canvas {
+		-webkit-app-region: no-drag;
 		position: absolute;
 		inset: 0;
 		z-index: 1;
@@ -1469,6 +1471,7 @@ onMount(() => {
 	}
 
 	.map-controls {
+		-webkit-app-region: no-drag;
 		position: absolute;
 		left: 24px;
 		bottom: 24px;
@@ -1687,6 +1690,7 @@ onMount(() => {
 	}
 
 	.node-popover {
+		-webkit-app-region: no-drag;
 		position: absolute;
 		z-index: 8;
 		display: flex;

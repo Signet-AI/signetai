@@ -17,9 +17,16 @@ export class GraphInputHandler {
 	private didDrag = false;
 	private lastX = 0;
 	private lastY = 0;
+	private activePointerId: number | null = null;
 	private currentHoverId: string | null = null;
 	private posHistory: Array<{ x: number; y: number; t: number }> = [];
 
+	private readonly pointerEventsSupported: boolean;
+	private readonly pointerDown = this.onPointerDown.bind(this);
+	private readonly pointerMove = this.onPointerMove.bind(this);
+	private readonly pointerUp = this.onPointerUp.bind(this);
+	private readonly pointerCancel = this.onPointerCancel.bind(this);
+	private readonly lostPointerCapture = this.onLostPointerCapture.bind(this);
 	private readonly mouseDown = this.onMouseDown.bind(this);
 	private readonly mouseMove = this.onMouseMove.bind(this);
 	private readonly mouseUp = this.onMouseUp.bind(this);
@@ -33,20 +40,37 @@ export class GraphInputHandler {
 		private readonly spatial: SpatialIndex,
 		private readonly callbacks: InputCallbacks,
 	) {
-		canvas.addEventListener("mousedown", this.mouseDown);
-		canvas.addEventListener("mousemove", this.mouseMove);
-		canvas.addEventListener("mouseup", this.mouseUp);
-		canvas.addEventListener("mouseleave", this.mouseUp);
+		this.pointerEventsSupported = "onpointerdown" in canvas;
+		if (this.pointerEventsSupported) {
+			canvas.addEventListener("pointerdown", this.pointerDown);
+			canvas.addEventListener("pointermove", this.pointerMove);
+			canvas.addEventListener("pointerup", this.pointerUp);
+			canvas.addEventListener("pointercancel", this.pointerCancel);
+			canvas.addEventListener("lostpointercapture", this.lostPointerCapture);
+		} else {
+			canvas.addEventListener("mousedown", this.mouseDown);
+			canvas.addEventListener("mousemove", this.mouseMove);
+			canvas.addEventListener("mouseup", this.mouseUp);
+			canvas.addEventListener("mouseleave", this.mouseUp);
+		}
 		canvas.addEventListener("click", this.click);
 		canvas.addEventListener("dblclick", this.doubleClick);
 		canvas.addEventListener("wheel", this.wheel, { passive: false });
 	}
 
 	destroy(): void {
-		this.canvas.removeEventListener("mousedown", this.mouseDown);
-		this.canvas.removeEventListener("mousemove", this.mouseMove);
-		this.canvas.removeEventListener("mouseup", this.mouseUp);
-		this.canvas.removeEventListener("mouseleave", this.mouseUp);
+		if (this.pointerEventsSupported) {
+			this.canvas.removeEventListener("pointerdown", this.pointerDown);
+			this.canvas.removeEventListener("pointermove", this.pointerMove);
+			this.canvas.removeEventListener("pointerup", this.pointerUp);
+			this.canvas.removeEventListener("pointercancel", this.pointerCancel);
+			this.canvas.removeEventListener("lostpointercapture", this.lostPointerCapture);
+		} else {
+			this.canvas.removeEventListener("mousedown", this.mouseDown);
+			this.canvas.removeEventListener("mousemove", this.mouseMove);
+			this.canvas.removeEventListener("mouseup", this.mouseUp);
+			this.canvas.removeEventListener("mouseleave", this.mouseUp);
+		}
 		this.canvas.removeEventListener("click", this.click);
 		this.canvas.removeEventListener("dblclick", this.doubleClick);
 		this.canvas.removeEventListener("wheel", this.wheel);
@@ -66,7 +90,7 @@ export class GraphInputHandler {
 		return this.spatial.queryPoint(world.x, world.y);
 	}
 
-	private onMouseDown(e: MouseEvent): void {
+	private beginInteraction(e: MouseEvent | PointerEvent): void {
 		const point = this.canvasPoint(e);
 		const node = this.nodeAt(point.x, point.y);
 		this.lastX = point.x;
@@ -85,7 +109,7 @@ export class GraphInputHandler {
 		this.canvas.style.cursor = "grabbing";
 	}
 
-	private onMouseMove(e: MouseEvent): void {
+	private moveInteraction(e: MouseEvent | PointerEvent): void {
 		const point = this.canvasPoint(e);
 		if (this.draggingNode) {
 			const world = this.viewport.screenToWorld(point.x, point.y);
@@ -118,7 +142,7 @@ export class GraphInputHandler {
 		}
 	}
 
-	private onMouseUp(): void {
+	private endInteraction(): void {
 		if (this.draggingNode) {
 			const node = this.draggingNode;
 			node.fx = null;
@@ -139,6 +163,56 @@ export class GraphInputHandler {
 		}
 		this.canvas.style.cursor = "default";
 		this.callbacks.onRequestRender();
+	}
+
+	private onPointerDown(e: PointerEvent): void {
+		if (!e.isPrimary || e.button !== 0) return;
+		e.preventDefault();
+		this.activePointerId = e.pointerId;
+		this.canvas.setPointerCapture(e.pointerId);
+		this.beginInteraction(e);
+	}
+
+	private onPointerMove(e: PointerEvent): void {
+		if (!e.isPrimary) return;
+		if (this.activePointerId !== null && e.pointerId !== this.activePointerId) return;
+		this.moveInteraction(e);
+	}
+
+	private onPointerUp(e: PointerEvent): void {
+		if (this.activePointerId !== e.pointerId) return;
+		this.releasePointer(e.pointerId);
+		this.endInteraction();
+	}
+
+	private onPointerCancel(e: PointerEvent): void {
+		if (this.activePointerId !== e.pointerId) return;
+		this.releasePointer(e.pointerId);
+		this.endInteraction();
+	}
+
+	private onLostPointerCapture(e: PointerEvent): void {
+		if (this.activePointerId !== e.pointerId) return;
+		this.activePointerId = null;
+		this.endInteraction();
+	}
+
+	private releasePointer(pointerId: number): void {
+		this.activePointerId = null;
+		if (this.canvas.hasPointerCapture(pointerId)) this.canvas.releasePointerCapture(pointerId);
+	}
+
+	private onMouseDown(e: MouseEvent): void {
+		if (e.button !== 0) return;
+		this.beginInteraction(e);
+	}
+
+	private onMouseMove(e: MouseEvent): void {
+		this.moveInteraction(e);
+	}
+
+	private onMouseUp(): void {
+		this.endInteraction();
 	}
 
 	private onClick(e: MouseEvent): void {
