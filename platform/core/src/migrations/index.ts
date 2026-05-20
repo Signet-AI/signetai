@@ -77,6 +77,7 @@ import { up as dailyReflections } from "./068-daily-reflections";
 import { up as dailyReflectionsMultipleInsights } from "./069-daily-reflections-multiple-insights";
 import { up as ontologyControlPlaneState } from "./070-ontology-control-plane-state";
 import { up as epistemicAssertions } from "./071-epistemic-assertions";
+import { up as agentScopedIdempotencyKey } from "./072-agent-scoped-idempotency-key";
 
 // -- Public interface consumed by Database.init() --
 
@@ -671,6 +672,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		artifacts: {
 			tables: ["epistemic_assertions"],
 		},
+	},
+	{
+		version: 72,
+		name: "agent-scoped-idempotency-key",
+		up: agentScopedIdempotencyKey,
 	},
 ];
 

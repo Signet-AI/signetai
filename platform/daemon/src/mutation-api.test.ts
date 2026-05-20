@@ -205,6 +205,75 @@ memory:
 		expect(retryJson).toMatchObject({ id: json.id, deduped: true });
 	});
 
+	it("POST /api/memory/remember scopes idempotency-key dedupe by agent and visibility", async () => {
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Default global provenance import",
+				who: "soulvessel.tests",
+				idempotencyKey: "shared-import-key",
+			}),
+		});
+		const firstJson = (await first.json()) as { id?: string; deduped?: boolean };
+		expect(first.status).toBe(200);
+		expect(firstJson.id).toBeString();
+		expect(firstJson.deduped).toBeUndefined();
+
+		const otherAgent = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Other agent provenance import",
+				who: "soulvessel.tests",
+				agentId: "agent-a",
+				idempotencyKey: "shared-import-key",
+			}),
+		});
+		const otherAgentJson = (await otherAgent.json()) as { id?: string; deduped?: boolean };
+		expect(otherAgent.status).toBe(200);
+		expect(otherAgentJson.id).toBeString();
+		expect(otherAgentJson.id).not.toBe(firstJson.id);
+		expect(otherAgentJson.deduped).toBeUndefined();
+
+		const privateVisibility = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Default private provenance import",
+				who: "soulvessel.tests",
+				visibility: "private",
+				idempotencyKey: "shared-import-key",
+			}),
+		});
+		const privateJson = (await privateVisibility.json()) as { id?: string; deduped?: boolean };
+		expect(privateVisibility.status).toBe(200);
+		expect(privateJson.id).toBeString();
+		expect(privateJson.id).not.toBe(firstJson.id);
+		expect(privateJson.deduped).toBeUndefined();
+
+		const retry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Default global provenance import retry",
+				who: "soulvessel.tests",
+				idempotencyKey: "shared-import-key",
+			}),
+		});
+		const retryJson = (await retry.json()) as { id?: string; deduped?: boolean };
+		expect(retry.status).toBe(200);
+		expect(retryJson).toMatchObject({ id: firstJson.id, deduped: true });
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM memories WHERE idempotency_key = ?").get("shared-import-key") as
+					| { count: number }
+					| undefined,
+		);
+		expect(row?.count).toBe(3);
+	});
+
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",

@@ -3,7 +3,7 @@ import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { normalizeAndHashContent } from "../content-normalization";
-import { getDbAccessor } from "../db-accessor";
+import { type WriteDb, getDbAccessor } from "../db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
@@ -86,6 +86,21 @@ interface RememberRowProvenance {
 	readonly idempotencyKey?: string;
 }
 
+interface RememberDedupeScope {
+	readonly agentId: string;
+	readonly visibility: "global" | "private" | "archived";
+	readonly scope: string | null;
+}
+
+interface RememberDedupeRow {
+	readonly id: string;
+	readonly type: string;
+	readonly tags: string | null;
+	readonly pinned: number;
+	readonly importance: number;
+	readonly content: string;
+}
+
 function pickOptionalString(...values: readonly unknown[]): string | undefined {
 	for (const value of values) {
 		const parsed = parseOptionalString(value);
@@ -97,7 +112,14 @@ function pickOptionalString(...values: readonly unknown[]): string | undefined {
 function parseRememberRowProvenance(body: Record<string, unknown>): RememberRowProvenance {
 	const metadata = toRecord(body.metadata) ?? {};
 	return {
-		sourcePath: pickOptionalString(body.sourcePath, body.source_path, body.source, metadata.sourcePath, metadata.source_path, metadata.source),
+		sourcePath: pickOptionalString(
+			body.sourcePath,
+			body.source_path,
+			body.source,
+			metadata.sourcePath,
+			metadata.source_path,
+			metadata.source,
+		),
 		runtimePath: pickOptionalString(body.runtimePath, body.runtime_path, metadata.runtimePath, metadata.runtime_path),
 		idempotencyKey: pickOptionalString(
 			body.idempotencyKey,
@@ -110,6 +132,50 @@ function parseRememberRowProvenance(body: Record<string, unknown>): RememberRowP
 
 function idempotencyKeyForChunk(baseKey: string | undefined, index: number): string | undefined {
 	return baseKey ? `${baseKey}:chunk:${index + 1}` : undefined;
+}
+
+function scopedMemoryPredicate(input: RememberDedupeScope): {
+	readonly sql: string;
+	readonly params: readonly string[];
+} {
+	return input.scope === null
+		? {
+				sql: "agent_id = ? AND visibility = ? AND scope IS NULL",
+				params: [input.agentId, input.visibility],
+			}
+		: {
+				sql: "agent_id = ? AND visibility = ? AND scope = ?",
+				params: [input.agentId, input.visibility, input.scope],
+			};
+}
+
+function getScopedIdempotencyMemoryId(
+	db: WriteDb,
+	key: string | undefined,
+	input: RememberDedupeScope,
+): { readonly id: string } | undefined {
+	if (!key) return undefined;
+	const scoped = scopedMemoryPredicate(input);
+	return db
+		.prepare(`SELECT id FROM memories WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0 LIMIT 1`)
+		.get(key, ...scoped.params) as { readonly id: string } | undefined;
+}
+
+function getScopedIdempotencyDedupeRow(
+	db: WriteDb,
+	key: string | undefined,
+	input: RememberDedupeScope,
+): RememberDedupeRow | undefined {
+	if (!key) return undefined;
+	const scoped = scopedMemoryPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, type, tags, pinned, importance, content
+			 FROM memories
+			 WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(key, ...scoped.params) as RememberDedupeRow | undefined;
 }
 
 function hasMemoriesSessionIdColumn(db: any): boolean {
@@ -558,6 +624,7 @@ export function registerMemoryRoutes(app: Hono): void {
 		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
 		const visibility = body.visibility === "private" ? "private" : "global";
+		const dedupeScope = { agentId, visibility, scope };
 		const hasBodyTags = Object.prototype.hasOwnProperty.call(body, "tags");
 		const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
 		if (hasBodyTags && bodyTags === undefined) {
@@ -620,12 +687,7 @@ export function registerMemoryRoutes(app: Hono): void {
 
 				try {
 					const inserted = getDbAccessor().withWriteTx((db) => {
-						const byIdempotencyKey = chunkIdempotencyKey
-							? (db
-									.prepare("SELECT id FROM memories WHERE idempotency_key = ? AND is_deleted = 0 LIMIT 1")
-									.get(chunkIdempotencyKey) as { id: string } | undefined)
-							: undefined;
-						if (byIdempotencyKey) return false;
+						if (getScopedIdempotencyMemoryId(db, chunkIdempotencyKey, dedupeScope)) return false;
 
 						const byHash =
 							scope !== null
@@ -784,14 +846,7 @@ export function registerMemoryRoutes(app: Hono): void {
 		const contentHash = normalizedContent.contentHash;
 		const pipelineEnqueueEnabled = pipelineCfg.enabled;
 
-		type DedupeRow = {
-			id: string;
-			type: string;
-			tags: string | null;
-			pinned: number;
-			importance: number;
-			content: string;
-		};
+		type DedupeRow = RememberDedupeRow;
 
 		try {
 			const result = getDbAccessor().withWriteTx((db) => {
@@ -815,15 +870,8 @@ export function registerMemoryRoutes(app: Hono): void {
 					if (bySource) return { deduped: true as const, row: bySource };
 				}
 
-				if (rowProvenance.idempotencyKey) {
-					const byIdempotencyKey = db
-						.prepare(
-							`SELECT id, type, tags, pinned, importance, content
-					 FROM memories WHERE idempotency_key = ? AND is_deleted = 0 LIMIT 1`,
-						)
-						.get(rowProvenance.idempotencyKey) as DedupeRow | undefined;
-					if (byIdempotencyKey) return { deduped: true as const, row: byIdempotencyKey };
-				}
+				const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
+				if (byIdempotencyKey) return { deduped: true as const, row: byIdempotencyKey };
 
 				// Check content_hash dedupe (scope-aware)
 				const byHash = (
@@ -895,16 +943,8 @@ export function registerMemoryRoutes(app: Hono): void {
 			const msg = e instanceof Error ? e.message : "";
 			if (msg.includes("UNIQUE constraint")) {
 				const existing = getDbAccessor().withReadDb((db) => {
-					if (rowProvenance.idempotencyKey) {
-						const byIdempotencyKey = db
-							.prepare(
-								`SELECT id, type, tags, pinned, importance, content
-						 FROM memories
-						 WHERE idempotency_key = ? AND is_deleted = 0 LIMIT 1`,
-							)
-							.get(rowProvenance.idempotencyKey) as DedupeRow | undefined;
-						if (byIdempotencyKey) return byIdempotencyKey;
-					}
+					const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
+					if (byIdempotencyKey) return byIdempotencyKey;
 					return db
 						.prepare(
 							`SELECT id, type, tags, pinned, importance, content

@@ -775,6 +775,52 @@ describe("migration framework", () => {
 		).run("f", "deleted", "hash1", "fact", "default", null, now, now, "test");
 	});
 
+	test("unique partial index on idempotency_key is agent-, visibility-, and scope-aware", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("a", "first import", "import-key", "fact", "default", "global", null, now, now, "test");
+
+		expect(() =>
+			db
+				.prepare(
+					`INSERT INTO memories
+					 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				)
+				.run("b", "same tuple import", "import-key", "fact", "default", "global", null, now, now, "test"),
+		).toThrow();
+
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("c", "other agent import", "import-key", "fact", "agent-a", "global", null, now, now, "test");
+
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("d", "private import", "import-key", "fact", "default", "private", null, now, now, "test");
+
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("e", "scoped import", "import-key", "fact", "default", "global", "bench:run-1", now, now, "test");
+
+		db.prepare(
+			`INSERT INTO memories
+			 (id, content, idempotency_key, is_deleted, type, agent_id, visibility, scope, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("f", "deleted import", "import-key", "fact", "default", "global", null, now, now, "test");
+	});
+
 	test("migration 003 deduplicates existing content hashes", () => {
 		db = createFreshDb();
 
