@@ -8,6 +8,7 @@ import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { loadMemoryConfig } from "./memory-config";
 import type { RecallParams, RecallResponse, RecallResult } from "./memory-search";
+import { txIngestEnvelope } from "./transactions";
 
 function row(id: string, content: string): RecallResult {
 	const now = "2026-05-20T12:00:00.000Z";
@@ -363,6 +364,56 @@ describe("aggregateRecall", () => {
 		) as { aggregate_count: number; link_count: number };
 		expect(rows.aggregate_count).toBe(0);
 		expect(rows.link_count).toBe(0);
+	});
+
+	it("dedupes when a concurrent aggregate insert wins the content-hash race", async () => {
+		let raced = false;
+		const result = await aggregateRecall(
+			{
+				query: "what happened",
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+				project: "current-project",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				idFactory: () => "aggregate-loser",
+				hybridRecall: async (input: RecallParams) => response(input.query, [row("mem-1", "First evidence")]),
+				ingestEnvelope: (db, mem) => {
+					if (!raced) {
+						raced = true;
+						txIngestEnvelope(db, {
+							...mem,
+							id: "aggregate-race-winner",
+						});
+					}
+					return txIngestEnvelope(db, mem);
+				},
+			},
+		);
+
+		expect(result.results).toHaveLength(1);
+		expect(result.results[0].id).toBe("aggregate-race-winner");
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: "aggregate-race-winner",
+			saved: true,
+			deduped: true,
+			stoppedReason: "complete",
+		});
+		const rows = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(
+					`SELECT
+						(SELECT COUNT(*) FROM memories WHERE id = 'aggregate-loser') AS loser_count,
+						(SELECT COUNT(*) FROM aggregate_memory_sources WHERE aggregate_memory_id = 'aggregate-race-winner') AS link_count`,
+				)
+				.get(),
+		) as { loser_count: number; link_count: number };
+		expect(rows.loser_count).toBe(0);
+		expect(rows.link_count).toBe(1);
 	});
 
 	it("returns structured no-hit metadata when synthesis is unavailable", async () => {

@@ -6,7 +6,7 @@ import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpe
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
 import { type EmbedFn, type RecallParams, type RecallResponse, type RecallResult, hybridRecall } from "./memory-search";
-import { txIngestEnvelope } from "./transactions";
+import { type IngestEnvelope, txIngestEnvelope } from "./transactions";
 
 export type AggregateRecallBudget = "small" | "medium" | "large";
 export type AggregateRecallStoppedReason = "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
@@ -30,6 +30,7 @@ interface AggregateRecallDeps {
 	readonly now?: () => Date;
 	readonly idFactory?: () => string;
 	readonly logger?: AggregateRecallLogger;
+	readonly ingestEnvelope?: (db: WriteDb, mem: IngestEnvelope) => string;
 }
 
 interface AggregateRecallLogger {
@@ -55,6 +56,11 @@ interface ContentHashMatch {
 	readonly row: RecallResult;
 	readonly visibleForAggregate: boolean;
 	readonly aggregateRecallMemory: boolean;
+}
+
+interface AggregateDuplicateResolution {
+	readonly row: RecallResult;
+	readonly saved: boolean;
 }
 
 const BUDGET_QUERY_LIMITS: Record<AggregateRecallBudget, number> = {
@@ -271,6 +277,39 @@ function linkAggregateSources(
 	}
 }
 
+function resolveAggregateDuplicate(
+	db: WriteDb,
+	input: {
+		readonly key: string;
+		readonly agentId: string;
+		readonly project: string | null;
+		readonly contentHash: string;
+		readonly answer: string;
+		readonly sourceMemoryIds: readonly string[];
+		readonly now: string;
+	},
+): AggregateDuplicateResolution | null {
+	const existing = loadAggregateByKey(db, input.key, { agentId: input.agentId, project: input.project });
+	if (existing) {
+		linkAggregateSources(db, existing.id, input.sourceMemoryIds, input.agentId, input.now);
+		return { row: existing, saved: true };
+	}
+	const duplicateContent = loadMemoryByContentHash(db, input.contentHash, {
+		agentId: input.agentId,
+		project: input.project,
+	});
+	if (!duplicateContent) return null;
+	if (!duplicateContent.visibleForAggregate || !duplicateContent.aggregateRecallMemory) {
+		return { row: unsavedAggregateResult(input.answer, input.key, input.project), saved: false };
+	}
+	linkAggregateSources(db, duplicateContent.row.id, input.sourceMemoryIds, input.agentId, input.now);
+	return { row: duplicateContent.row, saved: true };
+}
+
+function isUniqueConstraintError(err: unknown): boolean {
+	return err instanceof Error && /UNIQUE constraint failed|constraint failed/i.test(err.message);
+}
+
 async function embedAggregateMemory(
 	memoryId: string,
 	content: string,
@@ -387,6 +426,7 @@ export async function aggregateRecall(
 	const recall = deps.hybridRecall ?? hybridRecall;
 	const saveAggregate = params.saveAggregate !== false && params.save_aggregate !== false;
 	const log = deps.logger ?? logger;
+	const ingestEnvelope = deps.ingestEnvelope ?? txIngestEnvelope;
 	const first = await recall(params, cfg, deps.embedFn);
 
 	if (!deps.router) {
@@ -445,26 +485,22 @@ export async function aggregateRecall(
 	if (saveAggregate) {
 		const normalized = normalizeAndHashContent(answer);
 		row = getDbAccessor().withWriteTx((db) => {
-			const existing = loadAggregateByKey(db, key, { agentId, project });
-			if (existing) {
-				linkAggregateSources(db, existing.id, sourceMemoryIds, agentId, now);
+			const duplicate = resolveAggregateDuplicate(db, {
+				key,
+				agentId,
+				project,
+				contentHash: normalized.contentHash,
+				answer,
+				sourceMemoryIds,
+				now,
+			});
+			if (duplicate) {
 				deduped = true;
-				saved = true;
-				return existing;
-			}
-			const duplicateContent = loadMemoryByContentHash(db, normalized.contentHash, { agentId, project });
-			if (duplicateContent) {
-				if (!duplicateContent.visibleForAggregate || !duplicateContent.aggregateRecallMemory) {
-					deduped = true;
-					return unsavedAggregateResult(answer, key, project);
-				}
-				linkAggregateSources(db, duplicateContent.row.id, sourceMemoryIds, agentId, now);
-				deduped = true;
-				saved = true;
-				return duplicateContent.row;
+				saved = duplicate.saved;
+				return duplicate.row;
 			}
 			const id = deps.idFactory?.() ?? randomUUID();
-			txIngestEnvelope(db, {
+			const envelope: IngestEnvelope = {
 				id,
 				content: normalized.storageContent,
 				normalizedContent: normalized.normalizedContent || normalized.hashBasis,
@@ -488,7 +524,25 @@ export async function aggregateRecall(
 				agentId,
 				visibility: "global",
 				createdAt: now,
-			});
+			};
+			try {
+				ingestEnvelope(db, envelope);
+			} catch (err) {
+				if (!isUniqueConstraintError(err)) throw err;
+				const racedDuplicate = resolveAggregateDuplicate(db, {
+					key,
+					agentId,
+					project,
+					contentHash: normalized.contentHash,
+					answer,
+					sourceMemoryIds,
+					now,
+				});
+				if (!racedDuplicate) throw err;
+				deduped = true;
+				saved = racedDuplicate.saved;
+				return racedDuplicate.row;
+			}
 			linkAggregateSources(db, id, sourceMemoryIds, agentId, now);
 			saved = true;
 			return loadAggregateMemory(db, id);
