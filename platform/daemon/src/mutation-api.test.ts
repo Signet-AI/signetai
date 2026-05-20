@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { chunkBySentence } from "./routes/utils";
 import { txIngestEnvelope } from "./transactions";
 
 let app: Hono;
@@ -476,6 +477,40 @@ memory:
 		const smallAfterChunkJson = (await smallAfterChunk.json()) as { error?: string };
 		expect(smallAfterChunk.status).toBe(409);
 		expect(smallAfterChunkJson.error).toContain("chunked content");
+	});
+
+	it("POST /api/memory/remember rejects chunked imports that would reuse unrelated content rows", async () => {
+		const oversized = Array.from(
+			{ length: 90 },
+			(_, index) => `Existing chunk hash sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		const firstChunk = chunkBySentence(oversized, 600)[0];
+		expect(oversized.length).toBeGreaterThan(800);
+		expect(firstChunk.length).toBeLessThan(800);
+
+		const existing = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: firstChunk,
+				who: "soulvessel.tests",
+				idempotencyKey: "existing-normal-chunk-content-key",
+			}),
+		});
+		expect(existing.status).toBe(200);
+
+		const chunked = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: oversized,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-existing-content-key",
+			}),
+		});
+		const chunkedJson = (await chunked.json()) as { error?: string };
+		expect(chunked.status).toBe(409);
+		expect(chunkedJson.error).toContain("chunk content already exists");
 	});
 
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {

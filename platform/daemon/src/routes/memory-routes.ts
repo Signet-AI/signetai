@@ -815,6 +815,19 @@ export function registerMemoryRoutes(app: Hono): void {
 					deduped: true,
 				});
 			}
+			const contentHashes = new Set<string>();
+			for (const plan of chunkPlans) {
+				if (contentHashes.has(plan.normalized.contentHash)) {
+					return c.json({ error: "chunked content contains duplicate chunks" }, 409);
+				}
+				contentHashes.add(plan.normalized.contentHash);
+				const byHash = getDbAccessor().withReadDb((db) =>
+					getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
+				);
+				if (byHash) {
+					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+				}
+			}
 
 			const groupId = chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
 			const now = new Date().toISOString();
@@ -842,9 +855,6 @@ export function registerMemoryRoutes(app: Hono): void {
 					const result = getDbAccessor().withWriteTx((db) => {
 						const byIdempotencyKey = getScopedIdempotencyMemoryId(db, plan.idempotencyKey, dedupeScope);
 						if (byIdempotencyKey) return { id: byIdempotencyKey.id, inserted: false as const };
-
-						const byHash = getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope);
-						if (byHash) return { id: byHash.id, inserted: false as const };
 
 						txIngestEnvelope(db, {
 							id: chunkId,
