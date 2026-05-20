@@ -2574,7 +2574,6 @@ Explicit memory query from within a session. Requires `recall` permission.
   "who": "claude-code",
   "since": "2026-01-01T00:00:00Z",
   "until": "2026-04-01T00:00:00Z",
-  "expand": true,
   "sessionKey": "session-uuid",
   "runtimePath": "plugin"
 }
