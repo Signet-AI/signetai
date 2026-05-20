@@ -403,13 +403,30 @@ fn build_route_request(
     auth: &AuthState,
     body: &Map<String, Value>,
     config: &InferenceConfig,
+    header_agent_id: Option<&str>,
+    header_explicit_target: Option<&str>,
 ) -> Result<RouteRequest, Response> {
-    let requested = parse_hint(body.get("agentId"), "agentId")?;
+    let requested = match header_agent_id {
+        Some(agent_id) => Some(agent_id.to_string()),
+        None => parse_hint(body.get("agentId"), "agentId")?,
+    };
     let agent_id =
         resolve_scoped_agent(auth, state.auth_mode, is_local(peer), requested.as_deref())
             .map_err(|reason| error(StatusCode::FORBIDDEN, reason))?;
     let privacy = parse_hint(body.get("privacy"), "privacy")?;
-    let explicit_targets = parse_explicit_targets(body)?;
+    let mut explicit_targets = parse_explicit_targets(body)?;
+    if let Some(target) = header_explicit_target {
+        let parts = target.split('/').collect::<Vec<_>>();
+        if parts.len() != 2 || parts.iter().any(|part| part.is_empty()) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid explicit target ref '{target}'"),
+            ));
+        }
+        if !explicit_targets.contains(&target.to_string()) {
+            explicit_targets.push(target.to_string());
+        }
+    }
     let req = RouteRequest {
         agent_id,
         privacy,
@@ -485,7 +502,7 @@ pub async fn explain(
         Ok(config) => config,
         Err(resp) => return resp,
     };
-    if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config) {
+    if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config, None, None) {
         return resp;
     }
     if let Err(resp) = parse_bool(body.get("refresh"), "refresh") {
@@ -515,7 +532,7 @@ pub async fn execute(
         Ok(config) => config,
         Err(resp) => return resp,
     };
-    if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config) {
+    if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config, None, None) {
         return resp;
     }
     if let Err(resp) = validate_execute_options(&body) {
@@ -545,7 +562,7 @@ pub async fn stream(
         Ok(config) => config,
         Err(resp) => return resp,
     };
-    if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config) {
+    if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config, None, None) {
         return resp;
     }
     if let Err(resp) = validate_execute_options(&body) {
@@ -665,14 +682,27 @@ pub async fn gateway_chat_completions(
     if let Err(resp) = parse_gateway_messages(&body) {
         return resp;
     }
-    if let Err(resp) = parse_gateway_hint(&headers, "x-signet-agent-id") {
-        return resp;
-    }
+    let header_agent_id = match parse_gateway_hint(&headers, "x-signet-agent-id") {
+        Ok(agent_id) => agent_id,
+        Err(resp) => return resp,
+    };
+    let header_explicit_target = match parse_gateway_hint(&headers, "x-signet-explicit-target") {
+        Ok(target) => target,
+        Err(resp) => return resp,
+    };
     let config = match load_inference_config(&state) {
         Ok(config) => config,
         Err(resp) => return resp,
     };
-    if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config) {
+    if let Err(resp) = build_route_request(
+        &state,
+        peer,
+        &auth,
+        &body,
+        &config,
+        header_agent_id.as_deref(),
+        header_explicit_target.as_deref(),
+    ) {
         return gateway_error(resp.status(), "scope violation");
     }
     gateway_error(

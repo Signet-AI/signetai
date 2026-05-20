@@ -1153,6 +1153,23 @@ async fn inference_native_endpoints_cover_ts_hardening_contract() {
             .unwrap_or_default()
             .contains("x-signet-agent-id contains unsupported characters")
     );
+
+    let resp = server
+        .client
+        .post(format!("{}/v1/chat/completions", server.base))
+        .bearer_auth(&admin)
+        .header("x-signet-agent-id", "rose")
+        .header("x-signet-explicit-target", "remote/sonnet")
+        .json(&json!({
+            "model": "signet:auto",
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status(), 400);
+    let body = server.json(resp).await;
+    assert_eq!(body["error"]["message"], "scope violation");
 }
 
 #[tokio::test]
