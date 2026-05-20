@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { vectorSearch } from "@signet/core";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
@@ -142,6 +143,21 @@ function parseRememberRowProvenance(body: Record<string, unknown>): RememberRowP
 
 function idempotencyKeyForChunk(baseKey: string | undefined, index: number): string | undefined {
 	return baseKey ? `${baseKey}:chunk:${index + 1}` : undefined;
+}
+
+function chunkGroupIdForIdempotencyKey(baseKey: string | undefined, input: RememberDedupeScope): string | undefined {
+	if (!baseKey) return undefined;
+	const hash = createHash("sha256")
+		.update(input.agentId || "default")
+		.update("\0")
+		.update(input.visibility)
+		.update("\0")
+		.update(input.scope ?? "__NULL__")
+		.update("\0")
+		.update(baseKey)
+		.digest("hex")
+		.slice(0, 32);
+	return `chunk-group:${hash}`;
 }
 
 function escapeSqlLike(value: string): string {
@@ -800,7 +816,7 @@ export function registerMemoryRoutes(app: Hono): void {
 				});
 			}
 
-			const groupId = crypto.randomUUID();
+			const groupId = chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
 			const now = new Date().toISOString();
 			const chunkIds = Array<string | undefined>(chunkPlans.length);
 
