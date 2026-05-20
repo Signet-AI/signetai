@@ -1281,7 +1281,7 @@ Only `query` is required.
 
 Common `source` values include `hybrid`, `vector`, `keyword`, `hint`, `sec`,
 `structured`, `traversal`, `ka_traversal`, `source_obsidian`,
-`native_memory`, `transcript`, `constructed`, `graph`, and `llm_summary`.
+`native_memory`, `constructed`, `graph`, and `llm_summary`.
 `method` on the response reflects whether vector search was available for
 this call.
 
@@ -2501,9 +2501,10 @@ for in-context injection.
 are optional.
 
 Prompt-submit retrieval prefers structured memory recall. When structured
-recall is weak or empty, the daemon first attempts temporal-summary
-fallback (session DAG artifacts) and then transcript fallback from prior
-session transcripts instead of returning no context.
+recall is weak or empty, the daemon may attempt temporal-summary fallback
+(session DAG artifacts). Raw transcript search is not injected on
+prompt-submit; use the dedicated `session_search` MCP/API surface when a
+caller needs transcript evidence.
 
 ### POST /api/hooks/session-end
 
@@ -2573,7 +2574,6 @@ Explicit memory query from within a session. Requires `recall` permission.
   "who": "claude-code",
   "since": "2026-01-01T00:00:00Z",
   "until": "2026-04-01T00:00:00Z",
-  "expand": true,
   "sessionKey": "session-uuid",
   "runtimePath": "plugin"
 }

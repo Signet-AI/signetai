@@ -206,7 +206,7 @@ New recall stages should follow this rule:
 
 - Stages that only produce IDs and scores may run before authorization.
 - Stages that read memory content, send text to a model, build summaries,
-  inspect entity coverage, expand transcripts, or update metadata must run
+  inspect entity coverage, or update metadata must run
   after authorization.
 
 ### Phase 4: Shape Authorized Evidence
@@ -248,7 +248,6 @@ Supplementary results may include:
 
 - source-backed Obsidian chunks,
 - native memory artifacts,
-- transcript fallback cards when `expand` is enabled,
 - an LLM summary card when the LLM reranker path has remaining timeout
   budget,
 - linked rationale memories for decision results,
@@ -258,24 +257,22 @@ The final response is capped to `limit`. Supplementary rows are marked with
 `supplementary: true` so callers can distinguish them from ordinary memory
 rows.
 
-### Source and Transcript Rescue Paths
+### Source Rescue Paths
 
 If normal memory candidates produce no hits, recall can fall back to source
-chunks, native memory artifacts, and transcript FTS. These paths return
-synthetic recall rows rather than materializing new `memories` records, but
-each fallback is only enabled when its backing rows can satisfy the caller's
-scope boundary.
+chunks and native memory artifacts. These paths return synthetic recall rows
+rather than materializing new `memories` records, but each fallback is only
+enabled when its backing rows can satisfy the caller's scope boundary.
 
 Source chunk vector fallback is disabled for project-scoped recall until chunk
 embeddings carry a strong source root/project binding. Project-scoped searches
-still use authorized memory rows, native source artifacts, and transcript
-fallbacks; they do not guess source ownership from chunk text metadata.
+still use authorized memory rows and native source artifacts; they do not guess
+source ownership from chunk text metadata.
 
-When `expand` is enabled and ordinary memory rows reference session source
-IDs, recall may fetch raw transcript excerpts and same-session structured
-summaries. This is a lossless backing-source path: extracted memories remain
-the primary row, but the transcript can restore details that extraction
-compressed away.
+Transcript lookup is intentionally outside memory recall. Raw session
+transcripts are searched through the dedicated `/api/sessions/search` API,
+MCP `session_search` tool, and CLI `signet session search` command so callers
+must ask for transcript evidence explicitly.
 
 ### Timing and Failure Behavior
 
@@ -284,9 +281,9 @@ stage breakdown so latency regressions can be localized without guessing.
 
 Secondary channels are deliberately best-effort. Embedding, vector search,
 graph traversal, structured evidence, reranking, dampening, currentness,
-source fallback, transcript expansion, and LLM summary failures are logged
-and skipped. The caller should receive the best safe recall response the
-daemon can produce from the remaining channels.
+source fallback, and LLM summary failures are logged and skipped. The caller
+should receive the best safe recall response the daemon can produce from the
+remaining channels.
 
 ### Recall API
 
@@ -302,8 +299,8 @@ curl -X POST http://localhost:3850/api/memory/recall \
 ```
 
 Optional filters: `type`, `tags`, `who`, `pinned`, `importance_min`,
-`since`, `until`, `agentId`, `readPolicy`, `policyGroup`, `project`,
-`scope`, and `expand`.
+`since`, `until`, `agentId`, `readPolicy`, `policyGroup`, `project`, and
+`scope`.
 
 
 Content Normalization

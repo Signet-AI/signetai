@@ -61,10 +61,7 @@ describe("registerMemoryCommands remember", () => {
 			content: "Avery said Signet recall works in the terminal",
 			importance: 0.7,
 			who: "user",
-			hints: [
-				"What did Avery say about Signet recall?",
-				"Can Signet recall be useful from the terminal?",
-			],
+			hints: ["What did Avery say about Signet recall?", "Can Signet recall be useful from the terminal?"],
 		});
 	});
 });
@@ -101,7 +98,7 @@ describe("registerMemoryCommands recall", () => {
 		expect(lines[0]).toContain('"meta"');
 	});
 
-	test("forwards expanded recall filters and applies min-score in json mode", async () => {
+	test("forwards recall filters and applies min-score in json mode", async () => {
 		const lines: string[] = [];
 		console.log = (line?: unknown) => {
 			lines.push(String(line ?? ""));
@@ -156,7 +153,6 @@ describe("registerMemoryCommands recall", () => {
 			"2026-01-01",
 			"--until",
 			"2026-04-01",
-			"--expand",
 			"--min-score",
 			"0.8",
 			"--json",
@@ -174,7 +170,6 @@ describe("registerMemoryCommands recall", () => {
 			importance_min: 0.7,
 			since: "2026-01-01",
 			until: "2026-04-01",
-			expand: true,
 		});
 		expect(capturedTimeout).toBe(30_000);
 		expect(lines).toHaveLength(1);

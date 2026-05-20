@@ -86,7 +86,6 @@ import { getExpiryWarning } from "./session-tracker";
 import {
 	ensureCanonicalTranscriptHistory,
 	getSessionTranscriptContent,
-	searchTranscriptFallback,
 	upsertSessionTranscript,
 } from "./session-transcripts";
 import { type StructuralFeatures, getStructuralFeatures } from "./structural-features";
@@ -292,11 +291,6 @@ function formatLastSeenShort(isoDate: string): string {
 	if (hours < 24) return `${hours}h ago`;
 	const days = Math.floor(hours / 24);
 	return `${days}d ago`;
-}
-
-function formatTranscriptSessionLabel(sessionKey: string): string {
-	if (sessionKey.length <= 18) return sessionKey;
-	return `${sessionKey.slice(0, 8)}…${sessionKey.slice(-6)}`;
 }
 
 function harnessSupportsNamedCrossAgentTools(harness: string): boolean {
@@ -585,33 +579,6 @@ export function effectiveScore(importance: number, createdAt: string, pinned: bo
 
 export function appendSynthesisIndexBlock(content: string, indexBlock: string): string {
 	return appendRenderedIndexBlock(content, indexBlock);
-}
-
-function buildTranscriptFallbackResponse(
-	metadataHeader: string,
-	harness: string,
-	queryTerms: string,
-	charBudget: number,
-	hits: ReadonlyArray<{
-		readonly sessionKey: string;
-		readonly updatedAt: string;
-		readonly excerpt: string;
-	}>,
-	warnings?: string[],
-	pluginContext = "",
-): UserPromptSubmitResponse {
-	const rows = hits.map((hit) => ({
-		content: `- [transcript ${formatTranscriptSessionLabel(hit.sessionKey)}] ${hit.excerpt} (${formatMemoryDate(hit.updatedAt)})`,
-	}));
-	const lines = selectWithBudget(rows, charBudget).map((row) => row.content);
-	const inject = buildPromptRecallInject(metadataHeader, lines, harness, pluginContext);
-	return {
-		inject,
-		memoryCount: lines.length,
-		queryTerms,
-		engine: "transcript-fallback",
-		warnings,
-	};
 }
 
 function buildTemporalFallbackResponse(
@@ -2462,7 +2429,6 @@ type UserPromptSubmitDeps = {
 	readonly hybridRecall: typeof hybridRecall;
 	readonly fetchEmbedding: typeof fetchEmbedding;
 	readonly searchTemporalFallback: typeof searchTemporalFallback;
-	readonly searchTranscriptFallback: typeof searchTranscriptFallback;
 	readonly trackFtsHits: typeof trackFtsHits;
 };
 
@@ -2507,7 +2473,6 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 	hybridRecall,
 	fetchEmbedding,
 	searchTemporalFallback,
-	searchTranscriptFallback,
 	trackFtsHits,
 };
 
@@ -2773,31 +2738,6 @@ export async function handleUserPromptSubmit(
 						queryTerms,
 						injectBudget,
 						temporalHits,
-						warnings,
-						pluginContext,
-					),
-					deps.logger,
-				);
-			}
-			const transcriptHits = deps.searchTranscriptFallback({
-				query: vectorQuery,
-				agentId,
-				sessionKey: req.sessionKey,
-				project: req.project,
-				limit: 3,
-				allowScanFallback: false,
-			});
-			if (transcriptHits.length > 0) {
-				return finalizeUserPromptSubmitSuccess(
-					req,
-					userMessage,
-					start,
-					buildTranscriptFallbackResponse(
-						metadataHeader,
-						req.harness,
-						queryTerms,
-						injectBudget,
-						transcriptHits,
 						warnings,
 						pluginContext,
 					),

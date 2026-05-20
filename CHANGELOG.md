@@ -8,6 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-05-20
 - Bug fixes: preserve constellation pointer input; expose row provenance on read; persist remember row provenance; repair bundled node daemon startup; avoid heredoc in bundle smoke config.
+- Refactoring: separate transcript search surfaces.
 
 ### 2026-05-19
 - Bug fixes: minimize bundle release smoke workspace; install bun in bundle release job.
@@ -30,6 +31,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: surface daemon start journal diagnostics; clean up detached codex acp processes; reap acpx process trees.
 
 ## Release Ledger
+
+## [0.123.13] - 2026-05-20
+
+Release summary: 1 refactor.
+Tag range: `bundle-0.123.11-41b3b9278e15e906da87f9c7bdd27d2ab521a3ec..v0.123.13`.
+
+### Refactoring
+
+- **memory**: separate transcript search surfaces (#737)
 
 ## [0.123.12] - 2026-05-20
 

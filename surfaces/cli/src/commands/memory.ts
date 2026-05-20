@@ -85,7 +85,6 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.description("Search memories using hybrid (vector + keyword) search")
 		.option("-l, --limit <n>", "Max results", Number.parseInt, 10)
 		.option("--project <project>", "Filter by project")
-		.option("--expand", "Include expanded transcript/context sources", false)
 		.option("-t, --type <type>", "Filter by type")
 		.option("--tags <tags>", "Filter by tags (comma-separated)")
 		.option("--who <who>", "Filter by who")
@@ -115,7 +114,6 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					importance_min: options.importanceMin,
 					since: options.since,
 					until: options.until,
-					expand: options.expand,
 					agentId: options.agent,
 				}),
 				MEMORY_RECALL_TIMEOUT_MS,

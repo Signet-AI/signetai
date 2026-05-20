@@ -789,7 +789,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				query: z.string().describe("Search query text"),
 				limit: z.number().optional().describe("Max results to return (default 10)"),
 				project: z.string().optional().describe("Optional project path filter"),
-				expand: z.boolean().optional().describe("Include lossless session transcripts as sources"),
 				type: z.string().optional().describe("Filter by memory type"),
 				tags: z.string().optional().describe("Filter by tags (comma-separated)"),
 				who: z.string().optional().describe("Filter by author"),
@@ -819,7 +818,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			until,
 			min_score,
 			score_min,
-			expand,
 		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
@@ -834,7 +832,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance_min: importance_min ?? min_score,
 					since,
 					until,
-					expand,
 				}),
 			});
 
