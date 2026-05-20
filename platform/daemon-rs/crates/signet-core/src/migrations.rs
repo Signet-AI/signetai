@@ -434,12 +434,27 @@ fn ensure_cross_daemon_parity_columns(conn: &Connection) -> Result<(), CoreError
 
     conn.execute_batch(
         "UPDATE connectors
-            SET settings_json = NULLIF(config_json, '')
+            SET settings_json = CASE
+                WHEN json_valid(config_json)
+                     AND json_type(config_json, '$.settings') IS NOT NULL
+                THEN json_extract(config_json, '$.settings')
+                ELSE NULLIF(config_json, '')
+            END
           WHERE NULLIF(config_json, '') IS NOT NULL
             AND (
                 settings_json IS NULL
                 OR settings_json = ''
-                OR (settings_json = '{}' AND COALESCE(updated_at, '') = COALESCE(created_at, ''))
+                OR (
+                    settings_json = '{}'
+                    AND COALESCE(updated_at, '') = COALESCE(created_at, '')
+                    AND COALESCE(
+                        CASE
+                            WHEN json_valid(config_json)
+                            THEN json_extract(config_json, '$.settings')
+                        END,
+                        '__missing__'
+                    ) != '{}'
+                )
             );",
     )?;
 
@@ -914,6 +929,72 @@ mod tests {
             )
             .expect("read intentionally empty settings_json");
         assert_eq!(intentional_empty, "{}");
+    }
+
+    #[test]
+    fn connector_settings_repair_preserves_rust_wrapper_with_empty_settings() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        run(&conn).expect("initial migrations run");
+        conn.execute(
+            r#"INSERT INTO connectors
+               (id, provider, display_name, config_json, settings_json, created_at, updated_at)
+               VALUES
+               (
+                 'local-empty',
+                 'obsidian',
+                 'Obsidian',
+                 '{"id":"local-empty","provider":"obsidian","displayName":"Obsidian","settings":{},"enabled":true}',
+                 '{}',
+                 datetime('now'),
+                 datetime('now')
+               )"#,
+            [],
+        )
+        .expect("insert Rust-style connector with intentionally empty settings");
+
+        run(&conn).expect("rerun migrations preserves intentionally empty wrapper settings");
+
+        let settings: String = conn
+            .query_row(
+                "SELECT settings_json FROM connectors WHERE id = 'local-empty'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read settings_json");
+        assert_eq!(settings, "{}");
+    }
+
+    #[test]
+    fn connector_settings_repair_backfills_from_rust_wrapper_inner_settings() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        run(&conn).expect("initial migrations run");
+        conn.execute(
+            r#"INSERT INTO connectors
+               (id, provider, display_name, config_json, settings_json, created_at, updated_at)
+               VALUES
+               (
+                 'local-configured',
+                 'obsidian',
+                 'Obsidian',
+                 '{"id":"local-configured","provider":"obsidian","displayName":"Obsidian","settings":{"vault":"/tmp/vault"},"enabled":true}',
+                 '{}',
+                 datetime('now'),
+                 datetime('now')
+               )"#,
+            [],
+        )
+        .expect("insert Rust-style connector with default settings_json");
+
+        run(&conn).expect("rerun migrations backfills inner wrapper settings");
+
+        let settings: String = conn
+            .query_row(
+                "SELECT settings_json FROM connectors WHERE id = 'local-configured'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read settings_json");
+        assert_eq!(settings, r#"{"vault":"/tmp/vault"}"#);
     }
 
     #[test]
