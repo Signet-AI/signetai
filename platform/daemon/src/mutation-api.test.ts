@@ -366,6 +366,62 @@ memory:
 		expect(row?.count).toBe(1);
 	});
 
+	it("POST /api/memory/remember rejects changed oversized content for an existing idempotency key", async () => {
+		const content = Array.from(
+			{ length: 90 },
+			(_, index) => `Stable chunked import sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		const changed = Array.from(
+			{ length: 92 },
+			(_, index) => `Changed chunked import sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		expect(content.length).toBeGreaterThan(800);
+		expect(changed.length).toBeGreaterThan(800);
+
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-import-conflict-key",
+			}),
+		});
+		const firstJson = (await first.json()) as { ids?: string[] };
+		expect(first.status).toBe(200);
+		expect(firstJson.ids?.length).toBeGreaterThan(1);
+
+		const conflict = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: changed,
+				who: "soulvessel.tests",
+				idempotencyKey: "chunked-import-conflict-key",
+			}),
+		});
+		const conflictJson = (await conflict.json()) as { error?: string };
+		expect(conflict.status).toBe(409);
+		expect(conflictJson.error).toContain("different chunked content");
+
+		const rows = getDbAccessor().withReadDb((db) => ({
+			groups: (
+				db.prepare("SELECT COUNT(*) AS count FROM entities WHERE entity_type = 'chunk_group'").get() as
+					| { count: number }
+					| undefined
+			)?.count,
+			chunks: (
+				db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM memories WHERE idempotency_key LIKE 'chunked-import-conflict-key:chunk:%'",
+					)
+					.get() as { count: number } | undefined
+			)?.count,
+		}));
+		expect(rows.groups).toBe(1);
+		expect(rows.chunks).toBe(firstJson.ids?.length);
+	});
+
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",

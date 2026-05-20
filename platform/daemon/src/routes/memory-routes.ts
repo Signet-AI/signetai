@@ -106,6 +106,11 @@ interface RememberDedupeIdRow {
 	readonly sourceId: string | null;
 }
 
+interface RememberChunkDedupeRow extends RememberDedupeIdRow {
+	readonly contentHash: string | null;
+	readonly idempotencyKey: string;
+}
+
 function pickOptionalString(...values: readonly unknown[]): string | undefined {
 	for (const value of values) {
 		const parsed = parseOptionalString(value);
@@ -137,6 +142,17 @@ function parseRememberRowProvenance(body: Record<string, unknown>): RememberRowP
 
 function idempotencyKeyForChunk(baseKey: string | undefined, index: number): string | undefined {
 	return baseKey ? `${baseKey}:chunk:${index + 1}` : undefined;
+}
+
+function escapeSqlLike(value: string): string {
+	return value.replace(/[\\%_]/g, "\\$&");
+}
+
+function chunkIdempotencyIndex(baseKey: string, key: string): number | null {
+	const prefix = `${baseKey}:chunk:`;
+	if (!key.startsWith(prefix)) return null;
+	const index = Number.parseInt(key.slice(prefix.length), 10);
+	return Number.isSafeInteger(index) && index > 0 ? index - 1 : null;
 }
 
 function scopedMemoryPredicate(input: RememberDedupeScope): {
@@ -185,6 +201,30 @@ function getScopedIdempotencyDedupeRow(
 			 LIMIT 1`,
 		)
 		.get(key, ...scoped.params) as RememberDedupeRow | undefined;
+}
+
+function getScopedChunkIdempotencyRows(
+	db: WriteDb,
+	baseKey: string | undefined,
+	input: RememberDedupeScope,
+): readonly RememberChunkDedupeRow[] {
+	if (!baseKey) return [];
+	const scoped = scopedMemoryPredicate(input);
+	return (
+		db
+			.prepare(
+				`SELECT id, source_id AS sourceId, content_hash AS contentHash, idempotency_key AS idempotencyKey
+				 FROM memories
+				 WHERE idempotency_key LIKE ? ESCAPE '\\' AND ${scoped.sql} AND is_deleted = 0`,
+			)
+			.all(`${escapeSqlLike(baseKey)}:chunk:%`, ...scoped.params) as RememberChunkDedupeRow[]
+	)
+		.filter((row) => chunkIdempotencyIndex(baseKey, row.idempotencyKey) !== null)
+		.sort((left, right) => {
+			const leftIndex = chunkIdempotencyIndex(baseKey, left.idempotencyKey);
+			const rightIndex = chunkIdempotencyIndex(baseKey, right.idempotencyKey);
+			return (leftIndex ?? 0) - (rightIndex ?? 0);
+		});
 }
 
 function hasMemoriesSessionIdColumn(db: any): boolean {
@@ -683,27 +723,32 @@ export function registerMemoryRoutes(app: Hono): void {
 				return c.json({ error: "content produced no valid chunks" }, 400);
 			}
 
-			const existingChunks = getDbAccessor().withReadDb((db) => {
-				const rows = new Map<number, RememberDedupeIdRow>();
-				for (let index = 0; index < chunkPlans.length; index += 1) {
-					const row = getScopedIdempotencyMemoryId(db, chunkPlans[index].idempotencyKey, dedupeScope);
-					if (row) rows.set(index, row);
+			const existingChunks = getDbAccessor().withReadDb((db) =>
+				getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
+			);
+			if (existingChunks.length > 0) {
+				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
+				const matchesExistingPlan =
+					groupIds.size === 1 &&
+					existingChunks.length === chunkPlans.length &&
+					existingChunks.every((row, index) => {
+						const plan = chunkPlans[index];
+						return row.idempotencyKey === plan.idempotencyKey && row.contentHash === plan.normalized.contentHash;
+					});
+				if (!matchesExistingPlan) {
+					return c.json({ error: "idempotencyKey already used for different chunked content" }, 409);
 				}
-				return rows;
-			});
-			const existingGroupId = Array.from(existingChunks.values()).find((row) => row.sourceId)?.sourceId ?? null;
-			if (existingChunks.size === chunkPlans.length) {
-				const ids = chunkPlans.map((_, index) => existingChunks.get(index)?.id).filter((id): id is string => !!id);
+
 				return c.json({
 					chunked: true,
-					chunk_count: ids.length,
-					ids,
-					group_id: existingGroupId,
+					chunk_count: existingChunks.length,
+					ids: existingChunks.map((row) => row.id),
+					group_id: Array.from(groupIds)[0],
 					deduped: true,
 				});
 			}
 
-			const groupId = existingGroupId ?? crypto.randomUUID();
+			const groupId = crypto.randomUUID();
 			const now = new Date().toISOString();
 			const chunkIds: string[] = [];
 
@@ -727,8 +772,7 @@ export function registerMemoryRoutes(app: Hono): void {
 
 				try {
 					const result = getDbAccessor().withWriteTx((db) => {
-						const byIdempotencyKey =
-							existingChunks.get(chunkIndex) ?? getScopedIdempotencyMemoryId(db, plan.idempotencyKey, dedupeScope);
+						const byIdempotencyKey = getScopedIdempotencyMemoryId(db, plan.idempotencyKey, dedupeScope);
 						if (byIdempotencyKey) return { id: byIdempotencyKey.id, inserted: false as const };
 
 						const byHash =
