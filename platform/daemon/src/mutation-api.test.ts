@@ -513,6 +513,34 @@ memory:
 		expect(chunkedJson.error).toContain("chunk content already exists");
 	});
 
+	it("POST /api/memory/remember resolves concurrent chunk hash collisions as conflicts", async () => {
+		const oversized = Array.from(
+			{ length: 90 },
+			(_, index) => `Concurrent chunk hash sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		expect(oversized.length).toBeGreaterThan(800);
+
+		const [first, second] = await Promise.all(
+			["concurrent-chunk-content-key-a", "concurrent-chunk-content-key-b"].map((idempotencyKey) =>
+				app.request("http://localhost/api/memory/remember", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						content: oversized,
+						who: "soulvessel.tests",
+						idempotencyKey,
+					}),
+				}),
+			),
+		);
+		const statuses = [first.status, second.status].sort((a, b) => a - b);
+		expect(statuses).toEqual([200, 409]);
+
+		const conflict = first.status === 409 ? first : second;
+		const conflictJson = (await conflict.json()) as { error?: string };
+		expect(conflictJson.error).toContain("chunk content already exists");
+	});
+
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",

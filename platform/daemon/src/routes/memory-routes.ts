@@ -248,6 +248,11 @@ function getScopedContentHashMemoryId(
 		.get(contentHash, ...scoped.params) as { readonly id: string } | undefined;
 }
 
+function isMemoryContentHashUniqueError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	return err.message.includes("idx_memories_content_hash_unique") || err.message.includes("memories.content_hash");
+}
+
 function getScopedContentHashDedupeRow(
 	db: WriteDb,
 	contentHash: string,
@@ -832,6 +837,10 @@ export function registerMemoryRoutes(app: Hono): void {
 			const groupId = chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
 			const now = new Date().toISOString();
 			const chunkIds = Array<string | undefined>(chunkPlans.length);
+			type ChunkInsertResult =
+				| { readonly id: string; readonly status: "existing" }
+				| { readonly id: string; readonly status: "inserted" }
+				| { readonly status: "content_conflict" };
 
 			// Create chunk group entity
 			try {
@@ -852,9 +861,12 @@ export function registerMemoryRoutes(app: Hono): void {
 				const chunkId = crypto.randomUUID();
 
 				try {
-					const result = getDbAccessor().withWriteTx((db) => {
+					const result: ChunkInsertResult = getDbAccessor().withWriteTx((db) => {
 						const byIdempotencyKey = getScopedIdempotencyMemoryId(db, plan.idempotencyKey, dedupeScope);
-						if (byIdempotencyKey) return { id: byIdempotencyKey.id, inserted: false as const };
+						if (byIdempotencyKey) return { id: byIdempotencyKey.id, status: "existing" };
+
+						const byHash = getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope);
+						if (byHash) return { status: "content_conflict" };
 
 						txIngestEnvelope(db, {
 							id: chunkId,
@@ -891,11 +903,14 @@ export function registerMemoryRoutes(app: Hono): void {
 							 VALUES (?, ?, 'chunk', 1.0, ?)`,
 						).run(chunkId, groupId, now);
 
-						return { id: chunkId, inserted: true as const };
+						return { id: chunkId, status: "inserted" };
 					});
 
+					if (result.status === "content_conflict") {
+						return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+					}
 					chunkIds[chunkIndex] = result.id;
-					if (!result.inserted) continue;
+					if (result.status !== "inserted") continue;
 
 					// Generate embedding async
 					try {
@@ -955,6 +970,9 @@ export function registerMemoryRoutes(app: Hono): void {
 						}
 					}
 				} catch (e) {
+					if (isMemoryContentHashUniqueError(e)) {
+						return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+					}
 					logger.warn("memory", "Failed to save chunk", {
 						chunkId,
 						error: String(e),
