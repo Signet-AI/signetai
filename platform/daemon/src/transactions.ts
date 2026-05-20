@@ -32,6 +32,9 @@ export interface IngestEnvelope {
 	updatedBy?: string;
 	sourceType: string;
 	sourceId: string | null;
+	sourcePath?: string | null;
+	runtimePath?: string | null;
+	idempotencyKey?: string | null;
 	scope?: string | null;
 	agentId?: string;
 	visibility?: "global" | "private" | "archived";
@@ -218,8 +221,8 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		 (id, content, normalized_content, content_hash, who, why, project,
 		  importance, type, tags, pinned, is_deleted, extraction_status,
 		  embedding_model, extraction_model, created_at, updated_at, updated_by,
-		  source_type, source_id, scope, agent_id, visibility)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  source_type, source_id, source_path, runtime_path, idempotency_key, scope, agent_id, visibility)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		mem.id,
 		mem.content,
@@ -241,6 +244,9 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.updatedBy ?? mem.who,
 		mem.sourceType,
 		mem.sourceId,
+		mem.sourcePath ?? null,
+		mem.runtimePath ?? null,
+		mem.idempotencyKey ?? null,
 		mem.scope ?? null,
 		mem.agentId ?? "default",
 		mem.visibility ?? "global",

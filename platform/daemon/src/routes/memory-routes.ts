@@ -80,6 +80,38 @@ function parseOptionalIsoTimestamp(value: unknown): string | null {
 	return Number.isNaN(ts.getTime()) ? null : ts.toISOString();
 }
 
+interface RememberRowProvenance {
+	readonly sourcePath?: string;
+	readonly runtimePath?: string;
+	readonly idempotencyKey?: string;
+}
+
+function pickOptionalString(...values: readonly unknown[]): string | undefined {
+	for (const value of values) {
+		const parsed = parseOptionalString(value);
+		if (parsed) return parsed;
+	}
+	return undefined;
+}
+
+function parseRememberRowProvenance(body: Record<string, unknown>): RememberRowProvenance {
+	const metadata = toRecord(body.metadata) ?? {};
+	return {
+		sourcePath: pickOptionalString(body.sourcePath, body.source_path, body.source, metadata.sourcePath, metadata.source_path, metadata.source),
+		runtimePath: pickOptionalString(body.runtimePath, body.runtime_path, metadata.runtimePath, metadata.runtime_path),
+		idempotencyKey: pickOptionalString(
+			body.idempotencyKey,
+			body.idempotency_key,
+			metadata.idempotencyKey,
+			metadata.idempotency_key,
+		),
+	};
+}
+
+function idempotencyKeyForChunk(baseKey: string | undefined, index: number): string | undefined {
+	return baseKey ? `${baseKey}:chunk:${index + 1}` : undefined;
+}
+
 function hasMemoriesSessionIdColumn(db: any): boolean {
 	if (hasMemoriesSessionIdColumnCache !== null) {
 		return hasMemoriesSessionIdColumnCache;
@@ -475,6 +507,14 @@ export function registerMemoryRoutes(app: Hono): void {
 			scope?: string | null;
 			agentId?: string;
 			visibility?: "global" | "private" | "archived";
+			sourcePath?: string;
+			source_path?: string;
+			source?: string;
+			runtimePath?: string;
+			runtime_path?: string;
+			idempotencyKey?: string;
+			idempotency_key?: string;
+			metadata?: Record<string, unknown>;
 			hints?: string[];
 			transcript?: string;
 			structured?: {
@@ -515,6 +555,7 @@ export function registerMemoryRoutes(app: Hono): void {
 			return c.json({ error: "createdAt must be a valid ISO timestamp" }, 400);
 		}
 		const scope = body.scope ?? null;
+		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
 		const visibility = body.visibility === "private" ? "private" : "global";
 		const hasBodyTags = Object.prototype.hasOwnProperty.call(body, "tags");
@@ -566,17 +607,26 @@ export function registerMemoryRoutes(app: Hono): void {
 				return c.json({ error: "Failed to create chunk group" }, 500);
 			}
 
-			for (const chunk of chunks) {
+			for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+				const chunk = chunks[chunkIndex];
 				const chunkNormalized = normalizeAndHashContent(chunk);
 				if (!chunkNormalized.storageContent) continue;
 
 				const chunkId = crypto.randomUUID();
+				const chunkIdempotencyKey = idempotencyKeyForChunk(rowProvenance.idempotencyKey, chunkIndex);
 				const chunkContentForInsert =
 					chunkNormalized.normalizedContent.length > 0 ? chunkNormalized.normalizedContent : chunkNormalized.hashBasis;
 				const memType = inferType(chunk);
 
 				try {
 					const inserted = getDbAccessor().withWriteTx((db) => {
+						const byIdempotencyKey = chunkIdempotencyKey
+							? (db
+									.prepare("SELECT id FROM memories WHERE idempotency_key = ? AND is_deleted = 0 LIMIT 1")
+									.get(chunkIdempotencyKey) as { id: string } | undefined)
+							: undefined;
+						if (byIdempotencyKey) return false;
+
 						const byHash =
 							scope !== null
 								? (db
@@ -608,6 +658,9 @@ export function registerMemoryRoutes(app: Hono): void {
 							updatedBy: who,
 							sourceType: "chunk",
 							sourceId: groupId,
+							sourcePath: rowProvenance.sourcePath ?? null,
+							runtimePath: rowProvenance.runtimePath ?? null,
+							idempotencyKey: chunkIdempotencyKey ?? null,
 							scope,
 							agentId,
 							visibility,
@@ -762,6 +815,16 @@ export function registerMemoryRoutes(app: Hono): void {
 					if (bySource) return { deduped: true as const, row: bySource };
 				}
 
+				if (rowProvenance.idempotencyKey) {
+					const byIdempotencyKey = db
+						.prepare(
+							`SELECT id, type, tags, pinned, importance, content
+					 FROM memories WHERE idempotency_key = ? AND is_deleted = 0 LIMIT 1`,
+						)
+						.get(rowProvenance.idempotencyKey) as DedupeRow | undefined;
+					if (byIdempotencyKey) return { deduped: true as const, row: byIdempotencyKey };
+				}
+
 				// Check content_hash dedupe (scope-aware)
 				const byHash = (
 					scope !== null
@@ -805,6 +868,9 @@ export function registerMemoryRoutes(app: Hono): void {
 					updatedBy: who,
 					sourceType,
 					sourceId,
+					sourcePath: rowProvenance.sourcePath ?? null,
+					runtimePath: rowProvenance.runtimePath ?? null,
+					idempotencyKey: rowProvenance.idempotencyKey ?? null,
 					scope,
 					agentId,
 					visibility,
@@ -828,16 +894,25 @@ export function registerMemoryRoutes(app: Hono): void {
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : "";
 			if (msg.includes("UNIQUE constraint")) {
-				const existing = getDbAccessor().withReadDb(
-					(db) =>
-						db
+				const existing = getDbAccessor().withReadDb((db) => {
+					if (rowProvenance.idempotencyKey) {
+						const byIdempotencyKey = db
 							.prepare(
 								`SELECT id, type, tags, pinned, importance, content
 						 FROM memories
-						 WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
+						 WHERE idempotency_key = ? AND is_deleted = 0 LIMIT 1`,
 							)
-							.get(contentHash) as DedupeRow | undefined,
-				);
+							.get(rowProvenance.idempotencyKey) as DedupeRow | undefined;
+						if (byIdempotencyKey) return byIdempotencyKey;
+					}
+					return db
+						.prepare(
+							`SELECT id, type, tags, pinned, importance, content
+						 FROM memories
+						 WHERE content_hash = ? AND is_deleted = 0 LIMIT 1`,
+						)
+						.get(contentHash) as DedupeRow | undefined;
+				});
 				if (existing) {
 					return c.json({
 						id: existing.id,

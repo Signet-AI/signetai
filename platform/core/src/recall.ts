@@ -67,6 +67,7 @@ export interface RememberRequestOptions {
 	readonly pinned?: boolean;
 	readonly sourceType?: string;
 	readonly sourceId?: string;
+	readonly sourcePath?: string;
 	readonly createdAt?: string;
 	readonly hints?: readonly string[];
 	readonly transcript?: string;
@@ -290,6 +291,7 @@ export function buildRememberRequestBody(
 		pinned: options.pinned === true ? true : undefined,
 		sourceType: options.sourceType,
 		sourceId: options.sourceId,
+		sourcePath: options.sourcePath,
 		createdAt: options.createdAt,
 		hints: options.hints,
 		transcript: options.transcript,

@@ -145,6 +145,66 @@ memory:
 		}
 	});
 
+	it("POST /api/memory/remember persists row-level provenance from metadata", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Provenance-backed imported memory",
+				who: "soulvessel.tests",
+				sourceType: "hermes-memory",
+				sourceId: "hermes-doc-provenance-test",
+				metadata: {
+					source_path: "/tmp/signet-provenance/MEMORY.md",
+					runtime_path: "memories/MEMORY.md",
+					idempotency_key: "hermes:provenance-test",
+				},
+			}),
+		});
+		const json = (await res.json()) as { id?: string; sourceId?: string };
+
+		expect(res.status).toBe(200);
+		expect(json.id).toBeString();
+
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_type, source_id, source_path, runtime_path, idempotency_key
+						 FROM memories WHERE id = ?`,
+					)
+					.get(json.id) as
+					| {
+							source_type: string | null;
+							source_id: string | null;
+							source_path: string | null;
+							runtime_path: string | null;
+							idempotency_key: string | null;
+					  }
+					| undefined,
+		);
+		expect(row).toEqual({
+			source_type: "hermes-memory",
+			source_id: "hermes-doc-provenance-test",
+			source_path: "/tmp/signet-provenance/MEMORY.md",
+			runtime_path: "memories/MEMORY.md",
+			idempotency_key: "hermes:provenance-test",
+		});
+
+		const retry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Different retry content with the same stable import key",
+				who: "soulvessel.tests",
+				idempotencyKey: "hermes:provenance-test",
+			}),
+		});
+		const retryJson = (await retry.json()) as { id?: string; deduped?: boolean };
+		expect(retry.status).toBe(200);
+		expect(retryJson).toMatchObject({ id: json.id, deduped: true });
+	});
+
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",
