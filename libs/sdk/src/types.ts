@@ -9,7 +9,14 @@ export interface MemoryRecord {
 	readonly tags: string | null;
 	readonly pinned: boolean;
 	readonly who: string | null;
+	readonly source_id: string | null;
 	readonly source_type: string | null;
+	readonly source_path: string | null;
+	readonly runtime_path: string | null;
+	readonly idempotency_key: string | null;
+	readonly sourcePath: string | null;
+	readonly runtimePath: string | null;
+	readonly idempotencyKey: string | null;
 	readonly project: string | null;
 	readonly session_id: string | null;
 	readonly confidence: number;

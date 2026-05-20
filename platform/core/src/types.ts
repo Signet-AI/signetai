@@ -554,6 +554,9 @@ export interface Memory {
 	confidence: number;
 	sourceId?: string;
 	sourceType?: string;
+	sourcePath?: string;
+	runtimePath?: string;
+	idempotencyKey?: string;
 	tags: string[];
 	createdAt: string;
 	updatedAt: string;

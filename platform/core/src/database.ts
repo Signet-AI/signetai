@@ -3,13 +3,13 @@
  * Runtime-detecting: uses bun:sqlite under Bun, better-sqlite3 under Node.js
  */
 
-import { existsSync, readdirSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { homedir } from "os";
-import { arch, platform } from "process";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { arch, platform } from "node:process";
+import { fileURLToPath } from "node:url";
 import { runMigrations } from "./migrations/index";
-import type { Memory, Conversation, Embedding } from "./types";
+import type { Conversation, Embedding, Memory } from "./types";
 import type { MemoryHistory, MemoryJob } from "./types";
 
 // Compute __dirname at runtime so bun's bundler doesn't bake in a static path
@@ -42,7 +42,7 @@ function findSqliteVecExtension(): string | null {
 
 	// Try `npm root -g` to find the actual global prefix (works regardless of runtime)
 	try {
-		const { execFileSync } = require("child_process");
+		const { execFileSync } = require("node:child_process");
 		const npmRoot = (execFileSync("npm", ["root", "-g"], { encoding: "utf8", timeout: 3000 }) as string).trim();
 		if (npmRoot) {
 			const direct = join(npmRoot, platformPkg, extFile);
@@ -187,7 +187,7 @@ export class Database {
 	private dbPath: string;
 	private db: SQLiteDatabase | null = null;
 	private options?: { readonly?: boolean };
-	private vecEnabled: boolean = false;
+	private vecEnabled = false;
 
 	constructor(dbPath: string, options?: { readonly?: boolean }) {
 		this.dbPath = dbPath;
@@ -203,16 +203,19 @@ export class Database {
 			const bunOpts = this.options?.readonly ? { readonly: true } : { readwrite: true, create: true };
 			this.db = new BunDatabase(this.dbPath, bunOpts) as unknown as SQLiteDatabase;
 		} else {
-			let BetterSqlite3;
+			let BetterSqlite3: new (path: string, options?: { readonly?: boolean }) => SQLiteDatabase;
 			try {
-				BetterSqlite3 = (await import("better-sqlite3")).default;
+				BetterSqlite3 = (await import("better-sqlite3")).default as new (
+					path: string,
+					options?: { readonly?: boolean },
+				) => SQLiteDatabase;
 			} catch {
 				throw new Error(
-					"Signet requires Bun (recommended) or the better-sqlite3 npm package. " +
-						(platform === "win32"
+					`Signet requires Bun (recommended) or the better-sqlite3 npm package. ${
+						platform === "win32"
 							? 'Install Bun: powershell -c "irm bun.sh/install.ps1 | iex"\n'
-							: "Install Bun: curl -fsSL https://bun.sh/install | bash\n") +
-						"Or install better-sqlite3: npm install -g better-sqlite3",
+							: "Install Bun: curl -fsSL https://bun.sh/install | bash\n"
+					}Or install better-sqlite3: npm install -g better-sqlite3`,
 				);
 			}
 			this.db = new BetterSqlite3(this.dbPath, {
@@ -568,6 +571,9 @@ function rowToMemory(row: Record<string, unknown>): Memory {
 		confidence: row.confidence as number,
 		sourceId: row.source_id as string | undefined,
 		sourceType: row.source_type as string | undefined,
+		sourcePath: row.source_path as string | undefined,
+		runtimePath: row.runtime_path as string | undefined,
+		idempotencyKey: row.idempotency_key as string | undefined,
 		tags: safeJsonParse(row.tags, []) as string[],
 		createdAt: row.created_at as string,
 		updatedAt: row.updated_at as string,

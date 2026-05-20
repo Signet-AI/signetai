@@ -1413,7 +1413,8 @@ export function registerMemoryRoutes(app: Hono): void {
 			return db
 				.prepare(
 					`SELECT id, content, type, importance, tags, pinned, who,
-					        source_id, source_type, project, ${sessionSelect} confidence,
+					        source_id, source_type, source_path, runtime_path,
+					        idempotency_key, project, ${sessionSelect} confidence,
 					        access_count, last_accessed, is_deleted, deleted_at,
 					        extraction_status, embedding_model, version,
 					        created_at, updated_at, updated_by
@@ -1437,6 +1438,9 @@ export function registerMemoryRoutes(app: Hono): void {
 
 		return c.json({
 			...row,
+			sourcePath: row.source_path,
+			runtimePath: row.runtime_path,
+			idempotencyKey: row.idempotency_key,
 			sessionId,
 		});
 	});

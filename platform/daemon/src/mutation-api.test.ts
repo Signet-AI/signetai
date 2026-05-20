@@ -571,6 +571,52 @@ memory:
 		expect(partial.group).toBeNull();
 	});
 
+	it("GET /api/memory/:id returns row-level provenance for remembered rows", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "HTTP-visible provenance memory",
+				who: "soulvessel.tests",
+				sourceType: "hermes-memory",
+				sourceId: "hermes-doc-http-provenance-test",
+				sourcePath: "/tmp/signet-provenance/HTTP.md",
+				runtimePath: "memories/HTTP.md",
+				idempotencyKey: "hermes:http-provenance-test",
+			}),
+		});
+		const remembered = (await res.json()) as { id?: string };
+
+		expect(res.status).toBe(200);
+		expect(remembered.id).toBeString();
+
+		const read = await app.request(`http://localhost/api/memory/${remembered.id}`);
+		const json = (await read.json()) as {
+			id?: string;
+			source_id?: string | null;
+			source_type?: string | null;
+			source_path?: string | null;
+			runtime_path?: string | null;
+			idempotency_key?: string | null;
+			sourcePath?: string | null;
+			runtimePath?: string | null;
+			idempotencyKey?: string | null;
+		};
+
+		expect(read.status).toBe(200);
+		expect(json).toMatchObject({
+			id: remembered.id,
+			source_type: "hermes-memory",
+			source_id: "hermes-doc-http-provenance-test",
+			source_path: "/tmp/signet-provenance/HTTP.md",
+			runtime_path: "memories/HTTP.md",
+			idempotency_key: "hermes:http-provenance-test",
+			sourcePath: "/tmp/signet-provenance/HTTP.md",
+			runtimePath: "memories/HTTP.md",
+			idempotencyKey: "hermes:http-provenance-test",
+		});
+	});
+
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",
