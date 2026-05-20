@@ -298,6 +298,44 @@ describe("aggregateRecall", () => {
 		expect(count.n).toBe(0);
 	});
 
+	it("does not link synthesized recall rows as aggregate memory sources", async () => {
+		const result = await aggregateRecall(
+			{
+				query: "what happened",
+				aggregate: true,
+				agentId: "agent-a",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				now: () => new Date("2026-05-20T12:00:00.000Z"),
+				idFactory: () => "aggregate-sources",
+				hybridRecall: async (params: RecallParams) =>
+					response(params.query, [
+						{
+							...row("summary:abc", "Synthetic summary should not be provenance"),
+							source: "llm_summary",
+							supplementary: true,
+						},
+						row("mem-1", "Real evidence"),
+					]),
+			},
+		);
+
+		expect(result.aggregate?.sourceMemoryIds).toEqual(["mem-1"]);
+		const links = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT source_memory_id FROM aggregate_memory_sources WHERE aggregate_memory_id = ? ORDER BY source_memory_id",
+					)
+					.all("aggregate-sources") as Array<{ source_memory_id: string }>,
+		);
+		expect(links.map((link) => link.source_memory_id)).toEqual(["mem-1"]);
+	});
+
 	it("returns unsaved aggregate when content hash conflicts with an inaccessible memory", async () => {
 		const answer = "Aggregate answer from memory evidence.";
 		const normalized = normalizeAndHashContent(answer);

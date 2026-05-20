@@ -168,7 +168,13 @@ function parsePlannerQueries(raw: string): string[] {
 }
 
 function isSourceMemoryRow(row: RecallResult): boolean {
-	return !row.id.startsWith("constructed:");
+	return (
+		row.source !== "llm_summary" &&
+		!row.id.startsWith("constructed:") &&
+		!row.id.startsWith("summary:") &&
+		!row.id.startsWith("source-chunk:") &&
+		!row.id.startsWith("native-artifact:")
+	);
 }
 
 function uniqueEvidence(rows: readonly RecallResult[]): RecallResult[] {
