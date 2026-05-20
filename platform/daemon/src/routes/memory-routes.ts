@@ -75,6 +75,13 @@ const FORGET_CONFIRM_THRESHOLD = 25;
 const SOFT_DELETE_RETENTION_DAYS = 30;
 const SOFT_DELETE_RETENTION_MS = SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
+export interface MemoryRoutesDeps {
+	readonly aggregateRecall?: typeof aggregateRecall;
+	readonly hybridRecall?: typeof hybridRecall;
+	readonly fetchEmbedding?: typeof fetchEmbedding;
+	readonly getInferenceRouterOrNull?: typeof getInferenceRouterOrNull;
+}
+
 function parseOptionalIsoTimestamp(value: unknown): string | null {
 	if (typeof value !== "string") return null;
 	const trimmed = value.trim();
@@ -329,7 +336,11 @@ function recordRecallQaTelemetry(input: {
 	});
 }
 
-export function registerMemoryRoutes(app: Hono): void {
+export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
+	const aggregateRecallFn = deps.aggregateRecall ?? aggregateRecall;
+	const hybridRecallFn = deps.hybridRecall ?? hybridRecall;
+	const fetchEmbeddingFn = deps.fetchEmbedding ?? fetchEmbedding;
+	const getInferenceRouterOrNullFn = deps.getInferenceRouterOrNull ?? getInferenceRouterOrNull;
 	// =========================================================================
 	// Permission guards — memory routes
 	// =========================================================================
@@ -2322,6 +2333,11 @@ export function registerMemoryRoutes(app: Hono): void {
 			const params = {
 				...body,
 				query,
+				aggregate: body.aggregate,
+				aggregateBudget: body.aggregateBudget ?? body.aggregate_budget,
+				aggregate_budget: body.aggregate_budget ?? body.aggregateBudget,
+				saveAggregate: body.saveAggregate ?? body.save_aggregate,
+				save_aggregate: body.save_aggregate ?? body.saveAggregate,
 				agentId,
 				readPolicy: agentScope.readPolicy,
 				policyGroup: agentScope.policyGroup,
@@ -2329,11 +2345,11 @@ export function registerMemoryRoutes(app: Hono): void {
 			};
 			const result =
 				body.aggregate === true
-					? await aggregateRecall(params, cfg, {
-							router: getInferenceRouterOrNull(),
-							embedFn: fetchEmbedding,
+					? await aggregateRecallFn(params, cfg, {
+							router: getInferenceRouterOrNullFn(),
+							embedFn: fetchEmbeddingFn,
 						})
-					: await hybridRecall(params, cfg, fetchEmbedding);
+					: await hybridRecallFn(params, cfg, fetchEmbeddingFn);
 			recordRecallQaTelemetry({
 				route: "POST /api/memory/recall",
 				agentId,

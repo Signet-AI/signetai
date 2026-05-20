@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RecallParams, RecallResponse } from "./memory-search";
 
 /*
  * Regression test for auth guard co-location refactoring.
@@ -139,6 +140,74 @@ describe("auth guard co-location", () => {
 			expect(res.status).toBe(403);
 			const body = (await res.json()) as { error?: string };
 			expect(body.error).toContain("remember");
+		});
+
+		it("POST /api/memory/recall forwards read-only aggregate options", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode recall test");
+
+			let captured: RecallParams | null = null;
+			const aggregateRecallMock = mock(async (params: RecallParams): Promise<RecallResponse> => {
+				captured = params;
+				return {
+					results: [],
+					query: params.query,
+					method: "hybrid",
+					meta: {
+						totalReturned: 0,
+						hasSupplementary: false,
+						noHits: true,
+						timings: { totalMs: 0, stages: [] },
+					},
+					aggregate: {
+						savedMemoryId: null,
+						saved: false,
+						deduped: false,
+						budget: "large",
+						queries: [params.query],
+						sourceMemoryIds: [],
+						stoppedReason: "no_evidence",
+					},
+				};
+			});
+
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerMemoryRoutes(app, {
+				aggregateRecall: aggregateRecallMock,
+				getInferenceRouterOrNull: () => null,
+				fetchEmbedding: async () => null,
+			});
+			const token = createToken(secret, { sub: "readonly-recall", role: "readonly", scope: {} }, 60);
+			const res = await app.request("/api/memory/recall", {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${token}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({
+					query: "read-only aggregate should not save",
+					aggregate: true,
+					aggregateBudget: "large",
+					saveAggregate: false,
+				}),
+			});
+
+			expect(res.status).toBe(200);
+			expect(aggregateRecallMock).toHaveBeenCalledTimes(1);
+			expect(captured).toMatchObject({
+				query: "read-only aggregate should not save",
+				aggregate: true,
+				aggregateBudget: "large",
+				aggregate_budget: "large",
+				saveAggregate: false,
+				save_aggregate: false,
+			});
+			const body = (await res.json()) as RecallResponse;
+			expect(body.aggregate?.saved).toBe(false);
 		});
 	});
 
