@@ -601,25 +601,19 @@ function spawnHidden(cmd: string[], options?: { env?: Record<string, string | un
 		};
 	}
 
-	// Non-Windows: use node:child_process with piped stdio.
-	const child = nodeSpawn(resolvedBin, args, {
-		stdio: ["ignore", "pipe", "pipe"],
+	// Non-Windows: use Bun.spawn directly. Tests and callers depend on this
+	// path being mockable through Bun.spawn, while Windows still needs nodeSpawn
+	// for windowsHide and .cmd wrapper handling.
+	const child = Bun.spawn([resolvedBin, ...args], {
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
 		env: options?.env ? sanitizedEnv : undefined,
 	});
-
-	if (!child.stdout || !child.stderr) {
-		throw new Error("spawnHidden: stdout/stderr unexpectedly null despite pipe mode");
-	}
-
-	const exitPromise = new Promise<number>((resolve, reject) => {
-		child.on("exit", (code) => resolve(code ?? 1));
-		child.on("error", (err) => reject(err));
-	});
-
 	return {
-		stdout: toWebStream(child.stdout),
-		stderr: toWebStream(child.stderr),
-		exited: exitPromise,
+		stdout: child.stdout,
+		stderr: child.stderr,
+		exited: child.exited,
 		kill(signal?: string) {
 			if (signal === "SIGKILL") {
 				child.kill("SIGKILL");

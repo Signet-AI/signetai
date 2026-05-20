@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor";
+import { getInferenceProvider } from "../llm";
 import { logger } from "../logger";
 import { loadMemoryConfig } from "../memory-config";
 import { generateDailyBriefInsights } from "../pipeline/reflection-worker";
@@ -17,6 +18,12 @@ const MAX_REFLECTION_ANSWER_CHARS = 10_000;
 function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || join(homedir(), ".agents");
 }
+
+type ReflectionRouteDeps = {
+	readonly agentsDir?: string;
+	readonly getDbAccessor?: typeof getDbAccessor;
+	readonly getInferenceProvider?: typeof getInferenceProvider;
+};
 
 function parseReflectionLimit(raw: string | undefined): number {
 	if (raw === undefined) return DEFAULT_REFLECTION_LIMIT;
@@ -62,7 +69,9 @@ function formatReflection(r: ReflectionRow) {
 	};
 }
 
-export function registerReflectionRoutes(app: Hono): void {
+export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = {}): void {
+	const resolveDbAccessor = deps.getDbAccessor ?? getDbAccessor;
+
 	app.use("/api/reflections", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
@@ -82,7 +91,7 @@ export function registerReflectionRoutes(app: Hono): void {
 		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
-			const rows = getDbAccessor().withReadDb((db) => {
+			const rows = resolveDbAccessor().withReadDb((db) => {
 				return db
 					.prepare("SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ? ORDER BY created_at DESC LIMIT ?")
 					.all(agentId, date, limit) as ReflectionRow[];
@@ -101,7 +110,7 @@ export function registerReflectionRoutes(app: Hono): void {
 		const limit = parseReflectionLimit(c.req.query("limit"));
 
 		try {
-			const rows = getDbAccessor().withReadDb((db) => {
+			const rows = resolveDbAccessor().withReadDb((db) => {
 				return db
 					.prepare(
 						`SELECT id, date, summary, patterns, question, answer,
@@ -126,7 +135,7 @@ export function registerReflectionRoutes(app: Hono): void {
 		const count = parseGenerateCount(c.req.query("count"));
 		const date = new Date().toISOString().slice(0, 10);
 
-		const pipelineCfg = loadMemoryConfig(getAgentsDir()).pipelineV2;
+		const pipelineCfg = loadMemoryConfig(deps.agentsDir ?? getAgentsDir()).pipelineV2;
 		const cfg = pipelineCfg.reflections;
 		if (!cfg?.enabled) {
 			return c.json({ error: "Reflections are disabled in pipeline config" }, 400);
@@ -134,7 +143,11 @@ export function registerReflectionRoutes(app: Hono): void {
 
 		let ids: string[];
 		try {
-			ids = await generateDailyBriefInsights(agentId, cfg, count);
+			ids = await generateDailyBriefInsights(agentId, cfg, count, {
+				getDbAccessor: resolveDbAccessor,
+				getInferenceProvider: deps.getInferenceProvider ?? getInferenceProvider,
+				logger,
+			});
 		} catch (e) {
 			logger.error("reflections", "Daily brief generation failed", e instanceof Error ? e : undefined);
 			return c.json({ error: "LLM generation failed" }, 500);
@@ -148,7 +161,7 @@ export function registerReflectionRoutes(app: Hono): void {
 			});
 		}
 
-		const rows = getDbAccessor().withReadDb((db) => {
+		const rows = resolveDbAccessor().withReadDb((db) => {
 			return db
 				.prepare(
 					`SELECT * FROM daily_reflections WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at DESC`,
@@ -182,7 +195,7 @@ export function registerReflectionRoutes(app: Hono): void {
 		}
 
 		try {
-			const existing = getDbAccessor().withReadDb((db) => {
+			const existing = resolveDbAccessor().withReadDb((db) => {
 				return db.prepare("SELECT * FROM daily_reflections WHERE id = ? AND agent_id = ?").get(id, agentId) as
 					| ReflectionRow
 					| undefined;
@@ -199,7 +212,7 @@ export function registerReflectionRoutes(app: Hono): void {
 			const memoryId = randomUUID();
 
 			let claimed = false;
-			getDbAccessor().withWriteTx((db) => {
+			resolveDbAccessor().withWriteTx((db) => {
 				const result = db
 					.prepare(
 						`UPDATE daily_reflections

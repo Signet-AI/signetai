@@ -118,11 +118,25 @@ let catalogFetchedAt = 0;
 let clawhubCache: ClawhubItem[] = [];
 let clawhubFetchedAt = 0;
 const CATALOG_TTL = 10 * 60 * 1000;
+const CATALOG_FETCH_TIMEOUT_MS = 1500;
 const CLAWHUB_DOWNLOAD_BASE = process.env.CLAWHUB_DOWNLOAD_BASE ?? "https://clawhub.ai/api/v1/download";
 const MAX_CLAWHUB_ZIP_BYTES = 50 * 1024 * 1024;
 const MAX_CLAWHUB_ZIP_ENTRIES = 500;
 const MAX_CLAWHUB_ENTRY_BYTES = 25 * 1024 * 1024;
 const MAX_CLAWHUB_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
+
+async function fetchCatalogUrl(url: string, timeoutMs: number): Promise<Response> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		return await fetch(url, {
+			headers: { "User-Agent": "signet-daemon" },
+			signal: controller.signal,
+		});
+	} finally {
+		clearTimeout(timer);
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -226,9 +240,7 @@ async function fetchCatalog(): Promise<CatalogEntry[]> {
 	}
 	logger.info("skills", "Fetching skills.sh catalog");
 	try {
-		const res = await fetch("https://skills.sh", {
-			headers: { "User-Agent": "signet-daemon" },
-		});
+		const res = await fetchCatalogUrl("https://skills.sh", CATALOG_FETCH_TIMEOUT_MS);
 		const html = await res.text();
 		const entries: CatalogEntry[] = [];
 		const re =
@@ -265,16 +277,15 @@ async function fetchClawhubCatalog(): Promise<ClawhubItem[]> {
 		let cursor: string | undefined;
 		const MAX_ITEMS = 500;
 		const MAX_PAGES = 10;
+		const deadline = now + CATALOG_FETCH_TIMEOUT_MS;
 		let page = 0;
-		while (page < MAX_PAGES && items.length < MAX_ITEMS) {
+		while (page < MAX_PAGES && items.length < MAX_ITEMS && Date.now() < deadline) {
 			const url = new URL("https://clawhub.ai/api/v1/skills");
 			url.searchParams.set("sort", "downloads");
 			url.searchParams.set("limit", "50");
 			if (cursor) url.searchParams.set("cursor", cursor);
 
-			const res = await fetch(url.toString(), {
-				headers: { "User-Agent": "signet-daemon" },
-			});
+			const res = await fetchCatalogUrl(url.toString(), Math.max(1, deadline - Date.now()));
 			if (!res.ok) throw new Error(`ClawHub returned ${res.status}`);
 			const data = (await res.json()) as {
 				items: ClawhubItem[];
@@ -1154,10 +1165,7 @@ export function mountSkillsRoutes(app: Hono, _authMode: AuthMode = "local"): voi
 		}
 
 		if (process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL === "1") {
-			return c.json(
-				{ success: false, error: "Skill installation disabled for test" },
-				503,
-			);
+			return c.json({ success: false, error: "Skill installation disabled for test" }, 503);
 		}
 
 		const packageManager = resolvePrimaryPackageManager({

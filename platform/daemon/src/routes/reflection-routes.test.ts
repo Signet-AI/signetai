@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { Hono } from "hono";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "../llm";
 import { txIngestEnvelope } from "../transactions";
 import { registerReflectionRoutes } from "./reflection-routes";
 
 let dir: string;
+let dbAccessor: DbAccessor;
 const previousSignetPath = process.env.SIGNET_PATH;
 
 function makeProvider(text: string): LlmProvider {
@@ -28,7 +29,7 @@ function makeProvider(text: string): LlmProvider {
 function seedMemory(agentId: string, content = "Built daily reflections."): string {
 	const now = new Date().toISOString();
 	const id = randomUUID();
-	getDbAccessor().withWriteTx((db) => {
+	dbAccessor.withWriteTx((db) => {
 		txIngestEnvelope(db, {
 			id,
 			content,
@@ -56,7 +57,7 @@ function seedReflection(
 	summary = "Reflection summary",
 	createdAt = new Date().toISOString(),
 ): void {
-	getDbAccessor().withWriteTx((db) => {
+	dbAccessor.withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO daily_reflections
 			 (id, agent_id, date, summary, patterns, question, memory_ids, summary_ids, created_at)
@@ -67,11 +68,17 @@ function seedReflection(
 
 function app(): Hono {
 	const next = new Hono();
-	registerReflectionRoutes(next);
+	registerReflectionRoutes(next, {
+		agentsDir: dir,
+		getDbAccessor: () => dbAccessor,
+		getInferenceProvider: () =>
+			makeProvider("SUMMARY: We fixed reflections.\nPATTERNS: persistence, scoping\nQUESTION: Keep it?"),
+	});
 	return next;
 }
 
 beforeEach(() => {
+	closeDbAccessor();
 	dir = join(tmpdir(), `signet-reflections-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(join(dir, "memory"), { recursive: true });
 	process.env.SIGNET_PATH = dir;
@@ -90,9 +97,8 @@ beforeEach(() => {
 `,
 	);
 	initDbAccessor(join(dir, "memory", "memories.db"));
-	initInferenceProviderResolver(() =>
-		makeProvider("SUMMARY: We fixed reflections.\nPATTERNS: persistence, scoping\nQUESTION: Keep it?"),
-	);
+	dbAccessor = getDbAccessor();
+	initInferenceProviderResolver(() => makeProvider("unused test provider"));
 });
 
 afterEach(() => {
@@ -116,7 +122,7 @@ describe("reflection routes", () => {
 		expect(body.reflection.summary).toBe("Keep it?");
 		expect(body.reflection.patterns).toEqual([]);
 
-		const row = getDbAccessor().withReadDb(
+		const row = dbAccessor.withReadDb(
 			(db) =>
 				db
 					.prepare("SELECT agent_id, model, memory_ids FROM daily_reflections WHERE id = ?")
@@ -166,7 +172,7 @@ describe("reflection routes", () => {
 		});
 		expect(res.status).toBe(413);
 
-		const state = getDbAccessor().withReadDb((db) => {
+		const state = dbAccessor.withReadDb((db) => {
 			return {
 				answer: (
 					db.prepare("SELECT answer FROM daily_reflections WHERE id = ?").get(reflectionId) as { answer: string | null }
@@ -193,7 +199,7 @@ describe("reflection routes", () => {
 		expect(res.status).toBe(200);
 		const body = await res.json();
 
-		const memory = getDbAccessor().withReadDb(
+		const memory = dbAccessor.withReadDb(
 			(db) =>
 				db.prepare("SELECT content, agent_id FROM memories WHERE id = ?").get(body.memoryId) as {
 					content: string;
@@ -221,7 +227,7 @@ describe("reflection routes", () => {
 		});
 		expect(second.status).toBe(409);
 
-		const state = getDbAccessor().withReadDb((db) => {
+		const state = dbAccessor.withReadDb((db) => {
 			return {
 				answer: (
 					db.prepare("SELECT answer FROM daily_reflections WHERE id = ?").get(reflectionId) as { answer: string }
