@@ -457,6 +457,41 @@ inference:
       policy: auto
 "#;
 
+const COMMAND_STDIN_HANG_YAML: &str = r#"agent:
+  name: test-agent
+  version: 1
+auth:
+  method: token
+  mode: team
+memory:
+  pipelineV2:
+    extraction:
+      provider: none
+inference:
+  defaultPolicy: auto
+  targets:
+    noReadCli:
+      executor: command
+      command:
+        bin: /usr/bin/env
+        args:
+          - python3
+          - -c
+          - 'import time; time.sleep(5)'
+      models:
+        default:
+          model: no-read-cli
+          reasoning: low
+  policies:
+    auto:
+      mode: strict
+      defaultTargets:
+        - noReadCli/default
+  workloads:
+    default:
+      policy: auto
+"#;
+
 // ---------------------------------------------------------------------------
 // Tests organized by endpoint category
 // ---------------------------------------------------------------------------
@@ -1285,6 +1320,89 @@ inference:
         !marker.exists(),
         "timed out command target continued after request returned"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn inference_disabled_execute_does_not_run_command_targets() {
+    let marker_dir = tempfile::tempdir().expect("failed to create marker tmpdir");
+    let marker = marker_dir.path().join("disabled-command-ran");
+    let yaml = format!(
+        r#"agent:
+  name: test-agent
+  version: 1
+auth:
+  method: token
+  mode: team
+memory:
+  pipelineV2:
+    extraction:
+      provider: none
+inference:
+  enabled: false
+  defaultPolicy: auto
+  targets:
+    disabledCli:
+      executor: command
+      command:
+        bin: /bin/sh
+        args:
+          - -c
+          - 'touch "$MARKER"; printf "should-not-run\n"'
+        env:
+          MARKER: "{}"
+      models:
+        default:
+          model: disabled-cli
+          reasoning: low
+  policies:
+    auto:
+      mode: strict
+      defaultTargets:
+        - disabledCli/default
+  workloads:
+    default:
+      policy: auto
+"#,
+        marker.to_string_lossy()
+    );
+    let server = TestServer::start_team_auth_with_agent_yaml(&yaml).await;
+    let admin = TestServer::scoped_role_token("default", "admin");
+
+    let resp = server
+        .post_bearer(
+            "/api/inference/execute",
+            json!({"prompt": "disabled", "operation": "default", "timeoutMs": 1000}),
+            &admin,
+        )
+        .await;
+    assert_eq!(resp.status(), 503);
+    assert!(
+        !marker.exists(),
+        "disabled inference executed a command target"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn inference_command_stdin_write_respects_timeout() {
+    let server = TestServer::start_team_auth_with_agent_yaml(COMMAND_STDIN_HANG_YAML).await;
+    let admin = TestServer::scoped_role_token("default", "admin");
+    let prompt = "x".repeat(96_000);
+
+    let resp = tokio::time::timeout(
+        Duration::from_secs(2),
+        server.post_bearer(
+            "/api/inference/execute",
+            json!({"prompt": prompt, "operation": "default", "timeoutMs": 50}),
+            &admin,
+        ),
+    )
+    .await
+    .expect("request hung beyond route timeout");
+    let status = resp.status();
+    let body = server.json(resp).await;
+    assert_eq!(status, 504, "{body}");
 }
 
 #[tokio::test]

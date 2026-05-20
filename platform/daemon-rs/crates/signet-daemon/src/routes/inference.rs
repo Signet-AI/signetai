@@ -591,28 +591,29 @@ async fn execute_command_target(
             format!("command:{target_ref} failed to start: {err}"),
         )
     })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(prompt.as_bytes()).await.map_err(|err| {
-            error(
-                StatusCode::BAD_GATEWAY,
-                format!("command:{target_ref} failed to write prompt: {err}"),
-            )
-        })?;
-    }
-    let output = timeout(Duration::from_millis(timeout_ms), child.wait_with_output())
-        .await
-        .map_err(|_| {
-            error(
-                StatusCode::GATEWAY_TIMEOUT,
-                format!("command:{target_ref} timeout"),
-            )
-        })?
-        .map_err(|err| {
+    let output = timeout(Duration::from_millis(timeout_ms), async {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(prompt.as_bytes()).await.map_err(|err| {
+                error(
+                    StatusCode::BAD_GATEWAY,
+                    format!("command:{target_ref} failed to write prompt: {err}"),
+                )
+            })?;
+        }
+        child.wait_with_output().await.map_err(|err| {
             error(
                 StatusCode::BAD_GATEWAY,
                 format!("command:{target_ref} failed: {err}"),
             )
-        })?;
+        })
+    })
+    .await
+    .map_err(|_| {
+        error(
+            StatusCode::GATEWAY_TIMEOUT,
+            format!("command:{target_ref} timeout"),
+        )
+    })??;
     if !output.status.success() {
         return Err(error(
             StatusCode::BAD_GATEWAY,
@@ -699,6 +700,9 @@ pub async fn explain(
         Ok(config) => config,
         Err(resp) => return resp,
     };
+    if !config.enabled {
+        return unavailable("inference router not initialized");
+    }
     if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config, None, None) {
         return resp;
     }
@@ -730,6 +734,9 @@ pub async fn execute(
         Ok(config) => config,
         Err(resp) => return resp,
     };
+    if !config.enabled {
+        return unavailable("inference router not initialized");
+    }
     let req = match build_route_request(&state, peer, &auth, &body, &config, None, None) {
         Ok(req) => req,
         Err(resp) => return resp,
@@ -775,6 +782,9 @@ pub async fn stream(
         Ok(config) => config,
         Err(resp) => return resp,
     };
+    if !config.enabled {
+        return unavailable("inference router not initialized");
+    }
     if let Err(resp) = build_route_request(&state, peer, &auth, &body, &config, None, None) {
         return resp;
     }
@@ -907,6 +917,12 @@ pub async fn gateway_chat_completions(
         Ok(config) => config,
         Err(resp) => return resp,
     };
+    if !config.enabled {
+        return gateway_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "inference router not initialized",
+        );
+    }
     if let Err(resp) = build_route_request(
         &state,
         peer,
