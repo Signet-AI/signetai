@@ -33,6 +33,7 @@ import {
 	shapeStructuredEvidence,
 } from "./pipeline/structured-evidence";
 import { findStructuredPathCandidates, scoreStructuredPathEvidence } from "./pipeline/structured-path-evidence";
+import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { escapeLike } from "./sql-utils";
 
 // ---------------------------------------------------------------------------
@@ -64,6 +65,17 @@ export interface RecallParams {
 	expand?: boolean;
 	/** When set, restricts results to memories belonging to this project (auth scope enforcement). */
 	project?: string;
+	/** Enables per-session context dedupe when present. Sessionless recall is unchanged. */
+	sessionKey?: string;
+	/** Return already-recalled rows and annotate them instead of suppressing them. */
+	includeRecalled?: boolean;
+	/** Internal ledger metadata for call-site attribution. */
+	recallSurface?: string;
+	recallMode?: string;
+	/** Internal escape hatch for hooks that must claim only injected rows. */
+	claimRecallResults?: boolean;
+	/** Internal escape hatch for hooks that must track only injected rows elsewhere. */
+	trackRecallAccess?: boolean;
 }
 
 export interface RecallResult {
@@ -86,6 +98,7 @@ export interface RecallResult {
 	visibility?: string | null;
 	scope?: string | null;
 	supplementary?: boolean;
+	already_recalled?: boolean;
 }
 
 export interface RecallResponse {
@@ -97,6 +110,7 @@ export interface RecallResponse {
 		hasSupplementary: boolean;
 		noHits: boolean;
 		timings: RecallTimings;
+		dedupe?: RecallDedupeMeta;
 	};
 	aggregate?: {
 		savedMemoryId: string | null;
@@ -952,8 +966,76 @@ export async function hybridRecall(
 	const limit = normalizeRecallLimit(params.limit);
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
+	const filter = buildFilterClause(params);
+	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
 	const timings = createRecallTimingCollector();
-	const finish = (response: UntimedRecallResponse): RecallResponse => {
+	const selectionSuppressedIds = new Set<string>();
+	const selectionDedupeEnabled = !!params.sessionKey?.trim() && params.includeRecalled !== true;
+	const suppressPreviouslyRecalledForSelection = <T extends RecallResult>(items: T[]): T[] => {
+		if (!selectionDedupeEnabled || items.length === 0) return items;
+		const deduped = applyRecallDedupe({
+			sessionKey: params.sessionKey,
+			agentId: params.agentId,
+			includeRecalled: false,
+			surface: params.recallSurface ?? "recall",
+			mode: params.recallMode ?? "direct",
+			claim: false,
+			items,
+		});
+		if (!deduped.meta.enabled) return items;
+		const kept = new Set(deduped.items.map((row) => row.id));
+		for (const item of items) {
+			if (!kept.has(item.id)) selectionSuppressedIds.add(item.id);
+		}
+		return deduped.items;
+	};
+	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
+		const deduped = applyRecallDedupe({
+			sessionKey: params.sessionKey,
+			agentId: params.agentId,
+			includeRecalled: params.includeRecalled,
+			surface: params.recallSurface ?? "recall",
+			mode: params.recallMode ?? "direct",
+			claim: params.claimRecallResults !== false,
+			items: response.results,
+			markRepeated: (item) => ({ ...item, already_recalled: true }),
+		});
+		const dedupeMeta = deduped.meta.enabled
+			? {
+					...deduped.meta,
+					suppressed: deduped.meta.suppressed + selectionSuppressedIds.size,
+				}
+			: deduped.meta;
+		response.results = deduped.items;
+		response.meta = {
+			...response.meta,
+			totalReturned: response.results.length,
+			hasSupplementary: response.results.some((row) => row.supplementary === true),
+			noHits: response.results.length === 0,
+			...(dedupeMeta.enabled ? { dedupe: dedupeMeta } : {}),
+		};
+		try {
+			const trackedIds = response.results.map((row) => row.id).filter((id) => !id.includes(":"));
+			if (params.trackRecallAccess !== false && trackedIds.length > 0) {
+				timings.time("access_tracking_update", () => {
+					const trackedPlaceholders = trackedIds.map(() => "?").join(", ");
+					getDbAccessor().withWriteTx((db) => {
+						db.prepare(
+							`UPDATE memories
+							 SET last_accessed = datetime('now'), access_count = access_count + 1
+							 WHERE id IN (
+							   SELECT m.id
+							   FROM memories m
+							   WHERE m.id IN (${trackedPlaceholders})
+							     AND m.is_deleted = 0${filter.sql}
+							 )`,
+						).run(...trackedIds, ...filter.args);
+					});
+				});
+			}
+		} catch (e) {
+			logger.warn("memory", "Failed to update access tracking", e as Error);
+		}
 		const recallTimings = timings.finish();
 		if (recallTimings.totalMs >= RECALL_TIMING_LOG_THRESHOLD_MS) {
 			logger.warn("memory", "Recall stage timings", {
@@ -972,9 +1054,6 @@ export async function hybridRecall(
 			},
 		};
 	};
-
-	const filter = buildFilterClause(params);
-	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
 	const queryVecPromise = (() => {
 		const embeddingStart = performance.now();
 		let promise: Promise<number[] | null>;
@@ -1773,89 +1852,102 @@ export async function hybridRecall(
 	// Over-fetch before hydration for constrained searches. Broad candidate
 	// channels can include IDs that candidate authorization or hydration drops.
 	// 3x compensates for the expected discard rate.
-	const preHydrate = needsPostFilter ? limit * 3 : limit;
+	const preHydrate = selectionDedupeEnabled
+		? Math.max(needsPostFilter ? limit * 3 : limit, Math.min(scored.length, Math.max(limit * 4, limit + 10)))
+		: needsPostFilter
+			? limit * 3
+			: limit;
 	const topIds = scored.slice(0, preHydrate).map((s) => s.id);
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 
 	if (topIds.length === 0) {
+		const fallbackLimit = selectionDedupeEnabled ? Math.max(limit * 3, limit + 10) : limit;
 		const sourceChunkHits = timings.time("source_chunk_vector_fallback", () =>
-			buildSourceChunkVectorHits(queryVecF32, new Set(), limit, params.agentId ?? "default", params.project),
+			buildSourceChunkVectorHits(queryVecF32, new Set(), fallbackLimit, params.agentId ?? "default", params.project),
 		);
 		if (sourceChunkHits.length > 0) {
-			const results = sourceChunkHits.slice(0, limit).map((hit): RecallResult => {
-				const content = `[Obsidian vault chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
-				const truncated = content.length > recallTruncate;
-				return {
-					id: `source-chunk:${hit.embeddingId}`,
-					content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-					content_length: content.length,
-					truncated,
-					score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
-					source: "source_obsidian",
-					source_id: hit.sourceId,
-					session_id: hit.sourceId,
-					type: "source_obsidian_chunk",
-					tags: "obsidian,source,source_obsidian_chunk,vector",
-					pinned: false,
-					importance: 0.6,
-					who: "obsidian",
-					project: hit.project,
-					created_at: hit.createdAt,
-					source_path: hit.sourcePath,
-					supplementary: true,
-				};
-			});
-			return finish({
-				results,
-				query,
-				method: "hybrid",
-				meta: {
-					totalReturned: results.length,
-					hasSupplementary: true,
-					noHits: false,
-				},
-			});
+			const results = suppressPreviouslyRecalledForSelection(
+				sourceChunkHits.slice(0, fallbackLimit).map((hit): RecallResult => {
+					const content = `[Obsidian vault chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
+					const truncated = content.length > recallTruncate;
+					return {
+						id: `source-chunk:${hit.embeddingId}`,
+						content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+						content_length: content.length,
+						truncated,
+						score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
+						source: "source_obsidian",
+						source_id: hit.sourceId,
+						session_id: hit.sourceId,
+						type: "source_obsidian_chunk",
+						tags: "obsidian,source,source_obsidian_chunk,vector",
+						pinned: false,
+						importance: 0.6,
+						who: "obsidian",
+						project: hit.project,
+						created_at: hit.createdAt,
+						source_path: hit.sourcePath,
+						supplementary: true,
+					};
+				}),
+			).slice(0, limit);
+			if (results.length > 0) {
+				return await finish({
+					results,
+					query,
+					method: "hybrid",
+					meta: {
+						totalReturned: results.length,
+						hasSupplementary: true,
+						noHits: false,
+					},
+				});
+			}
 		}
 		const nativeHits = timings.time("native_artifact_fallback", () =>
 			buildNativeArtifactRecallHits(params, expandedQuery, new Set()),
 		);
 		if (nativeHits.length > 0) {
-			const results = nativeHits.slice(0, limit).map((hit): RecallResult => {
-				const content = nativeArtifactRecallContent(hit);
-				const truncated = content.length > recallTruncate;
-				const sourceId = nativeArtifactPublicId(hit);
-				return {
-					id: `native-artifact:${hit.rowid}`,
-					content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-					content_length: content.length,
-					truncated,
-					score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
-					source: nativeArtifactRecallSource(hit),
-					source_id: sourceId,
-					session_id: sourceId,
-					type: hit.sourceKind,
-					tags: nativeArtifactRecallTags(hit),
-					pinned: false,
-					importance: 0.55,
-					who: hit.harness ?? "",
-					project: hit.project,
-					created_at: hit.updatedAt,
-					source_path: hit.sourcePath,
-					supplementary: true,
-				};
-			});
-			return finish({
-				results,
-				query,
-				method: "keyword",
-				meta: {
-					totalReturned: results.length,
-					hasSupplementary: true,
-					noHits: false,
-				},
-			});
+			const results = suppressPreviouslyRecalledForSelection(
+				nativeHits.slice(0, fallbackLimit).map((hit): RecallResult => {
+					const content = nativeArtifactRecallContent(hit);
+					const truncated = content.length > recallTruncate;
+					const sourceId = nativeArtifactPublicId(hit);
+					return {
+						id: `native-artifact:${hit.rowid}`,
+						content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+						content_length: content.length,
+						truncated,
+						score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
+						source: nativeArtifactRecallSource(hit),
+						source_id: sourceId,
+						session_id: sourceId,
+						type: hit.sourceKind,
+						tags: nativeArtifactRecallTags(hit),
+						pinned: false,
+						importance: 0.55,
+						who: hit.harness ?? "",
+						project: hit.project,
+						created_at: hit.updatedAt,
+						source_path: hit.sourcePath,
+						supplementary: true,
+					};
+				}),
+			).slice(0, limit);
+			if (results.length > 0) {
+				return await finish({
+					results,
+					query,
+					method: "keyword",
+					meta: {
+						totalReturned: results.length,
+						hasSupplementary: true,
+						noHits: false,
+					},
+				});
+			}
 		}
-		return finish({
+		return await finish({
 			results: [],
 			query,
 			method: "hybrid",
@@ -1901,79 +1993,56 @@ export async function hybridRecall(
 	const rowMap = new Map(rows.map((r) => [r.id, r]));
 	// No pre-decrement: always fetch `limit` memories. The summary card is
 	// injected after assembly and the array is capped to `limit` at that point.
-	const results: RecallResult[] = timings.time("assemble_results", () =>
-		scored
-			.slice(0, preHydrate)
-			.filter((s) => rowMap.has(s.id))
-			.slice(0, limit)
-			.flatMap((s) => {
-				const r = rowMap.get(s.id);
-				if (!r) return [];
-				const content = annotateCurrentness(r.content, currentness.get(r.id));
-				const isTruncated = content.length > recallTruncate;
-				return [
-					{
-						id: r.id,
-						content: isTruncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-						content_length: content.length,
-						truncated: isTruncated,
-						score: Math.round(s.score * 100) / 100,
-						source: s.source,
-						...(r.source_id ? { source_id: r.source_id, session_id: sessionIdFromSourceId(r.source_id) } : {}),
-						type: r.type,
-						tags: r.tags,
-						pinned: !!r.pinned,
-						importance: r.importance,
-						who: r.who,
-						project: r.project,
-						created_at: r.created_at,
-						visibility: r.visibility,
-						scope: r.scope,
-					},
-				];
-			}),
+	let results: RecallResult[] = timings.time("assemble_results", () =>
+		suppressPreviouslyRecalledForSelection(
+			scored
+				.slice(0, preHydrate)
+				.filter((s) => rowMap.has(s.id))
+				.flatMap((s) => {
+					const r = rowMap.get(s.id);
+					if (!r) return [];
+					const content = annotateCurrentness(r.content, currentness.get(r.id));
+					const isTruncated = content.length > recallTruncate;
+					return [
+						{
+							id: r.id,
+							content: isTruncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+							content_length: content.length,
+							truncated: isTruncated,
+							score: Math.round(s.score * 100) / 100,
+							source: s.source,
+							...(r.source_id ? { source_id: r.source_id, session_id: sessionIdFromSourceId(r.source_id) } : {}),
+							type: r.type,
+							tags: r.tags,
+							pinned: !!r.pinned,
+							importance: r.importance,
+							who: r.who,
+							project: r.project,
+							created_at: r.created_at,
+							visibility: r.visibility,
+							scope: r.scope,
+						},
+					];
+				}),
+		).slice(0, limit),
 	);
-
-	// Update access tracking only for authorized memories actually returned.
-	try {
-		const trackedIds = results.map((row) => row.id).filter((id) => rowMap.has(id));
-		if (trackedIds.length > 0) {
-			timings.time("access_tracking_update", () => {
-				const trackedPlaceholders = trackedIds.map(() => "?").join(", ");
-				getDbAccessor().withWriteTx((db) => {
-					db.prepare(
-						`UPDATE memories
-						 SET last_accessed = datetime('now'), access_count = access_count + 1
-						 WHERE id IN (
-						   SELECT m.id
-						   FROM memories m
-						   WHERE m.id IN (${trackedPlaceholders})
-						     AND m.is_deleted = 0${filter.sql}
-						 )`,
-					).run(...trackedIds, ...filter.args);
-				});
-			});
-		}
-	} catch (e) {
-		logger.warn("memory", "Failed to update access tracking", e as Error);
-	}
 
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
+		const fill = limit - results.length;
 		const sourceChunkHits = timings.time("source_chunk_vector_supplement", () =>
 			buildSourceChunkVectorHits(
 				queryVecF32,
 				existingSourceIds,
-				limit - results.length,
+				selectionDedupeEnabled ? Math.max(fill * 3, fill + 10) : fill,
 				params.agentId ?? "default",
 				params.project,
 			),
 		);
-		for (const hit of sourceChunkHits) {
-			if (results.length >= limit) break;
+		const candidates = sourceChunkHits.map((hit): RecallResult => {
 			const content = `[Obsidian vault chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
 			const truncated = content.length > recallTruncate;
-			results.push({
+			return {
 				id: `source-chunk:${hit.embeddingId}`,
 				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
 				content_length: content.length,
@@ -1991,8 +2060,12 @@ export async function hybridRecall(
 				created_at: hit.createdAt,
 				source_path: hit.sourcePath,
 				supplementary: true,
-			});
-			existingSourceIds.add(hit.sourceId);
+			};
+		});
+		for (const row of suppressPreviouslyRecalledForSelection(candidates)) {
+			if (results.length >= limit) break;
+			results.push(row);
+			if (row.source_id) existingSourceIds.add(row.source_id);
 		}
 	}
 
@@ -2001,12 +2074,11 @@ export async function hybridRecall(
 		const nativeHits = timings.time("native_artifact_supplement", () =>
 			buildNativeArtifactRecallHits(params, expandedQuery, existingSourceIds),
 		);
-		for (const hit of nativeHits) {
-			if (results.length >= limit) break;
+		const candidates = nativeHits.map((hit): RecallResult => {
 			const content = nativeArtifactRecallContent(hit);
 			const truncated = content.length > recallTruncate;
 			const sourceId = nativeArtifactPublicId(hit);
-			results.push({
+			return {
 				id: `native-artifact:${hit.rowid}`,
 				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
 				content_length: content.length,
@@ -2024,7 +2096,11 @@ export async function hybridRecall(
 				created_at: hit.updatedAt,
 				source_path: hit.sourcePath,
 				supplementary: true,
-			});
+			};
+		});
+		for (const row of suppressPreviouslyRecalledForSelection(candidates)) {
+			if (results.length >= limit) break;
+			results.push(row);
 		}
 	}
 
@@ -2050,23 +2126,28 @@ export async function hybridRecall(
 		const digest = createHash("sha1").update(query).digest("hex").slice(0, 12);
 		const content = `[model summary, verify against source memories] ${recallSummary}`;
 		const score = results.length > 0 ? Math.max(0.01, Math.min(1, results[0].score)) : 0.5;
-		if (results.length >= limit) results.length = limit - 1;
-		results.unshift({
-			id: `summary:${digest}`,
-			content,
-			content_length: content.length,
-			truncated: false,
-			score,
-			source: "llm_summary",
-			type: "semantic",
-			tags: null,
-			pinned: false,
-			importance: 0.9,
-			who: "",
-			project: null,
-			created_at: new Date().toISOString(),
-			supplementary: true,
-		});
+		const summary = suppressPreviouslyRecalledForSelection([
+			{
+				id: `summary:${digest}`,
+				content,
+				content_length: content.length,
+				truncated: false,
+				score,
+				source: "llm_summary",
+				type: "semantic",
+				tags: null,
+				pinned: false,
+				importance: 0.9,
+				who: "",
+				project: null,
+				created_at: new Date().toISOString(),
+				supplementary: true,
+			},
+		]);
+		if (summary.length > 0) {
+			if (results.length >= limit) results.length = limit - 1;
+			results.unshift(summary[0]);
+		}
 	}
 
 	// --- Decision-rationale linking: auto-fetch linked rationale memories ---
@@ -2294,9 +2375,10 @@ export async function hybridRecall(
 		}
 	}
 
+	results = suppressPreviouslyRecalledForSelection(results);
 	if (results.length > limit) results.length = limit;
 
-	return finish({
+	return await finish({
 		results,
 		query,
 		method: vectorMap.size > 0 ? "hybrid" : "keyword",

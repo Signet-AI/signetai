@@ -653,6 +653,9 @@ export async function memoryRecall(
 		aggregate?: boolean;
 		aggregateBudget?: "small" | "medium" | "large";
 		saveAggregate?: boolean;
+		sessionKey?: string;
+		agentId?: string;
+		includeRecalled?: boolean;
 	} = {},
 ): Promise<RecallPayload | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
@@ -664,6 +667,9 @@ export async function memoryRecall(
 			aggregate: options.aggregate,
 			aggregateBudget: options.aggregateBudget,
 			saveAggregate: options.saveAggregate,
+			sessionKey: options.sessionKey,
+			agentId: options.agentId,
+			includeRecalled: options.includeRecalled,
 		}),
 		timeout: READ_TIMEOUT,
 	});
@@ -1596,9 +1602,35 @@ const signetPlugin = {
 								description: "Save aggregate answers as memories",
 							}),
 						),
+						session_key: Type.Optional(
+							Type.String({
+								description: "Session key for per-context recall dedupe",
+							}),
+						),
+						agent_id: Type.Optional(
+							Type.String({
+								description: "Agent ID for scoped recall dedupe",
+							}),
+						),
+						include_recalled: Type.Optional(
+							Type.Boolean({
+								description: "Include rows already recalled in this context",
+							}),
+						),
 					}),
 					async execute(_toolCallId, params) {
-						const { query, limit, type, min_score, aggregate, aggregate_budget, save_aggregate } = params as {
+						const {
+							query,
+							limit,
+							type,
+							min_score,
+							aggregate,
+							aggregate_budget,
+							save_aggregate,
+							session_key,
+							agent_id,
+							include_recalled,
+						} = params as {
 							query: string;
 							limit?: number;
 							type?: string;
@@ -1606,6 +1638,9 @@ const signetPlugin = {
 							aggregate?: boolean;
 							aggregate_budget?: "small" | "medium" | "large";
 							save_aggregate?: boolean;
+							session_key?: string;
+							agent_id?: string;
+							include_recalled?: boolean;
 						};
 						try {
 							const recall = await memoryRecall(query, {
@@ -1616,6 +1651,9 @@ const signetPlugin = {
 								aggregate,
 								aggregateBudget: aggregate_budget,
 								saveAggregate: save_aggregate,
+								sessionKey: session_key,
+								agentId: agent_id,
+								includeRecalled: include_recalled,
 							});
 							const parsed = parseRecallPayload(recall);
 							if (parsed.rows.length === 0) {

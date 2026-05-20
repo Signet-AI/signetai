@@ -1,7 +1,7 @@
 import type { MigrationDb } from "./index";
 
 /**
- * Migration 073: provenance links from aggregate recall memories to the
+ * Migration 074: provenance links from aggregate recall memories to the
  * memory IDs used as evidence during synthesis.
  */
 export function up(db: MigrationDb): void {

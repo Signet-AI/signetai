@@ -27,6 +27,9 @@ export async function memoryTools(client: SignetClient) {
 				aggregate: z.boolean().optional().describe("Synthesize an aggregate answer from recall evidence"),
 				aggregateBudget: z.enum(["small", "medium", "large"]).optional().describe("Aggregate recall budget"),
 				saveAggregate: z.boolean().optional().describe("Save aggregate answers as memories"),
+				sessionKey: z.string().optional().describe("Session key for context dedupe"),
+				agentId: z.string().optional().describe("Agent ID for scoped recall"),
+				includeRecalled: z.boolean().optional().describe("Include rows already recalled in this context"),
 			}),
 			execute: async ({
 				query,
@@ -35,6 +38,9 @@ export async function memoryTools(client: SignetClient) {
 				aggregate,
 				aggregateBudget,
 				saveAggregate,
+				sessionKey,
+				agentId,
+				includeRecalled,
 			}: {
 				query: string;
 				limit?: number;
@@ -42,8 +48,20 @@ export async function memoryTools(client: SignetClient) {
 				aggregate?: boolean;
 				aggregateBudget?: "small" | "medium" | "large";
 				saveAggregate?: boolean;
+				sessionKey?: string;
+				agentId?: string;
+				includeRecalled?: boolean;
 			}) => {
-				return client.recall(query, { limit, type, aggregate, aggregateBudget, saveAggregate });
+				return client.recall(query, {
+					limit,
+					type,
+					aggregate,
+					aggregateBudget,
+					saveAggregate,
+					sessionKey,
+					agentId,
+					includeRecalled,
+				});
 			},
 		},
 

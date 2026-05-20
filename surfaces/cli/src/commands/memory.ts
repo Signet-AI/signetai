@@ -98,6 +98,8 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("--aggregate", "Synthesize an aggregate answer from bounded recall evidence", false)
 		.option("--aggregate-budget <budget>", "Aggregate recall budget: small, medium, or large", "small")
 		.option("--no-save-aggregate", "Return the aggregate answer without saving it as a memory")
+		.option("--session-key <key>", "Session key for per-context recall dedupe")
+		.option("--include-recalled", "Include memories already recalled in this session context", false)
 		.option("--json", "Output as JSON")
 		.action(async (query: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
@@ -122,6 +124,8 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					aggregate: aggregateRequested,
 					aggregateBudget: aggregateRequested ? options.aggregateBudget : undefined,
 					saveAggregate: aggregateRequested ? options.saveAggregate : undefined,
+					sessionKey: options.sessionKey,
+					includeRecalled: options.includeRecalled,
 				}),
 				MEMORY_RECALL_TIMEOUT_MS,
 			);

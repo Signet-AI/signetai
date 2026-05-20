@@ -28,6 +28,9 @@ async function searchMemory(
 		readonly aggregate?: boolean;
 		readonly aggregate_budget?: string;
 		readonly save_aggregate?: boolean;
+		readonly session_key?: string;
+		readonly agent_id?: string;
+		readonly include_recalled?: boolean;
 	},
 ): Promise<string> {
 	const aggregateBudget =
@@ -42,6 +45,9 @@ async function searchMemory(
 			aggregate: args.aggregate,
 			aggregate_budget: aggregateBudget,
 			save_aggregate: args.save_aggregate,
+			sessionKey: args.session_key,
+			agentId: args.agent_id,
+			includeRecalled: args.include_recalled,
 		}),
 		READ_TIMEOUT,
 	);
@@ -119,6 +125,9 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				aggregate: tool.schema.boolean().optional().describe("Synthesize an aggregate answer from recall evidence"),
 				aggregate_budget: tool.schema.string().optional().describe("Aggregate recall budget: small, medium, or large"),
 				save_aggregate: tool.schema.boolean().optional().describe("Save aggregate answers as memories"),
+				session_key: tool.schema.string().optional().describe("Session key for per-context recall dedupe"),
+				agent_id: tool.schema.string().optional().describe("Agent ID for scoped recall"),
+				include_recalled: tool.schema.boolean().optional().describe("Include rows already recalled in this context"),
 			},
 			async execute(args): Promise<string> {
 				return searchMemory(client, args);

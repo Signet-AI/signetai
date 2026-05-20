@@ -36,7 +36,7 @@ import {
 	handleSessionStart,
 	handleSynthesisRequest,
 	handleUserPromptSubmit,
-	resetPromptDedup,
+	resetSessionStartDedupe,
 	writeMemoryMd,
 } from "../hooks.js";
 import { getInferenceRouterOrNull } from "../inference-router";
@@ -46,6 +46,7 @@ import { writeCompactionArtifact } from "../memory-lineage.js";
 import { hybridRecall } from "../memory-search";
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
 import { isNoiseSession } from "../session-noise";
+import { advanceRecallContextEpoch } from "../session-recall-dedupe";
 import {
 	type RuntimePath,
 	claimSession,
@@ -532,7 +533,7 @@ function registerRecall(app: Hono): void {
 			}
 
 			const agentId = resolveAgentId({
-				agentId: c.req.header("x-signet-agent-id"),
+				agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
 				sessionKey: body.sessionKey,
 			});
 			const agentScope = getAgentScope(agentId);
@@ -565,6 +566,10 @@ function registerRecall(app: Hono): void {
 				agentId,
 				readPolicy: agentScope.readPolicy,
 				policyGroup: agentScope.policyGroup,
+				sessionKey: body.sessionKey,
+				includeRecalled: body.includeRecalled === true,
+				recallSurface: "api.hooks.recall",
+				recallMode: "hook",
 			};
 			const result =
 				body.aggregate === true
@@ -782,9 +787,18 @@ function registerCompactionComplete(app: Hono): void {
 				memoryId: summaryId ?? "skipped-temp-session",
 			});
 
-			if (body.sessionKey) {
-				resetPromptDedup(body.sessionKey);
-			}
+			const epoch = advanceRecallContextEpoch({
+				sessionKey: body.sessionKey,
+				agentId,
+				reason: "compaction-complete",
+				sourceRef: summaryId ?? body.sessionKey ?? null,
+			});
+			resetSessionStartDedupe({
+				harness: body.harness,
+				agentId,
+				project,
+				sessionKey: body.sessionKey,
+			});
 
 			if (body.sessionKey) {
 				try {
@@ -838,6 +852,7 @@ function registerCompactionComplete(app: Hono): void {
 			return c.json({
 				success: true,
 				memoryId: summaryId,
+				contextEpoch: epoch.contextEpoch,
 			});
 		} catch (e) {
 			logger.error("hooks", "Compaction complete failed", e as Error);

@@ -12,7 +12,6 @@ import type {
 	AgentPresenceUpdateResponse,
 	AspectAttributesResponse,
 	CompactionCompleteResponse,
-
 	ConnectorCreateResponse,
 	ConnectorDeleteResponse,
 	ConnectorHealthResponse,
@@ -48,7 +47,6 @@ import type {
 	SynthesisCompleteResponse,
 	SynthesisConfigResponse,
 	SynthesisRequestResponse,
-
 	TraversalStatusResponse,
 	UnpinEntityResponse,
 	// Analytics
@@ -179,6 +177,8 @@ export class SignetClientP2 {
 		readonly until?: string;
 		readonly expand?: boolean;
 		readonly sessionKey?: string;
+		readonly agentId?: string;
+		readonly includeRecalled?: boolean;
 		readonly runtimePath?: string;
 	}): Promise<HookRecallResponse> {
 		return this.transport.post<HookRecallResponse>("/api/hooks/recall", opts);
@@ -199,6 +199,8 @@ export class SignetClientP2 {
 		readonly until?: string;
 		readonly expand?: boolean;
 		readonly sessionKey?: string;
+		readonly agentId?: string;
+		readonly includeRecalled?: boolean;
 		readonly runtimePath?: string;
 	}): Promise<HookRecallResponse> {
 		return this.hookRecall(opts);

@@ -33,6 +33,14 @@ export interface HookRecallResult {
 	readonly project: string | null;
 	readonly created_at: string;
 	readonly supplementary?: boolean;
+	readonly already_recalled?: boolean;
+}
+
+export interface HookRecallDedupeMeta {
+	readonly enabled: boolean;
+	readonly contextEpoch?: number;
+	readonly suppressed: number;
+	readonly repeatedReturned: number;
 }
 
 export interface HookRecallResponse {
@@ -45,6 +53,7 @@ export interface HookRecallResponse {
 		readonly totalReturned: number;
 		readonly hasSupplementary: boolean;
 		readonly noHits: boolean;
+		readonly dedupe?: HookRecallDedupeMeta;
 	};
 	readonly bypassed?: boolean;
 	readonly internal?: boolean;
@@ -56,6 +65,9 @@ export interface PreCompactionResponse {
 
 export interface CompactionCompleteResponse {
 	readonly message: string;
+	readonly success?: boolean;
+	readonly memoryId?: string | null;
+	readonly contextEpoch?: number;
 }
 
 export interface SynthesisConfigResponse {

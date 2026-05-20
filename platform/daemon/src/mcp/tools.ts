@@ -805,6 +805,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				aggregate: z.boolean().optional().describe("Synthesize an aggregate answer from bounded recall evidence"),
 				aggregate_budget: z.enum(["small", "medium", "large"]).optional().describe("Aggregate recall budget"),
 				save_aggregate: z.boolean().optional().describe("Save the aggregate answer as a memory"),
+				session_key: z.string().optional().describe("Session key for per-context recall dedupe"),
+				agent_id: z.string().optional().describe("Agent ID for scoped recall"),
+				include_recalled: z.boolean().optional().describe("Include rows already recalled in this context"),
 			}),
 		},
 		async ({
@@ -824,6 +827,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			aggregate,
 			aggregate_budget,
 			save_aggregate,
+			session_key,
+			agent_id,
+			include_recalled,
 		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
@@ -841,6 +847,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					aggregate,
 					aggregate_budget,
 					save_aggregate,
+					sessionKey: session_key,
+					agentId: agent_id,
+					includeRecalled: include_recalled,
 				}),
 			});
 

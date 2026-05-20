@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	applyRecallScoreThreshold,
 	buildRecallRequestBody,
 	buildRememberRequestBody,
 	formatRecallText,
@@ -49,12 +50,51 @@ describe("recall surface helpers", () => {
 				pinned: false,
 				expand: false,
 				agentId: "default",
+				sessionKey: "sess-1",
+				includeRecalled: true,
 			}),
 		).toEqual({
 			query: "graph",
 			keywordQuery: "graph OR entity",
 			limit: 5,
 			agentId: "default",
+			sessionKey: "sess-1",
+			includeRecalled: true,
+		});
+	});
+
+	it("preserves dedupe metadata when client-side score filtering rewrites counts", () => {
+		const result = applyRecallScoreThreshold(
+			{
+				results: [
+					{ id: "mem-1", content: "keep", score: 0.9 },
+					{ id: "mem-2", content: "drop", score: 0.1 },
+				],
+				meta: {
+					totalReturned: 2,
+					hasSupplementary: false,
+					noHits: false,
+					dedupe: {
+						enabled: true,
+						contextEpoch: 3,
+						suppressed: 4,
+						repeatedReturned: 1,
+					},
+				},
+			},
+			0.5,
+		);
+
+		expect(parseRecallPayload(result).meta).toEqual({
+			totalReturned: 1,
+			hasSupplementary: false,
+			noHits: false,
+			dedupe: {
+				enabled: true,
+				contextEpoch: 3,
+				suppressed: 4,
+				repeatedReturned: 1,
+			},
 		});
 	});
 

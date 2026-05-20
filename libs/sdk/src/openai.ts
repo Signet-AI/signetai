@@ -37,6 +37,9 @@ export function memoryToolDefinitions(): readonly OpenAIToolDefinition[] {
 							description: "Aggregate recall budget",
 						},
 						saveAggregate: { type: "boolean", description: "Save aggregate answers as memories" },
+						sessionKey: { type: "string", description: "Session key for context dedupe" },
+						agentId: { type: "string", description: "Agent ID for scoped recall" },
+						includeRecalled: { type: "boolean", description: "Include rows already recalled in this context" },
 					},
 					required: ["query"],
 				},
@@ -157,6 +160,9 @@ export async function executeMemoryTool(
 				aggregate: optionalBoolean(args, "aggregate"),
 				aggregateBudget: optionalAggregateBudget(args),
 				saveAggregate: optionalBoolean(args, "saveAggregate"),
+				...(optionalString(args, "sessionKey") ? { sessionKey: optionalString(args, "sessionKey") } : {}),
+				...(optionalString(args, "agentId") ? { agentId: optionalString(args, "agentId") } : {}),
+				...(args.includeRecalled === true ? { includeRecalled: true } : {}),
 			});
 
 		case "memory_store":

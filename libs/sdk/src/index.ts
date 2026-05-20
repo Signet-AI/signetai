@@ -157,6 +157,8 @@ export class SignetClient extends SignetClientHelpers {
 			readonly aggregate?: boolean;
 			readonly aggregateBudget?: "small" | "medium" | "large";
 			readonly saveAggregate?: boolean;
+			readonly sessionKey?: string;
+			readonly includeRecalled?: boolean;
 		},
 	): Promise<RecallResponse> {
 		return applyRecallMinScore(
