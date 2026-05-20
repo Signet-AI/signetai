@@ -59,6 +59,11 @@ the cursor. Summary job queueing and cursor advancement now match the TS
 daemon contract: if enqueue fails, the cursor is not advanced and the
 delta is retried on the next checkpoint attempt.
 
+For file-backed checkpoint transcripts, the Rust daemon applies the same
+guardrail used by its session-end path: `transcriptPath` must canonicalize
+under `/tmp/signet`, point to a regular file, and fit within the transcript
+size cap before the daemon reads it.
+
 ## Delivered
 
 PR #369 (`ant/openclaw-hardening`).

@@ -2694,14 +2694,17 @@ claim.
   "sessionKey": "session-uuid",
   "agentId": "agent-id",
   "project": "/workspace/repo",
-  "transcriptPath": "/path/to/session.jsonl",
+  "transcriptPath": "/tmp/signet/session.jsonl",
   "runtimePath": "plugin"
 }
 ```
 
 `harness` and `sessionKey` are required. `transcript` (inline string) takes
 precedence over `transcriptPath`; both fall back to the stored session
-transcript from a prior `session-end` or `user-prompt-submit` call.
+transcript from a prior `session-end` or `user-prompt-submit` call. Native
+daemon file-backed transcript reads require `transcriptPath` to resolve under
+the connector staging root `/tmp/signet`, point to a regular file, and fit
+within the transcript size limit.
 
 The endpoint skips silently when:
 - The delta since the last extraction cursor is < 500 characters

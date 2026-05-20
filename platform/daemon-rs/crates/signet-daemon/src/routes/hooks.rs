@@ -241,6 +241,73 @@ fn transcript_path_allowed(canonical: &Path) -> bool {
     canonical.starts_with("/tmp/signet")
 }
 
+fn load_guarded_transcript_path(
+    path: &str,
+    route: &str,
+) -> Result<String, (StatusCode, serde_json::Value)> {
+    let canonical = fs::canonicalize(path).map_err(|err| {
+        warn!(path, error = %err, "{route}: transcript_path unresolvable");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({"error": format!("transcript_path unresolvable: {err}")}),
+        )
+    })?;
+
+    if !transcript_path_allowed(&canonical) {
+        warn!(
+            path = %canonical.display(),
+            "{route}: transcript_path outside allowed roots"
+        );
+        return Err((
+            StatusCode::FORBIDDEN,
+            serde_json::json!({"error": "transcript_path outside allowed workspace roots"}),
+        ));
+    }
+
+    let metadata = fs::metadata(&canonical).map_err(|err| {
+        warn!(path = %canonical.display(), error = %err, "{route}: transcript_path metadata failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({"error": format!("transcript_path metadata failed: {err}")}),
+        )
+    })?;
+
+    if !metadata.is_file() {
+        warn!(
+            path = %canonical.display(),
+            "{route}: transcript_path is not a regular file"
+        );
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "transcript_path must point to a regular file"}),
+        ));
+    }
+
+    let file_len = metadata.len() as usize;
+    if file_len > MAX_TRANSCRIPT_BYTES {
+        warn!(
+            path = %canonical.display(),
+            bytes = file_len,
+            limit = MAX_TRANSCRIPT_BYTES,
+            "{route}: transcript_path exceeds size limit"
+        );
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            serde_json::json!({
+                "error": format!("transcript_path exceeds {MAX_TRANSCRIPT_BYTES} byte limit")
+            }),
+        ));
+    }
+
+    fs::read_to_string(&canonical).map_err(|err| {
+        warn!(path = %canonical.display(), error = %err, "{route}: transcript_path read failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({"error": format!("transcript_path read failed: {err}")}),
+        )
+    })
+}
+
 /// Hard cap on transcript content accepted by session-end.  Prevents a DoS /
 /// disk-growth attack via an oversized file or inline payload.  Matches the
 /// TS daemon's MAX_TRANSCRIPT_CHARS safety cap (100 000 chars), applied here
@@ -2674,11 +2741,33 @@ pub async fn session_checkpoint_extract(
     let agent_id = normalize_agent_id(body.agent_id.as_deref())
         .or_else(|| session_agent_id(Some(&session_key)))
         .unwrap_or_else(|| "default".to_string());
-    let inline = body.transcript.as_deref().map(normalize_session_transcript);
-    // transcript_path is trusted the same way as in session_end — OpenClaw
-    // session files may be anywhere (project dirs, /tmp, containers). Auth
-    // middleware provides network-level protection. Mirrors TS daemon behavior.
-    let tpath = body.transcript_path.clone();
+    let inline = body
+        .transcript
+        .as_deref()
+        .map(normalize_session_transcript)
+        .filter(|text| !text.is_empty());
+    let path_transcript = if inline.is_none() {
+        match body
+            .transcript_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+        {
+            Some(path) => match load_guarded_transcript_path(path, "session-checkpoint-extract") {
+                Ok(raw) => {
+                    let normalized = normalize_session_transcript(&raw);
+                    if normalized.is_empty() {
+                        None
+                    } else {
+                        Some(normalized)
+                    }
+                }
+                Err((status, body)) => return (status, Json(body)).into_response(),
+            },
+            None => None,
+        }
+    } else {
+        None
+    };
     let sk = session_key.clone();
     let aid = agent_id.clone();
     let project = body.project.clone();
@@ -2697,16 +2786,11 @@ pub async fn session_checkpoint_extract(
                 )
                 .unwrap_or(0);
 
-            // Resolve transcript: inline body → transcript_path file → stored.
-            // Mirrors the TS daemon priority order. Always filter by agent_id.
+            // Resolve transcript: inline body → guarded transcript_path file → stored.
+            // Always filter stored fallback by agent_id.
             let mut from_store = false;
             let full = inline
-                .or_else(|| {
-                    tpath
-                        .as_deref()
-                        .and_then(|p| std::fs::read_to_string(p).ok())
-                        .map(|raw| normalize_session_transcript(&raw))
-                })
+                .or(path_transcript)
                 .or_else(|| {
                     from_store = true;
                     conn.query_row(
@@ -3108,6 +3192,118 @@ mod tests {
         assert_eq!(jobs, 2);
         assert_eq!(stored_len, extended.len() as i64);
         assert_eq!(last_job_len, (CHECKPOINT_MIN_DELTA + 100) as i64);
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn checkpoint_extract_rejects_transcript_path_outside_allowed_roots() {
+        let (state, writer, tmp) = test_state("hooks-checkpoint-path-guard");
+        let transcript_path = tmp.path().join("checkpoint-secret.txt");
+        std::fs::write(
+            &transcript_path,
+            "outside checkpoint transcript ".repeat(30),
+        )
+        .unwrap();
+
+        let resp = session_checkpoint_extract(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CheckpointExtractBody {
+                harness: Some("test".to_string()),
+                session_key: Some("agent:agent-a:ckpt-path-guard".to_string()),
+                agent_id: Some("agent-a".to_string()),
+                project: None,
+                transcript: None,
+                transcript_path: Some(transcript_path.display().to_string()),
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = test_json(resp).await;
+        assert_eq!(
+            body["error"],
+            serde_json::Value::String(
+                "transcript_path outside allowed workspace roots".to_string()
+            )
+        );
+
+        let jobs = state
+            .pool
+            .read(|conn| {
+                let jobs = conn.query_row("SELECT COUNT(*) FROM summary_jobs", [], |row| {
+                    row.get::<_, i64>(0)
+                })?;
+                Ok(jobs)
+            })
+            .await
+            .unwrap();
+        assert_eq!(jobs, 0);
+
+        drop(state);
+        let _ = writer.await;
+    }
+
+    #[tokio::test]
+    async fn checkpoint_extract_falls_back_to_stored_transcript_when_input_normalizes_empty() {
+        let (state, writer, _tmp) = test_state("hooks-checkpoint-empty-fallback");
+        let session_key = "agent:agent-a:ckpt-empty-fallback";
+        let stored = "stored checkpoint transcript ".repeat(30);
+        let stored_for_seed = stored.clone();
+
+        state
+            .pool
+            .write(Priority::Low, move |conn| {
+                upsert_session_transcript(
+                    conn,
+                    session_key,
+                    &stored_for_seed,
+                    "test",
+                    Some("platform/daemon-rs"),
+                    "agent-a",
+                )?;
+                Ok(serde_json::Value::Null)
+            })
+            .await
+            .unwrap();
+
+        let resp = session_checkpoint_extract(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CheckpointExtractBody {
+                harness: Some("test".to_string()),
+                session_key: Some(session_key.to_string()),
+                agent_id: Some("agent-a".to_string()),
+                project: None,
+                transcript: Some(String::new()),
+                transcript_path: None,
+                runtime_path: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = test_json(resp).await;
+        assert_eq!(body["queued"], serde_json::Value::Bool(true));
+
+        let job_transcript = state
+            .pool
+            .read(move |conn| {
+                let transcript = conn.query_row(
+                    "SELECT transcript FROM summary_jobs
+                     WHERE session_key = ?1 AND agent_id = ?2
+                     LIMIT 1",
+                    rusqlite::params![session_key, "agent-a"],
+                    |row| row.get::<_, String>(0),
+                )?;
+                Ok(transcript)
+            })
+            .await
+            .unwrap();
+        assert_eq!(job_transcript, stored);
 
         drop(state);
         let _ = writer.await;

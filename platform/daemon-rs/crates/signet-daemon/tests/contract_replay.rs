@@ -1112,6 +1112,72 @@ async fn checkpoint_extract_queues_summary_and_advances_cursor() {
 
 #[tokio::test]
 #[ignore = "requires built daemon binary"]
+async fn checkpoint_extract_guards_file_backed_transcript_paths() {
+    let server = TestServer::start().await;
+    let outside_path = server._tmpdir.path().join("outside-checkpoint.jsonl");
+    std::fs::write(&outside_path, "outside checkpoint transcript ".repeat(24)).unwrap();
+
+    let rejected = server
+        .post(
+            "/api/hooks/session-checkpoint-extract",
+            json!({
+                "harness": "test",
+                "sessionKey": "agent:ant:checkpoint-path-rejected",
+                "agentId": "ant",
+                "transcriptPath": outside_path.display().to_string()
+            }),
+        )
+        .await;
+    assert_eq!(rejected.status(), 403);
+    let body = server.json(rejected).await;
+    assert_eq!(
+        body["error"],
+        "transcript_path outside allowed workspace roots"
+    );
+
+    let allowed_dir = std::path::Path::new("/tmp/signet");
+    std::fs::create_dir_all(allowed_dir).unwrap();
+    let allowed_path = allowed_dir.join(format!(
+        "checkpoint-replay-{}-{}.jsonl",
+        std::process::id(),
+        server.port
+    ));
+    std::fs::write(&allowed_path, "allowed checkpoint transcript ".repeat(24)).unwrap();
+
+    let accepted = server
+        .post(
+            "/api/hooks/session-checkpoint-extract",
+            json!({
+                "harness": "test",
+                "sessionKey": "agent:ant:checkpoint-path-accepted",
+                "agentId": "ant",
+                "transcriptPath": allowed_path.display().to_string()
+            }),
+        )
+        .await;
+    let _ = std::fs::remove_file(&allowed_path);
+    assert_eq!(accepted.status(), 200);
+    let body = server.json(accepted).await;
+    assert_eq!(body["queued"], true);
+    assert!(body["jobId"].is_string());
+
+    let conn = rusqlite::Connection::open(server.db_path()).expect("open replay db");
+    conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    let jobs: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM summary_jobs
+             WHERE session_key = 'agent:ant:checkpoint-path-accepted'
+               AND agent_id = 'ant'
+               AND trigger = 'checkpoint_extract'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(jobs, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
 async fn version_endpoint() {
     let server = TestServer::start().await;
     let resp = server.get("/api/version").await;
