@@ -259,6 +259,7 @@ function loadAggregateByKey(
 			 FROM memories
 			 WHERE idempotency_key = ?
 			   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			   AND source_type = 'aggregate-recall'
 			   AND visibility = 'global'
 			   AND scope IS NULL
 			   AND is_deleted = 0
@@ -571,7 +572,11 @@ export async function aggregateRecall(
 					sourceMemoryIds,
 					now,
 				});
-				if (!racedDuplicate) throw err;
+				if (!racedDuplicate) {
+					deduped = true;
+					saved = false;
+					return unsavedAggregateResult(answer, key, project);
+				}
 				deduped = true;
 				saved = racedDuplicate.saved;
 				return racedDuplicate.row;
