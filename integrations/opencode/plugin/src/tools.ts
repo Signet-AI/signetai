@@ -20,13 +20,24 @@ const DAEMON_OFFLINE_MSG = "Signet daemon not running. Start with: signet daemon
 
 async function searchMemory(
 	client: DaemonClient,
-	args: { readonly query: string; readonly limit?: number; readonly type?: string; readonly min_score?: number },
+	args: {
+		readonly query: string;
+		readonly limit?: number;
+		readonly type?: string;
+		readonly min_score?: number;
+		readonly session_key?: string;
+		readonly agent_id?: string;
+		readonly include_recalled?: boolean;
+	},
 ): Promise<string> {
 	const result = await client.post<unknown>(
 		"/api/memory/recall",
 		buildRecallRequestBody(args.query, {
 			limit: args.limit ?? 10,
 			type: args.type,
+			sessionKey: args.session_key,
+			agentId: args.agent_id,
+			includeRecalled: args.include_recalled,
 		}),
 		READ_TIMEOUT,
 	);
@@ -101,6 +112,9 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				limit: tool.schema.number().optional().describe("Max results to return (default 10)"),
 				type: tool.schema.string().optional().describe("Filter by memory type"),
 				min_score: tool.schema.number().optional().describe("Minimum relevance score threshold"),
+				session_key: tool.schema.string().optional().describe("Session key for per-context recall dedupe"),
+				agent_id: tool.schema.string().optional().describe("Agent ID for scoped recall"),
+				include_recalled: tool.schema.boolean().optional().describe("Include rows already recalled in this context"),
 			},
 			async execute(args): Promise<string> {
 				return searchMemory(client, args);

@@ -47,12 +47,19 @@ export interface RecallResult {
 	readonly project: string | null;
 	readonly created_at: string;
 	readonly supplementary?: boolean;
+	readonly already_recalled?: boolean;
 }
 
 export interface RecallMeta {
 	readonly totalReturned: number;
 	readonly hasSupplementary: boolean;
 	readonly noHits: boolean;
+	readonly dedupe?: {
+		readonly enabled: boolean;
+		readonly contextEpoch?: number;
+		readonly suppressed: number;
+		readonly repeatedReturned: number;
+	};
 }
 
 export interface RecallEntityAttribute {

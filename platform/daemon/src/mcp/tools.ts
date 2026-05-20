@@ -802,6 +802,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					.optional()
 					.describe("Deprecated compatibility alias for importance_min; ignored when importance_min is also set"),
 				score_min: z.number().optional().describe("Minimum recall score threshold (client-side)"),
+				session_key: z.string().optional().describe("Session key for per-context recall dedupe"),
+				agent_id: z.string().optional().describe("Agent ID for scoped recall"),
+				include_recalled: z.boolean().optional().describe("Include rows already recalled in this context"),
 			}),
 		},
 		async ({
@@ -818,6 +821,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			until,
 			min_score,
 			score_min,
+			session_key,
+			agent_id,
+			include_recalled,
 		}) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
@@ -832,6 +838,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					importance_min: importance_min ?? min_score,
 					since,
 					until,
+					sessionKey: session_key,
+					agentId: agent_id,
+					includeRecalled: include_recalled,
 				}),
 			});
 

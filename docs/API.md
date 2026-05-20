@@ -1243,11 +1243,20 @@ permission. For the full execution model, see [Hybrid Recall](./MEMORY.md#hybrid
   "pinned": false,
   "importance_min": 0.5,
   "since": "2026-01-01T00:00:00Z",
-  "agentId": "alice"
+  "agentId": "alice",
+  "sessionKey": "session-uuid",
+  "includeRecalled": false
 }
 ```
 
 Only `query` is required.
+
+When `sessionKey` is present, recall uses a daemon-owned context ledger keyed by
+`(sessionKey, agentId, contextEpoch)`. Rows returned once in the current epoch
+are suppressed by default across direct recall, hook recall, and automatic
+injection paths. Sessionless recall is unchanged. Set `includeRecalled: true`
+to return repeats; repeated rows are annotated with
+`already_recalled: true`, and newly returned rows are still recorded.
 
 **Response**
 
@@ -1266,7 +1275,8 @@ Only `query` is required.
       "who": "claude-code",
       "project": null,
       "created_at": "2026-02-21T10:00:00.000Z",
-      "supplementary": false
+      "supplementary": false,
+      "already_recalled": false
     }
   ],
   "query": "user preferences for editor",
@@ -1274,7 +1284,13 @@ Only `query` is required.
   "meta": {
     "totalReturned": 1,
     "hasSupplementary": false,
-    "noHits": false
+    "noHits": false,
+    "dedupe": {
+      "enabled": true,
+      "contextEpoch": 0,
+      "suppressed": 0,
+      "repeatedReturned": 0
+    }
   }
 }
 ```
@@ -1289,6 +1305,10 @@ this call.
 is `true` when the response includes supporting context such as an LLM summary
 card or linked rationale context. `meta.noHits` is `true` when recall completed
 normally but found no matching results.
+When session dedupe is enabled, `meta.dedupe.suppressed` counts rows omitted
+because they were already recalled in the current epoch, and
+`meta.dedupe.repeatedReturned` counts repeated rows returned only because the
+caller set `includeRecalled: true`.
 
 When `memory.pipelineV2.reranker.useExtractionModel` is enabled, an
 additional synthesized summary card may be prepended to results. This card
@@ -1330,6 +1350,8 @@ to the recall endpoint. Requires `recall` permission.
 | `pinned`       | `1` or `true` to filter       |
 | `importance_min` | Minimum importance float    |
 | `since`        | ISO timestamp lower bound     |
+| `sessionKey` / `session_key` | Session key for context dedupe |
+| `includeRecalled` / `include_recalled` | `1` or `true` to return repeats |
 
 **Response** — same shape as `POST /api/memory/recall`.
 
@@ -2575,6 +2597,8 @@ Explicit memory query from within a session. Requires `recall` permission.
   "since": "2026-01-01T00:00:00Z",
   "until": "2026-04-01T00:00:00Z",
   "sessionKey": "session-uuid",
+  "agentId": "alice",
+  "includeRecalled": false,
   "runtimePath": "plugin"
 }
 ```
@@ -2584,6 +2608,8 @@ Explicit memory query from within a session. Requires `recall` permission.
 This route is a hook-oriented wrapper around `POST /api/memory/recall`. It
 accepts a narrower request surface, applies hook/session policy checks, and
 then forwards the supported recall filters into the shared hybrid recall path.
+When `sessionKey` is present, it participates in the same context-epoch dedupe
+ledger as `POST /api/memory/recall`.
 
 `project` on this route is forwarded as the memory `project` filter. It is not
 remapped to recall `scope`.
@@ -2624,6 +2650,8 @@ rules.
 
 Called before context window compaction. Returns summary instructions for
 the compaction prompt.
+This endpoint does not advance the recall context epoch; only
+`/api/hooks/compaction-complete` does.
 
 **Request body**
 
@@ -2668,6 +2696,8 @@ If `sessionKey` is present, the daemon uses it to preserve lineage:
 - the canonical compaction file is written to
   `memory/{captured_at}--{session_token}--compaction.md`
 - the mutable manifest for that session is backfilled with `compaction_path`
+- the recall context epoch advances, so memories recalled before compaction are
+  eligible again in the fresh context
 
 If compaction fires before transcript persistence lands, callers should also
 send `project`. The daemon uses that explicit project as the fallback lineage
@@ -2676,7 +2706,7 @@ scope until transcript storage catches up.
 **Response**
 
 ```json
-{ "success": true, "memoryId": "uuid" }
+{ "success": true, "memoryId": "uuid", "contextEpoch": 1 }
 ```
 
 ### POST /api/hooks/session-checkpoint-extract

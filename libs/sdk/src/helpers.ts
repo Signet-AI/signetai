@@ -36,6 +36,7 @@ export function applyRecallMinScore(result: RecallResponse, minScore?: number): 
 		...result,
 		results: filtered,
 		meta: {
+			...result.meta,
 			totalReturned: filtered.length,
 			hasSupplementary: filtered.some((row) => row.supplementary === true),
 			noHits: filtered.length === 0,
@@ -158,6 +159,8 @@ export class SignetClientHelpers {
 			readonly expand?: boolean;
 			readonly minScore?: number;
 			readonly agentId?: string;
+			readonly sessionKey?: string;
+			readonly includeRecalled?: boolean;
 		},
 	): Promise<RecallResponse> {
 		const result = applyRecallMinScore(

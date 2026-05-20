@@ -24,17 +24,26 @@ export async function memoryTools(client: SignetClient) {
 				query: z.string().describe("Search query"),
 				limit: z.number().optional().describe("Max results"),
 				type: z.string().optional().describe("Memory type filter"),
+				sessionKey: z.string().optional().describe("Session key for context dedupe"),
+				agentId: z.string().optional().describe("Agent ID for scoped recall"),
+				includeRecalled: z.boolean().optional().describe("Include rows already recalled in this context"),
 			}),
 			execute: async ({
 				query,
 				limit,
 				type,
+				sessionKey,
+				agentId,
+				includeRecalled,
 			}: {
 				query: string;
 				limit?: number;
 				type?: string;
+				sessionKey?: string;
+				agentId?: string;
+				includeRecalled?: boolean;
 			}) => {
-				return client.recall(query, { limit, type });
+				return client.recall(query, { limit, type, sessionKey, agentId, includeRecalled });
 			},
 		},
 

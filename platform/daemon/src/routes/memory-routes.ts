@@ -2302,7 +2302,7 @@ export function registerMemoryRoutes(app: Hono): void {
 			authRecallLlmLimiter.record(actor);
 		}
 		try {
-			const sessionKeyRaw = c.req.header("x-signet-session-key");
+			const sessionKeyRaw = body.sessionKey ?? c.req.header("x-signet-session-key");
 			const sessionKey = sessionKeyRaw ?? null;
 			const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: sessionKeyRaw });
 			const agentScope = getAgentScope(agentId);
@@ -2313,6 +2313,10 @@ export function registerMemoryRoutes(app: Hono): void {
 				agentId,
 				readPolicy: agentScope.readPolicy,
 				policyGroup: agentScope.policyGroup,
+				sessionKey: sessionKeyRaw,
+				includeRecalled: body.includeRecalled === true,
+				recallSurface: "api.memory.recall",
+				recallMode: "direct",
 				...(scopeProject ? { project: scopeProject } : {}),
 			};
 			const result = await hybridRecall(params, cfg, fetchEmbedding);
@@ -2348,11 +2352,13 @@ export function registerMemoryRoutes(app: Hono): void {
 		const since = c.req.query("since");
 		const expand = c.req.query("expand");
 		const project = c.req.query("project");
+		const includeRecalled = c.req.query("includeRecalled") ?? c.req.query("include_recalled");
 
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		try {
-			const sessionKeyRaw = c.req.header("x-signet-session-key");
+			const sessionKeyRaw =
+				c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key");
 			const sessionKey = sessionKeyRaw ?? null;
 			const agentId = resolveAgentId({
 				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
@@ -2373,6 +2379,10 @@ export function registerMemoryRoutes(app: Hono): void {
 				agentId,
 				readPolicy: agentScope.readPolicy,
 				policyGroup: agentScope.policyGroup,
+				sessionKey: sessionKeyRaw,
+				includeRecalled: includeRecalled === "1" || includeRecalled === "true",
+				recallSurface: "api.memory.search",
+				recallMode: "direct",
 				...(scopeProject ? { project: scopeProject } : {}),
 			};
 			const result = await hybridRecall(params, cfg, fetchEmbedding);

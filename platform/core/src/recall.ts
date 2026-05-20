@@ -19,12 +19,19 @@ export interface RecallRow extends RecallPartitionableRow {
 	readonly pinned?: boolean | number;
 	readonly project?: string | null;
 	readonly importance?: number;
+	readonly already_recalled?: boolean;
 }
 
 export interface RecallMeta {
 	readonly totalReturned: number;
 	readonly hasSupplementary: boolean;
 	readonly noHits: boolean;
+	readonly dedupe?: {
+		readonly enabled: boolean;
+		readonly contextEpoch?: number;
+		readonly suppressed: number;
+		readonly repeatedReturned: number;
+	};
 }
 
 export interface RecallPayload {
@@ -56,6 +63,8 @@ export interface RecallRequestOptions {
 	readonly until?: string;
 	readonly expand?: boolean;
 	readonly agentId?: string;
+	readonly sessionKey?: string;
+	readonly includeRecalled?: boolean;
 	readonly scope?: "global" | "agent" | "session";
 }
 
@@ -134,7 +143,15 @@ export function parseRecallMeta(raw: unknown, fallbackCount: number): RecallMeta
 	const totalReturned = typeof raw.totalReturned === "number" ? raw.totalReturned : fallbackCount;
 	const hasSupplementary = raw.hasSupplementary === true;
 	const noHits = "noHits" in raw ? raw.noHits === true : totalReturned === 0;
-	return { totalReturned, hasSupplementary, noHits };
+	const dedupe = isRecord(raw.dedupe)
+		? {
+				enabled: raw.dedupe.enabled === true,
+				contextEpoch: typeof raw.dedupe.contextEpoch === "number" ? raw.dedupe.contextEpoch : undefined,
+				suppressed: typeof raw.dedupe.suppressed === "number" ? raw.dedupe.suppressed : 0,
+				repeatedReturned: typeof raw.dedupe.repeatedReturned === "number" ? raw.dedupe.repeatedReturned : 0,
+			}
+		: undefined;
+	return { totalReturned, hasSupplementary, noHits, ...(dedupe ? { dedupe } : {}) };
 }
 
 export function parseRecallPayload(raw: unknown): {
@@ -244,6 +261,8 @@ export function buildRecallRequestBody(query: string, options: RecallRequestOpti
 		until: options.until,
 		expand: options.expand === true ? true : undefined,
 		agentId: options.agentId,
+		sessionKey: options.sessionKey,
+		includeRecalled: options.includeRecalled === true ? true : undefined,
 		scope: options.scope,
 	});
 }

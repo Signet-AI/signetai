@@ -49,12 +49,16 @@ describe("recall surface helpers", () => {
 				pinned: false,
 				expand: false,
 				agentId: "default",
+				sessionKey: "sess-1",
+				includeRecalled: true,
 			}),
 		).toEqual({
 			query: "graph",
 			keywordQuery: "graph OR entity",
 			limit: 5,
 			agentId: "default",
+			sessionKey: "sess-1",
+			includeRecalled: true,
 		});
 	});
 

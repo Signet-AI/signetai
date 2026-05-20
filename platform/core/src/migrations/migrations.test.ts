@@ -369,6 +369,54 @@ describe("migration framework", () => {
 		).run("sm-3", "session-x", "agent-b", "mem-x", now);
 	});
 
+	test("recall context dedupe tables isolate sessions, agents, and epochs", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const tables = db
+			.query<{ name: string }, []>(
+				"SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_context_epochs', 'session_recall_events')",
+			)
+			.all()
+			.map((row) => row.name);
+		expect(tables).toContain("session_context_epochs");
+		expect(tables).toContain("session_recall_events");
+
+		db.run(
+			`INSERT INTO session_recall_events (
+				session_key, agent_id, context_epoch, item_kind, item_id, surface, mode
+			) VALUES ('sess-1', 'agent-a', 0, 'memory', 'mem-1', 'api', 'direct')`,
+		);
+		expect(() =>
+			db.run(
+				`INSERT INTO session_recall_events (
+					session_key, agent_id, context_epoch, item_kind, item_id, surface, mode
+				) VALUES ('sess-1', 'agent-a', 0, 'memory', 'mem-1', 'api', 'direct')`,
+			),
+		).toThrow();
+
+		db.run(
+			`INSERT INTO session_recall_events (
+				session_key, agent_id, context_epoch, item_kind, item_id, surface, mode
+			) VALUES ('sess-1', 'agent-b', 0, 'memory', 'mem-1', 'api', 'direct')`,
+		);
+		db.run(
+			`INSERT INTO session_context_epochs (
+				session_key, agent_id, context_epoch, reason
+			) VALUES ('sess-1', 'agent-a', 1, 'compaction-complete')`,
+		);
+		db.run(
+			`INSERT INTO session_recall_events (
+				session_key, agent_id, context_epoch, item_kind, item_id, surface, mode
+			) VALUES ('sess-1', 'agent-a', 1, 'memory', 'mem-1', 'api', 'direct')`,
+		);
+
+		const count = db
+			.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM session_recall_events WHERE item_id = 'mem-1'")
+			.get();
+		expect(count?.count).toBe(3);
+	});
+
 	test("migration 046 keeps multi-agent session summaries upgrade-safe", () => {
 		db = createFreshDb();
 		db.exec(`

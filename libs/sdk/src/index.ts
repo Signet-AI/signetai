@@ -154,6 +154,8 @@ export class SignetClient extends SignetClientHelpers {
 			readonly minScore?: number;
 			readonly expand?: boolean;
 			readonly agentId?: string;
+			readonly sessionKey?: string;
+			readonly includeRecalled?: boolean;
 		},
 	): Promise<RecallResponse> {
 		return applyRecallMinScore(

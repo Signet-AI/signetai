@@ -33,6 +33,7 @@ import {
 	shapeStructuredEvidence,
 } from "./pipeline/structured-evidence";
 import { findStructuredPathCandidates, scoreStructuredPathEvidence } from "./pipeline/structured-path-evidence";
+import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { escapeLike } from "./sql-utils";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,17 @@ export interface RecallParams {
 	expand?: boolean;
 	/** When set, restricts results to memories belonging to this project (auth scope enforcement). */
 	project?: string;
+	/** Enables per-session context dedupe when present. Sessionless recall is unchanged. */
+	sessionKey?: string;
+	/** Return already-recalled rows and annotate them instead of suppressing them. */
+	includeRecalled?: boolean;
+	/** Internal ledger metadata for call-site attribution. */
+	recallSurface?: string;
+	recallMode?: string;
+	/** Internal escape hatch for hooks that must claim only injected rows. */
+	claimRecallResults?: boolean;
+	/** Internal escape hatch for hooks that must track only injected rows elsewhere. */
+	trackRecallAccess?: boolean;
 }
 
 export interface RecallResult {
@@ -79,6 +91,7 @@ export interface RecallResult {
 	project: string | null;
 	created_at: string;
 	supplementary?: boolean;
+	already_recalled?: boolean;
 }
 
 export interface RecallResponse {
@@ -90,6 +103,7 @@ export interface RecallResponse {
 		hasSupplementary: boolean;
 		noHits: boolean;
 		timings: RecallTimings;
+		dedupe?: RecallDedupeMeta;
 	};
 	entities?: Array<{
 		name: string;
@@ -936,8 +950,50 @@ export async function hybridRecall(
 	const limit = normalizeRecallLimit(params.limit);
 	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
+	const filter = buildFilterClause(params);
+	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
 	const timings = createRecallTimingCollector();
-	const finish = (response: UntimedRecallResponse): RecallResponse => {
+	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
+		const deduped = applyRecallDedupe({
+			sessionKey: params.sessionKey,
+			agentId: params.agentId,
+			includeRecalled: params.includeRecalled,
+			surface: params.recallSurface ?? "recall",
+			mode: params.recallMode ?? "direct",
+			claim: params.claimRecallResults !== false,
+			items: response.results,
+			markRepeated: (item) => ({ ...item, already_recalled: true }),
+		});
+		response.results = deduped.items;
+		response.meta = {
+			...response.meta,
+			totalReturned: response.results.length,
+			hasSupplementary: response.results.some((row) => row.supplementary === true),
+			noHits: response.results.length === 0,
+			...(deduped.meta.enabled ? { dedupe: deduped.meta } : {}),
+		};
+		try {
+			const trackedIds = response.results.map((row) => row.id).filter((id) => !id.includes(":"));
+			if (params.trackRecallAccess !== false && trackedIds.length > 0) {
+				timings.time("access_tracking_update", () => {
+					const trackedPlaceholders = trackedIds.map(() => "?").join(", ");
+					getDbAccessor().withWriteTx((db) => {
+						db.prepare(
+							`UPDATE memories
+							 SET last_accessed = datetime('now'), access_count = access_count + 1
+							 WHERE id IN (
+							   SELECT m.id
+							   FROM memories m
+							   WHERE m.id IN (${trackedPlaceholders})
+							     AND m.is_deleted = 0${filter.sql}
+							 )`,
+						).run(...trackedIds, ...filter.args);
+					});
+				});
+			}
+		} catch (e) {
+			logger.warn("memory", "Failed to update access tracking", e as Error);
+		}
 		const recallTimings = timings.finish();
 		if (recallTimings.totalMs >= RECALL_TIMING_LOG_THRESHOLD_MS) {
 			logger.warn("memory", "Recall stage timings", {
@@ -956,9 +1012,6 @@ export async function hybridRecall(
 			},
 		};
 	};
-
-	const filter = buildFilterClause(params);
-	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
 	const queryVecPromise = (() => {
 		const embeddingStart = performance.now();
 		let promise: Promise<number[] | null>;
@@ -1789,7 +1842,7 @@ export async function hybridRecall(
 					supplementary: true,
 				};
 			});
-			return finish({
+			return await finish({
 				results,
 				query,
 				method: "hybrid",
@@ -1828,7 +1881,7 @@ export async function hybridRecall(
 					supplementary: true,
 				};
 			});
-			return finish({
+			return await finish({
 				results,
 				query,
 				method: "keyword",
@@ -1839,7 +1892,7 @@ export async function hybridRecall(
 				},
 			});
 		}
-		return finish({
+		return await finish({
 			results: [],
 			query,
 			method: "hybrid",
@@ -1913,30 +1966,6 @@ export async function hybridRecall(
 				];
 			}),
 	);
-
-	// Update access tracking only for authorized memories actually returned.
-	try {
-		const trackedIds = results.map((row) => row.id).filter((id) => rowMap.has(id));
-		if (trackedIds.length > 0) {
-			timings.time("access_tracking_update", () => {
-				const trackedPlaceholders = trackedIds.map(() => "?").join(", ");
-				getDbAccessor().withWriteTx((db) => {
-					db.prepare(
-						`UPDATE memories
-						 SET last_accessed = datetime('now'), access_count = access_count + 1
-						 WHERE id IN (
-						   SELECT m.id
-						   FROM memories m
-						   WHERE m.id IN (${trackedPlaceholders})
-						     AND m.is_deleted = 0${filter.sql}
-						 )`,
-					).run(...trackedIds, ...filter.args);
-				});
-			});
-		}
-	} catch (e) {
-		logger.warn("memory", "Failed to update access tracking", e as Error);
-	}
 
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
@@ -2272,7 +2301,7 @@ export async function hybridRecall(
 
 	if (results.length > limit) results.length = limit;
 
-	return finish({
+	return await finish({
 		results,
 		query,
 		method: vectorMap.size > 0 ? "hybrid" : "keyword",

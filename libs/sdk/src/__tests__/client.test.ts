@@ -139,6 +139,12 @@ describe("SignetClient", () => {
 						totalReturned: 2,
 						hasSupplementary: true,
 						noHits: false,
+						dedupe: {
+							enabled: true,
+							contextEpoch: 2,
+							suppressed: 3,
+							repeatedReturned: 1,
+						},
 					},
 					sources: {
 						"mem-high": "memory/abc.md",
@@ -155,6 +161,8 @@ describe("SignetClient", () => {
 			project: "proj-a",
 			keywordQuery: "confidence",
 			agentId: "agent-1",
+			sessionKey: "sess-1",
+			includeRecalled: true,
 		});
 
 		const req = lastRequest();
@@ -168,6 +176,8 @@ describe("SignetClient", () => {
 			project: "proj-a",
 			keywordQuery: "confidence",
 			agentId: "agent-1",
+			sessionKey: "sess-1",
+			includeRecalled: true,
 		});
 		expect(result.query).toBe("confidence");
 		expect(result.method).toBe("hybrid");
@@ -175,6 +185,12 @@ describe("SignetClient", () => {
 			totalReturned: 1,
 			hasSupplementary: true,
 			noHits: false,
+			dedupe: {
+				enabled: true,
+				contextEpoch: 2,
+				suppressed: 3,
+				repeatedReturned: 1,
+			},
 		});
 		expect(result.results.map((row) => row.id)).toEqual(["mem-high"]);
 		expect(result.sources?.["mem-high"]).toBe("memory/abc.md");
@@ -199,6 +215,7 @@ describe("SignetClient", () => {
 							who: "claude-code",
 							project: "proj-a",
 							created_at: "2026-04-01T00:00:00.000Z",
+							already_recalled: true,
 						},
 					],
 					query: "dark mode",
@@ -207,6 +224,12 @@ describe("SignetClient", () => {
 						totalReturned: 1,
 						hasSupplementary: false,
 						noHits: false,
+						dedupe: {
+							enabled: true,
+							contextEpoch: 4,
+							suppressed: 0,
+							repeatedReturned: 1,
+						},
 					},
 				};
 			}
@@ -225,6 +248,8 @@ describe("SignetClient", () => {
 			until: "2026-04-01T00:00:00Z",
 			expand: true,
 			sessionKey: "sess-123",
+			agentId: "agent-1",
+			includeRecalled: true,
 			runtimePath: "plugin",
 		});
 
@@ -243,11 +268,20 @@ describe("SignetClient", () => {
 			until: "2026-04-01T00:00:00Z",
 			expand: true,
 			sessionKey: "sess-123",
+			agentId: "agent-1",
+			includeRecalled: true,
 			runtimePath: "plugin",
 		});
 		expect(result.meta.totalReturned).toBe(1);
+		expect(result.meta.dedupe).toEqual({
+			enabled: true,
+			contextEpoch: 4,
+			suppressed: 0,
+			repeatedReturned: 1,
+		});
 		expect(result.query).toBe("dark mode");
 		expect(result.results[0]?.project).toBe("proj-a");
+		expect(result.results[0]?.already_recalled).toBe(true);
 	});
 
 	test("retired predictor SDK methods fail locally with a clear deprecation error", async () => {

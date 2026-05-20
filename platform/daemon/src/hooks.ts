@@ -82,6 +82,7 @@ import {
 	trackFtsHits,
 } from "./session-memories";
 import { isNoiseSession } from "./session-noise";
+import { claimRecallItems } from "./session-recall-dedupe";
 import { getExpiryWarning } from "./session-tracker";
 import {
 	ensureCanonicalTranscriptHistory,
@@ -210,6 +211,18 @@ function pruneSessionStartSeen(now = Date.now()): void {
 	}
 }
 
+export function resetSessionStartDedupe(req: {
+	readonly harness?: string;
+	readonly agentId?: string;
+	readonly project?: string;
+	readonly cwd?: string;
+	readonly sessionKey?: string;
+	readonly sessionId?: string;
+}): void {
+	const key = sessionStartDedupeKey(req);
+	if (key) sessionStartSeen.delete(key);
+}
+
 const DEFAULT_SESSION_START_MAX_INJECT_TOKENS = 12_000;
 const PREDICTED_CONTEXT_TERM_LIMIT = 6;
 const PREDICTED_CONTEXT_STOPWORDS: ReadonlySet<string> = new Set([
@@ -257,15 +270,6 @@ const PREDICTED_CONTEXT_STOPWORDS: ReadonlySet<string> = new Set([
 	"would",
 	"your",
 ]);
-
-/** Sliding window of recently-injected memory IDs per session (prompt-submit). */
-const PROMPT_DEDUP_WINDOW = 5;
-const promptDedupRecent = new Map<string, Array<Set<string>>>();
-
-/** Reset prompt-submit dedup for a session (call after compaction). */
-export function resetPromptDedup(sessionKey: string): void {
-	promptDedupRecent.delete(sessionKey);
-}
 
 function loadDbAccessor() {
 	try {
@@ -537,6 +541,8 @@ export interface RecallRequest {
 	until?: string;
 	expand?: boolean;
 	sessionKey?: string;
+	agentId?: string;
+	includeRecalled?: boolean;
 	runtimePath?: "plugin" | "legacy";
 }
 
@@ -1663,7 +1669,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		});
 	}
 	const tokenBudget = Math.max(1, rawTokenBudget);
-	const memories = selectWithTokenBudget(sortedCandidates, tokenBudget);
+	let memories = selectWithTokenBudget(sortedCandidates, tokenBudget);
 
 	// Get predicted context from recent session analysis (~30% of budget)
 	const existingIds = new Set(memories.map((m) => m.id));
@@ -1678,6 +1684,16 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	);
 	if (predictedMemories.length > 0) {
 		memories.push(...predictedMemories);
+	}
+
+	if (req.sessionKey && memories.length > 0) {
+		memories = claimRecallItems({
+			sessionKey: req.sessionKey,
+			agentId,
+			surface: "api.hooks.session-start",
+			mode: "automatic",
+			items: memories,
+		}).items;
 	}
 
 	const exploredId: string | null = null;
@@ -2682,6 +2698,11 @@ export async function handleUserPromptSubmit(
 				readPolicy: agentScope.readPolicy,
 				policyGroup: agentScope.policyGroup,
 				project: req.project,
+				sessionKey: req.sessionKey,
+				recallSurface: "api.hooks.user-prompt-submit",
+				recallMode: "automatic",
+				claimRecallResults: false,
+				trackRecallAccess: false,
 			},
 			cfg,
 			async (text, embeddingCfg) => {
@@ -2798,18 +2819,15 @@ export async function handleUserPromptSubmit(
 		const allMatchedIds = recall.results.map((result) => result.id);
 		deps.trackFtsHits(req.sessionKey, allMatchedIds, deps.resolveAgentId(req));
 
-		// Filter out memories already injected within the sliding window
-		let selected = budgetSelected;
-		if (req.sessionKey) {
-			const recentTurns = promptDedupRecent.get(req.sessionKey);
-			if (recentTurns && recentTurns.length > 0) {
-				const recentIds = new Set<string>();
-				for (const turnSet of recentTurns) {
-					for (const id of turnSet) recentIds.add(id);
-				}
-				selected = budgetSelected.filter((s) => !recentIds.has(s.id));
-			}
-		}
+		const selected = req.sessionKey
+			? claimRecallItems({
+					sessionKey: req.sessionKey,
+					agentId,
+					surface: "api.hooks.user-prompt-submit",
+					mode: "automatic",
+					items: budgetSelected,
+				}).items
+			: budgetSelected;
 
 		if (selected.length === 0) {
 			return finalizeUserPromptSubmitSuccess(
@@ -2836,6 +2854,7 @@ export async function handleUserPromptSubmit(
 
 		// Append agent feedback request if enabled and there are injected memories
 		const selectedIds = selected.map((s) => s.id);
+		updateAccessTracking(selectedIds);
 		if (feedbackEnabled && selectedIds.length > 0) {
 			const pi = isPiHarness(req.harness);
 			const toolName = pi ? "signet_memory_feedback" : "mcp__signet__memory_feedback";
@@ -2843,19 +2862,6 @@ export async function handleUserPromptSubmit(
 				? `Rate injected memories using the ${toolName} tool. Pass a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`
 				: `Rate injected memories using the ${toolName} tool. Pass session_key "${req.sessionKey}" and a ratings map of memory ID to score (-1 to 1). 0=unused, 1=directly helpful, -1=harmful.`;
 			inject += `\n<memory-feedback>\n${instruction}\nIDs: ${selectedIds.join(", ")}\n</memory-feedback>`;
-		}
-
-		// Record injected IDs into sliding window for dedup
-		if (req.sessionKey && selectedIds.length > 0) {
-			let recentTurns = promptDedupRecent.get(req.sessionKey);
-			if (!recentTurns) {
-				recentTurns = [];
-				promptDedupRecent.set(req.sessionKey, recentTurns);
-			}
-			recentTurns.unshift(new Set(selectedIds));
-			if (recentTurns.length > PROMPT_DEDUP_WINDOW) {
-				recentTurns.pop();
-			}
 		}
 
 		return finalizeUserPromptSubmitSuccess(
@@ -2930,9 +2936,6 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	// emit Stop between turns and then emit SessionStart again when an idle
 	// conversation is resumed with the same session key; clearing here would
 	// re-inject the full identity/memory block mid-conversation.
-	if (sessionKey) {
-		promptDedupRecent.delete(sessionKey);
-	}
 
 	// Flush pending periodic checkpoints
 	try {

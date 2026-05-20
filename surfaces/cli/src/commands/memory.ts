@@ -95,6 +95,8 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("--importance-min <n>", "Only return memories at or above this importance", Number.parseFloat)
 		.option("--min-score <n>", "Minimum recall score threshold (client-side)", Number.parseFloat)
 		.option("--agent <name>", "Filter by agent ID")
+		.option("--session-key <key>", "Session key for per-context recall dedupe")
+		.option("--include-recalled", "Include memories already recalled in this session context", false)
 		.option("--json", "Output as JSON")
 		.action(async (query: string, options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
@@ -115,6 +117,8 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					since: options.since,
 					until: options.until,
 					agentId: options.agent,
+					sessionKey: options.sessionKey,
+					includeRecalled: options.includeRecalled,
 				}),
 				MEMORY_RECALL_TIMEOUT_MS,
 			);

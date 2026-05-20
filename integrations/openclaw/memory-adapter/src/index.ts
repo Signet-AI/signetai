@@ -650,6 +650,9 @@ export async function memoryRecall(
 		limit?: number;
 		type?: string;
 		minScore?: number;
+		sessionKey?: string;
+		agentId?: string;
+		includeRecalled?: boolean;
 	} = {},
 ): Promise<RecallPayload | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
@@ -658,6 +661,9 @@ export async function memoryRecall(
 		body: buildRecallRequestBody(query, {
 			limit: options.limit ?? 10,
 			type: options.type,
+			sessionKey: options.sessionKey,
+			agentId: options.agentId,
+			includeRecalled: options.includeRecalled,
 		}),
 		timeout: READ_TIMEOUT,
 	});

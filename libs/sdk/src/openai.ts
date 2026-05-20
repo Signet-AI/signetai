@@ -30,6 +30,9 @@ export function memoryToolDefinitions(): readonly OpenAIToolDefinition[] {
 						query: { type: "string", description: "Search query" },
 						limit: { type: "number", description: "Max results" },
 						type: { type: "string", description: "Memory type filter" },
+						sessionKey: { type: "string", description: "Session key for context dedupe" },
+						agentId: { type: "string", description: "Agent ID for scoped recall" },
+						includeRecalled: { type: "boolean", description: "Include rows already recalled in this context" },
 					},
 					required: ["query"],
 				},
@@ -131,6 +134,9 @@ export async function executeMemoryTool(
 			return client.recall(requireString(args, "query"), {
 				limit: optionalNumber(args, "limit"),
 				type: optionalString(args, "type"),
+				...(optionalString(args, "sessionKey") ? { sessionKey: optionalString(args, "sessionKey") } : {}),
+				...(optionalString(args, "agentId") ? { agentId: optionalString(args, "agentId") } : {}),
+				...(args.includeRecalled === true ? { includeRecalled: true } : {}),
 			});
 
 		case "memory_store":
