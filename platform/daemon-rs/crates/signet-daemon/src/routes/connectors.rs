@@ -88,8 +88,7 @@ pub async fn list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             )?;
             let rows: Vec<serde_json::Value> = stmt
                 .query_map([], connector_row_json)?
-                .filter_map(|r| r.ok())
-                .collect();
+                .collect::<rusqlite::Result<Vec<_>>>()?;
 
             let count = rows.len();
             Ok(serde_json::json!({"connectors": rows, "count": count}))

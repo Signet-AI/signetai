@@ -217,6 +217,20 @@ impl TestServer {
         .expect("seed TS-style connector config");
     }
 
+    fn seed_malformed_connector_row(&self) {
+        let conn = rusqlite::Connection::open(self.db_path()).expect("open replay db");
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute(
+            r#"INSERT INTO connectors
+               (id, provider, display_name, config_json, settings_json, enabled, status, created_at, updated_at)
+               VALUES
+               (x'01', 'filesystem', 'Bad Connector', '{}', '{}', 1, 'idle',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"#,
+            [],
+        )
+        .expect("seed malformed connector row");
+    }
+
     fn seed_plugin_audit_fixture(&self) {
         let dir = self._tmpdir.path().join(".daemon/plugins");
         std::fs::create_dir_all(&dir).expect("plugin audit dir");
@@ -815,6 +829,24 @@ async fn connectors_unwrap_ts_style_config_settings() {
             .unwrap()
             .contains("connector-ts-full-config"),
         true
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires built daemon binary"]
+async fn connectors_list_surfaces_row_decode_errors() {
+    let server = TestServer::start().await;
+    server.seed_malformed_connector_row();
+
+    let resp = server.get("/api/connectors").await;
+    assert_eq!(resp.status(), 500);
+    let body = server.json(resp).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("database error"),
+        "{body}"
     );
 }
 
