@@ -5,7 +5,81 @@ interface SessionDeps {
 	readonly fetchFromDaemon: <T>(path: string, opts?: RequestInit & { timeout?: number }) => Promise<T | null>;
 }
 
+interface SessionSearchHit {
+	readonly sessionKey: string;
+	readonly project?: string | null;
+	readonly updatedAt: string;
+	readonly excerpt: string;
+	readonly rank: number;
+}
+
 export function registerSessionCommands(program: Command, deps: SessionDeps): void {
+	const session = program.command("session").description("Search transcripts and manage active sessions");
+
+	session
+		.command("search <query>")
+		.description("Search active or completed session transcripts")
+		.option("--session-key <key>", "Specific transcript session key to search")
+		.option("--current-session-key <key>", "Current session key; sub-agent lineage may resolve to the parent")
+		.option("--agent <name>", "Agent ID scope")
+		.option("--project <project>", "Filter by project")
+		.option("-l, --limit <n>", "Max results (default 10, max 20)", Number.parseInt, 10)
+		.option("--json", "Output as JSON", false)
+		.action(
+			async (
+				query: string,
+				options: {
+					sessionKey?: string;
+					currentSessionKey?: string;
+					agent?: string;
+					project?: string;
+					limit?: number;
+					json?: boolean;
+				},
+			) => {
+				const data = await deps.fetchFromDaemon<{
+					query: string;
+					hits: SessionSearchHit[];
+					count: number;
+					error?: string;
+				}>("/api/sessions/search", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						query,
+						sessionKey: options.sessionKey,
+						currentSessionKey: options.currentSessionKey,
+						agentId: options.agent,
+						project: options.project,
+						limit: options.limit,
+					}),
+					timeout: 30_000,
+				});
+				if (!data || data.error) {
+					console.error(chalk.red(data?.error ?? "Failed to search transcripts (is the daemon running?)"));
+					process.exit(1);
+				}
+
+				if (options.json) {
+					console.log(JSON.stringify(data, null, 2));
+					return;
+				}
+
+				if (data.hits.length === 0) {
+					console.log(chalk.dim("  No transcripts found"));
+					return;
+				}
+
+				console.log(chalk.bold(`\n  Transcript Search: ${data.query}\n`));
+				for (const hit of data.hits) {
+					const project = hit.project ? ` ${chalk.dim(hit.project)}` : "";
+					console.log(`  ${chalk.cyan(hit.sessionKey)} ${chalk.dim(formatSessionSearchDate(hit.updatedAt))}${project}`);
+					console.log(`  ${hit.excerpt}`);
+					console.log();
+				}
+			},
+		);
+
 	program
 		.command("bypass")
 		.description("Toggle per-session bypass (disable Signet hooks for one session)")
@@ -61,6 +135,12 @@ export function registerSessionCommands(program: Command, deps: SessionDeps): vo
 			}
 			console.log(chalk.green(`  Session ${sessionKey.slice(0, 12)} bypass removed — hooks re-enabled`));
 		});
+}
+
+function formatSessionSearchDate(isoDate: string): string {
+	const date = new Date(isoDate);
+	if (Number.isNaN(date.getTime())) return isoDate;
+	return date.toISOString().slice(0, 10);
 }
 
 function formatAge(isoDate: string): string {

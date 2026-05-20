@@ -8,7 +8,7 @@ import type { OpenClawPluginApi } from "./openclaw-types";
 // mocking @signet/core globally, which otherwise leaks into later suites.
 const signet = await import("./index");
 const signetPlugin = signet.default;
-const { memoryStore, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
+const { memoryStore, sessionSearch, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
 
 type HookHandler = (event: Record<string, unknown>, ctx: unknown) => Promise<unknown> | unknown;
 type ToolRegistration = { name: string; label?: string; description?: string };
@@ -33,6 +33,7 @@ let lastPreCompactionBody: unknown = null;
 let lastCompactionBody: unknown = null;
 let lastSessionEndBody: unknown = null;
 let lastPromptSubmitBody: unknown = null;
+let lastSessionSearchBody: unknown = null;
 let lastCheckpointBody: unknown = null;
 let warnMessages: string[] = [];
 let testDir = "";
@@ -139,6 +140,7 @@ beforeEach(() => {
 	lastCompactionBody = null;
 	lastSessionEndBody = null;
 	lastPromptSubmitBody = null;
+	lastSessionSearchBody = null;
 	lastCheckpointBody = null;
 	checkpointResponse = null;
 	warnMessages = [];
@@ -204,6 +206,21 @@ beforeEach(() => {
 						return jsonResponse(resp);
 					}
 					return jsonResponse({ queued: true, jobId: "checkpoint-1" });
+				case "/api/sessions/search":
+					lastSessionSearchBody = init?.body ? JSON.parse(String(init.body)) : null;
+					return jsonResponse({
+						query: "Juniper trunk ports",
+						hits: [
+							{
+								sessionKey: "parent-session",
+								project: "/tmp/network",
+								updatedAt: "2026-03-25T10:05:00.000Z",
+								excerpt: "keep the Juniper EX4300 VLAN audit focused on trunk ports",
+								rank: -1.2,
+							},
+						],
+						count: 1,
+					});
 				case "/api/marketplace/mcp/tools":
 					return jsonResponse({
 						count: 2,
@@ -270,6 +287,28 @@ afterEach(async () => {
 });
 
 describe("signet-memory-openclaw lifecycle hooks", () => {
+	it("forwards session_search requests to the transcript search endpoint", async () => {
+		const result = await sessionSearch("Juniper trunk ports", {
+			daemonUrl: "http://daemon.test",
+			sessionKey: "parent-session",
+			currentSessionKey: "child-session",
+			agentId: "research-agent",
+			project: "/tmp/network",
+			limit: 3,
+		});
+
+		expect(getHits("/api/sessions/search")).toBe(1);
+		expect(lastSessionSearchBody).toEqual({
+			query: "Juniper trunk ports",
+			sessionKey: "parent-session",
+			currentSessionKey: "child-session",
+			agentId: "research-agent",
+			project: "/tmp/network",
+			limit: 3,
+		});
+		expect(result).toMatchObject({ count: 1 });
+	});
+
 	it("prefers before_prompt_build and deduplicates legacy fallback for the same turn", async () => {
 		const { api, hooks, hookOptions } = createMockApi();
 		signetPlugin.register(api);

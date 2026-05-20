@@ -5,8 +5,8 @@ Bridges Hermes Agent's memory provider interface to the Signet daemon
 predictive recall, cross-session memory, and the full Signet pipeline
 (extraction, knowledge graph, retention decay, synthesis).
 
-Canonical Signet memory tools (memory_search, memory_store, memory_get,
-memory_list, memory_modify, memory_forget, plus recall/remember aliases) are
+Canonical Signet memory tools (memory_search, session_search, memory_store,
+memory_get, memory_list, memory_modify, memory_forget, plus recall/remember aliases) are
 exposed through the MemoryProvider interface. The daemon handles all heavy
 lifting: embedding, reranking, knowledge graph traversal, and predictive
 scoring.
@@ -63,7 +63,6 @@ MEMORY_SEARCH_SCHEMA = {
             },
             "limit": {"type": "integer", "description": "Max results to return (default 10, max 50)."},
             "project": {"type": "string", "description": "Optional project path filter."},
-            "expand": {"type": "boolean", "description": "Include lossless session transcripts as sources."},
             "type": {"type": "string", "description": "Filter by memory type."},
             "tags": {"type": "string", "description": "Filter by tags, comma-separated."},
             "who": {"type": "string", "description": "Filter by author."},
@@ -81,6 +80,26 @@ MEMORY_SEARCH_SCHEMA = {
                 "type": "boolean",
                 "description": "When true, scope recall to SIGNET_AGENT_ID instead of searching shared effective memory.",
             },
+        },
+        "required": ["query"],
+    },
+}
+
+SESSION_SEARCH_SCHEMA = {
+    "name": "session_search",
+    "description": "Search active or completed Signet session transcripts.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Natural language or keyword query."},
+            "session_key": {"type": "string", "description": "Specific transcript session key to search."},
+            "current_session_key": {
+                "type": "string",
+                "description": "Current session key; sub-agent lineage may resolve this to the parent session.",
+            },
+            "agent_id": {"type": "string", "description": "Agent scope, default default."},
+            "project": {"type": "string", "description": "Optional project path filter."},
+            "limit": {"type": "integer", "description": "Max results to return (default 10, max 20)."},
         },
         "required": ["query"],
     },
@@ -240,6 +259,7 @@ REMEMBER_ALIAS_SCHEMA = {
 
 ALL_TOOL_SCHEMAS = [
     MEMORY_SEARCH_SCHEMA,
+    SESSION_SEARCH_SCHEMA,
     MEMORY_STORE_SCHEMA,
     MEMORY_GET_SCHEMA,
     MEMORY_LIST_SCHEMA,
@@ -878,7 +898,6 @@ class SignetMemoryProvider(MemoryProvider):
                 since=str(search_args.get("since", "") or ""),
                 until=str(search_args.get("until", "") or ""),
                 keyword_query=str(search_args.get("keyword_query", "") or ""),
-                expand=bool(search_args.get("expand", False)),
                 score_min=_as_float(search_args.get("score_min")),
                 agent_scoped=bool(search_args.get("agent_scoped", False)),
             )
@@ -919,6 +938,20 @@ class SignetMemoryProvider(MemoryProvider):
         try:
             if tool_name in ("memory_search", "recall", "signet_search"):
                 return _search(args)
+
+            if tool_name == "session_search":
+                query = str(args.get("query", "")).strip()
+                if not query:
+                    return json.dumps({"error": "Missing required parameter: query"})
+                result = self._client.session_search(
+                    query,
+                    session_key=str(args.get("session_key", "") or ""),
+                    current_session_key=str(args.get("current_session_key", "") or ""),
+                    agent_id=str(args.get("agent_id", "") or ""),
+                    project=str(args.get("project", "") or ""),
+                    limit=_as_int(args.get("limit"), 10, minimum=1, maximum=20),
+                )
+                return json.dumps(result if result else {"error": "Session search failed.", "hits": []})
 
             if tool_name in ("memory_store", "remember", "signet_store"):
                 return _store(args)

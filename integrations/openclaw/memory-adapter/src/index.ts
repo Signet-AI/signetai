@@ -676,6 +676,33 @@ export async function memorySearch(
 	const result = await memoryRecall(query, options);
 	return result ? parseRecallPayload(result).rows : [];
 }
+
+export async function sessionSearch(
+	query: string,
+	options: {
+		daemonUrl?: string;
+		sessionKey?: string;
+		currentSessionKey?: string;
+		agentId?: string;
+		project?: string;
+		limit?: number;
+	} = {},
+): Promise<unknown | null> {
+	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
+	return daemonFetch<unknown>(daemonUrl, "/api/sessions/search", {
+		method: "POST",
+		body: {
+			query,
+			sessionKey: options.sessionKey,
+			currentSessionKey: options.currentSessionKey,
+			agentId: options.agentId,
+			project: options.project,
+			limit: options.limit,
+		},
+		timeout: READ_TIMEOUT,
+	});
+}
+
 export async function memoryStore(
 	content: string,
 	options: {
@@ -1635,6 +1662,71 @@ const signetPlugin = {
 					},
 				},
 				{ name: "memory_store" },
+			);
+
+			api.registerTool(
+				{
+					name: "session_search",
+					label: "Session Search",
+					description: "Search active or completed session transcripts",
+					parameters: Type.Object({
+						query: Type.String({
+							description: "Natural language or keyword query",
+						}),
+						session_key: Type.Optional(
+							Type.String({
+								description: "Specific transcript session key to search",
+							}),
+						),
+						current_session_key: Type.Optional(
+							Type.String({
+								description: "Current session key; sub-agent lineage may resolve this to the parent session",
+							}),
+						),
+						agent_id: Type.Optional(
+							Type.String({
+								description: "Agent scope, default default",
+							}),
+						),
+						project: Type.Optional(
+							Type.String({
+								description: "Optional project path filter",
+							}),
+						),
+						limit: Type.Optional(
+							Type.Number({
+								description: "Max results to return (default 10, max 20)",
+							}),
+						),
+					}),
+					async execute(_toolCallId, params) {
+						const { query, session_key, current_session_key, agent_id, project, limit } = params as {
+							query: string;
+							session_key?: string;
+							current_session_key?: string;
+							agent_id?: string;
+							project?: string;
+							limit?: number;
+						};
+						try {
+							const result = await sessionSearch(query, {
+								...opts,
+								sessionKey: session_key,
+								currentSessionKey: current_session_key,
+								agentId: agent_id,
+								project,
+								limit,
+							});
+							if (result === null) {
+								return textResult("Session search failed: daemon unavailable", { error: "daemon unavailable" });
+							}
+							return textResult(JSON.stringify(result, null, 2), { result });
+						} catch (err) {
+							return textResult(`Session search failed: ${String(err)}`, { error: String(err) });
+						}
+					},
+				},
+				{ name: "session_search" },
 			);
 
 			api.registerTool(

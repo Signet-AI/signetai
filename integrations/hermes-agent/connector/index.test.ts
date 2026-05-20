@@ -644,8 +644,10 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain('"name": "memory_store"');
 		expect(plugin).toContain('"name": "memory_get"');
 		expect(plugin).toContain('"name": "memory_list"');
+		expect(plugin).toContain('"name": "session_search"');
 		expect(plugin).not.toContain('"name": "signet_search"');
 		expect(plugin).toContain('if tool_name in ("memory_search", "recall", "signet_search")');
+		expect(plugin).toContain('if tool_name == "session_search"');
 	});
 
 	it("returns Signet tool schemas before daemon initialization", () => {
@@ -788,8 +790,10 @@ describe("Hermes Agent bundled plugin", () => {
 					"manager.add_provider(provider)",
 					"names = manager.get_all_tool_names()",
 					"assert 'memory_search' in names",
+					"assert 'session_search' in names",
 					"assert 'recall' in names",
 					"assert manager.has_tool('memory_store')",
+					"assert manager.has_tool('session_search')",
 					"print(','.join(sorted(names)))",
 				].join("\n"),
 			],
@@ -798,6 +802,7 @@ describe("Hermes Agent bundled plugin", () => {
 
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("memory_search");
+		expect(result.stdout).toContain("session_search");
 		expect(result.stdout).toContain("remember");
 	});
 
@@ -857,6 +862,56 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain('"agent_scoped"');
 		expect(plugin).toContain("scope recall to SIGNET_AGENT_ID");
 		expect(plugin).toContain('agent_scoped=bool(search_args.get("agent_scoped", False))');
+	});
+
+	it("exposes session_search as a dedicated transcript search tool", () => {
+		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
+		const client = readFileSync(join(import.meta.dir, "hermes-plugin", "client.py"), "utf-8");
+
+		expect(plugin).toContain("SESSION_SEARCH_SCHEMA");
+		expect(plugin).toContain('"description": "Search active or completed Signet session transcripts."');
+		expect(plugin).not.toContain('"expand":');
+		expect(plugin).toContain("self._client.session_search(");
+		expect(client).toContain("def session_search(");
+		expect(client).toContain('self._post("/api/sessions/search", body, timeout=_RECALL_TIMEOUT_SECS)');
+		expect(client).not.toContain("expand: bool");
+		expect(client).not.toContain('body["expand"]');
+	});
+
+	it("defaults Hermes session_search to the configured agent scope", () => {
+		const fixture = join(tmpRoot, "python-session-search-client-fixture");
+		const pluginDir = join(fixture, "plugins", "signet");
+		cpSync(join(import.meta.dir, "hermes-plugin"), pluginDir, { recursive: true });
+
+		const result = spawnSync(
+			"python",
+			[
+				"-c",
+				[
+					"import importlib.util, json, types",
+					"from pathlib import Path",
+					`root = Path(${JSON.stringify(fixture)})`,
+					"spec = importlib.util.spec_from_file_location('signet_client', root / 'plugins' / 'signet' / 'client.py')",
+					"mod = importlib.util.module_from_spec(spec)",
+					"spec.loader.exec_module(mod)",
+					"client = mod.SignetClient(agent_id='research-agent', harness='hermes-agent')",
+					"calls = []",
+					"def fake_post(path, body, **kwargs):",
+					"    calls.append({'path': path, 'body': body, 'kwargs': kwargs})",
+					"    return {'hits': []}",
+					"client._post = fake_post",
+					"client.session_search('Juniper trunk ports')",
+					"client.session_search('other lane', agent_id='explicit-agent')",
+					"print(json.dumps(calls, sort_keys=True))",
+				].join("\n"),
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain('"path": "/api/sessions/search"');
+		expect(result.stdout).toContain('"agentId": "research-agent"');
+		expect(result.stdout).toContain('"agentId": "explicit-agent"');
 	});
 
 	it("uses longer timeouts for recall paths", () => {

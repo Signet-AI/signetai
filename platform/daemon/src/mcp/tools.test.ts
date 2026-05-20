@@ -518,7 +518,6 @@ describe("createMcpServer", () => {
 				importance_min: 0.7,
 				since: "2026-01-01",
 				until: "2026-04-01",
-				expand: true,
 				score_min: 0.8,
 			});
 
@@ -535,7 +534,7 @@ describe("createMcpServer", () => {
 			expect(body.importance_min).toBe(0.7);
 			expect(body.since).toBe("2026-01-01");
 			expect(body.until).toBe("2026-04-01");
-			expect(body.expand).toBe(true);
+			expect(body.expand).toBeUndefined();
 			expect(body.min_score).toBeUndefined();
 			expect(body.score_min).toBeUndefined();
 			expect(result.isError).toBeUndefined();

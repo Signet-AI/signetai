@@ -206,7 +206,7 @@ New recall stages should follow this rule:
 
 - Stages that only produce IDs and scores may run before authorization.
 - Stages that read memory content, send text to a model, build summaries,
-  inspect entity coverage, expand transcripts, or update metadata must run
+  inspect entity coverage, or update metadata must run
   after authorization.
 
 ### Phase 4: Shape Authorized Evidence
@@ -248,7 +248,6 @@ Supplementary results may include:
 
 - source-backed Obsidian chunks,
 - native memory artifacts,
-- transcript fallback cards when `expand` is enabled,
 - an LLM summary card when the LLM reranker path has remaining timeout
   budget,
 - linked rationale memories for decision results,

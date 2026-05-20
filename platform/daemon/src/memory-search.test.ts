@@ -72,7 +72,7 @@ describe("hybridRecall", () => {
 		return Array.from({ length: 768 }, (_, index) => (index === 0 ? 1 : 0));
 	}
 
-	it("keeps expanded transcript sources scoped to the requesting agent", async () => {
+	it("keeps recall memory-only even when legacy expand is requested", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -108,10 +108,10 @@ describe("hybridRecall", () => {
 		);
 
 		expect(result.results.map((row) => row.id)).toContain("mem-a");
-		expect(result.results.find((row) => row.id === "mem-a")?.content).toStartWith("[Transcript excerpt]");
-		expect(result.sources).toBeDefined();
-		expect(result.sources?.["sess-shared"]).toBe("agent-a transcript context");
-		expect(Object.values(result.sources ?? {})).not.toContain("agent-b transcript context");
+		expect(result.results.find((row) => row.id === "mem-a")?.content).not.toContain("[Transcript excerpt]");
+		expect(result).not.toHaveProperty("sources");
+		expect(JSON.stringify(result)).not.toContain("agent-a transcript context");
+		expect(JSON.stringify(result)).not.toContain("agent-b transcript context");
 		expect(result.meta.totalReturned).toBe(result.results.length);
 		expect(result.meta.noHits).toBe(false);
 	});
@@ -145,7 +145,6 @@ describe("hybridRecall", () => {
 				"final_rank",
 				"source_chunk_vector_fallback",
 				"native_artifact_fallback",
-				"transcript_fallback",
 			]),
 		);
 		for (const stage of result.meta.timings.stages) {
@@ -1160,7 +1159,7 @@ describe("hybridRecall", () => {
 		);
 	});
 
-	it("uses transcript fallback when extracted memory compressed away media details", async () => {
+	it("does not use transcript fallback when extracted memory compressed away media details", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -1199,118 +1198,8 @@ assistant: John Mulaney's Kid Gorgeous is an excellent example. Hasan Minhaj: Ho
 			async () => null,
 		);
 
-		expect(result.results[0]?.source).toBe("transcript");
-		expect(result.results[0]?.source_id).toBe("bench-scope:answer_0250ae1c");
-		expect(result.results[0]?.content).toContain("stand-up comedy specials on Netflix");
-		expect(result.results[0]?.tags).toContain("answer_0250ae1c");
-	});
-
-	it("hydrates transcript fallback with the same-session structured memory summary", async () => {
-		const now = new Date().toISOString();
-		getDbAccessor().withWriteTx((db) => {
-			db.prepare(
-				`INSERT INTO memories (
-					id, content, type, source_id, agent_id, project, created_at, updated_at, updated_by
-				) VALUES (?, ?, 'fact', ?, 'default', ?, ?, ?, 'test')`,
-			).run(
-				"mem-routine-summary",
-				"Speaker A mentioned starting yoga on Wednesdays.",
-				"bench-scope:session-28",
-				"memorybench",
-				now,
-				now,
-			);
-
-			db.prepare(
-				`INSERT INTO session_transcripts (
-					session_key, content, harness, project, agent_id, created_at, updated_at
-				) VALUES (?, ?, 'memorybench-session', ?, ?, ?, ?)`,
-			).run(
-				"bench-scope:session-28",
-				`user: We talked through exercise classes and calendar planning.
-assistant: Considering your weightlifting background, power yoga might be useful.`,
-				"memorybench",
-				"default",
-				now,
-				now,
-			);
-		});
-
-		const cfg = loadMemoryConfig(dir);
-		cfg.search.rehearsal_enabled = false;
-		cfg.search.min_score = 0;
-		cfg.pipelineV2.graph.enabled = false;
-		cfg.pipelineV2.traversal.enabled = false;
-		cfg.pipelineV2.reranker.enabled = false;
-
-		const result = await hybridRecall(
-			{
-				query: "exercise classes calendar",
-				limit: 5,
-				agentId: "default",
-				readPolicy: "isolated",
-				project: "memorybench",
-				scope: "bench-scope",
-				expand: true,
-			},
-			cfg,
-			async () => null,
-		);
-
-		const hit = result.results.find((row) => row.id === "transcript:bench-scope:session-28");
-		expect(hit?.source).toBe("transcript");
-		expect(hit?.content).toStartWith("[Structured memory summary]");
-		expect(hit?.content).toContain("starting yoga on Wednesdays");
-		expect(hit?.content).toContain("[Transcript excerpt]");
-		expect(hit?.content).toContain("exercise classes and calendar planning");
-	});
-
-	it("defaults transcript summary hydration to the default agent when agentId is omitted", async () => {
-		const now = new Date().toISOString();
-		getDbAccessor().withWriteTx((db) => {
-			const memory = db.prepare(
-				`INSERT INTO memories (
-					id, content, type, source_id, agent_id, project, created_at, updated_at, updated_by
-				) VALUES (?, ?, 'fact', ?, ?, NULL, ?, ?, 'test')`,
-			);
-			memory.run(
-				"mem-default-summary",
-				"Default agent summary says the user maintains a fermented dough culture in the fridge.",
-				"shared-session-42",
-				"default",
-				now,
-				now,
-			);
-			memory.run(
-				"mem-other-agent-summary",
-				"Other agent summary says the user keeps backup API keys in a notebook.",
-				"shared-session-42",
-				"agent-b",
-				now,
-				now,
-			);
-
-			db.prepare(
-				`INSERT INTO session_transcripts (
-					session_key, content, harness, project, agent_id, created_at, updated_at
-				) VALUES (?, ?, 'codex', NULL, 'default', ?, ?)`,
-			).run("shared-session-42", "user: We discussed sourdough starter storage and feeding cadence.", now, now);
-		});
-
-		const result = await hybridRecall(
-			{
-				query: "sourdough starter feeding cadence",
-				limit: 5,
-				expand: true,
-			},
-			testCfg({ reranker: false }),
-			async () => null,
-		);
-
-		const hit = result.results.find((row) => row.id === "transcript:shared-session-42");
-		expect(hit?.content).toContain("Default agent summary");
-		expect(hit?.content).not.toContain("Other agent summary");
-		expect(hit?.content).not.toContain("backup API keys");
+		expect(result.results).toEqual([]);
+		expect(JSON.stringify(result)).not.toContain("stand-up comedy specials on Netflix");
 	});
 
 	it("dampens stale structured memories and annotates current replacements", async () => {

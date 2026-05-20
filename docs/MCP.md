@@ -73,7 +73,8 @@ not drift into separate request shapes or result formatting.
 
 Hybrid vector + keyword search over stored memories. Returns results ranked
 by combined BM25 + vector similarity score with optional graph boost and
-reranking.
+reranking. Transcript search is intentionally separate; use `session_search`
+when you need session transcript evidence.
 
 **Parameters:**
 
@@ -84,7 +85,6 @@ Primary controls:
 | `query` | string | yes | Search query text |
 | `limit` | number | no | Max results to return (default 10) |
 | `project` | string | no | Optional project path filter |
-| `expand` | boolean | no | Include expanded transcript/context sources |
 
 Common refinements:
 

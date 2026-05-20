@@ -157,8 +157,10 @@ with `/remember` or `memory_store`.
 Recall order is:
 
 1. structured memory recall,
-2. temporal thread-head fallback,
-3. transcript fallback.
+2. temporal thread-head fallback.
+
+Raw transcript search is deliberately not injected through this hook. Use
+`session_search` when a caller needs transcript evidence.
 
 The guidance is meant to prevent agents from treating an empty automatic
 inject as proof that no prior context exists.

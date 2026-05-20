@@ -34,12 +34,6 @@ const emptyTemporalHits: Array<{
 	excerpt: string;
 }> = [];
 const searchTemporalFallbackMock = mock(() => emptyTemporalHits);
-const emptyTranscriptHits: Array<{
-	sessionKey: string;
-	updatedAt: string;
-	excerpt: string;
-}> = [];
-const searchTranscriptFallbackMock = mock(() => emptyTranscriptHits);
 
 const { loadMemoryConfig: realLoadMemoryConfig } = await import("./memory-config");
 
@@ -97,7 +91,6 @@ function makeDeps(opts: { readonly agentFeedback?: boolean } = {}): PromptDeps {
 		hybridRecall: hybridRecallMock,
 		fetchEmbedding: fetchEmbeddingMock,
 		searchTemporalFallback: searchTemporalFallbackMock,
-		searchTranscriptFallback: searchTranscriptFallbackMock,
 		upsertSessionTranscript() {},
 		getExpiryWarning: () => null,
 		recordPrompt() {},
@@ -129,8 +122,6 @@ describe("handleUserPromptSubmit observability", () => {
 		fetchEmbeddingMock.mockClear();
 		searchTemporalFallbackMock.mockClear();
 		searchTemporalFallbackMock.mockImplementation(() => emptyTemporalHits);
-		searchTranscriptFallbackMock.mockClear();
-		searchTranscriptFallbackMock.mockImplementation(() => emptyTranscriptHits);
 		ensureMemoryDbExists();
 		resetDefaultPluginHostForTests();
 		getDefaultPluginHost().setEnabled(SIGNET_SECRETS_PLUGIN_ID, true);
@@ -228,7 +219,6 @@ describe("handleUserPromptSubmit observability", () => {
 		const payload = submitCalls[0]?.[2];
 		expect(payload?.engine).toBe("temporal-fallback");
 		expect(payload?.memoryCount).toBe(1);
-		expect(searchTranscriptFallbackMock).not.toHaveBeenCalled();
 		expect(result.inject).toContain("## Memory Check");
 		expect(result.inject).toContain("## Relevant Memory");
 		expect(result.inject).toContain("[thread node-1]");
@@ -237,15 +227,8 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(result.inject).not.toContain("[signet:recall");
 	});
 
-	it("logs successful transcript fallback outcomes", async () => {
+	it("does not inject transcript fallback content when structured recall misses", async () => {
 		searchTemporalFallbackMock.mockReturnValue([]);
-		searchTranscriptFallbackMock.mockReturnValue([
-			{
-				sessionKey: "session-2",
-				updatedAt: "2026-03-26T20:10:00.000Z",
-				excerpt: "fallback logs now appear in hooks telemetry",
-			},
-		]);
 
 		const result = await handleUserPromptSubmit(
 			{
@@ -256,20 +239,14 @@ describe("handleUserPromptSubmit observability", () => {
 			makeDeps(),
 		);
 
-		expect(result.engine).toBe("transcript-fallback");
 		const submitCalls = infoMock.mock.calls.filter((call) => call[1] === "User prompt submit");
 		expect(submitCalls).toHaveLength(1);
 		const payload = submitCalls[0]?.[2];
-		expect(payload?.engine).toBe("transcript-fallback");
-		expect(payload?.memoryCount).toBe(1);
-		expect(searchTranscriptFallbackMock).toHaveBeenCalledWith(
-			expect.objectContaining({
-				allowScanFallback: false,
-			}),
-		);
+		expect(payload?.engine).not.toBe("transcript-fallback");
+		expect(payload?.memoryCount).toBe(0);
 		expect(result.inject).toContain("## Memory Check");
-		expect(result.inject).toContain("## Relevant Memory");
-		expect(result.inject).toContain("[transcript session-2]");
+		expect(result.inject).not.toContain("## Relevant Memory");
+		expect(result.inject).not.toContain("[transcript");
 		expect(result.inject).toContain("save it with /remember or memory_store");
 		expect(result.inject).not.toContain("[signet:recall");
 	});

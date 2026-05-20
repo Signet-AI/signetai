@@ -579,7 +579,7 @@ Search memories using hybrid vector + keyword search.
 
 ```bash
 signet recall "user preferences"
-signet recall "release notes" --project /home/user/myapp --expand
+signet recall "release notes" --project /home/user/myapp
 signet recall "deploy process" --limit 5 --type decision
 signet recall "auth" --tags backend --who claude-code --since 2026-01-01
 signet recall "deploy checklist" --keyword-query "deploy OR rollback" --min-score 0.8
@@ -592,7 +592,6 @@ Primary controls:
 |--------|-------------|
 | `-l, --limit <n>` | Max results (default: 10) |
 | `--project <project>` | Filter by project |
-| `--expand` | Include expanded transcript/context sources |
 
 Common refinements:
 
@@ -614,6 +613,31 @@ Advanced controls:
 | `--min-score <n>` | Minimum recall score threshold, applied client-side |
 | `--agent <name>` | Filter by agent ID |
 | `--json` | Print the recall response as JSON |
+
+---
+
+`signet session search`
+---
+
+Search active or completed session transcripts. This is separate from
+`signet recall`, which searches stored memories only.
+
+```bash
+signet session search "Juniper trunk ports"
+signet session search "handoff notes" --session-key parent-session --limit 5
+signet session search "delegated task" --current-session-key child-session --agent research-agent --json
+```
+
+Options:
+
+| Option | Description |
+|--------|-------------|
+| `--session-key <key>` | Search one transcript session |
+| `--current-session-key <key>` | Current session key; sub-agent lineage may resolve to the parent |
+| `--agent <name>` | Agent ID scope |
+| `--project <project>` | Filter by project |
+| `-l, --limit <n>` | Max results (default: 10, max: 20) |
+| `--json` | Print the transcript search response as JSON |
 
 ---
 

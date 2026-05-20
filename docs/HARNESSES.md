@@ -106,8 +106,8 @@ mode expectations across harness paths.
 
 | Harness path | Prompt retrieval order | Thread-head continuity | Compaction artifact persistence | Forced post-event MEMORY refresh |
 |---|---|---|---|---|
-| TS daemon (primary) | hybrid -> temporal-fallback -> transcript-fallback | yes | yes | yes (session-summary + compaction-complete) |
-| daemon-rs shadow | hybrid-style scoped recall with temporal/transcript fallback | yes (agent-scoped retrieval path) | partial (hook route persistence only) | degraded (full event-driven refresh parity follows rust cutover wave) |
+| TS daemon (primary) | hybrid -> temporal-fallback; transcripts via explicit `session_search` | yes | yes | yes (session-summary + compaction-complete) |
+| daemon-rs shadow | hybrid-style scoped recall with temporal fallback | yes (agent-scoped retrieval path) | partial (hook route persistence only) | degraded (full event-driven refresh parity follows rust cutover wave) |
 
 Degraded mode rules:
 

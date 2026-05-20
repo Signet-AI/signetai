@@ -34,6 +34,7 @@ const REQUIRED_TOOL_NAMES = [
 	"memory_list",
 	"memory_modify",
 	"memory_forget",
+	"session_search",
 	"recall",
 	"remember",
 ] as const;
@@ -551,7 +552,7 @@ function probeHermesProvider(hermesRepo: string): HermesProbeResult {
 		"manager = MemoryManager()",
 		"manager.add_provider(provider)",
 		"names = sorted(manager.get_all_tool_names())",
-		"required = ['memory_search', 'memory_store', 'memory_get', 'memory_list', 'memory_modify', 'memory_forget', 'recall', 'remember']",
+		"required = ['memory_search', 'memory_store', 'memory_get', 'memory_list', 'memory_modify', 'memory_forget', 'session_search', 'recall', 'remember']",
 		"print(json.dumps({'toolNames': names, 'missing': [name for name in required if name not in names]}))",
 	].join("\n");
 

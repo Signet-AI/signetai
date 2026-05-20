@@ -1,7 +1,7 @@
 /**
  * Signet memory tools for OpenCode.
  *
- * 8 tools using tool() from @opencode-ai/plugin, mirroring the
+ * 9 tools using tool() from @opencode-ai/plugin, mirroring the
  * tool surface of @signetai/adapter-openclaw.
  */
 
@@ -33,6 +33,34 @@ async function searchMemory(
 
 	if (result === null) return DAEMON_OFFLINE_MSG;
 	return formatRecallText(applyRecallScoreThreshold(result, args.min_score));
+}
+
+async function searchSessions(
+	client: DaemonClient,
+	args: {
+		readonly query: string;
+		readonly session_key?: string;
+		readonly current_session_key?: string;
+		readonly agent_id?: string;
+		readonly project?: string;
+		readonly limit?: number;
+	},
+): Promise<string> {
+	const result = await client.post<unknown>(
+		"/api/sessions/search",
+		{
+			query: args.query,
+			sessionKey: args.session_key,
+			currentSessionKey: args.current_session_key,
+			agentId: args.agent_id,
+			project: args.project,
+			limit: args.limit,
+		},
+		READ_TIMEOUT,
+	);
+
+	if (result === null) return DAEMON_OFFLINE_MSG;
+	return JSON.stringify(result, null, 2);
 }
 
 async function storeMemory(
@@ -92,6 +120,24 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				if (result.offline) return DAEMON_OFFLINE_MSG;
 				const id = result.id ?? result.memoryId;
 				return id ? `Memory saved${args.pinned ? " (pinned)" : ""} (id: ${id})` : "Memory saved.";
+			},
+		}),
+
+		session_search: tool({
+			description: "Search active or completed session transcripts",
+			args: {
+				query: tool.schema.string().describe("Natural language or keyword query"),
+				session_key: tool.schema.string().optional().describe("Specific transcript session key to search"),
+				current_session_key: tool.schema
+					.string()
+					.optional()
+					.describe("Current session key; sub-agent lineage may resolve this to the parent session"),
+				agent_id: tool.schema.string().optional().describe("Agent scope, default default"),
+				project: tool.schema.string().optional().describe("Optional project path filter"),
+				limit: tool.schema.number().optional().describe("Max results to return (default 10, max 20)"),
+			},
+			async execute(args): Promise<string> {
+				return searchSessions(client, args);
 			},
 		}),
 

@@ -361,7 +361,6 @@ class SignetClient:
         since: str = "",
         until: str = "",
         keyword_query: str = "",
-        expand: bool = False,
         score_min: Optional[float] = None,
         agent_scoped: bool = False,
     ) -> Optional[Dict[str, Any]]:
@@ -388,8 +387,6 @@ class SignetClient:
             body["until"] = until
         if keyword_query:
             body["keywordQuery"] = keyword_query
-        if expand:
-            body["expand"] = True
         if agent_scoped and self._agent_id:
             body["agentId"] = self._agent_id
 
@@ -409,6 +406,32 @@ class SignetClient:
             if isinstance(meta, dict):
                 result["meta"] = {**meta, "totalReturned": len(kept), "noHits": len(kept) == 0}
         return result
+
+    def session_search(
+        self,
+        query: str,
+        *,
+        session_key: str = "",
+        current_session_key: str = "",
+        agent_id: str = "",
+        project: str = "",
+        limit: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        """Search active or completed session transcripts."""
+        body: Dict[str, Any] = {
+            "query": query,
+            "limit": limit,
+        }
+        if session_key:
+            body["sessionKey"] = session_key
+        if current_session_key:
+            body["currentSessionKey"] = current_session_key
+        resolved_agent_id = agent_id or self._agent_id
+        if resolved_agent_id:
+            body["agentId"] = resolved_agent_id
+        if project:
+            body["project"] = project
+        return self._post("/api/sessions/search", body, timeout=_RECALL_TIMEOUT_SECS)
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a single memory by ID."""

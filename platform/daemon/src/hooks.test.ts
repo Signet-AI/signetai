@@ -1346,7 +1346,7 @@ describe("handleUserPromptSubmit", () => {
 		expect(row?.content).toContain("review the release checklist");
 	});
 
-	test.serial("falls back to transcript excerpts when structured recall is empty", async () => {
+	test.serial("does not fall back to transcript excerpts when structured recall is empty", async () => {
 		createMemoryDb([]);
 		const db = openTestDb();
 		db.prepare(
@@ -1371,10 +1371,10 @@ describe("handleUserPromptSubmit", () => {
 			userPrompt: "where did we decide the temporal index drill-down handles should live?",
 		});
 
-		expect(result.memoryCount).toBeGreaterThan(0);
-		expect(result.engine).toBe("transcript-fallback");
-		expect(result.inject).toContain("temporal index");
-		expect(result.inject).toContain("sess-olde");
+		expect(result.memoryCount).toBe(0);
+		expect(result.engine).not.toBe("transcript-fallback");
+		expect(result.inject).not.toContain("temporal index");
+		expect(result.inject).not.toContain("sess-olde");
 	});
 
 	test.serial("uses temporal fallback before transcript fallback when weak hybrid misses anchors", async () => {
@@ -1657,7 +1657,7 @@ describe("handleUserPromptSubmit", () => {
 		expect(result.inject).toContain("node-foo-b");
 	});
 
-	test.serial("falls back to transcript excerpts when hybrid top hit misses query anchors", async () => {
+	test.serial("does not fall back to transcript excerpts when hybrid top hit misses query anchors", async () => {
 		createMemoryDb([
 			{
 				content: "Locate deployment logs from the latest rollout runbook.",
@@ -1687,10 +1687,10 @@ describe("handleUserPromptSubmit", () => {
 			userPrompt: "locate ultra-needle-transcript-only-5529931",
 		});
 
-		expect(result.memoryCount).toBeGreaterThan(0);
-		expect(result.engine).toBe("transcript-fallback");
-		expect(result.inject).toContain("ultra-needle-transcript-only-5529931");
-		expect(result.inject).toContain("sess-anch");
+		expect(result.memoryCount).toBe(0);
+		expect(result.engine).not.toBe("transcript-fallback");
+		expect(result.inject).not.toContain("ultra-needle-transcript-only-5529931");
+		expect(result.inject).not.toContain("sess-anch");
 	});
 
 	test.serial("applies character budget", async () => {
