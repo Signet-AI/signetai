@@ -422,6 +422,62 @@ memory:
 		expect(rows.chunks).toBe(firstJson.ids?.length);
 	});
 
+	it("POST /api/memory/remember rejects mixed chunked and non-chunk idempotency-key reuse", async () => {
+		const oversized = Array.from(
+			{ length: 90 },
+			(_, index) => `Mixed idempotency chunk sentence ${index} carries enough words to split predictably.`,
+		).join(" ");
+		expect(oversized.length).toBeGreaterThan(800);
+
+		const small = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Small memory using a key before a chunked import.",
+				who: "soulvessel.tests",
+				idempotencyKey: "mixed-small-first-key",
+			}),
+		});
+		expect(small.status).toBe(200);
+
+		const chunkAfterSmall = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: oversized,
+				who: "soulvessel.tests",
+				idempotencyKey: "mixed-small-first-key",
+			}),
+		});
+		const chunkAfterSmallJson = (await chunkAfterSmall.json()) as { error?: string };
+		expect(chunkAfterSmall.status).toBe(409);
+		expect(chunkAfterSmallJson.error).toContain("non-chunk content");
+
+		const chunkFirst = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: oversized,
+				who: "soulvessel.tests",
+				idempotencyKey: "mixed-chunk-first-key",
+			}),
+		});
+		expect(chunkFirst.status).toBe(200);
+
+		const smallAfterChunk = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Small memory using a key after a chunked import.",
+				who: "soulvessel.tests",
+				idempotencyKey: "mixed-chunk-first-key",
+			}),
+		});
+		const smallAfterChunkJson = (await smallAfterChunk.json()) as { error?: string };
+		expect(smallAfterChunk.status).toBe(409);
+		expect(smallAfterChunkJson.error).toContain("chunked content");
+	});
+
 	it("POST /api/memory/remember persists structured graph data under the requested agent", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",

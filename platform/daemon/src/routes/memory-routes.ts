@@ -768,6 +768,13 @@ export function registerMemoryRoutes(app: Hono): void {
 				return c.json({ error: "content produced no valid chunks" }, 400);
 			}
 
+			const baseIdempotencyMemory = getDbAccessor().withReadDb((db) =>
+				getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
+			);
+			if (baseIdempotencyMemory) {
+				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
+			}
+
 			const existingChunks = getDbAccessor().withReadDb((db) =>
 				getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
 			);
@@ -972,6 +979,15 @@ export function registerMemoryRoutes(app: Hono): void {
 				: normalizedContent.hashBasis;
 		const contentHash = normalizedContent.contentHash;
 		const pipelineEnqueueEnabled = pipelineCfg.enabled;
+		const chunkedIdempotencyMemory =
+			rowProvenance.idempotencyKey === undefined
+				? []
+				: getDbAccessor().withReadDb((db) =>
+						getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
+					);
+		if (chunkedIdempotencyMemory.length > 0) {
+			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
+		}
 
 		type DedupeRow = RememberDedupeRow;
 
