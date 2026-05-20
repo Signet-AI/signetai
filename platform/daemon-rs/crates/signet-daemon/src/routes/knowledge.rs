@@ -502,12 +502,12 @@ pub async fn expand(
             let aspects = {
                 let mut sql = "SELECT id, canonical_name, weight FROM entity_aspects WHERE entity_id = ?1 AND agent_id = ?2".to_string();
                 if aspect_filter.is_some() {
-                    sql.push_str(" AND canonical_name LIKE ?3");
+                    sql.push_str(" AND canonical_name LIKE ?3 ESCAPE '\\'");
                 }
                 sql.push_str(" ORDER BY weight DESC LIMIT 10");
                 let mut stmt = conn.prepare(&sql)?;
                 let rows = if let Some(filter) = aspect_filter.as_ref() {
-                    let like = format!("%{filter}%");
+                    let like = format!("%{}%", escape_like(filter));
                     stmt.query_map(rusqlite::params![entity_id, agent_id, like], |row| {
                         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?))
                     })?.collect::<Result<Vec<_>, _>>()?

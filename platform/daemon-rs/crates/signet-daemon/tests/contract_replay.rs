@@ -148,8 +148,12 @@ impl TestServer {
              INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES ('mem-other-agent-signet', 'entity-signet');
              INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
              VALUES ('aspect-signet-identity', 'entity-signet', 'default', 'identity', 'identity', 0.95, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+             VALUES ('aspect-signet-percent', 'entity-signet', 'default', 'percent %', 'percent %', 0.90, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO entity_attributes (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
              VALUES ('attr-signet-portable', 'aspect-signet-identity', 'default', 'mem-signet-context', 'attribute', 'Signet preserves portable AI identity with source-backed provenance.', 'signet preserves portable ai identity with source-backed provenance', 0.92, 0.91, 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             INSERT INTO entity_attributes (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+             VALUES ('attr-signet-percent', 'aspect-signet-percent', 'default', 'mem-signet-context', 'attribute', 'Signet has a literal percent aspect filter fixture.', 'signet has a literal percent aspect filter fixture', 0.90, 0.90, 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
              INSERT INTO entity_dependencies (id, source_entity_id, target_entity_id, agent_id, aspect_id, dependency_type, strength, reason, created_at, updated_at)
              VALUES ('dep-signet-provenance', 'entity-signet', 'entity-provenance', 'default', 'aspect-signet-identity', 'depends_on', 0.83, 'Identity recall depends on provenance evidence.', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');"
         ).expect("seed graph fixture");
@@ -1006,6 +1010,17 @@ async fn knowledge_expand_native_graph_data() {
     assert_eq!(body["memories"][0]["id"], "mem-signet-context");
     assert_eq!(body["aspects"][0]["name"], "identity");
     assert_eq!(body["dependencies"][0]["target"], "Provenance");
+
+    let resp = server
+        .post(
+            "/api/knowledge/expand",
+            json!({"entity": "Signet", "aspect": "%", "maxTokens": 200}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = server.json(resp).await;
+    assert_eq!(body["aspects"].as_array().unwrap().len(), 1);
+    assert_eq!(body["aspects"][0]["name"], "percent %");
 
     let resp = server
         .post(
