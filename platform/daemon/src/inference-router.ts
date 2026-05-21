@@ -23,6 +23,7 @@ import {
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import {
+	type AcpxHooksMode,
 	type LlmProviderStreamEvent,
 	type LlmProviderStreamResult,
 	type StreamCapableLlmProvider,
@@ -496,8 +497,9 @@ export class InferenceRouter {
 		loaded: LoadedRoutingConfig,
 		targetId: string,
 		modelId: string,
+		acpxHooks?: AcpxHooksMode,
 	): Promise<StreamCapableLlmProvider> {
-		const cacheKey = `${loaded.signature}:${targetId}/${modelId}`;
+		const cacheKey = `${loaded.signature}:${targetId}/${modelId}:${acpxHooks ?? "configured-hooks"}`;
 		const cached = this.providerCache.get(cacheKey);
 		if (cached) return cached;
 
@@ -514,6 +516,7 @@ export class InferenceRouter {
 					if (!target.acpx) throw new Error(`Missing ACPX config for target ${targetId}`);
 					return createAcpxProvider({
 						...target.acpx,
+						...(acpxHooks ? { hooks: acpxHooks } : {}),
 						model: model.model,
 					});
 				case "anthropic":
@@ -697,7 +700,12 @@ export class InferenceRouter {
 	async execute(
 		request: RouteRequest,
 		prompt: string,
-		opts?: { readonly timeoutMs?: number; readonly maxTokens?: number; readonly refresh?: boolean },
+		opts?: {
+			readonly timeoutMs?: number;
+			readonly maxTokens?: number;
+			readonly refresh?: boolean;
+			readonly acpxHooks?: AcpxHooksMode;
+		},
 	): Promise<RouterResult<InferenceExecutionResult>> {
 		const loaded = await this.loadConfig();
 		if (!loaded.ok) return loaded;
@@ -727,7 +735,12 @@ export class InferenceRouter {
 				continue;
 			}
 			try {
-				const provider = await this.createProvider(loaded.value, parsed.value.targetId, parsed.value.modelId);
+				const provider = await this.createProvider(
+					loaded.value,
+					parsed.value.targetId,
+					parsed.value.modelId,
+					opts?.acpxHooks,
+				);
 				const result = await generateWithTracking(provider, prompt, {
 					timeoutMs: opts?.timeoutMs,
 					maxTokens: opts?.maxTokens,

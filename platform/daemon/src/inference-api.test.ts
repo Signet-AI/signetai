@@ -185,6 +185,53 @@ inference:
 	return { argsPath, promptPath };
 }
 
+function writeAcpxInferenceFixtureWithoutHooks(root: string): {
+	readonly promptPath: string;
+	readonly hooksPath: string;
+} {
+	mkdirSync(join(root, "memory"), { recursive: true });
+	const bin = join(root, "fake-acpx.sh");
+	const promptPath = join(root, "acpx-prompt.txt");
+	const hooksPath = join(root, "acpx-hooks.txt");
+	writeFileSync(
+		bin,
+		`#!/usr/bin/env bash
+cat > ${JSON.stringify(promptPath)}
+printf '%s' "\${SIGNET_NO_HOOKS:-}" > ${JSON.stringify(hooksPath)}
+printf 'acpx:%s\n' "$(cat ${JSON.stringify(promptPath)})"
+	`,
+	);
+	chmodSync(bin, 0o755);
+	writeFileSync(
+		join(root, "agent.yaml"),
+		`memory:
+  pipelineV2:
+    extraction:
+      provider: none
+inference:
+  defaultPolicy: background-acpx
+  targets:
+    background-acpx:
+      executor: acpx
+      acpx:
+        agent: codex
+        bin: ${bin}
+      models:
+        default:
+          model: gpt-5.4-mini
+  policies:
+    background-acpx:
+      mode: strict
+      defaultTargets:
+        - background-acpx/default
+  workloads:
+    default:
+      policy: background-acpx
+	`,
+	);
+	return { promptPath, hooksPath };
+}
+
 function writeAccountFallbackRoutingFixture(
 	root: string,
 	endpoints: {
@@ -781,6 +828,25 @@ describe("inference route hardening", () => {
 			expect(args).toContain("--deny-all");
 			expect(args).toContain("--no-terminal");
 			expect(args.slice(-4)).toEqual(["codex", "exec", "--file", "-"]);
+		} finally {
+			resetInferenceRouterForTests();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("can force ACPX hooks off for sterile background router calls", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-acpx-hooks-"));
+		const fixture = writeAcpxInferenceFixtureWithoutHooks(root);
+		try {
+			const router = getOrCreateInferenceRouter(root);
+			const result = await router.execute({ operation: "tool_planning" }, "sterile aggregate prompt", {
+				acpxHooks: "disabled",
+			});
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.value.text).toBe("acpx:sterile aggregate prompt");
+			expect(readFileSync(fixture.promptPath, "utf-8")).toBe("sterile aggregate prompt");
+			expect(readFileSync(fixture.hooksPath, "utf-8")).toBe("1");
 		} finally {
 			resetInferenceRouterForTests();
 			rmSync(root, { recursive: true, force: true });

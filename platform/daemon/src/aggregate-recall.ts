@@ -5,7 +5,14 @@ import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
-import { type EmbedFn, type RecallParams, type RecallResponse, type RecallResult, hybridRecall } from "./memory-search";
+import {
+	type EmbedFn,
+	type RecallParams,
+	type RecallResponse,
+	type RecallResult,
+	type RecallTimings,
+	hybridRecall,
+} from "./memory-search";
 import { type IngestEnvelope, txIngestEnvelope } from "./transactions";
 
 export type AggregateRecallBudget = "small" | "medium" | "large";
@@ -19,7 +26,12 @@ export interface AggregateInferenceRouter {
 	execute(
 		request: RouteRequest,
 		prompt: string,
-		opts?: { readonly timeoutMs?: number; readonly maxTokens?: number; readonly refresh?: boolean },
+		opts?: {
+			readonly timeoutMs?: number;
+			readonly maxTokens?: number;
+			readonly refresh?: boolean;
+			readonly acpxHooks?: "disabled" | "inherit";
+		},
 	): Promise<RouterResult<AggregateInferenceResult>>;
 }
 
@@ -68,6 +80,47 @@ const BUDGET_QUERY_LIMITS: Record<AggregateRecallBudget, number> = {
 	medium: 5,
 	large: 8,
 };
+const AGGREGATE_RECALL_TIMING_LOG_THRESHOLD_MS = 1000;
+
+function roundAggregateDuration(ms: number): number {
+	return Math.round(ms * 100) / 100;
+}
+
+function createAggregateTimingCollector(): {
+	readonly time: <T>(name: string, fn: () => T) => T;
+	readonly timeAsync: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
+	readonly finish: () => RecallTimings;
+} {
+	const start = performance.now();
+	const stages: RecallTimings["stages"] = [];
+	const record = (name: string, stageStart: number): void => {
+		stages.push({ name, durationMs: roundAggregateDuration(performance.now() - stageStart) });
+	};
+	return {
+		time<T>(name: string, fn: () => T): T {
+			const stageStart = performance.now();
+			try {
+				return fn();
+			} finally {
+				record(name, stageStart);
+			}
+		},
+		async timeAsync<T>(name: string, fn: () => Promise<T>): Promise<T> {
+			const stageStart = performance.now();
+			try {
+				return await fn();
+			} finally {
+				record(name, stageStart);
+			}
+		},
+		finish(): RecallTimings {
+			return {
+				totalMs: roundAggregateDuration(performance.now() - start),
+				stages: [...stages],
+			};
+		},
+	};
+}
 
 export class InvalidAggregateRecallBudgetError extends Error {
 	constructor() {
@@ -457,7 +510,7 @@ async function planQueries(input: {
 			expectedOutputTokens: 300,
 		},
 		prompt,
-		{ maxTokens: 300, timeoutMs: 20_000 },
+		{ maxTokens: 300, timeoutMs: 20_000, acpxHooks: "disabled" },
 	);
 	return result.ok ? parsePlannerQueries(result.value.text).slice(0, remaining) : [];
 }
@@ -491,7 +544,7 @@ async function synthesize(input: {
 			expectedOutputTokens: 700,
 		},
 		prompt,
-		{ maxTokens: 700, timeoutMs: 30_000 },
+		{ maxTokens: 700, timeoutMs: 30_000, acpxHooks: "disabled" },
 	);
 	if (!result.ok) return null;
 	const text = result.value.text.trim();
@@ -509,51 +562,85 @@ export async function aggregateRecall(
 	const saveAggregate = params.saveAggregate !== false && params.save_aggregate !== false;
 	const log = deps.logger ?? logger;
 	const ingestEnvelope = deps.ingestEnvelope ?? txIngestEnvelope;
-	const first = await recall(params, cfg, deps.embedFn);
+	const timings = createAggregateTimingCollector();
+	const finish = (response: RecallResponse): RecallResponse => {
+		const recallTimings = timings.finish();
+		if (recallTimings.totalMs >= AGGREGATE_RECALL_TIMING_LOG_THRESHOLD_MS) {
+			log.warn("memory", "Aggregate recall stage timings", {
+				agentId: params.agentId ?? "default",
+				budget,
+				queryCount: response.aggregate?.queries.length ?? 1,
+				sourceMemoryCount: response.aggregate?.sourceMemoryIds.length ?? 0,
+				resultCount: response.meta.totalReturned,
+				totalMs: recallTimings.totalMs,
+				stages: recallTimings.stages,
+			});
+		}
+		return {
+			...response,
+			meta: {
+				...response.meta,
+				timings: recallTimings,
+			},
+		};
+	};
+	const first = await timings.timeAsync("aggregate_initial_recall", () => recall(params, cfg, deps.embedFn));
 
 	if (!deps.router) {
 		const sourceMemoryIds = uniqueEvidence(first.results).map((row) => row.id);
-		return emptyAggregateResponse(
-			params,
-			budget,
-			[params.query],
-			sourceMemoryIds,
-			sourceMemoryIds.length === 0 ? "no_evidence" : "router_unavailable",
-		);
-	}
-
-	const planned = await planQueries({
-		router: deps.router,
-		params,
-		budget,
-		maxQueries,
-		initialRows: first.results,
-	});
-	const queries = uniqueQueries(params.query, planned, maxQueries);
-	const recalls = [first];
-	for (const query of queries.slice(1)) {
-		recalls.push(
-			await recall(
-				{
-					...params,
-					query,
-					aggregate: false,
-				},
-				cfg,
-				deps.embedFn,
+		return finish(
+			emptyAggregateResponse(
+				params,
+				budget,
+				[params.query],
+				sourceMemoryIds,
+				sourceMemoryIds.length === 0 ? "no_evidence" : "router_unavailable",
 			),
 		);
 	}
 
+	const planned = await timings.timeAsync("aggregate_planning", () =>
+		planQueries({
+			router: deps.router,
+			params,
+			budget,
+			maxQueries,
+			initialRows: first.results,
+		}),
+	);
+	const queries = uniqueQueries(params.query, planned, maxQueries);
+	const followupQueries = queries.slice(1);
+	const followupRecalls =
+		followupQueries.length === 0
+			? []
+			: await timings.timeAsync("aggregate_followup_recalls", () =>
+					Promise.all(
+						followupQueries.map((query) =>
+							recall(
+								{
+									...params,
+									query,
+									aggregate: false,
+								},
+								cfg,
+								deps.embedFn,
+							),
+						),
+					),
+				);
+	const recalls = [first, ...followupRecalls];
+
 	const evidence = uniqueEvidence(recalls.flatMap((result) => result.results));
 	const sourceMemoryIds = evidence.map((row) => row.id);
 	if (evidence.length === 0) {
-		return emptyAggregateResponse(params, budget, queries, [], "no_evidence");
+		return finish(emptyAggregateResponse(params, budget, queries, [], "no_evidence"));
 	}
 
-	const answer = await synthesize({ router: deps.router, params, evidence });
+	const answer = await timings.timeAsync("aggregate_synthesis", () =>
+		synthesize({ router: deps.router, params, evidence }),
+	);
 	if (!answer) {
-		return emptyAggregateResponse(params, budget, queries, sourceMemoryIds, "synthesis_failed");
+		return finish(emptyAggregateResponse(params, budget, queries, sourceMemoryIds, "synthesis_failed"));
 	}
 
 	const agentId = params.agentId ?? "default";
@@ -566,53 +653,9 @@ export async function aggregateRecall(
 	let saved = false;
 	if (saveAggregate && evidenceCanSaveAsGlobalAggregate(evidence) && aggregateAnswerCanBeSaved(answer)) {
 		const normalized = normalizeAndHashContent(answer);
-		row = getDbAccessor().withWriteTx((db) => {
-			const duplicate = resolveAggregateDuplicate(db, {
-				key,
-				agentId,
-				project,
-				query: params.query,
-				contentHash: normalized.contentHash,
-				answer,
-				sourceMemoryIds,
-				now,
-			});
-			if (duplicate) {
-				deduped = true;
-				saved = duplicate.saved;
-				return duplicate.row;
-			}
-			const id = deps.idFactory?.() ?? randomUUID();
-			const envelope: IngestEnvelope = {
-				id,
-				content: normalized.storageContent,
-				normalizedContent: normalized.normalizedContent || normalized.hashBasis,
-				contentHash: normalized.contentHash,
-				who: "signet",
-				why: "aggregate recall",
-				project,
-				importance: 0.75,
-				type: "semantic",
-				tags: "aggregate,recall",
-				pinned: 0,
-				isDeleted: 0,
-				extractionStatus: "none",
-				embeddingModel: null,
-				extractionModel: null,
-				updatedBy: "signet",
-				sourceType: "aggregate-recall",
-				sourceId: key,
-				idempotencyKey: key,
-				scope: null,
-				agentId,
-				visibility: "global",
-				createdAt: now,
-			};
-			try {
-				ingestEnvelope(db, envelope);
-			} catch (err) {
-				if (!isUniqueConstraintError(err)) throw err;
-				const racedDuplicate = resolveAggregateDuplicate(db, {
+		row = timings.time("aggregate_save", () =>
+			getDbAccessor().withWriteTx((db) => {
+				const duplicate = resolveAggregateDuplicate(db, {
 					key,
 					agentId,
 					project,
@@ -622,31 +665,72 @@ export async function aggregateRecall(
 					sourceMemoryIds,
 					now,
 				});
-				if (!racedDuplicate) {
+				if (duplicate) {
 					deduped = true;
-					saved = false;
-					return unsavedAggregateResult(answer, key, project);
+					saved = duplicate.saved;
+					return duplicate.row;
 				}
-				deduped = true;
-				saved = racedDuplicate.saved;
-				return racedDuplicate.row;
-			}
-			linkAggregateSources(db, id, sourceMemoryIds, agentId, now);
-			linkAggregateQueryHint(db, id, agentId, params.query, now);
-			saved = true;
-			return loadAggregateMemory(db, id);
-		});
+				const id = deps.idFactory?.() ?? randomUUID();
+				const envelope: IngestEnvelope = {
+					id,
+					content: normalized.storageContent,
+					normalizedContent: normalized.normalizedContent || normalized.hashBasis,
+					contentHash: normalized.contentHash,
+					who: "signet",
+					why: "aggregate recall",
+					project,
+					importance: 0.75,
+					type: "semantic",
+					tags: "aggregate,recall",
+					pinned: 0,
+					isDeleted: 0,
+					extractionStatus: "none",
+					embeddingModel: null,
+					extractionModel: null,
+					updatedBy: "signet",
+					sourceType: "aggregate-recall",
+					sourceId: key,
+					idempotencyKey: key,
+					scope: null,
+					agentId,
+					visibility: "global",
+					createdAt: now,
+				};
+				try {
+					ingestEnvelope(db, envelope);
+				} catch (err) {
+					if (!isUniqueConstraintError(err)) throw err;
+					const racedDuplicate = resolveAggregateDuplicate(db, {
+						key,
+						agentId,
+						project,
+						query: params.query,
+						contentHash: normalized.contentHash,
+						answer,
+						sourceMemoryIds,
+						now,
+					});
+					if (!racedDuplicate) {
+						deduped = true;
+						saved = false;
+						return unsavedAggregateResult(answer, key, project);
+					}
+					deduped = true;
+					saved = racedDuplicate.saved;
+					return racedDuplicate.row;
+				}
+				linkAggregateSources(db, id, sourceMemoryIds, agentId, now);
+				linkAggregateQueryHint(db, id, agentId, params.query, now);
+				saved = true;
+				return loadAggregateMemory(db, id);
+			}),
+		);
 		if (row && !deduped) {
 			let embedded = false;
 			let embeddingError: unknown;
 			try {
-				embedded = await embedAggregateMemory(
-					row.id,
-					row.content,
-					normalized.contentHash,
-					now,
-					cfg.embedding,
-					deps.embedFn,
+				embedded = await timings.timeAsync("aggregate_embedding", () =>
+					embedAggregateMemory(row.id, row.content, normalized.contentHash, now, cfg.embedding, deps.embedFn),
 				);
 			} catch (err) {
 				embeddingError = err;
@@ -670,7 +754,7 @@ export async function aggregateRecall(
 		row = unsavedAggregateResult(answer, key, project);
 	}
 
-	return {
+	return finish({
 		results: row ? [row] : [],
 		query: params.query,
 		method: "hybrid",
@@ -689,5 +773,5 @@ export async function aggregateRecall(
 			sourceMemoryIds,
 			stoppedReason: "complete",
 		},
-	};
+	});
 }

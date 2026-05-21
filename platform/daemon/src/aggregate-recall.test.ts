@@ -75,12 +75,28 @@ function aggregateKeyForTest(input: {
 class StaticRouter implements AggregateInferenceRouter {
 	calls: RouteRequest[] = [];
 	prompts: string[] = [];
+	opts: Array<{
+		readonly timeoutMs?: number;
+		readonly maxTokens?: number;
+		readonly refresh?: boolean;
+		readonly acpxHooks?: "disabled" | "inherit";
+	}> = [];
 
 	constructor(private readonly synthesisText = "Aggregate answer from memory evidence.") {}
 
-	async execute(request: RouteRequest, prompt: string): Promise<RouterResult<{ readonly text: string }>> {
+	async execute(
+		request: RouteRequest,
+		prompt: string,
+		opts?: {
+			readonly timeoutMs?: number;
+			readonly maxTokens?: number;
+			readonly refresh?: boolean;
+			readonly acpxHooks?: "disabled" | "inherit";
+		},
+	): Promise<RouterResult<{ readonly text: string }>> {
 		this.calls.push(request);
 		this.prompts.push(prompt);
+		this.opts.push(opts ?? {});
 		return {
 			ok: true,
 			value: {
@@ -170,6 +186,7 @@ describe("aggregateRecall", () => {
 
 		expect(calls).toEqual(["what happened", "follow up one", "follow up two"]);
 		expect(router.calls.map((call) => call.operation)).toEqual(["tool_planning", "tool_planning"]);
+		expect(router.opts.map((opts) => opts.acpxHooks)).toEqual(["disabled", "disabled"]);
 		expect(router.prompts[1]).toContain("one concise atomic memory note");
 		expect(router.prompts[1]).toContain("not as a direct reply");
 		expect(router.prompts[1]).toContain("Restate the question's subject or relationship");
@@ -185,6 +202,14 @@ describe("aggregateRecall", () => {
 			sourceMemoryIds: ["mem-1", "mem-2", "mem-3"],
 			stoppedReason: "complete",
 		});
+		expect(result.meta.timings.stages.map((stage) => stage.name)).toEqual([
+			"aggregate_initial_recall",
+			"aggregate_planning",
+			"aggregate_followup_recalls",
+			"aggregate_synthesis",
+			"aggregate_save",
+			"aggregate_embedding",
+		]);
 
 		const saved = getDbAccessor().withReadDb((db) =>
 			db.prepare("SELECT source_type, idempotency_key, tags, who, type FROM memories WHERE id = ?").get("aggregate-1"),
@@ -241,6 +266,37 @@ describe("aggregateRecall", () => {
 				db.prepare("SELECT hint FROM memory_hints WHERE memory_id = ?").all("aggregate-1") as Array<{ hint: string }>,
 		);
 		expect(hints.map((hint) => hint.hint)).toEqual(["what happened"]);
+	});
+
+	it("runs planned follow-up recalls concurrently", async () => {
+		let activeFollowups = 0;
+		let maxActiveFollowups = 0;
+		const result = await aggregateRecall(
+			{
+				query: "what happened",
+				aggregate: true,
+				saveAggregate: false,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(),
+				embedFn: async () => null,
+				hybridRecall: async (input: RecallParams) => {
+					if (input.query.startsWith("follow up")) {
+						activeFollowups += 1;
+						maxActiveFollowups = Math.max(maxActiveFollowups, activeFollowups);
+						await new Promise((resolve) => setTimeout(resolve, 20));
+						activeFollowups -= 1;
+					}
+					return response(input.query, [row(input.query, `${input.query} evidence`)]);
+				},
+			},
+		);
+
+		expect(result.results).toHaveLength(1);
+		expect(maxActiveFollowups).toBe(2);
 	});
 
 	it("logs when a saved aggregate memory cannot be embedded", async () => {
@@ -797,5 +853,6 @@ describe("aggregateRecall", () => {
 			stoppedReason: "router_unavailable",
 			sourceMemoryIds: ["mem-1"],
 		});
+		expect(result.meta.timings.stages.map((stage) => stage.name)).toEqual(["aggregate_initial_recall"]);
 	});
 });
