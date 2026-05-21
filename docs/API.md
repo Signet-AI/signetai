@@ -1288,6 +1288,14 @@ to return repeats; repeated rows are annotated with
     "totalReturned": 1,
     "hasSupplementary": false,
     "noHits": false,
+    "timings": {
+      "totalMs": 14.25,
+      "stages": [
+        { "name": "memory_fts", "durationMs": 1.12 },
+        { "name": "query_embedding_wait", "durationMs": 8.4 },
+        { "name": "final_rank", "durationMs": 0.08 }
+      ]
+    },
     "dedupe": {
       "enabled": true,
       "contextEpoch": 0,
@@ -1308,6 +1316,10 @@ this call.
 is `true` when the response includes supporting context such as an LLM summary
 card or linked rationale context. `meta.noHits` is `true` when recall completed
 normally but found no matching results.
+`meta.timings`, when present, reports daemon-side stage timings in
+milliseconds. Aggregate recall fills the same field with aggregate-specific
+stages such as `aggregate_planning`, `aggregate_followup_recalls`, and
+`aggregate_synthesis`.
 When session dedupe is enabled, `meta.dedupe.suppressed` counts rows omitted
 because they were already recalled in the current epoch, and
 `meta.dedupe.repeatedReturned` counts repeated rows returned only because the

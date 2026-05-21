@@ -54,6 +54,10 @@ export interface RecallMeta {
 	readonly totalReturned: number;
 	readonly hasSupplementary: boolean;
 	readonly noHits: boolean;
+	readonly timings?: {
+		readonly totalMs: number;
+		readonly stages: readonly { readonly name: string; readonly durationMs: number }[];
+	};
 	readonly dedupe?: {
 		readonly enabled: boolean;
 		readonly contextEpoch?: number;

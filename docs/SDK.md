@@ -95,6 +95,7 @@ const { results, query, method, meta } = await signet.recall("language preferenc
   limit: 10,
   expand: true,
 });
+// meta.timings?.stages — daemon-side recall stages and durations
 ```
 
 You can refine further when needed:
@@ -115,11 +116,25 @@ const result = await signet.recall("language preferences", {
 // result.query — normalized query used by the daemon
 // result.method — "hybrid" | "keyword"
 // result.meta.totalReturned — result count after client-side minScore filtering
+// result.meta.timings — present when the daemon returns recall stage timings
 ```
 
 `minScore` is applied client-side by the SDK after the daemon returns recall
 results. This keeps the API contract honest while preserving compatibility for
 existing SDK callers that already rely on score thresholding.
+
+Explicit aggregate recall is available through the same method:
+
+```typescript
+const aggregate = await signet.recall("what did we decide about onboarding?", {
+  aggregate: true,
+  aggregateBudget: "small",
+  saveAggregate: false,
+});
+// aggregate.results[0] — synthesized aggregate row when evidence exists
+// aggregate.aggregate?.queries — recall queries used during aggregation
+// aggregate.meta.timings?.stages — aggregate planning/synthesis timings
+```
 
 **`getMemory(id)`** — Fetch a single memory record by ID.
 

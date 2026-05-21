@@ -148,6 +148,10 @@ describe("SignetClient", () => {
 						totalReturned: 2,
 						hasSupplementary: true,
 						noHits: false,
+						timings: {
+							totalMs: 12.5,
+							stages: [{ name: "memory_fts", durationMs: 1.25 }],
+						},
 						dedupe: {
 							enabled: true,
 							contextEpoch: 2,
@@ -194,6 +198,10 @@ describe("SignetClient", () => {
 			totalReturned: 1,
 			hasSupplementary: true,
 			noHits: false,
+			timings: {
+				totalMs: 12.5,
+				stages: [{ name: "memory_fts", durationMs: 1.25 }],
+			},
 			dedupe: {
 				enabled: true,
 				contextEpoch: 2,
