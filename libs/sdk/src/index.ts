@@ -1257,7 +1257,7 @@ export class SignetClient extends SignetClientHelpers {
 	 *
 	 * @example
 	 * ```typescript
-	 * const skill = await client.getSkill("signet-design");
+	 * const skill = await client.getSkill("recall");
 	 * console.log(skill.description, skill.content);
 	 * ```
 	 */
@@ -1272,7 +1272,7 @@ export class SignetClient extends SignetClientHelpers {
 	 *
 	 * @example
 	 * ```typescript
-	 * const result = await client.installSkill("signet-design");
+	 * const result = await client.installSkill("owner/repo");
 	 * console.log(result.success);
 	 * ```
 	 */
@@ -1288,7 +1288,7 @@ export class SignetClient extends SignetClientHelpers {
 	 *
 	 * @example
 	 * ```typescript
-	 * const result = await client.uninstallSkill("signet-design");
+	 * const result = await client.uninstallSkill("example-skill");
 	 * console.log(result.message);
 	 * ```
 	 */

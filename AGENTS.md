@@ -194,7 +194,7 @@ bun test platform/daemon/src/pipeline/worker.test.ts
 - **`@signet/desktop`**: Electron desktop packaging and local runtime shell.
 - **`@signet/tray`**: shared tray/menu bar state utilities only.
 - **`@signet/web`**: Astro static marketing site on Cloudflare Pages.
-  Use the `signet-design` skill for visual changes.
+  Follow current web/marketing implementation patterns for visual changes.
 
 ## Development notes
 

@@ -1,6 +1,6 @@
 ---
 name: recall
-description: "Query persistent memory using hybrid search (vector + keyword). NOTE: Relevant memories are automatically injected at session start. Use /recall for targeted searches beyond current context."
+description: "Run explicit Signet recall through the canonical scoped recall path, preserving scores, sources, provenance, supplementary context, and session dedupe metadata."
 user_invocable: true
 arg_hint: "search query"
 builtin: true
@@ -8,130 +8,149 @@ builtin: true
 
 # /recall
 
-Query persistent memory shared between all agents (claude-code, opencode,
-clawdbot) using hybrid search: 70% semantic vector similarity + 30% BM25
-keyword matching.
+Use this skill for targeted explicit recall. It is not the same surface as
+prompt-submit context injection.
 
-## When You Need This (And When You Don't)
+Signet's canonical explicit recall endpoint is `POST /api/memory/recall`.
+The CLI, MCP, and hook recall surfaces should stay thin wrappers around that
+contract. Recall combines FTS5, prospective hints, vector similarity,
+structured path evidence, graph traversal, optional reranking, source-backed
+fallbacks, currentness shaping, and session context dedupe where configured.
+Do not describe it as a fixed 70/30 vector/BM25 search.
 
-At session start, Signet automatically injects relevant memories into
-your context — scored by importance, recency, and relevance to the
-current conversation. MEMORY.md is also regenerated periodically from
-the full database using decay-weighted scoring. For most interactions,
-the right memories are already present without any manual searching.
+## When To Use
 
-Use /recall when you need to:
-- Search for something specific that isn't in current context
-- Look up old decisions or past conversations
-- Debug whether a memory was actually captured
-- Find memories by type, tag, or date range
-- Explore what the system knows about a topic
+Use `/recall` when:
 
-You do NOT need /recall to:
-- Access recent memories (they're already injected)
-- Check if the system "remembers" something (it does, automatically)
-- Build session-start rituals (injection handles this)
+- the user asks what Signet remembers or asks for a targeted memory search
+- current context is missing an old decision, preference, project fact, or
+  prior source
+- you need provenance, source labels, scores, ids, or no-hit metadata
+- you need aggregate recall to synthesize a bounded answer from evidence
+- you are debugging recall quality, scoping, or session-dedupe behavior
 
-## syntax
+Do not use `/recall` as a ritual before every task. Session-start and
+prompt-submit injection already provide lightweight context. Use explicit
+recall when there is a concrete retrieval question.
 
-```
-/recall <search>
-```
-
-## examples
-
-```
-/recall voice
-/recall signet architecture
-/recall preferences
-/recall bun vs npm
-/recall what did we decide about the API
-```
-
-## implementation
-
-Use the Signet CLI (requires running daemon):
+## CLI
 
 ```bash
-signet recall "<search>" -l 10
+signet recall "<query>"
+```
+
+Useful options:
+
+```bash
+signet recall "Signet ontology policy" --agent codex --limit 10
+signet recall "vim keybindings" --type preference --tags editor
+signet recall "OpenMarketUI evaluator health" --project /mnt/work/openmarketui
+signet recall "what did we decide about source truth" --aggregate --no-save-aggregate
+signet recall "recent Signet failures" --session-key "$SESSION_KEY" --include-recalled
+signet recall "ontology" --keyword-query '"ontology" OR "graph"' --json
 ```
 
 Options:
-- `-l, --limit <n>` — max results (default: 10)
-- `-t, --type <type>` — filter by type (preference, decision, rule, etc.)
-- `--tags <tags>` — filter by tags (comma-separated)
-- `--who <who>` — filter by who saved it
-- `--json` — output as JSON for parsing
 
-Example with filters:
+- `--agent <name>` filters/authorizes by Signet agent scope
+- `--project <path>` filters by project
+- `--type`, `--tags`, `--who`, `--pinned`, `--importance-min`, `--since`, and
+  `--until` filter memory rows
+- `--keyword-query <query>` overrides the FTS query while keeping the recall
+  query intact
+- `--aggregate` asks Signet to synthesize a bounded answer from recall evidence
+- `--aggregate-budget <small|medium|large>` caps follow-up recall breadth
+- `--no-save-aggregate` avoids persisting the aggregate answer
+- `--session-key <key>` enables context-epoch dedupe
+- `--include-recalled` returns rows already recalled in the current epoch
+- `--json` preserves the full response contract for tooling
+
+## API
 
 ```bash
-signet recall "signet" --type preference --tags architecture -l 5
+curl -s http://localhost:3850/api/memory/recall \
+  -H 'content-type: application/json' \
+  -d '{
+    "query": "user preferences for editor",
+    "limit": 10,
+    "agentId": "codex",
+    "sessionKey": "session-uuid",
+    "includeRecalled": false,
+    "aggregate": false
+  }'
 ```
 
-### daemon required
+The hook route `POST /api/hooks/recall` is a compatibility wrapper. It applies
+hook/session policy and forwards supported filters to the same recall family
+contract. Do not add separate retrieval behavior to hook or connector
+formatters.
 
-The daemon must be running for recall to work. Check status:
+## Response Contract
 
-```bash
-signet status
-curl -s http://localhost:3850/health
-```
-
-If the daemon is down, start it with `signet daemon start`.
-
-## response format
-
-The daemon returns:
+Preserve and show useful metadata. A normal response looks like:
 
 ```json
 {
   "results": [
     {
-      "content": "agent profile lives at ~/.agents/",
+      "id": "uuid",
+      "content": "User prefers vim keybindings.",
       "score": 0.92,
       "source": "hybrid",
-      "type": "fact",
-      "tags": "signet,architecture",
-      "pinned": true,
-      "importance": 1.0,
-      "who": "claude-code",
-      "project": "/home/nicholai/signet",
-      "created_at": "2026-02-15T20:38:00.000Z"
+      "type": "preference",
+      "tags": "preference,editor",
+      "pinned": false,
+      "importance": 0.9,
+      "who": "codex",
+      "project": null,
+      "created_at": "2026-02-21T10:00:00.000Z",
+      "supplementary": false,
+      "already_recalled": false
     }
   ],
-  "query": "signet architecture",
-  "method": "hybrid"
+  "query": "user preferences for editor",
+  "method": "hybrid",
+  "meta": {
+    "totalReturned": 1,
+    "hasSupplementary": false,
+    "noHits": false
+  }
 }
 ```
 
-## display format
+Common `source` values include `hybrid`, `vector`, `keyword`, `hint`,
+`structured`, `traversal`, `ka_traversal`, `source_obsidian`,
+`native_memory`, `constructed`, `graph`, and `llm_summary`.
 
-After getting results, show them like this:
+Display results with:
 
-```
-[0.92|hybrid] agent profile lives at ~/.agents/ [signet,architecture] [pinned]
-       type: fact | who: claude-code | Feb 15
+- content
+- id when available
+- score when available
+- source label
+- type/tags
+- created date
+- `supplementary` status
+- `already_recalled` when session dedupe is active
 
-[0.78|hybrid] Signet uses SQLite for memory storage
-       type: fact | who: opencode | Feb 14
+Do not flatten recall into anonymous bullets when metadata is present.
 
-[0.65|vector] Memory system supports hybrid search
-       type: fact | who: claude-code | Feb 12
-```
+## Aggregate Recall
 
-Score format: `[score|source]` where source is hybrid/vector/keyword.
+Aggregate recall first runs normal recall, may ask the inference router for
+bounded follow-up queries, synthesizes one concise answer from unique evidence
+rows, and returns aggregate metadata. Saving aggregate answers requires
+`remember` permission; recall-only callers can set `saveAggregate: false`.
 
-## configuration
+Use aggregate mode when the user asks a broad question over prior memory and a
+source-backed synthesis is more useful than a ranked list.
 
-Edit `~/.agents/config.yaml` or `~/.agents/AGENT.yaml` to adjust:
-- `search.alpha`: Vector weight (default 0.7)
-- `search.top_k`: Candidates per source (default 20)
-- `search.min_score`: Minimum score threshold (default 0.3)
+## Hard Rules
 
-## follow-up
-
-After showing results, offer to:
-- search with different terms
-- show memories by type: add `"type": "preference"` to the request
-- filter by date range or project
+- Treat `/api/memory/recall` as the canonical explicit recall contract.
+- Keep prompt-submit recall separate; it is a lightweight injection path.
+- Thread `agentId`, project, visibility policy, and session key deliberately.
+- Respect no-hit responses instead of inventing memory.
+- Preserve provenance and source labels in summaries.
+- If scoped recall looks wrong, debug authorization and dedupe before assuming
+  the memory is missing.
