@@ -13,20 +13,23 @@ import "../styles/landing.css";
 const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
 ---
 
-<Base>
+<Base
+  title="SignetAI | Self-Hosted AI Memory for Agents"
+  description="Self-hosted AI memory and portable context for Hermes Agent, OpenClaw, Claude Code, OpenCode, Codex, and Forge."
+>
   <StructuredData data={{
     '@context': 'https://schema.org',
     '@type': 'WebSite',
     name: 'SignetAI',
     url: siteUrl,
-    description: "Local-first identity, memory, and secrets for AI agents. Portable agent state across models and harnesses.",
+    description: "Self-hosted AI memory, identity, and secrets for AI agents. Portable agent state across models and harnesses including Hermes Agent and OpenClaw.",
   }} />
   <StructuredData data={{
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
     name: 'Signet',
     url: siteUrl,
-    description: "Local-first identity, memory, and secrets for AI agents. Portable state across Claude Code, OpenClaw, OpenCode, Codex, and Forge.",
+    description: "Self-hosted AI memory and portable context for Hermes Agent, OpenClaw, Claude Code, OpenCode, Codex, and Forge.",
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'Linux, macOS',
     offers: {

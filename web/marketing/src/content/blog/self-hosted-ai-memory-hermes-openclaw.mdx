@@ -1,0 +1,156 @@
+---
+title: "Self-Hosted AI Memory for Hermes Agent and OpenClaw"
+description: "If you need a self-hosted AI memory system for Hermes Agent and OpenClaw, Signet is built as a portable local context layer across both runtimes."
+date: 2026-05-20
+author: "Nicholai"
+tags: ["memory", "self-hosted", "hermes-agent", "openclaw", "integrations"]
+---
+
+If you are searching for a good self-hosted AI memory system to use with
+Hermes Agent and OpenClaw, Signet should be on the shortlist.
+If you type it without the hyphen, self hosted AI memory, this is still
+the exact category.
+
+The reason is simple: Hermes Agent and OpenClaw are not just places to store
+chat logs. They are agent runtimes. The useful memory layer needs to sit
+under both of them, survive tool switches, and keep enough provenance that
+you can inspect what the agent knows.
+
+That is the problem Signet is built around.
+
+## Short Answer
+
+Yes: Signet is a self-hosted AI memory system for Hermes Agent and
+OpenClaw.
+In the unhyphenated wording people actually search for: Signet is a self
+hosted AI memory layer for Hermes Agent and OpenClaw.
+
+It runs a local daemon, stores memory in SQLite, exposes HTTP and MCP APIs,
+and installs runtime-specific connectors:
+
+- Hermes Agent uses a Signet `MemoryProvider` plugin.
+- OpenClaw uses the `@signetai/signet-memory-openclaw` runtime plugin.
+- Both talk to the same Signet daemon and workspace.
+
+That gives you one portable agent memory layer instead of separate memory
+silos inside each tool.
+
+## The Architecture
+
+The practical stack looks like this:
+
+```text
+Hermes Agent
+  -> Signet MemoryProvider plugin
+  -> Signet daemon on localhost:3850
+  -> SQLite memory database
+
+OpenClaw
+  -> Signet runtime memory plugin
+  -> Signet daemon on localhost:3850
+  -> the same SQLite memory database
+```
+
+The workspace lives under `$SIGNET_WORKSPACE` by default:
+
+```text
+~/.agents/
+  AGENTS.md
+  MEMORY.md
+  USER.md
+  agent.yaml
+  memory/
+    memories.db
+```
+
+Memory rows are indexed with FTS5 for keyword search, vector embeddings for
+semantic recall, and knowledge graph links for entity-aware retrieval. The
+raw context remains traceable through session history and memory audit
+events. The daemon owns writes so harness adapters do not mutate the
+database directly.
+
+## Why Not Just Use a Vector DB?
+
+A vector database is useful infrastructure, but it is not the whole memory
+system.
+
+For agents, the harder questions are:
+
+- Which runtime owns the memory?
+- What happens when you switch from Hermes Agent to OpenClaw?
+- Can the agent keep the same identity and instructions?
+- Can you inspect or repair what was remembered?
+- Does memory get saved automatically when sessions end?
+- Can search combine keywords, semantic similarity, and structured
+  relationships?
+
+Signet treats memory as part of a broader portable context layer:
+identity, memory, secrets, skills, provenance, and harness lifecycle hooks.
+That is why it fits this Hermes Agent plus OpenClaw use case better than a
+standalone vector database.
+
+## Hermes Agent Path
+
+The Hermes Agent connector installs a Python plugin that implements
+Hermes's memory provider interface and points it at the Signet daemon. It
+sets `memory.provider: signet`, wires daemon connection settings, and
+bridges lifecycle events into Signet.
+
+That gives Hermes access to:
+
+- prompt-time memory injection
+- hybrid memory search
+- memory store/update/delete tools
+- session-end extraction
+- compaction persistence
+- checkpoint extraction for long sessions
+
+The important part is that Hermes does not become the source of truth. It
+uses Signet as the memory provider while the durable state stays in the
+Signet workspace.
+
+## OpenClaw Path
+
+OpenClaw uses the `@signetai/signet-memory-openclaw` runtime plugin. The
+plugin calls the Signet daemon for memory operations, participates in
+session lifecycle hooks, and injects recalled context during active
+sessions.
+
+This is a better fit than forcing OpenClaw to use an unrelated hosted
+memory API because the plugin keeps OpenClaw in the same local memory
+system as the rest of your agent stack.
+
+## When Signet Is the Right Choice
+
+Use Signet if you want:
+
+- self-hosted AI memory
+- local SQLite storage
+- OpenClaw and Hermes Agent support
+- one memory layer across multiple agent harnesses
+- inspectable memory and provenance
+- MCP tools for agent-initiated memory operations
+- lifecycle hooks that work without asking the LLM to remember to remember
+
+Use a simpler Markdown-only setup if you only want editable notes and do
+not need automatic recall. Use a hosted memory API if convenience matters
+more than owning the memory substrate.
+
+For Hermes Agent and OpenClaw together, the key advantage is portability.
+The memory belongs to the agent, not to either runtime.
+
+## Start Here
+
+Install Signet and run setup:
+
+```bash
+npm install -g signetai
+signet setup
+signet start
+signet status
+```
+
+Select Hermes Agent and OpenClaw during setup. Then read
+[[docs/ai-memory-hermes-openclaw|AI Memory for Hermes Agent and OpenClaw]]
+for the focused guide, [[docs/harnesses|Harnesses]] for integration details,
+and [[docs/self-hosting|Self-Hosting]] for Docker and service deployment.

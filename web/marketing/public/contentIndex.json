@@ -156,13 +156,6 @@
     ],
     "collection": "docs"
   },
-  "docs/documentation-audit-2026-03": {
-    "title": "Documentation Audit — March 25, 2026",
-    "url": "/docs/documentation-audit-2026-03/",
-    "tags": [],
-    "links": [],
-    "collection": "docs"
-  },
   "docs/documents": {
     "title": "Documents",
     "url": "/docs/documents/",
@@ -209,11 +202,7 @@
     "title": "Knowledge Architecture",
     "url": "/docs/knowledge-architecture/",
     "tags": [],
-    "links": [
-      "docs/memory",
-      "docs/pipeline",
-      "docs/dashboard"
-    ],
+    "links": [],
     "collection": "docs"
   },
   "docs/knowledge-graph": {
@@ -398,6 +387,16 @@
     "links": [],
     "collection": "docs"
   },
+  "docs/ai-memory-hermes-openclaw": {
+    "title": "AI Memory for Hermes Agent and OpenClaw",
+    "url": "/docs/ai-memory-hermes-openclaw/",
+    "tags": [],
+    "links": [
+      "docs/harnesses",
+      "docs/self-hosting"
+    ],
+    "collection": "docs"
+  },
   "docs/dreaming-skill-runbook": {
     "title": "dreaming-skill-runbook",
     "url": "/docs/dreaming-skill-runbook/",
@@ -515,6 +514,23 @@
       "blog/retrieval-is-not-memory",
       "docs/pipeline",
       "blog/why-local-first-memory"
+    ],
+    "collection": "blog"
+  },
+  "blog/self-hosted-ai-memory-hermes-openclaw": {
+    "title": "Self-Hosted AI Memory for Hermes Agent and OpenClaw",
+    "url": "/blog/self-hosted-ai-memory-hermes-openclaw/",
+    "tags": [
+      "memory",
+      "self-hosted",
+      "hermes-agent",
+      "openclaw",
+      "integrations"
+    ],
+    "links": [
+      "docs/ai-memory-hermes-openclaw",
+      "docs/harnesses",
+      "docs/self-hosting"
     ],
     "collection": "blog"
   },
