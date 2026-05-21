@@ -74,16 +74,20 @@ function aggregateKeyForTest(input: {
 
 class StaticRouter implements AggregateInferenceRouter {
 	calls: RouteRequest[] = [];
+	prompts: string[] = [];
 
-	async execute(request: RouteRequest): Promise<RouterResult<{ readonly text: string }>> {
+	constructor(private readonly synthesisText = "Aggregate answer from memory evidence.") {}
+
+	async execute(request: RouteRequest, prompt: string): Promise<RouterResult<{ readonly text: string }>> {
 		this.calls.push(request);
+		this.prompts.push(prompt);
 		return {
 			ok: true,
 			value: {
 				text:
 					this.calls.length === 1
 						? JSON.stringify({ queries: ["follow up one", "follow up two"] })
-						: "Aggregate answer from memory evidence.",
+						: this.synthesisText,
 			},
 		};
 	}
@@ -166,6 +170,11 @@ describe("aggregateRecall", () => {
 
 		expect(calls).toEqual(["what happened", "follow up one", "follow up two"]);
 		expect(router.calls.map((call) => call.operation)).toEqual(["tool_planning", "tool_planning"]);
+		expect(router.prompts[1]).toContain("one concise atomic memory note");
+		expect(router.prompts[1]).toContain("not as a direct reply");
+		expect(router.prompts[1]).toContain("Restate the question's subject or relationship");
+		expect(router.prompts[1]).toContain("partially answers the question");
+		expect(router.prompts[1]).toContain("INSUFFICIENT_EVIDENCE");
 		expect(result.results).toHaveLength(1);
 		expect(result.results[0].id).toBe("aggregate-1");
 		expect(result.results[0].source).toBe("aggregate-recall");
@@ -194,6 +203,11 @@ describe("aggregateRecall", () => {
 				.all("aggregate-1"),
 		) as Array<{ source_memory_id: string }>;
 		expect(links.map((link) => link.source_memory_id)).toEqual(["mem-1", "mem-2", "mem-3"]);
+
+		const hint = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT hint FROM memory_hints WHERE memory_id = ?").get("aggregate-1") as { hint: string },
+		);
+		expect(hint.hint).toBe("what happened");
 	});
 
 	it("dedupes repeated aggregate runs for the same evidence set", async () => {
@@ -222,6 +236,11 @@ describe("aggregateRecall", () => {
 		expect(first.results[0].id).toBe("aggregate-1");
 		expect(second.results[0].id).toBe("aggregate-1");
 		expect(second.aggregate?.deduped).toBe(true);
+		const hints = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT hint FROM memory_hints WHERE memory_id = ?").all("aggregate-1") as Array<{ hint: string }>,
+		);
+		expect(hints.map((hint) => hint.hint)).toEqual(["what happened"]);
 	});
 
 	it("logs when a saved aggregate memory cannot be embedded", async () => {
@@ -289,6 +308,114 @@ describe("aggregateRecall", () => {
 			n: number;
 		};
 		expect(count.n).toBe(0);
+	});
+
+	it("returns but does not save insufficient-evidence aggregate answers", async () => {
+		const result = await aggregateRecall(
+			{
+				query: "what is Nicholai's favorite food?",
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(
+					"There isn't enough evidence here to determine Nicholai's favorite food. The only explicit preference shown is earl grey tea.",
+				),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				idFactory: () => "aggregate-insufficient",
+				hybridRecall: async (input: RecallParams) =>
+					response(input.query, [row("mem-1", "Nicholai likes earl grey tea.")]),
+			},
+		);
+
+		expect(result.results).toHaveLength(1);
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: null,
+			saved: false,
+			deduped: false,
+			stoppedReason: "complete",
+		});
+		const count = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS n FROM memories WHERE id = ?").get("aggregate-insufficient") as { n: number },
+		);
+		expect(count.n).toBe(0);
+		const hints = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS n FROM memory_hints").get() as { n: number },
+		);
+		expect(hints.n).toBe(0);
+	});
+
+	it("returns but does not save conversational aggregate answers", async () => {
+		const result = await aggregateRecall(
+			{
+				query: "does Nicholai like danishes?",
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(
+					'Yes. The evidence says Nicholai ate two gas station danishes and called them "amazing".',
+				),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				idFactory: () => "aggregate-conversational",
+				hybridRecall: async (input: RecallParams) =>
+					response(input.query, [row("mem-1", 'Nicholai ate two gas station danishes and called them "amazing".')]),
+			},
+		);
+
+		expect(result.results).toHaveLength(1);
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: null,
+			saved: false,
+			deduped: false,
+			stoppedReason: "complete",
+		});
+		const count = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS n FROM memories WHERE id = ?").get("aggregate-conversational") as {
+					n: number;
+				},
+		);
+		expect(count.n).toBe(0);
+	});
+
+	it("saves atomic partial answers when they restate the queried relationship", async () => {
+		const result = await aggregateRecall(
+			{
+				query: "what are the problems going on between Amari and Nicholai?",
+				aggregate: true,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: new StaticRouter(
+					"Nicholai and Amari broke up on March 14, 2026, were still figuring things out on May 12, and by May 20 Nicholai felt ready to move on.",
+				),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				now: () => new Date("2026-05-20T12:00:00.000Z"),
+				idFactory: () => "aggregate-atomic-partial",
+				hybridRecall: async (input: RecallParams) =>
+					response(input.query, [
+						row("mem-1", "Nicholai and Amari broke up on March 14, 2026; by May 20 Nicholai felt ready to move on."),
+					]),
+			},
+		);
+
+		expect(result.results[0].content).toContain("Nicholai and Amari");
+		expect(result.aggregate).toMatchObject({
+			savedMemoryId: "aggregate-atomic-partial",
+			saved: true,
+			stoppedReason: "complete",
+		});
 	});
 
 	it("does not save global aggregate memories from private evidence", async () => {

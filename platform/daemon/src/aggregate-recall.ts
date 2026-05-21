@@ -192,6 +192,31 @@ function evidenceCanSaveAsGlobalAggregate(rows: readonly RecallResult[]): boolea
 	return rows.every((row) => row.visibility === "global" && row.scope === null);
 }
 
+function isInsufficientAggregateAnswer(text: string): boolean {
+	const normalized = normalizeQuery(text);
+	return (
+		normalized === "insufficient_evidence" ||
+		/^(there (isn't|is not) enough|not enough|insufficient|no useful)\b.{0,80}\bevidence\b/.test(normalized) ||
+		/^(can't|cannot|could not|unable to)\b.{0,80}\b(determine|answer|infer)\b/.test(normalized)
+	);
+}
+
+function isConversationalAggregateAnswer(text: string): boolean {
+	const normalized = normalizeQuery(text);
+	return (
+		/^(yes|no|probably|maybe)\b[.!?,:;-]?/.test(normalized) ||
+		/\b(based on (the )?evidence|from the evidence|the evidence (says|shows|suggests)|the read is|so the read is)\b/.test(
+			normalized,
+		) ||
+		/^(answer|response):/.test(normalized)
+	);
+}
+
+function aggregateAnswerCanBeSaved(text: string): boolean {
+	const trimmed = text.trim();
+	return trimmed.length >= 12 && !isInsufficientAggregateAnswer(trimmed) && !isConversationalAggregateAnswer(trimmed);
+}
+
 function aggregateKey(input: {
 	readonly agentId: string;
 	readonly project: string | null;
@@ -311,12 +336,28 @@ function linkAggregateSources(
 	}
 }
 
+function linkAggregateQueryHint(
+	db: WriteDb,
+	aggregateMemoryId: string,
+	agentId: string,
+	query: string,
+	now: string,
+): void {
+	const hint = query.trim();
+	if (hint.length === 0) return;
+	db.prepare(
+		`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+	).run(randomUUID(), aggregateMemoryId, agentId, hint, now);
+}
+
 function resolveAggregateDuplicate(
 	db: WriteDb,
 	input: {
 		readonly key: string;
 		readonly agentId: string;
 		readonly project: string | null;
+		readonly query: string;
 		readonly contentHash: string;
 		readonly answer: string;
 		readonly sourceMemoryIds: readonly string[];
@@ -326,6 +367,7 @@ function resolveAggregateDuplicate(
 	const existing = loadAggregateByKey(db, input.key, { agentId: input.agentId, project: input.project });
 	if (existing) {
 		linkAggregateSources(db, existing.id, input.sourceMemoryIds, input.agentId, input.now);
+		linkAggregateQueryHint(db, existing.id, input.agentId, input.query, input.now);
 		return { row: existing, saved: true };
 	}
 	const duplicateContent = loadMemoryByContentHash(db, input.contentHash, {
@@ -337,6 +379,7 @@ function resolveAggregateDuplicate(
 		return { row: unsavedAggregateResult(input.answer, input.key, input.project), saved: false };
 	}
 	linkAggregateSources(db, duplicateContent.row.id, input.sourceMemoryIds, input.agentId, input.now);
+	linkAggregateQueryHint(db, duplicateContent.row.id, input.agentId, input.query, input.now);
 	return { row: duplicateContent.row, saved: true };
 }
 
@@ -425,8 +468,13 @@ async function synthesize(input: {
 	readonly evidence: readonly RecallResult[];
 }): Promise<string | null> {
 	const prompt = [
-		"Synthesize a concise answer from the memory evidence below.",
-		"Use only the evidence. If the evidence is insufficient, say so briefly.",
+		"Write one concise atomic memory note from the memory evidence below.",
+		"Use only the evidence.",
+		"Write in third person as a standalone memory, not as a direct reply to the question.",
+		"Restate the question's subject or relationship in the memory so the note is useful without the original query.",
+		"If the evidence partially answers the question, save the stable known facts and omit unknowns or speculation.",
+		'Do not begin with "yes", "no", "based on the evidence", "the evidence says", or similar conversational framing.',
+		"If there are no useful stable facts relevant to the question, return exactly: INSUFFICIENT_EVIDENCE",
 		`Question: ${input.params.query}`,
 		"",
 		"Evidence:",
@@ -516,13 +564,14 @@ export async function aggregateRecall(
 	let row: RecallResult | null;
 	let deduped = false;
 	let saved = false;
-	if (saveAggregate && evidenceCanSaveAsGlobalAggregate(evidence)) {
+	if (saveAggregate && evidenceCanSaveAsGlobalAggregate(evidence) && aggregateAnswerCanBeSaved(answer)) {
 		const normalized = normalizeAndHashContent(answer);
 		row = getDbAccessor().withWriteTx((db) => {
 			const duplicate = resolveAggregateDuplicate(db, {
 				key,
 				agentId,
 				project,
+				query: params.query,
 				contentHash: normalized.contentHash,
 				answer,
 				sourceMemoryIds,
@@ -567,6 +616,7 @@ export async function aggregateRecall(
 					key,
 					agentId,
 					project,
+					query: params.query,
 					contentHash: normalized.contentHash,
 					answer,
 					sourceMemoryIds,
@@ -582,6 +632,7 @@ export async function aggregateRecall(
 				return racedDuplicate.row;
 			}
 			linkAggregateSources(db, id, sourceMemoryIds, agentId, now);
+			linkAggregateQueryHint(db, id, agentId, params.query, now);
 			saved = true;
 			return loadAggregateMemory(db, id);
 		});

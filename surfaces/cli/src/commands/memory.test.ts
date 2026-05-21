@@ -180,11 +180,13 @@ describe("registerMemoryCommands recall", () => {
 
 	test("forwards aggregate recall flags", async () => {
 		let capturedBody: unknown;
+		let capturedTimeout: number | undefined;
 		const program = new Command();
 		registerMemoryCommands(program, {
 			ensureDaemonForSecrets: async () => true,
-			secretApiCall: async (_method, _path, body) => {
+			secretApiCall: async (_method, _path, body, timeoutMs) => {
 				capturedBody = body;
+				capturedTimeout = timeoutMs;
 				return {
 					ok: true,
 					data: {
@@ -219,15 +221,18 @@ describe("registerMemoryCommands recall", () => {
 			aggregateBudget: "large",
 			saveAggregate: false,
 		});
+		expect(capturedTimeout).toBe(120_000);
 	});
 
 	test("--no-save-aggregate does not enable aggregate recall by itself", async () => {
 		let capturedBody: unknown;
+		let capturedTimeout: number | undefined;
 		const program = new Command();
 		registerMemoryCommands(program, {
 			ensureDaemonForSecrets: async () => true,
-			secretApiCall: async (_method, _path, body) => {
+			secretApiCall: async (_method, _path, body, timeoutMs) => {
 				capturedBody = body;
+				capturedTimeout = timeoutMs;
 				return {
 					ok: true,
 					data: {
@@ -250,5 +255,6 @@ describe("registerMemoryCommands recall", () => {
 			query: "project history",
 			limit: 10,
 		});
+		expect(capturedTimeout).toBe(30_000);
 	});
 });

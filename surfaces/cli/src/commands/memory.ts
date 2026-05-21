@@ -10,6 +10,7 @@ import type { Command } from "commander";
 import ora from "ora";
 
 const MEMORY_RECALL_TIMEOUT_MS = 30_000;
+const AGGREGATE_MEMORY_RECALL_TIMEOUT_MS = 120_000;
 
 function collectHint(value: string, previous: string[] = []): string[] {
 	const hint = value.trim();
@@ -105,6 +106,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			if (!(await deps.ensureDaemonForSecrets())) return;
 
 			const aggregateRequested = options.aggregate === true || options.aggregateBudget !== "small";
+			const timeoutMs = aggregateRequested ? AGGREGATE_MEMORY_RECALL_TIMEOUT_MS : MEMORY_RECALL_TIMEOUT_MS;
 			const spinner = ora("Searching memories...").start();
 			const { ok, data } = await deps.secretApiCall(
 				"POST",
@@ -127,7 +129,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					sessionKey: options.sessionKey,
 					includeRecalled: options.includeRecalled,
 				}),
-				MEMORY_RECALL_TIMEOUT_MS,
+				timeoutMs,
 			);
 
 			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;

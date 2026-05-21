@@ -285,6 +285,60 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 		expect(history.reason).toBe("cleanup with force");
 	});
 
+	it("removes aggregate provenance links when a linked memory is forgotten", () => {
+		insertMemory(db, {
+			id: "mem-aggregate",
+			content: "Aggregate content",
+			contentHash: "hash-aggregate",
+		});
+		insertMemory(db, {
+			id: "mem-source",
+			content: "Source content",
+			contentHash: "hash-source",
+		});
+		insertMemory(db, {
+			id: "mem-other-aggregate",
+			content: "Other aggregate content",
+			contentHash: "hash-other-aggregate",
+		});
+		insertMemory(db, {
+			id: "mem-other-source",
+			content: "Other source content",
+			contentHash: "hash-other-source",
+		});
+
+		const now = new Date().toISOString();
+		const link = db.prepare(
+			`INSERT INTO aggregate_memory_sources (
+				aggregate_memory_id, source_memory_id, agent_id, created_at
+			) VALUES (?, ?, 'default', ?)`,
+		);
+		link.run("mem-aggregate", "mem-source", now);
+		link.run("mem-other-aggregate", "mem-aggregate", now);
+		link.run("mem-other-aggregate", "mem-other-source", now);
+
+		const result = txForgetMemory(asWriteDb(db), {
+			memoryId: "mem-aggregate",
+			reason: "cleanup",
+			changedBy: "operator",
+			changedAt: now,
+			force: false,
+		});
+
+		expect(result.status).toBe("deleted");
+		const linkedRows = db
+			.prepare(
+				`SELECT aggregate_memory_id, source_memory_id
+				 FROM aggregate_memory_sources
+				 WHERE aggregate_memory_id = ? OR source_memory_id = ?`,
+			)
+			.all("mem-aggregate", "mem-aggregate");
+		expect(linkedRows).toEqual([]);
+
+		const remaining = db.prepare("SELECT COUNT(*) AS count FROM aggregate_memory_sources").get() as { count: number };
+		expect(remaining.count).toBe(1);
+	});
+
 	it("recovers a soft-deleted memory within retention window", () => {
 		insertMemory(db, {
 			id: "mem-recoverable",

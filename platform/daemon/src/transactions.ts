@@ -7,7 +7,7 @@
  */
 
 import type { WriteDb } from "./db-accessor";
-import { vectorToBlob, syncVecInsert, syncVecDeleteBySourceId, syncVecDeleteBySourceExceptHash } from "./db-helpers";
+import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -204,6 +204,19 @@ export function insertHistoryEvent(
 		args.sessionId ?? null,
 		args.requestId ?? null,
 	);
+}
+
+function tableExists(db: WriteDb, name: string): boolean {
+	const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+	return row !== null && row !== undefined;
+}
+
+function deleteAggregateMemorySourceLinks(db: WriteDb, memoryId: string): void {
+	if (!tableExists(db, "aggregate_memory_sources")) return;
+	db.prepare(
+		`DELETE FROM aggregate_memory_sources
+		 WHERE aggregate_memory_id = ? OR source_memory_id = ?`,
+	).run(memoryId, memoryId);
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +516,7 @@ export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetM
 		     version = version + 1
 		 WHERE id = ?`,
 	).run(input.changedAt, input.changedAt, input.changedBy, input.memoryId);
+	deleteAggregateMemorySourceLinks(db, input.memoryId);
 
 	insertHistoryEvent(db, {
 		memoryId: input.memoryId,
@@ -656,6 +670,7 @@ export function txApplyDecision(db: WriteDb, decision: SemanticDecision): void {
 				     updated_by = ?, version = version + 1
 				 WHERE id = ?`,
 			).run(decision.updatedAt, decision.updatedAt, decision.updatedBy, decision.memoryId);
+			deleteAggregateMemorySourceLinks(db, decision.memoryId);
 
 			insertHistoryEvent(db, {
 				memoryId: decision.memoryId,
@@ -754,6 +769,7 @@ export function txApplyDecision(db: WriteDb, decision: SemanticDecision): void {
 				     updated_by = ?, version = version + 1
 				 WHERE id = ?`,
 			).run(decision.updatedAt, decision.updatedAt, decision.updatedBy, decision.memoryId);
+			deleteAggregateMemorySourceLinks(db, decision.memoryId);
 
 			insertHistoryEvent(db, {
 				memoryId: decision.memoryId,

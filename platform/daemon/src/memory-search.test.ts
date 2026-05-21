@@ -328,6 +328,54 @@ describe("hybridRecall", () => {
 		expect(result.meta.noHits).toBe(true);
 	});
 
+	it("does not satisfy tagged recall with unfiltered source fallback rows", async () => {
+		const now = new Date().toISOString();
+		const vec = unitVector();
+		const codexMemoryPath = join(dir, "codex", "memories", "MEMORY.md");
+		mkdirSync(join(dir, "codex", "memories"), { recursive: true });
+		writeFileSync(codexMemoryPath, "# Codex Memory\n\nFiltered source fallback marker from native artifact.\n");
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			sourcePath: codexMemoryPath,
+			sourceKind: "native_memory_registry",
+			harness: "codex",
+			content: readFileSync(codexMemoryPath, "utf-8"),
+			sourceMtimeMs: Date.now(),
+		});
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO embeddings (
+					id, content_hash, vector, dimensions, source_type, source_id,
+					chunk_text, created_at, agent_id
+				) VALUES (?, ?, ?, 768, 'source_obsidian_chunk', ?, ?, ?, 'default')`,
+			).run(
+				"emb-filtered-source",
+				"hash-filtered-source",
+				vectorBlob(vec),
+				"obsidian:vault:filtered-source.md#overview:1-1:0",
+				"source_path: /vault/filtered-source.md\nFiltered source fallback marker from source chunk.",
+				now,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "Filtered source fallback marker",
+				keywordQuery: "Filtered source fallback marker",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+				tags: "cleanup-20260520",
+			},
+			testCfg(),
+			async () => vec,
+		);
+
+		expect(result.results).toEqual([]);
+		expect(result.meta.noHits).toBe(true);
+	});
+
 	it("falls back to keyword recall when embedding throws synchronously", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {

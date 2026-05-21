@@ -297,6 +297,24 @@ function buildFilterClause(params: RecallParams): FilterClause {
 	return base;
 }
 
+function hasMemoryMetadataFilters(params: RecallParams): boolean {
+	const hasTags =
+		params.tags
+			?.split(",")
+			.map((tag) => tag.trim())
+			.some(Boolean) === true;
+	return (
+		params.type !== undefined ||
+		hasTags ||
+		params.who !== undefined ||
+		params.pinned === true ||
+		typeof params.importance_min === "number" ||
+		params.since !== undefined ||
+		params.until !== undefined ||
+		params.scope !== undefined
+	);
+}
+
 function normalizeRecallLimit(raw: number | undefined): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return 10;
 	return Math.max(1, Math.min(50, Math.floor(raw)));
@@ -1859,12 +1877,21 @@ export async function hybridRecall(
 			: limit;
 	const topIds = scored.slice(0, preHydrate).map((s) => s.id);
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
+	const allowSourceFallbacks = !hasMemoryMetadataFilters(params);
 
 	if (topIds.length === 0) {
 		const fallbackLimit = selectionDedupeEnabled ? Math.max(limit * 3, limit + 10) : limit;
-		const sourceChunkHits = timings.time("source_chunk_vector_fallback", () =>
-			buildSourceChunkVectorHits(queryVecF32, new Set(), fallbackLimit, params.agentId ?? "default", params.project),
-		);
+		const sourceChunkHits = allowSourceFallbacks
+			? timings.time("source_chunk_vector_fallback", () =>
+					buildSourceChunkVectorHits(
+						queryVecF32,
+						new Set(),
+						fallbackLimit,
+						params.agentId ?? "default",
+						params.project,
+					),
+				)
+			: [];
 		if (sourceChunkHits.length > 0) {
 			const results = suppressPreviouslyRecalledForSelection(
 				sourceChunkHits.slice(0, fallbackLimit).map((hit): RecallResult => {
@@ -1904,9 +1931,9 @@ export async function hybridRecall(
 				});
 			}
 		}
-		const nativeHits = timings.time("native_artifact_fallback", () =>
-			buildNativeArtifactRecallHits(params, expandedQuery, new Set()),
-		);
+		const nativeHits = allowSourceFallbacks
+			? timings.time("native_artifact_fallback", () => buildNativeArtifactRecallHits(params, expandedQuery, new Set()))
+			: [];
 		if (nativeHits.length > 0) {
 			const results = suppressPreviouslyRecalledForSelection(
 				nativeHits.slice(0, fallbackLimit).map((hit): RecallResult => {
@@ -2030,15 +2057,17 @@ export async function hybridRecall(
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
 		const fill = limit - results.length;
-		const sourceChunkHits = timings.time("source_chunk_vector_supplement", () =>
-			buildSourceChunkVectorHits(
-				queryVecF32,
-				existingSourceIds,
-				selectionDedupeEnabled ? Math.max(fill * 3, fill + 10) : fill,
-				params.agentId ?? "default",
-				params.project,
-			),
-		);
+		const sourceChunkHits = allowSourceFallbacks
+			? timings.time("source_chunk_vector_supplement", () =>
+					buildSourceChunkVectorHits(
+						queryVecF32,
+						existingSourceIds,
+						selectionDedupeEnabled ? Math.max(fill * 3, fill + 10) : fill,
+						params.agentId ?? "default",
+						params.project,
+					),
+				)
+			: [];
 		const candidates = sourceChunkHits.map((hit): RecallResult => {
 			const content = `[Obsidian vault chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
 			const truncated = content.length > recallTruncate;
@@ -2071,9 +2100,11 @@ export async function hybridRecall(
 
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
-		const nativeHits = timings.time("native_artifact_supplement", () =>
-			buildNativeArtifactRecallHits(params, expandedQuery, existingSourceIds),
-		);
+		const nativeHits = allowSourceFallbacks
+			? timings.time("native_artifact_supplement", () =>
+					buildNativeArtifactRecallHits(params, expandedQuery, existingSourceIds),
+				)
+			: [];
 		const candidates = nativeHits.map((hit): RecallResult => {
 			const content = nativeArtifactRecallContent(hit);
 			const truncated = content.length > recallTruncate;
