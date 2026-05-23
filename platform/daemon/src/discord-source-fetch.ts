@@ -98,6 +98,17 @@ function parseRateLimit(headers: Headers): RateLimitInfo {
 	};
 }
 
+async function parseDiscordResponseBody(response: Response): Promise<unknown> {
+	if (response.status === 204) return null;
+	const raw = await response.text();
+	if (raw.trim().length === 0) return null;
+	try {
+		return JSON.parse(raw) as unknown;
+	} catch {
+		return raw;
+	}
+}
+
 async function discordRequest(url: string, token: string, method = "GET", body?: unknown): Promise<DiscordApiResponse> {
 	const headers: Record<string, string> = {
 		Authorization: `Bot ${token}`,
@@ -141,7 +152,7 @@ async function discordRequest(url: string, token: string, method = "GET", body?:
 			return {
 				status: response.status,
 				headers: response.headers,
-				body: response.status === 204 ? null : await response.json(),
+				body: await parseDiscordResponseBody(response),
 			};
 		} catch (err) {
 			lastError = err instanceof Error ? err : new Error(String(err));

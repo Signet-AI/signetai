@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SignetSourceEntry } from "../../core/src/sources-config";
-import { closeDbAccessor } from "./db-accessor";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { syncDiscordSource } from "./discord-source-bridge";
 import { putSecret, resetSecretExecJobsForTests } from "./secrets.js";
 
@@ -16,6 +16,7 @@ describe("syncDiscordSource", () => {
 		agentsDir = mkdtempSync(join(tmpdir(), "signet-discord-source-"));
 		process.env.SIGNET_PATH = agentsDir;
 		mkdirSync(agentsDir, { recursive: true });
+		initDbAccessor(join(agentsDir, "memories.db"));
 	});
 
 	afterEach(() => {

@@ -29,8 +29,62 @@ export interface PurgeDiscordSourceStructureInput {
 	readonly sourceId: string;
 }
 
+export interface ReconcileDiscordGuildStructureInput {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly guildId: string;
+	readonly currentChannelIds: readonly string[];
+	readonly reconciledChannels: readonly {
+		readonly channelId: string;
+		readonly conversationPaths: readonly string[];
+	}[];
+}
+
 function idFor(...parts: readonly string[]): string {
 	return `dcsrc_${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 28)}`;
+}
+
+function guildCanonical(guildId: string): string {
+	return `discord:${guildId}`;
+}
+
+function channelCanonical(guildId: string, channelId: string): string {
+	return `${guildCanonical(guildId)}:${channelId}`;
+}
+
+function conversationCanonical(guildId: string, channelId: string, threadId?: string): string {
+	return threadId
+		? `${channelCanonical(guildId, channelId)}:thread:${threadId}`
+		: `${channelCanonical(guildId, channelId)}:messages`;
+}
+
+function deleteEntitiesById(db: WriteDb, entityIds: readonly string[]): void {
+	if (entityIds.length === 0) return;
+	const placeholders = entityIds.map(() => "?").join(", ");
+	db.prepare(
+		`DELETE FROM entity_dependencies
+		 WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
+	).run(...entityIds, ...entityIds);
+	db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...entityIds);
+}
+
+function purgeOrphanedDiscordParticipants(db: WriteDb, agentId: string, sourceId: string): number {
+	const participantPrefix = `discord:${sourceId}:user:`;
+	return db
+		.prepare(
+			`DELETE FROM entities
+			 WHERE agent_id = ?
+			   AND source_id = ?
+			   AND entity_type = 'source_document_reference'
+			   AND source_path >= ?
+			   AND source_path < ?
+			   AND NOT EXISTS (
+			     SELECT 1 FROM entity_dependencies d
+			     WHERE d.agent_id = entities.agent_id
+			       AND (d.source_entity_id = entities.id OR d.target_entity_id = entities.id)
+			   )`,
+		)
+		.run(agentId, sourceId, participantPrefix, `${participantPrefix}\uffff`).changes;
 }
 
 function upsertEntity(
@@ -298,6 +352,13 @@ export function indexDiscordSourceStructure(input: IndexDiscordSourceStructureIn
 			sourceId: input.sourceId,
 			now,
 		});
+		db.prepare(
+			`DELETE FROM entity_dependencies
+			 WHERE agent_id = ?
+			   AND source_id = ?
+			   AND source_entity_id = ?
+			   AND dependency_type = 'wiki_link'`,
+		).run(input.agentId, input.sourceId, documentEntityId);
 
 		for (const participant of input.participants) {
 			const participantEntityId = idFor(input.agentId, input.sourceId, "participant", participant.id);
@@ -324,7 +385,89 @@ export function indexDiscordSourceStructure(input: IndexDiscordSourceStructureIn
 				now,
 			});
 		}
+		purgeOrphanedDiscordParticipants(db, input.agentId, input.sourceId);
 
+		db.prepare(
+			`UPDATE entity_communities
+			 SET member_count = (
+			   SELECT COUNT(*) FROM entities e WHERE e.community_id = entity_communities.id
+			 ), updated_at = ?
+			 WHERE agent_id = ? AND source_id = ?`,
+		).run(now, input.agentId, input.sourceId);
+	});
+}
+
+export function reconcileDiscordGuildStructure(input: ReconcileDiscordGuildStructureInput): void {
+	const now = new Date().toISOString();
+	getDbAccessor().withWriteTx((db) => {
+		const currentChannelPaths = new Set(
+			input.currentChannelIds.map((channelId) => channelCanonical(input.guildId, channelId)),
+		);
+		const staleChannelRows = db
+			.prepare(
+				`SELECT id, source_path
+				 FROM entities
+				 WHERE agent_id = ?
+				   AND source_id = ?
+				   AND entity_type = 'source_folder'
+				   AND source_path >= ?
+				   AND source_path < ?`,
+			)
+			.all(
+				input.agentId,
+				input.sourceId,
+				`${guildCanonical(input.guildId)}:`,
+				`${guildCanonical(input.guildId)}:\uffff`,
+			) as Array<{
+			id: string;
+			source_path: string;
+		}>;
+
+		const stalePrefixes = staleChannelRows
+			.filter((row) => row.source_path && !currentChannelPaths.has(row.source_path))
+			.map((row) => row.source_path);
+		const staleEntityIds = new Set<string>(
+			staleChannelRows.filter((row) => stalePrefixes.includes(row.source_path)).map((row) => row.id),
+		);
+
+		for (const prefix of stalePrefixes) {
+			const rows = db
+				.prepare(
+					`SELECT id
+					 FROM entities
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND source_path >= ?
+					   AND source_path < ?`,
+				)
+				.all(input.agentId, input.sourceId, `${prefix}:`, `${prefix}:\uffff`) as Array<{ id: string }>;
+			for (const row of rows) staleEntityIds.add(row.id);
+		}
+
+		for (const channel of input.reconciledChannels) {
+			const prefix = channelCanonical(input.guildId, channel.channelId);
+			const currentConversationPaths = new Set(channel.conversationPaths);
+			const staleDocs = db
+				.prepare(
+					`SELECT id, source_path
+					 FROM entities
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND entity_type = 'source_document'
+					   AND source_path >= ?
+					   AND source_path < ?`,
+				)
+				.all(input.agentId, input.sourceId, `${prefix}:`, `${prefix}:\uffff`) as Array<{
+				id: string;
+				source_path: string;
+			}>;
+			for (const row of staleDocs) {
+				if (!currentConversationPaths.has(row.source_path)) staleEntityIds.add(row.id);
+			}
+		}
+
+		deleteEntitiesById(db, [...staleEntityIds]);
+		purgeOrphanedDiscordParticipants(db, input.agentId, input.sourceId);
 		db.prepare(
 			`UPDATE entity_communities
 			 SET member_count = (

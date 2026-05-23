@@ -16,7 +16,11 @@ import {
 	isThread,
 	snowflakeIdForTimestamp,
 } from "./discord-source-fetch";
-import { indexDiscordSourceStructure, purgeDiscordSourceStructure } from "./discord-source-graph";
+import {
+	indexDiscordSourceStructure,
+	purgeDiscordSourceStructure,
+	reconcileDiscordGuildStructure,
+} from "./discord-source-graph";
 import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import type { SourceEmbeddingFetch } from "./obsidian-source-embeddings";
@@ -114,6 +118,8 @@ export async function syncDiscordSource(
 			? textChannels.filter((ch) => channelFilter.has(ch.id) || (ch.name && channelFilter.has(ch.name)))
 			: textChannels;
 		const activeThreads = settings.includeThreads ? await fetchGuildActiveThreads(config, guildId) : [];
+		const currentChannelIds = filteredChannels.map((channel) => channel.id);
+		const reconciledChannels: Array<{ channelId: string; conversationPaths: string[] }> = [];
 
 		const yielder = yieldEvery(5);
 
@@ -121,6 +127,7 @@ export async function syncDiscordSource(
 			if (!isSourceActive()) break;
 			const channelName = channel.name ?? channel.id;
 			try {
+				const conversationPaths: string[] = [];
 				const msgResult = await fetchChannelMessages(
 					config,
 					channel.id,
@@ -154,6 +161,7 @@ export async function syncDiscordSource(
 							fetchEmbedding: options.fetchEmbedding,
 						});
 					}
+					conversationPaths.push(`discord:${guildId}:${channel.id}:messages`);
 					totalIndexed++;
 				}
 
@@ -171,8 +179,10 @@ export async function syncDiscordSource(
 						sinceId,
 						activeThreads,
 					);
-					totalIndexed += threadResult;
+					totalIndexed += threadResult.indexed;
+					conversationPaths.push(...threadResult.conversationPaths);
 				}
+				reconciledChannels.push({ channelId: channel.id, conversationPaths });
 
 				await yielder();
 			} catch (err) {
@@ -184,6 +194,13 @@ export async function syncDiscordSource(
 				});
 			}
 		}
+		reconcileDiscordGuildStructure({
+			agentId,
+			sourceId: source.id,
+			guildId,
+			currentChannelIds,
+			reconciledChannels,
+		});
 
 		logger.info("discord-source", "Guild sync complete", {
 			sourceId: source.id,
@@ -208,8 +225,9 @@ async function syncThreads(
 	options: DiscordSourceBridgeOptions,
 	sinceId: string | undefined,
 	activeThreads: readonly DiscordChannel[],
-): Promise<number> {
+): Promise<{ indexed: number; conversationPaths: string[] }> {
 	let indexed = 0;
+	const conversationPaths: string[] = [];
 	const isSourceActive = options.sourceActiveCheck ?? (() => true);
 
 	const archivedResult = await fetchPublicArchivedThreads(config, parentChannelId, 50);
@@ -264,6 +282,7 @@ async function syncThreads(
 						fetchEmbedding: options.fetchEmbedding,
 					});
 				}
+				conversationPaths.push(`discord:${guildId}:${parentChannelId}:thread:${thread.id}`);
 				indexed++;
 			}
 		} catch (err) {
@@ -274,7 +293,7 @@ async function syncThreads(
 		}
 	}
 
-	return indexed;
+	return { indexed, conversationPaths };
 }
 
 async function fetchGuildActiveThreads(
