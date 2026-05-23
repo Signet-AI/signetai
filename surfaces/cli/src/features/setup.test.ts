@@ -231,6 +231,41 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(configureHarnessHooks).not.toHaveBeenCalled();
 	});
 
+	it("writes OpenAI-compatible endpoint during non-interactive setup", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-ni-compatible-endpoint-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(templatesPath, { recursive: true });
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({
+				...fakeDetection(basePath),
+				agentsDir: false,
+				memoryDb: false,
+				hasMemoryDir: false,
+			})),
+		});
+
+		await setupWizard(
+			{
+				nonInteractive: true,
+				extractionProvider: "openai-compatible",
+				extractionModel: "openai/gpt-oss-20b",
+				extractionEndpoint: "https://gateway.example.test/v1",
+				skipGit: true,
+			},
+			deps,
+		);
+
+		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+		expect(agentYaml).toContain("provider: openai-compatible");
+		expect(agentYaml).toContain("model: openai/gpt-oss-20b");
+		expect(agentYaml).toContain("endpoint: https://gateway.example.test/v1");
+	});
+
 	it("persists disabled signet secrets when existing non-interactive setup opts out", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-secrets-disabled-"));
 		const basePath = join(root, "agents");

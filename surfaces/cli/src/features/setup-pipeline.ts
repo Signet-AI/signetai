@@ -9,11 +9,13 @@ export interface SetupPipelineConfig {
 	readonly extraction: {
 		readonly provider: ExtractionProviderChoice;
 		readonly model: string;
+		readonly endpoint?: string;
 	};
 	readonly synthesis?: {
 		readonly enabled: boolean;
 		readonly provider: ExtractionProviderChoice;
 		readonly model: string;
+		readonly endpoint?: string;
 		readonly timeout: number;
 	};
 	readonly semanticContradictionEnabled?: boolean;
@@ -36,8 +38,13 @@ export function defaultExtractionModel(provider: DirectExtractionProviderChoice)
 	return defaultPipelineModel(provider);
 }
 
-export function buildSetupPipeline(provider: ExtractionProviderChoice, model?: string): SetupPipelineConfig {
+export function buildSetupPipeline(
+	provider: ExtractionProviderChoice,
+	model?: string,
+	endpoint?: string,
+): SetupPipelineConfig {
 	const resolved = model?.trim() || (provider === "acpx" ? "" : defaultExtractionModel(provider));
+	const resolvedEndpoint = endpoint?.trim() || undefined;
 	if (provider === "none") {
 		return {
 			enabled: false,
@@ -59,11 +66,13 @@ export function buildSetupPipeline(provider: ExtractionProviderChoice, model?: s
 		extraction: {
 			provider,
 			model: resolved,
+			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
 		},
 		synthesis: {
 			enabled: true,
 			provider,
 			model: resolved,
+			...(resolvedEndpoint ? { endpoint: resolvedEndpoint } : {}),
 			timeout: 120000,
 		},
 		semanticContradictionEnabled: true,
