@@ -151,7 +151,17 @@ describe("Sources routes", () => {
 	});
 
 	it("connects a Discord source and preserves since settings", async () => {
-		const res = await makeApp().request("/api/sources/discord", {
+		let syncCalls = 0;
+		const app = new Hono();
+		registerSourcesRoutes(app, {
+			agentsDir: dir,
+			syncDiscordSource: async (source) => {
+				syncCalls++;
+				expect(source.kind).toBe("discord");
+				return { indexed: 4, syncedGuilds: 1 };
+			},
+		});
+		const res = await app.request("/api/sources/discord", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -167,13 +177,18 @@ describe("Sources routes", () => {
 		const body = (await res.json()) as {
 			created: boolean;
 			queued: boolean;
-			source: { kind: string; settings?: { since?: string; maxMessagesPerChannel?: number } };
+			job: { id: string; status: string };
+			source: { id: string; kind: string; settings?: { since?: string; maxMessagesPerChannel?: number } };
 		};
 		expect(body.created).toBe(true);
-		expect(body.queued).toBe(false);
+		expect(body.queued).toBe(true);
+		expect(body.job.status).toBe("queued");
 		expect(body.source.kind).toBe("discord");
 		expect(body.source.settings?.since).toBe("2026-01-01T00:00:00.000Z");
 		expect(body.source.settings?.maxMessagesPerChannel).toBe(250);
+		await waitFor(() => syncCalls === 1);
+		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
+		expect(loadSourcesConfig(dir).sources[0]?.id).toBe(body.source.id);
 	});
 
 	it("purges again when a disconnected source still has an in-flight index job", async () => {

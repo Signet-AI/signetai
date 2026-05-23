@@ -149,20 +149,20 @@ export async function syncDiscordSource(
 						messageCount: msgResult.data.length,
 						participants,
 					});
-					if (options.embeddingConfig && options.fetchEmbedding) {
-						await indexDiscordSourceEmbeddings({
-							agentId,
-							sourceId: source.id,
-							guildId,
-							channelId: channel.id,
-							channelName,
-							messages: msgResult.data,
-							embeddingConfig: options.embeddingConfig,
-							fetchEmbedding: options.fetchEmbedding,
-						});
-					}
 					conversationPaths.push(`discord:${source.id}:guild:${guildId}:channel:${channel.id}:messages`);
 					totalIndexed++;
+				}
+				if (options.embeddingConfig && options.fetchEmbedding) {
+					await indexDiscordSourceEmbeddings({
+						agentId,
+						sourceId: source.id,
+						guildId,
+						channelId: channel.id,
+						channelName,
+						messages: msgResult.data,
+						embeddingConfig: options.embeddingConfig,
+						fetchEmbedding: options.fetchEmbedding,
+					});
 				}
 
 				if (settings.includeThreads) {
@@ -269,21 +269,21 @@ async function syncThreads(
 					messageCount: msgResult.data.length,
 					participants,
 				});
-				if (options.embeddingConfig && options.fetchEmbedding) {
-					await indexDiscordSourceEmbeddings({
-						agentId,
-						sourceId: source.id,
-						guildId,
-						channelId: parentChannelId,
-						channelName: parentChannelName,
-						threadId: thread.id,
-						messages: msgResult.data,
-						embeddingConfig: options.embeddingConfig,
-						fetchEmbedding: options.fetchEmbedding,
-					});
-				}
 				conversationPaths.push(`discord:${source.id}:guild:${guildId}:channel:${parentChannelId}:thread:${thread.id}`);
 				indexed++;
+			}
+			if (options.embeddingConfig && options.fetchEmbedding) {
+				await indexDiscordSourceEmbeddings({
+					agentId,
+					sourceId: source.id,
+					guildId,
+					channelId: parentChannelId,
+					channelName: parentChannelName,
+					threadId: thread.id,
+					messages: msgResult.data,
+					embeddingConfig: options.embeddingConfig,
+					fetchEmbedding: options.fetchEmbedding,
+				});
 			}
 		} catch (err) {
 			logger.warn("discord-source", "Failed to sync thread", {

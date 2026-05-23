@@ -15,7 +15,9 @@ import {
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
-import { purgeDiscordSource } from "../discord-source-bridge";
+import { purgeDiscordSource, syncDiscordSource as runDiscordSourceSync } from "../discord-source-bridge";
+import { fetchEmbedding } from "../embedding-fetch";
+import { loadMemoryConfig } from "../memory-config";
 import {
 	type NativeMemoryBridgeHandle,
 	obsidianNativeMemorySource,
@@ -79,12 +81,14 @@ export interface RegisterSourcesRoutesDeps {
 	readonly agentsDir?: string;
 	readonly startBridge?: typeof startNativeMemoryBridge;
 	readonly purgeNativeSource?: typeof purgeNativeMemorySourceArtifacts;
+	readonly syncDiscordSource?: typeof runDiscordSourceSync;
 }
 
 export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps = {}): void {
 	const agentsDir = deps.agentsDir ?? process.env.SIGNET_PATH ?? `${homedir()}/.agents`;
 	const startBridge = deps.startBridge ?? startNativeMemoryBridge;
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
+	const syncDiscordSource = deps.syncDiscordSource ?? runDiscordSourceSync;
 	cleanupSourceDeletionTombstones(agentsDir, purgeNativeSource);
 	app.get("/api/sources", (c) => {
 		const config = loadSourcesConfig(agentsDir);
@@ -165,7 +169,13 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		);
 		if (result.ok === false) return c.json({ error: result.error }, 400);
 
-		return c.json({ source: result.source, created: result.created, indexed: 0, queued: false }, 202);
+		const job = enqueueDiscordSourceIndexJob({
+			source: result.source,
+			agentsDir,
+			syncDiscordSource,
+		});
+
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 	});
 
 	app.delete("/api/sources/:sourceId", (c) => {
@@ -191,9 +201,21 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	});
 }
 
+interface DiscordSourceIndexJobInput {
+	readonly source: SignetSourceEntry;
+	readonly agentsDir: string;
+	readonly syncDiscordSource: typeof runDiscordSourceSync;
+}
+
 function enqueueSourceIndexJob(input: SourceIndexJobInput): SourceIndexJob {
 	const job = beginSourceIndexJob(input.source.id);
 	scheduleSourceIndexJob(input, job, 0);
+	return job;
+}
+
+function enqueueDiscordSourceIndexJob(input: DiscordSourceIndexJobInput): SourceIndexJob {
+	const job = beginSourceIndexJob(input.source.id, "discord-source-index");
+	scheduleDiscordSourceIndexJob(input, job, 0);
 	return job;
 }
 
@@ -254,6 +276,51 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
 	setTimeout(() => {
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		void runSourceIndexJob(input, job);
+	}, delayMs).unref?.();
+}
+
+async function runDiscordSourceIndexJob(input: DiscordSourceIndexJobInput, job: SourceIndexJob): Promise<void> {
+	if (isSourceIndexInFlight(input.source.id)) {
+		scheduleDiscordSourceIndexJob(input, job, 50);
+		return;
+	}
+	markSourceIndexInFlight(input.source.id);
+	if (!markSourceIndexJobRunning(input.source.id, job.id)) {
+		clearSourceIndexInFlight(input.source.id);
+		return;
+	}
+
+	try {
+		const embeddingConfig = loadMemoryConfig(input.agentsDir).embedding;
+		const result = await input.syncDiscordSource(input.source, {
+			agentId: resolveDaemonAgentId(),
+			embeddingConfig,
+			fetchEmbedding,
+			agentsDir: input.agentsDir,
+			sourceActiveCheck: () =>
+				loadSourcesConfig(input.agentsDir).sources.some(
+					(entry) => entry.id === input.source.id && entry.enabled && entry.kind === "discord",
+				),
+		});
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+		if (result.syncedGuilds > 0) markSourceIndexed(input.source.id, undefined, input.agentsDir);
+		completeSourceIndexJob(input.source.id, job.id, result.indexed);
+	} catch (err) {
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+		failSourceIndexJob(input.source.id, job.id, err);
+	} finally {
+		if (consumeCanceledSourceIndexJob(job.id)) {
+			purgeDiscordSource(input.source.id, resolveDaemonAgentId());
+			clearSourceDeletionTombstone(input.source.id, resolveDaemonAgentId(), input.agentsDir);
+		}
+		clearSourceIndexInFlight(input.source.id);
+	}
+}
+
+function scheduleDiscordSourceIndexJob(input: DiscordSourceIndexJobInput, job: SourceIndexJob, delayMs: number): void {
+	setTimeout(() => {
+		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
+		void runDiscordSourceIndexJob(input, job);
 	}, delayMs).unref?.();
 }
 
