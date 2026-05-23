@@ -1343,6 +1343,11 @@ When aggregate synthesis cannot complete, the response is a no-hit recall
 shape with `results: []` and `aggregate.stoppedReason` set to `no_evidence`,
 `router_unavailable`, or `synthesis_failed`.
 
+When the routed inference provider reports token or billing metadata,
+`aggregate.usage` includes planning/synthesis totals plus per-stage target,
+attempt, fallback, token, duration, and cost fields. Missing provider usage is
+reported as `null` rather than estimated.
+
 Successful aggregate responses include aggregate metadata:
 
 ```json
@@ -1354,7 +1359,29 @@ Successful aggregate responses include aggregate metadata:
     "budget": "small",
     "queries": ["user preferences for editor"],
     "sourceMemoryIds": ["source-memory-id"],
-    "stoppedReason": "complete"
+    "stoppedReason": "complete",
+    "usage": {
+      "inputTokens": 534,
+      "outputTokens": 84,
+      "cacheReadTokens": 128,
+      "cacheCreationTokens": null,
+      "totalCost": 0.00018,
+      "totalDurationMs": 812,
+      "stages": [
+        {
+          "name": "planning",
+          "targetRef": "recall-openrouter-mercury/default",
+          "attemptCount": 1,
+          "fallbackCount": 0,
+          "inputTokens": 142,
+          "outputTokens": 28,
+          "cacheReadTokens": 64,
+          "cacheCreationTokens": null,
+          "totalCost": 0.00005,
+          "totalDurationMs": 310
+        }
+      ]
+    }
   }
 }
 ```

@@ -151,6 +151,8 @@ export {
 	withHookRecallCompat,
 } from "./recall";
 export type {
+	AggregateRecallUsage,
+	AggregateRecallUsageStage,
 	RecallMeta,
 	RecallPartitionableRow,
 	RecallPayload,

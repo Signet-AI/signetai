@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { RouteRequest, RouterResult } from "@signet/core";
+import type { LlmUsage, RouteRequest, RouterResult } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { logger } from "./logger";
 import type { EmbeddingConfig, ResolvedMemoryConfig } from "./memory-config";
 import {
+	type AggregateRecallUsage,
+	type AggregateRecallUsageStage,
 	type EmbedFn,
 	type RecallParams,
 	type RecallResponse,
@@ -20,6 +22,15 @@ export type AggregateRecallStoppedReason = "complete" | "no_evidence" | "router_
 
 interface AggregateInferenceResult {
 	readonly text: string;
+	readonly usage?: LlmUsage | null;
+	readonly attempts?: readonly AggregateInferenceAttempt[];
+}
+
+interface AggregateInferenceAttempt {
+	readonly targetRef: string;
+	readonly ok: boolean;
+	readonly durationMs: number;
+	readonly usage?: LlmUsage | null;
 }
 
 export interface AggregateInferenceRouter {
@@ -84,6 +95,60 @@ const AGGREGATE_RECALL_TIMING_LOG_THRESHOLD_MS = 1000;
 
 function roundAggregateDuration(ms: number): number {
 	return Math.round(ms * 100) / 100;
+}
+
+function addNullableNumbers(left: number | null, right: number | null): number | null {
+	if (left === null && right === null) return null;
+	return (left ?? 0) + (right ?? 0);
+}
+
+function sumUsage(stages: readonly AggregateRecallUsageStage[]): LlmUsage {
+	return stages.reduce<LlmUsage>(
+		(total, stage) => ({
+			inputTokens: addNullableNumbers(total.inputTokens, stage.inputTokens),
+			outputTokens: addNullableNumbers(total.outputTokens, stage.outputTokens),
+			cacheReadTokens: addNullableNumbers(total.cacheReadTokens, stage.cacheReadTokens),
+			cacheCreationTokens: addNullableNumbers(total.cacheCreationTokens, stage.cacheCreationTokens),
+			totalCost: addNullableNumbers(total.totalCost, stage.totalCost),
+			totalDurationMs: addNullableNumbers(total.totalDurationMs, stage.totalDurationMs),
+		}),
+		{
+			inputTokens: null,
+			outputTokens: null,
+			cacheReadTokens: null,
+			cacheCreationTokens: null,
+			totalCost: null,
+			totalDurationMs: null,
+		},
+	);
+}
+
+function usageStage(
+	name: AggregateRecallUsageStage["name"],
+	result: AggregateInferenceResult,
+): AggregateRecallUsageStage {
+	const okAttempt = result.attempts?.find((attempt) => attempt.ok) ?? null;
+	const usage = result.usage ?? okAttempt?.usage ?? null;
+	return {
+		name,
+		targetRef: okAttempt?.targetRef ?? null,
+		attemptCount: result.attempts?.length ?? 1,
+		fallbackCount: result.attempts?.filter((attempt) => !attempt.ok).length ?? 0,
+		inputTokens: usage?.inputTokens ?? null,
+		outputTokens: usage?.outputTokens ?? null,
+		cacheReadTokens: usage?.cacheReadTokens ?? null,
+		cacheCreationTokens: usage?.cacheCreationTokens ?? null,
+		totalCost: usage?.totalCost ?? null,
+		totalDurationMs: usage?.totalDurationMs ?? okAttempt?.durationMs ?? null,
+	};
+}
+
+function buildAggregateUsage(stages: readonly AggregateRecallUsageStage[]): AggregateRecallUsage | undefined {
+	if (stages.length === 0) return undefined;
+	return {
+		...sumUsage(stages),
+		stages,
+	};
 }
 
 function createAggregateTimingCollector(): {
@@ -491,9 +556,9 @@ async function planQueries(input: {
 	readonly budget: AggregateRecallBudget;
 	readonly maxQueries: number;
 	readonly initialRows: readonly RecallResult[];
-}): Promise<string[]> {
+}): Promise<{ readonly queries: readonly string[]; readonly usage?: AggregateRecallUsageStage }> {
 	const remaining = input.maxQueries - 1;
-	if (remaining <= 0) return [];
+	if (remaining <= 0) return { queries: [] };
 	const prompt = [
 		"Propose focused follow-up memory recall queries.",
 		'Return only JSON with this shape: {"queries":["..."]}.',
@@ -512,14 +577,19 @@ async function planQueries(input: {
 		prompt,
 		{ maxTokens: 300, timeoutMs: 20_000, acpxHooks: "disabled" },
 	);
-	return result.ok ? parsePlannerQueries(result.value.text).slice(0, remaining) : [];
+	return result.ok
+		? {
+				queries: parsePlannerQueries(result.value.text).slice(0, remaining),
+				usage: usageStage("planning", result.value),
+			}
+		: { queries: [] };
 }
 
 async function synthesize(input: {
 	readonly router: AggregateInferenceRouter;
 	readonly params: RecallParams;
 	readonly evidence: readonly RecallResult[];
-}): Promise<string | null> {
+}): Promise<{ readonly answer: string | null; readonly usage?: AggregateRecallUsageStage }> {
 	const prompt = [
 		"Write one concise atomic memory note from the memory evidence below.",
 		"Use only the evidence.",
@@ -546,9 +616,12 @@ async function synthesize(input: {
 		prompt,
 		{ maxTokens: 700, timeoutMs: 30_000, acpxHooks: "disabled" },
 	);
-	if (!result.ok) return null;
+	if (!result.ok) return { answer: null };
 	const text = result.value.text.trim();
-	return text.length > 0 ? text : null;
+	return {
+		answer: text.length > 0 ? text : null,
+		usage: usageStage("synthesis", result.value),
+	};
 }
 
 export async function aggregateRecall(
@@ -563,8 +636,10 @@ export async function aggregateRecall(
 	const log = deps.logger ?? logger;
 	const ingestEnvelope = deps.ingestEnvelope ?? txIngestEnvelope;
 	const timings = createAggregateTimingCollector();
+	const usageStages: AggregateRecallUsageStage[] = [];
 	const finish = (response: RecallResponse): RecallResponse => {
 		const recallTimings = timings.finish();
+		const usage = buildAggregateUsage(usageStages);
 		if (recallTimings.totalMs >= AGGREGATE_RECALL_TIMING_LOG_THRESHOLD_MS) {
 			log.warn("memory", "Aggregate recall stage timings", {
 				agentId: params.agentId ?? "default",
@@ -574,6 +649,13 @@ export async function aggregateRecall(
 				resultCount: response.meta.totalReturned,
 				totalMs: recallTimings.totalMs,
 				stages: recallTimings.stages,
+				...(usage
+					? {
+							llmInputTokens: usage.inputTokens,
+							llmOutputTokens: usage.outputTokens,
+							llmTotalCost: usage.totalCost,
+						}
+					: {}),
 			});
 		}
 		return {
@@ -582,6 +664,12 @@ export async function aggregateRecall(
 				...response.meta,
 				timings: recallTimings,
 			},
+			aggregate: response.aggregate
+				? {
+						...response.aggregate,
+						...(usage ? { usage } : {}),
+					}
+				: response.aggregate,
 		};
 	};
 	const first = await timings.timeAsync("aggregate_initial_recall", () => recall(params, cfg, deps.embedFn));
@@ -608,7 +696,8 @@ export async function aggregateRecall(
 			initialRows: first.results,
 		}),
 	);
-	const queries = uniqueQueries(params.query, planned, maxQueries);
+	const queries = uniqueQueries(params.query, planned.queries, maxQueries);
+	if (planned.usage) usageStages.push(planned.usage);
 	const followupQueries = queries.slice(1);
 	const followupRecalls =
 		followupQueries.length === 0
@@ -636,9 +725,11 @@ export async function aggregateRecall(
 		return finish(emptyAggregateResponse(params, budget, queries, [], "no_evidence"));
 	}
 
-	const answer = await timings.timeAsync("aggregate_synthesis", () =>
+	const synthesized = await timings.timeAsync("aggregate_synthesis", () =>
 		synthesize({ router: deps.router, params, evidence }),
 	);
+	if (synthesized.usage) usageStages.push(synthesized.usage);
+	const answer = synthesized.answer;
 	if (!answer) {
 		return finish(emptyAggregateResponse(params, budget, queries, sourceMemoryIds, "synthesis_failed"));
 	}

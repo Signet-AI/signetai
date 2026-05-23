@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RouteRequest, RouterResult } from "@signet/core";
+import type { RouteRequest } from "@signet/core";
 import { type AggregateInferenceRouter, InvalidAggregateRecallBudgetError, aggregateRecall } from "./aggregate-recall";
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -97,17 +97,38 @@ class StaticRouter implements AggregateInferenceRouter {
 			readonly refresh?: boolean;
 			readonly acpxHooks?: "disabled" | "inherit";
 		},
-	): Promise<RouterResult<{ readonly text: string }>> {
+	): ReturnType<AggregateInferenceRouter["execute"]> {
 		this.calls.push(request);
 		this.prompts.push(prompt);
 		this.opts.push(opts ?? {});
+		const callNumber = this.calls.length;
 		return {
 			ok: true,
 			value: {
-				text:
-					this.calls.length === 1
-						? JSON.stringify({ queries: ["follow up one", "follow up two"] })
-						: this.synthesisText,
+				text: callNumber === 1 ? JSON.stringify({ queries: ["follow up one", "follow up two"] }) : this.synthesisText,
+				usage: {
+					inputTokens: callNumber * 10,
+					outputTokens: callNumber,
+					cacheReadTokens: callNumber,
+					cacheCreationTokens: null,
+					totalCost: callNumber / 1000,
+					totalDurationMs: callNumber * 100,
+				},
+				attempts: [
+					{
+						targetRef: "test-router/default",
+						ok: true,
+						durationMs: callNumber * 100,
+						usage: {
+							inputTokens: callNumber * 10,
+							outputTokens: callNumber,
+							cacheReadTokens: callNumber,
+							cacheCreationTokens: null,
+							totalCost: callNumber / 1000,
+							totalDurationMs: callNumber * 100,
+						},
+					},
+				],
 			},
 		};
 	}
@@ -136,7 +157,7 @@ describe("aggregateRecall", () => {
 		closeDbAccessor();
 		globalThis.fetch = originalFetch;
 		if (originalOpenAiApiKey === undefined) {
-			delete process.env.OPENAI_API_KEY;
+			Reflect.deleteProperty(process.env, "OPENAI_API_KEY");
 		} else {
 			process.env.OPENAI_API_KEY = originalOpenAiApiKey;
 		}
@@ -212,6 +233,29 @@ describe("aggregateRecall", () => {
 			deduped: false,
 			sourceMemoryIds: ["mem-1", "mem-2", "mem-3"],
 			stoppedReason: "complete",
+			usage: {
+				inputTokens: 30,
+				outputTokens: 3,
+				cacheReadTokens: 3,
+				totalCost: 0.003,
+				totalDurationMs: 300,
+				stages: [
+					{
+						name: "planning",
+						targetRef: "test-router/default",
+						attemptCount: 1,
+						fallbackCount: 0,
+						inputTokens: 10,
+					},
+					{
+						name: "synthesis",
+						targetRef: "test-router/default",
+						attemptCount: 1,
+						fallbackCount: 0,
+						inputTokens: 20,
+					},
+				],
+			},
 		});
 		expect(result.meta.timings.stages.map((stage) => stage.name)).toEqual([
 			"aggregate_initial_recall",

@@ -133,6 +133,7 @@ const aggregate = await signet.recall("what did we decide about onboarding?", {
 });
 // aggregate.results[0] — synthesized aggregate row when evidence exists
 // aggregate.aggregate?.queries — recall queries used during aggregation
+// aggregate.aggregate?.usage — provider-reported token/cost totals when available
 // aggregate.meta.timings?.stages — aggregate planning/synthesis timings
 ```
 

@@ -7,6 +7,8 @@ import { SignetClientP2 } from "./client-p2.js";
 import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
 import { SignetTransport } from "./transport.js";
 import type {
+	AggregateRecallUsage,
+	AggregateRecallUsageStage,
 	BatchModifyItemResult,
 	BatchModifyResponse,
 	BitwardenConnectResult,
@@ -1387,6 +1389,8 @@ export type {
 	PluginSurfaceBase,
 	PluginSurfaceSummary,
 	PluginToolSummary,
+	AggregateRecallUsage,
+	AggregateRecallUsageStage,
 	RecallResponse,
 	RecallResult,
 	RecoverResult,

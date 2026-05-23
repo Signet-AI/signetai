@@ -319,7 +319,15 @@ interface FakeOpenAiServer {
 }
 
 function startFakeOpenAiServer(
-	mode: "success" | "slow_success" | "slow_stream" | "error" | "rate_limit" | "unauthorized" | "secret_error",
+	mode:
+		| "success"
+		| "slow_success"
+		| "slow_stream"
+		| "error"
+		| "rate_limit"
+		| "payment_required"
+		| "unauthorized"
+		| "secret_error",
 ): FakeOpenAiServer {
 	const server = Bun.serve({
 		port: 0,
@@ -337,6 +345,9 @@ function startFakeOpenAiServer(
 					const payload = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
 					if (mode === "rate_limit") {
 						return new Response("rate limited", { status: 429 });
+					}
+					if (mode === "payment_required") {
+						return new Response("insufficient credits", { status: 402 });
 					}
 					if (mode === "unauthorized") {
 						return new Response("unauthorized", { status: 401 });
@@ -1071,6 +1082,72 @@ describe("inference session and quota state", () => {
 			);
 			expect(JSON.stringify(blocked["primary/fast"])).toContain("rate_limited");
 			expect(JSON.stringify(blocked["secondary/deep"])).toContain("rate_limited");
+		} finally {
+			resetInferenceRouterForTests();
+			primary.stop();
+			secondary.stop();
+			backup.stop();
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("marks exhausted API credits as rate limited and uses configured fallbacks", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-inference-credit-state-"));
+		const primary = startFakeOpenAiServer("payment_required");
+		const secondary = startFakeOpenAiServer("success");
+		const backup = startFakeOpenAiServer("success");
+		writeAccountFallbackRoutingFixture(root, {
+			primary: primary.url,
+			secondary: secondary.url,
+			backup: backup.url,
+		});
+		try {
+			const { app, secret } = createInferenceTestApp(root);
+			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
+
+			const executeRes = await app.request(
+				new Request("http://localhost/api/inference/execute", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${adminToken}`,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({
+						operation: "interactive",
+						prompt: "hello there",
+					}),
+				}),
+			);
+			expect(executeRes.status).toBe(200);
+			const executeBody = (await executeRes.json()) as {
+				text?: string;
+				attempts?: Array<{ targetRef?: string; ok?: boolean; error?: string }>;
+			};
+			expect(executeBody.text).toBe("hello");
+			expect(executeBody.attempts?.map((attempt) => attempt.targetRef)).toEqual([
+				"primary/fast",
+				"secondary/deep",
+				"backup/safe",
+			]);
+			expect(executeBody.attempts?.[0]?.ok).toBe(false);
+			expect(executeBody.attempts?.[0]?.error).toContain("402");
+			expect(executeBody.attempts?.[1]?.ok).toBe(false);
+			expect(executeBody.attempts?.[2]?.ok).toBe(true);
+
+			const statusRes = await app.request(
+				new Request("http://localhost/api/inference/status", {
+					headers: { Authorization: `Bearer ${adminToken}` },
+				}),
+			);
+			expect(statusRes.status).toBe(200);
+			const statusBody = (await statusRes.json()) as {
+				runtimeSnapshot?: {
+					targets?: Record<string, { accountState?: string }>;
+				};
+			};
+			expect(statusBody.runtimeSnapshot?.targets?.["primary/fast"]?.accountState).toBe("rate_limited");
+			expect(statusBody.runtimeSnapshot?.targets?.["secondary/deep"]?.accountState).toBe("rate_limited");
+			expect(statusBody.runtimeSnapshot?.targets?.["backup/safe"]?.accountState).toBe("ready");
 		} finally {
 			resetInferenceRouterForTests();
 			primary.stop();

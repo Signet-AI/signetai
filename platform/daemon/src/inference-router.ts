@@ -367,7 +367,14 @@ export class InferenceRouter {
 			lower.includes("rate-limit") ||
 			lower.includes("too many requests") ||
 			lower.includes("quota") ||
-			lower.includes("usage limit")
+			lower.includes("usage limit") ||
+			lower.includes("http 402") ||
+			lower.includes("payment required") ||
+			lower.includes("insufficient credit") ||
+			lower.includes("insufficient credits") ||
+			lower.includes("credit balance") ||
+			lower.includes("billing") ||
+			lower.includes("balance")
 		) {
 			return {
 				state: {

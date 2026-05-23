@@ -74,6 +74,30 @@ export interface AggregateRecallMeta {
 	readonly queries: readonly string[];
 	readonly sourceMemoryIds: readonly string[];
 	readonly stoppedReason: "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
+	readonly usage?: AggregateRecallUsage;
+}
+
+export interface AggregateRecallUsage {
+	readonly inputTokens: number | null;
+	readonly outputTokens: number | null;
+	readonly cacheReadTokens: number | null;
+	readonly cacheCreationTokens: number | null;
+	readonly totalCost: number | null;
+	readonly totalDurationMs: number | null;
+	readonly stages: readonly AggregateRecallUsageStage[];
+}
+
+export interface AggregateRecallUsageStage {
+	readonly name: "planning" | "synthesis";
+	readonly targetRef: string | null;
+	readonly attemptCount: number;
+	readonly fallbackCount: number;
+	readonly inputTokens: number | null;
+	readonly outputTokens: number | null;
+	readonly cacheReadTokens: number | null;
+	readonly cacheCreationTokens: number | null;
+	readonly totalCost: number | null;
+	readonly totalDurationMs: number | null;
 }
 
 export interface RecallEntityAttribute {

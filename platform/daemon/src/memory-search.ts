@@ -13,7 +13,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { vectorSearch } from "@signet/core";
+import { type LlmUsage, vectorSearch } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
@@ -120,6 +120,7 @@ export interface RecallResponse {
 		queries: readonly string[];
 		sourceMemoryIds: readonly string[];
 		stoppedReason: "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
+		usage?: AggregateRecallUsage;
 	};
 	entities?: Array<{
 		name: string;
@@ -129,6 +130,17 @@ export interface RecallResponse {
 			attributes: Array<{ content: string; status: string; importance: number }>;
 		}>;
 	}>;
+}
+
+export interface AggregateRecallUsage extends LlmUsage {
+	readonly stages: readonly AggregateRecallUsageStage[];
+}
+
+export interface AggregateRecallUsageStage extends LlmUsage {
+	readonly name: "planning" | "synthesis";
+	readonly targetRef: string | null;
+	readonly attemptCount: number;
+	readonly fallbackCount: number;
 }
 
 export type EmbedFn = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
