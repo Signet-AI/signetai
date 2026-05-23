@@ -272,13 +272,30 @@ describe("sources-config", () => {
 
 		it("rejects unsafe GitHub doc paths before writing config", () => {
 			const agentsDir = tmp();
-			for (const docPath of ["/README.md", "../README.md", "docs/../README.md", "README.md?ref=dev"]) {
+			for (const docPath of [
+				"/README.md",
+				"../README.md",
+				"docs/../README.md",
+				"README.md?ref=dev",
+				"src/daemon.ts",
+				"docs/openapi.yaml",
+			]) {
 				const result = addGitHubSource({ repos: ["owner/repo"], docPaths: [docPath] }, agentsDir);
 				expect(result.ok).toBe(false);
 				if (result.ok === true) throw new Error("expected doc path failure");
 				expect(result.error).toContain("docPaths");
 			}
 			expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		});
+
+		it("accepts markdown doc paths and markdown globs", () => {
+			const agentsDir = tmp();
+			for (const docPath of ["README.md", "docs/setup.md", "docs/*.md", "docs/**/*.md"]) {
+				const result = addGitHubSource({ repos: ["owner/repo"], docPaths: [docPath] }, agentsDir);
+				expect(result.ok).toBe(true);
+				if (result.ok === false) throw new Error(result.error);
+				removeSource(result.source.id, agentsDir);
+			}
 		});
 
 		it("drops malformed persisted GitHub sources instead of treating them as empty sources", () => {
@@ -401,7 +418,7 @@ describe("sources-config", () => {
 							createdAt: "2026-01-01T00:00:00.000Z",
 							updatedAt: "2026-01-01T00:00:00.000Z",
 							agentId: "default",
-							settings: { repos: ["owner/repo"], docPaths: ["README.md?ref=dev"] },
+							settings: { repos: ["owner/repo"], docPaths: ["src/daemon.ts"] },
 						},
 					],
 				}),

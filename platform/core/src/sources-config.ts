@@ -457,11 +457,21 @@ function isStringArray(value: unknown): value is readonly string[] {
 	return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+function isMarkdownDocPath(path: string): boolean {
+	return path.toLowerCase().endsWith(".md");
+}
+
+function isMarkdownDocGlob(path: string): boolean {
+	const lowered = path.toLowerCase();
+	return lowered.endsWith("/*.md") || lowered.endsWith("/**/*.md");
+}
+
 function isSafeGitHubDocPath(value: string): boolean {
 	const path = value.trim();
 	if (!path) return false;
 	if (path.startsWith("/") || path.includes("\\") || path.includes("?") || path.includes("#")) return false;
-	return !path.split("/").some((segment) => segment === "" || segment === "." || segment === "..");
+	if (path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) return false;
+	return isMarkdownDocPath(path) || isMarkdownDocGlob(path);
 }
 
 function mergeDefaultObsidianExcludeGlobs(values: readonly string[] | undefined): readonly string[] {
