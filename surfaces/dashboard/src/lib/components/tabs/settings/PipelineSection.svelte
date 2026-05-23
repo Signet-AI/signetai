@@ -51,6 +51,7 @@ const EXTRACTION_PROVIDER_OPTIONS = [
 	{ value: "opencode", label: "opencode" },
 	{ value: "anthropic", label: "anthropic" },
 	{ value: "openrouter", label: "openrouter" },
+	{ value: "openai-compatible", label: "openai-compatible" },
 ] as const;
 
 function getModelPresets(provider: string): Array<{ value: string; label: string }> {
@@ -93,6 +94,9 @@ function pickPreferredModel(provider: string, presets: Array<{ value: string; la
 			vals[0] ??
 			""
 		);
+	}
+	if (provider === "openai-compatible") {
+		return vals.find((v) => v.toLowerCase().includes("mini")) ?? vals[0] ?? "";
 	}
 	return vals[0] ?? "";
 }
@@ -138,7 +142,13 @@ function extractionDisabled(): boolean {
 }
 
 function providerRisky(provider: string): boolean {
-	return provider === "acpx" || provider === "anthropic" || provider === "openrouter" || provider === "opencode";
+	return (
+		provider === "acpx" ||
+		provider === "anthropic" ||
+		provider === "openrouter" ||
+		provider === "openai-compatible" ||
+		provider === "opencode"
+	);
 }
 
 function extractionProviderRisky(): boolean {
@@ -398,7 +408,7 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 			<Switch checked={st.aBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[0].key])} onCheckedChange={setBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[0].key])} />
 		</FormField>
 
-		<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses Claude Code CLI; codex uses the local Codex CLI; opencode uses the OpenCode server; anthropic uses direct API; openrouter uses the OpenRouter API.">
+		<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses Claude Code CLI; codex uses the local Codex CLI; opencode uses the OpenCode server; anthropic, openrouter, and openai-compatible use direct APIs.">
 			<div class="flex flex-col gap-2">
 				<Select.Root
 					type="single"

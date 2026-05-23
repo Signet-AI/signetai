@@ -823,6 +823,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				value: "openrouter",
 				name: "OpenRouter (cloud API, billed usage, expensive if left running)",
 			},
+			{
+				value: "openai-compatible",
+				name: "OpenAI-compatible endpoint (advanced, uses OPENAI_API_KEY and extraction endpoint config)",
+			},
 		];
 		extractionProvider = await select({
 			message: "Memory extraction provider (analyzes conversations):",
@@ -905,6 +909,20 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			extractionModel = await select({
 				message: "Which OpenRouter model for extraction? (provider/model format)",
 				choices: modelChoices("openrouter"),
+			});
+		}
+	} else if (extractionProvider === "openai-compatible") {
+		if (nonInteractive) {
+			extractionModel =
+				deps.normalizeStringValue(options.extractionModel) ||
+				deps.normalizeStringValue(existingPipeline.extractionModel) ||
+				deps.normalizeStringValue(existingExtraction.model) ||
+				defaultExtractionModel("openai-compatible");
+		} else {
+			console.log();
+			extractionModel = await select({
+				message: "Which OpenAI-compatible model for extraction?",
+				choices: modelChoices("openai-compatible"),
 			});
 		}
 	} else if (extractionProvider === "ollama") {

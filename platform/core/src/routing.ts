@@ -623,6 +623,7 @@ export function compileLegacyRoutingConfig(opts: {
 	readonly extraction: Pick<PipelineExtractionConfig, "provider" | "model" | "endpoint" | "command">;
 	readonly synthesis: Pick<PipelineSynthesisConfig, "enabled" | "provider" | "model" | "endpoint">;
 }): RoutingConfig {
+	const accounts: Record<string, RoutingAccountConfig> = {};
 	const targets: Record<string, RoutingTargetConfig> = {};
 	const policies: Record<string, RoutingPolicyConfig> = {};
 	const taskClasses: Record<string, RoutingTaskClassConfig> = {
@@ -649,6 +650,34 @@ export function compileLegacyRoutingConfig(opts: {
 	} = {};
 	let defaultTargets: readonly string[] = [];
 
+	const legacyAccountForProvider = (provider: RoutingExecutorKind): string | undefined => {
+		if (provider === "openrouter") {
+			accounts["legacy-openrouter"] = {
+				kind: "api",
+				providerFamily: "openrouter",
+				credentialRef: "OPENROUTER_API_KEY",
+			};
+			return "legacy-openrouter";
+		}
+		if (provider === "anthropic") {
+			accounts["legacy-anthropic"] = {
+				kind: "api",
+				providerFamily: "anthropic",
+				credentialRef: "ANTHROPIC_API_KEY",
+			};
+			return "legacy-anthropic";
+		}
+		if (provider === "openai-compatible") {
+			accounts["legacy-openai-compatible"] = {
+				kind: "api",
+				providerFamily: "openai-compatible",
+				credentialRef: "OPENAI_API_KEY",
+			};
+			return "legacy-openai-compatible";
+		}
+		return undefined;
+	};
+
 	if (
 		opts.extraction.provider !== "none" &&
 		opts.extraction.provider !== "command" &&
@@ -657,6 +686,7 @@ export function compileLegacyRoutingConfig(opts: {
 		targets["legacy-extraction"] = {
 			kind: inferTargetKind(opts.extraction.provider),
 			executor: opts.extraction.provider,
+			account: legacyAccountForProvider(opts.extraction.provider),
 			endpoint: opts.extraction.endpoint,
 			command: opts.extraction.command,
 			privacy: inferTargetPrivacy(opts.extraction.provider),
@@ -680,6 +710,7 @@ export function compileLegacyRoutingConfig(opts: {
 		targets["legacy-synthesis"] = {
 			kind: inferTargetKind(opts.synthesis.provider),
 			executor: opts.synthesis.provider,
+			account: legacyAccountForProvider(opts.synthesis.provider),
 			endpoint: opts.synthesis.endpoint,
 			privacy: inferTargetPrivacy(opts.synthesis.provider),
 			models: {
@@ -724,7 +755,7 @@ export function compileLegacyRoutingConfig(opts: {
 		source: "legacy-implicit",
 		enabled: defaultTargets.length > 0,
 		defaultPolicy: "legacy-default",
-		accounts: {},
+		accounts,
 		targets,
 		policies,
 		taskClasses,

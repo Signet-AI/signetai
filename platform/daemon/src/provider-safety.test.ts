@@ -61,6 +61,20 @@ describe("provider safety", () => {
 		}
 	});
 
+	it("treats openai-compatible as remote for provider safety", () => {
+		const result = validateProviderSafety(`memory:
+  pipelineV2:
+    allowRemoteProviders: false
+    extractionProvider: openai-compatible
+`);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toContain("allowRemoteProviders is false");
+			expect(result.error).toContain("openai-compatible");
+		}
+	});
+
 	it("blocks command extraction when allowRemoteProviders is false", () => {
 		const result = validateProviderSafety(`memory:
   pipelineV2:
