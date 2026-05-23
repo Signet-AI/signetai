@@ -364,6 +364,11 @@ function inferTargetPrivacy(executor: string): RoutingPrivacyTier {
 	return "remote_ok";
 }
 
+function inferLegacyTargetPrivacy(executor: string, endpoint: string | undefined): RoutingPrivacyTier {
+	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local_only";
+	return inferTargetPrivacy(executor);
+}
+
 function mergeUnique(base: readonly string[], extra: readonly string[]): readonly string[] {
 	const seen = new Set<string>();
 	const merged: string[] = [];
@@ -708,7 +713,7 @@ export function compileLegacyRoutingConfig(opts: {
 			account: legacyAccountForProvider(opts.extraction.provider, opts.extraction.endpoint),
 			endpoint: opts.extraction.endpoint,
 			command: opts.extraction.command,
-			privacy: inferTargetPrivacy(opts.extraction.provider),
+			privacy: inferLegacyTargetPrivacy(opts.extraction.provider, opts.extraction.endpoint),
 			models: {
 				default: {
 					model: opts.extraction.model,
@@ -731,7 +736,7 @@ export function compileLegacyRoutingConfig(opts: {
 			executor: opts.synthesis.provider,
 			account: legacyAccountForProvider(opts.synthesis.provider, opts.synthesis.endpoint),
 			endpoint: opts.synthesis.endpoint,
-			privacy: inferTargetPrivacy(opts.synthesis.provider),
+			privacy: inferLegacyTargetPrivacy(opts.synthesis.provider, opts.synthesis.endpoint),
 			models: {
 				default: {
 					model: opts.synthesis.model,

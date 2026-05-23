@@ -2,10 +2,12 @@
 import { describe, expect, it } from "bun:test";
 import { DEFAULT_PIPELINE_TIMEOUT_MS } from "@signet/core/pipeline-providers";
 import {
+	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	applyAcpxDashboardSetup,
 	defaultAcpxDashboardAgent,
 	hasExplicitSynthesisConfig,
 	hasExplicitSynthesisProvider,
+	resolveExtractionEndpoint,
 	resolveSynthesisEnabled,
 	resolveSynthesisEndpoint,
 	resolveSynthesisModel,
@@ -14,6 +16,28 @@ import {
 } from "./pipeline-settings";
 
 describe("pipeline-settings synthesis resolution", () => {
+	it("resolves extraction endpoints for OpenAI-compatible dashboard setup", () => {
+		expect(
+			resolveExtractionEndpoint({
+				memory: {
+					pipelineV2: {
+						extractionProvider: "openai-compatible",
+					},
+				},
+			}),
+		).toBe(DEFAULT_OPENAI_COMPATIBLE_ENDPOINT);
+		expect(
+			resolveExtractionEndpoint({
+				memory: {
+					pipelineV2: {
+						extractionProvider: "openai-compatible",
+						extractionEndpoint: "https://gateway.example.test/v1",
+					},
+				},
+			}),
+		).toBe("https://gateway.example.test/v1");
+	});
+
 	it("falls back to extraction values when synthesis is absent", () => {
 		const agent = {
 			memory: {

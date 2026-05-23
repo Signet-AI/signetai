@@ -20,11 +20,13 @@ import { defaultPipelineModel } from "@signet/core/pipeline-providers";
 import {
 	ACPX_DASHBOARD_AGENT_OPTIONS,
 	type AcpxDashboardAgent,
+	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	applyAcpxDashboardSetup,
 	defaultAcpxDashboardAgent,
 	defaultAcpxDashboardModel,
 	hasExplicitSynthesisConfig,
 	hasExplicitSynthesisProvider,
+	resolveExtractionEndpoint,
 	resolveSynthesisEnabled,
 	resolveSynthesisEndpoint,
 	resolveSynthesisModel,
@@ -120,7 +122,9 @@ function extractionModelSelectValue(): string {
 }
 
 function isKnownPreset(model: string): boolean {
-	return EXTRACTION_PROVIDER_OPTIONS.some((option) => getModelPresets(option.value).some((preset) => preset.value === model));
+	return EXTRACTION_PROVIDER_OPTIONS.some((option) =>
+		getModelPresets(option.value).some((preset) => preset.value === model),
+	);
 }
 
 function isKnownProvider(provider: string): provider is Parameters<typeof defaultPipelineModel>[0] {
@@ -135,6 +139,10 @@ function defaultModelForProvider(provider: string): string {
 
 function extractionModel(): string {
 	return st.aStr(["memory", "pipelineV2", "extractionModel"]);
+}
+
+function extractionEndpoint(): string {
+	return resolveExtractionEndpoint(st.agent);
 }
 
 function extractionDisabled(): boolean {
@@ -253,11 +261,19 @@ function setSelect(path: string[]) {
 function setExtractionProvider(v: string | undefined): void {
 	const nextProvider = v ?? "";
 	const currentModel = st.aStr(["memory", "pipelineV2", "extractionModel"]);
+	const currentEndpoint =
+		st.aStr(["memory", "pipelineV2", "extractionEndpoint"]) ||
+		st.aStr(["memory", "pipelineV2", "extractionBaseUrl"]) ||
+		st.aStr(["memory", "pipelineV2", "extraction", "endpoint"]) ||
+		st.aStr(["memory", "pipelineV2", "extraction", "base_url"]);
 	customModelActive = false;
 	st.aSetStr(["memory", "pipelineV2", "extractionProvider"], nextProvider);
 	if (!nextProvider) {
 		st.aSetStr(["memory", "pipelineV2", "extractionModel"], "");
 		return;
+	}
+	if (nextProvider === "openai-compatible" && !currentEndpoint) {
+		st.aSetStr(["memory", "pipelineV2", "extractionEndpoint"], DEFAULT_OPENAI_COMPATIBLE_ENDPOINT);
 	}
 	if (!currentModel || isKnownPreset(currentModel)) {
 		st.aSetStr(["memory", "pipelineV2", "extractionModel"], defaultModelForProvider(nextProvider));
@@ -462,6 +478,12 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 				{/if}
 			</div>
 		</FormField>
+
+		{#if extractionProvider() === "openai-compatible"}
+			<FormField label="Extraction endpoint" description="OpenAI-compatible /v1 endpoint for extraction. Loopback endpoints are treated as local; remote gateways use OPENAI_API_KEY.">
+				<Input value={extractionEndpoint()} oninput={setStr(["memory", "pipelineV2", "extractionEndpoint"])} placeholder={DEFAULT_OPENAI_COMPATIBLE_ENDPOINT} />
+			</FormField>
+		{/if}
 
 		<FormField label="Session synthesis" description="Provider used by the summary-worker for session summaries. This is separate from fact extraction once explicitly configured.">
 			<div class="flex flex-col gap-2">

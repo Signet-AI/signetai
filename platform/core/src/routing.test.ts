@@ -427,16 +427,21 @@ describe("inference config + decision engine", () => {
 				command: undefined,
 			},
 			synthesis: {
-				enabled: false,
-				provider: "none",
-				model: "",
-				endpoint: undefined,
+				enabled: true,
+				provider: "openai-compatible",
+				model: "openai/gpt-oss-20b",
+				endpoint: "http://127.0.0.1:1234/v1",
 			},
 		});
 		expect(localCompatible.accounts["legacy-openai-compatible"]).toBeUndefined();
 		expect(localCompatible.targets["legacy-extraction"]?.executor).toBe("openai-compatible");
 		expect(localCompatible.targets["legacy-extraction"]?.kind).toBe("local");
+		expect(localCompatible.targets["legacy-extraction"]?.privacy).toBe("local_only");
 		expect(localCompatible.targets["legacy-extraction"]?.account).toBeUndefined();
+		expect(localCompatible.targets["legacy-synthesis"]?.executor).toBe("openai-compatible");
+		expect(localCompatible.targets["legacy-synthesis"]?.kind).toBe("local");
+		expect(localCompatible.targets["legacy-synthesis"]?.privacy).toBe("local_only");
+		expect(localCompatible.targets["legacy-synthesis"]?.account).toBeUndefined();
 	});
 
 	it("does not allow explicit target overrides outside the agent roster", () => {
