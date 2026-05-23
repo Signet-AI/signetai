@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { fetchActiveThreads, fetchGuild, snowflakeIdForTimestamp } from "./discord-source-fetch";
+import { fetchActiveThreads, fetchChannelMessages, fetchGuild, snowflakeIdForTimestamp } from "./discord-source-fetch";
 
 const originalFetch = globalThis.fetch;
 
@@ -37,5 +37,40 @@ describe("discord-source-fetch", () => {
 		) as typeof fetch;
 
 		await expect(fetchGuild({ token: "TOKEN" }, "123456789012345678")).resolves.toBeNull();
+	});
+
+	it("skips malformed message ids without aborting the whole channel fetch", async () => {
+		globalThis.fetch = mock(() =>
+			Promise.resolve(
+				Response.json([
+					{
+						id: "bad-id",
+						type: 0,
+						content: "oops",
+						author: { id: "u1", username: "alice" },
+						timestamp: "2026-05-23T16:00:00.000Z",
+						channel_id: "channel1",
+					},
+					{
+						id: "999999999999999999",
+						type: 0,
+						content: "ok",
+						author: { id: "u2", username: "bob" },
+						timestamp: "2026-05-23T16:01:00.000Z",
+						channel_id: "channel1",
+					},
+				]),
+			),
+		) as typeof fetch;
+
+		const result = await fetchChannelMessages({ token: "TOKEN" }, "channel1", 10, undefined, "1");
+
+		expect(result.data.map((msg) => msg.id)).toEqual(["999999999999999999"]);
+		expect(result.errors).toEqual([
+			{
+				message: "Messages fetch returned malformed message id for channel channel1: bad-id",
+				retryable: false,
+			},
+		]);
 	});
 });

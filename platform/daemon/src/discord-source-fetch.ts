@@ -98,6 +98,14 @@ function parseRateLimit(headers: Headers): RateLimitInfo {
 	};
 }
 
+function parseSnowflake(value: string): bigint | null {
+	try {
+		return BigInt(value);
+	} catch {
+		return null;
+	}
+}
+
 async function parseDiscordResponseBody(response: Response): Promise<unknown> {
 	if (response.status === 204) return null;
 	const raw = await response.text();
@@ -211,6 +219,14 @@ export async function fetchChannelMessages(
 	let rateLimitReset = 0;
 	let fetched = 0;
 	let cursor = beforeId;
+	const sinceSnowflake = sinceId ? parseSnowflake(sinceId) : null;
+	if (sinceId && sinceSnowflake === null) {
+		errors.push({
+			message: `Messages fetch used malformed since id for channel ${channelId}: ${sinceId}`,
+			retryable: false,
+		});
+		return { data: messages, rateLimitRemaining, rateLimitReset, errors };
+	}
 
 	while (fetched < maxMessages) {
 		const params = new URLSearchParams({
@@ -234,8 +250,18 @@ export async function fetchChannelMessages(
 		if (batch.length === 0) break;
 
 		for (const msg of batch) {
-			if (sinceId && BigInt(msg.id) <= BigInt(sinceId)) {
-				return { data: messages, rateLimitRemaining, rateLimitReset, errors };
+			if (sinceSnowflake !== null) {
+				const msgSnowflake = parseSnowflake(msg.id);
+				if (msgSnowflake === null) {
+					errors.push({
+						message: `Messages fetch returned malformed message id for channel ${channelId}: ${msg.id}`,
+						retryable: false,
+					});
+					continue;
+				}
+				if (msgSnowflake <= sinceSnowflake) {
+					return { data: messages, rateLimitRemaining, rateLimitReset, errors };
+				}
 			}
 			messages.push(msg);
 			fetched++;
