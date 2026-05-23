@@ -198,6 +198,10 @@ export function addGitHubSource(input: AddGitHubSourceInput, agentsDir = getAgen
 	return withSourcesConfigLock(agentsDir, () => addGitHubSourceUnlocked(input, agentsDir));
 }
 
+function resolveSourceAgentId(agentId?: string): string {
+	return cleanName(agentId) ?? cleanName(process.env.SIGNET_AGENT_ID) ?? "default";
+}
+
 function addGitHubSourceUnlocked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	try {
 		return addGitHubSourceChecked(input, agentsDir);
@@ -259,7 +263,7 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 
 	const now = input.now ?? new Date().toISOString();
 	const cfg = loadSourcesConfigForWrite(agentsDir);
-	const agentId = cleanName(input.agentId) ?? "default";
+	const agentId = resolveSourceAgentId(input.agentId);
 	const settingsKey = [...repos].sort().join(",");
 	const existing = cfg.sources.find(
 		(source) =>

@@ -656,6 +656,7 @@ export async function fetchRepoDocs(
 	config: GitHubFetchConfig,
 	docPaths: readonly string[],
 	branch?: string,
+	maxItems = 500,
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
 	const errors: { message: string; retryable: boolean }[] = [];
@@ -663,8 +664,9 @@ export async function fetchRepoDocs(
 	let rateLimitReset = 0;
 
 	for (const docPath of docPaths) {
+		if (resources.length >= maxItems) break;
 		if (docPath.includes("*")) {
-			const treeResources = await fetchTreeDocs(config, docPath, branch);
+			const treeResources = await fetchTreeDocs(config, docPath, branch, maxItems - resources.length);
 			resources.push(...treeResources.resources);
 			errors.push(...treeResources.errors);
 			continue;
@@ -705,7 +707,12 @@ export async function fetchRepoDocs(
 	return { resources, rateLimitRemaining, rateLimitReset, errors };
 }
 
-async function fetchTreeDocs(config: GitHubFetchConfig, globPath: string, branch?: string): Promise<GitHubFetchResult> {
+async function fetchTreeDocs(
+	config: GitHubFetchConfig,
+	globPath: string,
+	branch?: string,
+	maxItems = 100,
+): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
 	const errors: { message: string; retryable: boolean }[] = [];
 	const dir = globPath.replace(/\/\*\*\/.*$/, "").replace(/\/\*.*$/, "");
@@ -729,7 +736,7 @@ async function fetchTreeDocs(config: GitHubFetchConfig, globPath: string, branch
 	const entries = (treeData.tree ?? []).filter((e) => e.type === "blob" && matcher(e.path));
 	const refParam = branch ? `?ref=${branch}` : "";
 
-	for (const entry of entries.slice(0, 100)) {
+	for (const entry of entries.slice(0, maxItems)) {
 		const fileUrl = `${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/contents/${dir ? `${dir}/` : ""}${entry.path}${refParam}`;
 		const fileResponse = await githubRequest(fileUrl, config.token);
 		if (fileResponse.status !== 200) {

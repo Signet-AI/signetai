@@ -230,8 +230,9 @@ export async function syncGitHubSource(
 
 			if (settings.resourceTypes.includes("docs")) {
 				const docPaths = settings.docPaths ?? ["README.md", "CHANGELOG.md"];
-				const result = await fetchRepoDocs(config, docPaths, repo.defaultBranch);
+				const result = await fetchRepoDocs(config, docPaths, repo.defaultBranch, settings.maxItemsPerRepo);
 				if (!isSourceActive()) break;
+				const capped = result.resources.length >= settings.maxItemsPerRepo;
 				for (const resource of result.resources) {
 					seenKeys.add(resourceKey(resource));
 					await indexResource(source.id, repo.fullName, resource, undefined, agentId, syncOpts);
@@ -240,7 +241,7 @@ export async function syncGitHubSource(
 				}
 				logErrors(source.id, repo.fullName, "docs", result.resources.length, result.errors);
 				if (result.errors.length > 0) hadErrors = true;
-				if (result.errors.length === 0) completeTypes.add("docs");
+				if (!capped && result.errors.length === 0) completeTypes.add("docs");
 			}
 
 			await reconcileStaleResources(source.id, repo.fullName, seenKeys, completeTypes, agentId);

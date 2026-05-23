@@ -218,6 +218,22 @@ describe("sources-config", () => {
 			expect(loadSourcesConfig(agentsDir).sources.map((source) => source.agentId)).toEqual(["agent-a", "agent-b"]);
 		});
 
+		it("defaults GitHub sources to the current SIGNET_AGENT_ID when caller omits agentId", () => {
+			const agentsDir = tmp();
+			const previousAgentId = process.env.SIGNET_AGENT_ID;
+			process.env.SIGNET_AGENT_ID = "agent-env";
+			try {
+				const result = addGitHubSource({ repos: ["owner/repo"], now: "2026-01-01T00:00:00.000Z" }, agentsDir);
+				expect(result.ok).toBe(true);
+				if (result.ok === false) throw new Error(result.error);
+				expect(result.source.agentId).toBe("agent-env");
+				expect(loadSourcesConfig(agentsDir).sources[0]?.agentId).toBe("agent-env");
+			} finally {
+				if (previousAgentId === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+				else process.env.SIGNET_AGENT_ID = previousAgentId;
+			}
+		});
+
 		it("rejects an explicit empty GitHub resource type list", () => {
 			const agentsDir = tmp();
 			const result = addGitHubSource({ repos: ["owner/repo"], resourceTypes: [] }, agentsDir);
