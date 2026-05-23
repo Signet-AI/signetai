@@ -163,8 +163,9 @@ Options:
 | `--identity-preset <preset>` | Identity/context preset (`minimal`, `hermes`, `openclaw`, `custom`); controls startup-loaded files and special prompt files like `DREAMING.md` |
 | `--embedding-provider <provider>` | Non-interactive embedding provider (`ollama`, `openai`, `native`, `none`) |
 | `--embedding-model <model>` | Non-interactive embedding model |
-| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `none`) |
+| `--extraction-provider <provider>` | Non-interactive extraction provider (`claude-code`, `codex`, `ollama`, `opencode`, `openrouter`, `openai-compatible`, `none`) |
 | `--extraction-model <model>` | Non-interactive extraction model |
+| `--extraction-endpoint <url>` | Non-interactive extraction endpoint for OpenAI-compatible providers |
 | `--search-balance <alpha>` | Non-interactive search alpha (`0-1`) |
 | `--openclaw-runtime-path <mode>` | Non-interactive OpenClaw mode (`plugin`, `legacy`) |
 | `--configure-openclaw-workspace` | Patch discovered OpenClaw configs to `$SIGNET_WORKSPACE` |

@@ -342,6 +342,61 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.pipelineV2.extraction.model).toBe("openai/gpt-4o-mini");
 	});
 
+	it("loads openai-compatible extraction settings from agent.yaml", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    extraction:
+      provider: openai-compatible
+      model: gpt-4o-mini
+      endpoint: https://gateway.example.test/v1
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2.extraction.provider).toBe("openai-compatible");
+		expect(cfg.pipelineV2.extraction.model).toBe("gpt-4o-mini");
+		expect(cfg.pipelineV2.extraction.endpoint).toBe("https://gateway.example.test/v1");
+	});
+
+	it("keeps local openai-compatible extraction when remote providers are locked", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					allowRemoteProviders: false,
+					extraction: {
+						provider: "openai-compatible",
+						model: "local-model",
+						endpoint: "http://127.0.0.1:1234/v1",
+					},
+				},
+			},
+		});
+		expect(result.extraction.provider).toBe("openai-compatible");
+		expect(result.extraction.model).toBe("local-model");
+		expect(result.extraction.endpoint).toBe("http://127.0.0.1:1234/v1");
+	});
+
+	it("falls back from remote openai-compatible extraction when remote providers are locked", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					allowRemoteProviders: false,
+					extraction: {
+						provider: "openai-compatible",
+						model: "gpt-4o-mini",
+						endpoint: "https://gateway.example.test/v1",
+					},
+				},
+			},
+		});
+		expect(result.extraction.provider).toBe("llama-cpp");
+		expect(result.extraction.model).toBe("qwen3:4b");
+		expect(result.extraction.endpoint).toBeUndefined();
+	});
+
 	it("loads disabled extraction settings from agent.yaml", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(
@@ -435,6 +490,24 @@ describe("loadPipelineConfig", () => {
 		expect(result.synthesis.provider).toBe("openrouter");
 		expect(result.synthesis.model).toBe("openai/gpt-4o-mini");
 	});
+
+	it("accepts openai-compatible synthesis provider", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					synthesis: {
+						provider: "openai-compatible",
+						model: "gpt-4o-mini",
+						endpoint: "https://gateway.example.test/v1",
+					},
+				},
+			},
+		});
+		expect(result.synthesis.provider).toBe("openai-compatible");
+		expect(result.synthesis.model).toBe("gpt-4o-mini");
+		expect(result.synthesis.endpoint).toBe("https://gateway.example.test/v1");
+	});
+
 
 	it("accepts codex synthesis provider", () => {
 		const result = loadPipelineConfig({

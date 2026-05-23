@@ -19,6 +19,7 @@ export interface SetupWizardOptions {
 	embeddingModel?: string;
 	extractionProvider?: string;
 	extractionModel?: string;
+	extractionEndpoint?: string;
 	searchBalance?: string;
 	skipGit?: boolean;
 	openDashboard?: boolean;
@@ -85,6 +86,7 @@ export interface FreshSetupConfig {
 	readonly embeddingDimensions: number;
 	readonly extractionProvider: ExtractionProviderChoice;
 	readonly extractionModel: string;
+	readonly extractionEndpoint?: string;
 	readonly availableExtractionProviders: readonly ExtractionProviderChoice[];
 	readonly acpxBin?: string;
 	readonly searchBalance: number;

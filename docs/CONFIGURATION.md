@@ -632,7 +632,7 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
-| `provider` | `"llama-cpp"` | — | `"none"`, `"acpx"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, or `"command"` |
+| `provider` | `"llama-cpp"` | — | `"none"`, `"acpx"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, `"openai-compatible"`, or `"command"` |
 | `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |
@@ -641,6 +641,12 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 | `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max extraction-provider calls per hour; set `0` to disable rate limiting |
 | `rateLimit.burstSize` | `20` when `rateLimit` is set | 1-1000 | Max burst size before throttling begins |
 | `rateLimit.waitTimeoutMs` | `5000` when `rateLimit` is set | 0-60000 ms | How long to wait for a token before failing with `RateLimitExceededError` |
+
+For `provider: openai-compatible`, set `endpoint` to the gateway's
+OpenAI-compatible `/v1` base URL. Remote endpoints use `OPENAI_API_KEY` by
+default when this legacy pipeline config is compiled into inference routing;
+explicit top-level `inference.accounts.*.credentialRef` can point at any
+stored secret or environment variable.
 
 For safety, the intended extraction setups are:
 
@@ -655,13 +661,13 @@ calls.
 
 Remote API extraction can accumulate extreme fees quickly because the
 pipeline runs continuously in the background. Use `anthropic`,
-`openrouter`, or remote OpenCode routes only when you explicitly want
+`openrouter`, `openai-compatible`, or remote OpenCode routes only when you explicitly want
 that billing behavior.
 
 `rateLimit` is opt-in. If the stanza is omitted, Signet preserves the
 provider's existing behavior with no throughput throttling. When
 configured, it applies only to remote or paid providers
-(`acpx`, `claude-code`, `anthropic`, `openrouter`, `codex`, `opencode`).
+(`acpx`, `claude-code`, `anthropic`, `openrouter`, `openai-compatible`, `codex`, `opencode`).
 Ollama and `command` providers are always exempt. If you set `rateLimit`
 on an exempt provider, Signet logs a warning and passes calls through
 unthrottled.
@@ -758,9 +764,9 @@ handles synthesis.
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `enabled` | `true` | — | Enable background session summary generation |
-| `provider` | inherited from extraction when omitted | — | `"none"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"codex"`, `"opencode"`, `"anthropic"`, or `"openrouter"` |
+| `provider` | inherited from extraction when omitted | — | `"none"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"codex"`, `"opencode"`, `"anthropic"`, `"openrouter"`, or `"openai-compatible"` |
 | `model` | inherited from extraction when omitted | — | Model name for the configured provider |
-| `endpoint` | inherited from extraction when omitted | — | Optional base URL override for Ollama, OpenCode, or OpenRouter |
+| `endpoint` | inherited from extraction when omitted | — | Optional base URL override for Ollama, OpenCode, OpenRouter, or OpenAI-compatible gateways |
 | `timeout` | inherited from extraction when omitted | 5000-300000 ms | Summary generation timeout |
 | `structuredOutput` | inherited from extraction when omitted | — | Send JSON schema in the `format` field of LLM requests. Set `false` when the synthesis provider rejects structured output (e.g. GitHub Copilot API). Falls back to `extraction.structuredOutput` when omitted. |
 | `rateLimit.maxCallsPerHour` | `200` when `rateLimit` is set | 0-10000 | Max synthesis-provider calls per hour; set `0` to disable rate limiting |

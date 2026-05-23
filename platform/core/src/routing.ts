@@ -257,6 +257,16 @@ function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+export function isLocalInferenceEndpoint(endpoint: string | undefined): boolean {
+	if (!endpoint) return true;
+	try {
+		const parsed = new URL(endpoint);
+		return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname);
+	} catch {
+		return false;
+	}
+}
+
 function asBool(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
 }
@@ -342,11 +352,21 @@ function inferTargetKind(executor: string): RoutingTargetKind {
 	return "subscription_session";
 }
 
+function inferLegacyTargetKind(executor: string, endpoint: string | undefined): RoutingTargetKind {
+	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local";
+	return inferTargetKind(executor);
+}
+
 function inferTargetPrivacy(executor: string): RoutingPrivacyTier {
 	if (executor === "ollama" || executor === "llama-cpp") return "local_only";
 	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode")
 		return "restricted_remote";
 	return "remote_ok";
+}
+
+function inferLegacyTargetPrivacy(executor: string, endpoint: string | undefined): RoutingPrivacyTier {
+	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local_only";
+	return inferTargetPrivacy(executor);
 }
 
 function mergeUnique(base: readonly string[], extra: readonly string[]): readonly string[] {
@@ -623,6 +643,7 @@ export function compileLegacyRoutingConfig(opts: {
 	readonly extraction: Pick<PipelineExtractionConfig, "provider" | "model" | "endpoint" | "command">;
 	readonly synthesis: Pick<PipelineSynthesisConfig, "enabled" | "provider" | "model" | "endpoint">;
 }): RoutingConfig {
+	const accounts: Record<string, RoutingAccountConfig> = {};
 	const targets: Record<string, RoutingTargetConfig> = {};
 	const policies: Record<string, RoutingPolicyConfig> = {};
 	const taskClasses: Record<string, RoutingTaskClassConfig> = {
@@ -649,17 +670,50 @@ export function compileLegacyRoutingConfig(opts: {
 	} = {};
 	let defaultTargets: readonly string[] = [];
 
+	const legacyAccountForProvider = (
+		provider: RoutingExecutorKind,
+		endpoint: string | undefined,
+	): string | undefined => {
+		if (provider === "openrouter") {
+			accounts["legacy-openrouter"] = {
+				kind: "api",
+				providerFamily: "openrouter",
+				credentialRef: "OPENROUTER_API_KEY",
+			};
+			return "legacy-openrouter";
+		}
+		if (provider === "anthropic") {
+			accounts["legacy-anthropic"] = {
+				kind: "api",
+				providerFamily: "anthropic",
+				credentialRef: "ANTHROPIC_API_KEY",
+			};
+			return "legacy-anthropic";
+		}
+		if (provider === "openai-compatible") {
+			if (isLocalInferenceEndpoint(endpoint)) return undefined;
+			accounts["legacy-openai-compatible"] = {
+				kind: "api",
+				providerFamily: "openai-compatible",
+				credentialRef: "OPENAI_API_KEY",
+			};
+			return "legacy-openai-compatible";
+		}
+		return undefined;
+	};
+
 	if (
 		opts.extraction.provider !== "none" &&
 		opts.extraction.provider !== "command" &&
 		opts.extraction.provider !== "acpx"
 	) {
 		targets["legacy-extraction"] = {
-			kind: inferTargetKind(opts.extraction.provider),
+			kind: inferLegacyTargetKind(opts.extraction.provider, opts.extraction.endpoint),
 			executor: opts.extraction.provider,
+			account: legacyAccountForProvider(opts.extraction.provider, opts.extraction.endpoint),
 			endpoint: opts.extraction.endpoint,
 			command: opts.extraction.command,
-			privacy: inferTargetPrivacy(opts.extraction.provider),
+			privacy: inferLegacyTargetPrivacy(opts.extraction.provider, opts.extraction.endpoint),
 			models: {
 				default: {
 					model: opts.extraction.model,
@@ -678,10 +732,11 @@ export function compileLegacyRoutingConfig(opts: {
 
 	if (opts.synthesis.enabled && opts.synthesis.provider !== "none" && opts.synthesis.provider !== "acpx") {
 		targets["legacy-synthesis"] = {
-			kind: inferTargetKind(opts.synthesis.provider),
+			kind: inferLegacyTargetKind(opts.synthesis.provider, opts.synthesis.endpoint),
 			executor: opts.synthesis.provider,
+			account: legacyAccountForProvider(opts.synthesis.provider, opts.synthesis.endpoint),
 			endpoint: opts.synthesis.endpoint,
-			privacy: inferTargetPrivacy(opts.synthesis.provider),
+			privacy: inferLegacyTargetPrivacy(opts.synthesis.provider, opts.synthesis.endpoint),
 			models: {
 				default: {
 					model: opts.synthesis.model,
@@ -724,7 +779,7 @@ export function compileLegacyRoutingConfig(opts: {
 		source: "legacy-implicit",
 		enabled: defaultTargets.length > 0,
 		defaultPolicy: "legacy-default",
-		accounts: {},
+		accounts,
 		targets,
 		policies,
 		taskClasses,

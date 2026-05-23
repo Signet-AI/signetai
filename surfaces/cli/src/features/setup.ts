@@ -67,6 +67,32 @@ function modelChoices(provider: ExtractionProviderChoice): Array<{ value: string
 	return modelPresetsForProvider(provider).map((preset) => ({ value: preset.value, name: preset.label }));
 }
 
+const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:1234/v1";
+
+function normalizeHttpEndpoint(value: string | null | undefined): string | undefined {
+	if (!value) return undefined;
+	const trimmed = value.trim();
+	if (!trimmed) return undefined;
+	try {
+		const parsed = new URL(trimmed);
+		return parsed.protocol === "http:" || parsed.protocol === "https:" ? trimmed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function resolveSetupExtractionEndpoint(options: {
+	readonly provider: ExtractionProviderChoice;
+	readonly requestedEndpoint?: string;
+	readonly existingProvider?: ExtractionProviderChoice | null;
+	readonly existingEndpoint?: string | null;
+}): string | undefined {
+	if (options.requestedEndpoint) return options.requestedEndpoint;
+	if (options.provider === options.existingProvider && options.existingEndpoint) return options.existingEndpoint;
+	if (options.provider === "openai-compatible") return DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
+	return undefined;
+}
+
 const IDENTITY_PRESET_CHOICES = ["minimal", "hermes", "openclaw", "custom"] as const;
 
 function cloneStartupFiles(preset: IdentityPresetName): IdentityContextFileEntry[] {
@@ -141,12 +167,19 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const existingMemory = readRecord(existingConfig.memory);
 	const existingPipeline = readRecord(existingMemory.pipelineV2);
 	const existingExtraction = readRecord(existingPipeline.extraction);
+	const existingExtractionEndpoint =
+		readString(existingPipeline.extractionEndpoint) ??
+		readString(existingPipeline.extractionBaseUrl) ??
+		readString(existingExtraction.endpoint) ??
+		readString(existingExtraction.base_url);
 	const rawDeploymentType = deps.normalizeStringValue(options.deploymentType);
 	const requestedDeploymentType = deps.normalizeChoice(rawDeploymentType, DEPLOYMENT_TYPE_CHOICES);
 	const rawEmbeddingProvider = deps.normalizeStringValue(options.embeddingProvider);
 	const requestedEmbeddingProvider = deps.normalizeChoice(rawEmbeddingProvider, EMBEDDING_PROVIDER_CHOICES);
 	const rawExtractionProvider = deps.normalizeStringValue(options.extractionProvider);
 	const requestedExtractionProvider = deps.normalizeChoice(rawExtractionProvider, EXTRACTION_PROVIDER_CHOICES);
+	const rawExtractionEndpoint = deps.normalizeStringValue(options.extractionEndpoint);
+	const requestedExtractionEndpoint = normalizeHttpEndpoint(rawExtractionEndpoint);
 	const existingName = readString(existingConfig.name) ?? readString(existingAgent.name) ?? "My Agent";
 	const existingDesc =
 		readString(existingConfig.description) ?? readString(existingAgent.description) ?? "Personal AI assistant";
@@ -191,6 +224,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		failSetupValidation(
 			`Unknown --extraction-provider value: ${rawExtractionProvider}. Valid choices: ${EXTRACTION_PROVIDER_CHOICES.join(", ")}.`,
 		);
+	}
+	if (rawExtractionEndpoint && !requestedExtractionEndpoint) {
+		failSetupValidation("--extraction-endpoint must be an http:// or https:// URL.");
 	}
 	const unknownHarnessValues = findUnknownHarnessValues(options.harness, deps);
 	if (nonInteractive && unknownHarnessValues.length > 0) {
@@ -334,6 +370,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				availableProviders: availableToolExtractionProviders,
 				preferredHarnesses: normalizedExistingHarnesses,
 			});
+			const migrationExtractionEndpoint = resolveSetupExtractionEndpoint({
+				provider: migrationExtractionProvider,
+				requestedEndpoint: requestedExtractionEndpoint,
+				existingProvider: existingExtractionProvider,
+				existingEndpoint: existingExtractionEndpoint,
+			});
 
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, true, options);
 			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, true, options);
@@ -348,6 +390,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				embeddingModel: deps.normalizeStringValue(options.embeddingModel) || undefined,
 				extractionProvider: migrationExtractionProvider,
 				extractionModel: deps.normalizeStringValue(options.extractionModel) || undefined,
+				extractionEndpoint: migrationExtractionEndpoint,
 				availableExtractionProviders: availableToolExtractionProviders,
 				acpxBin,
 				signetSecretsEnabled,
@@ -421,6 +464,12 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				availableProviders: availableToolExtractionProviders,
 				preferredHarnesses: normalizedExistingHarnesses,
 			});
+			const migrationExtractionEndpoint = resolveSetupExtractionEndpoint({
+				provider: migrationExtractionProvider,
+				requestedEndpoint: requestedExtractionEndpoint,
+				existingProvider: existingExtractionProvider,
+				existingEndpoint: existingExtractionEndpoint,
+			});
 
 			const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, false, options);
 			const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, false, options);
@@ -435,6 +484,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 					deps.normalizeStringValue(existingPipeline.extractionModel) ||
 					deps.normalizeStringValue(existingExtraction.model) ||
 					undefined,
+				extractionEndpoint: migrationExtractionEndpoint,
 				availableExtractionProviders: availableToolExtractionProviders,
 				acpxBin,
 				signetSecretsEnabled,
@@ -770,15 +820,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				],
 			});
 
+	const existingSetupExtractionProvider =
+		deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
+		deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
 	let extractionProvider: ExtractionProviderChoice;
 	if (nonInteractive) {
-		const providerFromConfig =
-			deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
-			deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
 		extractionProvider = resolveSetupExtractionProvider({
 			deploymentType,
 			requestedProvider: requestedExtractionProvider,
-			providerFromConfig,
+			providerFromConfig: existingSetupExtractionProvider,
 			preserveExisting: false,
 			detectedProvider,
 			availableProviders: availableToolExtractionProviders,
@@ -822,6 +872,10 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			{
 				value: "openrouter",
 				name: "OpenRouter (cloud API, billed usage, expensive if left running)",
+			},
+			{
+				value: "openai-compatible",
+				name: "OpenAI-compatible endpoint (advanced, uses OPENAI_API_KEY and extraction endpoint config)",
 			},
 		];
 		extractionProvider = await select({
@@ -907,6 +961,20 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				choices: modelChoices("openrouter"),
 			});
 		}
+	} else if (extractionProvider === "openai-compatible") {
+		if (nonInteractive) {
+			extractionModel =
+				deps.normalizeStringValue(options.extractionModel) ||
+				deps.normalizeStringValue(existingPipeline.extractionModel) ||
+				deps.normalizeStringValue(existingExtraction.model) ||
+				defaultExtractionModel("openai-compatible");
+		} else {
+			console.log();
+			extractionModel = await select({
+				message: "Which OpenAI-compatible model for extraction?",
+				choices: modelChoices("openai-compatible"),
+			});
+		}
 	} else if (extractionProvider === "ollama") {
 		if (nonInteractive) {
 			extractionModel =
@@ -921,6 +989,22 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 				choices: modelChoices("ollama"),
 			});
 		}
+	}
+
+	let extractionEndpoint = resolveSetupExtractionEndpoint({
+		provider: extractionProvider,
+		requestedEndpoint: requestedExtractionEndpoint,
+		existingProvider: existingSetupExtractionProvider,
+		existingEndpoint: existingExtractionEndpoint,
+	});
+	if (!nonInteractive && extractionProvider === "openai-compatible") {
+		console.log();
+		const endpointInput = await input({
+			message: "OpenAI-compatible endpoint:",
+			default: extractionEndpoint ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
+			validate: (value) => normalizeHttpEndpoint(value) !== undefined || "Enter an http:// or https:// URL.",
+		});
+		extractionEndpoint = normalizeHttpEndpoint(endpointInput) ?? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT;
 	}
 
 	const wantAdvanced = nonInteractive
@@ -1001,6 +1085,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		embeddingDimensions,
 		extractionProvider,
 		extractionModel,
+		extractionEndpoint,
 		availableExtractionProviders: availableToolExtractionProviders,
 		acpxBin,
 		searchBalance,

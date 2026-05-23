@@ -7,9 +7,13 @@ import type { RouteRequest, RouterResult } from "@signet/core";
 import { type AggregateInferenceRouter, InvalidAggregateRecallBudgetError, aggregateRecall } from "./aggregate-recall";
 import { normalizeAndHashContent } from "./content-normalization";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "./inference-router";
 import { loadMemoryConfig } from "./memory-config";
 import type { RecallParams, RecallResponse, RecallResult } from "./memory-search";
 import { txIngestEnvelope } from "./transactions";
+
+const originalFetch = globalThis.fetch;
+const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
 
 function row(
 	id: string,
@@ -130,6 +134,13 @@ describe("aggregateRecall", () => {
 
 	afterEach(() => {
 		closeDbAccessor();
+		globalThis.fetch = originalFetch;
+		if (originalOpenAiApiKey === undefined) {
+			delete process.env.OPENAI_API_KEY;
+		} else {
+			process.env.OPENAI_API_KEY = originalOpenAiApiKey;
+		}
+		resetInferenceRouterForTests();
 		if (prevSignetPath === undefined) {
 			Reflect.deleteProperty(process.env as Record<string, string | undefined>, "SIGNET_PATH");
 		} else {
@@ -233,6 +244,70 @@ describe("aggregateRecall", () => {
 			(db) => db.prepare("SELECT hint FROM memory_hints WHERE memory_id = ?").get("aggregate-1") as { hint: string },
 		);
 		expect(hint.hint).toBe("what happened");
+	});
+
+	it("synthesizes through a direct OpenAI-compatible API target without ACPX", async () => {
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`name: AggregateRecallTest
+memory:
+  pipelineV2:
+    extraction:
+      provider: openai-compatible
+      model: gpt-4o-mini
+      endpoint: https://gateway.example.test/v1
+    synthesis:
+      enabled: false
+`,
+		);
+		process.env.OPENAI_API_KEY = "test-openai-compatible-key";
+		let chatCalls = 0;
+		const seen: Array<{ readonly url: string; readonly authorization: string | null }> = [];
+		globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			const headers = new Headers(init?.headers);
+			seen.push({ url, authorization: headers.get("authorization") });
+			if (url.endsWith("/models")) {
+				return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+			}
+			chatCalls += 1;
+			const content =
+				chatCalls === 1
+					? JSON.stringify({ queries: [] })
+					: "Aggregate recall can synthesize directly through an OpenAI-compatible API target.";
+			return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 }));
+		}) as unknown as typeof fetch;
+
+		const result = await aggregateRecall(
+			{
+				query: "can aggregate recall use direct API models",
+				aggregate: true,
+				aggregateBudget: "small",
+				saveAggregate: false,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+			},
+			loadMemoryConfig(dir),
+			{
+				router: getOrCreateInferenceRouter(dir),
+				embedFn: async () => null,
+				logger: quietLogger(),
+				hybridRecall: async (params: RecallParams) =>
+					response(params.query, [row("mem-api-1", "Aggregate recall should use the unified LLM provider.")]),
+			},
+		);
+
+		expect(result.aggregate?.stoppedReason).toBe("complete");
+		expect(result.results[0]?.content).toBe(
+			"Aggregate recall can synthesize directly through an OpenAI-compatible API target.",
+		);
+		expect(chatCalls).toBe(2);
+		expect(seen.every((entry) => entry.authorization === "Bearer test-openai-compatible-key")).toBe(true);
+		expect(seen.map((entry) => entry.url)).toEqual([
+			"https://gateway.example.test/v1/models",
+			"https://gateway.example.test/v1/chat/completions",
+			"https://gateway.example.test/v1/chat/completions",
+		]);
 	});
 
 	it("dedupes repeated aggregate runs for the same evidence set", async () => {

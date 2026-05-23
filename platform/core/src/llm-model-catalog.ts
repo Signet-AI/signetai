@@ -15,6 +15,7 @@ export type ModelCatalogProvider =
 	| "opencode"
 	| "anthropic"
 	| "openrouter"
+	| "openai-compatible"
 	| "command";
 
 export const PIPELINE_MODEL_CATALOG = {
@@ -61,6 +62,11 @@ export const PIPELINE_MODEL_CATALOG = {
 		{ value: "anthropic/claude-3.5-haiku", label: "anthropic/claude-3.5-haiku", tier: "low", source: "provider" },
 		{ value: "google/gemini-2.5-flash", label: "google/gemini-2.5-flash", tier: "low", source: "provider" },
 	],
+	"openai-compatible": [
+		{ value: "gpt-4o-mini", label: "gpt-4o-mini", tier: "low", source: "provider" },
+		{ value: "gpt-4.1-mini", label: "gpt-4.1-mini", tier: "low", source: "provider" },
+		{ value: "local-model", label: "local-model", tier: "low", source: "provider" },
+	],
 } as const satisfies Record<ModelCatalogProvider, readonly PipelineModelPreset[]>;
 
 export const MODEL_DEFAULTS = {
@@ -73,6 +79,7 @@ export const MODEL_DEFAULTS = {
 	opencode: "google/gemini-2.5-flash",
 	anthropic: "claude-3-5-haiku-20241022",
 	openrouter: "openai/gpt-4o-mini",
+	"openai-compatible": "gpt-4o-mini",
 	command: "",
 } as const satisfies Record<ModelCatalogProvider, string>;
 

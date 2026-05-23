@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	compileLegacyRoutingConfig,
+	isLocalInferenceEndpoint,
 	makeRoutingTargetRef,
 	parseRoutingConfig,
 	resolveRoutingDecision,
@@ -14,6 +15,14 @@ const ready = {
 } as const;
 
 describe("inference config + decision engine", () => {
+	it("classifies loopback inference endpoints as local", () => {
+		expect(isLocalInferenceEndpoint(undefined)).toBe(true);
+		expect(isLocalInferenceEndpoint("http://127.0.0.1:1234/v1")).toBe(true);
+		expect(isLocalInferenceEndpoint("http://localhost:1234/v1")).toBe(true);
+		expect(isLocalInferenceEndpoint("http://[::1]:1234/v1")).toBe(true);
+		expect(isLocalInferenceEndpoint("https://gateway.example.test/v1")).toBe(false);
+	});
+
 	it("prefers local targets for local_only task classes", () => {
 		const parsed = parseRoutingConfig({
 			inference: {
@@ -357,6 +366,82 @@ describe("inference config + decision engine", () => {
 		expect(acpxLegacy.workloads?.memoryExtraction).toBeUndefined();
 		expect(acpxLegacy.workloads?.sessionSynthesis).toBeUndefined();
 		expect(acpxLegacy.enabled).toBe(false);
+	});
+
+	it("attaches legacy API credentials to routed API-backed workloads", () => {
+		const legacy = compileLegacyRoutingConfig({
+			extraction: {
+				provider: "anthropic",
+				model: "claude-3-5-haiku-latest",
+				endpoint: undefined,
+				command: undefined,
+			},
+			synthesis: {
+				enabled: true,
+				provider: "openrouter",
+				model: "openai/gpt-4o-mini",
+				endpoint: "https://openrouter.ai/api/v1",
+			},
+		});
+
+		expect(legacy.accounts["legacy-anthropic"]).toMatchObject({
+			kind: "api",
+			providerFamily: "anthropic",
+			credentialRef: "ANTHROPIC_API_KEY",
+		});
+		expect(legacy.accounts["legacy-openrouter"]).toMatchObject({
+			kind: "api",
+			providerFamily: "openrouter",
+			credentialRef: "OPENROUTER_API_KEY",
+		});
+		expect(legacy.targets["legacy-extraction"]?.account).toBe("legacy-anthropic");
+		expect(legacy.targets["legacy-synthesis"]?.account).toBe("legacy-openrouter");
+
+		const compatible = compileLegacyRoutingConfig({
+			extraction: {
+				provider: "openai-compatible",
+				model: "gpt-4o-mini",
+				endpoint: "https://api.openai.com/v1",
+				command: undefined,
+			},
+			synthesis: {
+				enabled: false,
+				provider: "none",
+				model: "",
+				endpoint: undefined,
+			},
+		});
+		expect(compatible.accounts["legacy-openai-compatible"]).toMatchObject({
+			kind: "api",
+			providerFamily: "openai-compatible",
+			credentialRef: "OPENAI_API_KEY",
+		});
+		expect(compatible.targets["legacy-extraction"]?.executor).toBe("openai-compatible");
+		expect(compatible.targets["legacy-extraction"]?.account).toBe("legacy-openai-compatible");
+
+		const localCompatible = compileLegacyRoutingConfig({
+			extraction: {
+				provider: "openai-compatible",
+				model: "openai/gpt-oss-20b",
+				endpoint: "http://127.0.0.1:1234/v1",
+				command: undefined,
+			},
+			synthesis: {
+				enabled: true,
+				provider: "openai-compatible",
+				model: "openai/gpt-oss-20b",
+				endpoint: "http://127.0.0.1:1234/v1",
+			},
+		});
+		expect(localCompatible.accounts["legacy-openai-compatible"]).toBeUndefined();
+		expect(localCompatible.targets["legacy-extraction"]?.executor).toBe("openai-compatible");
+		expect(localCompatible.targets["legacy-extraction"]?.kind).toBe("local");
+		expect(localCompatible.targets["legacy-extraction"]?.privacy).toBe("local_only");
+		expect(localCompatible.targets["legacy-extraction"]?.account).toBeUndefined();
+		expect(localCompatible.targets["legacy-synthesis"]?.executor).toBe("openai-compatible");
+		expect(localCompatible.targets["legacy-synthesis"]?.kind).toBe("local");
+		expect(localCompatible.targets["legacy-synthesis"]?.privacy).toBe("local_only");
+		expect(localCompatible.targets["legacy-synthesis"]?.account).toBeUndefined();
 	});
 
 	it("does not allow explicit target overrides outside the agent roster", () => {

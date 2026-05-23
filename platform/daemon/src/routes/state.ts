@@ -118,6 +118,14 @@ export function resolveRegistryOpenRouterBaseUrl(provider: string, endpoint: str
 	return normalizeRuntimeBaseUrl(endpoint, "https://openrouter.ai/api/v1");
 }
 
+export function resolveRegistryOpenAiCompatibleBaseUrl(
+	provider: string,
+	endpoint: string | undefined,
+): string | undefined {
+	if (provider !== "openai-compatible") return undefined;
+	return normalizeRuntimeBaseUrl(endpoint, "http://127.0.0.1:1234/v1");
+}
+
 export function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
 	try {
 		const parsed = new URL(baseUrl);
@@ -213,6 +221,7 @@ export type RuntimeProviderName =
 	| "codex"
 	| "anthropic"
 	| "openrouter"
+	| "openai-compatible"
 	| "command"
 	| "inference";
 
@@ -226,6 +235,7 @@ export type RuntimeSynthesisProviderName =
 	| "opencode"
 	| "anthropic"
 	| "openrouter"
+	| "openai-compatible"
 	| "inference";
 
 export interface ProviderRuntimeResolution {
