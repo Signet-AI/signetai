@@ -114,7 +114,7 @@ export {
 export type { ModelCatalogProvider, PipelineModelPreset } from "./llm-model-catalog";
 export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
-export { parseMemory, generateMemory } from "./memory";
+export { parseMemory, generateMemory, type ParsedMemory } from "./memory";
 export {
 	NETWORK_MODES,
 	normalizeNetworkMode,
