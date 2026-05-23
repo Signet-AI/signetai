@@ -13,7 +13,7 @@ import {
 } from "@signet/core";
 import { type AuthConfig, parseAuthConfig } from "./auth";
 import { logger } from "./logger";
-import { isRemotePipelineProvider, providerFallbackForLock } from "./provider-safety";
+import { isRemotePipelineProviderForEndpoint, providerFallbackForLock } from "./provider-safety";
 
 export interface EmbeddingConfig {
 	provider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
@@ -510,8 +510,8 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 		);
 	}
 	const effectiveProvider =
-		!allowRemoteProviders && isRemotePipelineProvider(resolvedProvider)
-			? providerFallbackForLock(resolvedProvider, resolvedFallbackProvider)
+		!allowRemoteProviders && isRemotePipelineProviderForEndpoint(resolvedProvider, resolvedEndpoint)
+			? providerFallbackForLock(resolvedProvider, resolvedFallbackProvider, resolvedEndpoint)
 			: resolvedProvider;
 	const effectiveModel =
 		effectiveProvider === resolvedProvider ? resolvedModel : defaultPipelineModel(effectiveProvider);
@@ -535,9 +535,20 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 		return effectiveProvider === "command" ? d.synthesis.provider : effectiveProvider;
 	};
 	const requestedSynthesisProvider: SynthesisProviderKind = resolveSynthesisProvider();
+	const requestedSynthesisEndpoint =
+		parseOptionalUrl(synthesisRaw?.endpoint) ??
+		parseOptionalUrl(synthesisRaw?.base_url) ??
+		(synthesisProviderWon || effectiveProvider === "command" ? undefined : effectiveEndpoint);
 	const resolveLockedSynthesisProvider = (): SynthesisProviderKind => {
-		if (!allowRemoteProviders && isRemotePipelineProvider(requestedSynthesisProvider)) {
-			const fallback = providerFallbackForLock(requestedSynthesisProvider, resolvedFallbackProvider);
+		if (
+			!allowRemoteProviders &&
+			isRemotePipelineProviderForEndpoint(requestedSynthesisProvider, requestedSynthesisEndpoint)
+		) {
+			const fallback = providerFallbackForLock(
+				requestedSynthesisProvider,
+				resolvedFallbackProvider,
+				requestedSynthesisEndpoint,
+			);
 			return isSynthesisProvider(fallback) ? fallback : "none";
 		}
 		return requestedSynthesisProvider;
@@ -555,9 +566,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 					: effectiveModel;
 	const resolvedSynthesisEndpoint = synthesisProviderChangedForLock
 		? undefined
-		: (parseOptionalUrl(synthesisRaw?.endpoint) ??
-			parseOptionalUrl(synthesisRaw?.base_url) ??
-			(synthesisProviderWon || effectiveProvider === "command" ? undefined : effectiveEndpoint));
+		: requestedSynthesisEndpoint;
 	const resolvedSynthesisTimeout = clampPositive(
 		synthesisRaw?.timeout,
 		5000,

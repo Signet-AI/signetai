@@ -61,11 +61,37 @@ describe("provider safety", () => {
 		}
 	});
 
-	it("treats openai-compatible as remote for provider safety", () => {
+	it("allows local openai-compatible endpoints when remote providers are locked", () => {
 		const result = validateProviderSafety(`memory:
   pipelineV2:
     allowRemoteProviders: false
-    extractionProvider: openai-compatible
+    extraction:
+      provider: openai-compatible
+      endpoint: http://127.0.0.1:1234/v1
+`);
+
+		expect(result).toEqual({ ok: true });
+	});
+
+	it("allows IPv6 loopback openai-compatible endpoints when remote providers are locked", () => {
+		const result = validateProviderSafety(`memory:
+  pipelineV2:
+    allowRemoteProviders: false
+    extraction:
+      provider: openai-compatible
+      endpoint: http://[::1]:1234/v1
+`);
+
+		expect(result).toEqual({ ok: true });
+	});
+
+	it("treats remote openai-compatible endpoints as remote for provider safety", () => {
+		const result = validateProviderSafety(`memory:
+  pipelineV2:
+    allowRemoteProviders: false
+    extraction:
+      provider: openai-compatible
+      endpoint: https://gateway.example.test/v1
 `);
 
 		expect(result.ok).toBe(false);

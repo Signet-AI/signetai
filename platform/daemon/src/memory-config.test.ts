@@ -361,6 +361,41 @@ describe("loadMemoryConfig", () => {
 		expect(cfg.pipelineV2.extraction.endpoint).toBe("https://gateway.example.test/v1");
 	});
 
+	it("keeps local openai-compatible extraction when remote providers are locked", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					allowRemoteProviders: false,
+					extraction: {
+						provider: "openai-compatible",
+						model: "local-model",
+						endpoint: "http://127.0.0.1:1234/v1",
+					},
+				},
+			},
+		});
+		expect(result.extraction.provider).toBe("openai-compatible");
+		expect(result.extraction.model).toBe("local-model");
+		expect(result.extraction.endpoint).toBe("http://127.0.0.1:1234/v1");
+	});
+
+	it("falls back from remote openai-compatible extraction when remote providers are locked", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					allowRemoteProviders: false,
+					extraction: {
+						provider: "openai-compatible",
+						model: "gpt-4o-mini",
+						endpoint: "https://gateway.example.test/v1",
+					},
+				},
+			},
+		});
+		expect(result.extraction.provider).toBe("llama-cpp");
+		expect(result.extraction.model).toBe("qwen3:4b");
+		expect(result.extraction.endpoint).toBeUndefined();
+	});
 
 	it("loads disabled extraction settings from agent.yaml", () => {
 		const agentsDir = makeTempAgentsDir();

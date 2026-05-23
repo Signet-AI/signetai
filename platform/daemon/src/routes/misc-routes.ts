@@ -11,7 +11,7 @@ import {
 	appendProviderTransitions,
 	detectProviderTransitions,
 	executeProviderRollback,
-	isRemotePipelineProvider,
+	isRemotePipelineProviderForEndpoint,
 	parseProviderSafetyRole,
 	preserveLockInYaml,
 	readProviderSafetySnapshot,
@@ -210,9 +210,9 @@ export function registerMiscRoutes(app: Hono): void {
 							incoming && !incoming.allowRemoteProvidersExplicit && incoming.allowRemoteProviders;
 						if (lockImplicitlyLifted) {
 							const blocked = [
-								["extraction", incoming.extractionProvider],
-								["synthesis", incoming.synthesisProvider],
-							].filter(([, p]) => isRemotePipelineProvider(p));
+								["extraction", incoming.extractionProvider, incoming.extractionEndpoint],
+								["synthesis", incoming.synthesisProvider, incoming.synthesisEndpoint],
+							].filter(([, p, endpoint]) => isRemotePipelineProviderForEndpoint(p, endpoint));
 							if (blocked.length > 0) {
 								return c.json(
 									{
