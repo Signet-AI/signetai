@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-23
+- Features: implement parseMemory with structured section extraction.
+
 ### 2026-05-22
 - Bug fixes: throw on unimplemented migration sources instead of silently no-oping.
 
@@ -28,10 +31,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: improve constellation ontology navigation; native bundle system with zero-prereq installer; add epistemic assertions; add safe entity merge planning.
 - Bug fixes: build mac zip artifacts; preserve root-only filesystem globs; repair native bundle regressions; sync built-in dreaming skill.
 
-### 2026-05-16
-- Features: add audited control plane.
-
 ## Release Ledger
+
+## [0.124.0] - 2026-05-23
+
+Release summary: 1 feature.
+Tag range: `bundle-0.123.21-7f658811173cf4c1bcc0cc1cdfa9ccfb99026a25..v0.124.0`.
+
+### Features
+
+- **core**: implement parseMemory with structured section extraction (#747)
 
 ## [0.123.22] - 2026-05-22
 
