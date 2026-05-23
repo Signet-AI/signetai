@@ -196,6 +196,20 @@ describe("sources-config", () => {
 			expect(result.error).toContain("token");
 		});
 
+		it("rejects obvious raw Discord bot tokens", () => {
+			const agentsDir = tmp();
+			const result = addDiscordSource(
+				{
+					guildIds: ["123456789012345678"],
+					tokenRef: "MTEyMzQ1Njc4OTAxMjM0NTY3OA.c29tZWJvdA.abcdefghijklmnopqrstuvwxYZ0123456789",
+				},
+				agentsDir,
+			);
+			expect(result.ok).toBe(false);
+			if (result.ok === true) throw new Error("expected failure");
+			expect(result.error).toContain("secret reference");
+		});
+
 		it("rejects invalid guild ID format", () => {
 			const agentsDir = tmp();
 			const result = addDiscordSource({ guildIds: ["not-a-number"], tokenRef: "TOKEN" }, agentsDir);

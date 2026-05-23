@@ -52,6 +52,10 @@ export interface DiscordSourceSettings {
 export const DEFAULT_DISCORD_MAX_MESSAGES = 1000;
 export const MAX_DISCORD_MESSAGES_PER_CHANNEL = 10_000;
 
+function looksLikeRawDiscordToken(value: string): boolean {
+	return /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}$/.test(value);
+}
+
 export interface AddDiscordSourceInput {
 	readonly guildIds: readonly string[];
 	readonly tokenRef: string;
@@ -148,6 +152,9 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 	}
 	const trimmedTokenRef = input.tokenRef?.trim();
 	if (!trimmedTokenRef) return { ok: false, error: "Discord bot token reference (tokenRef) is required" };
+	if (looksLikeRawDiscordToken(trimmedTokenRef)) {
+		return { ok: false, error: "Discord tokenRef must be a secret reference, not a raw bot token" };
+	}
 	const guildIds = cleanDiscordIds(input.guildIds);
 	if (guildIds.length === 0) return { ok: false, error: "At least one Discord guild ID is required" };
 	for (const id of guildIds) {

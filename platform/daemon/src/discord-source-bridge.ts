@@ -35,6 +35,11 @@ export interface DiscordSourceBridgeOptions {
 	readonly agentsDir?: string;
 }
 
+export interface DiscordSourceSyncResult {
+	readonly indexed: number;
+	readonly syncedGuilds: number;
+}
+
 interface DiscordParticipant {
 	readonly id: string;
 	readonly name: string;
@@ -55,18 +60,19 @@ async function resolveToken(tokenRef: string, agentsDir?: string): Promise<strin
 export async function syncDiscordSource(
 	source: SignetSourceEntry,
 	options: DiscordSourceBridgeOptions = {},
-): Promise<number> {
+): Promise<DiscordSourceSyncResult> {
 	const agentId = options.agentId ?? resolveDaemonAgentId();
 	const settings = parseDiscordSettings(source.settings);
 	const token = settings.tokenRef ? await resolveToken(settings.tokenRef, options.agentsDir) : undefined;
 	if (!token) {
 		logger.warn("discord-source", "No Discord bot token available, skipping source", { sourceId: source.id });
-		return 0;
+		return { indexed: 0, syncedGuilds: 0 };
 	}
 
 	const config: DiscordFetchConfig = { token };
 	const sinceId = settings.since ? snowflakeIdForTimestamp(settings.since) : undefined;
 	let totalIndexed = 0;
+	let syncedGuilds = 0;
 
 	logger.info("discord-source", "Starting Discord source sync", {
 		sourceId: source.id,
@@ -82,6 +88,7 @@ export async function syncDiscordSource(
 				continue;
 			}
 			guildName = guild.name;
+			syncedGuilds++;
 		} catch (err) {
 			logger.warn("discord-source", "Failed to fetch guild info", {
 				guildId,
@@ -180,7 +187,7 @@ export async function syncDiscordSource(
 		});
 	}
 
-	return totalIndexed;
+	return { indexed: totalIndexed, syncedGuilds };
 }
 
 async function syncThreads(

@@ -1620,12 +1620,13 @@ async function main() {
 				fetchEmbedding,
 				agentsDir: AGENTS_DIR,
 			})
-				.then((indexed) => {
+				.then((result) => {
 					logger.info("discord-source", "Discord source startup sync complete", {
 						sourceId: source.id,
-						indexed,
+						indexed: result.indexed,
+						syncedGuilds: result.syncedGuilds,
 					});
-					markSourceIndexed(source.id, undefined, AGENTS_DIR);
+					if (result.syncedGuilds > 0) markSourceIndexed(source.id, undefined, AGENTS_DIR);
 				})
 				.catch((e) => {
 					logger.error("discord-source", "Discord source startup sync failed", undefined, {
