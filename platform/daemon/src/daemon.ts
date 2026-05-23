@@ -36,7 +36,7 @@ import { migrateConfig } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
-import { syncDiscordSource } from "./discord-source-bridge";
+import { purgeDiscordSource, syncDiscordSource } from "./discord-source-bridge";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
@@ -96,7 +96,9 @@ import { createSingleFlightRunner } from "./single-flight-runner";
 import {
 	beginSourceIndexJob,
 	clearSourceIndexInFlight,
+	completeSourceIndexJob,
 	completeSourceIndexJobFromProgress,
+	consumeCanceledSourceIndexJob,
 	failSourceIndexJob,
 	markSourceIndexInFlight,
 	markSourceIndexJobRunning,
@@ -147,7 +149,7 @@ import { registerSecretRoutes } from "./routes/secrets-routes.js";
 import { registerSessionRoutes } from "./routes/session-routes.js";
 import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
-import { registerSourcesRoutes } from "./routes/sources-routes.js";
+import { clearSourceDeletionTombstone, registerSourcesRoutes } from "./routes/sources-routes.js";
 import { registerTelemetryRoutes } from "./routes/telemetry-routes.js";
 import { checkEmbeddingProvider } from "./routes/utils.js";
 import { mountWidgetRoutes } from "./routes/widget.js";
@@ -1614,6 +1616,12 @@ async function main() {
 		for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
 			if (!source.enabled || source.kind !== "discord") continue;
 			const startupEmbedCfg = loadMemoryConfig(AGENTS_DIR).embedding;
+			const startupJob = beginSourceIndexJob(source.id, "startup-source-index");
+			markSourceIndexInFlight(source.id);
+			if (!markSourceIndexJobRunning(source.id, startupJob.id)) {
+				clearSourceIndexInFlight(source.id);
+				continue;
+			}
 			syncDiscordSource(source, {
 				agentId: resolveDaemonAgentId(),
 				embeddingConfig: startupEmbedCfg,
@@ -1631,12 +1639,21 @@ async function main() {
 						syncedGuilds: result.syncedGuilds,
 					});
 					if (result.syncedGuilds > 0) markSourceIndexed(source.id, undefined, AGENTS_DIR);
+					completeSourceIndexJob(source.id, startupJob.id, result.indexed);
 				})
 				.catch((e) => {
+					failSourceIndexJob(source.id, startupJob.id, e);
 					logger.error("discord-source", "Discord source startup sync failed", undefined, {
 						sourceId: source.id,
 						error: e instanceof Error ? e.message : String(e),
 					});
+				})
+				.finally(() => {
+					if (consumeCanceledSourceIndexJob(startupJob.id)) {
+						purgeDiscordSource(source.id, resolveDaemonAgentId());
+						clearSourceDeletionTombstone(source.id, resolveDaemonAgentId(), AGENTS_DIR);
+					}
+					clearSourceIndexInFlight(source.id);
 				});
 		}
 

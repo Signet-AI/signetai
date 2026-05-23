@@ -302,7 +302,7 @@ function recordSourceDeletionTombstone(source: SignetSourceEntry, agentId: strin
 	);
 }
 
-function clearSourceDeletionTombstone(sourceId: string, agentId: string, agentsDir: string): void {
+export function clearSourceDeletionTombstone(sourceId: string, agentId: string, agentsDir: string): void {
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
 	const next = tombstones.filter((entry) => entry.source.id !== sourceId || entry.agentId !== agentId);
 	if (next.length !== tombstones.length) saveSourceDeletionTombstones(next, agentsDir);
