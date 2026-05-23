@@ -1619,6 +1619,10 @@ async function main() {
 				embeddingConfig: startupEmbedCfg,
 				fetchEmbedding,
 				agentsDir: AGENTS_DIR,
+				sourceActiveCheck: () =>
+					loadSourcesConfig(AGENTS_DIR).sources.some(
+						(entry) => entry.id === source.id && entry.enabled && entry.kind === "discord",
+					),
 			})
 				.then((result) => {
 					logger.info("discord-source", "Discord source startup sync complete", {

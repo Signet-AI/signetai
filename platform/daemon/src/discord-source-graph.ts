@@ -301,7 +301,7 @@ export function indexDiscordSourceStructure(input: IndexDiscordSourceStructureIn
 
 		for (const participant of input.participants) {
 			const participantEntityId = idFor(input.agentId, input.sourceId, "participant", participant.id);
-			const userCanonical = `discord:user:${participant.id}`;
+			const userCanonical = `discord:${input.sourceId}:user:${participant.id}`;
 			upsertEntity(db, {
 				id: participantEntityId,
 				name: participant.name,

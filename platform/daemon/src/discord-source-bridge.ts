@@ -33,6 +33,7 @@ export interface DiscordSourceBridgeOptions {
 	readonly embeddingConfig?: EmbeddingConfig;
 	readonly fetchEmbedding?: SourceEmbeddingFetch;
 	readonly agentsDir?: string;
+	readonly sourceActiveCheck?: () => boolean;
 }
 
 export interface DiscordSourceSyncResult {
@@ -68,6 +69,8 @@ export async function syncDiscordSource(
 		logger.warn("discord-source", "No Discord bot token available, skipping source", { sourceId: source.id });
 		return { indexed: 0, syncedGuilds: 0 };
 	}
+	const isSourceActive = options.sourceActiveCheck ?? (() => true);
+	if (!isSourceActive()) return { indexed: 0, syncedGuilds: 0 };
 
 	const config: DiscordFetchConfig = { token };
 	const sinceId = settings.since ? snowflakeIdForTimestamp(settings.since) : undefined;
@@ -80,6 +83,7 @@ export async function syncDiscordSource(
 	});
 
 	for (const guildId of settings.guildIds) {
+		if (!isSourceActive()) break;
 		let guildName: string;
 		try {
 			const guild = await fetchGuild(config, guildId);
@@ -114,6 +118,7 @@ export async function syncDiscordSource(
 		const yielder = yieldEvery(5);
 
 		for (const channel of filteredChannels) {
+			if (!isSourceActive()) break;
 			const channelName = channel.name ?? channel.id;
 			try {
 				const msgResult = await fetchChannelMessages(
@@ -124,6 +129,7 @@ export async function syncDiscordSource(
 					sinceId,
 				);
 				if (msgResult.data.length > 0) {
+					if (!isSourceActive()) break;
 					const participants = extractParticipants(msgResult.data);
 					indexDiscordSourceStructure({
 						agentId,
@@ -204,6 +210,7 @@ async function syncThreads(
 	activeThreads: readonly DiscordChannel[],
 ): Promise<number> {
 	let indexed = 0;
+	const isSourceActive = options.sourceActiveCheck ?? (() => true);
 
 	const archivedResult = await fetchPublicArchivedThreads(config, parentChannelId, 50);
 	const allThreads = [
@@ -218,6 +225,7 @@ async function syncThreads(
 	});
 
 	for (const thread of uniqueThreads) {
+		if (!isSourceActive()) break;
 		try {
 			const threadName = thread.name ?? thread.id;
 			const msgResult = await fetchChannelMessages(
@@ -228,6 +236,7 @@ async function syncThreads(
 				sinceId,
 			);
 			if (msgResult.data.length > 0) {
+				if (!isSourceActive()) break;
 				const participants = extractParticipants(msgResult.data);
 				indexDiscordSourceStructure({
 					agentId,
