@@ -196,7 +196,7 @@ describe("aggregateRecall", () => {
 		);
 
 		expect(calls).toEqual(["what happened", "follow up one", "follow up two"]);
-		expect(router.calls.map((call) => call.operation)).toEqual(["tool_planning", "tool_planning"]);
+		expect(router.calls.map((call) => call.operation)).toEqual(["session_synthesis", "session_synthesis"]);
 		expect(router.opts.map((opts) => opts.acpxHooks)).toEqual(["disabled", "disabled"]);
 		expect(router.prompts[1]).toContain("one concise atomic memory note");
 		expect(router.prompts[1]).toContain("not as a direct reply");

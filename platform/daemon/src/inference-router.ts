@@ -523,6 +523,7 @@ export class InferenceRouter {
 						model: model.model,
 						apiKey: credential,
 						baseUrl: target.endpoint ?? "https://openrouter.ai/api/v1",
+						reasoning: target.openrouter?.reasoning,
 						referer: process.env.OPENROUTER_HTTP_REFERER,
 						title: process.env.OPENROUTER_TITLE,
 					});
