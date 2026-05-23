@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { LlmProvider, PipelineProviderChoice, SynthesisProviderChoice } from "@signet/core";
-import { defaultPipelineModel, isPipelineProvider, isSynthesisProvider } from "@signet/core";
+import { defaultPipelineModel, isLocalInferenceEndpoint, isPipelineProvider, isSynthesisProvider } from "@signet/core";
 import { which } from "../which";
 import {
 	createAnthropicProvider,
@@ -112,16 +112,6 @@ export function isManagedOpenCodeLocalEndpoint(baseUrl: string): boolean {
 	}
 }
 
-function isLocalBaseUrl(baseUrl: string | undefined): boolean {
-	if (!baseUrl) return true;
-	try {
-		const parsed = new URL(baseUrl);
-		return parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "::1";
-	} catch {
-		return false;
-	}
-}
-
 export function resolveRuntimeEndpoints(
 	configuredProvider: RuntimeProviderName,
 	endpoint: string | undefined,
@@ -188,7 +178,7 @@ export function createRuntimeProvider(opts: RuntimeProviderFactoryOptions): LlmP
 	}
 	if (opts.effectiveProvider === "openai-compatible") {
 		const baseUrl = opts.openAiCompatibleBaseUrl ?? DEFAULT_OPENAI_COMPATIBLE_BASE_URL;
-		if (!isLocalBaseUrl(baseUrl) && !opts.openAiCompatibleApiKey) return null;
+		if (!isLocalInferenceEndpoint(baseUrl) && !opts.openAiCompatibleApiKey) return null;
 		return createOpenAiCompatibleProvider({
 			name: `openai-compatible:${model || defaultPipelineModel("openai-compatible")}`,
 			model: model || defaultPipelineModel("openai-compatible"),
@@ -331,7 +321,7 @@ export async function resolveRuntimeProviderStartup(opts: RuntimeStartupOptions)
 			markUnavailable(`OPENROUTER_API_KEY not found for ${opts.role} startup preflight`);
 		}
 	} else if (effectiveProvider === "openai-compatible") {
-		if (!isLocalBaseUrl(opts.endpoints.openAiCompatibleBaseUrl) && !opts.openAiCompatibleApiKey) {
+		if (!isLocalInferenceEndpoint(opts.endpoints.openAiCompatibleBaseUrl) && !opts.openAiCompatibleApiKey) {
 			markUnavailable(`OPENAI_API_KEY not found for remote OpenAI-compatible ${opts.role} startup preflight`);
 		}
 	} else if (effectiveProvider === "claude-code") {

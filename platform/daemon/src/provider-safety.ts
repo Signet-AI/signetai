@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { type PipelineProviderChoice, isPipelineProvider } from "@signet/core";
+import { type PipelineProviderChoice, isLocalInferenceEndpoint, isPipelineProvider } from "@signet/core";
 import { parse, stringify } from "yaml";
 import { logger } from "./logger.js";
 
@@ -83,26 +83,11 @@ export function isRemotePipelineProvider(provider: string | undefined | null): b
 	return provider !== undefined && provider !== null && REMOTE_PROVIDERS.has(provider);
 }
 
-function isLocalEndpoint(endpoint: string | undefined): boolean {
-	if (!endpoint) return true;
-	try {
-		const parsed = new URL(endpoint);
-		return (
-			parsed.hostname === "127.0.0.1" ||
-			parsed.hostname === "localhost" ||
-			parsed.hostname === "::1" ||
-			parsed.hostname === "[::1]"
-		);
-	} catch {
-		return false;
-	}
-}
-
 export function isRemotePipelineProviderForEndpoint(
 	provider: string | undefined | null,
 	endpoint: string | undefined,
 ): boolean {
-	if (provider === "openai-compatible") return !isLocalEndpoint(endpoint);
+	if (provider === "openai-compatible") return !isLocalInferenceEndpoint(endpoint);
 	return isRemotePipelineProvider(provider);
 }
 
@@ -206,9 +191,7 @@ export function detectProviderTransitions(
 			timestamp,
 			source,
 			actor,
-			risky:
-				(from === undefined || LOCAL_PROVIDERS.has(from)) &&
-				isRemotePipelineProviderForEndpoint(to, endpoint),
+			risky: (from === undefined || LOCAL_PROVIDERS.has(from)) && isRemotePipelineProviderForEndpoint(to, endpoint),
 		});
 	}
 	return entries;

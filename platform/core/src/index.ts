@@ -386,6 +386,7 @@ export {
 	ROUTING_OPERATION_KINDS,
 	makeRoutingTargetRef,
 	parseRoutingTargetRef,
+	isLocalInferenceEndpoint,
 	compileLegacyRoutingConfig,
 	parseRoutingConfig,
 	allTargetRefs,

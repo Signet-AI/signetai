@@ -11,12 +11,12 @@ const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 	if (originalOpenRouterApiKey === undefined) {
-		delete process.env.OPENROUTER_API_KEY;
+		process.env.OPENROUTER_API_KEY = undefined;
 	} else {
 		process.env.OPENROUTER_API_KEY = originalOpenRouterApiKey;
 	}
 	if (originalOpenAiApiKey === undefined) {
-		delete process.env.OPENAI_API_KEY;
+		process.env.OPENAI_API_KEY = undefined;
 	} else {
 		process.env.OPENAI_API_KEY = originalOpenAiApiKey;
 	}
@@ -140,6 +140,66 @@ describe("InferenceRouter legacy API credentials", () => {
 			expect(seen.every((entry) => entry.authorization === "Bearer test-openai-compatible-key")).toBe(true);
 			expect(seen.map((entry) => entry.url)).toContain("https://gateway.example.test/v1/models");
 			expect(seen.map((entry) => entry.url)).toContain("https://gateway.example.test/v1/chat/completions");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not require OPENAI_API_KEY for local legacy OpenAI-compatible targets", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-local-openai-compatible-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`memory:
+  pipelineV2:
+    extraction:
+      provider: openai-compatible
+      model: openai/gpt-oss-20b
+      endpoint: http://127.0.0.1:1234/v1
+    synthesis:
+      enabled: false
+`,
+			);
+
+			process.env.OPENAI_API_KEY = undefined;
+			const seen: Array<{ readonly url: string; readonly authorization: string | null }> = [];
+			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				const headers = new Headers(init?.headers);
+				seen.push({ url, authorization: headers.get("authorization") });
+				if (url.endsWith("/models")) {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				return Promise.resolve(
+					new Response(
+						JSON.stringify({
+							choices: [{ message: { content: "local compatible answer" } }],
+							usage: { prompt_tokens: 7, completion_tokens: 8 },
+						}),
+						{ status: 200 },
+					),
+				);
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const result = await router.execute(
+				{
+					operation: "tool_planning",
+					promptPreview: "aggregate recall",
+					expectedOutputTokens: 64,
+				},
+				"Summarize evidence",
+				{ maxTokens: 64, timeoutMs: 1000 },
+			);
+
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.value.text).toBe("local compatible answer");
+			expect(result.value.decision.targetRef).toBe("legacy-extraction/default");
+			expect(seen.every((entry) => entry.authorization === null)).toBe(true);
+			expect(seen.map((entry) => entry.url)).toContain("http://127.0.0.1:1234/v1/models");
+			expect(seen.map((entry) => entry.url)).toContain("http://127.0.0.1:1234/v1/chat/completions");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
