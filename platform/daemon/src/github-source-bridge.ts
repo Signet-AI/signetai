@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import type { GitHubSourceSettings, SignetSourceEntry } from "@signet/core";
-import { loadSourcesConfig, parseGitHubSettings } from "@signet/core";
+import { loadSourcesConfig, markSourceIndexed, parseGitHubSettings } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
@@ -24,7 +24,15 @@ import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import type { SourceEmbeddingFetch } from "./obsidian-source-embeddings";
 import { getSecret } from "./secrets";
-import { clearSourceIndexInFlight, isSourceIndexInFlight, markSourceIndexInFlight } from "./source-index-progress";
+import {
+	beginSourceIndexJob,
+	clearSourceIndexInFlight,
+	completeSourceIndexJob,
+	failSourceIndexJob,
+	isSourceIndexInFlight,
+	markSourceIndexInFlight,
+	markSourceIndexJobRunning,
+} from "./source-index-progress";
 
 export interface GitHubSourceBridgeHandle {
 	readonly sync: () => Promise<number>;
@@ -442,11 +450,19 @@ export function startGitHubSourceBridge(
 				if (!source.enabled || source.kind !== "github") continue;
 				if (source.agentId !== agentId) continue;
 				if (isSourceIndexInFlight(source.id)) continue;
+				const job = beginSourceIndexJob(source.id, "github-source-sync");
 				markSourceIndexInFlight(source.id);
+				if (!markSourceIndexJobRunning(source.id, job.id)) {
+					clearSourceIndexInFlight(source.id);
+					continue;
+				}
 				try {
 					const result = await syncGitHubSource(source, { ...options, agentId });
+					if (!result.hadErrors) markSourceIndexed(source.id, undefined, options.agentsDir);
+					completeSourceIndexJob(source.id, job.id, result.indexed);
 					total += result.indexed;
 				} catch (err) {
+					failSourceIndexJob(source.id, job.id, err);
 					logger.warn("github-source", "Source sync failed", {
 						sourceId: source.id,
 						error: err instanceof Error ? err.message : String(err),
