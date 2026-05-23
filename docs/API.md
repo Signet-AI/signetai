@@ -1713,8 +1713,8 @@ Sources
 -------
 
 Sources connect read-only external knowledge bases to Signet recall without
-turning them into ordinary saved memories. Obsidian is the currently supported
-source kind.
+turning them into ordinary saved memories. Supported source kinds include
+Obsidian vaults and Discord guilds.
 
 ### GET /api/sources
 
@@ -1769,6 +1769,52 @@ chunk embeddings to its own database.
   "source": { "id": "obsidian:abc123", "kind": "obsidian" },
   "created": true,
   "indexed": 42
+}
+```
+
+### POST /api/sources/discord
+
+Add or update a Discord source. The daemon indexes configured Discord sources
+on startup through the Discord REST API v10 using a bot token stored in Signet
+Secrets. The source remains read-only; Signet stores only derived source
+chunks, embeddings, and graph rows.
+
+**Request body**
+
+```json
+{
+  "guildIds": ["123456789012345678"],
+  "tokenRef": "DISCORD_BOT_TOKEN",
+  "name": "Team Discord",
+  "channelFilter": ["general", "987654321098765432"],
+  "maxMessagesPerChannel": 1000,
+  "includeThreads": true,
+  "since": "2026-01-01T00:00:00.000Z"
+}
+```
+
+`guildIds` and `tokenRef` are required. `channelFilter`, `maxMessagesPerChannel`,
+`includeThreads`, and `since` are optional. `maxMessagesPerChannel` must be an
+integer from `1` through `10000`; `since` must be a valid ISO date.
+
+**Response**
+
+```json
+{
+  "source": {
+    "id": "discord:abc123",
+    "kind": "discord",
+    "settings": {
+      "guildIds": ["123456789012345678"],
+      "tokenRef": "DISCORD_BOT_TOKEN",
+      "maxMessagesPerChannel": 1000,
+      "includeThreads": true,
+      "since": "2026-01-01T00:00:00.000Z"
+    }
+  },
+  "created": true,
+  "indexed": 0,
+  "queued": false
 }
 ```
 
@@ -4489,6 +4535,7 @@ silently disappear from the API reference.
 | GET | `/api/sources` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/pick-directory` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/obsidian` | platform/daemon/src/routes/sources-routes.ts |
+| POST | `/api/sources/discord` | platform/daemon/src/routes/sources-routes.ts |
 | DELETE | `/api/sources/:sourceId` | platform/daemon/src/routes/sources-routes.ts |
 | GET | `/api/knowledge/entities` | platform/daemon/src/routes/knowledge-routes.ts |
 | POST | `/api/knowledge/entities/:id/pin` | platform/daemon/src/routes/knowledge-routes.ts |

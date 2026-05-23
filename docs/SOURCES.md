@@ -1,6 +1,6 @@
 ---
 title: "Sources"
-description: "Connect read-only knowledge bases like Obsidian vaults directly into Signet recall."
+description: "Connect read-only knowledge bases like Obsidian vaults and Discord servers directly into Signet recall."
 order: 9
 section: "Core Concepts"
 ---
@@ -10,7 +10,7 @@ Sources
 
 Sources are external knowledge bases that Signet can read, index, and recall from without turning them into ordinary saved memories.
 
-The first Sources connector is **Obsidian**. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall.
+Sources currently support **Obsidian** vaults and **Discord** servers. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall. Add a Discord server and Signet indexes guild, channel, thread, and conversation context through the live Discord REST API.
 
 The important rule is simple: **the source stays canonical**. Signet reads from the vault. It does not edit notes, rewrite frontmatter, create files, or move anything inside the source directory.
 
@@ -22,6 +22,7 @@ Saved memories are durable facts that Signet owns. Sources are different: they a
 Use Sources when you want Signet to recall from:
 
 - an Obsidian vault;
+- Discord guilds and channels;
 - a local folder of Markdown knowledge;
 - documentation or research notes that should stay under their original editor/workflow;
 - future cloud, code, or document connectors.
@@ -49,6 +50,33 @@ Signet intentionally skips vault metadata and local agent scratch space:
 - `.obsidian/`
 - `.trash/`
 - `.hermes/`
+
+Discord v1
+----------
+
+Discord Sources v1 indexes opted-in guilds through Discord's REST API v10 using a bot token stored in Signet Secrets:
+
+```bash
+signet sources add discord --guild-id 123456789012345678 --token-ref DISCORD_BOT_TOKEN --name "Team Discord"
+signet sources add discord --guild-id 123456789012345678 --token-ref DISCORD_BOT_TOKEN --channel-filter general --since 2026-01-01
+signet sources list
+signet sources remove discord:...
+```
+
+The token reference is resolved through Signet Secrets at daemon sync time. Do not paste raw Discord bot tokens into source config. The bot must have access to the guilds and channels you want indexed.
+
+Discord source settings:
+
+| Setting | Description |
+|---------|-------------|
+| `guildIds` / `--guild-id` | One or more Discord guild IDs to index. |
+| `tokenRef` / `--token-ref` | Signet secret reference containing the Discord bot token. |
+| `channelFilter` / `--channel-filter` | Optional channel names or IDs to include. |
+| `maxMessagesPerChannel` / `--max-messages` | Maximum messages fetched per channel or thread. Defaults to `1000`; capped at `10000`. |
+| `includeThreads` / `--no-threads` | Include active and public archived threads by default. |
+| `since` / `--since` | Optional ISO date lower bound. Signet converts it to a Discord snowflake message bound. |
+
+Discord source graph rows use stable Discord IDs for canonical keys and display names only as labels. That keeps participants stable across renames and avoids merging unrelated users who share a display name.
 
 What gets indexed
 -----------------
@@ -103,7 +131,7 @@ This means a recall can return either a whole source artifact or a tighter sourc
 Recall behavior
 ---------------
 
-When you recall against Signet, Obsidian source results can appear alongside native memories. Source hits are labeled so callers can tell them apart:
+When you recall against Signet, source results can appear alongside native memories. Source hits are labeled so callers can tell them apart:
 
 ```json
 {
@@ -112,6 +140,8 @@ When you recall against Signet, Obsidian source results can appear alongside nat
   "source_path": "/path/to/vault/permanent/Idea.md"
 }
 ```
+
+Discord source chunk results use `type = "source_discord_chunk"` and source-owned chunk IDs that include guild, channel, and optional thread identifiers.
 
 For whole-file artifact hits, the content includes a visible header like:
 
@@ -161,6 +191,7 @@ The daemon exposes the Sources lifecycle under `/api/sources`:
 |--------|------|-------------|
 | `GET` | `/api/sources` | List configured sources. |
 | `POST` | `/api/sources/obsidian` | Add/update an Obsidian vault source and index it. |
+| `POST` | `/api/sources/discord` | Add/update a Discord source. The daemon indexes it on startup. |
 | `DELETE` | `/api/sources/:sourceId` | Remove a source config and purge Signet-owned source rows. |
 | `POST` | `/api/sources/pick-directory` | Development/browser fallback for choosing a local directory. |
 
@@ -169,9 +200,10 @@ The desktop shell uses native folder selection through IPC. The daemon picker ro
 Limitations in v1
 -----------------
 
-- Obsidian is the first supported source connector.
 - Sources are local/operator-managed. Permissions and RBAC are intentionally out of scope for v1.
 - Signet does not write back to Obsidian.
+- Signet does not write to Discord.
+- Discord indexing depends on bot visibility and Discord API rate limits.
 - Rename handling is delete + add.
 - Non-Markdown Obsidian attachments are not indexed by the Obsidian v1 source path.
 
