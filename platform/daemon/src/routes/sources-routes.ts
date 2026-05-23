@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import { promisify } from "node:util";
 import {
 	type SignetSourceEntry,
+	addGitHubSource,
 	addObsidianSource,
 	loadSourcesConfig,
 	markSourceIndexed,
@@ -13,7 +14,11 @@ import {
 } from "@signet/core";
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
+import { requirePermission } from "../auth/middleware";
 import { getDbAccessor } from "../db-accessor";
+import { fetchEmbedding } from "../embedding-fetch";
+import { type GitHubSourceBridgeOptions, purgeGitHubSource, syncGitHubSource } from "../github-source-bridge";
+import { loadMemoryConfig } from "../memory-config";
 import {
 	type NativeMemoryBridgeHandle,
 	obsidianNativeMemorySource,
@@ -35,6 +40,7 @@ import {
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "../source-index-progress";
+import { authConfig } from "./state.js";
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;
@@ -57,6 +63,18 @@ interface AddObsidianSourceBody {
 	readonly root?: string;
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
+}
+
+interface AddGitHubSourceBody {
+	readonly repos?: readonly string[];
+	readonly name?: string;
+	readonly tokenRef?: string;
+	readonly resourceTypes?: readonly ("issues" | "pulls" | "discussions" | "docs")[];
+	readonly state?: "open" | "closed" | "all";
+	readonly includeComments?: boolean;
+	readonly labels?: readonly string[];
+	readonly docPaths?: readonly string[];
+	readonly maxItemsPerRepo?: number;
 }
 
 interface PickDirectoryBody {
@@ -125,21 +143,73 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 	});
 
-	app.delete("/api/sources/:sourceId", (c) => {
+	app.post("/api/sources/github", requirePermission("admin", authConfig), async (c) => {
+		let body: AddGitHubSourceBody = {};
+		try {
+			body = (await c.req.json()) as AddGitHubSourceBody;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const repos = Array.isArray(body.repos) ? body.repos.filter((r) => typeof r === "string") : [];
+		if (repos.length === 0) return c.json({ error: "repos is required (e.g. ['owner/repo', 'owner/*'])" }, 400);
+
+		const result = addGitHubSource(
+			{
+				repos,
+				name: body.name,
+				tokenRef: body.tokenRef,
+				resourceTypes: body.resourceTypes,
+				state: body.state,
+				includeComments: body.includeComments,
+				labels: body.labels,
+				docPaths: body.docPaths,
+				maxItemsPerRepo: body.maxItemsPerRepo,
+				agentId: resolveDaemonAgentId(),
+			},
+			agentsDir,
+		);
+		if (result.ok === false) return c.json({ error: result.error }, 400);
+
+		const embeddingCfg = loadMemoryConfig(agentsDir);
+		const ec = embeddingCfg.embedding.provider !== "none" ? embeddingCfg.embedding : undefined;
+		const job = enqueueGitHubSourceIndexJob(result.source, {
+			agentsDir,
+			embeddingConfig: ec,
+			fetchEmbedding: ec ? fetchEmbedding : undefined,
+		});
+
+		return c.json({ source: result.source, created: result.created, queued: true, job }, 202);
+	});
+
+	app.delete("/api/sources/:sourceId", requirePermission("admin", authConfig), async (c) => {
 		const sourceId = c.req.param("sourceId");
+		const currentAgentId = resolveDaemonAgentId();
+		const source = loadSourcesConfig(agentsDir).sources.find((entry) => entry.id === sourceId);
+		if (!source) return c.json({ error: `Source not found: ${sourceId}` }, 404);
+		if (source.agentId && source.agentId !== currentAgentId) {
+			return c.json({ error: "Source is owned by a different agent" }, 403);
+		}
+		if (source.kind === "github" && isSourceIndexInFlight(source.id)) {
+			cancelSourceIndexJob(source.id);
+			return c.json({ error: "Source indexing is in flight; cancellation requested, retry deletion shortly" }, 409);
+		}
+
 		const result = removeSource(sourceId, agentsDir);
 		if (result.ok === false) return c.json({ error: result.error }, 404);
 		cancelSourceIndexJob(result.source.id);
 
-		const sourceAgentId = resolveDaemonAgentId();
+		const sourceAgentId = currentAgentId;
 		recordSourceDeletionTombstone(result.source, sourceAgentId, agentsDir);
-		const purged =
-			result.source.kind === "obsidian"
-				? purgeNativeSource(
-						obsidianNativeMemorySource(result.source.root, result.source.name, result.source.id),
-						sourceAgentId,
-					)
-				: 0;
+		let purged = 0;
+		if (result.source.kind === "obsidian") {
+			purged = purgeNativeSource(
+				obsidianNativeMemorySource(result.source.root, result.source.name, result.source.id),
+				sourceAgentId,
+			);
+		} else if (result.source.kind === "github") {
+			purged = await purgeGitHubSource(result.source.id, sourceAgentId);
+		}
 		if (!isSourceIndexInFlight(result.source.id))
 			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
@@ -212,6 +282,42 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
 	}, delayMs).unref?.();
 }
 
+function enqueueGitHubSourceIndexJob(source: SignetSourceEntry, options: GitHubSourceBridgeOptions): SourceIndexJob {
+	const job = beginSourceIndexJob(source.id, "github-source-index");
+	setTimeout(() => {
+		if (!isCurrentSourceIndexJob(source.id, job.id)) return;
+		if (isSourceIndexInFlight(source.id)) {
+			setTimeout(() => void runGitHubSourceIndexJob(source, options, job), 50).unref?.();
+			return;
+		}
+		markSourceIndexInFlight(source.id);
+		if (!markSourceIndexJobRunning(source.id, job.id)) {
+			clearSourceIndexInFlight(source.id);
+			return;
+		}
+		void runGitHubSourceIndexJob(source, options, job);
+	}, 0).unref?.();
+	return job;
+}
+
+async function runGitHubSourceIndexJob(
+	source: SignetSourceEntry,
+	options: GitHubSourceBridgeOptions,
+	job: SourceIndexJob,
+): Promise<void> {
+	try {
+		const result = await syncGitHubSource(source, options);
+		if (!isCurrentSourceIndexJob(source.id, job.id)) return;
+		if (!result.hadErrors) markSourceIndexed(source.id, undefined, options.agentsDir);
+		completeSourceIndexJob(source.id, job.id, result.indexed);
+	} catch (err) {
+		if (!isCurrentSourceIndexJob(source.id, job.id)) return;
+		failSourceIndexJob(source.id, job.id, err);
+	} finally {
+		clearSourceIndexInFlight(source.id);
+	}
+}
+
 function cleanupSourceDeletionTombstones(
 	agentsDir: string,
 	purgeNativeSource: typeof purgeNativeMemorySourceArtifacts,
@@ -232,6 +338,8 @@ function cleanupSourceDeletionTombstones(
 				),
 				tombstone.agentId,
 			);
+		} else if (tombstone.source.kind === "github") {
+			purgeGitHubSource(tombstone.source.id, tombstone.agentId);
 		}
 	}
 	saveSourceDeletionTombstones(remaining, agentsDir);
@@ -294,7 +402,7 @@ function isSourceDeletionTombstone(value: unknown): value is SourceDeletionTombs
 		!!candidate.source &&
 		typeof candidate.source === "object" &&
 		typeof candidate.source.id === "string" &&
-		candidate.source.kind === "obsidian"
+		(candidate.source.kind === "obsidian" || candidate.source.kind === "github")
 	);
 }
 

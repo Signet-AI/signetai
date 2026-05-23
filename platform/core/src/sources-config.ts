@@ -3,8 +3,23 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
-export type SignetSourceKind = "obsidian";
+export type SignetSourceKind = "obsidian" | "github";
 export type SignetSourceMode = "read-only";
+
+export interface GitHubSourceSettings {
+	readonly repos: readonly string[];
+	readonly tokenRef?: string;
+	readonly resourceTypes: readonly ("issues" | "pulls" | "discussions" | "docs")[];
+	readonly state?: "open" | "closed" | "all";
+	readonly includeComments?: boolean;
+	readonly labels?: readonly string[];
+	readonly docPaths?: readonly string[];
+	readonly maxItemsPerRepo?: number;
+}
+
+export const DEFAULT_GITHUB_RESOURCE_TYPES = ["issues", "pulls", "discussions", "docs"] as const;
+const VALID_GITHUB_RESOURCE_TYPES = new Set<string>(DEFAULT_GITHUB_RESOURCE_TYPES);
+export const DEFAULT_GITHUB_DOC_PATHS = ["README.md", "CHANGELOG.md"] as const;
 
 export interface SignetSourceEntry {
 	readonly id: string;
@@ -17,6 +32,8 @@ export interface SignetSourceEntry {
 	readonly updatedAt: string;
 	readonly lastIndexedAt?: string;
 	readonly excludeGlobs?: readonly string[];
+	readonly settings?: Readonly<Record<string, unknown>>;
+	readonly agentId?: string;
 }
 
 export const DEFAULT_OBSIDIAN_EXCLUDE_GLOBS = [
@@ -37,6 +54,20 @@ export interface AddObsidianSourceInput {
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
 	readonly now?: string;
+}
+
+export interface AddGitHubSourceInput {
+	readonly repos: readonly string[];
+	readonly name?: string;
+	readonly tokenRef?: string;
+	readonly resourceTypes?: readonly ("issues" | "pulls" | "discussions" | "docs")[];
+	readonly state?: "open" | "closed" | "all";
+	readonly includeComments?: boolean;
+	readonly labels?: readonly string[];
+	readonly docPaths?: readonly string[];
+	readonly maxItemsPerRepo?: number;
+	readonly now?: string;
+	readonly agentId?: string;
 }
 
 export type AddSourceResult =
@@ -163,6 +194,161 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 	return { ok: true, source, created: true };
 }
 
+export function addGitHubSource(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addGitHubSourceUnlocked(input, agentsDir));
+}
+
+function addGitHubSourceUnlocked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	try {
+		return addGitHubSourceChecked(input, agentsDir);
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
+function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	const repos = input.repos.map((r) => r.trim()).filter(Boolean);
+	if (repos.length === 0) return { ok: false, error: "At least one repo (owner/repo or owner/*) is required" };
+	for (const repo of repos) {
+		if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_*.-]+$/.test(repo)) {
+			return { ok: false, error: `Invalid repo pattern: ${repo}. Expected owner/repo or owner/*` };
+		}
+	}
+
+	if (input.maxItemsPerRepo !== undefined) {
+		if (!Number.isInteger(input.maxItemsPerRepo) || input.maxItemsPerRepo < 1 || input.maxItemsPerRepo > 10000) {
+			return { ok: false, error: "maxItemsPerRepo must be an integer between 1 and 10000" };
+		}
+	}
+
+	if (input.resourceTypes) {
+		if (!Array.isArray(input.resourceTypes)) {
+			return { ok: false, error: "resourceTypes must be an array" };
+		}
+		if (input.resourceTypes.length === 0) {
+			return { ok: false, error: "resourceTypes must include at least one resource type" };
+		}
+		const invalid = input.resourceTypes.filter((t) => !VALID_GITHUB_RESOURCE_TYPES.has(t));
+		if (invalid.length > 0) {
+			return {
+				ok: false,
+				error: `Invalid resource types: ${invalid.join(", ")}. Must be one of: ${[...DEFAULT_GITHUB_RESOURCE_TYPES].join(", ")}`,
+			};
+		}
+	}
+	if (input.tokenRef !== undefined && typeof input.tokenRef !== "string") {
+		return { ok: false, error: "tokenRef must be a string" };
+	}
+	if (input.state !== undefined && input.state !== "open" && input.state !== "closed" && input.state !== "all") {
+		return { ok: false, error: "state must be one of: open, closed, all" };
+	}
+	if (input.includeComments !== undefined && typeof input.includeComments !== "boolean") {
+		return { ok: false, error: "includeComments must be a boolean" };
+	}
+	if (input.labels !== undefined && !isStringArray(input.labels)) {
+		return { ok: false, error: "labels must be an array of strings" };
+	}
+	if (input.docPaths !== undefined) {
+		if (!isStringArray(input.docPaths)) return { ok: false, error: "docPaths must be an array of strings" };
+		const invalid = input.docPaths.filter((path) => !isSafeGitHubDocPath(path));
+		if (invalid.length > 0) {
+			return { ok: false, error: `Invalid docPaths: ${invalid.join(", ")}` };
+		}
+	}
+
+	const now = input.now ?? new Date().toISOString();
+	const cfg = loadSourcesConfigForWrite(agentsDir);
+	const agentId = cleanName(input.agentId) ?? "default";
+	const settingsKey = [...repos].sort().join(",");
+	const existing = cfg.sources.find(
+		(source) =>
+			source.kind === "github" &&
+			(source.agentId ?? "default") === agentId &&
+			Array.isArray(source.settings?.repos) &&
+			[...(source.settings.repos as string[])].sort().join(",") === settingsKey,
+	);
+
+	if (existing) {
+		const updated: SignetSourceEntry = {
+			...existing,
+			name: cleanName(input.name) ?? existing.name,
+			enabled: true,
+			updatedAt: now,
+			settings: buildGitHubSettings(input, repos),
+			agentId,
+		};
+		saveSourcesConfig(
+			{
+				version: SOURCES_CONFIG_VERSION,
+				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
+			},
+			agentsDir,
+		);
+		return { ok: true, source: updated, created: false };
+	}
+
+	const source: SignetSourceEntry = {
+		id: `github:${createHash("sha256").update(`${agentId}\0${settingsKey}`).digest("hex").slice(0, 16)}`,
+		kind: "github",
+		name: cleanName(input.name) ?? repos[0],
+		root: "",
+		enabled: true,
+		mode: "read-only",
+		createdAt: now,
+		updatedAt: now,
+		settings: buildGitHubSettings(input, repos),
+		agentId,
+	};
+	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
+	return { ok: true, source, created: true };
+}
+
+function buildGitHubSettings(input: AddGitHubSourceInput, repos: readonly string[]): Readonly<Record<string, unknown>> {
+	const resourceTypes = input.resourceTypes ?? [...DEFAULT_GITHUB_RESOURCE_TYPES];
+	return {
+		repos: repos,
+		tokenRef: input.tokenRef?.trim() || undefined,
+		resourceTypes,
+		state: input.state ?? "all",
+		includeComments: input.includeComments ?? true,
+		labels: input.labels ? cleanStringArray(input.labels) : undefined,
+		docPaths: input.docPaths ? cleanStringArray(input.docPaths) : [...DEFAULT_GITHUB_DOC_PATHS],
+		maxItemsPerRepo: input.maxItemsPerRepo ?? 500,
+	};
+}
+
+export function parseGitHubSettings(raw: Readonly<Record<string, unknown>> | undefined): GitHubSourceSettings {
+	if (!raw) {
+		return { repos: [], resourceTypes: [...DEFAULT_GITHUB_RESOURCE_TYPES] };
+	}
+	const repos =
+		Array.isArray(raw.repos) && raw.repos.every((r) => typeof r === "string") ? (raw.repos as string[]) : [];
+	let resourceTypes =
+		Array.isArray(raw.resourceTypes) && raw.resourceTypes.every((t) => typeof t === "string")
+			? (raw.resourceTypes as string[]).filter((t): t is "issues" | "pulls" | "discussions" | "docs" =>
+					["issues", "pulls", "discussions", "docs"].includes(t),
+				)
+			: [...DEFAULT_GITHUB_RESOURCE_TYPES];
+	if (resourceTypes.length === 0) resourceTypes = [...DEFAULT_GITHUB_RESOURCE_TYPES];
+	return {
+		repos,
+		tokenRef: typeof raw.tokenRef === "string" ? raw.tokenRef : undefined,
+		resourceTypes,
+		state: raw.state === "open" || raw.state === "closed" || raw.state === "all" ? raw.state : "all",
+		includeComments: typeof raw.includeComments === "boolean" ? raw.includeComments : true,
+		labels:
+			Array.isArray(raw.labels) && raw.labels.every((l) => typeof l === "string")
+				? (raw.labels as string[])
+				: undefined,
+		docPaths:
+			Array.isArray(raw.docPaths) && raw.docPaths.every((p) => typeof p === "string")
+				? (raw.docPaths as string[])
+				: [...DEFAULT_GITHUB_DOC_PATHS],
+		maxItemsPerRepo: typeof raw.maxItemsPerRepo === "number" && raw.maxItemsPerRepo > 0 ? raw.maxItemsPerRepo : 500,
+	};
+}
+
 export function markSourceIndexed(
 	sourceId: string,
 	indexedAt = new Date().toISOString(),
@@ -259,6 +445,21 @@ function cleanExcludeGlobs(values: readonly string[] | undefined): readonly stri
 	return cleaned.length > 0 ? cleaned : [];
 }
 
+function cleanStringArray(values: readonly string[]): readonly string[] {
+	return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+	return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isSafeGitHubDocPath(value: string): boolean {
+	const path = value.trim();
+	if (!path) return false;
+	if (path.startsWith("/") || path.includes("\\") || path.includes("?") || path.includes("#")) return false;
+	return !path.split("/").some((segment) => segment === "" || segment === "." || segment === "..");
+}
+
 function mergeDefaultObsidianExcludeGlobs(values: readonly string[] | undefined): readonly string[] {
 	return [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS, ...(cleanExcludeGlobs(values) ?? [])].filter(
 		(value, index, all) => all.indexOf(value) === index,
@@ -270,18 +471,76 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isSourceEntry(value: unknown): value is SignetSourceEntry {
-	return (
-		isRecord(value) &&
-		value.kind === "obsidian" &&
-		typeof value.id === "string" &&
-		typeof value.name === "string" &&
-		typeof value.root === "string" &&
-		typeof value.enabled === "boolean" &&
-		value.mode === "read-only" &&
-		typeof value.createdAt === "string" &&
-		typeof value.updatedAt === "string" &&
-		(value.lastIndexedAt === undefined || typeof value.lastIndexedAt === "string") &&
-		(value.excludeGlobs === undefined ||
-			(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string")))
-	);
+	if (
+		!(
+			isRecord(value) &&
+			(value.kind === "obsidian" || value.kind === "github") &&
+			typeof value.id === "string" &&
+			typeof value.name === "string" &&
+			typeof value.root === "string" &&
+			typeof value.enabled === "boolean" &&
+			value.mode === "read-only" &&
+			typeof value.createdAt === "string" &&
+			typeof value.updatedAt === "string" &&
+			(value.lastIndexedAt === undefined || typeof value.lastIndexedAt === "string") &&
+			(value.excludeGlobs === undefined ||
+				(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string"))) &&
+			(value.settings === undefined || isRecord(value.settings)) &&
+			(value.agentId === undefined || typeof value.agentId === "string")
+		)
+	) {
+		return false;
+	}
+	if (value.kind === "github") {
+		return typeof value.agentId === "string" && isValidGitHubSettingsRecord(value.settings);
+	}
+	return true;
+}
+
+function isValidGitHubSettingsRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+	if (!isRecord(value)) return false;
+	if (
+		!Array.isArray(value.repos) ||
+		value.repos.length === 0 ||
+		!value.repos.every((repo) => typeof repo === "string")
+	) {
+		return false;
+	}
+	if (value.tokenRef !== undefined && typeof value.tokenRef !== "string") return false;
+	if (value.includeComments !== undefined && typeof value.includeComments !== "boolean") return false;
+	if (value.state !== undefined && value.state !== "open" && value.state !== "closed" && value.state !== "all") {
+		return false;
+	}
+	if (value.resourceTypes !== undefined) {
+		if (
+			!Array.isArray(value.resourceTypes) ||
+			value.resourceTypes.length === 0 ||
+			!value.resourceTypes.every((type) => typeof type === "string" && VALID_GITHUB_RESOURCE_TYPES.has(type))
+		) {
+			return false;
+		}
+	}
+	if (value.labels !== undefined) {
+		if (!Array.isArray(value.labels) || !value.labels.every((label) => typeof label === "string")) return false;
+	}
+	if (value.docPaths !== undefined) {
+		if (
+			!Array.isArray(value.docPaths) ||
+			!value.docPaths.every((path) => typeof path === "string" && isSafeGitHubDocPath(path))
+		) {
+			return false;
+		}
+	}
+	if (value.maxItemsPerRepo !== undefined) {
+		const maxItemsPerRepo = value.maxItemsPerRepo;
+		if (
+			typeof maxItemsPerRepo !== "number" ||
+			!Number.isInteger(maxItemsPerRepo) ||
+			maxItemsPerRepo < 1 ||
+			maxItemsPerRepo > 10000
+		) {
+			return false;
+		}
+	}
+	return true;
 }

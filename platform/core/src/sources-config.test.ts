@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
+	addGitHubSource,
 	addObsidianSource,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
+	parseGitHubSettings,
 	removeSource,
 } from "./sources-config";
 
@@ -151,5 +153,276 @@ describe("sources-config", () => {
 		expect(removed.ok).toBe(false);
 		if (removed.ok === true) throw new Error("expected removeSource to fail");
 		expect(removed.error).toContain("not found");
+	});
+
+	describe("GitHub source", () => {
+		it("adds a GitHub source with repos and token ref", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource(
+				{
+					repos: ["Signet-AI/signetai", "Signet-AI/sqmd"],
+					name: "Signet Repos",
+					tokenRef: "github-pat",
+					now: "2026-01-01T00:00:00.000Z",
+				},
+				agentsDir,
+			);
+			expect(result.ok).toBe(true);
+			if (result.ok === false) throw new Error(result.error);
+			expect(result.created).toBe(true);
+			expect(result.source.kind).toBe("github");
+			expect(result.source.mode).toBe("read-only");
+			expect(result.source.enabled).toBe(true);
+			expect(result.source.name).toBe("Signet Repos");
+
+			const config = loadSourcesConfig(agentsDir);
+			expect(config.sources).toHaveLength(1);
+			const settings = parseGitHubSettings(config.sources[0]?.settings);
+			expect(settings.repos).toEqual(["Signet-AI/signetai", "Signet-AI/sqmd"]);
+			expect(settings.tokenRef).toBe("github-pat");
+		});
+
+		it("updates an existing GitHub source instead of duplicating", () => {
+			const agentsDir = tmp();
+			const first = addGitHubSource(
+				{ repos: ["owner/repo"], name: "Repo A", now: "2026-01-01T00:00:00.000Z" },
+				agentsDir,
+			);
+			const second = addGitHubSource(
+				{ repos: ["owner/repo"], name: "Repo B", now: "2026-01-02T00:00:00.000Z" },
+				agentsDir,
+			);
+			expect(first.ok).toBe(true);
+			expect(second.ok).toBe(true);
+			if (second.ok === false) throw new Error(second.error);
+			expect(second.created).toBe(false);
+			expect(second.source.name).toBe("Repo B");
+			expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+		});
+
+		it("keeps identical GitHub repo sets separate per agent", () => {
+			const agentsDir = tmp();
+			const first = addGitHubSource(
+				{ repos: ["owner/repo"], name: "Agent A Repo", agentId: "agent-a", now: "2026-01-01T00:00:00.000Z" },
+				agentsDir,
+			);
+			const second = addGitHubSource(
+				{ repos: ["owner/repo"], name: "Agent B Repo", agentId: "agent-b", now: "2026-01-02T00:00:00.000Z" },
+				agentsDir,
+			);
+
+			expect(first.ok).toBe(true);
+			expect(second.ok).toBe(true);
+			if (first.ok === false || second.ok === false) throw new Error("expected both sources to be added");
+			expect(first.source.id).not.toBe(second.source.id);
+			expect(loadSourcesConfig(agentsDir).sources.map((source) => source.agentId)).toEqual(["agent-a", "agent-b"]);
+		});
+
+		it("rejects an explicit empty GitHub resource type list", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource({ repos: ["owner/repo"], resourceTypes: [] }, agentsDir);
+			expect(result.ok).toBe(false);
+			if (result.ok === true) throw new Error("expected failure");
+			expect(result.error).toContain("resourceTypes");
+		});
+
+		it("rejects a non-integer GitHub max item limit", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource({ repos: ["owner/repo"], maxItemsPerRepo: 1.5 }, agentsDir);
+			expect(result.ok).toBe(false);
+			if (result.ok === true) throw new Error("expected failure");
+			expect(result.error).toContain("integer");
+		});
+
+		it("rejects invalid GitHub runtime fields before writing config", () => {
+			const agentsDir = tmp();
+			const state = addGitHubSource({ repos: ["owner/repo"], state: "draft" as never }, agentsDir);
+			expect(state.ok).toBe(false);
+			if (state.ok === true) throw new Error("expected state failure");
+			expect(state.error).toContain("state");
+
+			const labels = addGitHubSource({ repos: ["owner/repo"], labels: ["bug", 123] as never }, agentsDir);
+			expect(labels.ok).toBe(false);
+			if (labels.ok === true) throw new Error("expected labels failure");
+			expect(labels.error).toContain("labels");
+
+			const comments = addGitHubSource({ repos: ["owner/repo"], includeComments: "yes" as never }, agentsDir);
+			expect(comments.ok).toBe(false);
+			if (comments.ok === true) throw new Error("expected comments failure");
+			expect(comments.error).toContain("includeComments");
+
+			expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		});
+
+		it("rejects unsafe GitHub doc paths before writing config", () => {
+			const agentsDir = tmp();
+			for (const docPath of ["/README.md", "../README.md", "docs/../README.md", "README.md?ref=dev"]) {
+				const result = addGitHubSource({ repos: ["owner/repo"], docPaths: [docPath] }, agentsDir);
+				expect(result.ok).toBe(false);
+				if (result.ok === true) throw new Error("expected doc path failure");
+				expect(result.error).toContain("docPaths");
+			}
+			expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		});
+
+		it("drops malformed persisted GitHub sources instead of treating them as empty sources", () => {
+			const agentsDir = tmp();
+			writeFileSync(
+				getSourcesConfigPath(agentsDir),
+				JSON.stringify({
+					version: 1,
+					sources: [
+						{
+							id: "github:bad",
+							kind: "github",
+							name: "Bad GitHub",
+							root: "",
+							enabled: true,
+							mode: "read-only",
+							createdAt: "2026-01-01T00:00:00.000Z",
+							updatedAt: "2026-01-01T00:00:00.000Z",
+						},
+					],
+				}),
+				"utf8",
+			);
+
+			expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		});
+
+		it("drops persisted GitHub sources with invalid resource types instead of widening to defaults", () => {
+			const agentsDir = tmp();
+			writeFileSync(
+				getSourcesConfigPath(agentsDir),
+				JSON.stringify({
+					version: 1,
+					sources: [
+						{
+							id: "github:bad-types",
+							kind: "github",
+							name: "Bad GitHub Types",
+							root: "",
+							enabled: true,
+							mode: "read-only",
+							createdAt: "2026-01-01T00:00:00.000Z",
+							updatedAt: "2026-01-01T00:00:00.000Z",
+							settings: { repos: ["owner/repo"], resourceTypes: ["issue"] },
+						},
+					],
+				}),
+				"utf8",
+			);
+
+			expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		});
+
+		it("drops persisted GitHub sources without an owning agent", () => {
+			const agentsDir = tmp();
+			writeFileSync(
+				getSourcesConfigPath(agentsDir),
+				JSON.stringify({
+					version: 1,
+					sources: [
+						{
+							id: "github:unscoped",
+							kind: "github",
+							name: "Unscoped GitHub",
+							root: "",
+							enabled: true,
+							mode: "read-only",
+							createdAt: "2026-01-01T00:00:00.000Z",
+							updatedAt: "2026-01-01T00:00:00.000Z",
+							settings: { repos: ["owner/repo"] },
+						},
+					],
+				}),
+				"utf8",
+			);
+
+			expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		});
+
+		it("drops persisted GitHub sources with non-integer max item limits", () => {
+			const agentsDir = tmp();
+			writeFileSync(
+				getSourcesConfigPath(agentsDir),
+				JSON.stringify({
+					version: 1,
+					sources: [
+						{
+							id: "github:bad-max",
+							kind: "github",
+							name: "Bad GitHub Max",
+							root: "",
+							enabled: true,
+							mode: "read-only",
+							createdAt: "2026-01-01T00:00:00.000Z",
+							updatedAt: "2026-01-01T00:00:00.000Z",
+							settings: { repos: ["owner/repo"], maxItemsPerRepo: 1.5 },
+						},
+					],
+				}),
+				"utf8",
+			);
+
+			expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		});
+
+		it("drops persisted GitHub sources with unsafe doc paths", () => {
+			const agentsDir = tmp();
+			writeFileSync(
+				getSourcesConfigPath(agentsDir),
+				JSON.stringify({
+					version: 1,
+					sources: [
+						{
+							id: "github:bad-doc-path",
+							kind: "github",
+							name: "Bad GitHub Docs",
+							root: "",
+							enabled: true,
+							mode: "read-only",
+							createdAt: "2026-01-01T00:00:00.000Z",
+							updatedAt: "2026-01-01T00:00:00.000Z",
+							agentId: "default",
+							settings: { repos: ["owner/repo"], docPaths: ["README.md?ref=dev"] },
+						},
+					],
+				}),
+				"utf8",
+			);
+
+			expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		});
+
+		it("requires at least one repo", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource({ repos: [] }, agentsDir);
+			expect(result.ok).toBe(false);
+			if (result.ok === true) throw new Error("expected failure");
+			expect(result.error).toContain("repo");
+		});
+
+		it("coexists with Obsidian sources", () => {
+			const agentsDir = tmp();
+			const vault = join(agentsDir, "vault");
+			mkdirSync(vault, { recursive: true });
+
+			addObsidianSource({ root: vault, name: "My Vault" }, agentsDir);
+			addGitHubSource({ repos: ["owner/repo"], name: "GitHub" }, agentsDir);
+
+			const config = loadSourcesConfig(agentsDir);
+			expect(config.sources).toHaveLength(2);
+			expect(config.sources.map((s) => s.kind)).toEqual(["obsidian", "github"]);
+		});
+
+		it("defaults resource types to all four", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource({ repos: ["owner/repo"] }, agentsDir);
+			expect(result.ok).toBe(true);
+			if (result.ok === false) throw new Error(result.error);
+			const settings = parseGitHubSettings(loadSourcesConfig(agentsDir).sources[0]?.settings);
+			expect(settings.resourceTypes).toEqual(["issues", "pulls", "discussions", "docs"]);
+		});
 	});
 });

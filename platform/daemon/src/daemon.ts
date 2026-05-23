@@ -40,6 +40,7 @@ import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
+import { type GitHubSourceBridgeHandle, startGitHubSourceBridge } from "./github-source-bridge";
 import { createSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
 import { getOrCreateInferenceRouter } from "./inference-router.js";
@@ -243,6 +244,7 @@ setupDashboardRoutes(app);
 
 let watcher: ReturnType<typeof watch> | null = null;
 let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
+let githubSourceBridge: GitHubSourceBridgeHandle | null = null;
 
 // Track ingested files to avoid re-processing (path -> content hash)
 const ingestedMemoryFiles = new Map<string, string>();
@@ -1189,6 +1191,11 @@ async function cleanup() {
 		nativeMemoryBridge = null;
 	}
 
+	if (githubSourceBridge) {
+		await githubSourceBridge.close();
+		githubSourceBridge = null;
+	}
+
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
 		heartbeatTimer = undefined;
@@ -1608,6 +1615,27 @@ async function main() {
 				.finally(() => {
 					for (const sourceId of startupSourceJobs.keys()) clearSourceIndexInFlight(sourceId);
 				});
+		}
+
+		if (!githubSourceBridge) {
+			const embeddingCfg = memoryCfg.embedding.provider !== "none" ? memoryCfg.embedding : undefined;
+			githubSourceBridge = startGitHubSourceBridge(
+				() => loadSourcesConfig(AGENTS_DIR).sources.filter((s) => s.enabled && s.kind === "github"),
+				{
+					agentsDir: AGENTS_DIR,
+					pollIntervalMs: 300_000,
+					embeddingConfig: embeddingCfg,
+					fetchEmbedding: embeddingCfg ? fetchEmbedding : undefined,
+				},
+			);
+			githubSourceBridge.sync().catch((e) => {
+				logger.error(
+					"daemon",
+					"Failed to sync GitHub sources",
+					undefined,
+					e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) },
+				);
+			});
 		}
 
 		const startupCfg = loadMemoryConfig(AGENTS_DIR);

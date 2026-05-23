@@ -1,5 +1,11 @@
 import type { Command } from "commander";
-import { type SourcesDeps, addObsidianVaultSource, listSources, removeConfiguredSource } from "../features/sources.js";
+import {
+	type SourcesDeps,
+	addGitHubRepoSource,
+	addObsidianVaultSource,
+	listSources,
+	removeConfiguredSource,
+} from "../features/sources.js";
 import type { DaemonApiCall } from "../lib/daemon.js";
 
 export interface RegisterSourcesCommandsDeps extends SourcesDeps {
@@ -62,4 +68,17 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 		.action((path: string, options: { name?: string; exclude?: string[] }) =>
 			addObsidianVaultSource(path, options, deps),
 		);
+
+	add
+		.command("github")
+		.description("Index GitHub repos (issues, PRs, discussions, docs) as a recall source")
+		.requiredOption("--repos <repos...>", "Repo patterns (owner/repo or owner/*)")
+		.option("--name <name>", "Display name for this source")
+		.option("--token-ref <ref>", "Signet secret reference for GitHub PAT")
+		.option("--types <types>", "Resource types: issues,pulls,discussions,docs", "issues,pulls,discussions,docs")
+		.option("--state <state>", "Filter by state: open, closed, all", "all")
+		.option("--no-comments", "Skip fetching comments")
+		.option("--doc-paths <paths...>", "Doc file paths to index", ["README.md", "CHANGELOG.md"])
+		.option("--max-items <n>", "Max items per repo", "500")
+		.action((options) => addGitHubRepoSource(options, deps));
 }

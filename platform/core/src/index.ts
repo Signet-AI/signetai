@@ -221,18 +221,24 @@ export type {
 	WorkspaceSourceRepoSyncResult,
 } from "./workspace-source-repo";
 export {
+	addGitHubSource,
 	addObsidianSource,
+	DEFAULT_GITHUB_DOC_PATHS,
+	DEFAULT_GITHUB_RESOURCE_TYPES,
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
 	getAgentsDir,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
+	parseGitHubSettings,
 	removeSource,
 	saveSourcesConfig,
 } from "./sources-config";
 export type {
+	AddGitHubSourceInput,
 	AddObsidianSourceInput,
 	AddSourceResult,
+	GitHubSourceSettings,
 	RemoveSourceResult,
 	SignetSourceEntry,
 	SignetSourceKind,
