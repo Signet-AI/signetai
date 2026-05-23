@@ -87,7 +87,7 @@ No authentication required. Lightweight liveness check.
   "status": "healthy",
   "uptime": 3600.5,
   "pid": 12345,
-  "version": "0.109.x",
+  "version": "0.124.0",
   "port": 3850,
   "agentsDir": "/home/user/.agents",
   "db": true,
@@ -116,7 +116,7 @@ silent fallback or hard-blocked extraction after boot.
 ```json
 {
   "status": "running",
-  "version": "0.109.x",
+  "version": "0.124.0",
   "pid": 12345,
   "uptime": 3600.5,
   "startedAt": "2026-02-21T10:00:00.000Z",
@@ -177,7 +177,7 @@ silent fallback or hard-blocked extraction after boot.
   "agentCreatedAt": "2026-02-21T10:00:00.000Z",
   "health": { "score": 0.97, "status": "healthy" },
   "update": {
-    "currentVersion": "0.109.x",
+    "currentVersion": "0.124.0",
     "latestVersion": null,
     "updateAvailable": false,
     "pendingRestart": null,
@@ -3174,10 +3174,10 @@ is passed.
 
 ```json
 {
-  "currentVersion": "0.109.x",
-  "latestVersion": "0.110.0",
+  "currentVersion": "0.124.0",
+  "latestVersion": "0.124.1",
   "updateAvailable": true,
-  "releaseUrl": "https://github.com/Signet-AI/signetai/releases/tag/v0.110.0",
+  "releaseUrl": "https://github.com/Signet-AI/signetai/releases/tag/v0.124.1",
   "releaseNotes": "...",
   "publishedAt": "2026-02-20T12:00:00Z",
   "restartRequired": false,
@@ -3247,7 +3247,7 @@ update.
   "success": true,
   "message": "Update installed. Restart daemon to apply.",
   "output": "...",
-  "installedVersion": "0.110.0",
+  "installedVersion": "0.124.1",
   "restartRequired": true
 }
 ```
