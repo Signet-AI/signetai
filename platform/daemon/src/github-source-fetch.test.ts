@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { fetchRepoDocs } from "./github-source-fetch";
+import { expandRepoGlob, fetchRepoDocs } from "./github-source-fetch";
 
 const originalFetch = globalThis.fetch;
 
@@ -43,5 +43,26 @@ describe("fetchRepoDocs", () => {
 
 		expect(result.resources).toHaveLength(1);
 		expect(result.resources[0]?.path).toBe("docs/a.md");
+	});
+});
+
+describe("expandRepoGlob", () => {
+	test("caps wildcard repo expansion to the configured limit", async () => {
+		let requests = 0;
+		globalThis.fetch = mock(async (input: string | URL | Request) => {
+			requests++;
+			const url = new URL(String(input));
+			expect(url.searchParams.get("per_page")).toBe("1");
+			expect(url.searchParams.get("page")).toBe("1");
+			return new Response(JSON.stringify([{ full_name: "Signet-AI/signetai", name: "signetai" }]), {
+				status: 200,
+			});
+		}) as typeof fetch;
+
+		const result = await expandRepoGlob("Signet-AI", "*", undefined, 1);
+
+		expect(result.repos).toEqual(["Signet-AI/signetai"]);
+		expect(result.truncated).toBe(true);
+		expect(requests).toBe(1);
 	});
 });

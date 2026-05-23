@@ -229,25 +229,46 @@ export async function fetchRepoInfo(config: GitHubFetchConfig): Promise<GitHubRe
 	};
 }
 
-export async function expandRepoGlob(owner: string, pattern: string, token?: string): Promise<string[]> {
-	if (!pattern.includes("*")) return [`${owner}/${pattern}`];
+export interface RepoGlobExpansion {
+	readonly repos: readonly string[];
+	readonly truncated: boolean;
+}
+
+export async function expandRepoGlob(
+	owner: string,
+	pattern: string,
+	token?: string,
+	maxRepos = 500,
+): Promise<RepoGlobExpansion> {
+	if (!pattern.includes("*")) return { repos: [`${owner}/${pattern}`], truncated: false };
 	const regex = new RegExp(`^${pattern.replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
 	for (const prefix of [`/orgs/${owner}/repos`, `/users/${owner}/repos`]) {
 		const repos: Array<{ full_name: string; name: string }> = [];
 		let page = 1;
-		while (true) {
-			const url = `${GITHUB_API_BASE}${prefix}?per_page=${PER_PAGE}&page=${page}&type=all`;
+		let truncated = false;
+		while (repos.length < maxRepos) {
+			const remaining = Math.max(1, maxRepos - repos.length);
+			const url = `${GITHUB_API_BASE}${prefix}?per_page=${Math.min(PER_PAGE, remaining)}&page=${page}&type=all`;
 			const response = await githubRequest(url, token);
 			if (response.status !== 200) break;
 			const batch = response.body as Array<{ full_name: string; name: string }>;
 			repos.push(...batch);
+			if (repos.length >= maxRepos) {
+				truncated = batch.length === Math.min(PER_PAGE, remaining);
+				break;
+			}
 			if (batch.length < PER_PAGE) break;
 			page++;
 		}
-		if (repos.length > 0) return repos.filter((r) => regex.test(r.name)).map((r) => r.full_name);
+		if (repos.length > 0) {
+			return {
+				repos: repos.filter((r) => regex.test(r.name)).map((r) => r.full_name).slice(0, maxRepos),
+				truncated,
+			};
+		}
 	}
 	logger.warn("github-source", "Failed to expand repo glob", { owner });
-	return [];
+	return { repos: [], truncated: false };
 }
 
 export async function fetchIssues(

@@ -53,8 +53,16 @@ export async function resolveRepos(settings: GitHubSourceSettings, token?: strin
 		const [owner, repoPart] = pattern.split("/");
 		if (!owner || !repoPart) continue;
 		if (repoPart === "*" || repoPart.includes("*")) {
-			const expanded = await expandRepoGlob(owner, repoPart, token);
-			for (const fullName of expanded) {
+			const expanded = await expandRepoGlob(owner, repoPart, token, settings.maxItemsPerRepo);
+			if (expanded.truncated) {
+				logger.warn("github-source", "Wildcard repo source expansion hit configured cap", {
+					owner,
+					pattern: repoPart,
+					limit: settings.maxItemsPerRepo,
+					matchedRepos: expanded.repos.length,
+				});
+			}
+			for (const fullName of expanded.repos) {
 				const [o, r] = fullName.split("/");
 				if (!o || !r) continue;
 				resolved.push({ owner: o, repo: r, fullName, defaultBranch: "main" });
