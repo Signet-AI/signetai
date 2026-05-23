@@ -1,5 +1,11 @@
 import type { Command } from "commander";
-import { type SourcesDeps, addObsidianVaultSource, listSources, removeConfiguredSource } from "../features/sources.js";
+import {
+	type SourcesDeps,
+	addDiscordServerSource,
+	addObsidianVaultSource,
+	listSources,
+	removeConfiguredSource,
+} from "../features/sources.js";
 import type { DaemonApiCall } from "../lib/daemon.js";
 
 export interface RegisterSourcesCommandsDeps extends SourcesDeps {
@@ -61,5 +67,39 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 		)
 		.action((path: string, options: { name?: string; exclude?: string[] }) =>
 			addObsidianVaultSource(path, options, deps),
+		);
+
+	add
+		.command("discord")
+		.description("Index Discord server(s) as a read-only recall source")
+		.requiredOption("--guild-id <id>", "Discord guild ID (repeatable)", collect, [])
+		.requiredOption("--token-ref <ref>", "Signet secret reference for Discord bot token")
+		.option("--name <name>", "Display name for the Discord source")
+		.option("--channel-filter <channel>", "Channel name or ID to include (repeatable)", collect, [])
+		.option("--max-messages <n>", "Max messages per channel", Number, 1000)
+		.option("--no-threads", "Skip indexing threads")
+		.option("--since <date>", "Only index messages after this ISO date")
+		.action(
+			(options: {
+				guildId: string[];
+				tokenRef: string;
+				name?: string;
+				channelFilter: string[];
+				maxMessages: number;
+				threads: boolean;
+				since?: string;
+			}) =>
+				addDiscordServerSource(
+					{
+						guildIds: options.guildId,
+						tokenRef: options.tokenRef,
+						name: options.name,
+						channelFilter: options.channelFilter.length > 0 ? options.channelFilter : undefined,
+						maxMessagesPerChannel: options.maxMessages,
+						includeThreads: options.threads,
+						since: options.since,
+					},
+					deps,
+				),
 		);
 }

@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
+	addDiscordSource,
 	addObsidianSource,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
+	parseDiscordSettings,
 	removeSource,
 } from "./sources-config";
 
@@ -151,5 +153,134 @@ describe("sources-config", () => {
 		expect(removed.ok).toBe(false);
 		if (removed.ok === true) throw new Error("expected removeSource to fail");
 		expect(removed.error).toContain("not found");
+	});
+
+	describe("discord source", () => {
+		it("adds a Discord source with guild IDs and token ref", () => {
+			const agentsDir = tmp();
+			const result = addDiscordSource(
+				{
+					guildIds: ["123456789012345678"],
+					tokenRef: "DISCORD_BOT_TOKEN",
+					name: "My Discord Server",
+					now: "2026-01-01T00:00:00.000Z",
+				},
+				agentsDir,
+			);
+
+			expect(result.ok).toBe(true);
+			if (result.ok === false) throw new Error(result.error);
+			expect(result.created).toBe(true);
+			expect(result.source.kind).toBe("discord");
+			expect(result.source.mode).toBe("read-only");
+			expect(result.source.name).toBe("My Discord Server");
+			expect(result.source.root).toBe("");
+			expect(result.source.settings).toBeDefined();
+			expect((result.source.settings as { guildIds: string[] }).guildIds).toEqual(["123456789012345678"]);
+			expect((result.source.settings as { tokenRef: string }).tokenRef).toBe("DISCORD_BOT_TOKEN");
+		});
+
+		it("rejects missing guild IDs", () => {
+			const agentsDir = tmp();
+			const result = addDiscordSource({ guildIds: [], tokenRef: "TOKEN" }, agentsDir);
+			expect(result.ok).toBe(false);
+			if (result.ok === true) throw new Error("expected failure");
+			expect(result.error).toContain("guild ID");
+		});
+
+		it("rejects missing token ref", () => {
+			const agentsDir = tmp();
+			const result = addDiscordSource({ guildIds: ["123456789012345678"], tokenRef: "" }, agentsDir);
+			expect(result.ok).toBe(false);
+			if (result.ok === true) throw new Error("expected failure");
+			expect(result.error).toContain("token");
+		});
+
+		it("rejects invalid guild ID format", () => {
+			const agentsDir = tmp();
+			const result = addDiscordSource({ guildIds: ["not-a-number"], tokenRef: "TOKEN" }, agentsDir);
+			expect(result.ok).toBe(false);
+			if (result.ok === true) throw new Error("expected failure");
+			expect(result.error).toContain("Invalid Discord guild ID");
+		});
+
+		it("deduplicates by sorted guild IDs", () => {
+			const agentsDir = tmp();
+			const first = addDiscordSource(
+				{ guildIds: ["111111111111111111"], tokenRef: "TOKEN", name: "Server A", now: "2026-01-01T00:00:00.000Z" },
+				agentsDir,
+			);
+			const second = addDiscordSource(
+				{ guildIds: ["111111111111111111"], tokenRef: "TOKEN2", name: "Server B", now: "2026-01-02T00:00:00.000Z" },
+				agentsDir,
+			);
+
+			expect(first.ok).toBe(true);
+			expect(second.ok).toBe(true);
+			if (second.ok === false) throw new Error(second.error);
+			expect(second.created).toBe(false);
+			expect(second.source.name).toBe("Server B");
+			expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+		});
+
+		it("parseDiscordSettings returns defaults for empty input", () => {
+			const settings = parseDiscordSettings(undefined);
+			expect(settings.guildIds).toEqual([]);
+			expect(settings.tokenRef).toBe("");
+			expect(settings.maxMessagesPerChannel).toBe(1000);
+			expect(settings.includeThreads).toBe(true);
+		});
+
+		it("parseDiscordSettings preserves valid fields", () => {
+			const settings = parseDiscordSettings({
+				guildIds: ["123"],
+				tokenRef: "MY_TOKEN",
+				channelFilter: ["general"],
+				maxMessagesPerChannel: 500,
+				includeThreads: false,
+				since: "2026-01-01",
+			});
+			expect(settings.guildIds).toEqual(["123"]);
+			expect(settings.tokenRef).toBe("MY_TOKEN");
+			expect(settings.channelFilter).toEqual(["general"]);
+			expect(settings.maxMessagesPerChannel).toBe(500);
+			expect(settings.includeThreads).toBe(false);
+			expect(settings.since).toBe("2026-01-01T00:00:00.000Z");
+		});
+
+		it("rejects invalid Discord message bounds and since dates", () => {
+			const agentsDir = tmp();
+			const invalidMax = addDiscordSource(
+				{ guildIds: ["123456789012345678"], tokenRef: "TOKEN", maxMessagesPerChannel: -1 },
+				agentsDir,
+			);
+			expect(invalidMax.ok).toBe(false);
+			if (invalidMax.ok === true) throw new Error("expected max message validation failure");
+			expect(invalidMax.error).toContain("maxMessagesPerChannel");
+
+			const invalidSince = addDiscordSource(
+				{ guildIds: ["123456789012345678"], tokenRef: "TOKEN", since: "not-a-date" },
+				agentsDir,
+			);
+			expect(invalidSince.ok).toBe(false);
+			if (invalidSince.ok === true) throw new Error("expected since validation failure");
+			expect(invalidSince.error).toContain("since");
+		});
+
+		it("removes a Discord source by id", () => {
+			const agentsDir = tmp();
+			const added = addDiscordSource(
+				{ guildIds: ["123456789012345678"], tokenRef: "TOKEN", now: "2026-01-01T00:00:00.000Z" },
+				agentsDir,
+			);
+			expect(added.ok).toBe(true);
+			if (added.ok === false) throw new Error(added.error);
+
+			const removed = removeSource(added.source.id, agentsDir);
+			expect(removed.ok).toBe(true);
+			if (removed.ok === false) throw new Error(removed.error);
+			expect(removed.source.id).toBe(added.source.id);
+			expect(loadSourcesConfig(agentsDir).sources).toEqual([]);
+		});
 	});
 });

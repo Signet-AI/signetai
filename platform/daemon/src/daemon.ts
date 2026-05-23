@@ -36,6 +36,7 @@ import { migrateConfig } from "./config-migration";
 import { listConnectors } from "./connectors/registry";
 import { clearAllPresence } from "./cross-agent";
 import { closeDbAccessor, getDbAccessor, getVectorRuntimeStatus, initDbAccessor } from "./db-accessor";
+import { syncDiscordSource } from "./discord-source-bridge";
 import { fetchEmbedding } from "./embedding-fetch";
 import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
@@ -1607,6 +1608,30 @@ async function main() {
 				})
 				.finally(() => {
 					for (const sourceId of startupSourceJobs.keys()) clearSourceIndexInFlight(sourceId);
+				});
+		}
+
+		for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
+			if (!source.enabled || source.kind !== "discord") continue;
+			const startupEmbedCfg = loadMemoryConfig(AGENTS_DIR).embedding;
+			syncDiscordSource(source, {
+				agentId: resolveDaemonAgentId(),
+				embeddingConfig: startupEmbedCfg,
+				fetchEmbedding,
+				agentsDir: AGENTS_DIR,
+			})
+				.then((indexed) => {
+					logger.info("discord-source", "Discord source startup sync complete", {
+						sourceId: source.id,
+						indexed,
+					});
+					markSourceIndexed(source.id, undefined, AGENTS_DIR);
+				})
+				.catch((e) => {
+					logger.error("discord-source", "Discord source startup sync failed", undefined, {
+						sourceId: source.id,
+						error: e instanceof Error ? e.message : String(e),
+					});
 				});
 		}
 

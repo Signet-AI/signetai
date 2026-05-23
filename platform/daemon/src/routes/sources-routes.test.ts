@@ -150,6 +150,32 @@ describe("Sources routes", () => {
 		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
 	});
 
+	it("connects a Discord source and preserves since settings", async () => {
+		const res = await makeApp().request("/api/sources/discord", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Route Discord",
+				maxMessagesPerChannel: 250,
+				since: "2026-01-01",
+			}),
+		});
+
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as {
+			created: boolean;
+			queued: boolean;
+			source: { kind: string; settings?: { since?: string; maxMessagesPerChannel?: number } };
+		};
+		expect(body.created).toBe(true);
+		expect(body.queued).toBe(false);
+		expect(body.source.kind).toBe("discord");
+		expect(body.source.settings?.since).toBe("2026-01-01T00:00:00.000Z");
+		expect(body.source.settings?.maxMessagesPerChannel).toBe(250);
+	});
+
 	it("purges again when a disconnected source still has an in-flight index job", async () => {
 		let releaseScan = () => {};
 		let purges = 0;

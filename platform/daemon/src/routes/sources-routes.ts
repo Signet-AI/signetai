@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import { promisify } from "node:util";
 import {
 	type SignetSourceEntry,
+	addDiscordSource,
 	addObsidianSource,
 	loadSourcesConfig,
 	markSourceIndexed,
@@ -14,6 +15,7 @@ import {
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
+import { purgeDiscordSource } from "../discord-source-bridge";
 import {
 	type NativeMemoryBridgeHandle,
 	obsidianNativeMemorySource,
@@ -57,6 +59,16 @@ interface AddObsidianSourceBody {
 	readonly root?: string;
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
+}
+
+interface AddDiscordSourceBody {
+	readonly guildIds?: readonly string[];
+	readonly tokenRef?: string;
+	readonly name?: string;
+	readonly channelFilter?: readonly string[];
+	readonly maxMessagesPerChannel?: number;
+	readonly includeThreads?: boolean;
+	readonly since?: string;
 }
 
 interface PickDirectoryBody {
@@ -125,6 +137,37 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 	});
 
+	app.post("/api/sources/discord", async (c) => {
+		let body: AddDiscordSourceBody = {};
+		try {
+			body = (await c.req.json()) as AddDiscordSourceBody;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const guildIds = Array.isArray(body.guildIds)
+			? body.guildIds.filter((id): id is string => typeof id === "string")
+			: [];
+		const tokenRef = typeof body.tokenRef === "string" ? body.tokenRef : "";
+		const result = addDiscordSource(
+			{
+				guildIds,
+				tokenRef,
+				name: body.name,
+				channelFilter: Array.isArray(body.channelFilter)
+					? body.channelFilter.filter((id): id is string => typeof id === "string")
+					: undefined,
+				maxMessagesPerChannel: typeof body.maxMessagesPerChannel === "number" ? body.maxMessagesPerChannel : undefined,
+				includeThreads: typeof body.includeThreads === "boolean" ? body.includeThreads : undefined,
+				since: typeof body.since === "string" ? body.since : undefined,
+			},
+			agentsDir,
+		);
+		if (result.ok === false) return c.json({ error: result.error }, 400);
+
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: false }, 202);
+	});
+
 	app.delete("/api/sources/:sourceId", (c) => {
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
@@ -139,7 +182,9 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 						obsidianNativeMemorySource(result.source.root, result.source.name, result.source.id),
 						sourceAgentId,
 					)
-				: 0;
+				: result.source.kind === "discord"
+					? purgeDiscordSource(result.source.id, sourceAgentId)
+					: 0;
 		if (!isSourceIndexInFlight(result.source.id))
 			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
@@ -233,6 +278,9 @@ function cleanupSourceDeletionTombstones(
 				tombstone.agentId,
 			);
 		}
+		if (tombstone.source.kind === "discord") {
+			purgeDiscordSource(tombstone.source.id, tombstone.agentId);
+		}
 	}
 	saveSourceDeletionTombstones(remaining, agentsDir);
 }
@@ -294,7 +342,7 @@ function isSourceDeletionTombstone(value: unknown): value is SourceDeletionTombs
 		!!candidate.source &&
 		typeof candidate.source === "object" &&
 		typeof candidate.source.id === "string" &&
-		candidate.source.kind === "obsidian"
+		(candidate.source.kind === "obsidian" || candidate.source.kind === "discord")
 	);
 }
 
@@ -305,6 +353,23 @@ interface SourceStats {
 }
 
 function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
+	if (source.kind === "discord") {
+		const chunkPrefix = `${source.id}:`;
+		try {
+			return getDbAccessor().withReadDb((db) => {
+				const chunks = countRow(
+					db
+						.prepare(
+							"SELECT COUNT(*) AS n FROM embeddings WHERE agent_id = ? AND source_type = 'source_discord_chunk' AND source_id >= ? AND source_id < ?",
+						)
+						.get(agentId, chunkPrefix, `${chunkPrefix}\uffff`),
+				);
+				return { artifacts: chunks, chunks, indexed: chunks };
+			});
+		} catch {
+			return { artifacts: 0, chunks: 0, indexed: 0 };
+		}
+	}
 	if (source.kind !== "obsidian") return { artifacts: 0, chunks: 0, indexed: 0 };
 	const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
 	const chunkPrefix = `${source.id}:`;

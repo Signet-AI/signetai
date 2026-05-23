@@ -1,4 +1,4 @@
-import { addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
+import { addDiscordSource, addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
 import chalk from "chalk";
 
 export interface SourcesDeps {
@@ -17,6 +17,44 @@ export type DaemonRemoveSourceResult =
 export interface AddObsidianSourceOptions {
 	readonly name?: string;
 	readonly exclude?: readonly string[];
+}
+
+export interface AddDiscordSourceOptions {
+	readonly guildIds: readonly string[];
+	readonly tokenRef: string;
+	readonly name?: string;
+	readonly channelFilter?: readonly string[];
+	readonly maxMessagesPerChannel?: number;
+	readonly includeThreads?: boolean;
+	readonly since?: string;
+}
+
+export async function addDiscordServerSource(options: AddDiscordSourceOptions, deps: SourcesDeps): Promise<void> {
+	const result = addDiscordSource(
+		{
+			guildIds: options.guildIds,
+			tokenRef: options.tokenRef,
+			name: options.name,
+			channelFilter: options.channelFilter,
+			maxMessagesPerChannel: options.maxMessagesPerChannel,
+			includeThreads: options.includeThreads,
+			since: options.since,
+		},
+		deps.agentsDir,
+	);
+	if (result.ok === false) {
+		console.error(chalk.red(`✗ ${result.error}`));
+		process.exitCode = 1;
+		return;
+	}
+
+	const verb = result.created ? "Added" : "Updated";
+	console.log(chalk.green(`✓ ${verb} Discord source: ${result.source.name}`));
+	console.log(chalk.dim(`  guilds: ${options.guildIds.join(", ")}`));
+	if (options.channelFilter?.length) console.log(chalk.dim(`  channels: ${options.channelFilter.join(", ")}`));
+	console.log();
+	console.log(chalk.dim("The daemon indexes Discord sources on startup."));
+	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
 }
 
 export async function addObsidianVaultSource(
@@ -52,7 +90,12 @@ export async function listSources(deps: SourcesDeps): Promise<void> {
 		const status = source.enabled ? chalk.green("enabled") : chalk.dim("disabled");
 		console.log(`${source.name} ${chalk.dim(`(${source.kind}, ${source.mode}, ${status})`)}`);
 		console.log(chalk.dim(`  id: ${source.id}`));
-		console.log(chalk.dim(`  root: ${source.root}`));
+		if (source.kind === "discord") {
+			const settings = (source.settings as { guildIds?: string[] }) ?? {};
+			console.log(chalk.dim(`  guilds: ${(settings.guildIds ?? []).join(", ")}`));
+		} else {
+			console.log(chalk.dim(`  root: ${source.root}`));
+		}
 		if (source.excludeGlobs?.length) console.log(chalk.dim(`  excludes: ${source.excludeGlobs.join(", ")}`));
 		if (source.lastIndexedAt) console.log(chalk.dim(`  last indexed: ${source.lastIndexedAt}`));
 	}
