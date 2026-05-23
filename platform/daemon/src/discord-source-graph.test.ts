@@ -130,6 +130,67 @@ describe("discord-source-graph", () => {
 		]);
 	});
 
+	it("scopes guild, channel, and conversation entities by Discord source", () => {
+		indexDiscordSourceStructure({
+			agentId: "test-agent",
+			sourceId: "discord:source-a",
+			sourceName: "Source A",
+			guildId: "123456789012345678",
+			guildName: "Guild",
+			channelId: "ch1",
+			channelName: "general",
+			messageCount: 1,
+			participants: [],
+		});
+		indexDiscordSourceStructure({
+			agentId: "test-agent",
+			sourceId: "discord:source-b",
+			sourceName: "Source B",
+			guildId: "123456789012345678",
+			guildName: "Guild",
+			channelId: "ch1",
+			channelName: "general",
+			messageCount: 1,
+			participants: [],
+		});
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT canonical_name, source_id FROM entities WHERE agent_id = ? AND entity_type IN ('source_folder', 'source_document') ORDER BY source_id, canonical_name",
+					)
+					.all("test-agent") as Array<{ canonical_name: string; source_id: string }>,
+		);
+
+		expect(rows).toEqual([
+			{
+				canonical_name: "discord:discord:source-a:guild:123456789012345678",
+				source_id: "discord:source-a",
+			},
+			{
+				canonical_name: "discord:discord:source-a:guild:123456789012345678:channel:ch1",
+				source_id: "discord:source-a",
+			},
+			{
+				canonical_name: "discord:discord:source-a:guild:123456789012345678:channel:ch1:messages",
+				source_id: "discord:source-a",
+			},
+			{
+				canonical_name: "discord:discord:source-b:guild:123456789012345678",
+				source_id: "discord:source-b",
+			},
+			{
+				canonical_name: "discord:discord:source-b:guild:123456789012345678:channel:ch1",
+				source_id: "discord:source-b",
+			},
+			{
+				canonical_name: "discord:discord:source-b:guild:123456789012345678:channel:ch1:messages",
+				source_id: "discord:source-b",
+			},
+		]);
+	});
+
 	it("replaces stale participant links for a refreshed conversation", () => {
 		indexDiscordSourceStructure({
 			agentId: "test-agent",
@@ -212,7 +273,7 @@ describe("discord-source-graph", () => {
 			reconciledChannels: [
 				{
 					channelId: "ch2",
-					conversationPaths: ["discord:123456789012345678:ch2:thread:thread1"],
+					conversationPaths: ["discord:discord:test1234:guild:123456789012345678:channel:ch2:thread:thread1"],
 				},
 			],
 		});
@@ -228,10 +289,16 @@ describe("discord-source-graph", () => {
 
 		expect(entities).toEqual([
 			{ entity_type: "source", source_path: "discord:test1234" },
-			{ entity_type: "source_document", source_path: "discord:123456789012345678:ch2:thread:thread1" },
+			{
+				entity_type: "source_document",
+				source_path: "discord:discord:test1234:guild:123456789012345678:channel:ch2:thread:thread1",
+			},
 			{ entity_type: "source_document_reference", source_path: "discord:discord:test1234:user:u2" },
-			{ entity_type: "source_folder", source_path: "discord:123456789012345678" },
-			{ entity_type: "source_folder", source_path: "discord:123456789012345678:ch2" },
+			{ entity_type: "source_folder", source_path: "discord:discord:test1234:guild:123456789012345678" },
+			{
+				entity_type: "source_folder",
+				source_path: "discord:discord:test1234:guild:123456789012345678:channel:ch2",
+			},
 		]);
 	});
 });

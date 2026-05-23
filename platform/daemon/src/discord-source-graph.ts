@@ -44,18 +44,12 @@ function idFor(...parts: readonly string[]): string {
 	return `dcsrc_${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 28)}`;
 }
 
-function guildCanonical(guildId: string): string {
-	return `discord:${guildId}`;
+function guildCanonical(sourceId: string, guildId: string): string {
+	return `discord:${sourceId}:guild:${guildId}`;
 }
 
-function channelCanonical(guildId: string, channelId: string): string {
-	return `${guildCanonical(guildId)}:${channelId}`;
-}
-
-function conversationCanonical(guildId: string, channelId: string, threadId?: string): string {
-	return threadId
-		? `${channelCanonical(guildId, channelId)}:thread:${threadId}`
-		: `${channelCanonical(guildId, channelId)}:messages`;
+function channelCanonical(sourceId: string, guildId: string, channelId: string): string {
+	return `${guildCanonical(sourceId, guildId)}:channel:${channelId}`;
 }
 
 function deleteEntitiesById(db: WriteDb, entityIds: readonly string[]): void {
@@ -256,15 +250,15 @@ export function indexDiscordSourceStructure(input: IndexDiscordSourceStructureIn
 		});
 
 		const guildEntityId = idFor(input.agentId, input.sourceId, "guild", input.guildId);
-		const guildCanonical = `discord:${input.guildId}`;
+		const guildCanonicalName = guildCanonical(input.sourceId, input.guildId);
 		upsertEntity(db, {
 			id: guildEntityId,
 			name: input.guildName,
-			canonicalName: guildCanonical,
+			canonicalName: guildCanonicalName,
 			entityType: "source_folder",
 			agentId: input.agentId,
 			sourceId: input.sourceId,
-			sourcePath: `discord:${input.guildId}`,
+			sourcePath: guildCanonicalName,
 			now,
 		});
 		const guildCommunityId = idFor(input.agentId, input.sourceId, "community", input.guildId);
@@ -289,15 +283,15 @@ export function indexDiscordSourceStructure(input: IndexDiscordSourceStructureIn
 		});
 
 		const channelEntityId = idFor(input.agentId, input.sourceId, "channel", input.channelId);
-		const channelCanonical = `discord:${input.guildId}:${input.channelId}`;
+		const channelCanonicalName = channelCanonical(input.sourceId, input.guildId, input.channelId);
 		upsertEntity(db, {
 			id: channelEntityId,
 			name: `#${input.channelName}`,
-			canonicalName: channelCanonical,
+			canonicalName: channelCanonicalName,
 			entityType: "source_folder",
 			agentId: input.agentId,
 			sourceId: input.sourceId,
-			sourcePath: `discord:${input.guildId}:${input.channelId}`,
+			sourcePath: channelCanonicalName,
 			now,
 		});
 		db.prepare("UPDATE entities SET community_id = ? WHERE id = ?").run(guildCommunityId, channelEntityId);
@@ -325,8 +319,8 @@ export function indexDiscordSourceStructure(input: IndexDiscordSourceStructureIn
 			input.threadId ?? "main",
 		);
 		const documentCanonical = input.threadId
-			? `discord:${input.guildId}:${input.channelId}:thread:${input.threadId}`
-			: `discord:${input.guildId}:${input.channelId}:messages`;
+			? `${channelCanonicalName}:thread:${input.threadId}`
+			: `${channelCanonicalName}:messages`;
 		upsertEntity(db, {
 			id: documentEntityId,
 			name: `${threadLabel} (${input.messageCount} messages)`,
@@ -401,7 +395,7 @@ export function reconcileDiscordGuildStructure(input: ReconcileDiscordGuildStruc
 	const now = new Date().toISOString();
 	getDbAccessor().withWriteTx((db) => {
 		const currentChannelPaths = new Set(
-			input.currentChannelIds.map((channelId) => channelCanonical(input.guildId, channelId)),
+			input.currentChannelIds.map((channelId) => channelCanonical(input.sourceId, input.guildId, channelId)),
 		);
 		const staleChannelRows = db
 			.prepare(
@@ -416,8 +410,8 @@ export function reconcileDiscordGuildStructure(input: ReconcileDiscordGuildStruc
 			.all(
 				input.agentId,
 				input.sourceId,
-				`${guildCanonical(input.guildId)}:`,
-				`${guildCanonical(input.guildId)}:\uffff`,
+				`${guildCanonical(input.sourceId, input.guildId)}:`,
+				`${guildCanonical(input.sourceId, input.guildId)}:\uffff`,
 			) as Array<{
 			id: string;
 			source_path: string;
@@ -445,7 +439,7 @@ export function reconcileDiscordGuildStructure(input: ReconcileDiscordGuildStruc
 		}
 
 		for (const channel of input.reconciledChannels) {
-			const prefix = channelCanonical(input.guildId, channel.channelId);
+			const prefix = channelCanonical(input.sourceId, input.guildId, channel.channelId);
 			const currentConversationPaths = new Set(channel.conversationPaths);
 			const staleDocs = db
 				.prepare(

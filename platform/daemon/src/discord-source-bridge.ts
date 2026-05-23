@@ -161,7 +161,7 @@ export async function syncDiscordSource(
 							fetchEmbedding: options.fetchEmbedding,
 						});
 					}
-					conversationPaths.push(`discord:${guildId}:${channel.id}:messages`);
+					conversationPaths.push(`discord:${source.id}:guild:${guildId}:channel:${channel.id}:messages`);
 					totalIndexed++;
 				}
 
@@ -282,7 +282,7 @@ async function syncThreads(
 						fetchEmbedding: options.fetchEmbedding,
 					});
 				}
-				conversationPaths.push(`discord:${guildId}:${parentChannelId}:thread:${thread.id}`);
+				conversationPaths.push(`discord:${source.id}:guild:${guildId}:channel:${parentChannelId}:thread:${thread.id}`);
 				indexed++;
 			}
 		} catch (err) {
