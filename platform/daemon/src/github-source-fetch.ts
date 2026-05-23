@@ -535,7 +535,7 @@ export async function fetchDiscussions(
 				discussions(first: $first, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
 					pageInfo { hasNextPage endCursor }
 					nodes {
-						number title body url
+						number title body url closed
 						author { login }
 						labels(first: 20) { nodes { name } }
 						createdAt updatedAt
@@ -577,7 +577,7 @@ export async function fetchDiscussions(
 							number: number;
 							title: string;
 							body: string;
-							state: string;
+							closed: boolean;
 							url: string;
 							author: { login: string } | null;
 							labels: { nodes: Array<{ name: string }> };
@@ -603,7 +603,7 @@ export async function fetchDiscussions(
 				cursor = null;
 				break;
 			}
-			const discussionState = d.state.toLowerCase();
+			const discussionState = d.closed ? "closed" : "open";
 			if (state !== "all" && discussionState !== state) continue;
 			resources.push({
 				type: "discussion",

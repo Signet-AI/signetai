@@ -201,7 +201,7 @@ function makeDiscussionNode(number: number, state: string, updatedAt: string): R
 		number,
 		title: `Discussion ${number}`,
 		body: "",
-		state,
+		closed: state === "CLOSED",
 		url: `https://github.com/Signet-AI/signetai/discussions/${number}`,
 		author: { login: "alexmondello" },
 		labels: { nodes: [] },
