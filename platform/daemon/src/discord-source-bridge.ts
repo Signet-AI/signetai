@@ -152,7 +152,7 @@ export async function syncDiscordSource(
 					conversationPaths.push(`discord:${source.id}:guild:${guildId}:channel:${channel.id}:messages`);
 					totalIndexed++;
 				}
-				if (options.embeddingConfig && options.fetchEmbedding) {
+				if (options.embeddingConfig && options.fetchEmbedding && isSourceActive()) {
 					await indexDiscordSourceEmbeddings({
 						agentId,
 						sourceId: source.id,
@@ -164,6 +164,8 @@ export async function syncDiscordSource(
 						fetchEmbedding: options.fetchEmbedding,
 					});
 				}
+
+				if (!isSourceActive()) break;
 
 				if (settings.includeThreads) {
 					const threadResult = await syncThreads(
@@ -194,13 +196,15 @@ export async function syncDiscordSource(
 				});
 			}
 		}
-		reconcileDiscordGuildStructure({
-			agentId,
-			sourceId: source.id,
-			guildId,
-			currentChannelIds,
-			reconciledChannels,
-		});
+		if (isSourceActive()) {
+			reconcileDiscordGuildStructure({
+				agentId,
+				sourceId: source.id,
+				guildId,
+				currentChannelIds,
+				reconciledChannels,
+			});
+		}
 
 		logger.info("discord-source", "Guild sync complete", {
 			sourceId: source.id,
@@ -272,7 +276,7 @@ async function syncThreads(
 				conversationPaths.push(`discord:${source.id}:guild:${guildId}:channel:${parentChannelId}:thread:${thread.id}`);
 				indexed++;
 			}
-			if (options.embeddingConfig && options.fetchEmbedding) {
+			if (options.embeddingConfig && options.fetchEmbedding && isSourceActive()) {
 				await indexDiscordSourceEmbeddings({
 					agentId,
 					sourceId: source.id,

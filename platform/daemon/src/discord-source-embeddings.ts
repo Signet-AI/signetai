@@ -172,7 +172,6 @@ function sleep(ms: number): Promise<void> {
 export async function indexDiscordSourceEmbeddings(
 	input: IndexDiscordSourceEmbeddingsInput,
 ): Promise<IndexDiscordSourceEmbeddingsResult> {
-	if (input.embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0 };
 	const chunks = buildDiscordSourceChunks(input);
 	const currentHashes = new Set<string>();
 	const yielder = yieldEvery(1);
@@ -180,62 +179,64 @@ export async function indexDiscordSourceEmbeddings(
 	let skipped = 0;
 	const now = new Date().toISOString();
 
-	for (const chunk of chunks) {
-		const contentHash = hash(`${input.agentId}\n${chunk.id}\n${chunk.chunkText}`);
-		currentHashes.add(contentHash);
-		if (existingChunkEmbeddingContentHash(input.agentId, chunk.id) === contentHash) {
-			skipped++;
-			await yielder();
-			await sleep(DISCORD_SOURCE_CHUNK_DELAY_MS);
-			continue;
-		}
-		const vector = await input.fetchEmbedding(chunk.chunkText, input.embeddingConfig);
-		if (!vector || vector.length === 0) {
-			skipped++;
-			await yielder();
-			await sleep(DISCORD_SOURCE_CHUNK_DELAY_MS);
-			continue;
-		}
-		getDbAccessor().withWriteTx((db) => {
-			const embId = hash(`${DISCORD_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
-			const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
-				| { content_hash: string }
-				| undefined;
-			if (existingForId && existingForId.content_hash !== contentHash) {
-				syncVecDeleteByEmbeddingIds(db, [embId]);
-				db.prepare("DELETE FROM embeddings WHERE id = ?").run(embId);
+	if (input.embeddingConfig.provider !== "none") {
+		for (const chunk of chunks) {
+			const contentHash = hash(`${input.agentId}\n${chunk.id}\n${chunk.chunkText}`);
+			currentHashes.add(contentHash);
+			if (existingChunkEmbeddingContentHash(input.agentId, chunk.id) === contentHash) {
+				skipped++;
+				await yielder();
+				await sleep(DISCORD_SOURCE_CHUNK_DELAY_MS);
+				continue;
 			}
-			db.prepare(
-				`INSERT INTO embeddings
-				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-				 ON CONFLICT(content_hash) DO UPDATE SET
-				   vector = excluded.vector,
-				   dimensions = excluded.dimensions,
-				   source_type = excluded.source_type,
-				   source_id = excluded.source_id,
-				   chunk_text = excluded.chunk_text,
-				   created_at = excluded.created_at,
-				   agent_id = excluded.agent_id`,
-			).run(
-				embId,
-				contentHash,
-				vectorToBlob(vector),
-				vector.length,
-				DISCORD_CHUNK_SOURCE_TYPE,
-				chunk.id,
-				chunk.chunkText,
-				now,
-				input.agentId,
-			);
-			const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-				| { id: string }
-				| undefined;
-			syncVecInsert(db, stored?.id ?? embId, vector);
-		});
-		embedded++;
-		await yielder();
-		await sleep(DISCORD_SOURCE_CHUNK_DELAY_MS);
+			const vector = await input.fetchEmbedding(chunk.chunkText, input.embeddingConfig);
+			if (!vector || vector.length === 0) {
+				skipped++;
+				await yielder();
+				await sleep(DISCORD_SOURCE_CHUNK_DELAY_MS);
+				continue;
+			}
+			getDbAccessor().withWriteTx((db) => {
+				const embId = hash(`${DISCORD_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
+				const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
+					| { content_hash: string }
+					| undefined;
+				if (existingForId && existingForId.content_hash !== contentHash) {
+					syncVecDeleteByEmbeddingIds(db, [embId]);
+					db.prepare("DELETE FROM embeddings WHERE id = ?").run(embId);
+				}
+				db.prepare(
+					`INSERT INTO embeddings
+					 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+					 ON CONFLICT(content_hash) DO UPDATE SET
+					   vector = excluded.vector,
+					   dimensions = excluded.dimensions,
+					   source_type = excluded.source_type,
+					   source_id = excluded.source_id,
+					   chunk_text = excluded.chunk_text,
+					   created_at = excluded.created_at,
+					   agent_id = excluded.agent_id`,
+				).run(
+					embId,
+					contentHash,
+					vectorToBlob(vector),
+					vector.length,
+					DISCORD_CHUNK_SOURCE_TYPE,
+					chunk.id,
+					chunk.chunkText,
+					now,
+					input.agentId,
+				);
+				const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+					| { id: string }
+					| undefined;
+				syncVecInsert(db, stored?.id ?? embId, vector);
+			});
+			embedded++;
+			await yielder();
+			await sleep(DISCORD_SOURCE_CHUNK_DELAY_MS);
+		}
 	}
 
 	const prefix = `${threadPrefix(input.sourceId, input.guildId, input.channelId, input.threadId)}#`;

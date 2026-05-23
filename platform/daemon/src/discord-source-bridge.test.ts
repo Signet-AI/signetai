@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SignetSourceEntry } from "../../core/src/sources-config";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { vectorToBlob } from "./db-helpers";
 import { syncDiscordSource } from "./discord-source-bridge";
 import { putSecret, resetSecretExecJobsForTests } from "./secrets.js";
 
@@ -76,7 +77,7 @@ describe("syncDiscordSource", () => {
 		expect(result).toEqual({ indexed: 0, syncedGuilds: 1 });
 	});
 
-	it("purges stale channel embeddings when a refreshed channel becomes empty", async () => {
+	it("purges stale channel embeddings when a refreshed channel becomes empty or embeddings are disabled", async () => {
 		await putSecret("DISCORD_BOT_TOKEN", "discord-secret");
 		const source: SignetSourceEntry = {
 			id: "discord:test",
@@ -94,7 +95,6 @@ describe("syncDiscordSource", () => {
 			},
 		};
 
-		let fetchRound = 0;
 		globalThis.fetch = mock((input: string | URL | Request) => {
 			const url = String(input);
 			if (url.endsWith("/guilds/123456789012345678")) {
@@ -110,23 +110,7 @@ describe("syncDiscordSource", () => {
 				return Promise.resolve(Response.json({ threads: [], has_more: false }));
 			}
 			if (url.includes("/channels/channel1/messages")) {
-				fetchRound++;
-				return Promise.resolve(
-					Response.json(
-						fetchRound === 1
-							? [
-									{
-										id: "999999999999999999",
-										type: 0,
-										content: "hello world from discord",
-										author: { id: "u1", username: "alice" },
-										timestamp: "2026-05-23T16:00:00.000Z",
-										channel_id: "channel1",
-									},
-								]
-							: [],
-					),
-				);
+				return Promise.resolve(Response.json([]));
 			}
 			throw new Error(`Unexpected fetch: ${url}`);
 		}) as typeof fetch;
@@ -138,7 +122,23 @@ describe("syncDiscordSource", () => {
 		} as const;
 		const fetchEmbedding = async () => [0.1, 0.2, 0.3];
 
-		await syncDiscordSource(source, { agentsDir, embeddingConfig, fetchEmbedding });
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"stale-discord-embedding",
+				"stale-discord-hash",
+				vectorToBlob([0.1, 0.2, 0.3]),
+				3,
+				"source_discord_chunk",
+				"discord:test:guild:123456789012345678:channel:channel1:messages#old:0",
+				"stale Discord source chunk",
+				"2026-05-23T16:00:00.000Z",
+				"default",
+			);
+		});
 		let rows = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT id FROM embeddings WHERE source_type = 'source_discord_chunk'").all() as Array<{
@@ -147,7 +147,11 @@ describe("syncDiscordSource", () => {
 		);
 		expect(rows).toHaveLength(1);
 
-		await syncDiscordSource(source, { agentsDir, embeddingConfig, fetchEmbedding });
+		await syncDiscordSource(source, {
+			agentsDir,
+			embeddingConfig: { ...embeddingConfig, provider: "none" },
+			fetchEmbedding,
+		});
 		rows = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT id FROM embeddings WHERE source_type = 'source_discord_chunk'").all() as Array<{
