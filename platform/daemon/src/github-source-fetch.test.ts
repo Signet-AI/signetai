@@ -68,19 +68,22 @@ describe("expandRepoGlob", () => {
 });
 
 describe("fetchIssues", () => {
-	test("bounds issue scanning even when the issues endpoint returns PR rows", async () => {
+	test("keeps fetching until it indexes the requested number of issues even when pages include PR rows", async () => {
 		let requests = 0;
 		globalThis.fetch = (async (input) => {
 			requests++;
 			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			const page = Number(new URL(url).searchParams.get("page") ?? "1");
 			const perPage = Number(new URL(url).searchParams.get("per_page") ?? "100");
+			const rows =
+				page === 1
+					? [
+							makeIssueRow(1, false),
+							...Array.from({ length: 99 }, (_, index) => makeIssueRow(index + 2, true)),
+						]
+					: [makeIssueRow(5, false)];
 			return new Response(
-				JSON.stringify([
-					makeIssueRow(1, false),
-					makeIssueRow(2, true),
-					makeIssueRow(3, true),
-					makeIssueRow(4, false),
-				].slice(0, perPage)),
+				JSON.stringify(rows.slice(0, perPage)),
 				{
 					status: 200,
 					headers: {
@@ -94,8 +97,29 @@ describe("fetchIssues", () => {
 
 		const result = await fetchIssues({ owner: "Signet-AI", repo: "signetai" }, undefined, "all", 2);
 
-		expect(requests).toBe(1);
-		expect(result.resources.map((resource) => resource.number)).toEqual([1]);
+		expect(requests).toBe(2);
+		expect(result.resources.map((resource) => resource.number)).toEqual([1, 5]);
+	});
+
+	test("reports a bounded partial result when PR rows exhaust the scan budget", async () => {
+		let requests = 0;
+		globalThis.fetch = (async () => {
+			requests++;
+			return new Response(JSON.stringify(Array.from({ length: 100 }, (_, index) => makeIssueRow(index + 1, true))), {
+				status: 200,
+				headers: {
+					"content-type": "application/json",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "0",
+				},
+			});
+		}) as typeof fetch;
+
+		const result = await fetchIssues({ owner: "Signet-AI", repo: "signetai" }, undefined, "all", 2);
+
+		expect(requests).toBe(5);
+		expect(result.resources).toHaveLength(0);
+		expect(result.errors[0]?.message).toContain("scan budget exhausted");
 	});
 });
 

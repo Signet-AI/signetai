@@ -137,6 +137,9 @@ const MAX_COMMENTS_PER_RESOURCE = 200;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
+const MAX_ISSUE_SCAN_MULTIPLIER = 5;
+const MAX_ISSUE_SCAN_FLOOR = PER_PAGE * 5;
+const MAX_ISSUE_SCAN_CEILING = PER_PAGE * 20;
 
 interface GitHubApiResponse {
 	readonly status: number;
@@ -285,11 +288,15 @@ export async function fetchIssues(
 	let page = 1;
 	let fetched = 0;
 	let scanned = 0;
+	const maxScanned = Math.min(
+		Math.max(maxItems * MAX_ISSUE_SCAN_MULTIPLIER, MAX_ISSUE_SCAN_FLOOR),
+		MAX_ISSUE_SCAN_CEILING,
+	);
 
-	while (scanned < maxItems) {
+	while (fetched < maxItems && scanned < maxScanned) {
 		const params = new URLSearchParams({
 			state,
-			per_page: String(Math.min(PER_PAGE, maxItems - scanned)),
+			per_page: String(Math.min(PER_PAGE, maxScanned - scanned)),
 			sort: "updated",
 			direction: "desc",
 			page: String(page),
@@ -332,10 +339,16 @@ export async function fetchIssues(
 				},
 			});
 			fetched++;
-			if (scanned >= maxItems) break;
+			if (fetched >= maxItems) break;
 		}
 		if (issues.length < PER_PAGE) break;
 		page++;
+	}
+	if (fetched < maxItems && scanned >= maxScanned) {
+		errors.push({
+			message: `Issues fetch scan budget exhausted before reaching maxItems (${fetched}/${maxItems} indexed, ${scanned} scanned)`,
+			retryable: false,
+		});
 	}
 	return { resources, rateLimitRemaining, rateLimitReset, errors };
 }
