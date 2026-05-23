@@ -218,6 +218,7 @@ export interface PipelineExtractionConfig {
 		| "codex"
 		| "anthropic"
 		| "openrouter"
+		| "openai-compatible"
 		| "command";
 	readonly fallbackProvider?: "llama-cpp" | "ollama" | "none";
 	readonly allowRemoteProviders?: boolean;
@@ -401,7 +402,8 @@ export interface PipelineSynthesisConfig {
 		| "codex"
 		| "opencode"
 		| "anthropic"
-		| "openrouter";
+		| "openrouter"
+		| "openai-compatible";
 	readonly model: string;
 	readonly endpoint?: string;
 	readonly timeout: number;

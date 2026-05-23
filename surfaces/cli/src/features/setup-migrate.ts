@@ -76,6 +76,7 @@ export async function runExistingSetupWizard(
 		embeddingModel?: string;
 		extractionProvider?: ExtractionProviderChoice;
 		extractionModel?: string;
+		extractionEndpoint?: string;
 		availableExtractionProviders?: readonly ExtractionProviderChoice[];
 		acpxBin?: string;
 		signetSecretsEnabled?: boolean;
@@ -237,7 +238,7 @@ export async function runExistingSetupWizard(
 					? defaultAcpxModel(detectedHarnesses, options.availableExtractionProviders)
 					: defaultExtractionModel(options.extractionProvider));
 			const memory = readRecord(config.memory);
-			memory.pipelineV2 = buildSetupPipeline(options.extractionProvider, model);
+			memory.pipelineV2 = buildSetupPipeline(options.extractionProvider, model, options.extractionEndpoint);
 			config.memory = memory;
 			const inference = buildSetupInference(
 				options.extractionProvider,

@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import type { LlmProvider, PipelineProviderChoice, SynthesisProviderChoice } from "@signet/core";
-import { defaultPipelineModel, isPipelineProvider, isSynthesisProvider } from "@signet/core";
+import { defaultPipelineModel, isLocalInferenceEndpoint, isPipelineProvider, isSynthesisProvider } from "@signet/core";
 import { which } from "../which";
 import {
 	createAnthropicProvider,
 	createClaudeCodeProvider,
 	createCodexProvider,
 	createOllamaProvider,
+	createOpenAiCompatibleProvider,
 	createOpenCodeProvider,
 	createOpenRouterProvider,
 } from "./provider";
@@ -17,6 +18,7 @@ export type RuntimeSynthesisProviderName = SynthesisProviderChoice;
 export type RuntimeProviderStatus = "active" | "degraded" | "blocked" | "disabled" | "paused";
 
 type CliPreflightResult = "ok" | "missing" | "failed";
+const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
 
 export interface RuntimeProviderFactoryOptions {
 	readonly role: RuntimeRole;
@@ -29,8 +31,10 @@ export interface RuntimeProviderFactoryOptions {
 	readonly ollamaFallbackMaxContextTokens: number;
 	readonly openCodeBaseUrl: string;
 	readonly openRouterBaseUrl: string;
+	readonly openAiCompatibleBaseUrl?: string;
 	readonly anthropicApiKey?: string;
 	readonly openRouterApiKey?: string;
+	readonly openAiCompatibleApiKey?: string;
 	readonly openRouterReferer?: string;
 	readonly openRouterTitle?: string;
 }
@@ -40,6 +44,7 @@ export interface RuntimeEndpoints {
 	readonly ollamaFallbackBaseUrl: string;
 	readonly openCodeBaseUrl: string;
 	readonly openRouterBaseUrl: string;
+	readonly openAiCompatibleBaseUrl: string;
 	readonly openCodeShouldManage: boolean;
 }
 
@@ -55,6 +60,7 @@ export interface RuntimeStartupOptions {
 	readonly ollamaFallbackMaxContextTokens: number;
 	readonly anthropicApiKey?: string;
 	readonly openRouterApiKey?: string;
+	readonly openAiCompatibleApiKey?: string;
 	readonly openRouterReferer?: string;
 	readonly openRouterTitle?: string;
 	readonly ensureOpenCodeServer?: (port: number) => Promise<boolean>;
@@ -117,6 +123,7 @@ export function resolveRuntimeEndpoints(
 		ollamaFallbackBaseUrl: configuredProvider === "opencode" ? "http://127.0.0.1:11434" : ollamaBaseUrl,
 		openCodeBaseUrl,
 		openRouterBaseUrl: normalizeRuntimeBaseUrl(endpoint, "https://openrouter.ai/api/v1"),
+		openAiCompatibleBaseUrl: normalizeRuntimeBaseUrl(endpoint, DEFAULT_OPENAI_COMPATIBLE_BASE_URL),
 		openCodeShouldManage: isManagedOpenCodeLocalEndpoint(openCodeBaseUrl),
 	};
 }
@@ -128,6 +135,7 @@ export function resolveRuntimeEndpointForLogs(
 	if (provider === "ollama") return endpoints.ollamaFallbackBaseUrl;
 	if (provider === "opencode") return endpoints.openCodeBaseUrl;
 	if (provider === "openrouter") return endpoints.openRouterBaseUrl;
+	if (provider === "openai-compatible") return endpoints.openAiCompatibleBaseUrl;
 	return undefined;
 }
 
@@ -165,6 +173,17 @@ export function createRuntimeProvider(opts: RuntimeProviderFactoryOptions): LlmP
 			baseUrl: opts.openRouterBaseUrl,
 			referer: opts.openRouterReferer,
 			title: opts.openRouterTitle,
+			defaultTimeoutMs: opts.timeoutMs,
+		});
+	}
+	if (opts.effectiveProvider === "openai-compatible") {
+		const baseUrl = opts.openAiCompatibleBaseUrl ?? DEFAULT_OPENAI_COMPATIBLE_BASE_URL;
+		if (!isLocalInferenceEndpoint(baseUrl) && !opts.openAiCompatibleApiKey) return null;
+		return createOpenAiCompatibleProvider({
+			name: `openai-compatible:${model || defaultPipelineModel("openai-compatible")}`,
+			model: model || defaultPipelineModel("openai-compatible"),
+			baseUrl,
+			apiKey: opts.openAiCompatibleApiKey,
 			defaultTimeoutMs: opts.timeoutMs,
 		});
 	}
@@ -216,8 +235,10 @@ function createRuntimeProviderFromStartupOptions(
 		ollamaFallbackMaxContextTokens: opts.ollamaFallbackMaxContextTokens,
 		openCodeBaseUrl: opts.endpoints.openCodeBaseUrl,
 		openRouterBaseUrl: opts.endpoints.openRouterBaseUrl,
+		openAiCompatibleBaseUrl: opts.endpoints.openAiCompatibleBaseUrl,
 		anthropicApiKey: opts.anthropicApiKey,
 		openRouterApiKey: opts.openRouterApiKey,
+		openAiCompatibleApiKey: opts.openAiCompatibleApiKey,
 		openRouterReferer: opts.openRouterReferer,
 		openRouterTitle: opts.openRouterTitle,
 	});
@@ -298,6 +319,10 @@ export async function resolveRuntimeProviderStartup(opts: RuntimeStartupOptions)
 	} else if (effectiveProvider === "openrouter") {
 		if (!opts.openRouterApiKey) {
 			markUnavailable(`OPENROUTER_API_KEY not found for ${opts.role} startup preflight`);
+		}
+	} else if (effectiveProvider === "openai-compatible") {
+		if (!isLocalInferenceEndpoint(opts.endpoints.openAiCompatibleBaseUrl) && !opts.openAiCompatibleApiKey) {
+			markUnavailable(`OPENAI_API_KEY not found for remote OpenAI-compatible ${opts.role} startup preflight`);
 		}
 	} else if (effectiveProvider === "claude-code") {
 		const cliResult = await preflightCliCommand("claude", { SIGNET_NO_HOOKS: "1" });

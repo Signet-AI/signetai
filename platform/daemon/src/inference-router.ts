@@ -15,6 +15,7 @@ import type {
 import {
 	allTargetRefs,
 	compileLegacyRoutingConfig,
+	isLocalInferenceEndpoint,
 	parseRoutingConfig,
 	parseRoutingTargetRef,
 	parseYamlDocument,
@@ -155,16 +156,6 @@ interface SnapshotCacheEntry {
 interface ObservedRuntimeOverride {
 	readonly state: RoutingRuntimeState;
 	readonly expiresAt: number;
-}
-
-function isLocalBaseUrl(value: string | undefined): boolean {
-	if (!value) return true;
-	try {
-		const url = new URL(value);
-		return ["127.0.0.1", "localhost", "::1"].includes(url.hostname);
-	} catch {
-		return false;
-	}
 }
 
 function normalizePromptPreview(prompt: string): string {
@@ -613,7 +604,7 @@ export class InferenceRouter {
 		const needsCredential =
 			target.executor === "anthropic" ||
 			target.executor === "openrouter" ||
-			(target.executor === "openai-compatible" && !isLocalBaseUrl(target.endpoint));
+			(target.executor === "openai-compatible" && !isLocalInferenceEndpoint(target.endpoint));
 		if (target.account && !account) {
 			return {
 				available: false,

@@ -13,6 +13,7 @@ interface SetupOptions {
 	embeddingModel?: string;
 	extractionProvider?: string;
 	extractionModel?: string;
+	extractionEndpoint?: string;
 	searchBalance?: string;
 	openclawRuntimePath?: string;
 	configureOpenclawWorkspace?: boolean;
@@ -71,9 +72,10 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--embedding-model <model>", "Embedding model in non-interactive mode")
 		.option(
 			"--extraction-provider <provider>",
-			"Extraction provider in non-interactive mode (claude-code, codex, llama-cpp, ollama, opencode, openrouter, none)",
+			"Extraction provider in non-interactive mode (claude-code, codex, llama-cpp, ollama, opencode, openrouter, openai-compatible, none)",
 		)
 		.option("--extraction-model <model>", "Extraction model in non-interactive mode")
+		.option("--extraction-endpoint <url>", "OpenAI-compatible extraction endpoint in non-interactive mode")
 		.option("--search-balance <alpha>", "Search balance alpha in non-interactive mode (0-1)")
 		.option("--openclaw-runtime-path <mode>", "OpenClaw runtime path in non-interactive mode (plugin, legacy)")
 		.option(

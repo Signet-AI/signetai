@@ -15,6 +15,7 @@ export const PIPELINE_PROVIDER_CHOICES = [
 	"opencode",
 	"anthropic",
 	"openrouter",
+	"openai-compatible",
 	"command",
 ] as const;
 

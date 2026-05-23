@@ -20,11 +20,13 @@ import { defaultPipelineModel } from "@signet/core/pipeline-providers";
 import {
 	ACPX_DASHBOARD_AGENT_OPTIONS,
 	type AcpxDashboardAgent,
+	DEFAULT_OPENAI_COMPATIBLE_ENDPOINT,
 	applyAcpxDashboardSetup,
 	defaultAcpxDashboardAgent,
 	defaultAcpxDashboardModel,
 	hasExplicitSynthesisConfig,
 	hasExplicitSynthesisProvider,
+	resolveExtractionEndpoint,
 	resolveSynthesisEnabled,
 	resolveSynthesisEndpoint,
 	resolveSynthesisModel,
@@ -51,6 +53,7 @@ const EXTRACTION_PROVIDER_OPTIONS = [
 	{ value: "opencode", label: "opencode" },
 	{ value: "anthropic", label: "anthropic" },
 	{ value: "openrouter", label: "openrouter" },
+	{ value: "openai-compatible", label: "openai-compatible" },
 ] as const;
 
 function getModelPresets(provider: string): Array<{ value: string; label: string }> {
@@ -94,6 +97,9 @@ function pickPreferredModel(provider: string, presets: Array<{ value: string; la
 			""
 		);
 	}
+	if (provider === "openai-compatible") {
+		return vals.find((v) => v.toLowerCase().includes("mini")) ?? vals[0] ?? "";
+	}
 	return vals[0] ?? "";
 }
 
@@ -116,7 +122,9 @@ function extractionModelSelectValue(): string {
 }
 
 function isKnownPreset(model: string): boolean {
-	return EXTRACTION_PROVIDER_OPTIONS.some((option) => getModelPresets(option.value).some((preset) => preset.value === model));
+	return EXTRACTION_PROVIDER_OPTIONS.some((option) =>
+		getModelPresets(option.value).some((preset) => preset.value === model),
+	);
 }
 
 function isKnownProvider(provider: string): provider is Parameters<typeof defaultPipelineModel>[0] {
@@ -133,12 +141,22 @@ function extractionModel(): string {
 	return st.aStr(["memory", "pipelineV2", "extractionModel"]);
 }
 
+function extractionEndpoint(): string {
+	return resolveExtractionEndpoint(st.agent);
+}
+
 function extractionDisabled(): boolean {
 	return extractionProvider() === "none";
 }
 
 function providerRisky(provider: string): boolean {
-	return provider === "acpx" || provider === "anthropic" || provider === "openrouter" || provider === "opencode";
+	return (
+		provider === "acpx" ||
+		provider === "anthropic" ||
+		provider === "openrouter" ||
+		provider === "openai-compatible" ||
+		provider === "opencode"
+	);
 }
 
 function extractionProviderRisky(): boolean {
@@ -243,11 +261,19 @@ function setSelect(path: string[]) {
 function setExtractionProvider(v: string | undefined): void {
 	const nextProvider = v ?? "";
 	const currentModel = st.aStr(["memory", "pipelineV2", "extractionModel"]);
+	const currentEndpoint =
+		st.aStr(["memory", "pipelineV2", "extractionEndpoint"]) ||
+		st.aStr(["memory", "pipelineV2", "extractionBaseUrl"]) ||
+		st.aStr(["memory", "pipelineV2", "extraction", "endpoint"]) ||
+		st.aStr(["memory", "pipelineV2", "extraction", "base_url"]);
 	customModelActive = false;
 	st.aSetStr(["memory", "pipelineV2", "extractionProvider"], nextProvider);
 	if (!nextProvider) {
 		st.aSetStr(["memory", "pipelineV2", "extractionModel"], "");
 		return;
+	}
+	if (nextProvider === "openai-compatible" && !currentEndpoint) {
+		st.aSetStr(["memory", "pipelineV2", "extractionEndpoint"], DEFAULT_OPENAI_COMPATIBLE_ENDPOINT);
 	}
 	if (!currentModel || isKnownPreset(currentModel)) {
 		st.aSetStr(["memory", "pipelineV2", "extractionModel"], defaultModelForProvider(nextProvider));
@@ -398,7 +424,7 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 			<Switch checked={st.aBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[0].key])} onCheckedChange={setBool(["memory", "pipelineV2", PIPELINE_CORE_BOOLS[0].key])} />
 		</FormField>
 
-		<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses Claude Code CLI; codex uses the local Codex CLI; opencode uses the OpenCode server; anthropic uses direct API; openrouter uses the OpenRouter API.">
+		<FormField label="Extraction provider" description="LLM backend for fact extraction. Ollama runs locally; claude-code uses Claude Code CLI; codex uses the local Codex CLI; opencode uses the OpenCode server; anthropic, openrouter, and openai-compatible use direct APIs.">
 			<div class="flex flex-col gap-2">
 				<Select.Root
 					type="single"
@@ -452,6 +478,12 @@ const ADVANCED_FEATURE_KEYS = ["autonomousFrozen"] as const;
 				{/if}
 			</div>
 		</FormField>
+
+		{#if extractionProvider() === "openai-compatible"}
+			<FormField label="Extraction endpoint" description="OpenAI-compatible /v1 endpoint for extraction. Loopback endpoints are treated as local; remote gateways use OPENAI_API_KEY.">
+				<Input value={extractionEndpoint()} oninput={setStr(["memory", "pipelineV2", "extractionEndpoint"])} placeholder={DEFAULT_OPENAI_COMPATIBLE_ENDPOINT} />
+			</FormField>
+		{/if}
 
 		<FormField label="Session synthesis" description="Provider used by the summary-worker for session summaries. This is separate from fact extraction once explicitly configured.">
 			<div class="flex flex-col gap-2">

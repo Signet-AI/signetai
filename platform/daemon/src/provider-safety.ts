@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { type PipelineProviderChoice, isPipelineProvider } from "@signet/core";
+import { type PipelineProviderChoice, isLocalInferenceEndpoint, isPipelineProvider } from "@signet/core";
 import { parse, stringify } from "yaml";
 import { logger } from "./logger.js";
 
@@ -37,12 +37,23 @@ export interface ProviderTransitionAuditEntry {
 
 export interface ProviderSafetySnapshot {
 	readonly extractionProvider?: string;
+	readonly extractionEndpoint?: string;
 	readonly synthesisProvider?: string;
+	readonly synthesisEndpoint?: string;
 	readonly allowRemoteProviders: boolean;
 	readonly allowRemoteProvidersExplicit: boolean;
 }
 
-const REMOTE_PROVIDERS = new Set(["acpx", "claude-code", "codex", "opencode", "anthropic", "openrouter", "command"]);
+const REMOTE_PROVIDERS = new Set([
+	"acpx",
+	"claude-code",
+	"codex",
+	"opencode",
+	"anthropic",
+	"openrouter",
+	"openai-compatible",
+	"command",
+]);
 const LOCAL_PROVIDERS = new Set(["none", "llama-cpp", "ollama"]);
 const AUDIT_FILE = ".daemon/provider-transitions.json";
 
@@ -72,11 +83,20 @@ export function isRemotePipelineProvider(provider: string | undefined | null): b
 	return provider !== undefined && provider !== null && REMOTE_PROVIDERS.has(provider);
 }
 
+export function isRemotePipelineProviderForEndpoint(
+	provider: string | undefined | null,
+	endpoint: string | undefined,
+): boolean {
+	if (provider === "openai-compatible") return !isLocalInferenceEndpoint(endpoint);
+	return isRemotePipelineProvider(provider);
+}
+
 export function providerFallbackForLock(
 	provider: PipelineProviderChoice,
 	fallback: "llama-cpp" | "ollama" | "none" | undefined,
+	endpoint?: string,
 ): PipelineProviderChoice {
-	return isRemotePipelineProvider(provider) ? (fallback ?? "none") : provider;
+	return isRemotePipelineProviderForEndpoint(provider, endpoint) ? (fallback ?? "none") : provider;
 }
 
 export function readProviderSafetySnapshot(content: string): ProviderSafetySnapshot {
@@ -87,7 +107,10 @@ export function readProviderSafetySnapshot(content: string): ProviderSafetySnaps
 	const synthesis = asRecord(pipeline?.synthesis);
 	const flatExtraction = readProvider(pipeline?.extractionProvider);
 	const nestedExtraction = readProvider(extraction?.provider);
+	const flatExtractionEndpoint = readString(pipeline?.extractionEndpoint) ?? readString(pipeline?.extractionBaseUrl);
+	const nestedExtractionEndpoint = readString(extraction?.endpoint) ?? readString(extraction?.base_url);
 	const synthesisProvider = readProvider(synthesis?.provider);
+	const synthesisEndpoint = readString(synthesis?.endpoint) ?? readString(synthesis?.base_url);
 	const explicitAllowRemote =
 		typeof pipeline?.allowRemoteProviders === "boolean" || typeof extraction?.allowRemoteProviders === "boolean";
 	const topLevelRemote =
@@ -104,7 +127,9 @@ export function readProviderSafetySnapshot(content: string): ProviderSafetySnaps
 	const allowRemoteProviders = topLevelRemote ?? extractionRemote ?? true;
 	return {
 		extractionProvider: flatExtraction ?? nestedExtraction,
+		extractionEndpoint: flatExtractionEndpoint ?? nestedExtractionEndpoint,
 		synthesisProvider,
+		synthesisEndpoint,
 		allowRemoteProviders,
 		allowRemoteProvidersExplicit: explicitAllowRemote,
 	};
@@ -115,9 +140,9 @@ export function validateProviderSafety(content: string): { ok: true } | { ok: fa
 	if (!snapshot) return { ok: false, error: "Invalid YAML config" };
 	if (snapshot.allowRemoteProviders) return { ok: true };
 	const blocked = [
-		["extraction", snapshot.extractionProvider],
-		["synthesis", snapshot.synthesisProvider],
-	].filter(([, provider]) => isRemotePipelineProvider(provider));
+		["extraction", snapshot.extractionProvider, snapshot.extractionEndpoint],
+		["synthesis", snapshot.synthesisProvider, snapshot.synthesisEndpoint],
+	].filter(([, provider, endpoint]) => isRemotePipelineProviderForEndpoint(provider, endpoint));
 	if (blocked.length === 0) return { ok: true };
 	const parts = blocked.map(([role, provider]) => `${role} provider '${provider}'`);
 	return {
@@ -158,6 +183,7 @@ export function detectProviderTransitions(
 	];
 	for (const [role, from, to] of pairs) {
 		if (!to || from === to) continue;
+		const endpoint = role === "extraction" ? after.extractionEndpoint : after.synthesisEndpoint;
 		entries.push({
 			role,
 			from: from ?? null,
@@ -165,7 +191,7 @@ export function detectProviderTransitions(
 			timestamp,
 			source,
 			actor,
-			risky: (from === undefined || LOCAL_PROVIDERS.has(from)) && isRemotePipelineProvider(to),
+			risky: (from === undefined || LOCAL_PROVIDERS.has(from)) && isRemotePipelineProviderForEndpoint(to, endpoint),
 		});
 	}
 	return entries;

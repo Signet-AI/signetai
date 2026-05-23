@@ -5,6 +5,8 @@ import {
 	isPipelineProvider,
 } from "@signet/core/pipeline-providers";
 
+export const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:1234/v1";
+
 function toRecord(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 		? Object.fromEntries(Object.entries(value))
@@ -68,6 +70,18 @@ export function hasExplicitSynthesisConfig(agent: unknown): boolean {
 export function hasExplicitSynthesisProvider(agent: unknown): boolean {
 	const pipeline = readPipeline(agent);
 	return isPipelineProvider(readString(pipeline, "synthesis", "provider"));
+}
+
+export function resolveExtractionEndpoint(agent: unknown): string {
+	const pipeline = readPipeline(agent);
+	const explicit =
+		readString(pipeline, "extractionEndpoint") ??
+		readString(pipeline, "extractionBaseUrl") ??
+		readString(pipeline, "extraction", "endpoint") ??
+		readString(pipeline, "extraction", "base_url");
+	if (explicit) return explicit;
+	const provider = readString(pipeline, "extractionProvider") ?? readString(pipeline, "extraction", "provider");
+	return provider === "openai-compatible" ? DEFAULT_OPENAI_COMPATIBLE_ENDPOINT : "";
 }
 
 export function resolveSynthesisProvider(agent: unknown): PipelineProviderChoice {

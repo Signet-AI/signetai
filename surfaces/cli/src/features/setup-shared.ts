@@ -13,7 +13,16 @@ export type HarnessChoice =
 	| "hermes-agent"
 	| "gemini";
 export type EmbeddingProviderChoice = "native" | "llama-cpp" | "ollama" | "openai" | "none";
-export type ExtractionProviderChoice = "acpx" | "claude-code" | "llama-cpp" | "ollama" | "opencode" | "codex" | "openrouter" | "none";
+export type ExtractionProviderChoice =
+	| "acpx"
+	| "claude-code"
+	| "llama-cpp"
+	| "ollama"
+	| "opencode"
+	| "codex"
+	| "openrouter"
+	| "openai-compatible"
+	| "none";
 export type OpenClawRuntimeChoice = "plugin" | "legacy";
 export type DeploymentTypeChoice = "local" | "vps" | "server";
 export interface ResolveSetupExtractionProviderOptions {
@@ -46,6 +55,7 @@ export const EXTRACTION_PROVIDER_CHOICES: readonly ExtractionProviderChoice[] = 
 	"opencode",
 	"codex",
 	"openrouter",
+	"openai-compatible",
 	"none",
 ];
 export const OPENCLAW_RUNTIME_CHOICES: readonly OpenClawRuntimeChoice[] = ["plugin", "legacy"];

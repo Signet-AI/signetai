@@ -67,6 +67,23 @@ describe("buildSetupPipeline", () => {
 		});
 	});
 
+	it("writes the selected endpoint into extraction and synthesis config", () => {
+		expect(
+			buildSetupPipeline("openai-compatible", "openai/gpt-oss-20b", "https://gateway.example.test/v1"),
+		).toMatchObject({
+			extraction: {
+				provider: "openai-compatible",
+				model: "openai/gpt-oss-20b",
+				endpoint: "https://gateway.example.test/v1",
+			},
+			synthesis: {
+				provider: "openai-compatible",
+				model: "openai/gpt-oss-20b",
+				endpoint: "https://gateway.example.test/v1",
+			},
+		});
+	});
+
 	it("does not invent a generic ACPX model when no harness agent is known", () => {
 		expect(buildSetupPipeline("acpx").extraction.model).toBe("");
 		expect(buildSetupPipeline("acpx").synthesis?.model).toBe("");
@@ -80,17 +97,13 @@ describe("buildSetupInference", () => {
 		expect(defaultAcpxModel(["claude-code"], ["acpx"])).toBe("haiku");
 
 		expect(
-			buildSetupInference("acpx", undefined, ["codex"], ["acpx"], "/usr/local/bin/bunx")?.targets[
-				"background-acpx"
-			],
+			buildSetupInference("acpx", undefined, ["codex"], ["acpx"], "/usr/local/bin/bunx")?.targets["background-acpx"],
 		).toMatchObject({
 			acpx: { agent: "codex" },
 			models: { default: { model: "gpt-5.4-mini" } },
 		});
 		expect(
-			buildSetupInference("acpx", undefined, ["opencode"], ["acpx"], "/usr/local/bin/bunx")?.targets[
-				"background-acpx"
-			],
+			buildSetupInference("acpx", undefined, ["opencode"], ["acpx"], "/usr/local/bin/bunx")?.targets["background-acpx"],
 		).toMatchObject({
 			acpx: { agent: "opencode" },
 			models: { default: { model: "google/gemini-2.5-flash" } },
@@ -98,7 +111,13 @@ describe("buildSetupInference", () => {
 	});
 
 	it("writes ACPX as explicit inference routing with the selected harness agent", () => {
-		const inference = buildSetupInference("acpx", "google/gemini-2.5-flash", ["opencode", "codex"], [], "/usr/local/bin/bunx");
+		const inference = buildSetupInference(
+			"acpx",
+			"google/gemini-2.5-flash",
+			["opencode", "codex"],
+			[],
+			"/usr/local/bin/bunx",
+		);
 		expect(inference?.targets["background-acpx"]).toMatchObject({
 			executor: "acpx",
 			acpx: {

@@ -62,4 +62,38 @@ describe("createRuntimeProvider", () => {
 		});
 		expect(provider?.name.startsWith("ollama:")).toBe(true);
 	});
+
+	it("creates an OpenAI-compatible provider for local endpoints without an API key", () => {
+		const provider = createRuntimeProvider({
+			role: "synthesis",
+			effectiveProvider: "openai-compatible",
+			configuredProvider: "openai-compatible",
+			configuredModel: "local-model",
+			timeoutMs: 1000,
+			ollamaBaseUrl: "http://127.0.0.1:11434",
+			ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
+			ollamaFallbackMaxContextTokens: 4096,
+			openCodeBaseUrl: "http://127.0.0.1:4096",
+			openRouterBaseUrl: "https://openrouter.ai/api/v1",
+			openAiCompatibleBaseUrl: "http://127.0.0.1:1234/v1",
+		});
+		expect(provider?.name).toBe("openai-compatible:local-model");
+	});
+
+	it("requires an API key for remote OpenAI-compatible providers", () => {
+		const provider = createRuntimeProvider({
+			role: "synthesis",
+			effectiveProvider: "openai-compatible",
+			configuredProvider: "openai-compatible",
+			configuredModel: "gpt-4o-mini",
+			timeoutMs: 1000,
+			ollamaBaseUrl: "http://127.0.0.1:11434",
+			ollamaFallbackBaseUrl: "http://127.0.0.1:11434",
+			ollamaFallbackMaxContextTokens: 4096,
+			openCodeBaseUrl: "http://127.0.0.1:4096",
+			openRouterBaseUrl: "https://openrouter.ai/api/v1",
+			openAiCompatibleBaseUrl: "https://gateway.example.test/v1",
+		});
+		expect(provider).toBeNull();
+	});
 });
