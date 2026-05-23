@@ -162,6 +162,7 @@ export async function syncDiscordSource(
 						messages: msgResult.data,
 						embeddingConfig: options.embeddingConfig,
 						fetchEmbedding: options.fetchEmbedding,
+						sourceActiveCheck: isSourceActive,
 					});
 				}
 
@@ -233,8 +234,10 @@ async function syncThreads(
 	let indexed = 0;
 	const conversationPaths: string[] = [];
 	const isSourceActive = options.sourceActiveCheck ?? (() => true);
+	if (!isSourceActive()) return { indexed, conversationPaths };
 
 	const archivedResult = await fetchPublicArchivedThreads(config, parentChannelId, 50);
+	if (!isSourceActive()) return { indexed, conversationPaths };
 	const allThreads = [
 		...activeThreads.filter((thread) => thread.parent_id === parentChannelId),
 		...archivedResult.data,
@@ -287,6 +290,7 @@ async function syncThreads(
 					messages: msgResult.data,
 					embeddingConfig: options.embeddingConfig,
 					fetchEmbedding: options.fetchEmbedding,
+					sourceActiveCheck: isSourceActive,
 				});
 			}
 		} catch (err) {

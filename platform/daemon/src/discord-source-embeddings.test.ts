@@ -1,5 +1,9 @@
-import { describe, expect, it } from "bun:test";
-import { buildDiscordSourceChunks } from "./discord-source-embeddings";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { buildDiscordSourceChunks, indexDiscordSourceEmbeddings } from "./discord-source-embeddings";
 import type { DiscordMessage } from "./discord-source-fetch";
 
 function makeMessage(id: string, content: string, author: string, timestamp: string): DiscordMessage {
@@ -18,6 +22,19 @@ function longMessage(label: string): string {
 }
 
 describe("discord-source-embeddings", () => {
+	let dir = "";
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "signet-discord-embeddings-"));
+		closeDbAccessor();
+		initDbAccessor(join(dir, "memories.db"));
+	});
+
+	afterEach(() => {
+		closeDbAccessor();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
 	it("builds chunks from a sequence of messages", () => {
 		const messages: DiscordMessage[] = [
 			makeMessage("1", "Hello world", "alice", "2026-01-01T10:00:00.000Z"),
@@ -87,5 +104,36 @@ describe("discord-source-embeddings", () => {
 
 		expect(chunks.length).toBeGreaterThan(0);
 		expect(chunks[0]?.id).toContain("thread:thread123");
+	});
+
+	it("does not write embeddings if the source is deactivated while fetching vectors", async () => {
+		let active = true;
+		const result = await indexDiscordSourceEmbeddings({
+			agentId: "test-agent",
+			sourceId: "discord:test",
+			guildId: "guild1",
+			channelId: "ch1",
+			channelName: "general",
+			messages: [makeMessage("1", longMessage("Race window"), "alice", "2026-01-01T10:00:00.000Z")],
+			embeddingConfig: {
+				provider: "openai",
+				model: "text-embedding-3-small",
+				dimensions: 3,
+			},
+			fetchEmbedding: async () => {
+				active = false;
+				return [0.1, 0.2, 0.3];
+			},
+			sourceActiveCheck: () => active,
+		});
+
+		expect(result.embedded).toBe(0);
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT id FROM embeddings WHERE source_type = 'source_discord_chunk'").all() as Array<{
+					id: string;
+				}>,
+		);
+		expect(rows).toHaveLength(0);
 	});
 });

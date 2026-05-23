@@ -29,6 +29,7 @@ export interface IndexDiscordSourceEmbeddingsInput {
 	readonly messages: readonly DiscordMessage[];
 	readonly embeddingConfig: EmbeddingConfig;
 	readonly fetchEmbedding: SourceEmbeddingFetch;
+	readonly sourceActiveCheck?: () => boolean;
 }
 
 export interface IndexDiscordSourceEmbeddingsResult {
@@ -172,6 +173,8 @@ function sleep(ms: number): Promise<void> {
 export async function indexDiscordSourceEmbeddings(
 	input: IndexDiscordSourceEmbeddingsInput,
 ): Promise<IndexDiscordSourceEmbeddingsResult> {
+	const isSourceActive = input.sourceActiveCheck ?? (() => true);
+	if (!isSourceActive()) return { chunks: 0, embedded: 0, skipped: 0 };
 	const chunks = buildDiscordSourceChunks(input);
 	const currentHashes = new Set<string>();
 	const yielder = yieldEvery(1);
@@ -181,6 +184,7 @@ export async function indexDiscordSourceEmbeddings(
 
 	if (input.embeddingConfig.provider !== "none") {
 		for (const chunk of chunks) {
+			if (!isSourceActive()) return { chunks: chunks.length, embedded, skipped };
 			const contentHash = hash(`${input.agentId}\n${chunk.id}\n${chunk.chunkText}`);
 			currentHashes.add(contentHash);
 			if (existingChunkEmbeddingContentHash(input.agentId, chunk.id) === contentHash) {
@@ -190,6 +194,7 @@ export async function indexDiscordSourceEmbeddings(
 				continue;
 			}
 			const vector = await input.fetchEmbedding(chunk.chunkText, input.embeddingConfig);
+			if (!isSourceActive()) return { chunks: chunks.length, embedded, skipped };
 			if (!vector || vector.length === 0) {
 				skipped++;
 				await yielder();
@@ -239,6 +244,7 @@ export async function indexDiscordSourceEmbeddings(
 		}
 	}
 
+	if (!isSourceActive()) return { chunks: chunks.length, embedded, skipped };
 	const prefix = `${threadPrefix(input.sourceId, input.guildId, input.channelId, input.threadId)}#`;
 	getDbAccessor().withWriteTx((db) => {
 		const stale = db
