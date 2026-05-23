@@ -212,7 +212,7 @@ export async function syncGitHubSource(
 						repo: repo.fullName,
 					});
 				} else {
-					const result = await fetchDiscussions(config, undefined, settings.maxItemsPerRepo);
+					const result = await fetchDiscussions(config, undefined, settings.state, settings.maxItemsPerRepo);
 					if (!isSourceActive()) break;
 					const capped = result.resources.length >= settings.maxItemsPerRepo;
 					const labelSet = settings.labels?.length ? new Set(settings.labels) : null;
@@ -224,7 +224,7 @@ export async function syncGitHubSource(
 							try {
 								const rawComments = await fetchDiscussionComments(config, resource.number ?? 0);
 								comments = rawComments.map((c) => ({
-									author: c.author?.login ?? null,
+									author: typeof c.author === "string" ? c.author : c.author?.login ?? null,
 									body: c.body,
 									createdAt: c.created_at,
 								}));

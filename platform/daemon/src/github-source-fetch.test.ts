@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { expandRepoGlob, fetchRepoDocs } from "./github-source-fetch";
+import { expandRepoGlob, fetchDiscussions, fetchIssues, fetchRepoDocs } from "./github-source-fetch";
 
 const originalFetch = globalThis.fetch;
 
@@ -66,3 +66,124 @@ describe("expandRepoGlob", () => {
 		expect(requests).toBe(1);
 	});
 });
+
+describe("fetchIssues", () => {
+	test("bounds issue scanning even when the issues endpoint returns PR rows", async () => {
+		let requests = 0;
+		globalThis.fetch = (async (input) => {
+			requests++;
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			const perPage = Number(new URL(url).searchParams.get("per_page") ?? "100");
+			return new Response(
+				JSON.stringify([
+					makeIssueRow(1, false),
+					makeIssueRow(2, true),
+					makeIssueRow(3, true),
+					makeIssueRow(4, false),
+				].slice(0, perPage)),
+				{
+					status: 200,
+					headers: {
+						"content-type": "application/json",
+						"x-ratelimit-remaining": "4999",
+						"x-ratelimit-reset": "0",
+					},
+				},
+			);
+		}) as typeof fetch;
+
+		const result = await fetchIssues({ owner: "Signet-AI", repo: "signetai" }, undefined, "all", 2);
+
+		expect(requests).toBe(1);
+		expect(result.resources.map((resource) => resource.number)).toEqual([1]);
+	});
+});
+
+describe("fetchDiscussions", () => {
+	test("filters discussions by requested state across pages", async () => {
+		let requests = 0;
+		globalThis.fetch = (async (_input, init) => {
+			requests++;
+			const body = JSON.parse(String(init?.body ?? "{}")) as { variables?: { after?: string | null } };
+			const after = body.variables?.after ?? null;
+			return new Response(JSON.stringify(makeDiscussionPage(after)), {
+				status: 200,
+				headers: {
+					"content-type": "application/json",
+					"x-ratelimit-remaining": "4999",
+					"x-ratelimit-reset": "0",
+				},
+			});
+		}) as typeof fetch;
+
+		const result = await fetchDiscussions({ owner: "Signet-AI", repo: "signetai" }, undefined, "closed", 2);
+
+		expect(requests).toBe(2);
+		expect(result.resources).toHaveLength(2);
+		expect(result.resources.map((resource) => resource.number)).toEqual([2, 3]);
+		expect(result.resources.map((resource) => resource.state)).toEqual(["closed", "closed"]);
+	});
+});
+
+function makeIssueRow(number: number, isPullRequest: boolean): Record<string, unknown> {
+	return {
+		number,
+		title: `Issue ${number}`,
+		body: "",
+		state: "open",
+		html_url: `https://github.com/Signet-AI/signetai/issues/${number}`,
+		user: { login: "alexmondello" },
+		labels: [],
+		assignees: [],
+		milestone: null,
+		created_at: "2026-05-23T00:00:00Z",
+		updated_at: "2026-05-23T00:00:00Z",
+		closed_at: null,
+		comments: 0,
+		...(isPullRequest ? { pull_request: { url: `https://api.github.com/repos/Signet-AI/signetai/pulls/${number}` } } : {}),
+	};
+}
+
+function makeDiscussionPage(after: string | null): Record<string, unknown> {
+	if (after === "cursor-1") {
+		return {
+			data: {
+				repository: {
+					discussions: {
+						pageInfo: { hasNextPage: false, endCursor: null },
+						nodes: [
+							makeDiscussionNode(2, "CLOSED", "2026-05-23T01:00:00Z"),
+							makeDiscussionNode(3, "CLOSED", "2026-05-23T00:30:00Z"),
+						],
+					},
+				},
+			},
+		};
+	}
+	return {
+		data: {
+			repository: {
+				discussions: {
+					pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+					nodes: [makeDiscussionNode(1, "OPEN", "2026-05-23T02:00:00Z")],
+				},
+			},
+		},
+	};
+}
+
+function makeDiscussionNode(number: number, state: string, updatedAt: string): Record<string, unknown> {
+	return {
+		number,
+		title: `Discussion ${number}`,
+		body: "",
+		state,
+		url: `https://github.com/Signet-AI/signetai/discussions/${number}`,
+		author: { login: "alexmondello" },
+		labels: { nodes: [] },
+		createdAt: updatedAt,
+		updatedAt,
+		answerId: null,
+		comments: { totalCount: 0 },
+	};
+}

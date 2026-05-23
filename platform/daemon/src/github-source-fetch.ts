@@ -284,11 +284,12 @@ export async function fetchIssues(
 	let rateLimitReset = 0;
 	let page = 1;
 	let fetched = 0;
+	let scanned = 0;
 
-	while (fetched < maxItems) {
+	while (scanned < maxItems) {
 		const params = new URLSearchParams({
 			state,
-			per_page: String(Math.min(PER_PAGE, maxItems - fetched)),
+			per_page: String(Math.min(PER_PAGE, maxItems - scanned)),
 			sort: "updated",
 			direction: "desc",
 			page: String(page),
@@ -309,6 +310,7 @@ export async function fetchIssues(
 		const issues = response.body as GitHubIssue[];
 		if (issues.length === 0) break;
 		for (const issue of issues) {
+			scanned++;
 			if (issue.pull_request) continue;
 			resources.push({
 				type: "issue",
@@ -330,6 +332,7 @@ export async function fetchIssues(
 				},
 			});
 			fetched++;
+			if (scanned >= maxItems) break;
 		}
 		if (issues.length < PER_PAGE) break;
 		page++;
@@ -505,6 +508,7 @@ export async function fetchPullRequestsBySearch(
 export async function fetchDiscussions(
 	config: GitHubFetchConfig,
 	since?: string,
+	state = "all",
 	maxItems = 500,
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
@@ -586,12 +590,14 @@ export async function fetchDiscussions(
 				cursor = null;
 				break;
 			}
+			const discussionState = d.state.toLowerCase();
+			if (state !== "all" && discussionState !== state) continue;
 			resources.push({
 				type: "discussion",
 				number: d.number,
 				title: d.title,
 				body: d.body ?? "",
-				state: "open",
+				state: discussionState,
 				labels: d.labels?.nodes?.map((l) => l.name) ?? [],
 				author: d.author?.login ?? null,
 				createdAt: d.createdAt,
@@ -602,10 +608,10 @@ export async function fetchDiscussions(
 				extra: { url: d.url, answer_id: d.answerId?.id ?? null },
 			});
 			fetched++;
+			if (fetched >= maxItems) break;
 		}
-		if (!discussions.pageInfo.hasNextPage) break;
 		cursor = discussions.pageInfo.endCursor;
-		if (!cursor) break;
+		if (!discussions.pageInfo.hasNextPage || !cursor || fetched >= maxItems) break;
 	}
 	return { resources, rateLimitRemaining, rateLimitReset, errors };
 }
