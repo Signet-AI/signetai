@@ -211,6 +211,7 @@ export async function syncGitHubSource(
 						sourceId: source.id,
 						repo: repo.fullName,
 					});
+					hadErrors = true;
 				} else {
 					const result = await fetchDiscussions(config, undefined, settings.state, settings.maxItemsPerRepo);
 					if (!isSourceActive()) break;

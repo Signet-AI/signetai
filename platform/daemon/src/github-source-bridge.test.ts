@@ -213,4 +213,56 @@ describe("startGitHubSourceBridge", () => {
 		expect(getSourceIndexJob("github:default")).toMatchObject({ status: "complete" });
 		expect(getSourceIndexJob("github:agent-b")).toMatchObject({ status: "complete" });
 	});
+
+	test("marks the source job failed when discussions are requested without a token", async () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "signet-github-bridge-discussions-token-"));
+		mkdirSync(agentsDir, { recursive: true });
+		initDbAccessor(join(agentsDir, "memories.db"));
+		const source: SignetSourceEntry = {
+			id: "github:discussions-no-token",
+			kind: "github",
+			name: "Discussion Repo",
+			root: "",
+			enabled: true,
+			mode: "read-only",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			agentId: "default",
+			settings: {
+				repos: ["Signet-AI/signetai"],
+				resourceTypes: ["discussions"],
+				maxItemsPerRepo: 1,
+			},
+		};
+		saveSourcesConfig({ version: 1, sources: [source] }, agentsDir);
+
+		globalThis.fetch = mock(async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.endsWith("/repos/Signet-AI/signetai")) {
+				return new Response(
+					JSON.stringify({
+						owner: { login: "Signet-AI" },
+						name: "signetai",
+						full_name: "Signet-AI/signetai",
+						default_branch: "main",
+						html_url: "https://github.com/Signet-AI/signetai",
+					}),
+					{ status: 200 },
+				);
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		}) as typeof fetch;
+
+		const bridge = startGitHubSourceBridge([source], { agentsDir, pollIntervalMs: 0 });
+		try {
+			const indexed = await bridge.sync();
+			expect(indexed).toBe(0);
+		} finally {
+			await bridge.close();
+		}
+
+		const saved = loadSourcesConfig(agentsDir).sources[0];
+		expect(saved?.lastIndexedAt).toBeUndefined();
+		expect(getSourceIndexJob(source.id)).toMatchObject({ status: "error" });
+	});
 });

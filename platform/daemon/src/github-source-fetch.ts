@@ -244,7 +244,7 @@ export async function expandRepoGlob(
 	maxRepos = 500,
 ): Promise<RepoGlobExpansion> {
 	if (!pattern.includes("*")) return { repos: [`${owner}/${pattern}`], truncated: false };
-	const regex = new RegExp(`^${pattern.replace(/\*/g, ".*").replace(/\?/g, ".")}$`);
+	const regex = new RegExp(`^${globToRegexSource(pattern)}$`);
 	for (const prefix of [`/orgs/${owner}/repos`, `/users/${owner}/repos`]) {
 		const repos: Array<{ full_name: string; name: string }> = [];
 		let page = 1;
@@ -272,6 +272,13 @@ export async function expandRepoGlob(
 	}
 	logger.warn("github-source", "Failed to expand repo glob", { owner });
 	return { repos: [], truncated: false };
+}
+
+function globToRegexSource(pattern: string): string {
+	return pattern
+		.replace(/[|\\{}()[\]^$+?.]/g, "\\$&")
+		.replace(/\*/g, ".*")
+		.replace(/\\\?/g, ".");
 }
 
 export async function fetchIssues(

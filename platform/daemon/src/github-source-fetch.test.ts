@@ -65,6 +65,22 @@ describe("expandRepoGlob", () => {
 		expect(result.truncated).toBe(true);
 		expect(requests).toBe(1);
 	});
+
+	test("escapes regex metacharacters in repo globs before matching names", async () => {
+		globalThis.fetch = mock(async () => {
+			return new Response(
+				JSON.stringify([
+					{ full_name: "Signet-AI/private.repo", name: "private.repo" },
+					{ full_name: "Signet-AI/privateXrepo", name: "privateXrepo" },
+				]),
+				{ status: 200 },
+			);
+		}) as typeof fetch;
+
+		const result = await expandRepoGlob("Signet-AI", "private.*", undefined, 10);
+
+		expect(result.repos).toEqual(["Signet-AI/private.repo"]);
+	});
 });
 
 describe("fetchIssues", () => {
