@@ -112,6 +112,29 @@ describe("github-source-fetch", () => {
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			const text = String(url);
 			requested.push(text);
+			const pullMatch = text.match(/\/pulls\/(\d+)$/);
+			if (pullMatch) {
+				const number = Number.parseInt(pullMatch[1] ?? "0", 10);
+				return Promise.resolve(
+					Response.json({
+						number,
+						title: `PR ${number}`,
+						body: "",
+						state: "open",
+						html_url: `https://github.com/o/r/pull/${number}`,
+						user: null,
+						created_at: "2026-01-01T00:00:00.000Z",
+						updated_at: "2026-01-01T00:00:00.000Z",
+						closed_at: null,
+						merged_at: null,
+						draft: false,
+						base: { ref: "main" },
+						head: { ref: `feature-${number}` },
+						comments: 0,
+						review_comments: 0,
+					}),
+				);
+			}
 			const page = new URL(text).searchParams.get("page");
 			const makePull = (number: number) => ({
 				number,
@@ -136,8 +159,70 @@ describe("github-source-fetch", () => {
 		const result = await fetchPullRequestsBySearch({ owner: "o", repo: "r" }, ["bug"], undefined, "open", 101);
 
 		expect(result.resources).toHaveLength(101);
-		expect(new URL(requested[0] ?? "").searchParams.get("page")).toBe("1");
-		expect(new URL(requested[1] ?? "").searchParams.get("page")).toBe("2");
+		const searchRequests = requested.filter((entry) => entry.includes("/search/issues"));
+		expect(new URL(searchRequests[0] ?? "").searchParams.get("page")).toBe("1");
+		expect(new URL(searchRequests[1] ?? "").searchParams.get("page")).toBe("2");
+		expect(requested.filter((entry) => entry.includes("/pulls/"))).toHaveLength(101);
+	});
+
+	it("hydrates label-filtered pull request metadata while preserving search labels", async () => {
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.includes("/search/issues")) {
+				return Promise.resolve(
+					Response.json({
+						items: [
+							{
+								number: 17,
+								title: "Search PR",
+								body: "search body",
+								state: "open",
+								html_url: "https://github.com/o/r/pull/17",
+								user: { login: "alice" },
+								labels: [{ name: "sources" }],
+								created_at: "2026-01-01T00:00:00.000Z",
+								updated_at: "2026-01-01T00:00:00.000Z",
+								closed_at: null,
+								comments: 4,
+							},
+						],
+					}),
+				);
+			}
+			return Promise.resolve(
+				Response.json({
+					number: 17,
+					title: "Hydrated PR",
+					body: "pull body",
+					state: "closed",
+					html_url: "https://github.com/o/r/pull/17",
+					user: { login: "alice" },
+					created_at: "2026-01-01T00:00:00.000Z",
+					updated_at: "2026-01-03T00:00:00.000Z",
+					closed_at: "2026-01-04T00:00:00.000Z",
+					merged_at: "2026-01-04T00:00:00.000Z",
+					draft: true,
+					base: { ref: "main" },
+					head: { ref: "feature" },
+					comments: 2,
+					review_comments: 3,
+				}),
+			);
+		}) as typeof fetch;
+
+		const result = await fetchPullRequestsBySearch({ owner: "o", repo: "r" }, ["sources"], undefined, "all", 1);
+
+		expect(result.errors).toEqual([]);
+		expect(result.resources[0]).toMatchObject({
+			type: "pull",
+			title: "Hydrated PR",
+			body: "pull body",
+			state: "closed",
+			labels: ["sources"],
+			mergedAt: "2026-01-04T00:00:00.000Z",
+			commentsCount: 5,
+			extra: { draft: true, base: "main", head: "feature" },
+		});
 	});
 
 	it("maps pull request list responses without issue labels", async () => {

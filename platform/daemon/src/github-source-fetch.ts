@@ -300,7 +300,19 @@ export async function fetchPullRequestsBySearch(
 		}
 		const body = response.body as { items?: GitHubIssue[]; incomplete_results?: boolean };
 		const batch = body.items ?? [];
-		resources.push(...batch.map(searchPullResource));
+		for (const issue of batch) {
+			if (resources.length >= maxItems) break;
+			const pull = await fetchPullRequestDetail(config, issue.number);
+			if (pull) {
+				resources.push(pullResource({ ...pull, labels: issue.labels }));
+			} else {
+				errors.push({
+					message: `Pull request detail fetch failed for #${issue.number}`,
+					retryable: true,
+				});
+				resources.push(searchPullResource(issue));
+			}
+		}
 		if (body.incomplete_results) {
 			errors.push({ message: "Pull request search returned incomplete GitHub results", retryable: true });
 		}
@@ -308,6 +320,18 @@ export async function fetchPullRequestsBySearch(
 		page++;
 	}
 	return { resources: resources.slice(0, maxItems), errors };
+}
+
+async function fetchPullRequestDetail(
+	config: GitHubFetchConfig,
+	number: number,
+): Promise<GitHubPullRequest | undefined> {
+	const response = await githubRequest(
+		`${GITHUB_API_BASE}/repos/${config.owner}/${config.repo}/pulls/${number}`,
+		config.token,
+	);
+	if (response.status !== 200) return undefined;
+	return response.body as GitHubPullRequest;
 }
 
 export async function fetchIssueComments(config: GitHubFetchConfig, number: number): Promise<GitHubComment[]> {
