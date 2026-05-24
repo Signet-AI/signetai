@@ -244,6 +244,152 @@ describe("github-source-provider", () => {
 		}
 	});
 
+	it("applies maxItemsPerRepo once across enabled primary resource types", async () => {
+		const source: SignetSourceEntry = {
+			id: "github:primary-cap",
+			kind: "github",
+			name: "GitHub",
+			root: "github://repos/Signet-AI/signetai",
+			enabled: true,
+			mode: "read-only",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			providerSettings: {
+				repos: ["Signet-AI/signetai"],
+				resourceTypes: ["issues", "pulls", "docs"],
+				state: "all",
+				includeComments: false,
+				docPaths: ["README.md"],
+				maxItemsPerRepo: 1,
+			},
+		};
+		const requested: string[] = [];
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			requested.push(text);
+			if (text.endsWith("/repos/Signet-AI/signetai")) {
+				return Promise.resolve(
+					Response.json({ name: "signetai", full_name: "Signet-AI/signetai", default_branch: "main" }),
+				);
+			}
+			if (text.includes("/issues?")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							number: 12,
+							title: "Current issue",
+							body: "body",
+							state: "open",
+							html_url: "https://github.com/Signet-AI/signetai/issues/12",
+							user: { login: "alice" },
+							labels: [],
+							created_at: "2026-01-01T00:00:00.000Z",
+							updated_at: "2026-01-02T00:00:00.000Z",
+							closed_at: null,
+							comments: 0,
+						},
+					]),
+				);
+			}
+			throw new Error(`unexpected GitHub request after cap reached: ${text}`);
+		}) as typeof fetch;
+
+		const result = await githubSourceProvider.sync?.({
+			source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		const rows = sourceRows(source.id);
+		expect(result?.failures).toEqual([]);
+		expect(rows.map((row) => row.source_kind)).toEqual(["source_github_issue"]);
+		expect(requested.some((entry) => entry.includes("/pulls"))).toBe(false);
+		expect(requested.some((entry) => entry.includes("/contents/"))).toBe(false);
+	});
+
+	it("counts GitHub comments against the per-repo artifact cap", async () => {
+		const source: SignetSourceEntry = {
+			id: "github:comment-cap",
+			kind: "github",
+			name: "GitHub",
+			root: "github://repos/Signet-AI/signetai",
+			enabled: true,
+			mode: "read-only",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			providerSettings: {
+				repos: ["Signet-AI/signetai"],
+				resourceTypes: ["issues"],
+				state: "all",
+				includeComments: true,
+				docPaths: ["README.md"],
+				maxItemsPerRepo: 2,
+			},
+		};
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.endsWith("/repos/Signet-AI/signetai")) {
+				return Promise.resolve(
+					Response.json({ name: "signetai", full_name: "Signet-AI/signetai", default_branch: "main" }),
+				);
+			}
+			if (text.includes("/issues?")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							number: 12,
+							title: "Current issue",
+							body: "body",
+							state: "open",
+							html_url: "https://github.com/Signet-AI/signetai/issues/12",
+							user: { login: "alice" },
+							labels: [],
+							created_at: "2026-01-01T00:00:00.000Z",
+							updated_at: "2026-01-02T00:00:00.000Z",
+							closed_at: null,
+							comments: 2,
+						},
+					]),
+				);
+			}
+			if (text.includes("/issues/12/comments")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							id: 1,
+							body: "first comment",
+							user: { login: "bob" },
+							created_at: "2026-01-03T00:00:00.000Z",
+							updated_at: "2026-01-03T00:00:00.000Z",
+						},
+						{
+							id: 2,
+							body: "second comment",
+							user: { login: "carol" },
+							created_at: "2026-01-04T00:00:00.000Z",
+							updated_at: "2026-01-04T00:00:00.000Z",
+						},
+					]),
+				);
+			}
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+
+		const result = await githubSourceProvider.sync?.({
+			source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		const rows = sourceRows(source.id);
+		expect(result?.indexed).toBe(2);
+		expect(rows.map((row) => row.source_kind).sort()).toEqual(["source_github_comment", "source_github_issue"]);
+		expect(rows.map((row) => row.content).join("\n")).toContain("first comment");
+		expect(rows.map((row) => row.content).join("\n")).not.toContain("second comment");
+	});
+
 	it("purges stale artifacts for successful repos after another repo fails", async () => {
 		const source: SignetSourceEntry = {
 			id: "github:partial",

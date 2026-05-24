@@ -67,9 +67,11 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 		const config: GitHubFetchConfig = { owner: repo.owner, repo: repo.repo, token };
 		const seenPaths = new Set<string>();
 		const yielder = yieldEvery(5);
+		let repoIndexed = 0;
 
 		for (const resource of await fetchRepoResources(context.source, settings, config, repo, failures)) {
 			if (!context.shouldContinue()) break;
+			if (repoIndexed >= settings.maxItemsPerRepo) break;
 			const written = await writeResourceWithComments(
 				context.source,
 				agentId,
@@ -78,7 +80,9 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 				resource,
 				settings,
 				failures,
+				settings.maxItemsPerRepo - repoIndexed,
 			);
+			repoIndexed += written;
 			indexed += written;
 			seenPaths.add(resourcePath(repo.fullName, resource));
 			await yielder();
@@ -104,19 +108,31 @@ async function fetchRepoResources(
 	failures: SourceFailureState[],
 ): Promise<readonly GitHubResource[]> {
 	const resources: GitHubResource[] = [];
-	if (settings.resourceTypes.includes("issues")) {
-		const result = await fetchIssues(config, undefined, settings.state, settings.maxItemsPerRepo, settings.labels);
+	if (settings.resourceTypes.includes("issues") && hasResourceBudget(resources, settings)) {
+		const result = await fetchIssues(
+			config,
+			undefined,
+			settings.state,
+			remainingResourceBudget(resources, settings),
+			settings.labels,
+		);
 		resources.push(...result.resources);
 		writeFetchFailures(source, failures, repo.fullName, "issues", result.errors);
 	}
-	if (settings.resourceTypes.includes("pulls")) {
+	if (settings.resourceTypes.includes("pulls") && hasResourceBudget(resources, settings)) {
 		const result = settings.labels?.length
-			? await fetchPullRequestsBySearch(config, settings.labels, undefined, settings.state, settings.maxItemsPerRepo)
-			: await fetchPullRequests(config, undefined, settings.state, settings.maxItemsPerRepo);
+			? await fetchPullRequestsBySearch(
+					config,
+					settings.labels,
+					undefined,
+					settings.state,
+					remainingResourceBudget(resources, settings),
+				)
+			: await fetchPullRequests(config, undefined, settings.state, remainingResourceBudget(resources, settings));
 		resources.push(...result.resources);
 		writeFetchFailures(source, failures, repo.fullName, "pulls", result.errors);
 	}
-	if (settings.resourceTypes.includes("discussions")) {
+	if (settings.resourceTypes.includes("discussions") && hasResourceBudget(resources, settings)) {
 		if (!config.token) {
 			const failure = failureState(source, "GitHub discussions require tokenRef", {
 				repo: repo.fullName,
@@ -124,7 +140,12 @@ async function fetchRepoResources(
 			});
 			failures.push(failure);
 		} else {
-			const result = await fetchDiscussions(config, undefined, settings.state, settings.maxItemsPerRepo);
+			const result = await fetchDiscussions(
+				config,
+				undefined,
+				settings.state,
+				remainingResourceBudget(resources, settings),
+			);
 			const labelSet = settings.labels?.length ? new Set(settings.labels) : null;
 			resources.push(
 				...result.resources.filter((resource) => !labelSet || resource.labels.some((label) => labelSet.has(label))),
@@ -132,12 +153,25 @@ async function fetchRepoResources(
 			writeFetchFailures(source, failures, repo.fullName, "discussions", result.errors);
 		}
 	}
-	if (settings.resourceTypes.includes("docs")) {
-		const result = await fetchRepoDocs(config, settings.docPaths, repo.defaultBranch, settings.maxItemsPerRepo);
+	if (settings.resourceTypes.includes("docs") && hasResourceBudget(resources, settings)) {
+		const result = await fetchRepoDocs(
+			config,
+			settings.docPaths,
+			repo.defaultBranch,
+			remainingResourceBudget(resources, settings),
+		);
 		resources.push(...result.resources);
 		writeFetchFailures(source, failures, repo.fullName, "docs", result.errors);
 	}
 	return resources;
+}
+
+function hasResourceBudget(resources: readonly GitHubResource[], settings: GitHubSourceSettings): boolean {
+	return remainingResourceBudget(resources, settings) > 0;
+}
+
+function remainingResourceBudget(resources: readonly GitHubResource[], settings: GitHubSourceSettings): number {
+	return Math.max(0, settings.maxItemsPerRepo - resources.length);
 }
 
 async function writeResourceWithComments(
@@ -148,12 +182,22 @@ async function writeResourceWithComments(
 	resource: GitHubResource,
 	settings: GitHubSourceSettings,
 	failures: SourceFailureState[],
+	remainingArtifactBudget: number,
 ): Promise<number> {
+	if (remainingArtifactBudget <= 0) return 0;
 	let indexed = writeResourceArtifact(source, agentId, repo, resource);
-	if (!settings.includeComments || resource.commentsCount <= 0 || resource.type === "doc") return indexed;
+	const remainingCommentBudget = remainingArtifactBudget - indexed;
+	if (
+		!settings.includeComments ||
+		resource.commentsCount <= 0 ||
+		resource.type === "doc" ||
+		remainingCommentBudget <= 0
+	) {
+		return indexed;
+	}
 	try {
 		const comments = await fetchCommentsForResource(config, resource);
-		for (const comment of comments) {
+		for (const comment of comments.slice(0, remainingCommentBudget)) {
 			indexed += writeCommentArtifact(source, agentId, repo, resource, comment);
 		}
 	} catch (err) {
