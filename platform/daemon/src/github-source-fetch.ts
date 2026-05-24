@@ -103,9 +103,9 @@ const PER_PAGE = 100;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1_000;
-const MAX_ISSUE_SCAN_MULTIPLIER = 5;
-const MAX_ISSUE_SCAN_FLOOR = PER_PAGE * 5;
-const MAX_ISSUE_SCAN_CEILING = PER_PAGE * 20;
+const MAX_FILTERED_SCAN_MULTIPLIER = 5;
+const MAX_FILTERED_SCAN_FLOOR = PER_PAGE * 5;
+const MAX_FILTERED_SCAN_CEILING = PER_PAGE * 20;
 const MAX_COMMENTS_PER_RESOURCE = 200;
 
 async function githubRequest(url: string, token?: string, method = "GET", body?: unknown): Promise<GitHubApiResponse> {
@@ -215,8 +215,8 @@ export async function fetchIssues(
 	const resources: GitHubResource[] = [];
 	const errors: GitHubFetchResult["errors"] = [];
 	const scanLimit = Math.min(
-		Math.max(maxItems * MAX_ISSUE_SCAN_MULTIPLIER, MAX_ISSUE_SCAN_FLOOR),
-		MAX_ISSUE_SCAN_CEILING,
+		Math.max(maxItems * MAX_FILTERED_SCAN_MULTIPLIER, MAX_FILTERED_SCAN_FLOOR),
+		MAX_FILTERED_SCAN_CEILING,
 	);
 	let scanned = 0;
 	let page = 1;
@@ -349,6 +349,10 @@ export async function fetchDiscussions(
 ): Promise<GitHubFetchResult> {
 	const resources: GitHubResource[] = [];
 	const errors: GitHubFetchResult["errors"] = [];
+	const scanLimit = Math.min(
+		Math.max(maxItems * MAX_FILTERED_SCAN_MULTIPLIER, MAX_FILTERED_SCAN_FLOOR),
+		MAX_FILTERED_SCAN_CEILING,
+	);
 	const query = `
 		query($owner:String!, $name:String!, $first:Int!, $after:String) {
 			repository(owner:$owner, name:$name) {
@@ -362,11 +366,11 @@ export async function fetchDiscussions(
 					pageInfo { hasNextPage endCursor }
 				}
 			}
-		}`;
+	}`;
 	let cursor: string | null = null;
 	let scanned = 0;
-	while (resources.length < maxItems && scanned < maxItems) {
-		const remainingScan = maxItems - scanned;
+	while (resources.length < maxItems && scanned < scanLimit) {
+		const remainingScan = scanLimit - scanned;
 		const response = await githubRequest(GRAPHQL_URL, config.token, "POST", {
 			query,
 			variables: {
