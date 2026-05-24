@@ -152,6 +152,45 @@ describe("hybridRecall", () => {
 		}
 	});
 
+	it("returns provider-generic source chunk vector fallback hits", async () => {
+		const now = new Date().toISOString();
+		const vec = unitVector();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO embeddings (
+					id, content_hash, vector, dimensions, source_type, source_id,
+					chunk_text, created_at, agent_id
+				) VALUES (?, ?, ?, 768, 'source_chunk', ?, ?, ?, 'default')`,
+			).run(
+				"emb-generic-source",
+				"hash-generic-source",
+				vectorBlob(vec),
+				"obsidian:vault:generic.md#overview:1-1:0",
+				"source_id: obsidian:vault\nsource_provider: obsidian\nsource_path: /vault/generic.md\nGeneric source chunk fallback marker.",
+				now,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "Generic source chunk fallback marker",
+				keywordQuery: "Generic source chunk fallback marker",
+				limit: 3,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => vec,
+		);
+
+		expect(result.results[0]).toMatchObject({
+			source: "source_obsidian",
+			type: "source_chunk",
+			source_path: "/vault/generic.md",
+			supplementary: true,
+		});
+	});
+
 	it("refills capped recall responses after suppressing repeated session rows", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {

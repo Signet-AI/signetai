@@ -239,8 +239,24 @@ export type {
 	SignetSourceEntry,
 	SignetSourceKind,
 	SignetSourceMode,
+	SignetSourceProviderSettings,
 	SignetSourcesConfig,
 } from "./sources-config";
+export {
+	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
+	SOURCE_CHUNK_SOURCE_TYPE,
+} from "./source-substrate";
+export type {
+	SourceArtifactRecord,
+	SourceCheckpointRecord,
+	SourceContainerRecord,
+	SourceFailureState,
+	SourceProviderKind,
+	SourceRecordKind,
+	SourceRelationRecord,
+	SourceSyncResult,
+	SourceSyncStatus,
+} from "./source-substrate";
 
 // Portable export/import
 export {

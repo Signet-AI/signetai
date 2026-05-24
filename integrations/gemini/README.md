@@ -14,18 +14,14 @@ Integrates Signet's memory system with Gemini CLI's settings and extension model
 ## Installation
 
 ```bash
-signet install gemini
+signet setup --harness gemini
 ```
 
-This is handled automatically when you run `signet install` and Gemini CLI is detected.
+Interactive setup can also detect Gemini CLI and offer to configure it.
 
 ## Uninstallation
 
-```bash
-signet uninstall gemini
-```
-
-Removes settings patches and symlinks. Your memories are preserved in the Signet daemon.
+The connector package exposes programmatic cleanup that removes settings patches and symlinks. Your memories are preserved in the Signet daemon.
 
 ## Package
 

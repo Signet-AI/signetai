@@ -14,18 +14,14 @@ Integrates Signet's memory system with Codex CLI's hook and MCP configuration.
 ## Installation
 
 ```bash
-signet install codex
+signet setup --harness codex
 ```
 
-This is handled automatically when you run `signet install` and Codex CLI is detected.
+Interactive setup can also detect Codex CLI and offer to configure it.
 
 ## Uninstallation
 
-```bash
-signet uninstall codex
-```
-
-Removes hooks and MCP server registration. Your memories are preserved in the Signet daemon.
+The connector package exposes programmatic cleanup that removes hooks and MCP server registration. Your memories are preserved in the Signet daemon.
 
 ## Package
 

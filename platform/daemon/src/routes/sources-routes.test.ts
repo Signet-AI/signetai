@@ -311,7 +311,7 @@ describe("Sources routes", () => {
 				"chunk-hash-1",
 				new Uint8Array([0]),
 				1,
-				"source_obsidian_chunk",
+				"source_chunk",
 				`${added.source.id}:permanent/Note.md#overview:1-3:0`,
 				"source chunk",
 				"2026-01-01T00:00:00.000Z",

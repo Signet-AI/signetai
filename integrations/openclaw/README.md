@@ -16,18 +16,14 @@ Unlike other connectors, OpenClaw reads `~/.agents/AGENTS.md` directly, so no ge
 ## Installation
 
 ```bash
-signet install openclaw
+signet setup --harness openclaw
 ```
 
-This is handled automatically when you run `signet install` and OpenClaw is detected.
+Interactive setup can also detect OpenClaw and offer to configure it.
 
 ## Uninstallation
 
-```bash
-signet uninstall openclaw
-```
-
-Removes hook handlers and configuration patches. Your memories are preserved in the Signet daemon.
+The connector package exposes programmatic cleanup that removes hook handlers and configuration patches. Your memories are preserved in the Signet daemon.
 
 ## Package
 
