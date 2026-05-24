@@ -234,6 +234,22 @@ describe("sources-config", () => {
 			}
 		});
 
+		it("defaults unauthenticated GitHub sources to REST-fetchable resource types", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource({ repos: ["owner/repo"] }, agentsDir);
+			expect(result.ok).toBe(true);
+			if (result.ok === false) throw new Error(result.error);
+			expect(result.source.settings?.resourceTypes).toEqual(["issues", "pulls", "docs"]);
+		});
+
+		it("keeps discussion resource types in the default set when a tokenRef is provided", () => {
+			const agentsDir = tmp();
+			const result = addGitHubSource({ repos: ["owner/repo"], tokenRef: "GITHUB_TOKEN" }, agentsDir);
+			expect(result.ok).toBe(true);
+			if (result.ok === false) throw new Error(result.error);
+			expect(result.source.settings?.resourceTypes).toEqual(["issues", "pulls", "discussions", "docs"]);
+		});
+
 		it("rejects an explicit empty GitHub resource type list", () => {
 			const agentsDir = tmp();
 			const result = addGitHubSource({ repos: ["owner/repo"], resourceTypes: [] }, agentsDir);
@@ -449,13 +465,13 @@ describe("sources-config", () => {
 			expect(config.sources.map((s) => s.kind)).toEqual(["obsidian", "github"]);
 		});
 
-		it("defaults resource types to all four", () => {
+		it("defaults unauthenticated resource types to REST-fetchable types", () => {
 			const agentsDir = tmp();
 			const result = addGitHubSource({ repos: ["owner/repo"] }, agentsDir);
 			expect(result.ok).toBe(true);
 			if (result.ok === false) throw new Error(result.error);
 			const settings = parseGitHubSettings(loadSourcesConfig(agentsDir).sources[0]?.settings);
-			expect(settings.resourceTypes).toEqual(["issues", "pulls", "discussions", "docs"]);
+			expect(settings.resourceTypes).toEqual(["issues", "pulls", "docs"]);
 		});
 	});
 });

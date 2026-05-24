@@ -18,6 +18,7 @@ export interface GitHubSourceSettings {
 }
 
 export const DEFAULT_GITHUB_RESOURCE_TYPES = ["issues", "pulls", "discussions", "docs"] as const;
+export const DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN = ["issues", "pulls", "docs"] as const;
 const VALID_GITHUB_RESOURCE_TYPES = new Set<string>(DEFAULT_GITHUB_RESOURCE_TYPES);
 export const DEFAULT_GITHUB_DOC_PATHS = ["README.md", "CHANGELOG.md"] as const;
 
@@ -309,10 +310,15 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 }
 
 function buildGitHubSettings(input: AddGitHubSourceInput, repos: readonly string[]): Readonly<Record<string, unknown>> {
-	const resourceTypes = input.resourceTypes ?? [...DEFAULT_GITHUB_RESOURCE_TYPES];
+	const tokenRef = input.tokenRef?.trim() || undefined;
+	const resourceTypes = input.resourceTypes
+		? [...input.resourceTypes]
+		: tokenRef
+			? [...DEFAULT_GITHUB_RESOURCE_TYPES]
+			: [...DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN];
 	return {
 		repos: repos,
-		tokenRef: input.tokenRef?.trim() || undefined,
+		tokenRef,
 		resourceTypes,
 		state: input.state ?? "all",
 		includeComments: input.includeComments ?? true,
