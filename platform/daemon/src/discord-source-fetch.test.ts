@@ -1,0 +1,131 @@
+import { describe, expect, it, mock } from "bun:test";
+import {
+	fetchArchivedThreads,
+	fetchChannelMessages,
+	fetchGuild,
+	fetchGuildActiveThreads,
+	fetchGuildMembers,
+	fetchThreadMembers,
+	snowflakeIdForTimestamp,
+} from "./discord-source-fetch";
+
+describe("discord-source-fetch", () => {
+	it("fetches active threads through the guild-level Discord API v10 route", async () => {
+		let requestedUrl = "";
+		const fetchImpl = mock((url: string | URL | Request) => {
+			requestedUrl = String(url);
+			return Promise.resolve(
+				Response.json({ threads: [{ id: "123456789012345679", type: 11, parent_id: "123456789012345678" }] }),
+			);
+		}) as unknown as typeof fetch;
+
+		const result = await fetchGuildActiveThreads({ token: "TOKEN", fetchImpl }, "123456789012345678");
+
+		expect(requestedUrl).toBe("https://discord.com/api/v10/guilds/123456789012345678/threads/active");
+		expect(result.data[0]?.parent_id).toBe("123456789012345678");
+	});
+
+	it("fetches archived public and private threads through parent-channel catalogs", async () => {
+		const requested: string[] = [];
+		const fetchImpl = mock((url: string | URL | Request) => {
+			requested.push(String(url));
+			return Promise.resolve(
+				Response.json({
+					threads: [{ id: "123456789012345680", type: 12, parent_id: "123456789012345678" }],
+					has_more: false,
+				}),
+			);
+		}) as unknown as typeof fetch;
+
+		await fetchArchivedThreads({ token: "TOKEN", fetchImpl }, "123456789012345678", "public");
+		await fetchArchivedThreads({ token: "TOKEN", fetchImpl }, "123456789012345678", "private");
+
+		expect(requested[0]).toStartWith(
+			"https://discord.com/api/v10/channels/123456789012345678/threads/archived/public?",
+		);
+		expect(requested[1]).toStartWith(
+			"https://discord.com/api/v10/channels/123456789012345678/threads/archived/private?",
+		);
+	});
+
+	it("paginates guild members using the last user id as the after cursor", async () => {
+		const requested: string[] = [];
+		const fetchImpl = mock((url: string | URL | Request) => {
+			requested.push(String(url));
+			if (requested.length === 1) {
+				return Promise.resolve(
+					Response.json(
+						Array.from({ length: 100 }, (_, index) => ({
+							user: { id: `${1000 + index}`, username: `user-${index}` },
+						})),
+					),
+				);
+			}
+			return Promise.resolve(Response.json([{ user: { id: "2000", username: "final" } }]));
+		}) as unknown as typeof fetch;
+
+		const result = await fetchGuildMembers({ token: "TOKEN", fetchImpl }, "123456789012345678", 101);
+
+		expect(result.data).toHaveLength(101);
+		expect(requested[1]).toContain("after=1099");
+	});
+
+	it("preserves 404 handling when Discord returns a non-JSON body", async () => {
+		const fetchImpl = mock(() =>
+			Promise.resolve(new Response("missing", { status: 404, headers: { "content-type": "text/plain" } })),
+		) as unknown as typeof fetch;
+
+		await expect(fetchGuild({ token: "TOKEN", fetchImpl }, "123456789012345678")).resolves.toBeNull();
+	});
+
+	it("surfaces non-JSON API errors without throwing away partial fetch state", async () => {
+		const fetchImpl = mock(() =>
+			Promise.resolve(new Response("rate limit text", { status: 403, headers: { "content-type": "text/plain" } })),
+		) as unknown as typeof fetch;
+
+		const result = await fetchThreadMembers({ token: "TOKEN", fetchImpl }, "123456789012345678");
+
+		expect(result.data).toEqual([]);
+		expect(result.errors[0]?.message).toContain("403: rate limit text");
+	});
+
+	it("converts ISO timestamps to Discord snowflake lower bounds", () => {
+		expect(snowflakeIdForTimestamp("2015-01-02T00:00:00.000Z")).toBe("362387865600000");
+		expect(snowflakeIdForTimestamp("not-a-date")).toBeUndefined();
+	});
+
+	it("skips malformed message ids without aborting the whole channel fetch", async () => {
+		const fetchImpl = mock(() =>
+			Promise.resolve(
+				Response.json([
+					{
+						id: "bad-id",
+						type: 0,
+						content: "oops",
+						author: { id: "123456789012345681", username: "alice" },
+						timestamp: "2026-05-23T16:00:00.000Z",
+						channel_id: "123456789012345678",
+					},
+					{
+						id: "999999999999999999",
+						type: 0,
+						content: "ok",
+						author: { id: "123456789012345682", username: "bob" },
+						timestamp: "2026-05-23T16:01:00.000Z",
+						channel_id: "123456789012345678",
+					},
+				]),
+			),
+		) as unknown as typeof fetch;
+
+		const result = await fetchChannelMessages({ token: "TOKEN", fetchImpl }, "123456789012345678", 10, undefined, "1");
+
+		expect(result.data.map((msg) => msg.id)).toEqual(["999999999999999999"]);
+		expect(result.errors).toEqual([
+			{
+				message: "Messages fetch returned malformed message id for channel 123456789012345678: bad-id",
+				retryable: false,
+			},
+		]);
+	});
+});

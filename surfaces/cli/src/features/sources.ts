@@ -1,4 +1,4 @@
-import { addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
+import { addDiscordSource, addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
 import chalk from "chalk";
 
 export interface SourcesDeps {
@@ -17,6 +17,24 @@ export type DaemonRemoveSourceResult =
 export interface AddObsidianSourceOptions {
 	readonly name?: string;
 	readonly exclude?: readonly string[];
+}
+
+export interface AddDiscordSourceOptions {
+	readonly guild?: readonly string[];
+	readonly tokenRef?: string;
+	readonly name?: string;
+	readonly channel?: readonly string[];
+	readonly maxMessages?: string;
+	readonly since?: string;
+	readonly threads?: boolean;
+	readonly archivedThreads?: boolean;
+	readonly includePrivateArchivedThreads?: boolean;
+	readonly members?: boolean;
+	readonly attachments?: boolean;
+	readonly embeds?: boolean;
+	readonly polls?: boolean;
+	readonly threadMembers?: boolean;
+	readonly mode?: "rest" | "gateway-tail" | "desktop-cache";
 }
 
 export async function addObsidianVaultSource(
@@ -40,6 +58,45 @@ export async function addObsidianVaultSource(
 	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
 }
 
+export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, deps: SourcesDeps): Promise<void> {
+	const guildIds = options.guild ?? [];
+	const maxMessagesPerChannel =
+		options.maxMessages === undefined ? undefined : Number.parseInt(options.maxMessages, 10);
+	const result = addDiscordSource(
+		{
+			guildIds,
+			tokenRef: options.tokenRef ?? "",
+			name: options.name,
+			channelFilter: options.channel,
+			maxMessagesPerChannel,
+			includeThreads: options.threads,
+			includeArchivedThreads: options.archivedThreads,
+			includePrivateArchivedThreads: options.includePrivateArchivedThreads,
+			includeMembers: options.members,
+			includeAttachments: options.attachments,
+			includeEmbeds: options.embeds,
+			includePolls: options.polls,
+			includeThreadMembers: options.threadMembers,
+			since: options.since,
+			syncMode: options.mode,
+		},
+		deps.agentsDir,
+	);
+	if (result.ok === false) {
+		console.error(chalk.red(`✗ ${result.error}`));
+		process.exitCode = 1;
+		return;
+	}
+
+	const verb = result.created ? "Added" : "Updated";
+	console.log(chalk.green(`✓ ${verb} Discord source: ${result.source.name}`));
+	console.log(chalk.dim(`  ${result.source.root}`));
+	console.log(chalk.dim(`  tokenRef: ${result.source.providerSettings?.tokenRef ?? ""}`));
+	console.log();
+	console.log(chalk.dim("The daemon indexes Discord through the shared Sources job pipeline."));
+	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
+}
+
 export async function listSources(deps: SourcesDeps): Promise<void> {
 	const config = loadSourcesConfig(deps.agentsDir);
 	if (config.sources.length === 0) {
@@ -53,6 +110,14 @@ export async function listSources(deps: SourcesDeps): Promise<void> {
 		console.log(`${source.name} ${chalk.dim(`(${source.kind}, ${source.mode}, ${status})`)}`);
 		console.log(chalk.dim(`  id: ${source.id}`));
 		console.log(chalk.dim(`  root: ${source.root}`));
+		if (source.kind === "discord" && source.providerSettings) {
+			const guildIds = Array.isArray(source.providerSettings.guildIds)
+				? source.providerSettings.guildIds.filter((entry) => typeof entry === "string")
+				: [];
+			if (guildIds.length > 0) console.log(chalk.dim(`  guilds: ${guildIds.join(", ")}`));
+			if (typeof source.providerSettings.tokenRef === "string")
+				console.log(chalk.dim(`  tokenRef: ${source.providerSettings.tokenRef}`));
+		}
 		if (source.excludeGlobs?.length) console.log(chalk.dim(`  excludes: ${source.excludeGlobs.join(", ")}`));
 		if (source.lastIndexedAt) console.log(chalk.dim(`  last indexed: ${source.lastIndexedAt}`));
 	}

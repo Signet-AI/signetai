@@ -41,6 +41,44 @@ export interface AddObsidianSourceInput {
 	readonly now?: string;
 }
 
+export type DiscordSourceSyncMode = "rest" | "gateway-tail" | "desktop-cache";
+
+export interface DiscordSourceSettings {
+	readonly guildIds: readonly string[];
+	readonly tokenRef: string;
+	readonly channelFilter?: readonly string[];
+	readonly maxMessagesPerChannel: number;
+	readonly includeThreads: boolean;
+	readonly includeArchivedThreads: boolean;
+	readonly includePrivateArchivedThreads: boolean;
+	readonly includeMembers: boolean;
+	readonly includeAttachments: boolean;
+	readonly includeEmbeds: boolean;
+	readonly includePolls: boolean;
+	readonly includeThreadMembers: boolean;
+	readonly since?: string;
+	readonly syncMode: DiscordSourceSyncMode;
+}
+
+export interface AddDiscordSourceInput {
+	readonly guildIds: readonly string[];
+	readonly tokenRef: string;
+	readonly name?: string;
+	readonly channelFilter?: readonly string[];
+	readonly maxMessagesPerChannel?: number;
+	readonly includeThreads?: boolean;
+	readonly includeArchivedThreads?: boolean;
+	readonly includePrivateArchivedThreads?: boolean;
+	readonly includeMembers?: boolean;
+	readonly includeAttachments?: boolean;
+	readonly includeEmbeds?: boolean;
+	readonly includePolls?: boolean;
+	readonly includeThreadMembers?: boolean;
+	readonly since?: string;
+	readonly syncMode?: DiscordSourceSyncMode;
+	readonly now?: string;
+}
+
 export type AddSourceResult =
 	| { readonly ok: true; readonly source: SignetSourceEntry; readonly created: boolean }
 	| { readonly ok: false; readonly error: string };
@@ -50,6 +88,8 @@ export type RemoveSourceResult =
 	| { readonly ok: false; readonly error: string };
 
 const SOURCES_CONFIG_VERSION = 1;
+export const DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL = 1000;
+export const MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL = 10_000;
 
 export function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || `${homedir()}/.agents`;
@@ -105,6 +145,149 @@ function loadSourcesConfigForWrite(agentsDir = getAgentsDir()): SignetSourcesCon
 
 export function addObsidianSource(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	return withSourcesConfigLock(agentsDir, () => addObsidianSourceUnlocked(input, agentsDir));
+}
+
+export function addDiscordSource(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addDiscordSourceUnlocked(input, agentsDir));
+}
+
+function addDiscordSourceUnlocked(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	try {
+		return addDiscordSourceChecked(input, agentsDir);
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
+function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	const settings = buildDiscordSettings(input);
+	if ("error" in settings) return { ok: false, error: settings.error };
+
+	const now = input.now ?? new Date().toISOString();
+	const cfg = loadSourcesConfigForWrite(agentsDir);
+	const sourceId = `discord:${createHash("sha256").update(settings.guildIds.slice().sort().join(",")).digest("hex").slice(0, 16)}`;
+	const root = `discord://guilds/${settings.guildIds.slice().sort().join(",")}`;
+	const existing = cfg.sources.find((source) => source.id === sourceId);
+	if (existing) {
+		const updated: SignetSourceEntry = {
+			...existing,
+			name: cleanName(input.name) ?? existing.name,
+			root,
+			enabled: true,
+			providerSettings: discordSettingsProviderSettings(settings),
+			updatedAt: now,
+		};
+		saveSourcesConfig(
+			{
+				version: SOURCES_CONFIG_VERSION,
+				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
+			},
+			agentsDir,
+		);
+		return { ok: true, source: updated, created: false };
+	}
+
+	const source: SignetSourceEntry = {
+		id: sourceId,
+		kind: "discord",
+		name: cleanName(input.name) ?? "Discord Source",
+		root,
+		enabled: true,
+		mode: "read-only",
+		createdAt: now,
+		updatedAt: now,
+		providerSettings: discordSettingsProviderSettings(settings),
+	};
+	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
+	return { ok: true, source, created: true };
+}
+
+export function parseDiscordSettings(raw?: SignetSourceProviderSettings): DiscordSourceSettings {
+	const guildIds = Array.isArray(raw?.guildIds) ? cleanDiscordIds(raw.guildIds) : [];
+	const tokenRef = typeof raw?.tokenRef === "string" ? raw.tokenRef.trim() : "";
+	const channelFilter = Array.isArray(raw?.channelFilter) ? cleanDiscordChannelFilter(raw.channelFilter) : undefined;
+	const maxMessagesPerChannel =
+		cleanPositiveInteger(raw?.maxMessagesPerChannel, MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL) ??
+		DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL;
+	const since = typeof raw?.since === "string" ? cleanIsoDate(raw.since) : undefined;
+	return {
+		guildIds,
+		tokenRef,
+		channelFilter,
+		maxMessagesPerChannel,
+		includeThreads: raw?.includeThreads !== false,
+		includeArchivedThreads: raw?.includeArchivedThreads !== false,
+		includePrivateArchivedThreads: raw?.includePrivateArchivedThreads === true,
+		includeMembers: raw?.includeMembers !== false,
+		includeAttachments: raw?.includeAttachments !== false,
+		includeEmbeds: raw?.includeEmbeds !== false,
+		includePolls: raw?.includePolls !== false,
+		includeThreadMembers: raw?.includeThreadMembers !== false,
+		...(since ? { since } : {}),
+		syncMode: isDiscordSyncMode(raw?.syncMode) ? raw.syncMode : "rest",
+	};
+}
+
+function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettings | { readonly error: string } {
+	const guildIds = cleanDiscordIds(input.guildIds);
+	if (guildIds.length === 0) return { error: "At least one Discord guild ID is required" };
+	for (const guildId of guildIds) {
+		if (!isDiscordSnowflake(guildId)) return { error: `Invalid Discord guild ID: ${guildId}` };
+	}
+	const tokenRef = input.tokenRef?.trim();
+	if (!tokenRef) return { error: "Discord tokenRef is required" };
+	if (looksLikeRawDiscordToken(tokenRef))
+		return { error: "Discord tokenRef must be a secret reference, not a raw token" };
+	const channelFilter = cleanDiscordChannelFilter(input.channelFilter ?? []);
+	const maxMessagesPerChannel =
+		cleanPositiveInteger(input.maxMessagesPerChannel, MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL) ??
+		DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL;
+	if (input.maxMessagesPerChannel !== undefined && maxMessagesPerChannel !== input.maxMessagesPerChannel) {
+		return {
+			error: `Discord maxMessagesPerChannel must be an integer between 1 and ${MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL}`,
+		};
+	}
+	const since = cleanIsoDate(input.since);
+	if (input.since !== undefined && since === undefined) return { error: "Discord since must be a valid ISO date" };
+	if (input.syncMode && !isDiscordSyncMode(input.syncMode))
+		return { error: `Unsupported Discord sync mode: ${input.syncMode}` };
+
+	return {
+		guildIds,
+		tokenRef,
+		...(channelFilter.length > 0 ? { channelFilter } : {}),
+		maxMessagesPerChannel,
+		includeThreads: input.includeThreads ?? true,
+		includeArchivedThreads: input.includeArchivedThreads ?? true,
+		includePrivateArchivedThreads: input.includePrivateArchivedThreads ?? false,
+		includeMembers: input.includeMembers ?? true,
+		includeAttachments: input.includeAttachments ?? true,
+		includeEmbeds: input.includeEmbeds ?? true,
+		includePolls: input.includePolls ?? true,
+		includeThreadMembers: input.includeThreadMembers ?? true,
+		...(since ? { since } : {}),
+		syncMode: input.syncMode ?? "rest",
+	};
+}
+
+function discordSettingsProviderSettings(settings: DiscordSourceSettings): SignetSourceProviderSettings {
+	return {
+		guildIds: settings.guildIds,
+		tokenRef: settings.tokenRef,
+		...(settings.channelFilter ? { channelFilter: settings.channelFilter } : {}),
+		maxMessagesPerChannel: settings.maxMessagesPerChannel,
+		includeThreads: settings.includeThreads,
+		includeArchivedThreads: settings.includeArchivedThreads,
+		includePrivateArchivedThreads: settings.includePrivateArchivedThreads,
+		includeMembers: settings.includeMembers,
+		includeAttachments: settings.includeAttachments,
+		includeEmbeds: settings.includeEmbeds,
+		includePolls: settings.includePolls,
+		includeThreadMembers: settings.includeThreadMembers,
+		...(settings.since ? { since: settings.since } : {}),
+		syncMode: settings.syncMode,
+	};
 }
 
 function addObsidianSourceUnlocked(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
@@ -259,6 +442,52 @@ function cleanExcludeGlobs(values: readonly string[] | undefined): readonly stri
 	if (!values) return null;
 	const cleaned = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 	return cleaned.length > 0 ? cleaned : [];
+}
+
+function cleanDiscordIds(values: readonly unknown[]): readonly string[] {
+	return Array.from(
+		new Set(
+			values
+				.filter((value): value is string => typeof value === "string")
+				.map((value) => value.trim())
+				.filter(Boolean),
+		),
+	);
+}
+
+function cleanDiscordChannelFilter(values: readonly unknown[]): readonly string[] {
+	return Array.from(
+		new Set(
+			values
+				.filter((value): value is string => typeof value === "string")
+				.map((value) => value.trim())
+				.filter(Boolean),
+		),
+	);
+}
+
+function isDiscordSnowflake(value: string): boolean {
+	return /^\d{17,20}$/.test(value);
+}
+
+function looksLikeRawDiscordToken(value: string): boolean {
+	return /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}$/.test(value);
+}
+
+function cleanPositiveInteger(value: unknown, max: number): number | undefined {
+	if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > max) return undefined;
+	return value;
+}
+
+function cleanIsoDate(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (!trimmed) return undefined;
+	const ms = Date.parse(trimmed);
+	return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
+
+function isDiscordSyncMode(value: unknown): value is DiscordSourceSyncMode {
+	return value === "rest" || value === "gateway-tail" || value === "desktop-cache";
 }
 
 function mergeDefaultObsidianExcludeGlobs(values: readonly string[] | undefined): readonly string[] {

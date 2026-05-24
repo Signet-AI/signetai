@@ -223,18 +223,25 @@ export type {
 	WorkspaceSourceRepoSyncResult,
 } from "./workspace-source-repo";
 export {
+	addDiscordSource,
 	addObsidianSource,
+	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
+	MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL,
 	getAgentsDir,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
+	parseDiscordSettings,
 	removeSource,
 	saveSourcesConfig,
 } from "./sources-config";
 export type {
+	AddDiscordSourceInput,
 	AddObsidianSourceInput,
 	AddSourceResult,
+	DiscordSourceSettings,
+	DiscordSourceSyncMode,
 	RemoveSourceResult,
 	SignetSourceEntry,
 	SignetSourceKind,

@@ -1739,8 +1739,8 @@ Sources
 -------
 
 Sources connect read-only external knowledge bases to Signet recall without
-turning them into ordinary saved memories. Obsidian is the currently supported
-source kind.
+turning them into ordinary saved memories. Supported source kinds are
+`obsidian` and `discord`.
 
 ### GET /api/sources
 
@@ -1772,7 +1772,7 @@ agent.
 
 ### POST /api/sources/obsidian
 
-Add or update an Obsidian vault source and index it immediately. The vault
+Add or update an Obsidian vault source and queue a source index job. The vault
 stays read-only; Signet writes only derived source artifacts, graph rows, and
 chunk embeddings to its own database.
 
@@ -1794,9 +1794,60 @@ chunk embeddings to its own database.
 {
   "source": { "id": "obsidian:abc123", "kind": "obsidian" },
   "created": true,
-  "indexed": 42
+  "indexed": 0,
+  "queued": true,
+  "job": { "status": "queued", "sourceId": "obsidian:abc123" }
 }
 ```
+
+### POST /api/sources/discord
+
+Add or update a Discord source and queue a shared source index job. Discord
+sources require a bot token secret reference; raw Discord tokens are rejected
+at the config boundary.
+
+**Request body**
+
+```json
+{
+  "guildIds": ["123456789012345678"],
+  "tokenRef": "DISCORD_BOT_TOKEN",
+  "name": "Team Discord",
+  "channelFilter": ["general", "234567890123456789"],
+  "maxMessagesPerChannel": 1000,
+  "includeThreads": true,
+  "includeArchivedThreads": true,
+  "includePrivateArchivedThreads": false,
+  "includeMembers": true,
+  "includeAttachments": true,
+  "includeEmbeds": true,
+  "includePolls": true,
+  "includeThreadMembers": true,
+  "since": "2026-01-01T00:00:00.000Z",
+  "syncMode": "rest"
+}
+```
+
+`guildId` is accepted as a single-guild alias. `channels` is accepted as an
+alias for `channelFilter`.
+
+**Response**
+
+```json
+{
+  "source": { "id": "discord:abc123", "kind": "discord" },
+  "created": true,
+  "indexed": 0,
+  "queued": true,
+  "job": { "status": "queued", "sourceId": "discord:abc123" }
+}
+```
+
+The REST sync path indexes guilds, categories, channels, announcement
+channels, forums, active and archived threads, member snapshots, thread member
+snapshots, message windows, mentions, attachment metadata, embeds, polls,
+checkpoints, and partial-failure artifacts. Partial Discord listings are not
+used as authoritative deletes.
 
 ### DELETE /api/sources/:sourceId
 
@@ -4517,6 +4568,7 @@ silently disappear from the API reference.
 | GET | `/api/sources` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/pick-directory` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/obsidian` | platform/daemon/src/routes/sources-routes.ts |
+| POST | `/api/sources/discord` | platform/daemon/src/routes/sources-routes.ts |
 | DELETE | `/api/sources/:sourceId` | platform/daemon/src/routes/sources-routes.ts |
 | GET | `/api/knowledge/entities` | platform/daemon/src/routes/knowledge-routes.ts |
 | POST | `/api/knowledge/entities/:id/pin` | platform/daemon/src/routes/knowledge-routes.ts |

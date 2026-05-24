@@ -10,7 +10,7 @@ Sources
 
 Sources are external knowledge bases that Signet can read, index, and recall from without turning them into ordinary saved memories.
 
-The first Sources connector is **Obsidian**. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall.
+Sources currently support **Obsidian** vaults and **Discord** guilds. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall. Add Discord with a bot-token secret reference and Signet indexes guild topology, channels, threads, members, message windows, and Discord metadata through the same source-owned artifact lifecycle.
 
 The important rule is simple: **the source stays canonical**. Signet reads from the vault. It does not edit notes, rewrite frontmatter, create files, or move anything inside the source directory.
 
@@ -27,6 +27,34 @@ Use Sources when you want Signet to recall from:
 - future cloud, code, or document connectors.
 
 A source hit is marked as source-backed recall, not as a native saved memory. Obsidian recall results include a canonical `source_path` so agents and tools can inspect the original file directly.
+
+Discord v1
+----------
+
+Discord Sources v1 indexes bot-accessible guild context through Discord REST API v10:
+
+```bash
+signet secret put DISCORD_BOT_TOKEN
+signet sources add discord --guild 123456789012345678 --token-ref DISCORD_BOT_TOKEN --name "Team Discord"
+signet sources add discord --guild 123456789012345678 --token-ref DISCORD_BOT_TOKEN --channel general --since 2026-01-01
+signet sources list
+signet sources remove discord:...
+```
+
+The daemon rejects raw Discord tokens in source config. Store the bot token in Signet Secrets or an external secret reference, then pass the secret name with `--token-ref`.
+
+The REST sync path indexes:
+
+- multiple guilds per source;
+- guilds, categories, text channels, announcement channels, forums, media channels, active threads, and archived public/private thread catalogs;
+- guild member snapshots and thread member snapshots;
+- message windows with reply references, mentions, attachment metadata, embed metadata, poll metadata, and message lifecycle fields;
+- source checkpoints with latest/backfill cursors and authoritative vs partial status;
+- source failure artifacts for unavailable or partial fetches.
+
+Partial Discord listings are never treated as authoritative deletes. If a channel, thread, member, or message fetch fails, Signet records a source failure artifact and preserves existing source-owned rows until a successful sync can refresh them.
+
+Discord sources stay read-only. Signet does not write to Discord, automate user tokens, or selfbot against user accounts.
 
 Obsidian v1
 -----------
@@ -161,6 +189,7 @@ The daemon exposes the Sources lifecycle under `/api/sources`:
 |--------|------|-------------|
 | `GET` | `/api/sources` | List configured sources. |
 | `POST` | `/api/sources/obsidian` | Add/update an Obsidian vault source and index it. |
+| `POST` | `/api/sources/discord` | Add/update a Discord source and queue a shared source index job. |
 | `DELETE` | `/api/sources/:sourceId` | Remove a source config and purge Signet-owned source rows. |
 | `POST` | `/api/sources/pick-directory` | Development/browser fallback for choosing a local directory. |
 
@@ -169,11 +198,12 @@ The desktop shell uses native folder selection through IPC. The daemon picker ro
 Limitations in v1
 -----------------
 
-- Obsidian is the first supported source connector.
+- Discord gateway tailing and local desktop cache import are represented in config but not active yet. The supported Discord sync mode is REST.
 - Sources are local/operator-managed. Permissions and RBAC are intentionally out of scope for v1.
-- Signet does not write back to Obsidian.
+- Signet does not write back to Obsidian or Discord.
 - Rename handling is delete + add.
 - Non-Markdown Obsidian attachments are not indexed by the Obsidian v1 source path.
+- Discord attachment binary/media extraction is disabled by default; v1 indexes attachment metadata.
 
 Operational safety
 ------------------

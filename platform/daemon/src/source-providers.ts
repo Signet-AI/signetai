@@ -1,13 +1,37 @@
-import type { SignetSourceEntry, SignetSourceKind } from "@signet/core";
+import type { SignetSourceEntry, SignetSourceKind, SourceFailureState } from "@signet/core";
+import { discordSourceProvider } from "./discord-source-provider";
 import {
 	type NativeMemorySource,
 	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
 } from "./native-memory-sources";
 
+export interface SourceProviderProgressEvent {
+	readonly scanned: number;
+	readonly total: number;
+	readonly indexed: number;
+	readonly currentPath: string;
+}
+
+export interface SourceProviderSyncContext {
+	readonly source: SignetSourceEntry;
+	readonly agentsDir: string;
+	readonly agentId: string;
+	readonly shouldContinue: () => boolean;
+	readonly onProgress?: (event: SourceProviderProgressEvent) => void;
+}
+
+export interface SourceProviderSyncResult {
+	readonly indexed: number;
+	readonly scanned: number;
+	readonly total: number;
+	readonly failures: readonly SourceFailureState[];
+}
+
 export interface SourceProviderAdapter {
 	readonly kind: SignetSourceKind;
-	readonly toNativeSource: (source: SignetSourceEntry) => NativeMemorySource;
+	readonly toNativeSource?: (source: SignetSourceEntry) => NativeMemorySource;
+	readonly sync?: (context: SourceProviderSyncContext) => Promise<SourceProviderSyncResult>;
 	readonly purge: (source: SignetSourceEntry, agentId: string | undefined) => number;
 }
 
@@ -29,9 +53,10 @@ export function registerSourceProvider(provider: SourceProviderAdapter): void {
 
 export function getSourceProvider(kind: SignetSourceKind): SourceProviderAdapter | undefined {
 	if (kind === obsidianSourceProvider.kind) return obsidianSourceProvider;
+	if (kind === discordSourceProvider.kind) return discordSourceProvider;
 	return additionalProviders.get(kind);
 }
 
 export function configuredSourceProviders(): readonly SourceProviderAdapter[] {
-	return [obsidianSourceProvider, ...additionalProviders.values()];
+	return [obsidianSourceProvider, discordSourceProvider, ...additionalProviders.values()];
 }

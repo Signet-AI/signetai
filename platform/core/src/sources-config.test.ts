@@ -3,11 +3,14 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
+	addDiscordSource,
 	addObsidianSource,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
+	parseDiscordSettings,
 	removeSource,
 } from "./sources-config";
 
@@ -73,6 +76,141 @@ describe("sources-config", () => {
 		expect(second.created).toBe(false);
 		expect(second.source.name).toBe("Vault B");
 		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("adds a Discord source with validated provider settings", () => {
+		const agentsDir = tmp();
+
+		const result = addDiscordSource(
+			{
+				guildIds: ["123456789012345678", "223456789012345678", "123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Team Discord",
+				channelFilter: ["general", "323456789012345678", "general"],
+				maxMessagesPerChannel: 250,
+				includePrivateArchivedThreads: true,
+				since: "2026-01-01",
+				now: "2026-01-02T00:00:00.000Z",
+			},
+			agentsDir,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok === false) throw new Error(result.error);
+		expect(result.created).toBe(true);
+		expect(result.source.kind).toBe("discord");
+		expect(result.source.root).toBe("discord://guilds/123456789012345678,223456789012345678");
+		expect(result.source.providerSettings).toEqual({
+			guildIds: ["123456789012345678", "223456789012345678"],
+			tokenRef: "DISCORD_BOT_TOKEN",
+			channelFilter: ["general", "323456789012345678"],
+			maxMessagesPerChannel: 250,
+			includeThreads: true,
+			includeArchivedThreads: true,
+			includePrivateArchivedThreads: true,
+			includeMembers: true,
+			includeAttachments: true,
+			includeEmbeds: true,
+			includePolls: true,
+			includeThreadMembers: true,
+			since: "2026-01-01T00:00:00.000Z",
+			syncMode: "rest",
+		});
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("updates an existing Discord source instead of duplicating it", () => {
+		const agentsDir = tmp();
+		const first = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Discord A",
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			agentsDir,
+		);
+		const second = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Discord B",
+				maxMessagesPerChannel: 10,
+				now: "2026-01-02T00:00:00.000Z",
+			},
+			agentsDir,
+		);
+
+		expect(first.ok).toBe(true);
+		expect(second.ok).toBe(true);
+		if (second.ok === false) throw new Error(second.error);
+		expect(second.created).toBe(false);
+		expect(second.source.name).toBe("Discord B");
+		expect(parseDiscordSettings(second.source.providerSettings).maxMessagesPerChannel).toBe(10);
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("rejects invalid Discord source boundaries", () => {
+		const agentsDir = tmp();
+
+		expect(addDiscordSource({ guildIds: [], tokenRef: "DISCORD_BOT_TOKEN" }, agentsDir)).toEqual({
+			ok: false,
+			error: "At least one Discord guild ID is required",
+		});
+		expect(addDiscordSource({ guildIds: ["bad"], tokenRef: "DISCORD_BOT_TOKEN" }, agentsDir)).toEqual({
+			ok: false,
+			error: "Invalid Discord guild ID: bad",
+		});
+		expect(
+			addDiscordSource(
+				{
+					guildIds: ["123456789012345678"],
+					tokenRef: "MzI0NzY5ODEwMDc4NzQ3NjY4.GbM8rb.fakeFakeFakeFakeFakeFakeFakeFake",
+				},
+				agentsDir,
+			),
+		).toEqual({ ok: false, error: "Discord tokenRef must be a secret reference, not a raw token" });
+		expect(
+			addDiscordSource(
+				{
+					guildIds: ["123456789012345678"],
+					tokenRef: "DISCORD_BOT_TOKEN",
+					maxMessagesPerChannel: 0,
+				},
+				agentsDir,
+			),
+		).toEqual({
+			ok: false,
+			error: "Discord maxMessagesPerChannel must be an integer between 1 and 10000",
+		});
+		expect(
+			addDiscordSource({ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", since: "nope" }, agentsDir),
+		).toEqual({ ok: false, error: "Discord since must be a valid ISO date" });
+	});
+
+	it("parses persisted Discord settings with safe defaults", () => {
+		expect(
+			parseDiscordSettings({
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				maxMessagesPerChannel: -1,
+				includeThreads: false,
+				syncMode: "gateway-tail",
+			}),
+		).toEqual({
+			guildIds: ["123456789012345678"],
+			tokenRef: "DISCORD_BOT_TOKEN",
+			maxMessagesPerChannel: DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
+			includeThreads: false,
+			includeArchivedThreads: true,
+			includePrivateArchivedThreads: false,
+			includeMembers: true,
+			includeAttachments: true,
+			includeEmbeds: true,
+			includePolls: true,
+			includeThreadMembers: true,
+			syncMode: "gateway-tail",
+		});
 	});
 
 	it("round-trips provider-neutral source settings for future adapters", () => {

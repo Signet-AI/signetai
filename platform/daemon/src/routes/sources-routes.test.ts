@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addObsidianSource, loadSourcesConfig } from "@signet/core";
+import { addDiscordSource, addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import type { NativeMemoryBridgeHandle, NativeMemoryBridgeOptions, NativeMemorySource } from "../native-memory-sources";
@@ -130,6 +130,44 @@ describe("Sources routes", () => {
 
 		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
 		expect(loadSourcesConfig(dir).sources[0]?.id).toBe(body.source.id);
+	});
+
+	it("connects a Discord source through provider-neutral source config", async () => {
+		const res = await makeApp().request("/api/sources/discord", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Route Discord",
+				channelFilter: ["general"],
+				maxMessagesPerChannel: 25,
+			}),
+		});
+
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as {
+			source: { kind: string; providerSettings?: { tokenRef?: string } };
+			queued: boolean;
+		};
+		expect(body.queued).toBe(true);
+		expect(body.source.kind).toBe("discord");
+		expect(body.source.providerSettings?.tokenRef).toBe("DISCORD_BOT_TOKEN");
+		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("discord");
+	});
+
+	it("rejects raw Discord tokens at the route boundary", async () => {
+		const res = await makeApp().request("/api/sources/discord", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				guildIds: ["123456789012345678"],
+				tokenRef: "MzI0NzY5ODEwMDc4NzQ3NjY4.GbM8rb.fakeFakeFakeFakeFakeFakeFakeFake",
+			}),
+		});
+
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toContain("not a raw token");
 	});
 
 	it("does not block the connect response on a slow Obsidian source scan", async () => {
@@ -314,6 +352,58 @@ describe("Sources routes", () => {
 				"source_chunk",
 				`${added.source.id}:permanent/Note.md#overview:1-3:0`,
 				"source chunk",
+				"2026-01-01T00:00:00.000Z",
+				"default",
+			);
+		});
+
+		const res = await makeApp().request("/api/sources");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			sources: Array<{ stats?: { artifacts: number; chunks: number; indexed: number } }>;
+		};
+		expect(body.sources[0]?.stats).toEqual({ artifacts: 1, chunks: 1, indexed: 1 });
+	});
+
+	it("reports generic source stats for Discord source-owned artifacts and chunks", async () => {
+		const added = addDiscordSource(
+			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", name: "Stats Discord" },
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, source_id, source_root, session_id, session_token, harness, captured_at, content, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"default",
+				"discord://guild/123456789012345678",
+				"sha",
+				"source_discord_guild",
+				added.source.id,
+				added.source.root,
+				"session",
+				"token",
+				"discord",
+				"2026-01-01T00:00:00.000Z",
+				"Guild",
+				"2026-01-01T00:00:00.000Z",
+			);
+			db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"discord-chunk-1",
+				"discord-chunk-hash-1",
+				new Uint8Array([0]),
+				1,
+				"source_chunk",
+				`${added.source.id}:guild/123456789012345678#overview:1-3:0`,
+				"discord source chunk",
 				"2026-01-01T00:00:00.000Z",
 				"default",
 			);
