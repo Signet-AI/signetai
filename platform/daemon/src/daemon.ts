@@ -23,6 +23,7 @@ import {
 	loadConfiguredHarnesses,
 	loadSourcesConfig,
 	normalizeAgentRosterEntry,
+	parseRoutingTargetRef,
 	parseSimpleYaml,
 	stripSignetBlock,
 } from "@signet/core";
@@ -913,9 +914,10 @@ function executorForTargetRef(
 	statusValue: InferenceStatusSummary,
 	targetRef: string | undefined,
 ): RuntimeProviderName | null {
-	if (!targetRef?.includes("/")) return null;
-	const targetId = targetRef.split("/", 1)[0];
-	return targetId ? ((statusValue.targets[targetId]?.executor as RuntimeProviderName | undefined) ?? null) : null;
+	if (!targetRef) return null;
+	const parsed = parseRoutingTargetRef(targetRef);
+	if (!parsed.ok) return null;
+	return (statusValue.targets[parsed.value.targetId]?.executor as RuntimeProviderName | undefined) ?? null;
 }
 
 function runtimeReasonForTarget(
