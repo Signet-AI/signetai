@@ -87,6 +87,7 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 		if (failures.length === failureCountBeforeRepo)
 			purgeStaleGitHubArtifacts(context.source.id, agentId, syncStartedAt, seenPaths, repo.fullName);
 	}
+	if (context.shouldContinue()) purgeStaleGitHubFailureArtifacts(context.source.id, agentId, syncStartedAt);
 	for (const failure of failures) {
 		indexed += writeFailureArtifact(context.source, agentId, failure);
 	}
@@ -386,6 +387,31 @@ function purgeStaleGitHubArtifacts(
 					.run(syncStartedAt, row.rowid),
 			);
 		}
+	});
+}
+
+function purgeStaleGitHubFailureArtifacts(sourceId: string, agentId: string, syncStartedAt: string): void {
+	getDbAccessor().withWriteTx((db) => {
+		countChanges(
+			db
+				.prepare(
+					`UPDATE memory_artifacts
+					 SET is_deleted = 1, updated_at = ?
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND source_kind = 'source_github_failure'
+					   AND source_path >= ?
+					   AND source_path < ?
+					   AND COALESCE(is_deleted, 0) = 0`,
+				)
+				.run(
+					syncStartedAt,
+					agentId,
+					sourceId,
+					`github://source/${sourceId}/failures/`,
+					`github://source/${sourceId}/failures/\uffff`,
+				),
+		);
 	});
 }
 

@@ -263,6 +263,79 @@ describe("github-source-provider", () => {
 		expect(rows.map((row) => row.source_kind)).toContain("source_github_failure");
 	});
 
+	it("purges stale failure artifacts after a later successful sync", async () => {
+		const source: SignetSourceEntry = {
+			id: "github:recovered",
+			kind: "github",
+			name: "GitHub",
+			root: "github://repos/Signet-AI/signetai",
+			enabled: true,
+			mode: "read-only",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			providerSettings: {
+				repos: ["Signet-AI/signetai"],
+				resourceTypes: ["issues"],
+				state: "all",
+				includeComments: false,
+				docPaths: ["README.md"],
+				maxItemsPerRepo: 5,
+			},
+		};
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			harness: "github",
+			sourceId: source.id,
+			sourceRoot: source.root,
+			sourceExternalId: "failure:2025-01-01T00:00:00.000Z:old failure",
+			sourcePath: `github://source/${source.id}/failures/2025-01-01T00%3A00%3A00.000Z`,
+			sourceKind: "source_github_failure",
+			sourceMtimeMs: Date.parse("2025-01-01T00:00:00.000Z"),
+			capturedAt: "2025-01-01T00:00:00.000Z",
+			content: "old failure",
+		});
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.endsWith("/repos/Signet-AI/signetai")) {
+				return Promise.resolve(
+					Response.json({ name: "signetai", full_name: "Signet-AI/signetai", default_branch: "main" }),
+				);
+			}
+			if (text.includes("/issues?")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							number: 12,
+							title: "Current issue",
+							body: "body",
+							state: "open",
+							html_url: "https://github.com/Signet-AI/signetai/issues/12",
+							user: { login: "alice" },
+							labels: [],
+							created_at: "2026-01-01T00:00:00.000Z",
+							updated_at: "2026-01-02T00:00:00.000Z",
+							closed_at: null,
+							comments: 0,
+						},
+					]),
+				);
+			}
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+
+		const result = await githubSourceProvider.sync?.({
+			source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		const rows = sourceRows(source.id);
+		expect(result?.failures).toEqual([]);
+		expect(rows.map((row) => row.source_external_id)).toContain("Signet-AI/signetai:issue:12");
+		expect(rows.map((row) => row.source_kind)).not.toContain("source_github_failure");
+	});
+
 	it("propagates comment fetch failures to the provider result", async () => {
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			const text = String(url);
