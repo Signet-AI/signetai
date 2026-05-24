@@ -138,7 +138,7 @@ in the daemon database.
 The Settings pipeline section includes active-session controls with per-session
 bypass toggles. Each row shows the session key, harness name, runtime path, and
 a Switch control to enable or disable bypass. Toggling the switch calls
-`POST /api/sessions/:key/bypass` (see [[api#Sessions]]). When bypass
+`POST /api/sessions/:key/bypass` (see [Sessions and hooks API](./api/sessions-hooks.md#sessions)). When bypass
 is on, all hooks for that session return empty no-op responses — MCP
 tools still work normally.
 

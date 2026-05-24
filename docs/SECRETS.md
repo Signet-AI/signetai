@@ -295,7 +295,8 @@ accepted:
 
 ## API Reference
 
-The full secrets API is documented in [API.md](./API.md#secrets-api). Summary:
+The full secrets API is documented in the
+[Runtime extensions API](./api/runtime-extensions.md#secrets). Summary:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|

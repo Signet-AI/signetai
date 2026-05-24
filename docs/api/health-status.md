@@ -133,7 +133,7 @@ silent fallback or hard-blocked extraction after boot.
 ```
 
 The `bypassedSessions` field reports how many active sessions currently have
-bypass enabled (see [[#Sessions]]).
+bypass enabled (see [Sessions and hooks API](./sessions-hooks.md#sessions)).
 Monitor `providerResolution.extraction.status` for `degraded` or `blocked`
 states when the configured extraction provider is unavailable or routed to a
 fallback target.
