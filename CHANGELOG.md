@@ -10,6 +10,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add Discord source adapter.
 - Bug fixes: disclose macOS launchagent attribution; surface aggregate usage and credit fallback.
 - Refactoring: unify provider routing factory.
+- Docs: split HTTP reference.
 
 ### 2026-05-23
 - Features: implement parseMemory with structured section extraction.
@@ -35,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: load updater through cjs interop.
 
 ## Release Ledger
+
+## [0.125.2] - 2026-05-24
+
+Release summary: 1 docs update.
+Tag range: `v0.125.1..v0.125.2`.
+
+### Docs
+
+- **api**: split HTTP reference (#762)
 
 ## [0.125.1] - 2026-05-24
 
