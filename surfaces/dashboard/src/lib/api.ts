@@ -1193,8 +1193,10 @@ export async function addObsidianSource(
 
 export interface AddDiscordSourceInput {
 	guildIds: string[];
-	tokenRef: string;
+	tokenRef?: string;
 	name?: string;
+	desktopCachePath?: string;
+	desktopCacheFullScan?: boolean;
 	channelFilter?: string[];
 	maxMessagesPerChannel?: number;
 	includeThreads?: boolean;
@@ -1206,6 +1208,7 @@ export interface AddDiscordSourceInput {
 	includePolls?: boolean;
 	includeThreadMembers?: boolean;
 	since?: string;
+	syncMode?: "rest" | "gateway-tail" | "desktop-cache";
 }
 
 export async function addDiscordSource(input: AddDiscordSourceInput): Promise<AddSourceResponse> {

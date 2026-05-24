@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
-import { addObsidianVaultSource, removeConfiguredSource } from "./sources";
+import { addDiscordSourceFromCli, addObsidianVaultSource, removeConfiguredSource } from "./sources";
 
 describe("sources CLI features", () => {
 	let dir = "";
@@ -93,6 +93,25 @@ describe("sources CLI features", () => {
 		expect(source?.name).toBe("Renamed CLI Vault");
 		expect(source?.excludeGlobs).toContain("private/**");
 		expect(logs.join("\n")).toContain("Updated Obsidian source: Renamed CLI Vault");
+		expect(process.exitCode).not.toBe(1);
+	});
+
+	it("adds a Discord Desktop cache source without requiring bot options", async () => {
+		const cachePath = join(dir, "discord");
+
+		await addDiscordSourceFromCli(
+			{ name: "CLI Discord Cache", mode: "desktop-cache", desktopCachePath: cachePath, fullCache: true },
+			{ agentsDir: dir },
+		);
+
+		const [source] = loadSourcesConfig(dir).sources;
+		expect(source?.id.startsWith("discord-cache:")).toBe(true);
+		expect(source?.root).toBe(cachePath);
+		expect(source?.providerSettings?.syncMode).toBe("desktop-cache");
+		expect(source?.providerSettings?.desktopCacheFullScan).toBe(true);
+		expect(logs.join("\n")).toContain("Added Discord source: CLI Discord Cache");
+		expect(logs.join("\n")).toContain("mode: desktop-cache");
+		expect(logs.join("\n")).not.toContain("tokenRef:");
 		expect(process.exitCode).not.toBe(1);
 	});
 

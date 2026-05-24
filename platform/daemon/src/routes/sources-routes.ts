@@ -67,6 +67,8 @@ interface AddDiscordSourceBody {
 	readonly guildId?: string;
 	readonly tokenRef?: string;
 	readonly name?: string;
+	readonly desktopCachePath?: string;
+	readonly desktopCacheFullScan?: boolean;
 	readonly channelFilter?: readonly string[];
 	readonly channels?: readonly string[];
 	readonly maxMessagesPerChannel?: number;
@@ -171,6 +173,8 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				guildIds,
 				tokenRef: typeof body.tokenRef === "string" ? body.tokenRef : "",
 				name: body.name,
+				desktopCachePath: typeof body.desktopCachePath === "string" ? body.desktopCachePath : undefined,
+				desktopCacheFullScan: body.desktopCacheFullScan,
 				channelFilter,
 				maxMessagesPerChannel: body.maxMessagesPerChannel,
 				includeThreads: body.includeThreads,

@@ -23,6 +23,8 @@ export interface AddDiscordSourceOptions {
 	readonly guild?: readonly string[];
 	readonly tokenRef?: string;
 	readonly name?: string;
+	readonly desktopCachePath?: string;
+	readonly fullCache?: boolean;
 	readonly channel?: readonly string[];
 	readonly maxMessages?: string;
 	readonly since?: string;
@@ -67,6 +69,8 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 			guildIds,
 			tokenRef: options.tokenRef ?? "",
 			name: options.name,
+			desktopCachePath: options.desktopCachePath,
+			desktopCacheFullScan: options.fullCache,
 			channelFilter: options.channel,
 			maxMessagesPerChannel,
 			includeThreads: options.threads,
@@ -91,7 +95,12 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 	const verb = result.created ? "Added" : "Updated";
 	console.log(chalk.green(`✓ ${verb} Discord source: ${result.source.name}`));
 	console.log(chalk.dim(`  ${result.source.root}`));
-	console.log(chalk.dim(`  tokenRef: ${result.source.providerSettings?.tokenRef ?? ""}`));
+	if (result.source.providerSettings?.syncMode === "desktop-cache") {
+		console.log(chalk.dim("  mode: desktop-cache"));
+		console.log(chalk.dim(`  full cache scan: ${result.source.providerSettings.desktopCacheFullScan === true}`));
+	} else {
+		console.log(chalk.dim(`  tokenRef: ${result.source.providerSettings?.tokenRef ?? ""}`));
+	}
 	console.log();
 	console.log(chalk.dim("The daemon indexes Discord through the shared Sources job pipeline."));
 	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
@@ -115,7 +124,9 @@ export async function listSources(deps: SourcesDeps): Promise<void> {
 				? source.providerSettings.guildIds.filter((entry) => typeof entry === "string")
 				: [];
 			if (guildIds.length > 0) console.log(chalk.dim(`  guilds: ${guildIds.join(", ")}`));
-			if (typeof source.providerSettings.tokenRef === "string")
+			if (source.providerSettings.syncMode === "desktop-cache")
+				console.log(chalk.dim(`  desktop cache: ${String(source.providerSettings.desktopCachePath ?? source.root)}`));
+			if (source.providerSettings.syncMode !== "desktop-cache" && typeof source.providerSettings.tokenRef === "string")
 				console.log(chalk.dim(`  tokenRef: ${source.providerSettings.tokenRef}`));
 		}
 		if (source.excludeGlobs?.length) console.log(chalk.dim(`  excludes: ${source.excludeGlobs.join(", ")}`));

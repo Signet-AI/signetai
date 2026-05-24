@@ -110,8 +110,13 @@ let vaultName = $state("Obsidian Vault");
 let excludeGlobsText = $state("**/.obsidian/**\n**/.trash/**\n**/.hermes/**\n**/.*/**\n**/.*");
 // biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
 let discordName = $state("Discord");
+// biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
+let discordSyncMode = $state<"rest" | "desktop-cache">("rest");
 let discordGuildIdsText = $state("");
 let discordTokenRef = $state("");
+let discordDesktopCachePath = $state("");
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordDesktopCacheFullScan = $state(false);
 let discordChannelFilterText = $state("");
 let discordSince = $state("");
 // biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
@@ -483,12 +488,13 @@ const hasActiveIndexJob = $derived(
 const pathIsMissing = $derived(vaultPath.trim().length === 0);
 const discordGuildIds = $derived(parseListInput(discordGuildIdsText));
 const discordChannelFilter = $derived(parseListInput(discordChannelFilterText));
+const discordUsesDesktopCache = $derived(discordSyncMode === "desktop-cache");
 const discordTokenMissing = $derived(discordTokenRef.trim().length === 0);
 const discordGuildsMissing = $derived(discordGuildIds.length === 0);
 const canSubmit = $derived.by(() => {
 	if (adding) return false;
 	if (selectedKind === "obsidian") return !pathIsMissing;
-	if (selectedKind === "discord") return !discordGuildsMissing && !discordTokenMissing;
+	if (selectedKind === "discord") return discordUsesDesktopCache || (!discordGuildsMissing && !discordTokenMissing);
 	return false;
 });
 const filteredConnectors = $derived.by(() => {
@@ -565,6 +571,31 @@ async function chooseFolder(): Promise<void> {
 	}
 }
 
+async function chooseDiscordCacheFolder(): Promise<void> {
+	const shell = getDesktopShell() as DesktopShellWithPicker;
+	pickingFolder = true;
+	error = null;
+	status = null;
+	try {
+		if (shell?.pickDirectory) {
+			const picked = await shell.pickDirectory({ title: "Choose Discord Desktop data folder" });
+			if (picked) discordDesktopCachePath = picked;
+			return;
+		}
+
+		const result = await pickSourceDirectory("Choose Discord Desktop data folder");
+		if (result.path) {
+			discordDesktopCachePath = result.path;
+			return;
+		}
+		if (result.error) error = result.error;
+	} catch (err) {
+		error = err instanceof Error ? err.message : "Could not open folder picker.";
+	} finally {
+		pickingFolder = false;
+	}
+}
+
 async function submitSource(): Promise<void> {
 	touchedPath = true;
 	if (!canSubmit) return;
@@ -598,20 +629,23 @@ async function submitDiscordSource(): Promise<void> {
 	error = null;
 	try {
 		const result = await addDiscordSource({
-			guildIds: discordGuildIds,
-			tokenRef: discordTokenRef.trim(),
+			guildIds: discordUsesDesktopCache ? [] : discordGuildIds,
+			tokenRef: discordUsesDesktopCache ? undefined : discordTokenRef.trim(),
 			name: discordName.trim() || undefined,
-			channelFilter: discordChannelFilter.length > 0 ? discordChannelFilter : undefined,
-			maxMessagesPerChannel: discordMaxMessages,
-			includeMembers: discordIncludeMembers,
-			includeThreads: discordIncludeThreads,
-			includeArchivedThreads: discordIncludeArchivedThreads,
-			includePrivateArchivedThreads: discordIncludePrivateArchivedThreads,
-			includeAttachments: discordIncludeAttachments,
-			includeEmbeds: discordIncludeEmbeds,
-			includePolls: discordIncludePolls,
-			includeThreadMembers: discordIncludeThreadMembers,
-			since: discordSince.trim() || undefined,
+			desktopCachePath: discordUsesDesktopCache ? discordDesktopCachePath.trim() || undefined : undefined,
+			desktopCacheFullScan: discordUsesDesktopCache ? discordDesktopCacheFullScan : undefined,
+			channelFilter: !discordUsesDesktopCache && discordChannelFilter.length > 0 ? discordChannelFilter : undefined,
+			maxMessagesPerChannel: discordUsesDesktopCache ? undefined : discordMaxMessages,
+			includeMembers: discordUsesDesktopCache ? undefined : discordIncludeMembers,
+			includeThreads: discordUsesDesktopCache ? undefined : discordIncludeThreads,
+			includeArchivedThreads: discordUsesDesktopCache ? undefined : discordIncludeArchivedThreads,
+			includePrivateArchivedThreads: discordUsesDesktopCache ? undefined : discordIncludePrivateArchivedThreads,
+			includeAttachments: discordUsesDesktopCache ? undefined : discordIncludeAttachments,
+			includeEmbeds: discordUsesDesktopCache ? undefined : discordIncludeEmbeds,
+			includePolls: discordUsesDesktopCache ? undefined : discordIncludePolls,
+			includeThreadMembers: discordUsesDesktopCache ? undefined : discordIncludeThreadMembers,
+			since: discordUsesDesktopCache ? undefined : discordSince.trim() || undefined,
+			syncMode: discordSyncMode,
 		});
 		if (result.error) {
 			error = result.error;
@@ -1075,32 +1109,55 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 												<input bind:value={discordName} placeholder="Team Discord" />
 											</label>
 											<label>
-												<span>Guild IDs</span>
-												<textarea
-													bind:value={discordGuildIdsText}
-													rows="3"
-													placeholder="123456789012345678&#10;223456789012345678"
-													onblur={() => (touchedDiscord = true)}
-												></textarea>
-												<small class="field-hint">One guild snowflake per line or comma. The bot token must already have access.</small>
+												<span>Mode</span>
+												<select bind:value={discordSyncMode}>
+													<option value="rest">Bot REST</option>
+													<option value="desktop-cache">Desktop cache</option>
+												</select>
 											</label>
-											{#if touchedDiscord && discordGuildsMissing}<p class="field-error">At least one Discord guild ID is required.</p>{/if}
-											<label>
-												<span>Token reference</span>
-												<input
-													bind:value={discordTokenRef}
-													placeholder="DISCORD_BOT_TOKEN"
-													onblur={() => (touchedDiscord = true)}
-												/>
-												<small class="field-hint">Use a Signet secret name or external secret reference. Raw Discord tokens are rejected.</small>
-											</label>
-											{#if touchedDiscord && discordTokenMissing}<p class="field-error">A Discord bot token reference is required.</p>{/if}
-											<label>
-												<span>Channel filter</span>
-												<textarea bind:value={discordChannelFilterText} rows="3" placeholder="general&#10;123456789012345679"></textarea>
-												<small class="field-hint">Optional channel names or IDs. Leave blank to index every bot-visible channel and thread.</small>
-											</label>
-											<div class="discord-options-grid">
+											{#if discordUsesDesktopCache}
+												<label>
+													<span>Desktop data folder</span>
+													<div class="path-row">
+														<input bind:value={discordDesktopCachePath} placeholder="Use detected Discord folder" />
+														<button type="button" onclick={() => void chooseDiscordCacheFolder()} disabled={pickingFolder}>
+															<FolderOpen /> {pickingFolder ? "Opening" : "Browse"}
+														</button>
+													</div>
+													<small class="field-hint">Leave blank to use the platform default Discord Desktop data folder.</small>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={discordDesktopCacheFullScan} type="checkbox" />
+													<span>Full cache scan</span>
+												</label>
+											{:else}
+												<label>
+													<span>Guild IDs</span>
+													<textarea
+														bind:value={discordGuildIdsText}
+														rows="3"
+														placeholder="123456789012345678&#10;223456789012345678"
+														onblur={() => (touchedDiscord = true)}
+													></textarea>
+													<small class="field-hint">One guild snowflake per line or comma. The bot token must already have access.</small>
+												</label>
+												{#if touchedDiscord && discordGuildsMissing}<p class="field-error">At least one Discord guild ID is required.</p>{/if}
+												<label>
+													<span>Token reference</span>
+													<input
+														bind:value={discordTokenRef}
+														placeholder="DISCORD_BOT_TOKEN"
+														onblur={() => (touchedDiscord = true)}
+													/>
+													<small class="field-hint">Use a Signet secret name or external secret reference. Raw Discord tokens are rejected.</small>
+												</label>
+												{#if touchedDiscord && discordTokenMissing}<p class="field-error">A Discord bot token reference is required.</p>{/if}
+												<label>
+													<span>Channel filter</span>
+													<textarea bind:value={discordChannelFilterText} rows="3" placeholder="general&#10;123456789012345679"></textarea>
+													<small class="field-hint">Optional channel names or IDs. Leave blank to index every bot-visible channel and thread.</small>
+												</label>
+												<div class="discord-options-grid">
 												<label>
 													<span>Message cap</span>
 													<input bind:value={discordMaxMessages} type="number" min="1" max="10000" />
@@ -1109,41 +1166,42 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 													<span>Since</span>
 													<input bind:value={discordSince} placeholder="2026-01-01" />
 												</label>
-											</div>
-											<div class="source-option-grid" aria-label="Discord source options">
-												<label class="source-option-row">
-													<input bind:checked={discordIncludeMembers} type="checkbox" />
-													<span>Members</span>
-												</label>
-												<label class="source-option-row">
-													<input bind:checked={discordIncludeThreads} type="checkbox" />
-													<span>Threads</span>
-												</label>
-												<label class="source-option-row">
-													<input bind:checked={discordIncludeArchivedThreads} type="checkbox" />
-													<span>Archived threads</span>
-												</label>
-												<label class="source-option-row">
-													<input bind:checked={discordIncludePrivateArchivedThreads} type="checkbox" />
-													<span>Private archived threads</span>
-												</label>
-												<label class="source-option-row">
-													<input bind:checked={discordIncludeThreadMembers} type="checkbox" />
-													<span>Thread members</span>
-												</label>
-												<label class="source-option-row">
-													<input bind:checked={discordIncludeAttachments} type="checkbox" />
-													<span>Attachments</span>
-												</label>
-												<label class="source-option-row">
-													<input bind:checked={discordIncludeEmbeds} type="checkbox" />
-													<span>Embeds</span>
-												</label>
-												<label class="source-option-row">
-													<input bind:checked={discordIncludePolls} type="checkbox" />
-													<span>Polls</span>
-												</label>
-											</div>
+												</div>
+												<div class="source-option-grid" aria-label="Discord source options">
+													<label class="source-option-row">
+														<input bind:checked={discordIncludeMembers} type="checkbox" />
+														<span>Members</span>
+													</label>
+													<label class="source-option-row">
+														<input bind:checked={discordIncludeThreads} type="checkbox" />
+														<span>Threads</span>
+													</label>
+													<label class="source-option-row">
+														<input bind:checked={discordIncludeArchivedThreads} type="checkbox" />
+														<span>Archived threads</span>
+													</label>
+													<label class="source-option-row">
+														<input bind:checked={discordIncludePrivateArchivedThreads} type="checkbox" />
+														<span>Private archived threads</span>
+													</label>
+													<label class="source-option-row">
+														<input bind:checked={discordIncludeThreadMembers} type="checkbox" />
+														<span>Thread members</span>
+													</label>
+													<label class="source-option-row">
+														<input bind:checked={discordIncludeAttachments} type="checkbox" />
+														<span>Attachments</span>
+													</label>
+													<label class="source-option-row">
+														<input bind:checked={discordIncludeEmbeds} type="checkbox" />
+														<span>Embeds</span>
+													</label>
+													<label class="source-option-row">
+														<input bind:checked={discordIncludePolls} type="checkbox" />
+														<span>Polls</span>
+													</label>
+												</div>
+											{/if}
 											<button class="connect-button" type="submit" disabled={!canSubmit}>
 												{#if adding}<span class="spin"><RefreshCw /></span>{:else}<CirclePlus />{/if}
 												{adding ? "Queueing" : "Add source"}

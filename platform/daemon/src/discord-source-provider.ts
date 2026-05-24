@@ -7,6 +7,7 @@ import {
 import { resolveDaemonAgentId } from "./agent-id";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
+import { syncDiscordDesktopCacheSource } from "./discord-desktop-cache-source";
 import {
 	DISCORD_CHANNEL_TYPES,
 	type DiscordAttachment,
@@ -47,9 +48,19 @@ export const discordSourceProvider: SourceProviderAdapter = {
 
 async function syncDiscordSource(context: SourceProviderSyncContext): Promise<SourceProviderSyncResult> {
 	const settings = parseDiscordSettings(context.source.providerSettings);
+	const agentId = context.agentId || resolveDaemonAgentId();
+	if (settings.syncMode === "desktop-cache") {
+		return syncDiscordDesktopCacheSource({
+			source: context.source,
+			agentId,
+			cachePath: settings.desktopCachePath ?? context.source.root,
+			fullScan: settings.desktopCacheFullScan,
+			shouldContinue: context.shouldContinue,
+			onProgress: context.onProgress,
+		});
+	}
 	if (settings.guildIds.length === 0) throw new Error("Discord source has no guild IDs");
 	if (!settings.tokenRef) throw new Error("Discord source has no tokenRef");
-
 	const failures: SourceFailureState[] = [];
 	let indexed = 0;
 	let scanned = 0;
@@ -57,7 +68,6 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 	const total = settings.guildIds.length;
 	const token = await getSecret(settings.tokenRef);
 	const fetchConfig: DiscordFetchConfig = { token };
-	const agentId = context.agentId || resolveDaemonAgentId();
 
 	if (settings.syncMode !== "rest") {
 		const failure = failureState(

@@ -156,6 +156,47 @@ describe("Sources routes", () => {
 		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("discord");
 	});
 
+	it("connects a Discord Desktop cache source without a bot token", async () => {
+		const cachePath = join(dir, "discord");
+		mkdirSync(join(cachePath, "Local Storage", "leveldb"), { recursive: true });
+		writeFileSync(
+			join(cachePath, "Local Storage", "leveldb", "000001.log"),
+			`https://discord.com/channels/@me/111111111111111111
+{"id":"333333333333333333","channel_id":"111111111111111111","content":"route dm message","timestamp":"2026-04-23T18:20:43Z","author":{"id":"222222222222222222","username":"alice"}}`,
+		);
+
+		const res = await makeApp().request("/api/sources/discord", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				name: "Route Discord Cache",
+				desktopCachePath: cachePath,
+				syncMode: "desktop-cache",
+			}),
+		});
+
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as {
+			source: { id: string; kind: string; providerSettings?: { syncMode?: string; desktopCachePath?: string } };
+			queued: boolean;
+		};
+		expect(body.queued).toBe(true);
+		expect(body.source.id.startsWith("discord-cache:")).toBe(true);
+		expect(body.source.providerSettings?.syncMode).toBe("desktop-cache");
+		expect(body.source.providerSettings?.desktopCachePath).toBe(cachePath);
+		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					(
+						db
+							.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE source_id = ? AND source_path LIKE ?")
+							.get(body.source.id, "discord-cache://guild/@me/%") as { count: number }
+					).count,
+			),
+		).toBeGreaterThan(0);
+	});
+
 	it("rejects raw Discord tokens at the route boundary", async () => {
 		const res = await makeApp().request("/api/sources/discord", {
 			method: "POST",

@@ -71,10 +71,12 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 
 	add
 		.command("discord")
-		.description("Index Discord guilds as read-only recall sources using a bot token secret reference")
-		.requiredOption("--guild <id>", "Discord guild ID (repeatable)", collect, [])
-		.requiredOption("--token-ref <secret>", "Signet secret name or external secret reference for the Discord bot token")
+		.description("Index Discord guilds or local Discord Desktop cache as read-only recall sources")
+		.option("--guild <id>", "Discord guild ID (repeatable; required for REST/gateway modes)", collect, [])
+		.option("--token-ref <secret>", "Signet secret name or external secret reference for the Discord bot token")
 		.option("--name <name>", "Display name for the Discord source")
+		.option("--desktop-cache-path <path>", "Discord Desktop data directory for --mode desktop-cache")
+		.option("--full-cache", "Exhaustively scan Chromium cache files for --mode desktop-cache")
 		.option("--channel <id-or-name>", "Channel ID or name filter (repeatable)", collect, [])
 		.option("--max-messages <count>", "Maximum messages per channel per sync")
 		.option("--since <iso-date>", "Lower bound for message history")

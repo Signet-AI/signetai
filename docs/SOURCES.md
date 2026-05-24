@@ -31,22 +31,25 @@ A source hit is marked as source-backed recall, not as a native saved memory. Ob
 Discord v1
 ----------
 
-Discord Sources v1 indexes bot-accessible guild context through Discord REST API v10:
+Discord Sources v1 indexes bot-accessible guild context through Discord REST API v10 and local Discord Desktop cache artifacts:
 
 ```bash
 signet secret put DISCORD_BOT_TOKEN
 signet sources add discord --guild 123456789012345678 --token-ref DISCORD_BOT_TOKEN --name "Team Discord"
 signet sources add discord --guild 123456789012345678 --token-ref DISCORD_BOT_TOKEN --channel general --since 2026-01-01
+signet sources add discord --mode desktop-cache --name "Local Discord Cache"
+signet sources add discord --mode desktop-cache --desktop-cache-path ~/.config/discord --full-cache
 signet sources list
 signet sources remove discord:...
 ```
 
 The daemon rejects raw Discord tokens in source config. Store the bot token in Signet Secrets or an external secret reference, then pass the secret name with `--token-ref`.
 
-The dashboard Sources tab exposes the same REST path. Open Discord, choose
-Connect, enter one or more guild IDs and a token reference, optionally narrow
-the channel filter or message bounds, and Signet queues the shared source index
-job in the background.
+The dashboard Sources tab exposes both modes. Open Discord, choose Connect,
+then select Bot REST for guild indexing or Desktop cache for local cache import.
+Desktop cache mode can use the platform default Discord Desktop data folder or
+a picked folder path, and Signet queues the shared source index job in the
+background.
 
 The REST sync path indexes:
 
@@ -56,6 +59,20 @@ The REST sync path indexes:
 - per-message artifacts and message windows with reply references, pins, mentions, attachment metadata, embed metadata, poll metadata, reactions metadata, and message lifecycle fields;
 - source checkpoints with latest/backfill cursors and authoritative vs partial status;
 - source failure artifacts for unavailable or partial fetches.
+
+The desktop-cache sync path indexes classifiable local Discord Desktop cache
+messages without a bot token or user-token automation:
+
+- route-bearing cached guild and DM messages;
+- local-only direct messages under the synthetic guild id `@me`;
+- cached channel metadata, selected-DM route hints, and inferred DM names;
+- message windows, per-message artifacts, mentions, attachment metadata, embed
+  metadata, poll metadata, and cache-observed checkpoints;
+- an import stats artifact with scanned/skipped counts.
+
+Desktop cache imports are cache-observed, not authoritative. Cache eviction or
+missing local files do not delete previously indexed cache artifacts; removing
+the source still purges all Signet-owned rows for that source.
 
 Partial Discord listings are never treated as authoritative deletes. If a channel, thread, member, or message fetch fails, Signet records a source failure artifact and preserves existing source-owned rows until a successful sync can refresh them.
 
@@ -203,7 +220,8 @@ The desktop shell uses native folder selection through IPC. The daemon picker ro
 Limitations in v1
 -----------------
 
-- Discord gateway tailing and local desktop cache import are represented in config but not active yet. The supported Discord sync mode is REST.
+- Discord gateway tailing is represented in config but not active yet. Supported
+  Discord sync modes are REST and local desktop cache import.
 - Sources are local/operator-managed. Permissions and RBAC are intentionally out of scope for v1.
 - Signet does not write back to Obsidian or Discord.
 - Rename handling is delete + add.

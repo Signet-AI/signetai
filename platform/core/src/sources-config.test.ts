@@ -119,6 +119,44 @@ describe("sources-config", () => {
 		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
 	});
 
+	it("adds a Discord desktop cache source without a bot token", () => {
+		const agentsDir = tmp();
+		const desktopCachePath = join(agentsDir, "discord-cache");
+
+		const result = addDiscordSource(
+			{
+				guildIds: [],
+				name: "Local Discord Cache",
+				desktopCachePath,
+				desktopCacheFullScan: true,
+				syncMode: "desktop-cache",
+				now: "2026-01-02T00:00:00.000Z",
+			},
+			agentsDir,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok === false) throw new Error(result.error);
+		expect(result.source.id.startsWith("discord-cache:")).toBe(true);
+		expect(result.source.root).toBe(desktopCachePath);
+		expect(result.source.providerSettings).toEqual({
+			guildIds: [],
+			tokenRef: "",
+			desktopCachePath,
+			desktopCacheFullScan: true,
+			maxMessagesPerChannel: DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
+			includeThreads: true,
+			includeArchivedThreads: true,
+			includePrivateArchivedThreads: false,
+			includeMembers: true,
+			includeAttachments: true,
+			includeEmbeds: true,
+			includePolls: true,
+			includeThreadMembers: true,
+			syncMode: "desktop-cache",
+		});
+	});
+
 	it("updates an existing Discord source instead of duplicating it", () => {
 		const agentsDir = tmp();
 		const first = addDiscordSource(
@@ -211,6 +249,7 @@ describe("sources-config", () => {
 		).toEqual({
 			guildIds: ["123456789012345678"],
 			tokenRef: "DISCORD_BOT_TOKEN",
+			desktopCacheFullScan: false,
 			maxMessagesPerChannel: DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
 			includeThreads: false,
 			includeArchivedThreads: true,

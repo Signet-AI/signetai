@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
 import { dirname, resolve } from "node:path";
 
 export type SignetSourceKind = "obsidian" | (string & {});
@@ -46,6 +46,8 @@ export type DiscordSourceSyncMode = "rest" | "gateway-tail" | "desktop-cache";
 export interface DiscordSourceSettings {
 	readonly guildIds: readonly string[];
 	readonly tokenRef: string;
+	readonly desktopCachePath?: string;
+	readonly desktopCacheFullScan: boolean;
 	readonly channelFilter?: readonly string[];
 	readonly maxMessagesPerChannel: number;
 	readonly includeThreads: boolean;
@@ -61,8 +63,10 @@ export interface DiscordSourceSettings {
 }
 
 export interface AddDiscordSourceInput {
-	readonly guildIds: readonly string[];
-	readonly tokenRef: string;
+	readonly guildIds?: readonly string[];
+	readonly tokenRef?: string;
+	readonly desktopCachePath?: string;
+	readonly desktopCacheFullScan?: boolean;
 	readonly name?: string;
 	readonly channelFilter?: readonly string[];
 	readonly maxMessagesPerChannel?: number;
@@ -90,6 +94,7 @@ export type RemoveSourceResult =
 const SOURCES_CONFIG_VERSION = 1;
 export const DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL = 1000;
 export const MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL = 10_000;
+export const DEFAULT_DISCORD_DESKTOP_CACHE_PATH = defaultDiscordDesktopCachePath();
 
 export function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || `${homedir()}/.agents`;
@@ -166,8 +171,14 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 
 	const now = input.now ?? new Date().toISOString();
 	const cfg = loadSourcesConfigForWrite(agentsDir);
-	const sourceId = `discord:${createHash("sha256").update(settings.guildIds.slice().sort().join(",")).digest("hex").slice(0, 16)}`;
-	const root = `discord://guilds/${settings.guildIds.slice().sort().join(",")}`;
+	const root =
+		settings.syncMode === "desktop-cache"
+			? (settings.desktopCachePath ?? DEFAULT_DISCORD_DESKTOP_CACHE_PATH)
+			: `discord://guilds/${settings.guildIds.slice().sort().join(",")}`;
+	const sourceId =
+		settings.syncMode === "desktop-cache"
+			? `discord-cache:${createHash("sha256").update(root).digest("hex").slice(0, 16)}`
+			: `discord:${createHash("sha256").update(settings.guildIds.slice().sort().join(",")).digest("hex").slice(0, 16)}`;
 	const existing = cfg.sources.find((source) => source.id === sourceId);
 	if (existing) {
 		const updated: SignetSourceEntry = {
@@ -206,6 +217,7 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 export function parseDiscordSettings(raw?: SignetSourceProviderSettings): DiscordSourceSettings {
 	const guildIds = Array.isArray(raw?.guildIds) ? cleanDiscordIds(raw.guildIds) : [];
 	const tokenRef = typeof raw?.tokenRef === "string" ? raw.tokenRef.trim() : "";
+	const desktopCachePath = typeof raw?.desktopCachePath === "string" ? cleanLocalPath(raw.desktopCachePath) : undefined;
 	const channelFilter = Array.isArray(raw?.channelFilter) ? cleanDiscordChannelFilter(raw.channelFilter) : undefined;
 	const maxMessagesPerChannel =
 		cleanPositiveInteger(raw?.maxMessagesPerChannel, MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL) ??
@@ -214,7 +226,9 @@ export function parseDiscordSettings(raw?: SignetSourceProviderSettings): Discor
 	return {
 		guildIds,
 		tokenRef,
-		channelFilter,
+		...(desktopCachePath ? { desktopCachePath } : {}),
+		desktopCacheFullScan: raw?.desktopCacheFullScan === true,
+		...(channelFilter ? { channelFilter } : {}),
 		maxMessagesPerChannel,
 		includeThreads: raw?.includeThreads !== false,
 		includeArchivedThreads: raw?.includeArchivedThreads !== false,
@@ -230,15 +244,20 @@ export function parseDiscordSettings(raw?: SignetSourceProviderSettings): Discor
 }
 
 function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettings | { readonly error: string } {
-	const guildIds = cleanDiscordIds(input.guildIds);
-	if (guildIds.length === 0) return { error: "At least one Discord guild ID is required" };
+	if (input.syncMode && !isDiscordSyncMode(input.syncMode))
+		return { error: `Unsupported Discord sync mode: ${input.syncMode}` };
+	const syncMode = input.syncMode ?? "rest";
+	const guildIds = cleanDiscordIds(input.guildIds ?? []);
+	if (syncMode !== "desktop-cache" && guildIds.length === 0)
+		return { error: "At least one Discord guild ID is required" };
 	for (const guildId of guildIds) {
 		if (!isDiscordSnowflake(guildId)) return { error: `Invalid Discord guild ID: ${guildId}` };
 	}
-	const tokenRef = input.tokenRef?.trim();
-	if (!tokenRef) return { error: "Discord tokenRef is required" };
+	const tokenRef = input.tokenRef?.trim() ?? "";
+	if (syncMode !== "desktop-cache" && !tokenRef) return { error: "Discord tokenRef is required" };
 	if (looksLikeRawDiscordToken(tokenRef))
 		return { error: "Discord tokenRef must be a secret reference, not a raw token" };
+	const desktopCachePath = cleanLocalPath(input.desktopCachePath) ?? DEFAULT_DISCORD_DESKTOP_CACHE_PATH;
 	const channelFilter = cleanDiscordChannelFilter(input.channelFilter ?? []);
 	const maxMessagesPerChannel =
 		cleanPositiveInteger(input.maxMessagesPerChannel, MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL) ??
@@ -250,12 +269,12 @@ function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettin
 	}
 	const since = cleanIsoDate(input.since);
 	if (input.since !== undefined && since === undefined) return { error: "Discord since must be a valid ISO date" };
-	if (input.syncMode && !isDiscordSyncMode(input.syncMode))
-		return { error: `Unsupported Discord sync mode: ${input.syncMode}` };
 
 	return {
 		guildIds,
 		tokenRef,
+		...(syncMode === "desktop-cache" ? { desktopCachePath } : {}),
+		desktopCacheFullScan: input.desktopCacheFullScan === true,
 		...(channelFilter.length > 0 ? { channelFilter } : {}),
 		maxMessagesPerChannel,
 		includeThreads: input.includeThreads ?? true,
@@ -267,7 +286,7 @@ function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettin
 		includePolls: input.includePolls ?? true,
 		includeThreadMembers: input.includeThreadMembers ?? true,
 		...(since ? { since } : {}),
-		syncMode: input.syncMode ?? "rest",
+		syncMode,
 	};
 }
 
@@ -275,6 +294,10 @@ function discordSettingsProviderSettings(settings: DiscordSourceSettings): Signe
 	return {
 		guildIds: settings.guildIds,
 		tokenRef: settings.tokenRef,
+		...(settings.desktopCachePath ? { desktopCachePath: settings.desktopCachePath } : {}),
+		...(settings.syncMode === "desktop-cache" || settings.desktopCacheFullScan
+			? { desktopCacheFullScan: settings.desktopCacheFullScan }
+			: {}),
 		...(settings.channelFilter ? { channelFilter: settings.channelFilter } : {}),
 		maxMessagesPerChannel: settings.maxMessagesPerChannel,
 		includeThreads: settings.includeThreads,
@@ -466,6 +489,11 @@ function cleanDiscordChannelFilter(values: readonly unknown[]): readonly string[
 	);
 }
 
+function cleanLocalPath(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed ? resolve(trimmed.replace(/^~(?=$|\/|\\)/, homedir())) : undefined;
+}
+
 function isDiscordSnowflake(value: string): boolean {
 	return /^\d{17,20}$/.test(value);
 }
@@ -495,6 +523,17 @@ function cleanIsoDate(value: string | undefined): string | undefined {
 
 function isDiscordSyncMode(value: unknown): value is DiscordSourceSyncMode {
 	return value === "rest" || value === "gateway-tail" || value === "desktop-cache";
+}
+
+function defaultDiscordDesktopCachePath(): string {
+	switch (platform()) {
+		case "darwin":
+			return resolve(homedir(), "Library", "Application Support", "discord");
+		case "win32":
+			return resolve(process.env.APPDATA || resolve(homedir(), "AppData", "Roaming"), "discord");
+		default:
+			return resolve(process.env.XDG_CONFIG_HOME || resolve(homedir(), ".config"), "discord");
+	}
 }
 
 function mergeDefaultObsidianExcludeGlobs(values: readonly string[] | undefined): readonly string[] {

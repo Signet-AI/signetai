@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addDiscordSource } from "@signet/core";
@@ -170,6 +170,148 @@ describe("discord-source-provider", () => {
 		const rows = sourceRows(added.source.id);
 		expect(rows.some((row) => row.content === "stale row")).toBe(false);
 		expect(rows.some((row) => row.source_path === "discord://guild/123456789012345678")).toBe(true);
+	});
+
+	it("imports Discord Desktop cache DMs locally without persisting raw cache tokens", async () => {
+		const cachePath = join(dir, "discord", "Local Storage", "leveldb");
+		mkdirSync(cachePath, { recursive: true });
+		writeFileSync(
+			join(cachePath, "000001.log"),
+			[
+				`{"id":"111111111111111111","type":1,"recipients":[{"id":"222222222222222222","username":"alice","global_name":"Alice"}]}`,
+				`noise {"t":"MESSAGE_CREATE","token":"do-not-store","d":{"id":"333333333333333333","channel_id":"111111111111111111","content":"launch checklist in a DM","timestamp":"2026-04-23T18:20:43.123Z","author":{"id":"222222222222222222","username":"alice","global_name":"Alice"},"attachments":[{"id":"444444444444444444","filename":"plan.txt","size":10}],"mentions":[{"id":"555555555555555555","username":"bob"}]}} tail`,
+			].join("\n"),
+		);
+		const added = addDiscordSource(
+			{
+				guildIds: [],
+				name: "Desktop Cache",
+				desktopCachePath: join(dir, "discord"),
+				syncMode: "desktop-cache",
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const result = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures).toEqual([]);
+		const rows = sourceRows(added.source.id);
+		expect(rows.some((row) => row.source_path === "discord-cache://guild/@me")).toBe(true);
+		expect(rows.some((row) => row.source_path === "discord-cache://guild/@me/channel/111111111111111111")).toBe(true);
+		expect(
+			rows.some(
+				(row) => row.source_path === "discord-cache://guild/@me/channel/111111111111111111/messages/333333333333333333",
+			),
+		).toBe(true);
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_attachment");
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_mention");
+		expect(rows.find((row) => row.source_kind === "source_discord_message")?.source_meta_json).toContain(
+			'"localOnly":true',
+		);
+		expect(rows.map((row) => `${row.content}\n${row.source_meta_json ?? ""}`).join("\n")).not.toContain("do-not-store");
+	});
+
+	it("classifies route-bearing Discord Desktop cache guild messages and skips ambiguous routes", async () => {
+		const cachePath = join(dir, "discord", "Cache", "Cache_Data");
+		mkdirSync(cachePath, { recursive: true });
+		writeFileSync(
+			join(cachePath, "guild_0"),
+			[
+				"https://discord.com/channels/999999999999999998/111111111111111115",
+				`{"id":"333333333333333337","channel_id":"111111111111111115","content":"route guild message","timestamp":"2026-04-23T18:20:44Z","author":{"id":"222222222222222226","username":"bob"}}`,
+			].join("\n"),
+		);
+		writeFileSync(
+			join(cachePath, "ambiguous_0"),
+			[
+				"https://discord.com/channels/999999999999999998/111111111111111118",
+				"https://discord.com/channels/999999999999999997/111111111111111118",
+				`{"id":"333333333333333340","channel_id":"111111111111111118","content":"ambiguous route message","timestamp":"2026-04-23T18:20:43Z","author":{"id":"222222222222222229","username":"alice"}}`,
+			].join("\n"),
+		);
+		const added = addDiscordSource(
+			{
+				guildIds: [],
+				name: "Desktop Cache",
+				desktopCachePath: join(dir, "discord"),
+				syncMode: "desktop-cache",
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const result = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures).toEqual([]);
+		const rows = sourceRows(added.source.id);
+		expect(
+			rows.some(
+				(row) =>
+					row.source_path ===
+					"discord-cache://guild/999999999999999998/channel/111111111111111115/messages/333333333333333337",
+			),
+		).toBe(true);
+		expect(rows.some((row) => row.content.includes("ambiguous route message"))).toBe(false);
+		const stats = rows.find((row) => row.source_kind === "source_discord_desktop_import");
+		expect(stats?.source_meta_json).toContain('"skippedMessages":1');
+	});
+
+	it("skips unreadable Discord Desktop cache files without failing the source sync", async () => {
+		const cachePath = join(dir, "discord", "Local Storage", "leveldb");
+		mkdirSync(cachePath, { recursive: true });
+		writeFileSync(
+			join(cachePath, "000001.log"),
+			[
+				`{"id":"111111111111111111","type":1,"recipients":[{"id":"222222222222222222","username":"alice"}]}`,
+				`{"id":"333333333333333333","channel_id":"111111111111111111","content":"readable cache message","timestamp":"2026-04-23T18:20:43.123Z","author":{"id":"222222222222222222","username":"alice"}}`,
+			].join("\n"),
+		);
+		const unreadablePath = join(cachePath, "000002.log");
+		writeFileSync(unreadablePath, "unreadable");
+		chmodSync(unreadablePath, 0);
+		const added = addDiscordSource(
+			{
+				name: "Desktop Cache",
+				desktopCachePath: join(dir, "discord"),
+				syncMode: "desktop-cache",
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		let result: Awaited<ReturnType<NonNullable<typeof discordSourceProvider.sync>>> | undefined;
+		try {
+			result = await discordSourceProvider.sync?.({
+				source: added.source,
+				agentsDir: dir,
+				agentId: "default",
+				shouldContinue: () => true,
+			});
+		} finally {
+			chmodSync(unreadablePath, 0o600);
+		}
+		expect(result?.failures).toEqual([]);
+		const rows = sourceRows(added.source.id);
+		expect(rows.some((row) => row.content.includes("readable cache message"))).toBe(true);
+		const stats = rows.find((row) => row.source_kind === "source_discord_desktop_import");
+		expect(stats?.source_meta_json).toContain('"filesSkipped":1');
 	});
 
 	it("records guild fetch failures and continues syncing later guilds", async () => {
