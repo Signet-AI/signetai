@@ -43,12 +43,17 @@ signet sources remove discord:...
 
 The daemon rejects raw Discord tokens in source config. Store the bot token in Signet Secrets or an external secret reference, then pass the secret name with `--token-ref`.
 
+The dashboard Sources tab exposes the same REST path. Open Discord, choose
+Connect, enter one or more guild IDs and a token reference, optionally narrow
+the channel filter or message bounds, and Signet queues the shared source index
+job in the background.
+
 The REST sync path indexes:
 
 - multiple guilds per source;
 - guilds, categories, text channels, announcement channels, forums, media channels, active threads, and archived public/private thread catalogs;
 - guild member snapshots and thread member snapshots;
-- message windows with reply references, mentions, attachment metadata, embed metadata, poll metadata, and message lifecycle fields;
+- per-message artifacts and message windows with reply references, pins, mentions, attachment metadata, embed metadata, poll metadata, reactions metadata, and message lifecycle fields;
 - source checkpoints with latest/backfill cursors and authoritative vs partial status;
 - source failure artifacts for unavailable or partial fetches.
 

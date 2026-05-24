@@ -115,7 +115,7 @@ export interface SignetSourceIndexJob {
 
 export interface SignetSourceEntry {
 	id: string;
-	kind: "obsidian";
+	kind: "obsidian" | "discord" | (string & {});
 	name: string;
 	root: string;
 	enabled: boolean;
@@ -124,6 +124,7 @@ export interface SignetSourceEntry {
 	updatedAt: string;
 	lastIndexedAt?: string;
 	excludeGlobs?: string[];
+	providerSettings?: Record<string, unknown>;
 	stats?: SignetSourceStats;
 	indexJob?: SignetSourceIndexJob;
 }
@@ -1177,6 +1178,50 @@ export async function addObsidianSource(
 				kind: "obsidian",
 				name: "Obsidian Vault",
 				root: path,
+				enabled: false,
+				mode: "read-only",
+				createdAt: "",
+				updatedAt: "",
+			},
+			created: false,
+			indexed: 0,
+			error: typeof body?.error === "string" ? body.error : `Request failed with ${response.status}`,
+		};
+	}
+	return body as AddSourceResponse;
+}
+
+export interface AddDiscordSourceInput {
+	guildIds: string[];
+	tokenRef: string;
+	name?: string;
+	channelFilter?: string[];
+	maxMessagesPerChannel?: number;
+	includeThreads?: boolean;
+	includeArchivedThreads?: boolean;
+	includePrivateArchivedThreads?: boolean;
+	includeMembers?: boolean;
+	includeAttachments?: boolean;
+	includeEmbeds?: boolean;
+	includePolls?: boolean;
+	includeThreadMembers?: boolean;
+	since?: string;
+}
+
+export async function addDiscordSource(input: AddDiscordSourceInput): Promise<AddSourceResponse> {
+	const response = await fetch(`${API_BASE}/api/sources/discord`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(input),
+	});
+	const body = (await response.json().catch(() => null)) as Partial<AddSourceResponse> | null;
+	if (!response.ok) {
+		return {
+			source: {
+				id: "",
+				kind: "discord",
+				name: input.name ?? "Discord",
+				root: `discord://guilds/${input.guildIds.join(",")}`,
 				enabled: false,
 				mode: "read-only",
 				createdAt: "",

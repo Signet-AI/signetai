@@ -1,11 +1,13 @@
 import { describe, expect, it, mock } from "bun:test";
 import {
+	DISCORD_CHANNEL_TYPES,
 	fetchArchivedThreads,
 	fetchChannelMessages,
 	fetchGuild,
 	fetchGuildActiveThreads,
 	fetchGuildMembers,
 	fetchThreadMembers,
+	isDiscordTextReadableChannel,
 	snowflakeIdForTimestamp,
 } from "./discord-source-fetch";
 
@@ -92,6 +94,14 @@ describe("discord-source-fetch", () => {
 	it("converts ISO timestamps to Discord snowflake lower bounds", () => {
 		expect(snowflakeIdForTimestamp("2015-01-02T00:00:00.000Z")).toBe("362387865600000");
 		expect(snowflakeIdForTimestamp("not-a-date")).toBeUndefined();
+	});
+
+	it("treats forum and media parents as thread containers instead of message-readable channels", () => {
+		expect(isDiscordTextReadableChannel({ id: "1", type: DISCORD_CHANNEL_TYPES.guildText })).toBe(true);
+		expect(isDiscordTextReadableChannel({ id: "2", type: DISCORD_CHANNEL_TYPES.guildAnnouncement })).toBe(true);
+		expect(isDiscordTextReadableChannel({ id: "3", type: DISCORD_CHANNEL_TYPES.publicThread })).toBe(true);
+		expect(isDiscordTextReadableChannel({ id: "4", type: DISCORD_CHANNEL_TYPES.guildForum })).toBe(false);
+		expect(isDiscordTextReadableChannel({ id: "5", type: DISCORD_CHANNEL_TYPES.guildMedia })).toBe(false);
 	});
 
 	it("skips malformed message ids without aborting the whole channel fetch", async () => {

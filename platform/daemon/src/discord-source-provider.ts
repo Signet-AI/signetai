@@ -236,6 +236,7 @@ function writeMessageArtifacts(
 	if (messages.length === 0) return 0;
 	let indexed = writeArtifact(source, agentId, messageWindowArtifact(guild, channel, messages));
 	for (const msg of messages) {
+		indexed += writeArtifact(source, agentId, messageArtifact(guild, channel, msg));
 		if (msg.mentions && msg.mentions.length > 0)
 			indexed += writeArtifact(source, agentId, mentionArtifact(guild, channel, msg));
 		if (options.includeAttachments) {
@@ -435,6 +436,59 @@ function messageWindowArtifact(
 			messageCount: messages.length,
 			oldestMessageId: oldest?.id ?? null,
 			newestMessageId: newest?.id ?? null,
+		},
+	};
+}
+
+function messageArtifact(guild: DiscordGuild, channel: DiscordChannel, msg: DiscordMessage): DiscordArtifact {
+	const speaker = discordDisplayName(msg.author);
+	return {
+		kind: "source_discord_message",
+		externalId: `message:${msg.id}`,
+		path: `discord://guild/${guild.id}/channel/${channel.id}/messages/${msg.id}`,
+		parentPath: `discord://guild/${guild.id}/channel/${channel.id}`,
+		mtimeMs: Date.parse(msg.edited_timestamp ?? msg.timestamp) || Date.now(),
+		content: [
+			`# Discord Message: ${msg.id}`,
+			"",
+			`Guild: ${guild.name}`,
+			`Channel: ${channel.name ?? channel.id}`,
+			`Author: ${speaker} (${msg.author.id})`,
+			`Created: ${msg.timestamp}`,
+			msg.edited_timestamp ? `Edited: ${msg.edited_timestamp}` : "",
+			msg.message_reference?.message_id ? `Reply to: ${msg.message_reference.message_id}` : "",
+			msg.pinned ? "Pinned: true" : "",
+			"",
+			msg.content,
+		]
+			.filter(Boolean)
+			.join("\n"),
+		meta: {
+			provider: DISCORD_PROVIDER_KIND,
+			recordType: "message",
+			guildId: guild.id,
+			channelId: channel.id,
+			messageId: msg.id,
+			messageType: msg.type,
+			authorId: msg.author.id,
+			authorName: speaker,
+			createdAt: msg.timestamp,
+			editedAt: msg.edited_timestamp ?? null,
+			replyToMessageId: msg.message_reference?.message_id ?? msg.referenced_message?.id ?? null,
+			replyToChannelId: msg.message_reference?.channel_id ?? null,
+			pinned: msg.pinned === true,
+			flags: msg.flags ?? null,
+			webhookId: msg.webhook_id ?? null,
+			attachmentIds: (msg.attachments ?? []).map((attachment) => attachment.id),
+			mentionUserIds: (msg.mentions ?? []).map((user) => user.id),
+			mentionRoleIds: msg.mention_roles ?? [],
+			embedCount: msg.embeds?.length ?? 0,
+			pollPresent: !!msg.poll,
+			reactions: (msg.reactions ?? []).map((reaction) => ({
+				count: reaction.count ?? 0,
+				emojiId: reaction.emoji?.id ?? null,
+				emojiName: reaction.emoji?.name ?? null,
+			})),
 		},
 	};
 }

@@ -1,5 +1,12 @@
 <script lang="ts">
-import { type SignetSourceEntry, addObsidianSource, getSources, pickSourceDirectory, removeSource } from "$lib/api";
+import {
+	type SignetSourceEntry,
+	addDiscordSource,
+	addObsidianSource,
+	getSources,
+	pickSourceDirectory,
+	removeSource,
+} from "$lib/api";
 import { getDesktopShell } from "$lib/desktop-shell";
 import Check from "@lucide/svelte/icons/check";
 import CheckCircle2 from "@lucide/svelte/icons/check-circle-2";
@@ -101,9 +108,34 @@ let vaultPath = $state("");
 let vaultName = $state("Obsidian Vault");
 // biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
 let excludeGlobsText = $state("**/.obsidian/**\n**/.trash/**\n**/.hermes/**\n**/.*/**\n**/.*");
+// biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
+let discordName = $state("Discord");
+let discordGuildIdsText = $state("");
+let discordTokenRef = $state("");
+let discordChannelFilterText = $state("");
+let discordSince = $state("");
+// biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
+let discordMaxMessages = $state(1000);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordIncludeMembers = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordIncludeThreads = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordIncludeArchivedThreads = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordIncludePrivateArchivedThreads = $state(false);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordIncludeAttachments = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordIncludeEmbeds = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordIncludePolls = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let discordIncludeThreadMembers = $state(true);
 let status = $state<string | null>(null);
 let error = $state<string | null>(null);
 let touchedPath = $state(false);
+let touchedDiscord = $state(false);
 let expandedKind = $state<SourceKind | null>(null);
 let sourceRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -278,13 +310,13 @@ const connectors: SourceConnector[] = [
 		name: "Discord",
 		detail: "Servers, channels, threads",
 		description:
-			"Index opted-in Discord servers, channels, and threads as source-labeled conversation context with server/channel provenance.",
+			"Index bot-visible Discord guilds, channels, threads, members, messages, mentions, attachments, embeds, polls, and checkpoints as source-labeled conversation context.",
 		icon: "discord",
 		category: "social",
-		tags: ["social", "discord", "chat", "planned"],
-		status: "planned",
-		indexes: ["Selected channels", "Threads", "Message authors and timestamps"],
-		never: ["Send messages without an explicit action"],
+		tags: ["social", "discord", "chat", "read-only"],
+		status: "available",
+		indexes: ["Guild channels and threads", "Members and message windows", "Attachments, mentions, embeds, polls"],
+		never: ["Send messages or use a raw Discord token"],
 		learnMore: [],
 	},
 	{
@@ -437,15 +469,28 @@ const filters: Array<{ id: ActiveFilter; label: string }> = [
 
 const selectedConnector = $derived(connectors.find((connector) => connector.kind === selectedKind) ?? connectors[0]);
 const obsidianSources = $derived(sources.filter((source) => source.kind === "obsidian"));
-const connectedCount = $derived(obsidianSources.length);
+const discordSources = $derived(sources.filter((source) => source.kind === "discord"));
+const connectedCount = $derived(obsidianSources.length + discordSources.length);
 const indexedCount = $derived(
-	obsidianSources.filter((source) => source.lastIndexedAt || (source.stats?.indexed ?? 0) > 0).length,
+	[...obsidianSources, ...discordSources].filter((source) => source.lastIndexedAt || (source.stats?.indexed ?? 0) > 0)
+		.length,
 );
 const hasActiveIndexJob = $derived(
-	obsidianSources.some((source) => source.indexJob?.status === "queued" || source.indexJob?.status === "running"),
+	[...obsidianSources, ...discordSources].some(
+		(source) => source.indexJob?.status === "queued" || source.indexJob?.status === "running",
+	),
 );
 const pathIsMissing = $derived(vaultPath.trim().length === 0);
-const canSubmit = $derived(!pathIsMissing && !adding && selectedKind === "obsidian");
+const discordGuildIds = $derived(parseListInput(discordGuildIdsText));
+const discordChannelFilter = $derived(parseListInput(discordChannelFilterText));
+const discordTokenMissing = $derived(discordTokenRef.trim().length === 0);
+const discordGuildsMissing = $derived(discordGuildIds.length === 0);
+const canSubmit = $derived.by(() => {
+	if (adding) return false;
+	if (selectedKind === "obsidian") return !pathIsMissing;
+	if (selectedKind === "discord") return !discordGuildsMissing && !discordTokenMissing;
+	return false;
+});
 const filteredConnectors = $derived.by(() => {
 	const q = searchTerm.trim().toLowerCase();
 	return connectors.filter((connector) => {
@@ -488,6 +533,7 @@ function selectConnector(kind: SourceKind): void {
 	status = null;
 	error = null;
 	touchedPath = false;
+	touchedDiscord = false;
 }
 
 async function chooseFolder(): Promise<void> {
@@ -544,9 +590,50 @@ async function submitSource(): Promise<void> {
 	}
 }
 
+async function submitDiscordSource(): Promise<void> {
+	touchedDiscord = true;
+	if (!canSubmit) return;
+	adding = true;
+	status = null;
+	error = null;
+	try {
+		const result = await addDiscordSource({
+			guildIds: discordGuildIds,
+			tokenRef: discordTokenRef.trim(),
+			name: discordName.trim() || undefined,
+			channelFilter: discordChannelFilter.length > 0 ? discordChannelFilter : undefined,
+			maxMessagesPerChannel: discordMaxMessages,
+			includeMembers: discordIncludeMembers,
+			includeThreads: discordIncludeThreads,
+			includeArchivedThreads: discordIncludeArchivedThreads,
+			includePrivateArchivedThreads: discordIncludePrivateArchivedThreads,
+			includeAttachments: discordIncludeAttachments,
+			includeEmbeds: discordIncludeEmbeds,
+			includePolls: discordIncludePolls,
+			includeThreadMembers: discordIncludeThreadMembers,
+			since: discordSince.trim() || undefined,
+		});
+		if (result.error) {
+			error = result.error;
+			return;
+		}
+		status = `${result.created ? "Connected" : "Updated"} ${result.source.name}. Discord indexing is running in the background.`;
+		discordGuildIdsText = "";
+		discordTokenRef = "";
+		discordChannelFilterText = "";
+		discordSince = "";
+		touchedDiscord = false;
+		connectMode = false;
+		await refreshSources();
+	} finally {
+		adding = false;
+	}
+}
+
 async function disconnectSource(source: SignetSourceEntry): Promise<void> {
+	const originalLabel = source.kind === "discord" ? "Discord data" : "vault files";
 	const confirmed = window.confirm(
-		`Remove ${source.name} from Signet?\n\nThis purges Signet's indexed source rows and chunks, but leaves the original vault files untouched.`,
+		`Remove ${source.name} from Signet?\n\nThis purges Signet's indexed source rows and chunks, but leaves the original ${originalLabel} untouched.`,
 	);
 	if (!confirmed) return;
 	removingSourceId = source.id;
@@ -558,7 +645,7 @@ async function disconnectSource(source: SignetSourceEntry): Promise<void> {
 			error = result.error;
 			return;
 		}
-		status = `Removed ${source.name}. Purged ${result.purged ?? 0} Signet-owned source rows; vault files were not touched.`;
+		status = `Removed ${source.name}. Purged ${result.purged ?? 0} Signet-owned source rows; ${originalLabel} was not touched.`;
 		await refreshSources();
 	} finally {
 		removingSourceId = null;
@@ -573,6 +660,10 @@ function formatDate(value: string | undefined): string {
 }
 
 function parseExcludeGlobs(value: string): string[] {
+	return parseListInput(value);
+}
+
+function parseListInput(value: string): string[] {
 	return Array.from(
 		new Set(
 			value
@@ -593,10 +684,13 @@ function sourceScanLabel(source: SignetSourceEntry): string {
 		return scanned > 0 ? `Indexing · ${scanned} scanned · ${indexed} changed` : "Indexing in background";
 	}
 	if (source.indexJob?.status === "error") return `Index failed: ${source.indexJob.error ?? "unknown error"}`;
+	const itemLabel = source.kind === "obsidian" ? "notes" : "artifacts";
 	const indexed = source.stats?.indexed ?? 0;
 	const chunks = source.stats?.chunks ?? 0;
-	if (indexed > 0) return `${indexed} notes · ${chunks} chunks${source.lastIndexedAt ? "" : " · syncing"}`;
-	return source.lastIndexedAt ? "Scan completed with no indexed notes" : "Connected; waiting for first indexed note";
+	if (indexed > 0) return `${indexed} ${itemLabel} · ${chunks} chunks${source.lastIndexedAt ? "" : " · syncing"}`;
+	return source.lastIndexedAt
+		? `Scan completed with no indexed ${itemLabel}`
+		: `Connected; waiting for first indexed ${itemLabel.slice(0, -1)}`;
 }
 
 function sourceIndexPercent(source: SignetSourceEntry): number {
@@ -848,7 +942,7 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 				<div class="connector-grid" class:has-expanded={expandedKind !== null}>
 					{#each filteredConnectors as connector (connector.kind)}
 						{@const expanded = expandedKind === connector.kind}
-						{@const connectedSources = connector.kind === "obsidian" ? obsidianSources : []}
+						{@const connectedSources = connector.kind === "obsidian" ? obsidianSources : connector.kind === "discord" ? discordSources : []}
 						{@const isConnected = connectedSources.length > 0}
 						<article class="connector-card" class:expanded class:connected={isConnected} class:compressed={expandedKind !== null && !expanded}>
 							<button
@@ -883,7 +977,7 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 							<div class="connector-expand" class:open={expanded} aria-hidden={!expanded}>
 								<p class="connector-description">{connector.description}</p>
 
-								{#if loading && connector.kind === "obsidian"}
+								{#if loading && connector.status === "available"}
 									<p class="connected-loading">Checking source registry...</p>
 								{:else if isConnected}
 									<div class="connected-list connected-list--inline">
@@ -935,7 +1029,7 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 													onclick={() => void disconnectSource(source)}
 												>
 													{#if removingSourceId === source.id}<span class="spin"><RefreshCw /></span>{:else}<X />{/if}
-													{removingSourceId === source.id ? "Removing" : "Disconnect vault"}
+													{removingSourceId === source.id ? "Removing" : source.kind === "discord" ? "Disconnect Discord" : "Disconnect vault"}
 												</button>
 											</article>
 										{/each}
@@ -971,6 +1065,88 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 											<button class="connect-button" type="submit" disabled={!canSubmit}>
 												{#if adding}<span class="spin"><RefreshCw /></span>{:else}<CirclePlus />{/if}
 												{adding ? "Indexing" : "Add source"}
+											</button>
+										</form>
+									{/if}
+									{#if connectMode && expanded && connector.kind === "discord"}
+										<form class="connect-form" onsubmit={(event) => { event.preventDefault(); void submitDiscordSource(); }}>
+											<label>
+												<span>Display name</span>
+												<input bind:value={discordName} placeholder="Team Discord" />
+											</label>
+											<label>
+												<span>Guild IDs</span>
+												<textarea
+													bind:value={discordGuildIdsText}
+													rows="3"
+													placeholder="123456789012345678&#10;223456789012345678"
+													onblur={() => (touchedDiscord = true)}
+												></textarea>
+												<small class="field-hint">One guild snowflake per line or comma. The bot token must already have access.</small>
+											</label>
+											{#if touchedDiscord && discordGuildsMissing}<p class="field-error">At least one Discord guild ID is required.</p>{/if}
+											<label>
+												<span>Token reference</span>
+												<input
+													bind:value={discordTokenRef}
+													placeholder="DISCORD_BOT_TOKEN"
+													onblur={() => (touchedDiscord = true)}
+												/>
+												<small class="field-hint">Use a Signet secret name or external secret reference. Raw Discord tokens are rejected.</small>
+											</label>
+											{#if touchedDiscord && discordTokenMissing}<p class="field-error">A Discord bot token reference is required.</p>{/if}
+											<label>
+												<span>Channel filter</span>
+												<textarea bind:value={discordChannelFilterText} rows="3" placeholder="general&#10;123456789012345679"></textarea>
+												<small class="field-hint">Optional channel names or IDs. Leave blank to index every bot-visible channel and thread.</small>
+											</label>
+											<div class="discord-options-grid">
+												<label>
+													<span>Message cap</span>
+													<input bind:value={discordMaxMessages} type="number" min="1" max="10000" />
+												</label>
+												<label>
+													<span>Since</span>
+													<input bind:value={discordSince} placeholder="2026-01-01" />
+												</label>
+											</div>
+											<div class="source-option-grid" aria-label="Discord source options">
+												<label class="source-option-row">
+													<input bind:checked={discordIncludeMembers} type="checkbox" />
+													<span>Members</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={discordIncludeThreads} type="checkbox" />
+													<span>Threads</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={discordIncludeArchivedThreads} type="checkbox" />
+													<span>Archived threads</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={discordIncludePrivateArchivedThreads} type="checkbox" />
+													<span>Private archived threads</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={discordIncludeThreadMembers} type="checkbox" />
+													<span>Thread members</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={discordIncludeAttachments} type="checkbox" />
+													<span>Attachments</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={discordIncludeEmbeds} type="checkbox" />
+													<span>Embeds</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={discordIncludePolls} type="checkbox" />
+													<span>Polls</span>
+												</label>
+											</div>
+											<button class="connect-button" type="submit" disabled={!canSubmit}>
+												{#if adding}<span class="spin"><RefreshCw /></span>{:else}<CirclePlus />{/if}
+												{adding ? "Queueing" : "Add source"}
 											</button>
 										</form>
 									{/if}
@@ -1782,6 +1958,45 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 		color: var(--sig-text-muted);
 	}
 
+	.discord-options-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 10px;
+	}
+
+	.source-option-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+	}
+
+	.connect-form .source-option-row {
+		display: grid;
+		grid-template-columns: 14px minmax(0, 1fr);
+		align-items: center;
+		gap: 8px;
+		border: 1px solid var(--sig-border);
+		background: rgba(255, 255, 255, 0.02);
+		padding: 7px 8px;
+	}
+
+	.connect-form .source-option-row input {
+		width: 14px;
+		height: 14px;
+		margin: 0;
+		accent-color: var(--sig-accent);
+	}
+
+	.connect-form .source-option-row span {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		letter-spacing: 0;
+		text-transform: none;
+		color: var(--sig-text);
+	}
+
 	.path-row {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;
@@ -2180,6 +2395,11 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 		}
 
 		.path-row {
+			grid-template-columns: 1fr;
+		}
+
+		.discord-options-grid,
+		.source-option-grid {
 			grid-template-columns: 1fr;
 		}
 

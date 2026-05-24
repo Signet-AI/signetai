@@ -53,6 +53,8 @@ export interface DiscordMessage {
 	readonly timestamp: string;
 	readonly edited_timestamp?: string | null;
 	readonly channel_id: string;
+	readonly flags?: number;
+	readonly webhook_id?: string;
 	readonly referenced_message?: DiscordMessage | null;
 	readonly message_reference?: {
 		readonly message_id?: string;
@@ -65,6 +67,7 @@ export interface DiscordMessage {
 	readonly mention_roles?: readonly string[];
 	readonly pinned?: boolean;
 	readonly poll?: DiscordPoll;
+	readonly reactions?: readonly DiscordReaction[];
 }
 
 export interface DiscordUser {
@@ -105,6 +108,14 @@ export interface DiscordEmbed {
 export interface DiscordPoll {
 	readonly question?: { readonly text?: string };
 	readonly answers?: readonly { readonly answer_id?: number; readonly poll_media?: { readonly text?: string } }[];
+}
+
+export interface DiscordReaction {
+	readonly count?: number;
+	readonly emoji?: {
+		readonly id?: string | null;
+		readonly name?: string | null;
+	};
 }
 
 export interface DiscordThreadMember {
@@ -377,8 +388,6 @@ export function isDiscordTextReadableChannel(channel: DiscordChannel): boolean {
 	return (
 		channel.type === DISCORD_CHANNEL_TYPES.guildText ||
 		channel.type === DISCORD_CHANNEL_TYPES.guildAnnouncement ||
-		channel.type === DISCORD_CHANNEL_TYPES.guildForum ||
-		channel.type === DISCORD_CHANNEL_TYPES.guildMedia ||
 		isDiscordThread(channel)
 	);
 }

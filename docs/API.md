@@ -1845,8 +1845,8 @@ alias for `channelFilter`.
 
 The REST sync path indexes guilds, categories, channels, announcement
 channels, forums, active and archived threads, member snapshots, thread member
-snapshots, message windows, mentions, attachment metadata, embeds, polls,
-checkpoints, and partial-failure artifacts. Partial Discord listings are not
+snapshots, per-message artifacts, message windows, mentions, attachment
+metadata, embeds, polls, checkpoints, and partial-failure artifacts. Partial Discord listings are not
 used as authoritative deletes.
 
 ### DELETE /api/sources/:sourceId
