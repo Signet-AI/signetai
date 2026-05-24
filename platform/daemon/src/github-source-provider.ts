@@ -61,6 +61,7 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 
 	for (const repo of repos) {
 		if (!context.shouldContinue()) break;
+		const failureCountBeforeRepo = failures.length;
 		context.onProgress?.({ scanned, total: repos.length, indexed, currentPath: `github://${repo.fullName}` });
 		const config: GitHubFetchConfig = { owner: repo.owner, repo: repo.repo, token };
 		const seenPaths = new Set<string>();
@@ -83,7 +84,7 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 		}
 		scanned++;
 		context.onProgress?.({ scanned, total: repos.length, indexed, currentPath: `github://${repo.fullName}` });
-		if (failures.length === 0)
+		if (failures.length === failureCountBeforeRepo)
 			purgeStaleGitHubArtifacts(context.source.id, agentId, syncStartedAt, seenPaths, repo.fullName);
 	}
 	for (const failure of failures) {
