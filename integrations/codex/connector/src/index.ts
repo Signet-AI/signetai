@@ -883,13 +883,13 @@ export class CodexConnector extends BaseConnector {
 			if (patchNativePluginConfig(this.getConfigPath(), bundle.marketplaceRoot)) {
 				configsPatched.push(this.getConfigPath());
 			}
+			if (unpatchConfigToml(this.getConfigPath()) && !configsPatched.includes(this.getConfigPath())) {
+				configsPatched.push(this.getConfigPath());
+			}
 			const pluginInstall = this.installNativePlugin(codexHome);
 			filesWritten.push(...pluginInstall.filesWritten);
 			if (pluginInstall.warning) warnings.push(pluginInstall.warning);
 			if (pluginInstall.success) {
-				if (unpatchConfigToml(this.getConfigPath()) && !configsPatched.includes(this.getConfigPath())) {
-					configsPatched.push(this.getConfigPath());
-				}
 				if (this.nativePluginProvidesHooks()) {
 					const existingHooks = readHooksFile(this.getHooksJsonPath());
 					const trustEntries = existingHooks ? buildHookTrustEntries(this.getHooksJsonPath(), existingHooks) : [];
