@@ -223,7 +223,23 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 				channelId: channel.id,
 				phase: "messages",
 			});
-			indexed += writeMessageArtifacts(context.source, agentId, guild, channel, messages.data, {
+			const backfillLimit = Math.max(0, settings.maxMessagesPerChannel - messages.data.length);
+			const backfillCursor = previousCheckpoint?.backfillComplete
+				? undefined
+				: (previousCheckpoint?.backfillCursor ?? previousCheckpoint?.latestCursor ?? undefined);
+			const backfill =
+				previousCheckpoint && backfillCursor && backfillLimit > 0
+					? await fetchChannelMessages(fetchConfig, channel.id, backfillLimit, backfillCursor, sinceId)
+					: null;
+			if (backfill) {
+				indexed += writeFetchFailures(context.source, agentId, failures, backfill.errors, {
+					guildId,
+					channelId: channel.id,
+					phase: "message_backfill",
+				});
+			}
+			const channelMessages = [...messages.data, ...(backfill?.data ?? [])];
+			indexed += writeMessageArtifacts(context.source, agentId, guild, channel, channelMessages, {
 				includeAttachments: settings.includeAttachments,
 				includeEmbeds: settings.includeEmbeds,
 				includePolls: settings.includePolls,
@@ -235,9 +251,18 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 					context.source,
 					guild,
 					channel,
-					messages.data,
-					messages.errors.length === 0 ? "authoritative" : "partial",
+					channelMessages,
+					messages.errors.length === 0 && (backfill?.errors.length ?? 0) === 0 ? "authoritative" : "partial",
 					previousCheckpoint,
+					{
+						backfillMessages: backfill?.data ?? (previousCheckpoint ? [] : messages.data),
+						backfillComplete:
+							backfill !== null
+								? backfill.exhausted === true || backfill.reachedLowerBound === true
+								: previousCheckpoint
+									? previousCheckpoint.backfillComplete
+									: messages.exhausted === true || messages.reachedLowerBound === true,
+					},
 				),
 			);
 			context.onProgress?.({
@@ -803,13 +828,17 @@ function checkpointArtifact(
 	messages: readonly DiscordMessage[],
 	status: "authoritative" | "partial",
 	previous?: DiscordCheckpoint | null,
+	backfillUpdate: {
+		readonly backfillMessages: readonly DiscordMessage[];
+		readonly backfillComplete: boolean;
+	} = { backfillMessages: [], backfillComplete: false },
 ): DiscordArtifact {
 	const sorted = messages.slice().sort(compareDiscordMessagesByCursor);
 	const latest = sorted[sorted.length - 1];
-	const earliest = sorted[0];
+	const sortedBackfill = backfillUpdate.backfillMessages.slice().sort(compareDiscordMessagesByCursor);
+	const earliestBackfill = sortedBackfill[0];
 	const latestCursor = newestCheckpointCursor(previous?.latestCursor ?? null, latest?.id ?? null);
-	const backfillCursor = previous?.backfillCursor ?? earliest?.id ?? null;
-	const backfillComplete = previous?.backfillComplete ?? messages.length === 0;
+	const backfillCursor = earliestBackfill?.id ?? previous?.backfillCursor ?? null;
 	return {
 		kind: "source_discord_checkpoint",
 		externalId: `checkpoint:${channel.id}`,
@@ -833,7 +862,7 @@ function checkpointArtifact(
 			status,
 			latestCursor,
 			backfillCursor,
-			backfillComplete,
+			backfillComplete: backfillUpdate.backfillComplete,
 		},
 	};
 }

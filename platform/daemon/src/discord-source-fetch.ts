@@ -129,6 +129,8 @@ export interface DiscordFetchResult<T> {
 	readonly rateLimitRemaining: number;
 	readonly rateLimitReset: number;
 	readonly errors: readonly DiscordFetchError[];
+	readonly exhausted?: boolean;
+	readonly reachedLowerBound?: boolean;
 }
 
 export interface DiscordFetchError {
@@ -287,6 +289,8 @@ export async function fetchChannelMessages(
 	let fetched = 0;
 	let rateLimitRemaining = 5;
 	let rateLimitReset = 0;
+	let exhausted = false;
+	let reachedLowerBound = false;
 	if (beforeId && afterId) {
 		return {
 			data: [],
@@ -300,23 +304,25 @@ export async function fetchChannelMessages(
 			],
 		};
 	}
-	const effectiveSinceId = sinceId ?? afterId;
-	const sinceSnowflake = effectiveSinceId ? parseSnowflake(effectiveSinceId) : null;
-	if (effectiveSinceId && sinceSnowflake === null) {
+	const malformedLowerBound = [sinceId, afterId].find((value) => value && parseSnowflake(value) === null);
+	if (malformedLowerBound) {
 		return {
 			data: [],
 			rateLimitRemaining,
 			rateLimitReset,
 			errors: [
 				{
-					message: `Messages fetch used malformed since id for channel ${channelId}: ${effectiveSinceId}`,
+					message: `Messages fetch used malformed lower-bound id for channel ${channelId}: ${malformedLowerBound}`,
 					retryable: false,
 				},
 			],
 		};
 	}
+	const effectiveSinceId = newestSnowflakeBound(sinceId, afterId);
+	const sinceSnowflake = effectiveSinceId ? parseSnowflake(effectiveSinceId) : null;
 	while (fetched < maxMessages) {
-		const params = new URLSearchParams({ limit: String(Math.min(PER_PAGE, maxMessages - fetched)) });
+		const pageLimit = Math.min(PER_PAGE, maxMessages - fetched);
+		const params = new URLSearchParams({ limit: String(pageLimit) });
 		if (cursor) params.set("before", cursor);
 		if (afterCursor) params.set("after", afterCursor);
 		const prefix = `Messages fetch failed for channel ${channelId}`;
@@ -333,7 +339,10 @@ export async function fetchChannelMessages(
 			break;
 		}
 		const batch = Array.isArray(response.body) ? (response.body as DiscordMessage[]) : [];
-		if (batch.length === 0) break;
+		if (batch.length === 0) {
+			exhausted = true;
+			break;
+		}
 		for (const msg of batch) {
 			if (sinceSnowflake !== null) {
 				const msgSnowflake = parseSnowflake(msg.id);
@@ -344,16 +353,31 @@ export async function fetchChannelMessages(
 					});
 					continue;
 				}
-				if (msgSnowflake <= sinceSnowflake) return { data: messages, rateLimitRemaining, rateLimitReset, errors };
+				if (msgSnowflake <= sinceSnowflake) {
+					reachedLowerBound = true;
+					return { data: messages, rateLimitRemaining, rateLimitReset, errors, exhausted, reachedLowerBound };
+				}
 			}
 			messages.push(msg);
 			fetched++;
 		}
-		if (batch.length < PER_PAGE) break;
+		if (batch.length < pageLimit) {
+			exhausted = true;
+			break;
+		}
 		cursor = batch[batch.length - 1]?.id;
 		afterCursor = undefined;
 	}
-	return { data: messages, rateLimitRemaining, rateLimitReset, errors };
+	return { data: messages, rateLimitRemaining, rateLimitReset, errors, exhausted, reachedLowerBound };
+}
+
+function newestSnowflakeBound(left?: string, right?: string): string | undefined {
+	if (!left) return right;
+	if (!right) return left;
+	const leftId = parseSnowflake(left);
+	const rightId = parseSnowflake(right);
+	if (leftId === null || rightId === null) return left;
+	return leftId > rightId ? left : right;
 }
 
 export async function fetchGuildActiveThreads(

@@ -44,7 +44,7 @@ Tag range: `bundle-0.130.1-13d784943001995e248894b6742fa2eec17144d8..v0.132.0`.
 
 ### Features
 
-- **sources**: resume Discord sync from checkpoints (#773)
+- **sources**: resume Discord history backfill from checkpoints (#775)
 
 ## [0.131.0] - 2026-05-24
 

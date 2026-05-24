@@ -248,4 +248,90 @@ describe("discord-source-fetch", () => {
 		expect(requested[1]).toContain("before=101");
 		expect(requested[1]).not.toContain("after=");
 	});
+
+	it("uses the newer after cursor as the lower bound when since is older", async () => {
+		const requested: string[] = [];
+		const fetchImpl = mock((url: string | URL | Request) => {
+			requested.push(String(url));
+			if (requested.length === 1) {
+				return Promise.resolve(
+					Response.json(
+						Array.from({ length: 100 }, (_, index) => ({
+							id: String(200 - index),
+							type: 0,
+							content: `message-${index}`,
+							author: { id: "123456789012345681", username: "alice" },
+							timestamp: `2026-05-23T16:${String(index).padStart(2, "0")}:00.000Z`,
+							channel_id: "123456789012345678",
+						})),
+					),
+				);
+			}
+			return Promise.resolve(
+				Response.json([
+					{
+						id: "100",
+						type: 0,
+						content: "already indexed boundary",
+						author: { id: "123456789012345681", username: "alice" },
+						timestamp: "2026-05-23T15:59:00.000Z",
+						channel_id: "123456789012345678",
+					},
+				]),
+			);
+		}) as unknown as typeof fetch;
+
+		const result = await fetchChannelMessages(
+			{ token: "TOKEN", fetchImpl },
+			"123456789012345678",
+			101,
+			undefined,
+			"50",
+			"100",
+		);
+
+		expect(result.errors).toEqual([]);
+		expect(result.data).toHaveLength(100);
+		expect(result.data.map((msg) => msg.id)).not.toContain("100");
+		expect(result.reachedLowerBound).toBe(true);
+	});
+
+	it("reports whether capped message fetches exhausted the available history", async () => {
+		const fetchImpl = mock((url: string | URL | Request) => {
+			if (String(url).includes("before=1000")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							id: "999",
+							type: 0,
+							content: "older",
+							author: { id: "123456789012345681", username: "alice" },
+							timestamp: "2026-05-23T15:59:00.000Z",
+							channel_id: "123456789012345678",
+						},
+					]),
+				);
+			}
+			return Promise.resolve(
+				Response.json([
+					{
+						id: "1000",
+						type: 0,
+						content: "latest",
+						author: { id: "123456789012345681", username: "alice" },
+						timestamp: "2026-05-23T16:00:00.000Z",
+						channel_id: "123456789012345678",
+					},
+				]),
+			);
+		}) as unknown as typeof fetch;
+
+		const capped = await fetchChannelMessages({ token: "TOKEN", fetchImpl }, "123456789012345678", 1);
+		const exhausted = await fetchChannelMessages({ token: "TOKEN", fetchImpl }, "123456789012345678", 2, "1000");
+
+		expect(capped.data.map((msg) => msg.id)).toEqual(["1000"]);
+		expect(capped.exhausted).toBe(false);
+		expect(exhausted.data.map((msg) => msg.id)).toEqual(["999"]);
+		expect(exhausted.exhausted).toBe(true);
+	});
 });

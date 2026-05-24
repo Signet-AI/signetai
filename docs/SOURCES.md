@@ -59,7 +59,7 @@ The REST sync path indexes:
 - guilds, categories, text channels, announcement channels, forums, media channels, active threads, and archived public/private thread catalogs;
 - guild member snapshots and thread member snapshots;
 - per-message artifacts and message windows with reply references, pins, mentions, attachment metadata, embed metadata, poll metadata, reactions metadata, and message lifecycle fields;
-- source checkpoints with latest/backfill cursors and authoritative vs partial status; routine REST refreshes use the latest checkpoint cursor to fetch only newer messages while preserving older source-owned rows;
+- source checkpoints with latest/backfill cursors and authoritative vs partial status; routine REST refreshes fetch newer messages from the latest checkpoint cursor, then resume bounded historical backfill from the backfill cursor until history is complete within the configured `since` bound;
 - source failure artifacts for unavailable or partial fetches.
 
 The desktop-cache sync path indexes classifiable local Discord Desktop cache

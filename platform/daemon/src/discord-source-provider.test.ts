@@ -915,6 +915,129 @@ describe("discord-source-provider", () => {
 		expect(checkpoint?.source_meta_json).toContain('"backfillCursor":"1000"');
 	});
 
+	it("resumes capped Discord history backfill from the checkpoint cursor", async () => {
+		const requestedMessages: string[] = [];
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.includes("/guilds/123456789012345678?with_counts=true")) {
+				return Promise.resolve(Response.json({ id: "123456789012345678", name: "Guild A" }));
+			}
+			if (text.includes("/guilds/123456789012345678/channels")) {
+				return Promise.resolve(
+					Response.json([{ id: "123456789012345679", type: DISCORD_CHANNEL_TYPES.guildText, name: "general" }]),
+				);
+			}
+			if (text.includes("/channels/123456789012345679/messages")) {
+				requestedMessages.push(text);
+				if (text.includes("after=1001")) return Promise.resolve(Response.json([]));
+				if (text.includes("before=998")) {
+					return Promise.resolve(
+						Response.json([
+							{
+								id: "997",
+								type: 0,
+								channel_id: "123456789012345679",
+								content: "oldest final backfill",
+								author: { id: "123456789012345680", username: "alice" },
+								timestamp: "2015-01-01T00:00:00.997Z",
+							},
+						]),
+					);
+				}
+				if (text.includes("before=1000")) {
+					return Promise.resolve(
+						Response.json([
+							{
+								id: "999",
+								type: 0,
+								channel_id: "123456789012345679",
+								content: "older backfill page",
+								author: { id: "123456789012345680", username: "alice" },
+								timestamp: "2015-01-01T00:00:00.999Z",
+							},
+							{
+								id: "998",
+								type: 0,
+								channel_id: "123456789012345679",
+								content: "oldest incomplete backfill",
+								author: { id: "123456789012345680", username: "alice" },
+								timestamp: "2015-01-01T00:00:00.998Z",
+							},
+						]),
+					);
+				}
+				return Promise.resolve(
+					Response.json([
+						{
+							id: "1001",
+							type: 0,
+							channel_id: "123456789012345679",
+							content: "latest capped baseline",
+							author: { id: "123456789012345681", username: "bob" },
+							timestamp: "2015-01-01T00:00:01.001Z",
+						},
+						{
+							id: "1000",
+							type: 0,
+							channel_id: "123456789012345679",
+							content: "oldest capped baseline",
+							author: { id: "123456789012345680", username: "alice" },
+							timestamp: "2015-01-01T00:00:01.000Z",
+						},
+					]),
+				);
+			}
+			if (text.includes("/members?")) return Promise.resolve(Response.json([]));
+			if (text.includes("/threads/active")) return Promise.resolve(Response.json({ threads: [] }));
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				maxMessagesPerChannel: 2,
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const first = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+		const second = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+		const third = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(first?.failures).toEqual([]);
+		expect(second?.failures).toEqual([]);
+		expect(third?.failures).toEqual([]);
+		expect(requestedMessages.some((url) => url.includes("after=1001"))).toBe(true);
+		expect(requestedMessages.some((url) => url.includes("before=1000"))).toBe(true);
+		expect(requestedMessages.some((url) => url.includes("before=998"))).toBe(true);
+		const rows = sourceRows(added.source.id);
+		expect(rows.some((row) => row.content.includes("latest capped baseline"))).toBe(true);
+		expect(rows.some((row) => row.content.includes("older backfill page"))).toBe(true);
+		expect(rows.some((row) => row.content.includes("oldest final backfill"))).toBe(true);
+		const checkpoint = rows.find((row) => row.source_kind === "source_discord_checkpoint");
+		expect(checkpoint?.source_meta_json).toContain('"latestCursor":"1001"');
+		expect(checkpoint?.source_meta_json).toContain('"backfillCursor":"997"');
+		expect(checkpoint?.source_meta_json).toContain('"backfillComplete":true');
+	});
+
 	it("purges source-owned Discord artifacts and generic chunks by source id", async () => {
 		const added = addDiscordSource(
 			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", now: "2026-01-01T00:00:00.000Z" },
