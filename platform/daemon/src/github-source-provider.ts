@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	type GitHubSourceSettings,
 	type SignetSourceEntry,
@@ -278,7 +279,7 @@ function writeFailureArtifact(source: SignetSourceEntry, agentId: string, failur
 		sourceId: source.id,
 		sourceRoot: source.root,
 		sourceExternalId: `failure:${failure.failedAt}:${failure.message}`,
-		sourcePath: `github://source/${source.id}/failures/${encodeURIComponent(failure.failedAt)}`,
+		sourcePath: failureArtifactPath(source, failure),
 		sourceKind: "source_github_failure",
 		sourceMtimeMs: Date.parse(failure.failedAt) || Date.now(),
 		capturedAt: failure.failedAt,
@@ -286,6 +287,16 @@ function writeFailureArtifact(source: SignetSourceEntry, agentId: string, failur
 		sourceMeta: failure.metadata,
 	});
 	return 1;
+}
+
+function failureArtifactPath(source: SignetSourceEntry, failure: SourceFailureState): string {
+	const fingerprint = createHash("sha256")
+		.update(failure.message)
+		.update("\0")
+		.update(JSON.stringify(failure.metadata ?? {}))
+		.digest("hex")
+		.slice(0, 16);
+	return `github://source/${source.id}/failures/${encodeURIComponent(failure.failedAt)}-${fingerprint}`;
 }
 
 async function resolveRepos(

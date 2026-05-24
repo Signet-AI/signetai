@@ -178,6 +178,72 @@ describe("github-source-provider", () => {
 		expect(sourceRows(source.id).map((row) => row.source_kind)).toContain("source_github_failure");
 	});
 
+	it("keeps same-timestamp GitHub failure artifacts distinct", async () => {
+		const source: SignetSourceEntry = {
+			id: "github:failure-collision",
+			kind: "github",
+			name: "GitHub",
+			root: "github://repos/Signet-AI/no-match-*,Signet-AI/also-missing-*",
+			enabled: true,
+			mode: "read-only",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			providerSettings: {
+				repos: ["Signet-AI/no-match-*", "Signet-AI/also-missing-*"],
+				resourceTypes: ["issues"],
+				state: "all",
+				includeComments: false,
+				docPaths: ["README.md"],
+				maxItemsPerRepo: 5,
+			},
+		};
+		const originalDate = globalThis.Date;
+		const fixedNow = originalDate.parse("2026-02-03T04:05:06.007Z");
+		globalThis.Date = class extends originalDate {
+			constructor(value?: string | number | Date) {
+				if (value === undefined) super(fixedNow);
+				else super(value);
+			}
+
+			static now(): number {
+				return fixedNow;
+			}
+
+			static parse(value: string): number {
+				return originalDate.parse(value);
+			}
+
+			static UTC(
+				year: number,
+				monthIndex: number,
+				date?: number,
+				hours?: number,
+				minutes?: number,
+				seconds?: number,
+				ms?: number,
+			): number {
+				return originalDate.UTC(year, monthIndex, date, hours, minutes, seconds, ms);
+			}
+		} as DateConstructor;
+		globalThis.fetch = mock(() => Promise.resolve(Response.json([]))) as typeof fetch;
+
+		try {
+			const result = await githubSourceProvider.sync?.({
+				source,
+				agentsDir: dir,
+				agentId: "default",
+				shouldContinue: () => true,
+			});
+
+			const failureRows = sourceRows(source.id).filter((row) => row.source_kind === "source_github_failure");
+			expect(result?.failures).toHaveLength(2);
+			expect(failureRows).toHaveLength(2);
+			expect(new Set(failureRows.map((row) => row.source_path)).size).toBe(2);
+		} finally {
+			globalThis.Date = originalDate;
+		}
+	});
+
 	it("purges stale artifacts for successful repos after another repo fails", async () => {
 		const source: SignetSourceEntry = {
 			id: "github:partial",
