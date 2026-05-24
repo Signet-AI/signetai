@@ -40,6 +40,14 @@ const DISCORD_PROVIDER_KIND: SourceProviderKind = "discord";
 const DISCORD_HARNESS = "discord";
 const DEFAULT_MAX_MEMBERS_PER_GUILD = 10_000;
 const DEFAULT_MAX_THREADS_PER_PARENT = 1_000;
+const DISCORD_MESSAGE_HISTORY_KINDS = [
+	"source_discord_message_window",
+	"source_discord_message",
+	"source_discord_mention",
+	"source_discord_attachment",
+	"source_discord_embed",
+	"source_discord_poll",
+] as const;
 
 export const discordSourceProvider: SourceProviderAdapter = {
 	kind: "discord",
@@ -69,6 +77,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 	const total = settings.guildIds.length;
 	const token = await getSecret(settings.tokenRef);
 	const fetchConfig: DiscordFetchConfig = { token };
+	const incrementalMessageChannelPaths = new Set<string>();
 
 	if (settings.syncMode !== "rest") {
 		const failure = failureState(
@@ -198,12 +207,16 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 		const messageChannels = [...channelRows, ...threadMap.values()].filter(isDiscordTextReadableChannel);
 		for (const channel of messageChannels) {
 			if (!context.shouldContinue()) break;
+			const previousCheckpoint = readDiscordCheckpoint(context.source.id, agentId, guild.id, channel.id);
+			const afterCursor = previousCheckpoint?.latestCursor ?? undefined;
+			if (afterCursor) incrementalMessageChannelPaths.add(discordChannelPath(guild.id, channel.id));
 			const messages = await fetchChannelMessages(
 				fetchConfig,
 				channel.id,
 				settings.maxMessagesPerChannel,
 				undefined,
 				sinceId,
+				afterCursor,
 			);
 			indexed += writeFetchFailures(context.source, agentId, failures, messages.errors, {
 				guildId,
@@ -224,6 +237,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 					channel,
 					messages.data,
 					messages.errors.length === 0 ? "authoritative" : "partial",
+					previousCheckpoint,
 				),
 			);
 			context.onProgress?.({
@@ -239,7 +253,9 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 	}
 
 	if (failures.length === 0 && scanned === total) {
-		purgeStaleDiscordArtifacts(context.source.id, agentId, syncStartedAt);
+		purgeStaleDiscordArtifacts(context.source.id, agentId, syncStartedAt, {
+			preserveMessageChannelPaths: [...incrementalMessageChannelPaths],
+		});
 	}
 
 	return { indexed, scanned, total, failures };
@@ -341,7 +357,30 @@ function writeFailureArtifact(source: SignetSourceEntry, agentId: string, failur
 	});
 }
 
-function purgeStaleDiscordArtifacts(sourceId: string, agentId: string, syncStartedAt: string): number {
+function purgeStaleDiscordArtifacts(
+	sourceId: string,
+	agentId: string,
+	syncStartedAt: string,
+	options: { readonly preserveMessageChannelPaths?: readonly string[] } = {},
+): number {
+	const preservePaths = options.preserveMessageChannelPaths ?? [];
+	const preserveClause =
+		preservePaths.length > 0
+			? `AND NOT (
+						 source_kind IN (${DISCORD_MESSAGE_HISTORY_KINDS.map(() => "?").join(", ")})
+						 AND (${preservePaths.map(() => "(source_path LIKE ? OR source_path LIKE ?)").join(" OR ")})
+					   )`
+			: "";
+	const params =
+		preservePaths.length > 0
+			? [
+					agentId,
+					sourceId,
+					syncStartedAt,
+					...DISCORD_MESSAGE_HISTORY_KINDS,
+					...preservePaths.flatMap((path) => [`${path}/messages/%`, `${path}/message/%`]),
+				]
+			: [agentId, sourceId, syncStartedAt];
 	const rows = getDbAccessor().withReadDb(
 		(db) =>
 			db
@@ -349,9 +388,10 @@ function purgeStaleDiscordArtifacts(sourceId: string, agentId: string, syncStart
 					`SELECT source_path FROM memory_artifacts
 					 WHERE agent_id = ?
 					   AND source_id = ?
-					   AND updated_at < ?`,
+					   AND updated_at < ?
+					   ${preserveClause}`,
 				)
-				.all(agentId, sourceId, syncStartedAt) as Array<{ source_path: string }>,
+				.all(...params) as Array<{ source_path: string }>,
 	);
 	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
 	return getDbAccessor().withWriteTx((db) =>
@@ -361,11 +401,16 @@ function purgeStaleDiscordArtifacts(sourceId: string, agentId: string, syncStart
 					`DELETE FROM memory_artifacts
 					 WHERE agent_id = ?
 					   AND source_id = ?
-					   AND updated_at < ?`,
+					   AND updated_at < ?
+					   ${preserveClause}`,
 				)
-				.run(agentId, sourceId, syncStartedAt),
+				.run(...params),
 		),
 	);
+}
+
+function discordChannelPath(guildId: string, channelId: string): string {
+	return `discord://guild/${guildId}/channel/${channelId}`;
 }
 
 interface DiscordArtifact {
@@ -376,6 +421,53 @@ interface DiscordArtifact {
 	readonly mtimeMs: number;
 	readonly content: string;
 	readonly meta: Readonly<Record<string, unknown>>;
+}
+
+interface DiscordCheckpoint {
+	readonly latestCursor: string | null;
+	readonly backfillCursor: string | null;
+	readonly backfillComplete: boolean;
+}
+
+function readDiscordCheckpoint(
+	sourceId: string,
+	agentId: string,
+	guildId: string,
+	channelId: string,
+): DiscordCheckpoint | null {
+	const row = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT source_meta_json FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND source_kind = 'source_discord_checkpoint'
+					   AND source_path = ?
+					 LIMIT 1`,
+				)
+				.get(agentId, sourceId, `discord://source/${sourceId}/checkpoint/${guildId}/${channelId}`) as
+				| { source_meta_json: string | null }
+				| undefined,
+	);
+	if (!row?.source_meta_json) return null;
+	try {
+		const raw = JSON.parse(row.source_meta_json) as unknown;
+		if (!isRecord(raw)) return null;
+		return {
+			latestCursor: cleanCheckpointCursor(raw.latestCursor),
+			backfillCursor: cleanCheckpointCursor(raw.backfillCursor),
+			backfillComplete: raw.backfillComplete === true,
+		};
+	} catch {
+		return null;
+	}
+}
+
+function cleanCheckpointCursor(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	return parseDiscordSnowflake(trimmed) === null ? null : trimmed;
 }
 
 function guildArtifact(source: SignetSourceEntry, guild: DiscordGuild): DiscordArtifact {
@@ -710,10 +802,14 @@ function checkpointArtifact(
 	channel: DiscordChannel,
 	messages: readonly DiscordMessage[],
 	status: "authoritative" | "partial",
+	previous?: DiscordCheckpoint | null,
 ): DiscordArtifact {
 	const sorted = messages.slice().sort(compareDiscordMessagesByCursor);
 	const latest = sorted[sorted.length - 1];
 	const earliest = sorted[0];
+	const latestCursor = newestCheckpointCursor(previous?.latestCursor ?? null, latest?.id ?? null);
+	const backfillCursor = previous?.backfillCursor ?? earliest?.id ?? null;
+	const backfillComplete = previous?.backfillComplete ?? messages.length === 0;
 	return {
 		kind: "source_discord_checkpoint",
 		externalId: `checkpoint:${channel.id}`,
@@ -726,8 +822,8 @@ function checkpointArtifact(
 			`Guild: ${guild.name}`,
 			`Channel: ${channel.name ?? channel.id}`,
 			`Status: ${status}`,
-			`Latest cursor: ${latest?.id ?? ""}`,
-			`Backfill cursor: ${earliest?.id ?? ""}`,
+			`Latest cursor: ${latestCursor ?? ""}`,
+			`Backfill cursor: ${backfillCursor ?? ""}`,
 		].join("\n"),
 		meta: {
 			provider: DISCORD_PROVIDER_KIND,
@@ -735,11 +831,20 @@ function checkpointArtifact(
 			guildId: guild.id,
 			channelId: channel.id,
 			status,
-			latestCursor: latest?.id ?? null,
-			backfillCursor: earliest?.id ?? null,
-			backfillComplete: messages.length === 0,
+			latestCursor,
+			backfillCursor,
+			backfillComplete,
 		},
 	};
+}
+
+function newestCheckpointCursor(left: string | null, right: string | null): string | null {
+	if (!left) return right;
+	if (!right) return left;
+	const leftId = parseDiscordSnowflake(left);
+	const rightId = parseDiscordSnowflake(right);
+	if (leftId !== null && rightId !== null) return leftId > rightId ? left : right;
+	return left > right ? left : right;
 }
 
 function compareDiscordMessagesByCursor(left: DiscordMessage, right: DiscordMessage): number {
@@ -844,4 +949,8 @@ function hashKey(input: string): string {
 		hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
 	}
 	return hash.toString(16).padStart(8, "0");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

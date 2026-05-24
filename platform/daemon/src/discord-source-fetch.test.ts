@@ -197,4 +197,55 @@ describe("discord-source-fetch", () => {
 			},
 		]);
 	});
+
+	it("uses an after cursor for incremental message refresh then paginates within that window", async () => {
+		const requested: string[] = [];
+		const fetchImpl = mock((url: string | URL | Request) => {
+			requested.push(String(url));
+			if (requested.length === 1) {
+				return Promise.resolve(
+					Response.json(
+						Array.from({ length: 100 }, (_, index) => ({
+							id: String(200 - index),
+							type: 0,
+							content: `message-${index}`,
+							author: { id: "123456789012345681", username: "alice" },
+							timestamp: `2026-05-23T16:${String(index).padStart(2, "0")}:00.000Z`,
+							channel_id: "123456789012345678",
+						})),
+					),
+				);
+			}
+			return Promise.resolve(
+				Response.json([
+					{
+						id: "100",
+						type: 0,
+						content: "already indexed boundary",
+						author: { id: "123456789012345681", username: "alice" },
+						timestamp: "2026-05-23T15:59:00.000Z",
+						channel_id: "123456789012345678",
+					},
+				]),
+			);
+		}) as unknown as typeof fetch;
+
+		const result = await fetchChannelMessages(
+			{ token: "TOKEN", fetchImpl },
+			"123456789012345678",
+			101,
+			undefined,
+			undefined,
+			"100",
+		);
+
+		expect(result.errors).toEqual([]);
+		expect(result.data).toHaveLength(100);
+		expect(result.data[0]?.id).toBe("200");
+		expect(result.data[99]?.id).toBe("101");
+		expect(requested[0]).toContain("after=100");
+		expect(requested[0]).not.toContain("before=");
+		expect(requested[1]).toContain("before=101");
+		expect(requested[1]).not.toContain("after=");
+	});
 });

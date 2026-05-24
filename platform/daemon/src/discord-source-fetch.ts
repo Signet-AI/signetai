@@ -278,27 +278,47 @@ export async function fetchChannelMessages(
 	maxMessages = 1000,
 	beforeId?: string,
 	sinceId?: string,
+	afterId?: string,
 ): Promise<DiscordFetchResult<DiscordMessage>> {
 	const messages: DiscordMessage[] = [];
 	const errors: DiscordFetchError[] = [];
 	let cursor = beforeId;
+	let afterCursor = afterId;
 	let fetched = 0;
 	let rateLimitRemaining = 5;
 	let rateLimitReset = 0;
-	const sinceSnowflake = sinceId ? parseSnowflake(sinceId) : null;
-	if (sinceId && sinceSnowflake === null) {
+	if (beforeId && afterId) {
 		return {
 			data: [],
 			rateLimitRemaining,
 			rateLimitReset,
 			errors: [
-				{ message: `Messages fetch used malformed since id for channel ${channelId}: ${sinceId}`, retryable: false },
+				{
+					message: `Messages fetch cannot use both before and after cursors for channel ${channelId}`,
+					retryable: false,
+				},
+			],
+		};
+	}
+	const effectiveSinceId = sinceId ?? afterId;
+	const sinceSnowflake = effectiveSinceId ? parseSnowflake(effectiveSinceId) : null;
+	if (effectiveSinceId && sinceSnowflake === null) {
+		return {
+			data: [],
+			rateLimitRemaining,
+			rateLimitReset,
+			errors: [
+				{
+					message: `Messages fetch used malformed since id for channel ${channelId}: ${effectiveSinceId}`,
+					retryable: false,
+				},
 			],
 		};
 	}
 	while (fetched < maxMessages) {
 		const params = new URLSearchParams({ limit: String(Math.min(PER_PAGE, maxMessages - fetched)) });
 		if (cursor) params.set("before", cursor);
+		if (afterCursor) params.set("after", afterCursor);
 		const prefix = `Messages fetch failed for channel ${channelId}`;
 		const response = await catchDiscordRequest(config, `/channels/${channelId}/messages?${params}`);
 		if (!response.ok) {
@@ -331,6 +351,7 @@ export async function fetchChannelMessages(
 		}
 		if (batch.length < PER_PAGE) break;
 		cursor = batch[batch.length - 1]?.id;
+		afterCursor = undefined;
 	}
 	return { data: messages, rateLimitRemaining, rateLimitReset, errors };
 }

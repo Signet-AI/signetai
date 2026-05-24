@@ -756,6 +756,165 @@ describe("discord-source-provider", () => {
 		expect(checkpoint?.source_meta_json).toContain('"backfillCursor":"99"');
 	});
 
+	it("resumes routine message sync from the latest checkpoint cursor without purging older rows", async () => {
+		const requestedMessages: string[] = [];
+		let channelFetches = 0;
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.includes("/guilds/123456789012345678?with_counts=true")) {
+				return Promise.resolve(Response.json({ id: "123456789012345678", name: "Guild A" }));
+			}
+			if (text.includes("/guilds/123456789012345678/channels")) {
+				channelFetches++;
+				const channels = [{ id: "123456789012345679", type: DISCORD_CHANNEL_TYPES.guildText, name: "general" }];
+				if (channelFetches > 1)
+					channels.push({ id: "123456789012345680", type: DISCORD_CHANNEL_TYPES.guildText, name: "new-channel" });
+				return Promise.resolve(Response.json(channels));
+			}
+			if (text.includes("/channels/123456789012345680/messages")) {
+				requestedMessages.push(text);
+				return Promise.resolve(
+					Response.json([
+						{
+							id: "2000",
+							type: 0,
+							channel_id: "123456789012345680",
+							content: "new channel authoritative row",
+							author: { id: "123456789012345682", username: "cara" },
+							timestamp: "2015-01-01T00:00:02.000Z",
+						},
+					]),
+				);
+			}
+			if (text.includes("/channels/123456789012345679/messages")) {
+				requestedMessages.push(text);
+				if (text.includes("after=1001")) return Promise.resolve(Response.json([]));
+				if (text.includes("after=1000")) {
+					return Promise.resolve(
+						Response.json([
+							{
+								id: "1001",
+								type: 0,
+								channel_id: "123456789012345679",
+								content: "new checkpoint delta",
+								author: { id: "123456789012345681", username: "bob" },
+								timestamp: "2015-01-01T00:00:01.000Z",
+							},
+						]),
+					);
+				}
+				return Promise.resolve(
+					Response.json([
+						{
+							id: "1000",
+							type: 0,
+							channel_id: "123456789012345679",
+							content: "existing checkpoint baseline",
+							author: { id: "123456789012345680", username: "alice" },
+							timestamp: "2015-01-01T00:00:00.000Z",
+						},
+					]),
+				);
+			}
+			if (text.includes("/members?")) return Promise.resolve(Response.json([]));
+			if (text.includes("/threads/active")) return Promise.resolve(Response.json({ threads: [] }));
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				maxMessagesPerChannel: 10,
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const first = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			harness: "discord",
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourceExternalId: "member:123456789012345678:stale",
+			sourcePath: "discord://guild/123456789012345678/member/stale",
+			sourceKind: "source_discord_member",
+			sourceMtimeMs: Date.parse("2025-01-01T00:00:00.000Z"),
+			content: "stale member row",
+		});
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			harness: "discord",
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourceExternalId: "message:removed-channel",
+			sourcePath: "discord://guild/123456789012345678/channel/removed/messages/stale",
+			sourceKind: "source_discord_message",
+			sourceMtimeMs: Date.parse("2025-01-01T00:00:00.000Z"),
+			content: "stale removed channel message",
+		});
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			harness: "discord",
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourceExternalId: "message:new-channel-stale",
+			sourcePath: "discord://guild/123456789012345678/channel/123456789012345680/messages/stale",
+			sourceKind: "source_discord_message",
+			sourceMtimeMs: Date.parse("2025-01-01T00:00:00.000Z"),
+			content: "stale new channel message",
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`UPDATE memory_artifacts
+				 SET updated_at = ?
+				 WHERE source_id = ?
+				   AND content IN (?, ?, ?)`,
+			).run(
+				"2025-01-01T00:00:00.000Z",
+				added.source.id,
+				"stale member row",
+				"stale removed channel message",
+				"stale new channel message",
+			);
+		});
+		const second = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+		const third = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(first?.failures).toEqual([]);
+		expect(second?.failures).toEqual([]);
+		expect(third?.failures).toEqual([]);
+		expect(requestedMessages.some((url) => url.includes("after=1000"))).toBe(true);
+		expect(requestedMessages.some((url) => url.includes("after=1001"))).toBe(true);
+		const rows = sourceRows(added.source.id);
+		expect(rows.some((row) => row.content.includes("existing checkpoint baseline"))).toBe(true);
+		expect(rows.some((row) => row.content.includes("new checkpoint delta"))).toBe(true);
+		expect(rows.some((row) => row.content.includes("new channel authoritative row"))).toBe(true);
+		expect(rows.some((row) => row.content === "stale member row")).toBe(false);
+		expect(rows.some((row) => row.content === "stale removed channel message")).toBe(false);
+		expect(rows.some((row) => row.content === "stale new channel message")).toBe(false);
+		const checkpoint = rows.find((row) => row.source_kind === "source_discord_checkpoint");
+		expect(checkpoint?.source_meta_json).toContain('"latestCursor":"1001"');
+		expect(checkpoint?.source_meta_json).toContain('"backfillCursor":"1000"');
+	});
+
 	it("purges source-owned Discord artifacts and generic chunks by source id", async () => {
 		const added = addDiscordSource(
 			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", now: "2026-01-01T00:00:00.000Z" },
