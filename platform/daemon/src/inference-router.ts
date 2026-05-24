@@ -21,6 +21,7 @@ import {
 	parseYamlDocument,
 	resolveRoutingDecision,
 } from "@signet/core";
+import { createRoutingProvider } from "./inference-provider-factory";
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import {
@@ -28,35 +29,15 @@ import {
 	type LlmProviderStreamEvent,
 	type LlmProviderStreamResult,
 	type StreamCapableLlmProvider,
-	createAcpxProvider,
-	createAnthropicProvider,
-	createClaudeCodeProvider,
-	createCodexProvider,
-	createCommandLineProvider,
-	createOllamaProvider,
-	createOpenAiCompatibleProvider,
-	createOpenCodeProvider,
-	createOpenRouterProvider,
 	generateWithTracking,
 } from "./pipeline/provider";
-import { resolveDefaultOllamaFallbackMaxContextTokens } from "./pipeline/provider";
 import { getSecret } from "./secrets";
 
 const SNAPSHOT_TTL_MS = 15_000;
-const DEFAULT_OPENCODE_BASE_URL = "http://127.0.0.1:4096";
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
-const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:1234/v1";
-const DEFAULT_LLAMA_CPP_BASE_URL = "http://127.0.0.1:8080";
 const OBSERVED_RATE_LIMIT_TTL_MS = 60_000;
 const OBSERVED_AUTH_TTL_MS = 5 * 60_000;
 const OBSERVED_MISSING_TTL_MS = 60_000;
 const REDACTED_UPSTREAM_DETAIL = "[redacted upstream detail]";
-
-function withOpenAiVersionPath(baseUrl: string): string {
-	const trimmed = baseUrl.trim().replace(/\/+$/, "");
-	if (trimmed.endsWith("/v1")) return trimmed;
-	return `${trimmed}/v1`;
-}
 
 export interface InferenceExecutionAttempt {
 	readonly targetRef: string;
@@ -502,82 +483,13 @@ export class InferenceRouter {
 		if (cached) return cached;
 
 		const build = (async (): Promise<StreamCapableLlmProvider> => {
-			const target = loaded.config.targets[targetId];
-			const model = target?.models[modelId];
-			if (!target || !model) {
-				throw new Error(`Unknown routing target ${targetId}/${modelId}`);
-			}
-			const account = target.account ? loaded.config.accounts[target.account] : undefined;
-			const credential = await this.resolveCredential(account?.credentialRef);
-			switch (target.executor) {
-				case "acpx":
-					if (!target.acpx) throw new Error(`Missing ACPX config for target ${targetId}`);
-					return createAcpxProvider({
-						...target.acpx,
-						...(acpxHooks ? { hooks: acpxHooks } : {}),
-						model: model.model,
-					});
-				case "anthropic":
-					if (!credential) throw new Error(`Missing credential for account ${target.account ?? "anthropic"}`);
-					return createAnthropicProvider({
-						model: model.model,
-						apiKey: credential,
-						baseUrl: target.endpoint ?? "https://api.anthropic.com",
-					});
-				case "openrouter":
-					if (!credential) throw new Error(`Missing credential for account ${target.account ?? "openrouter"}`);
-					return createOpenRouterProvider({
-						model: model.model,
-						apiKey: credential,
-						baseUrl: target.endpoint ?? "https://openrouter.ai/api/v1",
-						reasoning: target.openrouter?.reasoning,
-						referer: process.env.OPENROUTER_HTTP_REFERER,
-						title: process.env.OPENROUTER_TITLE,
-					});
-				case "ollama":
-					return createOllamaProvider({
-						model: model.model,
-						baseUrl: target.endpoint ?? DEFAULT_OLLAMA_BASE_URL,
-					});
-				case "claude-code":
-					return createClaudeCodeProvider({ model: model.model });
-				case "codex":
-					return createCodexProvider({ model: model.model });
-				case "opencode":
-					return createOpenCodeProvider({
-						model: model.model,
-						baseUrl: target.endpoint ?? DEFAULT_OPENCODE_BASE_URL,
-						ollamaFallbackBaseUrl: DEFAULT_OLLAMA_BASE_URL,
-						ollamaFallbackMaxContextTokens: resolveDefaultOllamaFallbackMaxContextTokens(),
-					});
-				case "openai-compatible":
-					return createOpenAiCompatibleProvider({
-						name: `openai-compatible:${model.model}`,
-						model: model.model,
-						baseUrl: target.endpoint ?? DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
-						apiKey: credential,
-						defaultTimeoutMs: 60_000,
-					});
-				case "llama-cpp":
-					return createOpenAiCompatibleProvider({
-						name: `llama-cpp:${model.model}`,
-						model: model.model,
-						baseUrl: withOpenAiVersionPath(target.endpoint ?? DEFAULT_LLAMA_CPP_BASE_URL),
-						apiKey: credential,
-						defaultTimeoutMs: 60_000,
-					});
-				case "command": {
-					if (!target.command) throw new Error(`Missing command config for target ${targetId}`);
-					return createCommandLineProvider({
-						name: `command:${targetId}`,
-						bin: target.command.bin,
-						args: target.command.args,
-						cwd: target.command.cwd,
-						env: target.command.env,
-						defaultTimeoutMs: 60_000,
-					});
-				}
-			}
+			return createRoutingProvider({
+				config: loaded.config,
+				targetId,
+				modelId,
+				acpxHooks,
+				resolveCredential: (credentialRef) => this.resolveCredential(credentialRef),
+			});
 		})();
 
 		this.providerCache.set(cacheKey, build);

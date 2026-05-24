@@ -28,7 +28,7 @@ do not distinguish between the configured provider and a fallback provider.
   - `paused`
 - Expose the persisted state via `/api/status`.
 - Surface degraded/blocked extraction in `signet status`.
-- Add `memory.pipelineV2.extraction.fallbackProvider` with `ollama | none`.
+- Add `memory.pipelineV2.extraction.fallbackProvider` with `llama-cpp | ollama | none`.
 - When startup preflight blocks extraction and fallback is disabled or
   unavailable, dead-letter queued extraction jobs with a structured reason.
 
@@ -36,4 +36,4 @@ do not distinguish between the configured provider and a fallback provider.
 
 - This is an ops-hardening stub tied to issue #320.
 - The feature is additive and backward compatible because the default
-  `fallbackProvider` remains `ollama`.
+  `fallbackProvider` remains `llama-cpp`.

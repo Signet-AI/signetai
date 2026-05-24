@@ -633,6 +633,7 @@ Controls the LLM-based extraction stage. Supports multiple providers.
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `provider` | `"llama-cpp"` | — | `"none"`, `"acpx"`, `"llama-cpp"`, `"ollama"`, `"claude-code"`, `"opencode"`, `"codex"`, `"anthropic"`, `"openrouter"`, `"openai-compatible"`, or `"command"` |
+| `fallbackProvider` | `"llama-cpp"` | — | `"llama-cpp"`, `"ollama"`, or `"none"`; legacy extraction configs compile this into an inference fallback target |
 | `model` | `"qwen3:4b"` | — | Model name for the configured provider |
 | `timeout` | `90000` | 5000-300000 ms | Extraction call timeout |
 | `minConfidence` | `0.7` | 0.0-1.0 | Confidence threshold; facts below this are dropped |

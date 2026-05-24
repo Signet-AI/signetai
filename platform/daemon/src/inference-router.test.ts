@@ -137,7 +137,11 @@ describe("InferenceRouter legacy API credentials", () => {
 			if (!result.ok) return;
 			expect(result.value.text).toBe("compatible gateway answer");
 			expect(result.value.decision.targetRef).toBe("legacy-extraction/default");
-			expect(seen.every((entry) => entry.authorization === "Bearer test-openai-compatible-key")).toBe(true);
+			expect(
+				seen
+					.filter((entry) => entry.url.startsWith("https://gateway.example.test/v1"))
+					.every((entry) => entry.authorization === "Bearer test-openai-compatible-key"),
+			).toBe(true);
 			expect(seen.map((entry) => entry.url)).toContain("https://gateway.example.test/v1/models");
 			expect(seen.map((entry) => entry.url)).toContain("https://gateway.example.test/v1/chat/completions");
 		} finally {
@@ -162,7 +166,7 @@ describe("InferenceRouter legacy API credentials", () => {
 `,
 			);
 
-			process.env.OPENAI_API_KEY = undefined;
+			Reflect.deleteProperty(process.env, "OPENAI_API_KEY");
 			const seen: Array<{ readonly url: string; readonly authorization: string | null }> = [];
 			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
 				const url = String(input);
@@ -200,6 +204,64 @@ describe("InferenceRouter legacy API credentials", () => {
 			expect(seen.every((entry) => entry.authorization === null)).toBe(true);
 			expect(seen.map((entry) => entry.url)).toContain("http://127.0.0.1:1234/v1/models");
 			expect(seen.map((entry) => entry.url)).toContain("http://127.0.0.1:1234/v1/chat/completions");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("executes a legacy extraction fallback target when the configured provider is blocked", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-legacy-fallback-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`memory:
+  pipelineV2:
+    extraction:
+      provider: openai-compatible
+      model: gpt-4o-mini
+      endpoint: https://gateway.example.test/v1
+      fallbackProvider: llama-cpp
+    synthesis:
+      enabled: false
+`,
+			);
+
+			process.env.OPENAI_API_KEY = undefined;
+			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (url === "http://127.0.0.1:8080/v1/models") {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				if (url === "http://127.0.0.1:8080/v1/chat/completions" && typeof init?.body === "string") {
+					return Promise.resolve(
+						new Response(
+							JSON.stringify({
+								choices: [{ message: { content: "local fallback answer" } }],
+								usage: { prompt_tokens: 9, completion_tokens: 10 },
+							}),
+							{ status: 200 },
+						),
+					);
+				}
+				return Promise.resolve(new Response("unexpected fetch", { status: 500 }));
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const result = await router.execute(
+				{
+					operation: "memory_extraction",
+					promptPreview: "extract",
+					expectedOutputTokens: 64,
+				},
+				"Extract durable facts",
+				{ maxTokens: 64, timeoutMs: 1000 },
+			);
+
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.value.text).toBe("local fallback answer");
+			expect(result.value.decision.targetRef).toBe("legacy-extraction-fallback/default");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

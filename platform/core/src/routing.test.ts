@@ -189,6 +189,87 @@ describe("inference config + decision engine", () => {
 		expect(parsed.value.defaultPolicy).toBe("legacy-default");
 	});
 
+	it("compiles legacy extraction fallbackProvider into routed fallback targets", () => {
+		const legacy = compileLegacyRoutingConfig({
+			extraction: {
+				provider: "anthropic",
+				model: "claude-3-5-haiku-latest",
+				endpoint: undefined,
+				command: undefined,
+				fallbackProvider: "llama-cpp",
+			},
+			synthesis: {
+				enabled: false,
+				provider: "none",
+				model: "",
+				endpoint: undefined,
+			},
+		});
+		const fallbackRef = makeRoutingTargetRef("legacy-extraction-fallback", "default");
+
+		expect(legacy.targets["legacy-extraction"]?.executor).toBe("anthropic");
+		expect(legacy.targets["legacy-extraction-fallback"]?.executor).toBe("llama-cpp");
+		expect(legacy.targets["legacy-extraction-fallback"]?.privacy).toBe("local_only");
+		expect(legacy.policies["legacy-default"]?.fallbackTargets).toEqual([fallbackRef]);
+
+		const primaryDecision = resolveRoutingDecision(
+			legacy,
+			{ operation: "memory_extraction" },
+			{
+				targets: {
+					[makeRoutingTargetRef("legacy-extraction", "default")]: ready,
+					[fallbackRef]: ready,
+				},
+			},
+		);
+		expect(primaryDecision.ok).toBe(true);
+		if (!primaryDecision.ok) return;
+		expect(primaryDecision.value.targetRef).toBe(makeRoutingTargetRef("legacy-extraction", "default"));
+
+		const decision = resolveRoutingDecision(
+			legacy,
+			{ operation: "memory_extraction" },
+			{
+				targets: {
+					[makeRoutingTargetRef("legacy-extraction", "default")]: {
+						available: false,
+						health: "blocked",
+						circuitOpen: false,
+						accountState: "expired",
+						unavailableReason: "auth failed",
+					},
+					[fallbackRef]: ready,
+				},
+			},
+		);
+		expect(decision.ok).toBe(true);
+		if (!decision.ok) return;
+		expect(decision.value.targetRef).toBe(fallbackRef);
+	});
+
+	it("omits legacy extraction fallback targets when fallbackProvider is none", () => {
+		const legacy = compileLegacyRoutingConfig({
+			extraction: {
+				provider: "anthropic",
+				model: "claude-3-5-haiku-latest",
+				endpoint: undefined,
+				command: undefined,
+				fallbackProvider: "none",
+			},
+			synthesis: {
+				enabled: false,
+				provider: "none",
+				model: "",
+				endpoint: undefined,
+			},
+		});
+
+		expect(legacy.targets["legacy-extraction-fallback"]).toBeUndefined();
+		expect(legacy.policies["legacy-default"]?.fallbackTargets).toEqual([
+			makeRoutingTargetRef("legacy-extraction", "default"),
+		]);
+	});
+
 	it("parses ACPX as a first-class restricted harness-backed target", () => {
 		const parsed = parseRoutingConfig({
 			inference: {

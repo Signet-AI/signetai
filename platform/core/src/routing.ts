@@ -1,4 +1,5 @@
 import type { PipelineCommandConfig, PipelineExtractionConfig, PipelineSynthesisConfig } from "./types";
+import { defaultPipelineModel } from "./pipeline-providers";
 
 export const ROUTING_ACCOUNT_KINDS = ["subscription_session", "api"] as const;
 export const ROUTING_TARGET_KINDS = ["subscription_session", "api", "local", "gateway"] as const;
@@ -671,7 +672,10 @@ function parseWorkloadBinding(raw: unknown): RoutingWorkloadBinding | undefined 
 }
 
 export function compileLegacyRoutingConfig(opts: {
-	readonly extraction: Pick<PipelineExtractionConfig, "provider" | "model" | "endpoint" | "command">;
+	readonly extraction: Pick<
+		PipelineExtractionConfig,
+		"provider" | "model" | "endpoint" | "command" | "fallbackProvider"
+	>;
 	readonly synthesis: Pick<PipelineSynthesisConfig, "enabled" | "provider" | "model" | "endpoint">;
 }): RoutingConfig {
 	const accounts: Record<string, RoutingAccountConfig> = {};
@@ -700,6 +704,7 @@ export function compileLegacyRoutingConfig(opts: {
 		repair?: RoutingWorkloadBinding;
 	} = {};
 	let defaultTargets: readonly string[] = [];
+	let fallbackTargets: readonly string[] = [];
 
 	const legacyAccountForProvider = (
 		provider: RoutingExecutorKind,
@@ -759,6 +764,27 @@ export function compileLegacyRoutingConfig(opts: {
 			taskClass: "memory_extraction",
 		};
 		defaultTargets = [...defaultTargets, ref];
+
+		const fallbackProvider = opts.extraction.fallbackProvider;
+		if (
+			(fallbackProvider === "llama-cpp" || fallbackProvider === "ollama") &&
+			fallbackProvider !== opts.extraction.provider
+		) {
+			const fallbackModel = defaultPipelineModel(fallbackProvider);
+			targets["legacy-extraction-fallback"] = {
+				kind: "local",
+				executor: fallbackProvider,
+				privacy: "local_only",
+				models: {
+					default: {
+						model: fallbackModel,
+						label: fallbackModel,
+						reasoning: "medium",
+					},
+				},
+			};
+			fallbackTargets = [...fallbackTargets, makeRoutingTargetRef("legacy-extraction-fallback", "default")];
+		}
 	}
 
 	if (opts.synthesis.enabled && opts.synthesis.provider !== "none" && opts.synthesis.provider !== "acpx") {
@@ -787,7 +813,7 @@ export function compileLegacyRoutingConfig(opts: {
 	policies["legacy-default"] = {
 		mode: "automatic",
 		defaultTargets,
-		fallbackTargets: defaultTargets,
+		fallbackTargets: fallbackTargets.length > 0 ? fallbackTargets : defaultTargets,
 	};
 	workloads.default = {
 		policy: "legacy-default",
@@ -1241,9 +1267,10 @@ function buildCandidateTrace(
 
 	const reasoning = model.reasoning ?? "medium";
 	const reasoningDelta = reasoningRank(reasoning) - reasoningRank(classification.reasoning);
-	score += 100 - orderedTargets.indexOf(targetRef) * 5;
-	if (orderedTargets.includes(targetRef)) {
-		reasons.push(`preferred order ${orderedTargets.indexOf(targetRef) + 1}`);
+	const orderIndex = orderedTargets.indexOf(targetRef);
+	if (orderIndex >= 0) {
+		score += 100 - orderIndex * 5;
+		reasons.push(`preferred order ${orderIndex + 1}`);
 	}
 	if (reasoningDelta >= 0) {
 		score += 25 - reasoningDelta * 3;
