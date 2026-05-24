@@ -361,7 +361,8 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		expect(config).toContain("[marketplaces.signet-local]");
 		expect(config).toContain("[plugins.\"signet@signet-local\"]");
 		expect(config).toContain("enabled = true");
-		expect(config).not.toContain("[mcp_servers.signet]");
+		expect(config).toContain("[mcp_servers.signet]");
+		expect(config).toContain("command = 'signet-mcp'");
 		expect(config).toContain("[hooks.state.");
 
 		const plugin = JSON.parse(readFileSync(pluginManifestPath, "utf-8")) as {
@@ -404,7 +405,8 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		expect(result.message).toBe("Codex integration installed — native plugin bundle + Signet lifecycle hooks");
 		expect(result.warnings).not.toContain("codex refused stale mcp_servers.signet");
 		expect(config).toContain("[plugins.\"signet@signet-local\"]");
-		expect(config).not.toContain("[mcp_servers.signet]");
+		expect(config).toContain("[mcp_servers.signet]");
+		expect(config).toContain("command = 'signet-mcp'");
 		expect(config).not.toContain("transport = 'sse'");
 	});
 

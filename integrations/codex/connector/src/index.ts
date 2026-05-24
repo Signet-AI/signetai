@@ -890,6 +890,9 @@ export class CodexConnector extends BaseConnector {
 			filesWritten.push(...pluginInstall.filesWritten);
 			if (pluginInstall.warning) warnings.push(pluginInstall.warning);
 			if (pluginInstall.success) {
+				if (patchConfigToml(this.getConfigPath(), mcp) && !configsPatched.includes(this.getConfigPath())) {
+					configsPatched.push(this.getConfigPath());
+				}
 				if (this.nativePluginProvidesHooks()) {
 					const existingHooks = readHooksFile(this.getHooksJsonPath());
 					const trustEntries = existingHooks ? buildHookTrustEntries(this.getHooksJsonPath(), existingHooks) : [];
