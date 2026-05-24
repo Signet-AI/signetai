@@ -189,12 +189,12 @@ const connectors: SourceConnector[] = [
 	{
 		kind: "github",
 		name: "GitHub Repositories",
-		detail: "Issues, PRs, code, docs",
+		detail: "Issues, PRs, discussions, docs",
 		description:
 			"Connect public or private repositories so issues, pull requests, discussions, comments, and docs stay available as source-backed recall.",
 		icon: "github",
 		category: "code",
-		tags: ["code", "cloud", "issues", "pull-requests", "docs"],
+		tags: ["github", "cloud", "issues", "pull-requests", "discussions", "docs"],
 		status: "available",
 		indexes: ["Issues and pull requests", "Discussion and issue comments", "README and docs paths"],
 		never: ["Push changes without an explicit action"],

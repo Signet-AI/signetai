@@ -146,6 +146,38 @@ describe("github-source-provider", () => {
 		expect(sourceRows(source.id).map((row) => row.source_kind)).toContain("source_github_failure");
 	});
 
+	it("records a failure when a wildcard repo pattern matches nothing", async () => {
+		const source: SignetSourceEntry = {
+			id: "github:wildcard",
+			kind: "github",
+			name: "GitHub",
+			root: "github://repos/Signet-AI/no-match-*",
+			enabled: true,
+			mode: "read-only",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			providerSettings: {
+				repos: ["Signet-AI/no-match-*"],
+				resourceTypes: ["issues"],
+				state: "all",
+				includeComments: true,
+				docPaths: ["README.md"],
+				maxItemsPerRepo: 5,
+			},
+		};
+		globalThis.fetch = mock(() => Promise.resolve(Response.json([]))) as typeof fetch;
+
+		const result = await githubSourceProvider.sync?.({
+			source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures[0]?.message).toContain("matched no repositories");
+		expect(sourceRows(source.id).map((row) => row.source_kind)).toContain("source_github_failure");
+	});
+
 	it("propagates comment fetch failures to the provider result", async () => {
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			const text = String(url);

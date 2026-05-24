@@ -55,7 +55,7 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 	const syncStartedAt = new Date().toISOString();
 	const agentId = context.agentId || resolveDaemonAgentId();
 	const token = settings.tokenRef ? await resolveToken(settings.tokenRef) : undefined;
-	const repos = await resolveRepos(settings, token);
+	const repos = await resolveRepos(context.source, settings, failures, token);
 	let indexed = 0;
 	let scanned = 0;
 
@@ -286,13 +286,27 @@ function writeFailureArtifact(source: SignetSourceEntry, agentId: string, failur
 	return 1;
 }
 
-async function resolveRepos(settings: GitHubSourceSettings, token?: string): Promise<ResolvedRepo[]> {
+async function resolveRepos(
+	source: SignetSourceEntry,
+	settings: GitHubSourceSettings,
+	failures: SourceFailureState[],
+	token?: string,
+): Promise<ResolvedRepo[]> {
 	const resolved: ResolvedRepo[] = [];
 	for (const pattern of settings.repos) {
 		const [owner, repoPart] = pattern.split("/");
 		if (!owner || !repoPart) continue;
 		if (repoPart.includes("*")) {
 			const expanded = await expandRepoGlob(owner, repoPart, token, settings.maxItemsPerRepo);
+			if (expanded.repos.length === 0) {
+				failures.push(
+					failureState(source, `GitHub wildcard repo pattern matched no repositories: ${pattern}`, {
+						owner,
+						pattern,
+						phase: "repo_expansion",
+					}),
+				);
+			}
 			if (expanded.truncated) {
 				logger.warn("github-source", "Wildcard repo source expansion hit configured cap", {
 					owner,
