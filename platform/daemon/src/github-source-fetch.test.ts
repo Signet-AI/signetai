@@ -74,6 +74,39 @@ describe("github-source-fetch", () => {
 		expect(decodeURIComponent(requested)).toContain('label:"quoted\\"label"');
 	});
 
+	it("paginates label-filtered pull request search up to maxItems", async () => {
+		const requested: string[] = [];
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			requested.push(text);
+			const page = new URL(text).searchParams.get("page");
+			const makePull = (number: number) => ({
+				number,
+				title: `PR ${number}`,
+				body: "",
+				state: "open",
+				html_url: `https://github.com/o/r/pull/${number}`,
+				user: null,
+				labels: [],
+				created_at: "2026-01-01T00:00:00.000Z",
+				updated_at: "2026-01-01T00:00:00.000Z",
+				closed_at: null,
+				comments: 0,
+			});
+			return Promise.resolve(
+				Response.json({
+					items: page === "1" ? Array.from({ length: 100 }, (_, index) => makePull(index + 1)) : [makePull(101)],
+				}),
+			);
+		}) as typeof fetch;
+
+		const result = await fetchPullRequestsBySearch({ owner: "o", repo: "r" }, ["bug"], undefined, "open", 101);
+
+		expect(result.resources).toHaveLength(101);
+		expect(new URL(requested[0] ?? "").searchParams.get("page")).toBe("1");
+		expect(new URL(requested[1] ?? "").searchParams.get("page")).toBe("2");
+	});
+
 	it("maps GraphQL discussion closed state without requiring a state string field", async () => {
 		globalThis.fetch = mock(() =>
 			Promise.resolve(
@@ -106,6 +139,46 @@ describe("github-source-fetch", () => {
 
 		expect(result.resources[0]?.state).toBe("closed");
 		expect(result.resources[0]?.labels).toEqual(["roadmap"]);
+	});
+
+	it("paginates discussions until maxItems or the final GraphQL page", async () => {
+		const afterValues: Array<string | null> = [];
+		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
+			const variables = JSON.parse(String(init?.body)).variables as { after?: string | null };
+			afterValues.push(variables.after ?? null);
+			return Promise.resolve(
+				Response.json({
+					data: {
+						repository: {
+							discussions: {
+								nodes: [
+									{
+										number: variables.after ? 2 : 1,
+										title: variables.after ? "Second discussion" : "First discussion",
+										body: "body",
+										url: `https://github.com/o/r/discussions/${variables.after ? 2 : 1}`,
+										closed: false,
+										createdAt: "2026-01-01T00:00:00.000Z",
+										updatedAt: "2026-01-02T00:00:00.000Z",
+										author: { login: "alice" },
+										labels: { nodes: [] },
+										comments: { totalCount: 0 },
+									},
+								],
+								pageInfo: variables.after
+									? { hasNextPage: false, endCursor: null }
+									: { hasNextPage: true, endCursor: "cursor-1" },
+							},
+						},
+					},
+				}),
+			);
+		}) as typeof fetch;
+
+		const result = await fetchDiscussions({ owner: "o", repo: "r", token: "token" }, undefined, "all", 2);
+
+		expect(result.resources.map((resource) => resource.number)).toEqual([1, 2]);
+		expect(afterValues).toEqual([null, "cursor-1"]);
 	});
 
 	it("preserves opaque GraphQL discussion comment ids", async () => {

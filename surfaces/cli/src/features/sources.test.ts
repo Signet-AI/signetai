@@ -143,6 +143,21 @@ describe("sources CLI features", () => {
 		expect(process.exitCode).not.toBe(1);
 	});
 
+	it("rejects malformed GitHub max-items values", async () => {
+		await addGitHubSourceFromCli(
+			{
+				repo: ["Signet-AI/signetai"],
+				resourceType: ["issues"],
+				maxItems: "25oops",
+			},
+			{ agentsDir: dir },
+		);
+
+		expect(errors.join("\n")).toContain("GitHub max-items must be an integer");
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+		expect(process.exitCode).toBe(1);
+	});
+
 	it("sets a non-zero exit code when removing an unknown source", async () => {
 		await removeConfiguredSource("obsidian:missing", { agentsDir: dir });
 

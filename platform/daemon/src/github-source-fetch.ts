@@ -279,18 +279,32 @@ export async function fetchPullRequestsBySearch(
 	state: GitHubSourceState = "all",
 	maxItems = 500,
 ): Promise<GitHubFetchResult> {
+	const resources: GitHubResource[] = [];
+	const errors: GitHubFetchResult["errors"] = [];
 	const statePart = state === "all" ? "" : ` state:${state}`;
 	const labelPart = labels.map((label) => ` label:${quoteSearchValue(label)}`).join("");
 	const q = `repo:${config.owner}/${config.repo} is:pr${statePart}${labelPart}`;
-	const response = await githubRequest(
-		`${GITHUB_API_BASE}/search/issues?q=${encodeURIComponent(q)}&per_page=${Math.min(PER_PAGE, maxItems)}`,
-		config.token,
-	);
-	if (response.status !== 200) {
-		return { resources: [], errors: [{ message: `Pull request search failed: ${response.status}`, retryable: false }] };
+	let page = 1;
+	while (resources.length < maxItems) {
+		const remaining = maxItems - resources.length;
+		const response = await githubRequest(
+			`${GITHUB_API_BASE}/search/issues?q=${encodeURIComponent(q)}&per_page=${Math.min(PER_PAGE, remaining)}&page=${page}`,
+			config.token,
+		);
+		if (response.status !== 200) {
+			errors.push({ message: `Pull request search failed: ${response.status}`, retryable: false });
+			break;
+		}
+		const body = response.body as { items?: GitHubIssue[]; incomplete_results?: boolean };
+		const batch = body.items ?? [];
+		resources.push(...batch.map(searchPullResource));
+		if (body.incomplete_results) {
+			errors.push({ message: "Pull request search returned incomplete GitHub results", retryable: true });
+		}
+		if (batch.length < Math.min(PER_PAGE, remaining)) break;
+		page++;
 	}
-	const body = response.body as { items?: GitHubIssue[] };
-	return { resources: (body.items ?? []).slice(0, maxItems).map(searchPullResource), errors: [] };
+	return { resources: resources.slice(0, maxItems), errors };
 }
 
 export async function fetchIssueComments(config: GitHubFetchConfig, number: number): Promise<GitHubComment[]> {
@@ -330,46 +344,55 @@ export async function fetchDiscussions(
 	state: GitHubSourceState = "all",
 	maxItems = 500,
 ): Promise<GitHubFetchResult> {
+	const resources: GitHubResource[] = [];
+	const errors: GitHubFetchResult["errors"] = [];
 	const query = `
-		query($owner:String!, $name:String!, $first:Int!) {
+		query($owner:String!, $name:String!, $first:Int!, $after:String) {
 			repository(owner:$owner, name:$name) {
-				discussions(first:$first, orderBy:{field:UPDATED_AT, direction:DESC}) {
+				discussions(first:$first, after:$after, orderBy:{field:UPDATED_AT, direction:DESC}) {
 					nodes {
 						number title body url closed createdAt updatedAt
 						author { login }
 						labels(first:20) { nodes { name } }
 						comments { totalCount }
 					}
+					pageInfo { hasNextPage endCursor }
 				}
 			}
 		}`;
-	const response = await githubRequest(GRAPHQL_URL, config.token, "POST", {
-		query,
-		variables: { owner: config.owner, name: config.repo, first: Math.min(maxItems, 100) },
-	});
-	if (response.status !== 200) {
-		return { resources: [], errors: [{ message: `Discussions fetch failed: ${response.status}`, retryable: false }] };
-	}
-	const data = response.body as {
-		data?: {
-			repository?: {
-				discussions?: { nodes?: DiscussionNode[] };
+	let cursor: string | null = null;
+	while (resources.length < maxItems) {
+		const response = await githubRequest(GRAPHQL_URL, config.token, "POST", {
+			query,
+			variables: { owner: config.owner, name: config.repo, first: Math.min(maxItems, PER_PAGE), after: cursor },
+		});
+		if (response.status !== 200) {
+			errors.push({ message: `Discussions fetch failed: ${response.status}`, retryable: false });
+			break;
+		}
+		const data = response.body as {
+			data?: {
+				repository?: {
+					discussions?: { nodes?: DiscussionNode[]; pageInfo?: DiscussionPageInfo };
+				};
 			};
+			errors?: Array<{ message?: string }>;
 		};
-		errors?: Array<{ message?: string }>;
-	};
-	if (data.errors?.length) {
-		return {
-			resources: [],
-			errors: data.errors.map((error) => ({ message: error.message ?? "GraphQL error", retryable: false })),
-		};
+		if (data.errors?.length) {
+			errors.push(...data.errors.map((error) => ({ message: error.message ?? "GraphQL error", retryable: false })));
+			break;
+		}
+		const discussions = data.data?.repository?.discussions;
+		const nodes = discussions?.nodes ?? [];
+		for (const resource of nodes.map(discussionResource)) {
+			if (resources.length >= maxItems) break;
+			if (state === "all" || resource.state === state) resources.push(resource);
+		}
+		if (!discussions?.pageInfo?.hasNextPage) break;
+		cursor = discussions.pageInfo.endCursor ?? null;
+		if (!cursor) break;
 	}
-	const nodes = data.data?.repository?.discussions?.nodes ?? [];
-	const resources = nodes
-		.map(discussionResource)
-		.filter((resource) => state === "all" || resource.state === state)
-		.slice(0, maxItems);
-	return { resources, errors: [] };
+	return { resources, errors };
 }
 
 export async function fetchDiscussionComments(config: GitHubFetchConfig, number: number): Promise<GitHubComment[]> {
@@ -522,6 +545,11 @@ interface DiscussionNode {
 	readonly author?: { readonly login?: string } | null;
 	readonly labels?: { readonly nodes?: Array<{ readonly name?: string }> };
 	readonly comments?: { readonly totalCount?: number };
+}
+
+interface DiscussionPageInfo {
+	readonly hasNextPage?: boolean;
+	readonly endCursor?: string | null;
 }
 
 interface DiscussionCommentNode {

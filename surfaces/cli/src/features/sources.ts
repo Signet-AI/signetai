@@ -111,8 +111,12 @@ export async function addObsidianVaultSource(
 
 export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, deps: SourcesDeps): Promise<void> {
 	const guildIds = options.guild ?? [];
-	const maxMessagesPerChannel =
-		options.maxMessages === undefined ? undefined : Number.parseInt(options.maxMessages, 10);
+	const maxMessagesPerChannel = parseIntegerOption(options.maxMessages, "Discord max-messages");
+	if (isParseError(maxMessagesPerChannel)) {
+		console.error(chalk.red(`✗ ${maxMessagesPerChannel.error}`));
+		process.exitCode = 1;
+		return;
+	}
 	const result = addDiscordSource(
 		{
 			guildIds,
@@ -156,7 +160,12 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 }
 
 export async function addGitHubSourceFromCli(options: AddGitHubSourceOptions, deps: SourcesDeps): Promise<void> {
-	const maxItemsPerRepo = options.maxItems === undefined ? undefined : Number.parseInt(options.maxItems, 10);
+	const maxItemsPerRepo = parseIntegerOption(options.maxItems, "GitHub max-items");
+	if (isParseError(maxItemsPerRepo)) {
+		console.error(chalk.red(`✗ ${maxItemsPerRepo.error}`));
+		process.exitCode = 1;
+		return;
+	}
 	const resourceTypes = options.resourceType?.filter(isGitHubResourceType);
 	if (options.resourceType && resourceTypes?.length !== options.resourceType.length) {
 		console.error(chalk.red("✗ GitHub resource types must be one of: issues, pulls, discussions, docs"));
@@ -335,4 +344,17 @@ export async function importConfiguredSourceSnapshot(
 
 function isGitHubResourceType(value: string): value is "issues" | "pulls" | "discussions" | "docs" {
 	return value === "issues" || value === "pulls" || value === "discussions" || value === "docs";
+}
+
+type ParseIntegerResult = number | undefined | { readonly error: string };
+
+function parseIntegerOption(value: string | undefined, label: string): ParseIntegerResult {
+	if (value === undefined) return undefined;
+	const trimmed = value.trim();
+	if (!/^\d+$/.test(trimmed)) return { error: `${label} must be an integer` };
+	return Number(trimmed);
+}
+
+function isParseError(value: ParseIntegerResult): value is { readonly error: string } {
+	return typeof value === "object";
 }
