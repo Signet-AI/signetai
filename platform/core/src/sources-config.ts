@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 export type SignetSourceKind = "obsidian" | (string & {});
 export type SignetSourceMode = "read-only";
@@ -258,6 +258,9 @@ function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettin
 	if (looksLikeRawDiscordToken(tokenRef))
 		return { error: "Discord tokenRef must be a secret reference, not a raw token" };
 	const desktopCachePath = cleanLocalPath(input.desktopCachePath) ?? DEFAULT_DISCORD_DESKTOP_CACHE_PATH;
+	if (syncMode === "desktop-cache" && !looksLikeDiscordDesktopCacheRoot(desktopCachePath)) {
+		return { error: "Discord desktopCachePath must point at a Discord Desktop data directory" };
+	}
 	const channelFilter = cleanDiscordChannelFilter(input.channelFilter ?? []);
 	const maxMessagesPerChannel =
 		cleanPositiveInteger(input.maxMessagesPerChannel, MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL) ??
@@ -534,6 +537,13 @@ function defaultDiscordDesktopCachePath(): string {
 		default:
 			return resolve(process.env.XDG_CONFIG_HOME || resolve(homedir(), ".config"), "discord");
 	}
+}
+
+function looksLikeDiscordDesktopCacheRoot(value: string): boolean {
+	const base = basename(value)
+		.toLowerCase()
+		.replace(/[\s_-]+/g, "");
+	return ["discord", "discordcanary", "discordptb", "discorddevelopment", "vesktop"].includes(base);
 }
 
 function mergeDefaultObsidianExcludeGlobs(values: readonly string[] | undefined): readonly string[] {

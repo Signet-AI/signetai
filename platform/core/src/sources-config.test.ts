@@ -121,7 +121,7 @@ describe("sources-config", () => {
 
 	it("adds a Discord desktop cache source without a bot token", () => {
 		const agentsDir = tmp();
-		const desktopCachePath = join(agentsDir, "discord-cache");
+		const desktopCachePath = join(agentsDir, "discord");
 
 		const result = addDiscordSource(
 			{
@@ -186,6 +186,21 @@ describe("sources-config", () => {
 		expect(second.source.name).toBe("Discord B");
 		expect(parseDiscordSettings(second.source.providerSettings).maxMessagesPerChannel).toBe(10);
 		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("rejects Discord desktop cache paths outside known Desktop data roots", () => {
+		const result = addDiscordSource(
+			{
+				name: "Local Discord Cache",
+				desktopCachePath: join(tmp(), "documents"),
+				syncMode: "desktop-cache",
+			},
+			tmp(),
+		);
+
+		expect(result.ok).toBe(false);
+		if (result.ok === true) throw new Error("expected invalid desktop cache path");
+		expect(result.error).toContain("Discord desktopCachePath must point at a Discord Desktop data directory");
 	});
 
 	it("rejects invalid Discord source boundaries", () => {
