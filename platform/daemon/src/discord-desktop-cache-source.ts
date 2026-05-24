@@ -2,7 +2,10 @@ import { type Stats, existsSync, lstatSync, readFileSync, readdirSync } from "no
 import { basename, join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
 import type { SignetSourceEntry } from "@signet/core";
+import { getDbAccessor } from "./db-accessor";
+import { countChanges } from "./db-helpers";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
+import { indexSourceArtifactStructure, purgeSourceArtifactStructure } from "./source-artifact-graph";
 import type { SourceProviderSyncResult } from "./source-providers";
 
 const DISCORD_PROVIDER_KIND = "discord";
@@ -144,14 +147,19 @@ interface CacheArtifact {
 export async function syncDiscordDesktopCacheSource(
 	options: DiscordDesktopCacheSyncOptions,
 ): Promise<SourceProviderSyncResult> {
+	const syncStartedAt = new Date().toISOString();
 	const stats = emptyStats();
 	const snapshot = emptySnapshot();
 	const root = options.cachePath;
 	const candidates = discoverCandidates(root, options.fullScan, stats);
 	let indexed = 0;
+	let cancelled = false;
 
 	for (const candidate of candidates) {
-		if (!options.shouldContinue()) break;
+		if (!options.shouldContinue()) {
+			cancelled = true;
+			break;
+		}
 		const data = readCandidateFile(candidate, stats);
 		if (!data) continue;
 		stats.filesScanned++;
@@ -170,10 +178,14 @@ export async function syncDiscordDesktopCacheSource(
 
 	finalizeSnapshot(snapshot, stats);
 	for (const artifact of artifactsForSnapshot(options.source, snapshot, stats, root, options.fullScan)) {
-		if (!options.shouldContinue()) break;
+		if (!options.shouldContinue()) {
+			cancelled = true;
+			break;
+		}
 		writeArtifact(options.source, options.agentId, artifact);
 		indexed++;
 	}
+	if (!cancelled) purgeStaleDesktopCacheArtifacts(options.source.id, options.agentId, syncStartedAt);
 
 	return { indexed, scanned: stats.filesScanned, total: candidates.length, failures: [] };
 }
@@ -398,6 +410,50 @@ function writeArtifact(source: SignetSourceEntry, agentId: string, artifact: Cac
 		content: artifact.content,
 		sourceMeta: artifact.meta,
 	});
+	if (artifact.kind !== "source_discord_checkpoint") {
+		indexSourceArtifactStructure({
+			agentId,
+			sourceId: source.id,
+			sourceKind: artifact.kind,
+			sourceRoot: source.root,
+			sourceParentPath: artifact.parentPath,
+			sourcePath: artifact.path,
+			displayName: sourceArtifactDisplayName(artifact),
+			content: artifact.content,
+		});
+	}
+}
+
+function sourceArtifactDisplayName(artifact: CacheArtifact): string | undefined {
+	const name = artifact.meta.name ?? artifact.meta.username ?? artifact.meta.filename ?? artifact.meta.title;
+	return typeof name === "string" && name.trim().length > 0 ? name.trim() : undefined;
+}
+
+function purgeStaleDesktopCacheArtifacts(sourceId: string, agentId: string, syncStartedAt: string): number {
+	const rows = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT source_path FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND updated_at < ?`,
+				)
+				.all(agentId, sourceId, syncStartedAt) as Array<{ source_path: string }>,
+	);
+	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
+	return getDbAccessor().withWriteTx((db) =>
+		countChanges(
+			db
+				.prepare(
+					`DELETE FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND updated_at < ?`,
+				)
+				.run(agentId, sourceId, syncStartedAt),
+		),
+	);
 }
 
 function importStatsArtifact(

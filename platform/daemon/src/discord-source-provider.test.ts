@@ -8,6 +8,7 @@ import { DISCORD_CHANNEL_TYPES } from "./discord-source-fetch";
 import { discordSourceProvider } from "./discord-source-provider";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { putSecret } from "./secrets";
+import { indexSourceArtifactStructure } from "./source-artifact-graph";
 
 const originalFetch = globalThis.fetch;
 
@@ -81,6 +82,20 @@ describe("discord-source-provider", () => {
 		expect(message?.source_meta_json).toContain('"pinned":true');
 		const attachment = rows.find((row) => row.source_kind === "source_discord_attachment");
 		expect(attachment?.source_meta_json).toContain('"urlPresent":true');
+		const graph = getDbAccessor().withReadDb((db) => ({
+			docs: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE source_id = ? AND entity_type = 'source_document'")
+					.get(added.source.id) as { count: number }
+			).count,
+			attrs: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE source_id = ? AND memory_id IS NULL")
+					.get(added.source.id) as { count: number }
+			).count,
+		}));
+		expect(graph.docs).toBeGreaterThan(0);
+		expect(graph.attrs).toBeGreaterThan(0);
 	});
 
 	it("records partial Discord failures without deleting existing source-owned rows", async () => {
@@ -226,6 +241,87 @@ describe("discord-source-provider", () => {
 		expect(indexedText).not.toContain("mfa.DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD");
 		expect(indexedText).not.toContain("mfa.EEEEEEEEEEEEEEEEEEEEEEEEEEEEEE");
 		expect(indexedText).toContain("[redacted]");
+		const graphDocs = getDbAccessor().withReadDb(
+			(db) =>
+				(
+					db
+						.prepare("SELECT COUNT(*) AS count FROM entities WHERE source_id = ? AND entity_type = 'source_document'")
+						.get(added.source.id) as { count: number }
+				).count,
+		);
+		expect(graphDocs).toBeGreaterThan(0);
+	});
+
+	it("purges stale Discord Desktop cache artifacts and graph rows after a complete sync", async () => {
+		const cachePath = join(dir, "discord");
+		mkdirSync(cachePath, { recursive: true });
+		const added = addDiscordSource(
+			{
+				guildIds: [],
+				name: "Desktop Cache",
+				desktopCachePath: cachePath,
+				syncMode: "desktop-cache",
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		const stalePath = "discord-cache://guild/@me/channel/stale/messages/stale";
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			harness: "discord",
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourceExternalId: "message:stale",
+			sourcePath: stalePath,
+			sourceKind: "source_discord_message",
+			sourceMtimeMs: Date.parse("2025-01-01T00:00:00.000Z"),
+			content: "stale cache message",
+		});
+		indexSourceArtifactStructure({
+			agentId: "default",
+			sourceId: added.source.id,
+			sourceKind: "source_discord_message",
+			sourceRoot: added.source.root,
+			sourcePath: stalePath,
+			content: "# Stale\n\nThis stale desktop-cache graph row should be purged after the next complete sync.\n",
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memory_artifacts SET updated_at = ? WHERE source_id = ? AND source_path = ?").run(
+				"2025-01-01T00:00:00.000Z",
+				added.source.id,
+				stalePath,
+			);
+			db.prepare("UPDATE entities SET updated_at = ? WHERE source_id = ? AND source_path = ?").run(
+				"2025-01-01T00:00:00.000Z",
+				added.source.id,
+				stalePath,
+			);
+		});
+
+		const result = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures).toEqual([]);
+		expect(sourceRows(added.source.id).some((row) => row.source_path === stalePath)).toBe(false);
+		const graphRows = getDbAccessor().withReadDb((db) => ({
+			entities: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entities WHERE source_id = ? AND source_path = ?")
+					.get(added.source.id, stalePath) as { count: number }
+			).count,
+			attrs: (
+				db
+					.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE source_id = ? AND source_path = ?")
+					.get(added.source.id, stalePath) as { count: number }
+			).count,
+		}));
+		expect(graphRows).toEqual({ entities: 0, attrs: 0 });
 	});
 
 	it("classifies route-bearing Discord Desktop cache guild messages and skips ambiguous routes", async () => {

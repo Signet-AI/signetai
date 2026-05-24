@@ -32,6 +32,7 @@ import {
 } from "./discord-source-fetch";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { getSecret } from "./secrets";
+import { indexSourceArtifactStructure, purgeSourceArtifactStructure } from "./source-artifact-graph";
 import type { SourceProviderAdapter, SourceProviderSyncContext, SourceProviderSyncResult } from "./source-providers";
 import { purgeSourceOwnedRows } from "./source-purge";
 
@@ -258,7 +259,28 @@ function writeArtifact(source: SignetSourceEntry, agentId: string, artifact: Dis
 		content: artifact.content,
 		sourceMeta: artifact.meta,
 	});
+	if (indexesSourceArtifactGraph(artifact)) {
+		indexSourceArtifactStructure({
+			agentId,
+			sourceId: source.id,
+			sourceKind: artifact.kind,
+			sourceRoot: source.root,
+			sourceParentPath: artifact.parentPath,
+			sourcePath: artifact.path,
+			displayName: sourceArtifactDisplayName(artifact),
+			content: artifact.content,
+		});
+	}
 	return 1;
+}
+
+function indexesSourceArtifactGraph(artifact: DiscordArtifact): boolean {
+	return artifact.kind !== "source_discord_failure" && artifact.kind !== "source_discord_checkpoint";
+}
+
+function sourceArtifactDisplayName(artifact: DiscordArtifact): string | undefined {
+	const name = artifact.meta.name ?? artifact.meta.username ?? artifact.meta.filename ?? artifact.meta.title;
+	return typeof name === "string" && name.trim().length > 0 ? name.trim() : undefined;
 }
 
 function writeMessageArtifacts(
@@ -320,6 +342,18 @@ function writeFailureArtifact(source: SignetSourceEntry, agentId: string, failur
 }
 
 function purgeStaleDiscordArtifacts(sourceId: string, agentId: string, syncStartedAt: string): number {
+	const rows = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT source_path FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND updated_at < ?`,
+				)
+				.all(agentId, sourceId, syncStartedAt) as Array<{ source_path: string }>,
+	);
+	for (const row of rows) purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
 	return getDbAccessor().withWriteTx((db) =>
 		countChanges(
 			db

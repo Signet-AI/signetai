@@ -29,6 +29,7 @@ import {
 import { logger } from "./logger";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { getSecret } from "./secrets";
+import { indexSourceArtifactStructure, purgeSourceArtifactStructure } from "./source-artifact-graph";
 import type { SourceProviderAdapter, SourceProviderSyncContext, SourceProviderSyncResult } from "./source-providers";
 import { purgeSourceOwnedRows } from "./source-purge";
 
@@ -243,6 +244,8 @@ function writeResourceArtifact(
 	resource: GitHubResource,
 ): string {
 	const path = resourcePath(repo, resource);
+	const sourceKind = `source_github_${resource.type}`;
+	const content = resourceContent(repo, resource);
 	indexExternalMemoryArtifact({
 		agentId,
 		harness: GITHUB_HARNESS,
@@ -251,10 +254,10 @@ function writeResourceArtifact(
 		sourceExternalId: resourceExternalId(repo, resource),
 		sourceParentPath: `github://${repo}`,
 		sourcePath: path,
-		sourceKind: `source_github_${resource.type}`,
+		sourceKind,
 		sourceMtimeMs: Date.parse(resource.updatedAt) || Date.now(),
 		capturedAt: resource.updatedAt,
-		content: resourceContent(repo, resource),
+		content,
 		sourceMeta: {
 			provider: GITHUB_PROVIDER_KIND,
 			repo,
@@ -272,6 +275,16 @@ function writeResourceArtifact(
 			...resource.extra,
 		},
 	});
+	indexSourceArtifactStructure({
+		agentId,
+		sourceId: source.id,
+		sourceKind,
+		sourceRoot: source.root,
+		sourceParentPath: `github://${repo}`,
+		sourcePath: path,
+		displayName: resource.title,
+		content,
+	});
 	return path;
 }
 
@@ -286,6 +299,7 @@ function writeCommentArtifact(
 		typeof comment.author === "string" ? comment.author : (comment.author?.login ?? comment.user?.login ?? null);
 	const commentId = String(comment.id);
 	const path = `${resourcePath(repo, resource)}#comment-${commentId}`;
+	const content = [`# Comment on ${resource.title}`, "", `Author: ${author ?? "unknown"}`, "", comment.body].join("\n");
 	indexExternalMemoryArtifact({
 		agentId,
 		harness: GITHUB_HARNESS,
@@ -297,7 +311,7 @@ function writeCommentArtifact(
 		sourceKind: "source_github_comment",
 		sourceMtimeMs: Date.parse(comment.updated_at) || Date.now(),
 		capturedAt: comment.updated_at,
-		content: [`# Comment on ${resource.title}`, "", `Author: ${author ?? "unknown"}`, "", comment.body].join("\n"),
+		content,
 		sourceMeta: {
 			provider: GITHUB_PROVIDER_KIND,
 			repo,
@@ -309,6 +323,16 @@ function writeCommentArtifact(
 			createdAt: comment.created_at,
 			updatedAt: comment.updated_at,
 		},
+	});
+	indexSourceArtifactStructure({
+		agentId,
+		sourceId: source.id,
+		sourceKind: "source_github_comment",
+		sourceRoot: source.root,
+		sourceParentPath: resourcePath(repo, resource),
+		sourcePath: path,
+		displayName: `Comment on ${resource.title}`,
+		content,
 	});
 	return path;
 }
@@ -429,21 +453,28 @@ function purgeStaleGitHubArtifacts(
 	repo: string,
 ): void {
 	const repoPathPrefix = `github://${repo}/`;
+	const rows = getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT rowid, source_path FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND source_path >= ?
+					   AND source_path < ?
+					   AND updated_at < ?
+					   AND COALESCE(is_deleted, 0) = 0`,
+				)
+				.all(agentId, sourceId, repoPathPrefix, `${repoPathPrefix}\uffff`, syncStartedAt) as Array<{
+				rowid: number;
+				source_path: string;
+			}>,
+	);
+	for (const row of rows) {
+		if (seenPaths.has(row.source_path)) continue;
+		purgeSourceArtifactStructure({ agentId, sourceId, sourcePath: row.source_path });
+	}
 	getDbAccessor().withWriteTx((db) => {
-		const rows = db
-			.prepare(
-				`SELECT rowid, source_path FROM memory_artifacts
-				 WHERE agent_id = ?
-				   AND source_id = ?
-				   AND source_path >= ?
-				   AND source_path < ?
-				   AND updated_at < ?
-				   AND COALESCE(is_deleted, 0) = 0`,
-			)
-			.all(agentId, sourceId, repoPathPrefix, `${repoPathPrefix}\uffff`, syncStartedAt) as Array<{
-			rowid: number;
-			source_path: string;
-		}>;
 		for (const row of rows) {
 			if (seenPaths.has(row.source_path)) continue;
 			countChanges(

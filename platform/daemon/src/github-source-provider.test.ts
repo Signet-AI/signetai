@@ -105,6 +105,15 @@ describe("github-source-provider", () => {
 			"Signet-AI/signetai:issue:12",
 		);
 		expect(rows.find((row) => row.source_kind === "source_github_comment")?.content).toContain("comment body");
+		const graphDocs = getDbAccessor().withReadDb(
+			(db) =>
+				(
+					db
+						.prepare("SELECT COUNT(*) AS count FROM entities WHERE source_id = ? AND entity_type = 'source_document'")
+						.get(added.source.id) as { count: number }
+				).count,
+		);
+		expect(graphDocs).toBeGreaterThanOrEqual(2);
 	});
 
 	it("records requested discussion failures when no token is available", async () => {

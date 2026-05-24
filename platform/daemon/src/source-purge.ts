@@ -49,6 +49,14 @@ export function purgeSourceOwnedRows(input: PurgeSourceOwnedRowsInput): number {
 				.run(...(input.agentId ? [input.agentId] : []), sourceId),
 		);
 
+		const entityRows = db
+			.prepare(`SELECT id FROM entities WHERE ${agentWhere}source_id = ?`)
+			.all(...(input.agentId ? [input.agentId] : []), sourceId) as Array<{ id: string }>;
+		if (entityRows.length > 0) {
+			const stmt = db.prepare("DELETE FROM entity_aspects WHERE entity_id = ?");
+			for (const row of entityRows) purged += countChanges(stmt.run(row.id));
+		}
+
 		for (const table of SOURCE_OWNED_GRAPH_TABLES) {
 			if (!tableHasColumn(db, table, "source_id")) continue;
 			if (input.agentId && !tableHasColumn(db, table, "agent_id")) continue;
