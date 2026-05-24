@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
@@ -90,6 +90,88 @@ describe("native memory sources", () => {
 		expect(row.source_kind).toBe("native_automation_memory");
 		expect(row.harness).toBe("codex");
 		expect(row.content).toContain("Obsidian wiki automation");
+	});
+
+	it("indexes Codex skills and ad-hoc memory notes with source metadata", async () => {
+		const root = join(dir, ".codex");
+		const skill = join(root, "memories", "skills", "debugging", "SKILL.md");
+		const note = join(root, "memories", "extensions", "ad_hoc", "notes", "2026-05-24-note.md");
+		mkdirSync(join(root, "memories", "skills", "debugging"), { recursive: true });
+		mkdirSync(join(root, "memories", "extensions", "ad_hoc", "notes"), { recursive: true });
+		writeFileSync(skill, "# Debugging\n\nUse repo truth first.\n");
+		writeFileSync(note, "Remember the Codex note bridge.\n");
+
+		const source = codexNativeMemorySource(root);
+		expect(await indexNativeMemoryFile(source, skill, "agent-native")).toBe(true);
+		expect(await indexNativeMemoryFile(source, note, "agent-native")).toBe(true);
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT source_kind, source_id, source_external_id, source_meta_json FROM memory_artifacts ORDER BY source_kind").all() as Array<{
+					source_kind: string;
+					source_id: string | null;
+					source_external_id: string | null;
+					source_meta_json: string;
+				}>,
+		);
+		expect(rows.map((row) => row.source_kind)).toEqual(["native_ad_hoc_note", "native_skill_memory"]);
+		expect(rows.every((row) => row.source_id?.startsWith("codex_native_memory:"))).toBe(true);
+		expect(rows.map((row) => row.source_external_id)).toEqual([
+			"memories/extensions/ad_hoc/notes/2026-05-24-note.md",
+			"memories/skills/debugging/SKILL.md",
+		]);
+		expect(JSON.parse(rows[0]?.source_meta_json ?? "{}")).toMatchObject({
+			sourceType: "codex_native_memory",
+			lineStart: 1,
+			lineEnd: 1,
+		});
+	});
+
+	it("indexes Codex rollout jsonl files and extracts rollout IDs", async () => {
+		const root = join(dir, ".codex");
+		const rollout = join(root, "memories", "rollout_summaries", "2026-05-24-run.jsonl");
+		mkdirSync(join(root, "memories", "rollout_summaries"), { recursive: true });
+		writeFileSync(
+			rollout,
+			'{"session_meta":{"payload":{"id":"019e5b4c-c317-74b0-bc52-a658b16e0f5d"}}}\n{"event":"done"}\n',
+		);
+
+		const handle = startNativeMemoryBridge([codexNativeMemorySource(root)], {
+			agentId: "agent-native",
+			pollIntervalMs: 0,
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(1);
+			const row = getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT source_kind, source_meta_json FROM memory_artifacts").get() as {
+						source_kind: string;
+						source_meta_json: string;
+					},
+			);
+			expect(row.source_kind).toBe("native_rollout_summary");
+			expect(JSON.parse(row.source_meta_json)).toMatchObject({
+				rolloutId: "019e5b4c-c317-74b0-bc52-a658b16e0f5d",
+				lineEnd: 2,
+			});
+		} finally {
+			await handle.close();
+		}
+	});
+
+	it("rejects symlinked Codex memory files", async () => {
+		const root = join(dir, ".codex");
+		const outside = join(dir, "outside.md");
+		const link = join(root, "memories", "MEMORY.md");
+		mkdirSync(join(root, "memories"), { recursive: true });
+		writeFileSync(outside, "Do not index through a symlink.\n");
+		symlinkSync(outside, link);
+
+		expect(await indexNativeMemoryFile(codexNativeMemorySource(root), link, "agent-native")).toBe(false);
+		const count = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts").get() as { count: number },
+		).count;
+		expect(count).toBe(0);
 	});
 
 	it("indexes Claude Code memdir files through the native bridge", async () => {

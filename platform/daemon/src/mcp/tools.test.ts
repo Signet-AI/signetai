@@ -165,6 +165,7 @@ describe("createMcpServer", () => {
 	const originalFetch = globalThis.fetch;
 	const originalSignetPath = process.env.SIGNET_PATH;
 	const originalPath = process.env.PATH;
+	const originalCodexHome = process.env.CODEX_HOME;
 	let tempAgentsDir = "";
 
 	beforeEach(async () => {
@@ -190,6 +191,11 @@ describe("createMcpServer", () => {
 		} else {
 			process.env.PATH = originalPath;
 		}
+		if (originalCodexHome === undefined) {
+			Reflect.deleteProperty(process.env, "CODEX_HOME");
+		} else {
+			process.env.CODEX_HOME = originalCodexHome;
+		}
 		if (tempAgentsDir) rmSync(tempAgentsDir, { recursive: true, force: true });
 		tempAgentsDir = "";
 		resetDefaultPluginHostForTests();
@@ -209,6 +215,10 @@ describe("createMcpServer", () => {
 		expect(names).toContain("memory_modify");
 		expect(names).toContain("memory_forget");
 		expect(names).toContain("memory_feedback");
+		expect(names).toContain("signet_recall");
+		expect(names).toContain("signet_source_search");
+		expect(names).toContain("signet_session_search");
+		expect(names).toContain("signet_save_note");
 		expect(names).toContain("knowledge_expand");
 		expect(names).toContain("knowledge_tree");
 		expect(names).toContain("knowledge_list_entities");
@@ -249,7 +259,7 @@ describe("createMcpServer", () => {
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(53);
+		expect(names.length).toBe(57);
 	});
 
 	it("registers generic code tools when GraphIQ has an active project", async () => {
@@ -648,6 +658,37 @@ describe("createMcpServer", () => {
 		});
 	});
 
+	describe("signet_recall", () => {
+		it("calls the recall endpoint with Signet-specific tool naming", async () => {
+			const cap: { url?: string; body?: string } = {};
+			mockFetch(
+				200,
+				{
+					method: "hybrid",
+					results: [{ id: "sig-1", content: "Signet recall result", score: 0.91, type: "decision" }],
+					meta: { totalReturned: 1, hasSupplementary: false, noHits: false },
+				},
+				cap,
+			);
+
+			const result = await callTool(server, "signet_recall", {
+				query: "What did Signet decide?",
+				session_key: "session-a",
+				agent_id: "agent-a",
+				include_recalled: true,
+			});
+
+			expect(cap.url).toBe("http://localhost:3850/api/memory/recall");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.query).toBe("What did Signet decide?");
+			expect(body.sessionKey).toBe("session-a");
+			expect(body.agentId).toBe("agent-a");
+			expect(body.includeRecalled).toBe(true);
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toContain("Signet recall result");
+		});
+	});
+
 	describe("session_search", () => {
 		it("calls the session transcript search endpoint with lineage hints", async () => {
 			const cap: { url?: string; method?: string; body?: string } = {};
@@ -691,6 +732,22 @@ describe("createMcpServer", () => {
 			});
 			expect(result.isError).toBeUndefined();
 			expect(result.content[0]?.text).toContain("Juniper EX4300 VLAN audit");
+		});
+	});
+
+	describe("signet_session_search", () => {
+		it("keeps transcript search on the session endpoint", async () => {
+			const cap: { url?: string; body?: string } = {};
+			mockFetch(200, { hits: [{ excerpt: "transcript-only evidence" }] }, cap);
+
+			const result = await callTool(server, "signet_session_search", {
+				query: "transcript evidence",
+				current_session_key: "child",
+			});
+
+			expect(cap.url).toBe("http://localhost:3850/api/sessions/search");
+			expect(JSON.parse(cap.body ?? "{}").currentSessionKey).toBe("child");
+			expect(result.content[0]?.text).toContain("transcript-only evidence");
 		});
 	});
 
@@ -815,6 +872,27 @@ describe("createMcpServer", () => {
 					attributes: [{ content: "prefers Signet memory tools", confidence: 0.9 }],
 				},
 			]);
+		});
+	});
+
+	describe("signet_save_note", () => {
+		it("writes explicit notes under Codex native memory ad-hoc extensions", async () => {
+			const codexHome = join(tempAgentsDir, ".codex");
+			process.env.CODEX_HOME = codexHome;
+
+			const result = await callTool(server, "signet_save_note", {
+				title: "Bridge Note",
+				content: "Codex should ingest this explicit Signet note.",
+				tags: "codex,signet",
+			});
+
+			expect(result.isError).toBeUndefined();
+			const payload = JSON.parse(result.content[0]?.text ?? "{}") as { path: string };
+			expect(payload.path).toContain(join(".codex", "memories", "extensions", "ad_hoc", "notes"));
+			const content = readFileSync(payload.path, "utf-8");
+			expect(content).toContain("source: signet_save_note");
+			expect(content).toContain("Codex should ingest this explicit Signet note.");
+			expect(content).not.toContain("MEMORY.md");
 		});
 	});
 

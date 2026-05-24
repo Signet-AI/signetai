@@ -700,6 +700,9 @@ function buildPluginPromptContributionSection(target: PluginPromptTargetV1, log:
 }
 
 function buildPromptRecallGuidance(harness: string): string {
+	if (harness === "codex") {
+		return "Use the Signet context below as starting context before acting. Codex native memory is already available separately, so run 1-3 targeted Signet recalls with signet_recall only when the task needs cross-harness history, source-backed artifacts, sessions, ontology, or accepted decisions. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
+	}
 	if (isPiHarness(harness)) {
 		return "Use the memories below as starting context before acting. If the task depends on prior context and anything is missing, run 1-3 targeted recalls with signet_recall. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
 	}
@@ -707,6 +710,9 @@ function buildPromptRecallGuidance(harness: string): string {
 }
 
 function buildNoStrongMemoryMatchGuidance(harness: string): string {
+	if (harness === "codex") {
+		return "No strong automatic Signet context was injected for this turn. Codex native memory may already cover ordinary memory needs; if this request depends on cross-harness history, source-backed docs, sessions, ontology, or accepted decisions, run 1-3 targeted Signet recalls with signet_recall before executing commands, editing files, or making decisions.";
+	}
 	if (isPiHarness(harness)) {
 		return "No strong automatic memory match was injected for this turn. If the request depends on prior context, preferences, project history, or unresolved work, run 1-3 targeted Signet recalls with signet_recall before executing commands, editing files, or making decisions. Ask natural questions with entity + event + timeframe when possible. Avoid bag-of-keywords recall queries. Treat graph expansion as supporting context, not proof.";
 	}
@@ -714,8 +720,82 @@ function buildNoStrongMemoryMatchGuidance(harness: string): string {
 }
 
 function buildDurableSaveGuidance(harness: string): string {
+	if (harness === "codex") return "If you learn something explicitly durable for Codex memory, save it with signet_save_note.";
 	if (isPiHarness(harness)) return "If you learn something durable, save it with /remember or signet_remember.";
 	return "If you learn something durable, save it with /remember or memory_store.";
+}
+
+function codexNativeMemoriesEnabled(): boolean {
+	const override = process.env.SIGNET_CODEX_NATIVE_MEMORY?.trim();
+	if (override === "1" || override === "true") return true;
+	if (override === "0" || override === "false") return false;
+	const home = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+	if (!existsSync(join(home, "memories"))) return false;
+	const configPath = join(home, "config.toml");
+	if (!existsSync(configPath)) return true;
+	try {
+		const config = readFileSync(configPath, "utf-8");
+		return !codexConfigDisablesNativeMemories(config);
+	} catch {
+		return true;
+	}
+}
+
+function codexConfigDisablesNativeMemories(config: string): boolean {
+	const lines = config.split(/\r?\n/);
+	let section = "";
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+			section = trimmed;
+			continue;
+		}
+		if (section === "" && /^features\.memories\s*=\s*false\s*(?:#.*)?$/.test(trimmed)) return true;
+		if ((section === "" || section === "[features]") && /^memories\s*=\s*false\s*(?:#.*)?$/.test(trimmed)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function isCodexNativeMemoryRow(row: {
+	readonly source?: string;
+	readonly type?: string;
+	readonly source_id?: string;
+	readonly source_path?: string;
+	readonly tags?: string | null;
+	readonly who?: string;
+}): boolean {
+	const sourceId = row.source_id?.trim().toLowerCase() ?? "";
+	if (sourceId.startsWith("native:codex:") || sourceId.startsWith("codex_native_memory:")) return true;
+	const who = row.who?.trim().toLowerCase();
+	if (who === "codex") return true;
+	const tags = row.tags
+		?.split(",")
+		.map((tag) => tag.trim().toLowerCase())
+		.filter(Boolean);
+	if (tags?.includes("codex")) return true;
+	const path = row.source_path?.replace(/\\/g, "/");
+	if (!path) return false;
+	const home = (process.env.CODEX_HOME?.trim() || join(homedir(), ".codex")).replace(/\\/g, "/").replace(/\/$/, "");
+	return path === home || path.startsWith(`${home}/`);
+}
+
+function filterCodexNativeMemoryRows<
+	T extends {
+		readonly source?: string;
+		readonly type?: string;
+		readonly source_id?: string;
+		readonly source_path?: string;
+		readonly tags?: string | null;
+		readonly who?: string;
+	},
+>(rows: readonly T[]): T[] {
+	if (!codexNativeMemoriesEnabled()) return [...rows];
+	return rows.filter((row) => {
+		const native = row.source === "native_memory" || row.type?.startsWith("native_");
+		return !native || !isCodexNativeMemoryRow(row);
+	});
 }
 
 function buildPromptRecallInject(
@@ -2739,12 +2819,13 @@ export async function handleUserPromptSubmit(
 			});
 		}
 
-		const topRaw = recall.results[0]?.score;
+		const recallResults = req.harness === "codex" ? filterCodexNativeMemoryRows(recall.results) : recall.results;
+		const topRaw = recallResults[0]?.score;
 		const topScore = typeof topRaw === "number" ? clampScore01(topRaw) : undefined;
-		const noStructured = recall.results.length === 0 || typeof topScore !== "number" || topScore < 0.4;
+		const noStructured = recallResults.length === 0 || typeof topScore !== "number" || topScore < 0.4;
 		// Anchor checks must be driven by the current user turn text, not any
 		// expanded/derived recall query shape.
-		const anchorsMissed = queryAnchorsMissingFromRecall(userMessage, recall.results);
+		const anchorsMissed = queryAnchorsMissingFromRecall(userMessage, recallResults);
 		if (noStructured || anchorsMissed) {
 			const temporalHits = deps.searchTemporalFallback({
 				query: vectorQuery,
@@ -2800,7 +2881,7 @@ export async function handleUserPromptSubmit(
 			);
 		}
 
-		const mapped = recall.results.map((result) => ({
+		const mapped = recallResults.map((result) => ({
 			...result,
 			pinned: result.pinned ? 1 : 0,
 		}));
@@ -2818,7 +2899,7 @@ export async function handleUserPromptSubmit(
 		const budgetSelected = budgetFiltered.slice(0, 5);
 		// omitted reflects only budget truncation, not the 5-item display cap,
 		// so the hint correctly directs users to raise contextBudgetChars.
-		const omitted = Math.max(0, recall.results.length - budgetFiltered.length);
+		const omitted = Math.max(0, recallResults.length - budgetFiltered.length);
 
 		// Track FTS hits for predictive scorer data collection (full results, pre-dedup)
 		const allMatchedIds = recall.results.map((result) => result.id);

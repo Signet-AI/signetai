@@ -1,0 +1,38 @@
+{
+  "name": "signet",
+  "version": "0.1.0",
+  "description": "Connect Codex to the local Signet substrate for source-backed recall, sessions, ontology, skills, and scoped note capture.",
+  "author": {
+    "name": "Signet"
+  },
+  "homepage": "https://github.com/signetai/signetai",
+  "repository": "https://github.com/signetai/signetai",
+  "license": "Apache-2.0",
+  "keywords": [
+    "signet",
+    "recall",
+    "sources",
+    "sessions",
+    "ontology",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Signet",
+    "shortDescription": "Source-backed recall and continuity for Codex",
+    "longDescription": "Signet connects Codex to local source-backed memory, transcript search, ontology, and explicit note capture without replacing Codex native memory.",
+    "developerName": "Signet",
+    "category": "Coding",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/signetai/signetai",
+    "defaultPrompt": [
+      "Recall prior Signet context for this repo"
+    ],
+    "brandColor": "#2563EB"
+  }
+}

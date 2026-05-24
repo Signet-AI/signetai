@@ -50,9 +50,11 @@ When to Use MCP vs Hooks
 |----------|-----|
 | Session start/end lifecycle | Hooks |
 | Automatic memory extraction after each prompt | Hooks |
-| Agent wants to search memories mid-conversation | MCP (`memory_search`) |
-| Sub-agent needs to inspect its parent session | MCP (`session_search`) |
-| Agent wants to store a specific fact | MCP (`memory_store`) |
+| Agent wants to search memories mid-conversation | MCP (`signet_recall`, compatibility `memory_search`) |
+| Agent wants to search source-backed docs/artifacts | MCP (`signet_source_search`) |
+| Sub-agent needs to inspect its parent session | MCP (`signet_session_search`, compatibility `session_search`) |
+| Codex agent wants to save a durable native-memory note | MCP (`signet_save_note`) |
+| Agent wants to store a specific Signet memory row | MCP (`memory_store`) |
 | Agent needs to run a command with secrets | MCP (`secret_exec`) |
 | Compaction boundary handling | Hooks |
 | Agent-initiated memory edits or deletions | MCP (`memory_modify`, `memory_forget`) |

@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -93,16 +94,24 @@ function claudeCodeRoot(): string {
 	return join(homedir(), ".claude");
 }
 
+function sourceIdForCodexRoot(root: string): string {
+	return `codex_native_memory:${createHash("sha256").update(normalizedRoot(root)).digest("hex").slice(0, 16)}`;
+}
+
 export function codexNativeMemorySource(root = codexRoot()): NativeMemorySource {
 	return {
 		harness: "codex",
 		displayName: "Codex",
 		root,
+		sourceId: sourceIdForCodexRoot(root),
 		files: [
 			{ glob: "memories/memory_summary.md", kind: "native_memory_summary" },
 			{ glob: "memories/MEMORY.md", kind: "native_memory_registry" },
 			{ glob: "memories/raw_memories.md", kind: "native_raw_memories" },
 			{ glob: "memories/rollout_summaries/*.md", kind: "native_rollout_summary" },
+			{ glob: "memories/rollout_summaries/*.jsonl", kind: "native_rollout_summary" },
+			{ glob: "memories/skills/**/*.md", kind: "native_skill_memory" },
+			{ glob: "memories/extensions/ad_hoc/notes/*.md", kind: "native_ad_hoc_note" },
 			{ glob: "automations/*/memory.md", kind: "native_automation_memory" },
 		],
 	};
@@ -155,14 +164,15 @@ export function configuredNativeMemorySources(agentsDir?: string): NativeMemoryS
 	return [codexNativeMemorySource(), claudeCodeNativeMemorySource(), ...configured];
 }
 
-async function* walkMarkdownFiles(dir: string): AsyncGenerator<string> {
+async function* walkNativeMemoryFiles(dir: string): AsyncGenerator<string> {
 	if (!existsSync(dir)) return;
 	const entries = await readdir(dir, { withFileTypes: true });
 	for (const entry of entries) {
+		if (entry.name === ".git") continue;
 		const path = join(dir, entry.name);
 		if (entry.isDirectory()) {
-			yield* walkMarkdownFiles(path);
-		} else if (entry.isFile() && entry.name.endsWith(".md")) {
+			yield* walkNativeMemoryFiles(path);
+		} else if (entry.isFile() && (entry.name.endsWith(".md") || entry.name.endsWith(".jsonl"))) {
 			yield path;
 		}
 	}
@@ -246,8 +256,35 @@ function normalizedRoot(root: string): string {
 	return resolve(root).replace(/\\/g, "/").replace(/\/$/, "");
 }
 
+function safeRelativePath(root: string, filePath: string): string | null {
+	const rootPath = normalizedRoot(root);
+	const resolvedPath = resolve(filePath).replace(/\\/g, "/");
+	if (resolvedPath !== rootPath && !resolvedPath.startsWith(`${rootPath}/`)) return null;
+	const rel = relative(rootPath, resolvedPath).replace(/\\/g, "/");
+	if (!rel || rel.startsWith("../") || rel === "..") return null;
+	if (rel.split("/").includes(".git")) return null;
+	return rel;
+}
+
 function sourceRelativePath(root: string, filePath: string): string {
 	return relative(normalizedRoot(root), filePath.replace(/\\/g, "/")).replace(/\\/g, "/");
+}
+
+function codexSourceMeta(source: NativeMemorySource, filePath: string, content: string): Record<string, unknown> | undefined {
+	if (source.harness !== "codex") return undefined;
+	const rel = safeRelativePath(source.root, filePath) ?? sourceRelativePath(source.root, filePath);
+	const normalized = content.replace(/\r\n?/g, "\n").replace(/\n$/, "");
+	const lineCount = normalized.length === 0 ? 0 : normalized.split("\n").length;
+	const rolloutId = content.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i)?.[0];
+	return {
+		sourceType: "codex_native_memory",
+		provider: "codex",
+		displayName: source.displayName,
+		relativePath: rel,
+		lineStart: lineCount > 0 ? 1 : 0,
+		lineEnd: lineCount,
+		...(rolloutId ? { rolloutId } : {}),
+	};
 }
 
 function sourceFileDelayMs(source: NativeMemorySource, options: NativeMemoryBridgeOptions): number {
@@ -376,12 +413,15 @@ export async function indexNativeMemoryFile(
 		readonly markdownPathIndex?: ObsidianMarkdownPathIndex;
 	} = {},
 ): Promise<boolean> {
+	if (!safeRelativePath(source.root, filePath)) return false;
 	const pattern = matchesPattern(source, filePath);
 	if (!pattern) return false;
 
 	let content = "";
 	let mtimeMs = 0;
 	try {
+		const linkStat = lstatSync(filePath);
+		if (linkStat.isSymbolicLink()) return false;
 		const stat = statSync(filePath);
 		if (!stat.isFile()) return false;
 		mtimeMs = stat.mtimeMs;
@@ -400,7 +440,7 @@ export async function indexNativeMemoryFile(
 	const hash = contentFingerprint(content);
 	const persistedHash = nativeArtifactContentHash(filePath, agentId);
 	const obsidian = source.harness === "obsidian" && pattern.kind === "source_obsidian_markdown";
-	const sourceId = obsidian ? (source.sourceId ?? sourceIdForObsidianRoot(source.root)) : null;
+	const sourceId = obsidian ? (source.sourceId ?? sourceIdForObsidianRoot(source.root)) : (source.sourceId ?? null);
 	const graphRequested = obsidian && (options.sourceGraphEnabled ?? true);
 	const embeddingRequested =
 		obsidian &&
@@ -432,6 +472,7 @@ export async function indexNativeMemoryFile(
 		const artifactChanged = persistedHash !== hash;
 		if (artifactChanged) {
 			const sourceExternalId = obsidian ? sourceRelativePath(source.root, filePath) : null;
+			const externalId = sourceExternalId ?? (source.harness === "codex" ? sourceRelativePath(source.root, filePath) : null);
 			indexExternalMemoryArtifact({
 				agentId,
 				sourcePath: filePath,
@@ -440,15 +481,15 @@ export async function indexNativeMemoryFile(
 				content,
 				sourceMtimeMs: mtimeMs,
 				sourceId,
-				sourceRoot: obsidian ? normalizedRoot(source.root) : null,
-				sourceExternalId,
-				sourceParentPath: sourceExternalId ? dirname(sourceExternalId).replace(/^\.$/, "") : null,
+				sourceRoot: obsidian || source.harness === "codex" ? normalizedRoot(source.root) : null,
+				sourceExternalId: externalId,
+				sourceParentPath: externalId ? dirname(externalId).replace(/^\.$/, "") : null,
 				sourceMeta: obsidian
 					? {
 							provider: "obsidian",
 							displayName: source.displayName,
 						}
-					: undefined,
+					: codexSourceMeta(source, filePath, content),
 			});
 		}
 		let semanticIndexed = false;
@@ -607,7 +648,7 @@ export function startNativeMemoryBridge(
 			const rootExists = existsSync(source.root);
 			if (rootExists) {
 				const files: string[] = [];
-				for await (const file of walkMarkdownFiles(source.root)) {
+				for await (const file of walkNativeMemoryFiles(source.root)) {
 					if (!matchesPattern(source, file)) continue;
 					files.push(file);
 					await yielder();

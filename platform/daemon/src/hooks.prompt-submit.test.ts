@@ -8,6 +8,8 @@ import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostF
 type PromptDeps = Required<NonNullable<Parameters<typeof handleUserPromptSubmit>[1]>>;
 
 const originalSignetPath = process.env.SIGNET_PATH;
+const originalCodexNativeMemory = process.env.SIGNET_CODEX_NATIVE_MEMORY;
+const originalCodexHome = process.env.CODEX_HOME;
 const agentsDir = mkdtempSync(join(tmpdir(), "signet-hooks-prompt-submit-"));
 const memoryDir = join(agentsDir, "memory");
 const memoryDbPath = join(memoryDir, "memories.db");
@@ -123,6 +125,8 @@ describe("handleUserPromptSubmit observability", () => {
 		searchTemporalFallbackMock.mockClear();
 		searchTemporalFallbackMock.mockImplementation(() => emptyTemporalHits);
 		ensureMemoryDbExists();
+		Reflect.deleteProperty(process.env, "SIGNET_CODEX_NATIVE_MEMORY");
+		Reflect.deleteProperty(process.env, "CODEX_HOME");
 		resetDefaultPluginHostForTests();
 		getDefaultPluginHost().setEnabled(SIGNET_SECRETS_PLUGIN_ID, true);
 	});
@@ -133,6 +137,16 @@ describe("handleUserPromptSubmit observability", () => {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
 			process.env.SIGNET_PATH = originalSignetPath;
+		}
+		if (originalCodexNativeMemory === undefined) {
+			Reflect.deleteProperty(process.env, "SIGNET_CODEX_NATIVE_MEMORY");
+		} else {
+			process.env.SIGNET_CODEX_NATIVE_MEMORY = originalCodexNativeMemory;
+		}
+		if (originalCodexHome === undefined) {
+			Reflect.deleteProperty(process.env, "CODEX_HOME");
+		} else {
+			process.env.CODEX_HOME = originalCodexHome;
 		}
 	});
 
@@ -174,6 +188,112 @@ describe("handleUserPromptSubmit observability", () => {
 		expect(result.inject).toContain("save it with /remember or signet_remember");
 		expect(result.inject).not.toContain("memory_search");
 		expect(result.inject).not.toContain("memory_store");
+	});
+
+	it("uses Codex-specific guidance when native memories are enabled", async () => {
+		process.env.SIGNET_CODEX_NATIVE_MEMORY = "1";
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "   ",
+			},
+			makeDeps(),
+		);
+
+		expect(result.inject).toContain("Codex native memory may already cover ordinary memory needs");
+		expect(result.inject).toContain("run 1-3 targeted Signet recalls with signet_recall");
+		expect(result.inject).toContain("save it with signet_save_note");
+		expect(result.inject).not.toContain("memory_store");
+	});
+
+	it("filters Codex native memory rows from automatic prompt-submit injection", async () => {
+		process.env.SIGNET_CODEX_NATIVE_MEMORY = "1";
+		hybridRecallMock.mockImplementation(async () => ({
+			results: [
+				{
+					id: "native-1",
+					content: "Codex native memory duplicate",
+					score: 0.95,
+					source: "native_memory",
+					source_id: "native:codex:native_memory_registry:abc123",
+					type: "native_memory_registry",
+					tags: "codex,native-memory,native_memory_registry",
+					who: "codex",
+					created_at: "2026-05-24T00:00:00.000Z",
+				},
+				{
+					id: "native-claude",
+					content: "Claude Code source-backed context still matters",
+					score: 0.93,
+					source: "native_memory",
+					source_id: "native:claude-code:native_claude_memory:def456",
+					type: "native_claude_memory",
+					tags: "claude-code,native-memory,native_claude_memory",
+					who: "claude-code",
+					created_at: "2026-05-24T00:00:00.000Z",
+				},
+				{
+					id: "decision-1",
+					content: "Accepted Signet decision from another harness",
+					score: 0.9,
+					source: "hybrid",
+					type: "decision",
+					created_at: "2026-05-24T00:00:00.000Z",
+				},
+			],
+		}));
+
+		const result = await handleUserPromptSubmit(
+			{
+				harness: "codex",
+				userMessage: "What Signet decision should I follow?",
+				sessionKey: "codex-native-filter",
+			},
+			makeDeps(),
+		);
+
+		expect(result.memoryCount).toBe(2);
+		expect(result.inject).toContain("Claude Code source-backed context still matters");
+		expect(result.inject).toContain("Accepted Signet decision from another harness");
+		expect(result.inject).not.toContain("Codex native memory duplicate");
+	});
+
+	it("keeps native rows when Codex memories are disabled in the features table", async () => {
+		const codexHome = mkdtempSync(join(tmpdir(), "signet-codex-home-"));
+		try {
+			mkdirSync(join(codexHome, "memories"), { recursive: true });
+			writeFileSync(join(codexHome, "config.toml"), "[features]\nmemories = false\n", "utf-8");
+			process.env.CODEX_HOME = codexHome;
+			hybridRecallMock.mockImplementation(async () => ({
+				results: [
+					{
+						id: "native-1",
+						content: "Codex native memory should stay when Codex memory feature is off",
+						score: 0.95,
+						source: "native_memory",
+						source_id: "native:codex:native_memory_registry:abc123",
+						type: "native_memory_registry",
+						tags: "codex,native-memory,native_memory_registry",
+						who: "codex",
+						created_at: "2026-05-24T00:00:00.000Z",
+					},
+				],
+			}));
+
+			const result = await handleUserPromptSubmit(
+				{
+					harness: "codex",
+					userMessage: "What native memory should I use?",
+					sessionKey: "codex-memory-feature-disabled",
+				},
+				makeDeps(),
+			);
+
+			expect(result.memoryCount).toBe(1);
+			expect(result.inject).toContain("Codex native memory should stay when Codex memory feature is off");
+		} finally {
+			rmSync(codexHome, { recursive: true, force: true });
+		}
 	});
 
 	it("removes Secrets prompt contribution when signet.secrets is disabled", async () => {

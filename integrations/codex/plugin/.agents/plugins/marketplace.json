@@ -1,0 +1,19 @@
+{
+  "name": "signet-local",
+  "interface": {
+    "displayName": "Signet Local"
+  },
+  "plugins": [
+    {
+      "name": "signet",
+      "source": {
+        "source": "local",
+        "path": "./plugins/signet"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Coding"
+    }
+  ]
+}

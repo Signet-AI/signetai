@@ -241,36 +241,49 @@ This gives Claude Code direct access to `memory_search`, `session_search`,
 ## Codex
 
 Codex is OpenAI's terminal coding agent (`codex-rs`). Signet integrates
-with Codex using its native hook system (`hooks.json`) for full lifecycle
-memory — including per-prompt recall on every user turn. Signet also
-registers as an MCP server so Codex can call `signet_remember` and
-`signet_recall` as native tools.
+with Codex through a generated Codex plugin bundle when the installed Codex
+CLI supports plugin marketplaces. The plugin declares Signet metadata, skills,
+and MCP configuration. Until Codex exposes plugin lifecycle hooks, Signet also
+installs compatibility `hooks.json` entries for session start, prompt submit,
+and session end. Older Codex versions fall back to direct hook and MCP config
+patching.
 
 ### Files managed by Signet
 
 | File | Description |
 |------|-------------|
-| `~/.codex/hooks.json` | Native Codex hooks — SessionStart, UserPromptSubmit, Stop |
-| `~/.codex/config.toml` | MCP server registration (`[mcp_servers.signet]`) |
-| `~/.codex/skills` | Symlink to `$SIGNET_WORKSPACE/skills` |
+| `~/.codex/.tmp/signet-plugin-marketplace` | Generated local marketplace containing the Signet plugin bundle |
+| `~/.codex/config.toml` | Plugin marketplace/config registration, or compatibility `[mcp_servers.signet]` on older Codex installs |
+| `~/.codex/hooks.json` | Compatibility lifecycle hooks — SessionStart, UserPromptSubmit, Stop |
+| `~/.codex/skills` | Compatibility symlink to `$SIGNET_WORKSPACE/skills` when plugin support is unavailable |
 
 ### Native memory bridge
 
 Signet indexes Codex-owned memory artifacts without rewriting them or turning
-them into Signet-authored memory rows. The daemon watches
-`~/.codex/memories/` and automation-local `~/.codex/automations/*/memory.md`
-files, then exposes matching content through Signet recall as
-`native_memory` results with Codex provenance. Removed native files are
-soft-deleted from active recall while preserving their artifact rows for
-lineage.
+them into Signet-authored memory rows. The daemon polls Codex memory files with
+content hashes under `~/.codex/memories/`, including `memory_summary.md`,
+`MEMORY.md`, rollout summaries, skill memories, ad-hoc extension notes, and
+automation-local `~/.codex/automations/*/memory.md` files. Matching content is
+indexed as `codex_native_memory` source artifacts with path, hash, line range,
+and rollout-id metadata when present. Removed native files are soft-deleted
+from active recall while preserving their artifact rows for lineage.
+
+When Codex native memories are enabled, Signet's Codex prompt hook reduces
+automatic injection of Codex-owned memory rows. Prompt-time context stays
+focused on high-value Signet material: cross-harness history, source-backed
+documents, ontology, explicit recalls, and accepted decisions. Explicit recall
+still uses daemon-side dedupe keyed by `session_key`, `agent_id`, and
+`context_epoch`.
 
 ### How it works
 
-1. Codex reads `~/.codex/hooks.json` at startup and registers three hooks.
-2. On session start, Codex fires `SessionStart` → calls `signet hook session-start -H codex --codex-json` → Signet returns identity + memories as `hookSpecificOutput.additionalContext` with `suppressOutput: true`, injected into the model's context window without printing the hook payload to the user transcript.
-3. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex --codex-json` → Signet returns per-prompt recalled memories as `hookSpecificOutput.additionalContext` with `suppressOutput: true` so the context is model-visible but not printed into the user transcript. This is blocking — Codex waits for the hook before sending to the model.
-4. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
-5. The MCP server exposes `memory_store`, `memory_search`, `session_search`, and other tools that Codex can invoke directly during sessions.
+1. `signet setup --harness codex` feature-detects `codex plugin` support.
+2. On supported Codex installs, Signet writes a local plugin marketplace bundle and registers `signet@signet-local` in `~/.codex/config.toml`.
+3. While plugin lifecycle hooks are not available, Codex also reads compatibility hooks from `~/.codex/hooks.json`.
+4. On session start, Codex fires `SessionStart` → calls `signet hook session-start -H codex --codex-json` → Signet returns identity + memories as `hookSpecificOutput.additionalContext` with `suppressOutput: true`, injected into the model's context window without printing the hook payload to the user transcript.
+5. On every user prompt, Codex fires `UserPromptSubmit` → calls `signet hook user-prompt-submit -H codex --codex-json` → Signet returns bounded Signet context as `hookSpecificOutput.additionalContext` with `suppressOutput: true` so the context is model-visible but not printed into the user transcript. This is blocking — Codex waits for the hook before sending to the model.
+6. On session end, Codex fires `Stop` → calls `signet hook session-end -H codex` → Signet extracts memories from the transcript.
+7. The MCP server exposes `signet_recall`, `signet_source_search`, `signet_session_search`, `signet_save_note`, and compatibility `memory_*` tools that Codex can invoke directly during sessions.
 
 Codex `SessionStart` hook timeout defaults to 20 seconds: the Signet CLI
 waits up to `SIGNET_SESSION_START_TIMEOUT` (`15000` ms by default) for
@@ -288,9 +301,10 @@ SIGNET_DAEMON_URL=http://192.168.0.60:3850 signet setup --harness codex
 ```
 
 When `SIGNET_DAEMON_URL` is set, the Codex connector writes
-`[mcp_servers.signet] url = "<daemon>/mcp"` and bakes the same daemon URL
-into the generated lifecycle hook commands. This keeps on-demand MCP tools
-and automatic lifecycle memory pointed at the same Signet instance.
+the plugin MCP URL, or compatibility `[mcp_servers.signet] url =
+"<daemon>/mcp"` when plugin support is unavailable, and bakes the same daemon
+URL into generated lifecycle hook commands. This keeps on-demand MCP tools and
+automatic lifecycle memory pointed at the same Signet instance.
 The value must be the daemon origin only, for example
 `http://192.168.0.60:3850` or `https://signet.internal:3850`, with no
 path, query string, fragment, or embedded credentials.
@@ -312,12 +326,11 @@ Claude Code or OpenCode.
 When the Signet MCP server is registered, Codex gains access to these
 tools (namespaced as `mcp__signet__*`):
 
-- `memory_store` — save a memory
-- `memory_search` — hybrid recall (vector + keyword)
-- `session_search` — search active or completed session transcripts
-- `memory_list` — list recent memories
-- `memory_modify` — update existing memory
-- `memory_forget` — delete a memory
+- `signet_recall` — explicit Signet recall for cross-harness history and accepted decisions
+- `signet_source_search` — search source-backed Signet artifacts and docs
+- `signet_session_search` — search active or completed session transcripts
+- `signet_save_note` — write a small explicit note into Codex native memory extensions
+- `memory_search`, `memory_store`, `session_search`, and other legacy `memory_*` tools — compatibility aliases
 
 MCP tools do not replace hooks. MCP gives Codex on-demand tools during a
 session; hooks provide automatic identity injection, prompt-time recall,

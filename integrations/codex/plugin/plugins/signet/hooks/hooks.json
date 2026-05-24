@@ -1,0 +1,41 @@
+{
+  "_signet": true,
+  "hooks": {
+    "SessionStart": [
+      {
+        "_signet": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "signet hook session-start -H codex --codex-json",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "_signet": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "signet hook user-prompt-submit -H codex --codex-json",
+            "timeout": 7
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "_signet": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "signet hook session-end -H codex",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
