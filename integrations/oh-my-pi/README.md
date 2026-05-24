@@ -14,18 +14,14 @@ Integrates Signet's memory system with Oh My Pi via its extension mechanism.
 ## Installation
 
 ```bash
-signet install oh-my-pi
+signet setup --harness oh-my-pi
 ```
 
-This is handled automatically when you run `signet install` and Oh My Pi is detected.
+Interactive setup can also detect Oh My Pi and offer to configure it.
 
 ## Uninstallation
 
-```bash
-signet uninstall oh-my-pi
-```
-
-Removes the extension file and clears workspace configuration. Your memories are preserved in the Signet daemon.
+The connector package exposes programmatic cleanup that removes the extension file and clears workspace configuration. Your memories are preserved in the Signet daemon.
 
 ## Package
 

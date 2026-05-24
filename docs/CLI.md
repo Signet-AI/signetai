@@ -905,12 +905,10 @@ not running, hooks exit cleanly with code 0 so the harness is not blocked.
 ---
 
 Check for updates, install them manually, or configure unattended
-auto-installs. Running `signet update` with no subcommand is equivalent
-to `signet update check`.
+auto-installs. Use an explicit subcommand such as `signet update check`.
 
 ```bash
-signet update               # same as check
-signet update check
+signet update check         # check for updates
 signet update check --force
 signet update install
 signet update status

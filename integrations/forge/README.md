@@ -14,18 +14,14 @@ Integrates Signet's memory system with ForgeCode's configuration and hook system
 ## Installation
 
 ```bash
-signet install forge
+signet setup --harness forge
 ```
 
-This is handled automatically when you run `signet install` and ForgeCode is detected.
+Interactive setup can also detect ForgeCode and offer to configure it.
 
 ## Uninstallation
 
-```bash
-signet uninstall forge
-```
-
-Removes configuration entries and symlinks. Your memories are preserved in the Signet daemon.
+The connector package exposes programmatic cleanup that removes configuration entries and symlinks. Your memories are preserved in the Signet daemon.
 
 ## Package
 

@@ -251,7 +251,7 @@ GET /health
   "status": "healthy",
   "uptime": 3600,
   "pid": 12345,
-  "version": "0.109.x",
+  "version": "0.124.3",
   "port": 3850,
   "agentsDir": "/home/user/.agents",
   "db": true,
@@ -277,7 +277,7 @@ GET /api/status
 ```json
 {
   "status": "running",
-  "version": "0.109.x",
+  "version": "0.124.3",
   "pid": 12345,
   "uptime": 3600,
   "startedAt": "2025-02-17T16:00:00.000Z",

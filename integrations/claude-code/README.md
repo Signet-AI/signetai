@@ -13,18 +13,14 @@ Integrates Signet's memory system with Claude Code's lifecycle hooks so your age
 ## Installation
 
 ```bash
-signet install claude-code
+signet setup --harness claude-code
 ```
 
-This is handled automatically when you run `signet install` and Claude Code is detected.
+Interactive setup can also detect Claude Code and offer to configure it.
 
 ## Uninstallation
 
-```bash
-signet uninstall claude-code
-```
-
-Removes hooks and MCP server registration. Your memories are preserved in the Signet daemon.
+The connector package exposes programmatic cleanup that removes hooks and MCP server registration. Your memories are preserved in the Signet daemon.
 
 ## Package
 

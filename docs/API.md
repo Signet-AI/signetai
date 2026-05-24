@@ -87,7 +87,7 @@ No authentication required. Lightweight liveness check.
   "status": "healthy",
   "uptime": 3600.5,
   "pid": 12345,
-  "version": "0.109.x",
+  "version": "0.124.3",
   "port": 3850,
   "agentsDir": "/home/user/.agents",
   "db": true,
@@ -116,7 +116,7 @@ silent fallback or hard-blocked extraction after boot.
 ```json
 {
   "status": "running",
-  "version": "0.109.x",
+  "version": "0.124.3",
   "pid": 12345,
   "uptime": 3600.5,
   "startedAt": "2026-02-21T10:00:00.000Z",
@@ -177,13 +177,12 @@ silent fallback or hard-blocked extraction after boot.
   "agentCreatedAt": "2026-02-21T10:00:00.000Z",
   "health": { "score": 0.97, "status": "healthy" },
   "update": {
-    "currentVersion": "0.109.x",
+    "currentVersion": "0.124.3",
     "latestVersion": null,
     "updateAvailable": false,
     "pendingRestart": null,
     "autoInstall": false,
     "checkInterval": 21600,
-    "channel": "stable",
     "lastCheckAt": null,
     "lastError": null,
     "timerActive": true
@@ -3201,10 +3200,10 @@ is passed.
 
 ```json
 {
-  "currentVersion": "0.109.x",
-  "latestVersion": "0.110.0",
+  "currentVersion": "0.124.3",
+  "latestVersion": "0.124.4",
   "updateAvailable": true,
-  "releaseUrl": "https://github.com/Signet-AI/signetai/releases/tag/v0.110.0",
+  "releaseUrl": "https://github.com/Signet-AI/signetai/releases/tag/v0.124.4",
   "releaseNotes": "...",
   "publishedAt": "2026-02-20T12:00:00Z",
   "restartRequired": false,
@@ -3224,6 +3223,7 @@ Return current update configuration and runtime state.
 {
   "autoInstall": false,
   "checkInterval": 21600,
+  "channel": "stable",
   "minInterval": 300,
   "maxInterval": 604800,
   "pendingRestartVersion": null,
@@ -3242,18 +3242,19 @@ Modify auto-update settings. Changes are persisted to `agent.yaml`.
 ```json
 {
   "autoInstall": true,
-  "checkInterval": 43200
+  "checkInterval": 43200,
+  "channel": "nightly"
 }
 ```
 
-`checkInterval` must be between 300 and 604800 seconds.
+`checkInterval` must be between 300 and 604800 seconds. `channel` must be `stable` or `nightly`.
 
 **Response**
 
 ```json
 {
   "success": true,
-  "config": { "autoInstall": true, "checkInterval": 43200 },
+  "config": { "autoInstall": true, "checkInterval": 43200, "channel": "nightly" },
   "persisted": true,
   "pendingRestartVersion": null,
   "lastAutoUpdateAt": null,

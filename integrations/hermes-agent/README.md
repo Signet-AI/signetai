@@ -14,18 +14,14 @@ Integrates Signet's memory system into Hermes Agent as a native plugin.
 ## Installation
 
 ```bash
-signet install hermes-agent
+signet setup --harness hermes-agent
 ```
 
-This is handled automatically when you run `signet install` and Hermes Agent is detected.
+Interactive setup can also detect Hermes Agent and offer to configure it.
 
 ## Uninstallation
 
-```bash
-signet uninstall hermes-agent
-```
-
-Restores the previous memory provider configuration. Your memories are preserved in the Signet daemon.
+The connector package exposes programmatic cleanup that restores the previous memory provider configuration. Your memories are preserved in the Signet daemon.
 
 ## Package
 

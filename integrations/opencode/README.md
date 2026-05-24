@@ -16,18 +16,14 @@ Integrates Signet's memory system with OpenCode via its plugin system.
 ## Installation
 
 ```bash
-signet install opencode
+signet setup --harness opencode
 ```
 
-This is handled automatically when you run `signet install` and OpenCode is detected.
+Interactive setup can also detect OpenCode and offer to configure it.
 
 ## Uninstallation
 
-```bash
-signet uninstall opencode
-```
-
-Removes the plugin file and configuration entries. Your memories are preserved in the Signet daemon.
+The connector package exposes programmatic cleanup that removes the plugin file and configuration entries. Your memories are preserved in the Signet daemon.
 
 ## Package
 

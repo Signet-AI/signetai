@@ -14,18 +14,14 @@ Integrates Signet's memory system with Pi via its extension mechanism.
 ## Installation
 
 ```bash
-signet install pi
+signet setup --harness pi
 ```
 
-This is handled automatically when you run `signet install` and Pi is detected.
+Interactive setup can also detect Pi and offer to configure it.
 
 ## Uninstallation
 
-```bash
-signet uninstall pi
-```
-
-Removes the extension file and clears workspace configuration. Your memories are preserved in the Signet daemon.
+The connector package exposes programmatic cleanup that removes the extension file and clears workspace configuration. Your memories are preserved in the Signet daemon.
 
 ## Package
 
