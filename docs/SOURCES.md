@@ -10,7 +10,7 @@ Sources
 
 Sources are external knowledge bases that Signet can read, index, and recall from without turning them into ordinary saved memories.
 
-Sources currently support **Obsidian** vaults and **Discord** guilds. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall. Add Discord with a bot-token secret reference and Signet indexes guild topology, channels, threads, members, message windows, and Discord metadata through the same source-owned artifact lifecycle.
+Sources currently support **Obsidian** vaults, **Discord** guilds, and **GitHub** repositories. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall. Add Discord with a bot-token secret reference and Signet indexes guild topology, channels, threads, members, message windows, and Discord metadata through the same source-owned artifact lifecycle. Add GitHub repositories to index issues, pull requests, discussions, selected Markdown docs, comments, and source failure artifacts through the shared source provider pipeline.
 
 The important rule is simple: **the source stays canonical**. Signet reads from the vault. It does not edit notes, rewrite frontmatter, create files, or move anything inside the source directory.
 
@@ -93,6 +93,34 @@ Discord Desktop cache DMs are local-only. Snapshot export/import excludes
 artifacts under the synthetic `@me` guild by default; use
 `--include-local-discord` only when intentionally moving that private local
 cache data.
+
+GitHub v1
+---------
+
+GitHub Sources v1 indexes configured repositories through the shared Sources job pipeline:
+
+```bash
+signet sources add github --repo Signet-AI/signetai --name "Signet GitHub"
+signet sources add github --repo Signet-AI/signetai --token-ref GITHUB_TOKEN --resource-type issues --resource-type discussions
+signet sources add github --repo Signet-AI/* --resource-type docs --doc-path "docs/**/*.md" --max-items 50
+signet sources list
+signet sources remove github:...
+```
+
+Without `--token-ref`, GitHub sources default to REST-fetchable resources:
+issues, pull requests, and selected Markdown docs. Discussions use the GitHub
+GraphQL API and require a token reference. Tokens must be stored in Signet
+Secrets or an external secret reference; Signet does not store raw GitHub
+tokens in source config.
+
+GitHub source config is bounded by `maxItemsPerRepo`. Repo globs, issue/PR
+fetches, discussion fetches, and wildcard docs paths all honor configured caps.
+Direct docs paths are limited to Markdown paths or Markdown globs, so GitHub v1
+does not become arbitrary source-code indexing by accident.
+
+Partial GitHub failures are written as source-owned failure artifacts and cause
+the shared source job to report failure instead of silently marking incomplete
+data as fully indexed.
 
 Obsidian v1
 -----------
@@ -228,6 +256,7 @@ The daemon exposes the Sources lifecycle under `/api/sources`:
 | `GET` | `/api/sources` | List configured sources. |
 | `POST` | `/api/sources/obsidian` | Add/update an Obsidian vault source and index it. |
 | `POST` | `/api/sources/discord` | Add/update a Discord source and queue a shared source index job. |
+| `POST` | `/api/sources/github` | Add/update a GitHub source and queue a shared source index job. |
 | `DELETE` | `/api/sources/:sourceId` | Remove a source config and purge Signet-owned source rows. |
 | `POST` | `/api/sources/pick-directory` | Development/browser fallback for choosing a local directory. |
 

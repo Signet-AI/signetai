@@ -9,6 +9,7 @@ import {
 	SOURCE_CHUNK_SOURCE_TYPE,
 	type SignetSourceEntry,
 	addDiscordSource,
+	addGitHubSource,
 	addObsidianSource,
 	loadSourcesConfig,
 	markSourceIndexed,
@@ -83,6 +84,19 @@ interface AddDiscordSourceBody {
 	readonly includeThreadMembers?: boolean;
 	readonly since?: string;
 	readonly syncMode?: "rest" | "gateway-tail" | "desktop-cache";
+}
+
+interface AddGitHubSourceBody {
+	readonly repos?: readonly string[];
+	readonly repo?: string;
+	readonly tokenRef?: string;
+	readonly name?: string;
+	readonly resourceTypes?: readonly ("issues" | "pulls" | "discussions" | "docs")[];
+	readonly state?: "open" | "closed" | "all";
+	readonly includeComments?: boolean;
+	readonly labels?: readonly string[];
+	readonly docPaths?: readonly string[];
+	readonly maxItemsPerRepo?: number;
 }
 
 interface PickDirectoryBody {
@@ -245,6 +259,49 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		}
 	});
 
+	app.post("/api/sources/github", async (c) => {
+		let body: AddGitHubSourceBody = {};
+		try {
+			body = (await c.req.json()) as AddGitHubSourceBody;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const repos = Array.isArray(body.repos)
+			? body.repos.filter((entry): entry is string => typeof entry === "string")
+			: typeof body.repo === "string"
+				? [body.repo]
+				: [];
+		const result = addGitHubSource(
+			{
+				repos,
+				tokenRef: typeof body.tokenRef === "string" ? body.tokenRef : undefined,
+				name: body.name,
+				resourceTypes: body.resourceTypes,
+				state: body.state,
+				includeComments: body.includeComments,
+				labels: Array.isArray(body.labels)
+					? body.labels.filter((entry): entry is string => typeof entry === "string")
+					: undefined,
+				docPaths: Array.isArray(body.docPaths)
+					? body.docPaths.filter((entry): entry is string => typeof entry === "string")
+					: undefined,
+				maxItemsPerRepo: body.maxItemsPerRepo,
+			},
+			agentsDir,
+		);
+		if (result.ok === false) return c.json({ error: result.error }, 400);
+
+		const job = enqueueSourceIndexJob({
+			source: result.source,
+			agentsDir,
+			startBridge,
+			purgeNativeSource,
+		});
+
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+	});
+
 	app.delete("/api/sources/:sourceId", (c) => {
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
@@ -304,8 +361,16 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 				},
 			});
 			if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
-			markSourceIndexed(input.source.id, undefined, input.agentsDir);
-			completeSourceIndexJob(input.source.id, job.id, result.indexed);
+			if (result.failures.length > 0) {
+				failSourceIndexJob(
+					input.source.id,
+					job.id,
+					`${input.source.kind} source sync completed with ${result.failures.length} failure(s)`,
+				);
+			} else {
+				markSourceIndexed(input.source.id, undefined, input.agentsDir);
+				completeSourceIndexJob(input.source.id, job.id, result.indexed);
+			}
 			return;
 		}
 		if (!provider.toNativeSource) throw new Error(`Source provider has no sync implementation: ${input.source.kind}`);

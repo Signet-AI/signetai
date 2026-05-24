@@ -135,7 +135,7 @@ the document are soft-deleted one at a time with audit history.
 
 Sources connect read-only external knowledge bases to Signet recall without
 turning them into ordinary saved memories. Supported source kinds are
-`obsidian` and `discord`.
+`obsidian`, `discord`, and `github`.
 
 ### GET /api/sources
 
@@ -266,6 +266,51 @@ DMs under the synthetic guild id `@me`, cache-observed channel metadata, message
 windows, attachments, mentions, embeds, polls, checkpoints, and import stats.
 Cache imports are observational and never reconcile deletes from missing or
 evicted local cache files.
+
+### POST /api/sources/github
+
+Add or update a GitHub source and queue a shared source index job. Without a
+token reference, GitHub sources default to issues, pull requests, and selected
+Markdown docs. Discussions require `tokenRef` because they use the GitHub
+GraphQL API. Raw GitHub tokens are rejected; pass a Signet secret name or
+external secret reference instead.
+
+**Request body**
+
+```json
+{
+  "repos": ["Signet-AI/signetai"],
+  "tokenRef": "GITHUB_TOKEN",
+  "name": "Signet GitHub",
+  "resourceTypes": ["issues", "pulls", "discussions", "docs"],
+  "state": "all",
+  "includeComments": true,
+  "labels": ["bug", "needs review"],
+  "docPaths": ["README.md", "docs/**/*.md"],
+  "maxItemsPerRepo": 500
+}
+```
+
+`repo` is accepted as a single-repository alias. `docPaths` are limited to
+Markdown files or Markdown globs so GitHub source indexing stays focused on
+chosen docs instead of broad source-code ingestion.
+
+**Response**
+
+```json
+{
+  "source": { "id": "github:abc123", "kind": "github" },
+  "created": true,
+  "indexed": 0,
+  "queued": true,
+  "job": { "status": "queued", "sourceId": "github:abc123" }
+}
+```
+
+The sync path indexes source-owned artifacts for issues, pull requests,
+discussions, selected Markdown docs, comments, and partial-failure artifacts.
+Partial GitHub failures cause the shared source job to report failure while
+preserving source-owned rows that were indexed successfully.
 
 ### DELETE /api/sources/:sourceId
 

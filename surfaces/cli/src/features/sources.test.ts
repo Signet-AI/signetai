@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
 import {
 	addDiscordSourceFromCli,
+	addGitHubSourceFromCli,
 	addObsidianVaultSource,
 	exportConfiguredSourceSnapshot,
 	importConfiguredSourceSnapshot,
@@ -118,6 +119,27 @@ describe("sources CLI features", () => {
 		expect(logs.join("\n")).toContain("Added Discord source: CLI Discord Cache");
 		expect(logs.join("\n")).toContain("mode: desktop-cache");
 		expect(logs.join("\n")).not.toContain("tokenRef:");
+		expect(process.exitCode).not.toBe(1);
+	});
+
+	it("adds a GitHub source from CLI options", async () => {
+		await addGitHubSourceFromCli(
+			{
+				repo: ["Signet-AI/signetai"],
+				resourceType: ["issues", "docs"],
+				label: ["sources"],
+				docPath: ["docs/API.md"],
+				maxItems: "25",
+				name: "GitHub CLI",
+			},
+			{ agentsDir: dir },
+		);
+
+		const [source] = loadSourcesConfig(dir).sources;
+		expect(source?.kind).toBe("github");
+		expect(source?.providerSettings?.repos).toEqual(["Signet-AI/signetai"]);
+		expect(source?.providerSettings?.resourceTypes).toEqual(["issues", "docs"]);
+		expect(logs.join("\n")).toContain("Added GitHub source: GitHub CLI");
 		expect(process.exitCode).not.toBe(1);
 	});
 

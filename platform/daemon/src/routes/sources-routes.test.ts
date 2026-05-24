@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,8 @@ import {
 	updateSourceIndexJobProgress,
 } from "../source-index-progress";
 import { registerSourcesRoutes } from "./sources-routes";
+
+const originalFetch = globalThis.fetch;
 
 describe("Sources routes", () => {
 	let dir = "";
@@ -41,6 +43,7 @@ describe("Sources routes", () => {
 	});
 
 	afterEach(() => {
+		globalThis.fetch = originalFetch;
 		clearSourceIndexProgressForTests();
 		closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -197,6 +200,41 @@ describe("Sources routes", () => {
 					).count,
 			),
 		).toBeGreaterThan(0);
+	});
+
+	it("connects a GitHub source through provider-neutral source config", async () => {
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.endsWith("/repos/Signet-AI/signetai")) {
+				return Promise.resolve(
+					Response.json({ name: "signetai", full_name: "Signet-AI/signetai", default_branch: "main" }),
+				);
+			}
+			if (text.includes("/issues?") || text.includes("/pulls?")) return Promise.resolve(Response.json([]));
+			if (text.includes("/contents/")) return Promise.resolve(new Response("missing", { status: 404 }));
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+
+		const res = await makeApp().request("/api/sources/github", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				repos: ["Signet-AI/signetai"],
+				name: "Route GitHub",
+				resourceTypes: ["issues", "docs"],
+				maxItemsPerRepo: 5,
+			}),
+		});
+
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as {
+			source: { kind: string; providerSettings?: { repos?: string[] } };
+			queued: boolean;
+		};
+		expect(body.queued).toBe(true);
+		expect(body.source.kind).toBe("github");
+		expect(body.source.providerSettings?.repos).toEqual(["Signet-AI/signetai"]);
+		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("github");
 	});
 
 	it("rejects raw Discord tokens at the route boundary", async () => {
