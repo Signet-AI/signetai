@@ -1,7 +1,9 @@
 <script lang="ts">
 import {
+	type GitHubSourceResourceType,
 	type SignetSourceEntry,
 	addDiscordSource,
+	addGitHubSource,
 	addObsidianSource,
 	getSources,
 	pickSourceDirectory,
@@ -137,10 +139,32 @@ let discordIncludeEmbeds = $state(true);
 let discordIncludePolls = $state(true);
 // biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
 let discordIncludeThreadMembers = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
+let githubName = $state("GitHub");
+let githubReposText = $state("");
+let githubTokenRef = $state("");
+// biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
+let githubState = $state<"open" | "closed" | "all">("all");
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let githubIncludeIssues = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let githubIncludePulls = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let githubIncludeDiscussions = $state(false);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let githubIncludeDocs = $state(true);
+// biome-ignore lint/style/useConst: Svelte bind:checked mutates this rune from markup.
+let githubIncludeComments = $state(true);
+let githubLabelsText = $state("");
+// biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
+let githubDocPathsText = $state("README.md\nCHANGELOG.md");
+// biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
+let githubMaxItems = $state(500);
 let status = $state<string | null>(null);
 let error = $state<string | null>(null);
 let touchedPath = $state(false);
 let touchedDiscord = $state(false);
+let touchedGithub = $state(false);
 let expandedKind = $state<SourceKind | null>(null);
 let sourceRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -166,12 +190,13 @@ const connectors: SourceConnector[] = [
 		kind: "github",
 		name: "GitHub Repositories",
 		detail: "Issues, PRs, code, docs",
-		description: "Bring repository context, issues, pull requests, and project docs into recall.",
+		description:
+			"Connect public or private repositories so issues, pull requests, discussions, comments, and docs stay available as source-backed recall.",
 		icon: "github",
 		category: "code",
-		tags: ["code", "cloud"],
-		status: "planned",
-		indexes: ["Repository files", "Issues and PRs", "Project documentation"],
+		tags: ["code", "cloud", "issues", "pull-requests", "docs"],
+		status: "available",
+		indexes: ["Issues and pull requests", "Discussion and issue comments", "README and docs paths"],
 		never: ["Push changes without an explicit action"],
 		learnMore: [],
 	},
@@ -475,15 +500,14 @@ const filters: Array<{ id: ActiveFilter; label: string }> = [
 const selectedConnector = $derived(connectors.find((connector) => connector.kind === selectedKind) ?? connectors[0]);
 const obsidianSources = $derived(sources.filter((source) => source.kind === "obsidian"));
 const discordSources = $derived(sources.filter((source) => source.kind === "discord"));
-const connectedCount = $derived(obsidianSources.length + discordSources.length);
+const githubSources = $derived(sources.filter((source) => source.kind === "github"));
+const connectedSourceList = $derived([...obsidianSources, ...discordSources, ...githubSources]);
+const connectedCount = $derived(connectedSourceList.length);
 const indexedCount = $derived(
-	[...obsidianSources, ...discordSources].filter((source) => source.lastIndexedAt || (source.stats?.indexed ?? 0) > 0)
-		.length,
+	connectedSourceList.filter((source) => source.lastIndexedAt || (source.stats?.indexed ?? 0) > 0).length,
 );
 const hasActiveIndexJob = $derived(
-	[...obsidianSources, ...discordSources].some(
-		(source) => source.indexJob?.status === "queued" || source.indexJob?.status === "running",
-	),
+	connectedSourceList.some((source) => source.indexJob?.status === "queued" || source.indexJob?.status === "running"),
 );
 const pathIsMissing = $derived(vaultPath.trim().length === 0);
 const discordGuildIds = $derived(parseListInput(discordGuildIdsText));
@@ -491,10 +515,30 @@ const discordChannelFilter = $derived(parseListInput(discordChannelFilterText));
 const discordUsesDesktopCache = $derived(discordSyncMode === "desktop-cache");
 const discordTokenMissing = $derived(discordTokenRef.trim().length === 0);
 const discordGuildsMissing = $derived(discordGuildIds.length === 0);
+const githubRepos = $derived(parseListInput(githubReposText));
+const githubLabels = $derived(parseListInput(githubLabelsText));
+const githubDocPaths = $derived(parseListInput(githubDocPathsText));
+const githubResourceTypes = $derived.by(() => {
+	const types: GitHubSourceResourceType[] = [];
+	if (githubIncludeIssues) types.push("issues");
+	if (githubIncludePulls) types.push("pulls");
+	if (githubIncludeDiscussions) types.push("discussions");
+	if (githubIncludeDocs) types.push("docs");
+	return types;
+});
+const githubReposMissing = $derived(githubRepos.length === 0);
+const githubResourceTypesMissing = $derived(githubResourceTypes.length === 0);
+const githubTokenMissingForDiscussions = $derived(githubIncludeDiscussions && githubTokenRef.trim().length === 0);
+const githubMaxItemsInvalid = $derived(!Number.isInteger(Number(githubMaxItems)) || Number(githubMaxItems) < 1);
 const canSubmit = $derived.by(() => {
 	if (adding) return false;
 	if (selectedKind === "obsidian") return !pathIsMissing;
 	if (selectedKind === "discord") return discordUsesDesktopCache || (!discordGuildsMissing && !discordTokenMissing);
+	if (selectedKind === "github") {
+		return (
+			!githubReposMissing && !githubResourceTypesMissing && !githubTokenMissingForDiscussions && !githubMaxItemsInvalid
+		);
+	}
 	return false;
 });
 const filteredConnectors = $derived.by(() => {
@@ -540,6 +584,7 @@ function selectConnector(kind: SourceKind): void {
 	error = null;
 	touchedPath = false;
 	touchedDiscord = false;
+	touchedGithub = false;
 }
 
 async function chooseFolder(): Promise<void> {
@@ -664,8 +709,43 @@ async function submitDiscordSource(): Promise<void> {
 	}
 }
 
+async function submitGitHubSource(): Promise<void> {
+	touchedGithub = true;
+	if (!canSubmit) return;
+	adding = true;
+	status = null;
+	error = null;
+	try {
+		const result = await addGitHubSource({
+			repos: githubRepos,
+			tokenRef: githubTokenRef.trim() || undefined,
+			name: githubName.trim() || undefined,
+			resourceTypes: githubResourceTypes,
+			state: githubState,
+			includeComments: githubIncludeComments,
+			labels: githubLabels.length > 0 ? githubLabels : undefined,
+			docPaths: githubDocPaths,
+			maxItemsPerRepo: Number(githubMaxItems),
+		});
+		if (result.error) {
+			error = result.error;
+			return;
+		}
+		status = `${result.created ? "Connected" : "Updated"} ${result.source.name}. GitHub indexing is running in the background.`;
+		githubReposText = "";
+		githubTokenRef = "";
+		githubLabelsText = "";
+		touchedGithub = false;
+		connectMode = false;
+		await refreshSources();
+	} finally {
+		adding = false;
+	}
+}
+
 async function disconnectSource(source: SignetSourceEntry): Promise<void> {
-	const originalLabel = source.kind === "discord" ? "Discord data" : "vault files";
+	const originalLabel =
+		source.kind === "discord" ? "Discord data" : source.kind === "github" ? "GitHub data" : "vault files";
 	const confirmed = window.confirm(
 		`Remove ${source.name} from Signet?\n\nThis purges Signet's indexed source rows and chunks, but leaves the original ${originalLabel} untouched.`,
 	);
@@ -718,7 +798,7 @@ function sourceScanLabel(source: SignetSourceEntry): string {
 		return scanned > 0 ? `Indexing · ${scanned} scanned · ${indexed} changed` : "Indexing in background";
 	}
 	if (source.indexJob?.status === "error") return `Index failed: ${source.indexJob.error ?? "unknown error"}`;
-	const itemLabel = source.kind === "obsidian" ? "notes" : "artifacts";
+	const itemLabel = source.kind === "obsidian" ? "notes" : source.kind === "github" ? "items" : "artifacts";
 	const indexed = source.stats?.indexed ?? 0;
 	const chunks = source.stats?.chunks ?? 0;
 	if (indexed > 0) return `${indexed} ${itemLabel} · ${chunks} chunks${source.lastIndexedAt ? "" : " · syncing"}`;
@@ -976,7 +1056,7 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 				<div class="connector-grid" class:has-expanded={expandedKind !== null}>
 					{#each filteredConnectors as connector (connector.kind)}
 						{@const expanded = expandedKind === connector.kind}
-						{@const connectedSources = connector.kind === "obsidian" ? obsidianSources : connector.kind === "discord" ? discordSources : []}
+						{@const connectedSources = connector.kind === "obsidian" ? obsidianSources : connector.kind === "discord" ? discordSources : connector.kind === "github" ? githubSources : []}
 						{@const isConnected = connectedSources.length > 0}
 						<article class="connector-card" class:expanded class:connected={isConnected} class:compressed={expandedKind !== null && !expanded}>
 							<button
@@ -1063,7 +1143,7 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 													onclick={() => void disconnectSource(source)}
 												>
 													{#if removingSourceId === source.id}<span class="spin"><RefreshCw /></span>{:else}<X />{/if}
-													{removingSourceId === source.id ? "Removing" : source.kind === "discord" ? "Disconnect Discord" : "Disconnect vault"}
+													{removingSourceId === source.id ? "Removing" : source.kind === "discord" ? "Disconnect Discord" : source.kind === "github" ? "Disconnect GitHub" : "Disconnect vault"}
 												</button>
 											</article>
 										{/each}
@@ -1202,6 +1282,93 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 													</label>
 												</div>
 											{/if}
+											<button class="connect-button" type="submit" disabled={!canSubmit}>
+												{#if adding}<span class="spin"><RefreshCw /></span>{:else}<CirclePlus />{/if}
+												{adding ? "Queueing" : "Add source"}
+											</button>
+										</form>
+									{/if}
+									{#if connectMode && expanded && connector.kind === "github"}
+										<form class="connect-form" onsubmit={(event) => { event.preventDefault(); void submitGitHubSource(); }}>
+											<label>
+												<span>Display name</span>
+												<input bind:value={githubName} placeholder="GitHub" />
+											</label>
+											<label>
+												<span>Repositories</span>
+												<textarea
+													bind:value={githubReposText}
+													rows="3"
+													placeholder="Signet-AI/signetai&#10;Signet-AI/*"
+													onblur={() => (touchedGithub = true)}
+												></textarea>
+												<small class="field-hint">One owner/repo or owner/* pattern per line. Public repositories work without a token.</small>
+											</label>
+											{#if touchedGithub && githubReposMissing}<p class="field-error">At least one GitHub repository is required.</p>{/if}
+											<label>
+												<span>Secret reference</span>
+												<input
+													bind:value={githubTokenRef}
+													placeholder="GITHUB_TOKEN"
+													onblur={() => (touchedGithub = true)}
+												/>
+												<small class="field-hint">Optional Signet secret name for private repositories, higher rate limits, and discussions. Do not paste a raw token.</small>
+											</label>
+											<div class="github-options-grid">
+												<label>
+													<span>State</span>
+													<select bind:value={githubState}>
+														<option value="all">Open and closed</option>
+														<option value="open">Open only</option>
+														<option value="closed">Closed only</option>
+													</select>
+												</label>
+												<label>
+													<span>Item cap</span>
+													<input
+														bind:value={githubMaxItems}
+														type="number"
+														min="1"
+														max="10000"
+														onblur={() => (touchedGithub = true)}
+													/>
+												</label>
+											</div>
+											{#if touchedGithub && githubMaxItemsInvalid}<p class="field-error">Item cap must be a whole number of at least 1.</p>{/if}
+											<div class="source-option-grid" aria-label="GitHub source resources">
+												<label class="source-option-row">
+													<input bind:checked={githubIncludeIssues} type="checkbox" />
+													<span>Issues</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={githubIncludePulls} type="checkbox" />
+													<span>Pull requests</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={githubIncludeDocs} type="checkbox" />
+													<span>Docs</span>
+												</label>
+												<label class="source-option-row">
+													<input bind:checked={githubIncludeDiscussions} type="checkbox" />
+													<span>Discussions</span>
+												</label>
+											</div>
+											{#if touchedGithub && githubResourceTypesMissing}<p class="field-error">Choose at least one GitHub resource type.</p>{/if}
+											{#if touchedGithub && githubTokenMissingForDiscussions}<p class="field-error">Discussions require a GitHub secret reference.</p>{/if}
+											<label class="source-option-row">
+												<input bind:checked={githubIncludeComments} type="checkbox" />
+												<span>Include comments</span>
+											</label>
+											<label>
+												<span>Labels</span>
+												<textarea bind:value={githubLabelsText} rows="3" placeholder="bug&#10;docs"></textarea>
+												<small class="field-hint">Optional labels for issue and PR indexing. Leave blank to include all labels.</small>
+											</label>
+											<label>
+												<span>Doc paths</span>
+												<textarea bind:value={githubDocPathsText} rows="4" placeholder="README.md&#10;docs/**/*.md"></textarea>
+												<small class="field-hint">Use exact files or globs. Defaults cover README and changelog without crawling the whole repository.</small>
+											</label>
 											<button class="connect-button" type="submit" disabled={!canSubmit}>
 												{#if adding}<span class="spin"><RefreshCw /></span>{:else}<CirclePlus />{/if}
 												{adding ? "Queueing" : "Add source"}
@@ -1990,6 +2157,7 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 	}
 
 	.connect-form input,
+	.connect-form select,
 	.connect-form textarea {
 		width: 100%;
 		border: 1px solid var(--sig-border-strong);
@@ -2001,8 +2169,13 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 		outline: none;
 	}
 
-	.connect-form input {
+	.connect-form input,
+	.connect-form select {
 		height: 32px;
+	}
+
+	.connect-form select {
+		appearance: none;
 	}
 
 	.connect-form textarea {
@@ -2019,6 +2192,12 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 	.discord-options-grid {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 10px;
+	}
+
+	.github-options-grid {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 110px;
 		gap: 10px;
 	}
 

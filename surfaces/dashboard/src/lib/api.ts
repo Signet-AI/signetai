@@ -1211,6 +1211,20 @@ export interface AddDiscordSourceInput {
 	syncMode?: "rest" | "gateway-tail" | "desktop-cache";
 }
 
+export type GitHubSourceResourceType = "issues" | "pulls" | "discussions" | "docs";
+
+export interface AddGitHubSourceInput {
+	repos: string[];
+	tokenRef?: string;
+	name?: string;
+	resourceTypes?: GitHubSourceResourceType[];
+	state?: "open" | "closed" | "all";
+	includeComments?: boolean;
+	labels?: string[];
+	docPaths?: string[];
+	maxItemsPerRepo?: number;
+}
+
 export async function addDiscordSource(input: AddDiscordSourceInput): Promise<AddSourceResponse> {
 	const response = await fetch(`${API_BASE}/api/sources/discord`, {
 		method: "POST",
@@ -1225,6 +1239,33 @@ export async function addDiscordSource(input: AddDiscordSourceInput): Promise<Ad
 				kind: "discord",
 				name: input.name ?? "Discord",
 				root: `discord://guilds/${input.guildIds.join(",")}`,
+				enabled: false,
+				mode: "read-only",
+				createdAt: "",
+				updatedAt: "",
+			},
+			created: false,
+			indexed: 0,
+			error: typeof body?.error === "string" ? body.error : `Request failed with ${response.status}`,
+		};
+	}
+	return body as AddSourceResponse;
+}
+
+export async function addGitHubSource(input: AddGitHubSourceInput): Promise<AddSourceResponse> {
+	const response = await fetch(`${API_BASE}/api/sources/github`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(input),
+	});
+	const body = (await response.json().catch(() => null)) as Partial<AddSourceResponse> | null;
+	if (!response.ok) {
+		return {
+			source: {
+				id: "",
+				kind: "github",
+				name: input.name ?? "GitHub",
+				root: `github://repos/${input.repos.join(",")}`,
 				enabled: false,
 				mode: "read-only",
 				createdAt: "",
