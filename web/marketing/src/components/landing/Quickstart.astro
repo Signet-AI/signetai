@@ -3,10 +3,10 @@ import InlineCode from "../ui/InlineCode.astro";
 
 const methods = [
 	{
-		key: "bun",
-		label: "Bun",
-		commands: ["bun add -g signetai", "signet setup"],
-		comment: "# recommended",
+		key: "native",
+		label: "Native",
+		commands: ["curl -fsSL https://signetai.sh/install.sh | bash", "signet setup"],
+		comment: "# recommended on macOS and Linux",
 		docs: "/docs/quickstart#install",
 		docsLabel: "Quickstart docs",
 	},
@@ -14,9 +14,17 @@ const methods = [
 		key: "npm",
 		label: "npm",
 		commands: ["npm install -g signetai", "signet setup"],
-		comment: "# works everywhere",
+		comment: "# package-manager install",
 		docs: "/docs/quickstart#install",
 		docsLabel: "npm docs",
+	},
+	{
+		key: "bun",
+		label: "Bun",
+		commands: ["bun add -g signetai", "signet setup"],
+		comment: "# package-manager install",
+		docs: "/docs/quickstart#install",
+		docsLabel: "Bun docs",
 	},
 	{
 		key: "source",

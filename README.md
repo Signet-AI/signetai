@@ -55,7 +55,7 @@ Why teams adopt it:
 ## Quick start (about 5 minutes)
 
 ```bash
-npm install -g signetai    # or: bun add -g signetai
+curl -fsSL https://signetai.sh/install.sh | bash
 signet setup               # interactive setup wizard
 signet status              # confirm daemon + pipeline health
 signet dashboard           # open memory + retrieval inspector
@@ -239,12 +239,16 @@ methodology, scoring note, and run workflow.
 ## Install (detailed)
 
 ```bash
-npm install -g signetai    # or: bun add -g signetai
+curl -fsSL https://signetai.sh/install.sh | bash
 signet setup               # interactive setup wizard
 ```
 
 The wizard initializes `$SIGNET_WORKSPACE/`, configures your harnesses, sets up
 an embedding provider, creates the database, and starts the daemon.
+
+On macOS, the native bundle installer is preferred. Package-manager installs
+run the background daemon through Bun or Node.js, so macOS may show that
+runtime's signer in Login Items / Background Activity instead of Signet.
 
 > Path note: `$SIGNET_WORKSPACE` means your active Signet workspace path.
 > Default is `~/.agents`, configurable via `signet workspace set <path>`.

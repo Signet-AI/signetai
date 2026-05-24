@@ -564,6 +564,29 @@ export function resolveDaemonLaunchCommand(daemonPath: string, env: NodeJS.Proce
 	return [resolveDaemonRuntimeCommand(env), daemonPath];
 }
 
+export function macOSLaunchAgentAttributionNotice(
+	daemonPath: string,
+	opts: {
+		readonly env?: NodeJS.ProcessEnv;
+		readonly execPath?: string;
+		readonly pathValue?: string;
+		readonly platform?: NodeJS.Platform;
+	} = {},
+): string | null {
+	if ((opts.platform ?? process.platform) !== "darwin" || !isJavaScriptDaemonPath(daemonPath)) {
+		return null;
+	}
+
+	const runtime = resolveDaemonRuntimeCommand(opts.env, opts.execPath, opts.pathValue);
+	const runtimeName = basename(runtime).startsWith("bun")
+		? "Bun"
+		: basename(runtime).startsWith("node")
+			? "Node.js"
+			: basename(runtime);
+	const signer = runtimeName === "Bun" ? "Bun's signer (for example, Jarred Sumner)" : `${runtimeName}'s signer`;
+	return `macOS may show a Login Items / Background Activity notification naming ${signer} instead of Signet. This is expected when Signet is installed as a JavaScript-runtime LaunchAgent. For the native daemon install path, use: curl -fsSL https://signetai.sh/install.sh | bash`;
+}
+
 function xmlEscape(value: string): string {
 	return value
 		.replaceAll("&", "&amp;")
@@ -700,6 +723,11 @@ export async function startDaemon(agentsDir: string = AGENTS_DIR): Promise<boole
 	if (!daemonPath) {
 		console.error(chalk.red("Daemon not found. Try reinstalling signet."));
 		return false;
+	}
+
+	const attributionNotice = macOSLaunchAgentAttributionNotice(daemonPath);
+	if (attributionNotice) {
+		console.warn(chalk.yellow(`  Note: ${attributionNotice}`));
 	}
 
 	const startupLogPath = join(logDir, "startup.log");

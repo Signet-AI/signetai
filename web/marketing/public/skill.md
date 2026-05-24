@@ -244,8 +244,8 @@ Signet only writes to these locations inside the home directory:
 
 > GATE: Before proceeding, tell your user:
 > "I'm going to install Signet, which will give me persistent memory,
-> an identity system, and a secrets vault. It installs as a global npm
-> package and runs a small background daemon on port 3850. It only
+> an identity system, and a secrets vault. The recommended installer uses
+> Signet's native bundle and runs a small background daemon on port 3850. It only
 > writes to directories inside your home folder — never system files,
 > never with sudo. Ready to proceed?"
 >
@@ -253,20 +253,19 @@ Signet only writes to these locations inside the home directory:
 
 ### Step 1: Check prerequisites
 
-Check Bun first (required for the daemon and full end-to-end setup):
+Check whether the native installer prerequisites are available:
+
+```bash
+curl --version
+```
+
+If you choose the Bun package-manager path instead, verify Bun first:
 
 ```bash
 bun --version
 ```
 
-If Bun is missing, install it:
-
-```bash
-curl -fsSL https://bun.sh/install | bash
-source ~/.bashrc   # or restart shell
-```
-
-If using npm for global install, also verify Node.js (>= 18):
+If you choose the npm package-manager path, verify Node.js (>= 18):
 
 ```bash
 node --version
@@ -280,9 +279,14 @@ Check the operating system:
 - **Linux**: Fully supported
 - **Windows**: Supported via WSL (Windows Subsystem for Linux) only
 
-### Step 2: Install Signet globally
+### Step 2: Install Signet
 
-Using bun (preferred):
+Using the native bundle installer (preferred on macOS and Linux):
+```bash
+curl -fsSL https://signetai.sh/install.sh | bash
+```
+
+Using bun:
 ```bash
 bun add -g signetai
 ```
@@ -292,7 +296,7 @@ Using npm (alternative):
 npm install -g signetai
 ```
 
-These are the ONLY two supported install methods. Do not use:
+These are the supported install methods. Do not use:
 - `npx signet init` — does not exist
 - `signet init` — does not exist
 - `sudo npm install` — never use sudo
@@ -678,11 +682,12 @@ signet setup
 
 ```bash
 # Prereqs
-bun --version                  # Required runtime for daemon
-node --version                 # Optional, only needed for npm install
+curl --version                 # Required for native bundle installer
+bun --version                  # Only needed for Bun package install
+node --version                 # Only needed for npm package install
 
 # Install
-bun add -g signetai          # or: npm install -g signetai
+curl -fsSL https://signetai.sh/install.sh | bash
 
 # Setup
 signet                       # Show command help

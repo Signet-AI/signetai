@@ -20,19 +20,24 @@ Installation
 ---
 
 ```bash
-# bun (recommended)
-bun add -g signetai
+# native bundle (recommended)
+curl -fsSL https://signetai.sh/install.sh | bash
 
-# npm
+# npm package
 npm install -g signetai
 
-# or installer script
-curl -sL https://signetai.sh/install | bash
+# Bun package
+bun add -g signetai
 ```
 
-Runtime operations that need package execution (skills, updates) follow
-the primary package manager captured during setup, with deterministic
-fallback when unavailable.
+Package-manager installs use the primary package manager captured during
+setup for runtime operations such as skills and updates, with deterministic
+fallback when unavailable. Native bundle installs use the bundled updater.
+
+On macOS, package-manager installs run the background daemon through the
+JavaScript runtime. The system Login Items / Background Activity notification
+may therefore name Bun or Node.js rather than Signet. Use the native bundle
+installer when you want the native daemon install path.
 
 ---
 
