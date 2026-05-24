@@ -80,6 +80,15 @@ export interface RoutingModelConfig {
 	readonly averageLatencyMs?: number;
 }
 
+export interface RoutingOpenRouterReasoningConfig {
+	readonly enabled?: boolean;
+	readonly maxTokens?: number;
+}
+
+export interface RoutingOpenRouterConfig {
+	readonly reasoning?: RoutingOpenRouterReasoningConfig;
+}
+
 export type RoutingAcpxPermissionMode = "inherit" | "deny-all" | "approve-reads" | "approve-all";
 export type RoutingAcpxHooksMode = "inherit" | "disabled" | "enabled";
 export type RoutingAcpxTerminalMode = "inherit" | "disabled" | "enabled";
@@ -112,6 +121,7 @@ export interface RoutingTargetConfig {
 	readonly endpoint?: string;
 	readonly command?: PipelineCommandConfig;
 	readonly acpx?: RoutingAcpxConfig;
+	readonly openrouter?: RoutingOpenRouterConfig;
 	readonly privacy?: RoutingPrivacyTier;
 	readonly models: Readonly<Record<string, RoutingModelConfig>>;
 }
@@ -273,6 +283,11 @@ function asBool(value: unknown): boolean | undefined {
 
 function asPositiveInt(value: unknown): number | undefined {
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+	return Math.floor(value);
+}
+
+function asNonNegativeInt(value: unknown): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
 	return Math.floor(value);
 }
 
@@ -553,6 +568,20 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 	};
 }
 
+function parseOpenRouterConfig(raw: unknown): RoutingOpenRouterConfig | undefined {
+	if (!isRecord(raw)) return undefined;
+	const nested = isRecord(raw.openrouter) ? raw.openrouter : raw;
+	const reasoningRaw = isRecord(nested.reasoning) ? nested.reasoning : undefined;
+	if (!reasoningRaw) return undefined;
+	const enabled = asBool(reasoningRaw.enabled);
+	const maxTokens = asNonNegativeInt(reasoningRaw.maxTokens ?? reasoningRaw.max_tokens);
+	const reasoning = {
+		...(enabled !== undefined ? { enabled } : {}),
+		...(maxTokens !== undefined ? { maxTokens } : {}),
+	};
+	return Object.keys(reasoning).length > 0 ? { reasoning } : undefined;
+}
+
 function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 	if (!isRecord(raw)) return null;
 	const executor = asString(raw.executor);
@@ -567,6 +596,7 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 	if (Object.keys(models).length === 0) return null;
 	const acpx = executor === "acpx" ? parseAcpxConfig(raw) : undefined;
 	if (executor === "acpx" && !acpx) return null;
+	const openrouter = executor === "openrouter" ? parseOpenRouterConfig(raw) : undefined;
 	return {
 		kind: (() => {
 			const parsed = asString(raw.kind);
@@ -580,6 +610,7 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 		endpoint: asString(raw.endpoint ?? raw.baseUrl ?? raw.base_url),
 		command: parseCommandConfig(raw.command),
 		acpx,
+		openrouter,
 		privacy: asRoutingPrivacyTier(raw.privacy, inferTargetPrivacy(executor)),
 		models,
 	};

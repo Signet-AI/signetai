@@ -444,6 +444,37 @@ describe("inference config + decision engine", () => {
 		expect(localCompatible.targets["legacy-synthesis"]?.account).toBeUndefined();
 	});
 
+	it("parses OpenRouter reasoning controls on explicit targets", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					mercury: {
+						executor: "openrouter",
+						account: "openrouter-api",
+						openrouter: {
+							reasoning: {
+								enabled: false,
+								max_tokens: 0,
+							},
+						},
+						models: {
+							default: {
+								model: "inception/mercury-2",
+							},
+						},
+					},
+				},
+			},
+		});
+
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.mercury?.openrouter?.reasoning).toEqual({
+			enabled: false,
+			maxTokens: 0,
+		});
+	});
+
 	it("does not allow explicit target overrides outside the agent roster", () => {
 		const parsed = parseRoutingConfig({
 			inference: {

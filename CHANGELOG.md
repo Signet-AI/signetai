@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-05-23
 - Features: implement parseMemory with structured section extraction.
-- Bug fixes: route direct API pipeline providers.
+- Bug fixes: route aggregate recall through synthesis; route direct API pipeline providers.
 - Refactoring: improve readability of agents.ts.
 
 ### 2026-05-22
@@ -34,6 +34,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: build mac zip artifacts; preserve root-only filesystem globs; repair native bundle regressions; sync built-in dreaming skill.
 
 ## Release Ledger
+
+## [0.124.3] - 2026-05-23
+
+Release summary: 1 bug fix.
+Tag range: `bundle-0.124.1-2e50cf88d4a2ea8c257f493a21c3002ae25e7e18..v0.124.3`.
+
+### Bug Fixes
+
+- **inference**: route aggregate recall through synthesis (#754)
 
 ## [0.124.2] - 2026-05-23
 

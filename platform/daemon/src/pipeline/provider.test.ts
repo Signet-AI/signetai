@@ -2402,6 +2402,25 @@ describe("createOpenRouterProvider", () => {
 		expect(h.get("X-Title")).toBe("Signet");
 	});
 
+	it("passes OpenRouter reasoning controls in chat completion requests", async () => {
+		let requestBody: Record<string, unknown> | null = null;
+		mockFetch(async (_url, init) => {
+			requestBody = parseJsonObjectBody(init?.body);
+			return Response.json({
+				choices: [{ message: { content: "ok" } }],
+			});
+		});
+
+		const provider = createOpenRouterProvider({
+			model: "inception/mercury-2",
+			apiKey: "sk-or-test",
+			reasoning: { enabled: false, maxTokens: 0 },
+		});
+		await provider.generate("test");
+
+		expect(requestBody?.reasoning).toEqual({ enabled: false, max_tokens: 0 });
+	});
+
 	it("generate() throws timeout on slow responses", async () => {
 		mockFetch((_url, init) => {
 			return new Promise((_resolve, reject) => {

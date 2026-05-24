@@ -204,4 +204,84 @@ describe("InferenceRouter legacy API credentials", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("passes explicit OpenRouter reasoning controls through routed targets", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-openrouter-reasoning-"));
+		try {
+			mkdirSync(join(dir, "memory"), { recursive: true });
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: mercury
+  accounts:
+    openrouter-api:
+      kind: api
+      providerFamily: openrouter
+      credentialRef: OPENROUTER_API_KEY
+  targets:
+    mercury:
+      executor: openrouter
+      account: openrouter-api
+      openrouter:
+        reasoning:
+          enabled: false
+          max_tokens: 0
+      models:
+        default:
+          model: inception/mercury-2
+          reasoning: medium
+  policies:
+    mercury:
+      mode: automatic
+      allow:
+        - mercury/default
+      defaultTargets:
+        - mercury/default
+  workloads:
+    sessionSynthesis:
+      target: mercury/default
+      taskClass: session_synthesis
+`,
+			);
+
+			process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+			let requestBody: Record<string, unknown> | null = null;
+			globalThis.fetch = mock((input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				if (url.endsWith("/chat/completions") && typeof init?.body === "string") {
+					const parsed: unknown = JSON.parse(init.body);
+					if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+						requestBody = parsed as Record<string, unknown>;
+					}
+				}
+				if (url.endsWith("/models")) {
+					return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+				}
+				return Promise.resolve(
+					new Response(JSON.stringify({ choices: [{ message: { content: "mercury answer" } }] }), {
+						status: 200,
+					}),
+				);
+			}) as unknown as typeof fetch;
+
+			const router = getOrCreateInferenceRouter(dir);
+			const result = await router.execute(
+				{
+					operation: "session_synthesis",
+					promptPreview: "aggregate recall",
+					expectedOutputTokens: 64,
+				},
+				"Summarize evidence",
+				{ maxTokens: 64, timeoutMs: 1000 },
+			);
+
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.value.text).toBe("mercury answer");
+			expect(result.value.decision.targetRef).toBe("mercury/default");
+			expect(requestBody?.reasoning).toEqual({ enabled: false, max_tokens: 0 });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

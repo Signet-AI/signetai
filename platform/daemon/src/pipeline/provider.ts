@@ -2183,6 +2183,10 @@ export interface OpenRouterProviderConfig {
 	readonly maxRetries: number;
 	readonly referer?: string;
 	readonly title?: string;
+	readonly reasoning?: {
+		readonly enabled?: boolean;
+		readonly maxTokens?: number;
+	};
 }
 
 const DEFAULT_OPENROUTER_CONFIG: OpenRouterProviderConfig = {
@@ -2193,6 +2197,7 @@ const DEFAULT_OPENROUTER_CONFIG: OpenRouterProviderConfig = {
 	maxRetries: 2,
 	referer: undefined,
 	title: undefined,
+	reasoning: undefined,
 };
 
 interface OpenRouterChoice {
@@ -2239,6 +2244,14 @@ export function createOpenRouterProvider(config?: Partial<OpenRouterProviderConf
 			model: cfg.model,
 			messages: [{ role: "user", content: prompt }],
 			max_tokens: maxTokens,
+			...(cfg.reasoning
+				? {
+						reasoning: {
+							...(cfg.reasoning.enabled !== undefined ? { enabled: cfg.reasoning.enabled } : {}),
+							...(cfg.reasoning.maxTokens !== undefined ? { max_tokens: cfg.reasoning.maxTokens } : {}),
+						},
+					}
+				: {}),
 		});
 
 		return httpProviderCall<{ text: string; usage: OpenRouterUsage | null }>(
