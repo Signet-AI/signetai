@@ -865,9 +865,9 @@ function collectChannelRoutes(snapshot: CacheSnapshot, text: string): void {
 }
 
 function collectChannelRoute(snapshot: CacheSnapshot, channelId: string, guildId: string): void {
-	const existing = snapshot.routes.get(channelId);
-	if (existing && existing !== guildId) {
-		snapshot.routes.set(channelId, "");
+	if (snapshot.routes.has(channelId)) {
+		const existing = snapshot.routes.get(channelId);
+		if (existing !== guildId) snapshot.routes.set(channelId, "");
 		return;
 	}
 	snapshot.routes.set(channelId, guildId);

@@ -234,6 +234,7 @@ describe("discord-source-provider", () => {
 			[
 				"https://discord.com/channels/999999999999999998/111111111111111118",
 				"https://discord.com/channels/999999999999999997/111111111111111118",
+				"https://discord.com/channels/999999999999999998/111111111111111118",
 				`{"id":"333333333333333340","channel_id":"111111111111111118","content":"ambiguous route message","timestamp":"2026-04-23T18:20:43Z","author":{"id":"222222222222222229","username":"alice"}}`,
 			].join("\n"),
 		);
