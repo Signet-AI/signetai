@@ -123,6 +123,55 @@ describe("discord-source-provider", () => {
 		expect(rows.map((row) => row.source_kind)).toContain("source_discord_failure");
 	});
 
+	it("removes stale source-owned Discord artifacts after a fully successful sync", async () => {
+		const added = addDiscordSource(
+			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", now: "2026-01-01T00:00:00.000Z" },
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		indexExternalMemoryArtifact({
+			agentId: "default",
+			harness: "discord",
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourceExternalId: "message:stale",
+			sourcePath: "discord://guild/123456789012345678/channel/old/messages/stale",
+			sourceKind: "source_discord_message",
+			sourceMtimeMs: Date.now(),
+			content: "stale row",
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memory_artifacts SET updated_at = ? WHERE source_id = ? AND content = ?").run(
+				"2000-01-01T00:00:00.000Z",
+				added.source.id,
+				"stale row",
+			);
+		});
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.includes("/guilds/123456789012345678?with_counts=true")) {
+				return Promise.resolve(Response.json({ id: "123456789012345678", name: "Guild A" }));
+			}
+			if (text.includes("/guilds/123456789012345678/channels")) return Promise.resolve(Response.json([]));
+			if (text.includes("/members?")) return Promise.resolve(Response.json([]));
+			if (text.includes("/threads/active")) return Promise.resolve(Response.json({ threads: [] }));
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+
+		const result = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures).toEqual([]);
+		const rows = sourceRows(added.source.id);
+		expect(rows.some((row) => row.content === "stale row")).toBe(false);
+		expect(rows.some((row) => row.source_path === "discord://guild/123456789012345678")).toBe(true);
+	});
+
 	it("records guild fetch failures and continues syncing later guilds", async () => {
 		const added = addDiscordSource(
 			{

@@ -5,6 +5,8 @@ import {
 	parseDiscordSettings,
 } from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
+import { getDbAccessor } from "./db-accessor";
+import { countChanges } from "./db-helpers";
 import {
 	DISCORD_CHANNEL_TYPES,
 	type DiscordAttachment,
@@ -51,6 +53,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 	const failures: SourceFailureState[] = [];
 	let indexed = 0;
 	let scanned = 0;
+	const syncStartedAt = new Date().toISOString();
 	const total = settings.guildIds.length;
 	const token = await getSecret(settings.tokenRef);
 	const fetchConfig: DiscordFetchConfig = { token };
@@ -224,6 +227,10 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 		context.onProgress?.({ scanned, total, indexed, currentPath: `discord://guild/${guild.id}` });
 	}
 
+	if (failures.length === 0 && scanned === total) {
+		purgeStaleDiscordArtifacts(context.source.id, agentId, syncStartedAt);
+	}
+
 	return { indexed, scanned, total, failures };
 }
 
@@ -300,6 +307,21 @@ function writeFailureArtifact(source: SignetSourceEntry, agentId: string, failur
 		content: ["# Discord Source Failure", "", failure.message, "", `recoverable: ${failure.recoverable}`].join("\n"),
 		meta: { ...failure.metadata, provider: DISCORD_PROVIDER_KIND, recoverable: failure.recoverable },
 	});
+}
+
+function purgeStaleDiscordArtifacts(sourceId: string, agentId: string, syncStartedAt: string): number {
+	return getDbAccessor().withWriteTx((db) =>
+		countChanges(
+			db
+				.prepare(
+					`DELETE FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_id = ?
+					   AND updated_at < ?`,
+				)
+				.run(agentId, sourceId, syncStartedAt),
+		),
+	);
 }
 
 interface DiscordArtifact {
