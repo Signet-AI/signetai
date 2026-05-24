@@ -439,7 +439,6 @@ export function startGitHubSourceBridge(
 	options: GitHubSourceBridgeOptions = {},
 ): GitHubSourceBridgeHandle {
 	const loadSources = typeof sourcesOrLoader === "function" ? sourcesOrLoader : () => sourcesOrLoader;
-	const agentId = options.agentId ?? resolveDaemonAgentId();
 	let syncInFlight: Promise<number> | null = null;
 
 	const sync = async (): Promise<number> => {
@@ -449,7 +448,7 @@ export function startGitHubSourceBridge(
 			const sources = loadSources();
 			for (const source of sources) {
 				if (!source.enabled || source.kind !== "github") continue;
-				if (source.agentId !== agentId) continue;
+				const sourceAgentId = source.agentId ?? "default";
 				if (isSourceIndexInFlight(source.id)) continue;
 				const job = beginSourceIndexJob(source.id, "github-source-sync");
 				markSourceIndexInFlight(source.id);
@@ -458,7 +457,7 @@ export function startGitHubSourceBridge(
 					continue;
 				}
 				try {
-					const result = await syncGitHubSource(source, { ...options, agentId });
+					const result = await syncGitHubSource(source, { ...options, agentId: sourceAgentId });
 					if (result.hadErrors) {
 						failSourceIndexJob(source.id, job.id, "GitHub source sync completed with partial errors");
 					} else {
