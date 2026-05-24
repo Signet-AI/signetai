@@ -198,7 +198,8 @@ silent fallback or hard-blocked extraction after boot.
 The `bypassedSessions` field reports how many active sessions currently have
 bypass enabled (see [[#Sessions]]).
 Monitor `providerResolution.extraction.status` for `degraded` or `blocked`
-states when the configured extraction provider is unavailable at startup.
+states when the configured extraction provider is unavailable or routed to a
+fallback target.
 When `pipeline.extraction.overloaded` is `true`, the extraction worker is
 intentionally backing off for `overloadBackoffMs` between polls.
 Use `GET /api/inference/status` for the shared inference control plane status.

@@ -23,6 +23,7 @@ import {
 	loadConfiguredHarnesses,
 	loadSourcesConfig,
 	normalizeAgentRosterEntry,
+	parseRoutingTargetRef,
 	parseSimpleYaml,
 	stripSignetBlock,
 } from "@signet/core";
@@ -42,7 +43,7 @@ import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { createSignetHttpServer } from "./http-server";
 import { syncAgentWorkspaces } from "./identity-sync";
-import { getOrCreateInferenceRouter } from "./inference-router.js";
+import { type InferenceStatusSummary, getOrCreateInferenceRouter } from "./inference-router.js";
 import { closeInferenceProviderResolver, getInferenceProvider, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
@@ -907,6 +908,27 @@ async function restartPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry
 	await startPipelineRuntime(memoryCfg, telemetry);
 }
 
+type RouterHandle = ReturnType<typeof getOrCreateInferenceRouter>;
+
+function executorForTargetRef(
+	statusValue: InferenceStatusSummary,
+	targetRef: string | undefined,
+): RuntimeProviderName | null {
+	if (!targetRef) return null;
+	const parsed = parseRoutingTargetRef(targetRef);
+	if (!parsed.ok) return null;
+	return (statusValue.targets[parsed.value.targetId]?.executor as RuntimeProviderName | undefined) ?? null;
+}
+
+function runtimeReasonForTarget(
+	decision: Awaited<ReturnType<RouterHandle["explain"]>> | null,
+	targetRef: string | undefined,
+): string | null {
+	if (!targetRef || !decision?.ok) return null;
+	const candidate = decision.value.trace.candidates.find((entry) => entry.targetRef === targetRef);
+	return candidate?.blockedBy[0] ?? candidate?.runtime.unavailableReason ?? null;
+}
+
 function syncAgentRoster(agentsDir: string): void {
 	const paths = [join(agentsDir, "agent.yaml"), join(agentsDir, "AGENT.yaml")];
 	let roster: readonly AgentDefinition[] = [];
@@ -978,21 +1000,50 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	const routerStatus = await router.status(false);
 	const statusValue = routerStatus.ok ? routerStatus.value : null;
 	const explicitInference = statusValue?.source === "explicit";
-	const executorForBinding = (binding: string | undefined): RuntimeProviderName | null => {
-		if (!binding?.includes("/")) return null;
-		const targetId = binding.split("/", 1)[0];
-		return targetId ? ((statusValue?.targets[targetId]?.executor as RuntimeProviderName | undefined) ?? null) : null;
-	};
 	const commandExtractionMode = memoryCfg.pipelineV2.extraction.provider === "command";
-	const extractionAvailable =
+	const extractionWorkloadConfigured =
 		!pipelinePaused && (commandExtractionMode || (await router.hasWorkload("memory_extraction")));
-	const synthesisAvailable = !pipelinePaused && (await router.hasWorkload("session_synthesis"));
+	const synthesisWorkloadConfigured = !pipelinePaused && (await router.hasWorkload("session_synthesis"));
+	const extractionDecision =
+		!pipelinePaused && !commandExtractionMode && extractionWorkloadConfigured
+			? await router.explain({ agentId: defaultAgentId, operation: "memory_extraction" })
+			: null;
+	const synthesisDecision =
+		!pipelinePaused && synthesisWorkloadConfigured
+			? await router.explain({ agentId: defaultAgentId, operation: "session_synthesis" })
+			: null;
+	const extractionAvailable = !pipelinePaused && (commandExtractionMode || Boolean(extractionDecision?.ok));
+	const synthesisAvailable = !pipelinePaused && Boolean(synthesisDecision?.ok);
+	const extractionBinding = statusValue?.workloadBindings.memoryExtraction;
+	const extractionSelectedRef = extractionDecision?.ok ? extractionDecision.value.targetRef : undefined;
+	const extractionSelectedRuntime = extractionSelectedRef
+		? statusValue?.runtimeSnapshot.targets[extractionSelectedRef]
+		: undefined;
+	const extractionFallbackApplied = Boolean(
+		extractionSelectedRef && extractionBinding?.includes("/") && extractionSelectedRef !== extractionBinding,
+	);
+	const extractionDegraded = extractionFallbackApplied || extractionSelectedRuntime?.health === "degraded";
+	const extractionStatus = pipelinePaused
+		? "paused"
+		: !extractionWorkloadConfigured
+			? "disabled"
+			: extractionDecision?.ok
+				? extractionDegraded
+					? "degraded"
+					: "active"
+				: "blocked";
+	const statusSince =
+		extractionStatus === "active" || extractionStatus === "disabled" ? null : new Date().toISOString();
 	const extractionEffective = commandExtractionMode
 		? "command"
-		: (executorForBinding(statusValue?.workloadBindings.memoryExtraction) ??
+		: ((statusValue && executorForTargetRef(statusValue, extractionSelectedRef)) ??
 			(extractionAvailable ? "inference" : "none"));
 	const synthesisEffective =
-		(executorForBinding(statusValue?.workloadBindings.sessionSynthesis) as RuntimeSynthesisProviderName | null) ??
+		(statusValue &&
+			(executorForTargetRef(
+				statusValue,
+				synthesisDecision?.ok ? synthesisDecision.value.targetRef : undefined,
+			) as RuntimeSynthesisProviderName | null)) ??
 		(synthesisAvailable ? "inference" : null);
 	providerRuntimeResolution.extraction = {
 		configured: memoryCfg.pipelineV2.extraction.provider,
@@ -1003,15 +1054,22 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				: memoryCfg.pipelineV2.extraction.provider,
 		effective: extractionEffective,
 		fallbackProvider: memoryCfg.pipelineV2.extraction.fallbackProvider,
-		status: pipelinePaused ? "paused" : extractionAvailable ? "active" : "disabled",
-		degraded: false,
-		fallbackApplied: false,
+		status: extractionStatus,
+		degraded: extractionDegraded,
+		fallbackApplied: extractionFallbackApplied,
 		reason: pipelinePaused
 			? "Pipeline paused"
-			: extractionAvailable
-				? null
-				: "No inference workload is configured for memoryExtraction",
-		since: extractionAvailable ? null : new Date().toISOString(),
+			: extractionStatus === "disabled"
+				? "No inference workload is configured for memoryExtraction"
+				: extractionStatus === "blocked"
+					? extractionDecision && !extractionDecision.ok
+						? extractionDecision.error.message
+						: "No memoryExtraction route available"
+					: extractionFallbackApplied
+						? (runtimeReasonForTarget(extractionDecision, extractionBinding) ??
+							`Configured extraction provider unavailable; using ${extractionEffective} fallback`)
+						: (extractionSelectedRuntime?.unavailableReason ?? null),
+		since: statusSince,
 	};
 	providerRuntimeResolution.synthesis = {
 		configured: memoryCfg.pipelineV2.synthesis.enabled ? memoryCfg.pipelineV2.synthesis.provider : null,

@@ -8,6 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-05-24
 - Bug fixes: surface aggregate usage and credit fallback.
+- Refactoring: unify provider routing factory.
 
 ### 2026-05-23
 - Features: implement parseMemory with structured section extraction.
@@ -33,6 +34,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: load updater through cjs interop.
 
 ## Release Ledger
+
+## [0.124.5] - 2026-05-24
+
+Release summary: 1 refactor.
+Tag range: `bundle-0.124.4-35f7027a7704c4da7ffcd95a416c6398717522c9..v0.124.5`.
+
+### Refactoring
+
+- **inference**: unify provider routing factory (#760)
 
 ## [0.124.4] - 2026-05-24
 
