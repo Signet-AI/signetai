@@ -159,7 +159,18 @@ agent.
       "updatedAt": "2026-05-06T09:00:00.000Z",
       "lastIndexedAt": "2026-05-06T09:01:00.000Z",
       "excludeGlobs": ["**/.obsidian/**", "**/.trash/**", "**/.hermes/**"],
-      "stats": { "artifacts": 42, "chunks": 108, "indexed": 42 }
+      "stats": { "artifacts": 42, "chunks": 108, "indexed": 42 },
+      "health": {
+        "status": "healthy",
+        "generatedAt": "2026-05-06T09:01:00.000Z",
+        "latestArtifactAt": "2026-05-06T09:01:00.000Z",
+        "latestCheckpointAt": null,
+        "chunkCoverage": 1,
+        "failures": { "total": 0, "recoverable": 0 },
+        "checkpoints": { "total": 0, "partial": 0, "stale": 0 },
+        "purge": { "deletedArtifacts": 0, "orphanChunks": 0 },
+        "semantic": { "entities": 8, "attributes": 0, "dependencies": 12, "communities": 3, "total": 23 }
+      }
     }
   ]
 }
@@ -323,6 +334,38 @@ and source chunk embeddings. Source files are not modified.
 {
   "source": { "id": "obsidian:abc123", "kind": "obsidian" },
   "purged": 150
+}
+```
+
+### GET /api/sources/:sourceId/health
+
+Return operational diagnostics for a configured source. The payload is the same
+health object embedded in `GET /api/sources`, plus the source config and index
+stats.
+
+Diagnostics include artifact/chunk counts, latest artifact and checkpoint
+timestamps, Discord partial-failure/checkpoint counts, stale checkpoint counts,
+purge residue, and source-provenance graph row counts. If diagnostic queries
+fail, the route returns `status: "unhealthy"` with an `error` field instead of
+synthesizing a healthy source.
+
+**Response**
+
+```json
+{
+  "source": { "id": "discord:abc123", "kind": "discord", "name": "Team Discord" },
+  "stats": { "artifacts": 420, "chunks": 250, "indexed": 420 },
+  "health": {
+    "status": "degraded",
+    "generatedAt": "2026-05-24T00:00:00.000Z",
+    "latestArtifactAt": "2026-05-24T00:00:00.000Z",
+    "latestCheckpointAt": "2026-05-24T00:00:00.000Z",
+    "chunkCoverage": 0.6,
+    "failures": { "total": 1, "recoverable": 1 },
+    "checkpoints": { "total": 20, "partial": 1, "stale": 0 },
+    "purge": { "deletedArtifacts": 0, "orphanChunks": 0 },
+    "semantic": { "entities": 12, "attributes": 4, "dependencies": 6, "communities": 2, "total": 24 }
+  }
 }
 ```
 

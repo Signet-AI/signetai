@@ -807,6 +807,31 @@ function sourceScanLabel(source: SignetSourceEntry): string {
 		: `Connected; waiting for first indexed ${itemLabel.slice(0, -1)}`;
 }
 
+function sourceHealthLabel(source: SignetSourceEntry): string {
+	const health = source.health;
+	if (!health) return "Health pending";
+	if (health.status === "empty") return "No indexed source rows yet";
+	if (health.status === "unhealthy") return health.error ?? "Health diagnostics failed";
+	if (health.status === "healthy") {
+		const checkpointLabel =
+			source.kind === "discord" && health.checkpoints.total > 0 ? ` · ${health.checkpoints.total} checkpoints` : "";
+		const semanticLabel = health.semantic.total > 0 ? ` · ${health.semantic.total} graph rows` : "";
+		return `Healthy${checkpointLabel}${semanticLabel}`;
+	}
+	const issues: string[] = [];
+	if (health.failures.total > 0) issues.push(`${health.failures.total} fetch failures`);
+	if (health.checkpoints.partial > 0) issues.push(`${health.checkpoints.partial} partial checkpoints`);
+	if (health.checkpoints.stale > 0) issues.push(`${health.checkpoints.stale} stale checkpoints`);
+	if (health.purge.deletedArtifacts > 0) issues.push(`${health.purge.deletedArtifacts} deleted rows retained`);
+	if (health.purge.orphanChunks > 0) issues.push(`${health.purge.orphanChunks} orphan chunks`);
+	return issues.length > 0 ? issues.join(" · ") : "Needs attention";
+}
+
+function sourceHealthTone(source: SignetSourceEntry): string {
+	if (!source.health) return "unknown";
+	return source.health.status;
+}
+
 function sourceIndexPercent(source: SignetSourceEntry): number {
 	const scanned = source.indexJob?.scanned ?? 0;
 	const total = source.indexJob?.total ?? 0;
@@ -1107,6 +1132,9 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 													<ul>
 														<li><CheckCircle2 /> {source.enabled ? "Enabled" : "Disabled"}</li>
 														<li><Database /> {sourceScanLabel(source)}</li>
+														<li class={`source-health source-health--${sourceHealthTone(source)}`}>
+															<Info /> {sourceHealthLabel(source)}
+														</li>
 														<li><Database /> Last complete scan: {formatDate(source.lastIndexedAt)}</li>
 													</ul>
 													{#if source.indexJob?.status === "queued" || source.indexJob?.status === "running"}
@@ -2435,6 +2463,23 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 		.connected-row li :global(svg) {
 			width: 13px;
 			height: 13px;
+		}
+
+		.connected-row li.source-health--healthy {
+			color: #6fa97f;
+		}
+
+		.connected-row li.source-health--degraded {
+			color: #c4a24a;
+		}
+
+		.connected-row li.source-health--unhealthy {
+			color: #d06f62;
+		}
+
+		.connected-row li.source-health--empty,
+		.connected-row li.source-health--unknown {
+			color: var(--sig-text-muted);
 		}
 
 		.source-index-progress {

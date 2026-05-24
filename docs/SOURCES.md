@@ -122,6 +122,19 @@ Partial GitHub failures are written as source-owned failure artifacts and cause
 the shared source job to report failure instead of silently marking incomplete
 data as fully indexed.
 
+Operations diagnostics
+----------------------
+
+The sources API and dashboard expose source health diagnostics for operational
+follow-up after sync, import, or removal. Each configured source reports
+artifact and chunk counts, latest artifact/checkpoint timestamps, Discord
+partial-failure artifacts, partial and stale checkpoints, purge residue, and
+source-provenance graph row counts. Discord sources degrade when Signet has
+recorded fetch failures, partial checkpoints, stale checkpoints, deleted
+artifact residue, or orphan chunks. If diagnostics cannot read the backing
+tables, the source health reports `unhealthy` with error context rather than
+pretending the source is healthy.
+
 Obsidian v1
 -----------
 
@@ -257,6 +270,9 @@ The daemon exposes the Sources lifecycle under `/api/sources`:
 | `POST` | `/api/sources/obsidian` | Add/update an Obsidian vault source and index it. |
 | `POST` | `/api/sources/discord` | Add/update a Discord source and queue a shared source index job. |
 | `POST` | `/api/sources/github` | Add/update a GitHub source and queue a shared source index job. |
+| `GET` | `/api/sources/:sourceId/health` | Inspect source health diagnostics used by the dashboard. |
+| `GET` | `/api/sources/:sourceId/snapshot` | Export source-owned artifacts as a Signet source snapshot. |
+| `POST` | `/api/sources/:sourceId/snapshot/import` | Import a Signet source snapshot into an existing source. |
 | `DELETE` | `/api/sources/:sourceId` | Remove a source config and purge Signet-owned source rows. |
 | `POST` | `/api/sources/pick-directory` | Development/browser fallback for choosing a local directory. |
 

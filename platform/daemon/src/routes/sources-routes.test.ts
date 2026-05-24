@@ -456,9 +456,16 @@ describe("Sources routes", () => {
 		const res = await makeApp().request("/api/sources");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
-			sources: Array<{ stats?: { artifacts: number; chunks: number; indexed: number } }>;
+			sources: Array<{
+				stats?: { artifacts: number; chunks: number; indexed: number };
+				health?: { status?: string; purge?: { orphanChunks?: number } };
+			}>;
 		};
 		expect(body.sources[0]?.stats).toEqual({ artifacts: 1, chunks: 1, indexed: 1 });
+		expect(body.sources[0]?.health).toMatchObject({
+			status: "healthy",
+			purge: { orphanChunks: 0 },
+		});
 	});
 
 	it("reports generic source stats for Discord source-owned artifacts and chunks", async () => {
@@ -862,6 +869,214 @@ describe("Sources routes", () => {
 			sources: Array<{ indexJob?: { status?: string; scanned?: number; indexed?: number } }>;
 		};
 		expect(completed.sources[0]?.indexJob).toMatchObject({ status: "complete", scanned: 3, indexed: 2 });
+	});
+
+	it("reports source health diagnostics from artifacts, chunks, failures, and checkpoints", async () => {
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Health Discord",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord://guild/123/channel/456/message/789",
+			sourceKind: "source_discord_message",
+			content: "health test message",
+			metaJson: "{}",
+		});
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: `discord://source/${added.source.id}/checkpoint/123/456`,
+			sourceKind: "source_discord_checkpoint",
+			content: "partial checkpoint",
+			metaJson: JSON.stringify({ status: "partial", recordType: "checkpoint" }),
+		});
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: `discord://source/${added.source.id}/failure/rate-limit`,
+			sourceKind: "source_discord_failure",
+			content: "recoverable failure",
+			metaJson: JSON.stringify({ recoverable: true, status: 429 }),
+		});
+		insertSourceChunk({
+			id: "health-discord-chunk",
+			sourceId: `${added.source.id}:discord://guild/123/channel/456/message/789#0`,
+			chunkText: "health test message",
+		});
+
+		const res = await makeApp().request("/api/sources");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			sources: Array<{
+				stats?: { artifacts?: number; chunks?: number };
+				health?: {
+					status?: string;
+					failures?: { total?: number; recoverable?: number };
+					checkpoints?: { total?: number; partial?: number };
+					latestArtifactAt?: string | null;
+					latestCheckpointAt?: string | null;
+				};
+			}>;
+		};
+		expect(body.sources[0]?.stats).toMatchObject({ artifacts: 3, chunks: 1 });
+		expect(body.sources[0]?.health).toMatchObject({
+			status: "degraded",
+			failures: { total: 1, recoverable: 1 },
+			checkpoints: { total: 1, partial: 1 },
+		});
+		expect(body.sources[0]?.health?.latestArtifactAt).toBe("2026-05-24T00:00:00.000Z");
+		expect(body.sources[0]?.health?.latestCheckpointAt).toBe("2026-05-24T00:00:00.000Z");
+
+		const healthRes = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
+		expect(healthRes.status).toBe(200);
+		const healthBody = (await healthRes.json()) as {
+			stats?: { artifacts?: number; chunks?: number };
+			health?: { status?: string; failures?: { total?: number }; checkpoints?: { partial?: number } };
+		};
+		expect(healthBody.stats).toMatchObject({ artifacts: 3, chunks: 1 });
+		expect(healthBody.health).toMatchObject({
+			status: "degraded",
+			failures: { total: 1 },
+			checkpoints: { partial: 1 },
+		});
+	});
+
+	it("reports orphan source chunks when live artifacts still exist", async () => {
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Orphan Chunk Discord",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord://guild/123/channel/456/message/live",
+			sourceKind: "source_discord_message",
+			content: "live message",
+			metaJson: "{}",
+		});
+		insertSourceChunk({
+			id: "live-discord-chunk",
+			sourceId: `${added.source.id}:guild/123/channel/456/message/live#0`,
+			chunkText: "source_path: discord://guild/123/channel/456/message/live\n\nlive message",
+		});
+		insertSourceChunk({
+			id: "orphan-discord-chunk",
+			sourceId: `${added.source.id}:guild/123/channel/456/message/deleted#0`,
+			chunkText: "deleted message",
+		});
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { health?: { status?: string; purge?: { orphanChunks?: number } } };
+		expect(body.health).toMatchObject({
+			status: "degraded",
+			purge: { orphanChunks: 1 },
+		});
+	});
+
+	it("degrades source health when only deleted artifact residue remains", async () => {
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Deleted Residue Discord",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord://guild/123/channel/456/message/deleted",
+			sourceKind: "source_discord_message",
+			content: "deleted message",
+			metaJson: "{}",
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memory_artifacts SET is_deleted = 1 WHERE source_id = ?").run(added.source.id);
+		});
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			stats?: { artifacts?: number; chunks?: number };
+			health?: { status?: string; purge?: { deletedArtifacts?: number } };
+		};
+		expect(body.stats).toMatchObject({ artifacts: 0, chunks: 0 });
+		expect(body.health).toMatchObject({
+			status: "degraded",
+			purge: { deletedArtifacts: 1 },
+		});
+	});
+
+	it("returns a clear 404 for source health on an unknown source", async () => {
+		const res = await makeApp().request("/api/sources/discord%3Amissing/health");
+		expect(res.status).toBe(404);
+		expect(((await res.json()) as { error: string }).error).toContain("Source not found");
+	});
+
+	it("marks source health unhealthy when diagnostics queries fail", async () => {
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Broken Health Discord",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DROP TABLE memory_artifacts").run();
+		});
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { health?: { status?: string; error?: string } };
+		expect(body.health?.status).toBe("unhealthy");
+		expect(body.health?.error).toContain("Source health diagnostics failed");
+	});
+
+	it("marks source health unhealthy when semantic diagnostics queries fail", async () => {
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Broken Semantic Health Discord",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DROP TABLE entity_communities").run();
+		});
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { health?: { status?: string; error?: string } };
+		expect(body.health?.status).toBe("unhealthy");
+		expect(body.health?.error).toContain("Source health diagnostics failed");
 	});
 
 	it("completes startup source jobs from their own progress, not aggregate bridge counts", () => {

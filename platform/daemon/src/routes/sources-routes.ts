@@ -17,7 +17,7 @@ import {
 } from "@signet/core";
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
-import { getDbAccessor } from "../db-accessor";
+import { type ReadDb, getDbAccessor } from "../db-accessor";
 import {
 	type NativeMemoryBridgeHandle,
 	purgeNativeMemorySourceArtifacts,
@@ -119,11 +119,15 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const agentId = resolveDaemonAgentId();
 		return c.json({
 			version: config.version,
-			sources: config.sources.map((source) => ({
-				...source,
-				stats: sourceStats(source, agentId),
-				indexJob: getSourceIndexJob(source.id),
-			})),
+			sources: config.sources.map((source) => {
+				const stats = sourceStats(source, agentId);
+				return {
+					...source,
+					stats,
+					health: sourceHealth(source, agentId, stats),
+					indexJob: getSourceIndexJob(source.id),
+				};
+			}),
 		});
 	});
 
@@ -229,6 +233,15 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				includeLocalDiscord,
 			}),
 		);
+	});
+
+	app.get("/api/sources/:sourceId/health", (c) => {
+		const sourceId = c.req.param("sourceId");
+		const source = findConfiguredSource(sourceId, agentsDir);
+		if (!source) return c.json({ error: "Source not found" }, 404);
+		const agentId = resolveDaemonAgentId();
+		const stats = sourceStats(source, agentId);
+		return c.json({ source, stats, health: sourceHealth(source, agentId, stats) });
 	});
 
 	app.post("/api/sources/:sourceId/snapshot/import", async (c) => {
@@ -509,6 +522,35 @@ interface SourceStats {
 	readonly indexed: number;
 }
 
+interface SourceHealth {
+	readonly status: "healthy" | "degraded" | "unhealthy" | "empty";
+	readonly generatedAt: string;
+	readonly error?: string;
+	readonly latestArtifactAt: string | null;
+	readonly latestCheckpointAt: string | null;
+	readonly chunkCoverage: number;
+	readonly failures: {
+		readonly total: number;
+		readonly recoverable: number;
+	};
+	readonly checkpoints: {
+		readonly total: number;
+		readonly partial: number;
+		readonly stale: number;
+	};
+	readonly purge: {
+		readonly deletedArtifacts: number;
+		readonly orphanChunks: number;
+	};
+	readonly semantic: {
+		readonly entities: number;
+		readonly attributes: number;
+		readonly dependencies: number;
+		readonly communities: number;
+		readonly total: number;
+	};
+}
+
 function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
 	const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
 	const chunkPrefix = `${source.id}:`;
@@ -566,6 +608,334 @@ function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
 	} catch {
 		return { artifacts: 0, chunks: 0, indexed: 0 };
 	}
+}
+
+function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceStats): SourceHealth {
+	const generatedAt = new Date().toISOString();
+	try {
+		const artifactSummary = artifactHealthSummary(source, agentId);
+		const discordSummary = discordHealthSummary(source, agentId);
+		const semantic = semanticHealthSummary(source, agentId);
+		const orphanChunks = sourceOrphanChunks(source, agentId);
+		const hasDegradation =
+			discordSummary.failures.total > 0 ||
+			discordSummary.checkpoints.partial > 0 ||
+			discordSummary.checkpoints.stale > 0 ||
+			artifactSummary.deletedArtifacts > 0 ||
+			orphanChunks > 0;
+		const status = hasDegradation ? "degraded" : stats.artifacts === 0 && stats.chunks === 0 ? "empty" : "healthy";
+		return {
+			status,
+			generatedAt,
+			latestArtifactAt: artifactSummary.latestArtifactAt,
+			latestCheckpointAt: discordSummary.latestCheckpointAt,
+			chunkCoverage: stats.artifacts > 0 ? Math.min(1, stats.chunks / stats.artifacts) : stats.chunks > 0 ? 1 : 0,
+			failures: discordSummary.failures,
+			checkpoints: discordSummary.checkpoints,
+			purge: {
+				deletedArtifacts: artifactSummary.deletedArtifacts,
+				orphanChunks,
+			},
+			semantic,
+		};
+	} catch (err) {
+		return {
+			status: "unhealthy",
+			error: `Source health diagnostics failed: ${err instanceof Error ? err.message : String(err)}`,
+			generatedAt,
+			latestArtifactAt: null,
+			latestCheckpointAt: null,
+			chunkCoverage: stats.artifacts > 0 ? Math.min(1, stats.chunks / stats.artifacts) : stats.chunks > 0 ? 1 : 0,
+			failures: { total: 0, recoverable: 0 },
+			checkpoints: { total: 0, partial: 0, stale: 0 },
+			purge: { deletedArtifacts: 0, orphanChunks: stats.artifacts === 0 ? stats.chunks : 0 },
+			semantic: { entities: 0, attributes: 0, dependencies: 0, communities: 0, total: 0 },
+		};
+	}
+}
+
+function sourceOrphanChunks(source: SignetSourceEntry, agentId: string): number {
+	const chunkPrefix = `${source.id}:`;
+	return getDbAccessor().withReadDb((db) => {
+		const livePaths = liveSourceArtifactPaths(db, source, agentId);
+		const chunks = db
+			.prepare(
+				`SELECT source_id, chunk_text
+				   FROM embeddings
+				  WHERE agent_id = ?
+				    AND source_type IN (?, ?)
+				    AND source_id >= ?
+				    AND source_id < ?`,
+			)
+			.all(
+				agentId,
+				SOURCE_CHUNK_SOURCE_TYPE,
+				LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
+				chunkPrefix,
+				`${chunkPrefix}\uffff`,
+			) as SourceChunkHealthRow[];
+		return chunks.filter((chunk) => !sourceChunkMatchesLiveArtifact(source, chunk, livePaths)).length;
+	});
+}
+
+function liveSourceArtifactPaths(db: ReadDb, source: SignetSourceEntry, agentId: string): ReadonlySet<string> {
+	if (source.kind === "obsidian") {
+		const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
+		const rows = db
+			.prepare(
+				`SELECT source_path
+				   FROM memory_artifacts
+				  WHERE agent_id = ?
+				    AND COALESCE(is_deleted, 0) = 0
+				    AND (
+					    source_id = ?
+					    OR (
+						    harness = 'obsidian'
+						    AND source_id IS NULL
+						    AND source_path >= ?
+						    AND source_path < ?
+					    )
+				    )`,
+			)
+			.all(agentId, source.id, rootPrefix, `${rootPrefix}\uffff`) as SourcePathHealthRow[];
+		return new Set(rows.map((row) => normalizeSourcePath(row.source_path)));
+	}
+	const rows = db
+		.prepare(
+			`SELECT source_path
+			   FROM memory_artifacts
+			  WHERE agent_id = ?
+			    AND source_id = ?
+			    AND COALESCE(is_deleted, 0) = 0`,
+		)
+		.all(agentId, source.id) as SourcePathHealthRow[];
+	return new Set(rows.map((row) => normalizeSourcePath(row.source_path)));
+}
+
+interface SourceChunkHealthRow {
+	readonly source_id: string;
+	readonly chunk_text: string | null;
+}
+
+interface SourcePathHealthRow {
+	readonly source_path: string;
+}
+
+function sourceChunkMatchesLiveArtifact(
+	source: SignetSourceEntry,
+	chunk: SourceChunkHealthRow,
+	livePaths: ReadonlySet<string>,
+): boolean {
+	const explicitPath = sourcePathFromChunkText(chunk.chunk_text);
+	if (explicitPath && livePaths.has(normalizeSourcePath(explicitPath))) return true;
+	const localPath = sourceLocalPathFromChunkId(source.id, chunk.source_id);
+	if (!localPath) return false;
+	return sourcePathCandidates(source, localPath).some((candidate) => livePaths.has(candidate));
+}
+
+function sourcePathFromChunkText(chunkText: string | null): string | null {
+	if (!chunkText) return null;
+	const line = chunkText.split("\n").find((part) => part.trimStart().toLowerCase().startsWith("source_path:"));
+	return line ? normalizeSourcePath(line.trimStart().slice("source_path:".length).trim()) : null;
+}
+
+function sourceLocalPathFromChunkId(sourceId: string, chunkSourceId: string): string | null {
+	const prefix = `${sourceId}:`;
+	if (!chunkSourceId.startsWith(prefix)) return null;
+	const localWithAnchor = chunkSourceId.slice(prefix.length);
+	const anchorIndex = localWithAnchor.indexOf("#");
+	const localPath = anchorIndex >= 0 ? localWithAnchor.slice(0, anchorIndex) : localWithAnchor;
+	return localPath ? normalizeSourcePath(localPath) : null;
+}
+
+function sourcePathCandidates(source: SignetSourceEntry, localPath: string): readonly string[] {
+	const normalized = normalizeSourcePath(localPath);
+	const root = normalizeSourcePath(source.root).replace(/\/$/, "");
+	return [normalized, `${root}/${normalized}`, `discord://${normalized}`, `discord-cache://${normalized}`].map(
+		normalizeSourcePath,
+	);
+}
+
+function normalizeSourcePath(value: string): string {
+	return value.replace(/\\/g, "/").replace(/([^:])\/{2,}/g, "$1/");
+}
+
+function artifactHealthSummary(
+	source: SignetSourceEntry,
+	agentId: string,
+): {
+	readonly latestArtifactAt: string | null;
+	readonly deletedArtifacts: number;
+} {
+	return getDbAccessor().withReadDb((db) => {
+		if (source.kind === "obsidian") {
+			const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
+			const row = db
+				.prepare(
+					`SELECT MAX(updated_at) AS latestArtifactAt,
+					        SUM(CASE WHEN COALESCE(is_deleted, 0) = 1 THEN 1 ELSE 0 END) AS deletedArtifacts
+					   FROM memory_artifacts
+					  WHERE agent_id = ?
+					    AND (
+						    source_id = ?
+						    OR (
+							    harness = 'obsidian'
+							    AND source_id IS NULL
+							    AND source_path >= ?
+							    AND source_path < ?
+						    )
+					    )`,
+				)
+				.get(agentId, source.id, rootPrefix, `${rootPrefix}\uffff`) as HealthAggregateRow | null;
+			return {
+				latestArtifactAt: stringOrNull(row?.latestArtifactAt),
+				deletedArtifacts: numberOrZero(row?.deletedArtifacts),
+			};
+		}
+		const row = db
+			.prepare(
+				`SELECT MAX(updated_at) AS latestArtifactAt,
+				        SUM(CASE WHEN COALESCE(is_deleted, 0) = 1 THEN 1 ELSE 0 END) AS deletedArtifacts
+				   FROM memory_artifacts
+				  WHERE agent_id = ?
+				    AND source_id = ?`,
+			)
+			.get(agentId, source.id) as HealthAggregateRow | null;
+		return {
+			latestArtifactAt: stringOrNull(row?.latestArtifactAt),
+			deletedArtifacts: numberOrZero(row?.deletedArtifacts),
+		};
+	});
+}
+
+interface DiscordHealthSummary {
+	readonly latestCheckpointAt: string | null;
+	readonly failures: {
+		readonly total: number;
+		readonly recoverable: number;
+	};
+	readonly checkpoints: {
+		readonly total: number;
+		readonly partial: number;
+		readonly stale: number;
+	};
+}
+
+function discordHealthSummary(source: SignetSourceEntry, agentId: string): DiscordHealthSummary {
+	if (source.kind !== "discord") {
+		return {
+			latestCheckpointAt: null,
+			failures: { total: 0, recoverable: 0 },
+			checkpoints: { total: 0, partial: 0, stale: 0 },
+		};
+	}
+	return getDbAccessor().withReadDb((db) => {
+		const rows = db
+			.prepare(
+				`SELECT source_kind, source_meta_json, updated_at
+				   FROM memory_artifacts
+				  WHERE agent_id = ?
+				    AND source_id = ?
+				    AND source_kind IN ('source_discord_failure', 'source_discord_checkpoint')
+				    AND COALESCE(is_deleted, 0) = 0`,
+			)
+			.all(agentId, source.id) as DiscordHealthRow[];
+		let failures = 0;
+		let recoverable = 0;
+		let checkpoints = 0;
+		let partial = 0;
+		let stale = 0;
+		let latestCheckpointAt: string | null = null;
+		for (const row of rows) {
+			const meta = parseJsonObject(row.source_meta_json);
+			if (row.source_kind === "source_discord_failure") {
+				failures++;
+				if (meta?.recoverable === true) recoverable++;
+				continue;
+			}
+			checkpoints++;
+			if (meta?.status === "partial") partial++;
+			if (isStaleCheckpoint(row.updated_at, source.lastIndexedAt)) stale++;
+			latestCheckpointAt = maxIsoTimestamp(latestCheckpointAt, stringOrNull(row.updated_at));
+		}
+		return {
+			latestCheckpointAt,
+			failures: { total: failures, recoverable },
+			checkpoints: { total: checkpoints, partial, stale },
+		};
+	});
+}
+
+function semanticHealthSummary(source: SignetSourceEntry, agentId: string): SourceHealth["semantic"] {
+	return getDbAccessor().withReadDb((db) => {
+		const entities = countSourceRows(db, "entities", agentId, source.id);
+		const attributes = countSourceRows(db, "entity_attributes", agentId, source.id);
+		const dependencies = countSourceRows(db, "entity_dependencies", agentId, source.id);
+		const communities = countSourceRows(db, "entity_communities", agentId, source.id);
+		return {
+			entities,
+			attributes,
+			dependencies,
+			communities,
+			total: entities + attributes + dependencies + communities,
+		};
+	});
+}
+
+function countSourceRows(
+	db: { prepare: (sql: string) => { get: (...args: unknown[]) => unknown } },
+	table: string,
+	agentId: string,
+	sourceId: string,
+): number {
+	return countRow(
+		db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE agent_id = ? AND source_id = ?`).get(agentId, sourceId),
+	);
+}
+
+interface HealthAggregateRow {
+	readonly latestArtifactAt?: unknown;
+	readonly deletedArtifacts?: unknown;
+}
+
+interface DiscordHealthRow {
+	readonly source_kind: string;
+	readonly source_meta_json: string | null;
+	readonly updated_at: string | null;
+}
+
+function parseJsonObject(value: string | null): Readonly<Record<string, unknown>> | null {
+	if (!value) return null;
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as Readonly<Record<string, unknown>>)
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+function isStaleCheckpoint(updatedAt: string | null, lastIndexedAt: string | undefined): boolean {
+	if (!updatedAt || !lastIndexedAt) return false;
+	const updatedMs = Date.parse(updatedAt);
+	const indexedMs = Date.parse(lastIndexedAt);
+	if (!Number.isFinite(updatedMs) || !Number.isFinite(indexedMs)) return false;
+	return indexedMs - updatedMs > 60_000;
+}
+
+function maxIsoTimestamp(left: string | null, right: string | null): string | null {
+	if (!right) return left;
+	if (!left) return right;
+	return Date.parse(right) > Date.parse(left) ? right : left;
+}
+
+function stringOrNull(value: unknown): string | null {
+	return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberOrZero(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function countRow(row: unknown): number {

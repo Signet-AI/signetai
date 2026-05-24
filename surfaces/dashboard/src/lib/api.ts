@@ -99,6 +99,35 @@ export interface SignetSourceStats {
 	indexed: number;
 }
 
+export interface SignetSourceHealth {
+	status: "healthy" | "degraded" | "unhealthy" | "empty";
+	generatedAt: string;
+	error?: string;
+	latestArtifactAt: string | null;
+	latestCheckpointAt: string | null;
+	chunkCoverage: number;
+	failures: {
+		total: number;
+		recoverable: number;
+	};
+	checkpoints: {
+		total: number;
+		partial: number;
+		stale: number;
+	};
+	purge: {
+		deletedArtifacts: number;
+		orphanChunks: number;
+	};
+	semantic: {
+		entities: number;
+		attributes: number;
+		dependencies: number;
+		communities: number;
+		total: number;
+	};
+}
+
 export interface SignetSourceIndexJob {
 	id: string;
 	sourceId: string;
@@ -126,6 +155,7 @@ export interface SignetSourceEntry {
 	excludeGlobs?: string[];
 	providerSettings?: Record<string, unknown>;
 	stats?: SignetSourceStats;
+	health?: SignetSourceHealth;
 	indexJob?: SignetSourceIndexJob;
 }
 
