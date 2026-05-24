@@ -5,6 +5,8 @@ import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
 import {
+	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
+	SOURCE_CHUNK_SOURCE_TYPE,
 	type SignetSourceEntry,
 	addObsidianSource,
 	loadSourcesConfig,
@@ -16,10 +18,10 @@ import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
 import {
 	type NativeMemoryBridgeHandle,
-	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
 	startNativeMemoryBridge,
 } from "../native-memory-sources";
+import { getSourceProvider } from "../source-providers";
 import {
 	type SourceIndexJob,
 	beginSourceIndexJob,
@@ -133,13 +135,8 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 
 		const sourceAgentId = resolveDaemonAgentId();
 		recordSourceDeletionTombstone(result.source, sourceAgentId, agentsDir);
-		const purged =
-			result.source.kind === "obsidian"
-				? purgeNativeSource(
-						obsidianNativeMemorySource(result.source.root, result.source.name, result.source.id),
-						sourceAgentId,
-					)
-				: 0;
+		const provider = getSourceProvider(result.source.kind);
+		const purged = provider ? purgeNativeSource(provider.toNativeSource(result.source), sourceAgentId) : 0;
 		if (!isSourceIndexInFlight(result.source.id))
 			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
@@ -166,8 +163,10 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 	let bridge: NativeMemoryBridgeHandle | null = null;
 
 	try {
+		const provider = getSourceProvider(input.source.kind);
+		if (!provider) throw new Error(`Unsupported source provider: ${input.source.kind}`);
 		bridge = input.startBridge(
-			[obsidianNativeMemorySource(input.source.root, input.source.name, input.source.id, input.source.excludeGlobs)],
+			[provider.toNativeSource(input.source)],
 			{
 				pollIntervalMs: 0,
 				agentsDir: input.agentsDir,
@@ -183,6 +182,7 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 						currentPath: event.filePath,
 					});
 				},
+				shouldContinue: () => isCurrentSourceIndexJob(input.source.id, job.id),
 			},
 		);
 		const indexed = await bridge.syncExisting();
@@ -195,10 +195,8 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 	} finally {
 		await bridge?.close().catch(() => undefined);
 		if (consumeCanceledSourceIndexJob(job.id)) {
-			input.purgeNativeSource(
-				obsidianNativeMemorySource(input.source.root, input.source.name, input.source.id, input.source.excludeGlobs),
-				resolveDaemonAgentId(),
-			);
+			const provider = getSourceProvider(input.source.kind);
+			if (provider) input.purgeNativeSource(provider.toNativeSource(input.source), resolveDaemonAgentId());
 			clearSourceDeletionTombstone(input.source.id, resolveDaemonAgentId(), input.agentsDir);
 		}
 		clearSourceIndexInFlight(input.source.id);
@@ -222,17 +220,8 @@ function cleanupSourceDeletionTombstones(
 	const remaining: SourceDeletionTombstone[] = [];
 	for (const tombstone of tombstones) {
 		if (configuredIds.has(tombstone.source.id)) continue;
-		if (tombstone.source.kind === "obsidian") {
-			purgeNativeSource(
-				obsidianNativeMemorySource(
-					tombstone.source.root,
-					tombstone.source.name,
-					tombstone.source.id,
-					tombstone.source.excludeGlobs,
-				),
-				tombstone.agentId,
-			);
-		}
+		const provider = getSourceProvider(tombstone.source.kind);
+		if (provider) purgeNativeSource(provider.toNativeSource(tombstone.source), tombstone.agentId);
 	}
 	saveSourceDeletionTombstones(remaining, agentsDir);
 }
@@ -294,7 +283,7 @@ function isSourceDeletionTombstone(value: unknown): value is SourceDeletionTombs
 		!!candidate.source &&
 		typeof candidate.source === "object" &&
 		typeof candidate.source.id === "string" &&
-		candidate.source.kind === "obsidian"
+		typeof candidate.source.kind === "string"
 	);
 }
 
@@ -313,16 +302,33 @@ function sourceStats(source: SignetSourceEntry, agentId: string): SourceStats {
 			const artifacts = countRow(
 				db
 					.prepare(
-						"SELECT COUNT(*) AS n FROM memory_artifacts WHERE agent_id = ? AND harness = 'obsidian' AND source_path >= ? AND source_path < ? AND COALESCE(is_deleted, 0) = 0",
+						`SELECT COUNT(*) AS n FROM memory_artifacts
+						 WHERE agent_id = ?
+						   AND harness = 'obsidian'
+						   AND (
+							   source_id = ?
+							   OR (source_id IS NULL AND source_path >= ? AND source_path < ?)
+						   )
+						   AND COALESCE(is_deleted, 0) = 0`,
 					)
-					.get(agentId, rootPrefix, `${rootPrefix}\uffff`),
+					.get(agentId, source.id, rootPrefix, `${rootPrefix}\uffff`),
 			);
 			const chunks = countRow(
 				db
 					.prepare(
-						"SELECT COUNT(*) AS n FROM embeddings WHERE agent_id = ? AND source_type = 'source_obsidian_chunk' AND source_id >= ? AND source_id < ?",
+						`SELECT COUNT(*) AS n FROM embeddings
+						 WHERE agent_id = ?
+						   AND source_type IN (?, ?)
+						   AND source_id >= ?
+						   AND source_id < ?`,
 					)
-					.get(agentId, chunkPrefix, `${chunkPrefix}\uffff`),
+					.get(
+						agentId,
+						SOURCE_CHUNK_SOURCE_TYPE,
+						LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
+						chunkPrefix,
+						`${chunkPrefix}\uffff`,
+					),
 			);
 			return { artifacts, chunks, indexed: artifacts };
 		});

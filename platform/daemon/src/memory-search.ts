@@ -13,7 +13,12 @@
  */
 
 import { createHash } from "node:crypto";
-import { type LlmUsage, vectorSearch } from "@signet/core";
+import {
+	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
+	SOURCE_CHUNK_SOURCE_TYPE,
+	type LlmUsage,
+	vectorSearch,
+} from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
@@ -670,6 +675,7 @@ interface NativeArtifactRecallHit {
 interface SourceChunkVectorHit {
 	readonly embeddingId: string;
 	readonly sourceId: string;
+	readonly sourceType: string;
 	readonly sourcePath: string;
 	readonly chunkText: string;
 	readonly score: number;
@@ -714,6 +720,20 @@ function sourcePathFromChunkText(chunkText: string): string {
 	return line?.slice("source_path:".length).trim() ?? "";
 }
 
+function sourceChunkRecallSource(sourceId: string): string {
+	return sourceId.startsWith("obsidian:") ? "source_obsidian" : "source";
+}
+
+function sourceChunkProvider(sourceId: string): string {
+	const separator = sourceId.indexOf(":");
+	return separator > 0 ? sourceId.slice(0, separator) : "source";
+}
+
+function sourceChunkRecallTags(hit: SourceChunkVectorHit): string {
+	const provider = sourceChunkProvider(hit.sourceId);
+	return [provider, "source", hit.sourceType, "vector"].join(",");
+}
+
 function buildSourceChunkVectorHits(
 	queryVec: Float32Array | null,
 	existingSourceIds: ReadonlySet<string>,
@@ -731,14 +751,15 @@ function buildSourceChunkVectorHits(
 		return getDbAccessor().withReadDb((db) => {
 			const rows = db
 				.prepare(
-					`SELECT id, source_id, vector, chunk_text, created_at
+					`SELECT id, source_type, source_id, vector, chunk_text, created_at
 					 FROM embeddings
-					 WHERE source_type = 'source_obsidian_chunk'
+					 WHERE source_type IN (?, ?)
 					   AND vector IS NOT NULL
 					   AND agent_id = ?`,
 				)
-				.all(agentId) as Array<{
+				.all(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, agentId) as Array<{
 				id: string;
+				source_type: string;
 				source_id: string;
 				vector: Buffer;
 				chunk_text: string;
@@ -751,6 +772,7 @@ function buildSourceChunkVectorHits(
 						{
 							embeddingId: row.id,
 							sourceId: row.source_id,
+							sourceType: row.source_type,
 							sourcePath,
 							chunkText: row.chunk_text,
 							score: cosineSimilarity(
@@ -1907,7 +1929,7 @@ export async function hybridRecall(
 		if (sourceChunkHits.length > 0) {
 			const results = suppressPreviouslyRecalledForSelection(
 				sourceChunkHits.slice(0, fallbackLimit).map((hit): RecallResult => {
-					const content = `[Obsidian vault chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
+					const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
 					const truncated = content.length > recallTruncate;
 					return {
 						id: `source-chunk:${hit.embeddingId}`,
@@ -1915,14 +1937,14 @@ export async function hybridRecall(
 						content_length: content.length,
 						truncated,
 						score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
-						source: "source_obsidian",
+						source: sourceChunkRecallSource(hit.sourceId),
 						source_id: hit.sourceId,
 						session_id: hit.sourceId,
-						type: "source_obsidian_chunk",
-						tags: "obsidian,source,source_obsidian_chunk,vector",
+						type: hit.sourceType,
+						tags: sourceChunkRecallTags(hit),
 						pinned: false,
 						importance: 0.6,
-						who: "obsidian",
+						who: sourceChunkProvider(hit.sourceId),
 						project: hit.project,
 						created_at: hit.createdAt,
 						source_path: hit.sourcePath,
@@ -2081,7 +2103,7 @@ export async function hybridRecall(
 				)
 			: [];
 		const candidates = sourceChunkHits.map((hit): RecallResult => {
-			const content = `[Obsidian vault chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
+			const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
 			const truncated = content.length > recallTruncate;
 			return {
 				id: `source-chunk:${hit.embeddingId}`,
@@ -2089,14 +2111,14 @@ export async function hybridRecall(
 				content_length: content.length,
 				truncated,
 				score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
-				source: "source_obsidian",
+				source: sourceChunkRecallSource(hit.sourceId),
 				source_id: hit.sourceId,
 				session_id: hit.sourceId,
-				type: "source_obsidian_chunk",
-				tags: "obsidian,source,source_obsidian_chunk,vector",
+				type: hit.sourceType,
+				tags: sourceChunkRecallTags(hit),
 				pinned: false,
 				importance: 0.6,
-				who: "obsidian",
+				who: sourceChunkProvider(hit.sourceId),
 				project: hit.project,
 				created_at: hit.createdAt,
 				source_path: hit.sourcePath,

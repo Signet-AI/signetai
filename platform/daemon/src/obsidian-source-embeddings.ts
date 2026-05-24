@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { relative } from "node:path";
+import { LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "./db-helpers";
 import type { EmbeddingConfig } from "./memory-config";
 
-export const OBSIDIAN_CHUNK_SOURCE_TYPE = "source_obsidian_chunk";
+export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
 const OBSIDIAN_SOURCE_CHUNK_DELAY_MS = 100;
+const OBSIDIAN_CHUNK_SOURCE_TYPES = [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE] as const;
 
 export type SourceEmbeddingFetch = (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>;
 
@@ -178,6 +180,8 @@ export function buildObsidianSourceChunks(input: {
 				const chunkId = `${input.sourceId}:${relativePath}#${headingKey}:${lineKey}:${chunkIndex}`;
 				const chunkText = [
 					`source_id: ${input.sourceId}`,
+					"source_provider: obsidian",
+					`source_root: ${root}`,
 					`source_path: ${filePath}`,
 					`vault_relative_path: ${relativePath}`,
 					`heading: ${section.headingPath}`,
@@ -291,15 +295,20 @@ export async function indexObsidianSourceEmbeddings(
 
 	getDbAccessor().withWriteTx((db) => {
 		const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
-		const stale = db
-			.prepare(
-				"SELECT id, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
-			)
-			.all(OBSIDIAN_CHUNK_SOURCE_TYPE, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
-			id: string;
-			content_hash: string;
-		}>;
-		const staleIds = stale.filter((row) => !currentHashes.has(row.content_hash)).map((row) => row.id);
+		const stale = OBSIDIAN_CHUNK_SOURCE_TYPES.flatMap((sourceType) =>
+			db
+				.prepare(
+					"SELECT id, source_type, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
+				)
+				.all(sourceType, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
+				id: string;
+				source_type: string;
+				content_hash: string;
+			}>,
+		);
+		const staleIds = stale
+			.filter((row) => row.source_type === LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE || !currentHashes.has(row.content_hash))
+			.map((row) => row.id);
 		if (staleIds.length > 0) {
 			syncVecDeleteByEmbeddingIds(db, staleIds);
 			const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
@@ -318,7 +327,7 @@ function existingChunkEmbeddingContentHash(agentId: string, chunkId: string): st
 	const row = getDbAccessor().withReadDb((db) =>
 		db
 			.prepare("SELECT content_hash FROM embeddings WHERE source_type = ? AND source_id = ? AND agent_id = ? LIMIT 1")
-			.get(OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
+			.get(SOURCE_CHUNK_SOURCE_TYPE, chunkId, agentId),
 	) as { content_hash: string } | undefined;
 	return row?.content_hash ?? null;
 }
@@ -336,18 +345,21 @@ function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): numb
 	return getDbAccessor().withWriteTx((db) => {
 		const agentWhere = agentId ? " AND agent_id = ?" : "";
 		const upper = prefixUpperBound(prefix);
-		const args = agentId
-			? [OBSIDIAN_CHUNK_SOURCE_TYPE, prefix, upper, agentId]
-			: [OBSIDIAN_CHUNK_SOURCE_TYPE, prefix, upper];
-		const rows = db
-			.prepare(`SELECT id FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
-			.all(...args) as Array<{ id: string }>;
-		const ids = rows.map((row) => row.id);
+		const ids: string[] = [];
+		let changes = 0;
+		for (const sourceType of OBSIDIAN_CHUNK_SOURCE_TYPES) {
+			const args = agentId ? [sourceType, prefix, upper, agentId] : [sourceType, prefix, upper];
+			const rows = db
+				.prepare(`SELECT id FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
+				.all(...args) as Array<{ id: string }>;
+			ids.push(...rows.map((row) => row.id));
+			const result = db
+				.prepare(`DELETE FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
+				.run(...args);
+			changes += result.changes;
+		}
 		syncVecDeleteByEmbeddingIds(db, ids);
-		const result = db
-			.prepare(`DELETE FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
-			.run(...args);
-		return result.changes;
+		return changes;
 	});
 }
 

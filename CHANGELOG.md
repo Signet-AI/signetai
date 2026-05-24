@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-05-24
+- Bug fixes: surface aggregate usage and credit fallback.
+
 ### 2026-05-23
 - Features: implement parseMemory with structured section extraction.
 - Bug fixes: route aggregate recall through synthesis; route direct API pipeline providers.
@@ -29,11 +32,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-05-18
 - Bug fixes: load updater through cjs interop.
 
-### 2026-05-17
-- Features: improve constellation ontology navigation; native bundle system with zero-prereq installer; add epistemic assertions; add safe entity merge planning.
-- Bug fixes: build mac zip artifacts; preserve root-only filesystem globs; repair native bundle regressions; sync built-in dreaming skill.
-
 ## Release Ledger
+
+## [0.124.4] - 2026-05-24
+
+Release summary: 1 bug fix.
+Tag range: `bundle-0.124.2-49c278e14746b2850bdd49993a550a811a0e469c..v0.124.4`.
+
+### Bug Fixes
+
+- **recall**: surface aggregate usage and credit fallback (#755)
 
 ## [0.124.3] - 2026-05-23
 
