@@ -397,7 +397,12 @@ describe("discord-source-provider", () => {
 		});
 
 		expect(result?.failures).toEqual([]);
-		const checkpoint = sourceRows(added.source.id).find((row) => row.source_kind === "source_discord_checkpoint");
+		const rows = sourceRows(added.source.id);
+		const window = rows.find((row) => row.source_kind === "source_discord_message_window");
+		expect(window?.source_path).toContain("/messages/99-1000");
+		expect(window?.source_meta_json).toContain('"oldestMessageId":"99"');
+		expect(window?.source_meta_json).toContain('"newestMessageId":"1000"');
+		const checkpoint = rows.find((row) => row.source_kind === "source_discord_checkpoint");
 		expect(checkpoint?.source_meta_json).toContain('"latestCursor":"1000"');
 		expect(checkpoint?.source_meta_json).toContain('"backfillCursor":"99"');
 	});

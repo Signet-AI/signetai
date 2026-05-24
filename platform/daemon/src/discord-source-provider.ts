@@ -436,7 +436,7 @@ function messageWindowArtifact(
 	channel: DiscordChannel,
 	messages: readonly DiscordMessage[],
 ): DiscordArtifact {
-	const sorted = messages.slice().sort((a, b) => a.id.localeCompare(b.id));
+	const sorted = messages.slice().sort(compareDiscordMessagesByCursor);
 	const oldest = sorted[0];
 	const newest = sorted[sorted.length - 1];
 	const windowKey = `${oldest?.id ?? "empty"}-${newest?.id ?? "empty"}`;
