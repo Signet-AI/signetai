@@ -15,6 +15,9 @@ const CACHE_SNIFF_BYTES = 1 << 20;
 
 const channelRoutePattern = /\/channels\/(@me|[0-9]{12,24})\/([0-9]{12,24})/g;
 const apiMessagesRoutePattern = /\/api\/v[0-9]+\/channels\/[0-9]{12,24}\/messages/;
+const discordTokenLikePattern =
+	/(mfa\.[A-Za-z0-9_-]{20,}|[A-Za-z0-9_-]{20,32}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,})/g;
+const sensitiveFieldNamePattern = /\b(auth(?:orization)?|api[_ -]?key|cookie|password|secret|token)\b/i;
 
 export interface DiscordDesktopCacheSyncOptions {
 	readonly source: SignetSourceEntry;
@@ -818,18 +821,26 @@ function parseEmbeds(raw: Readonly<Record<string, unknown>>): readonly CacheEmbe
 	return items.flatMap((item) => {
 		if (!isRecord(item)) return [];
 		const fields = Array.isArray(item.fields)
-			? item.fields.flatMap((field) =>
-					isRecord(field) ? [{ name: stringField(field, "name"), value: stringField(field, "value") }] : [],
-				)
+			? item.fields.flatMap((field) => {
+					if (!isRecord(field)) return [];
+					const name = sanitizeCacheText(stringField(field, "name"));
+					return [{ name, value: sanitizeCacheText(stringField(field, "value"), name) }];
+				})
 			: [];
 		return [
 			{
-				title: stringField(item, "title") || undefined,
-				description: stringField(item, "description") || undefined,
+				title: sanitizeCacheText(stringField(item, "title")) || undefined,
+				description: sanitizeCacheText(stringField(item, "description")) || undefined,
 				fields,
 			},
 		];
 	});
+}
+
+function sanitizeCacheText(value: string, fieldName = ""): string {
+	if (!value) return "";
+	if (fieldName && sensitiveFieldNamePattern.test(fieldName)) return "[redacted]";
+	return value.replace(discordTokenLikePattern, "[redacted]");
 }
 
 function parsePoll(raw: Readonly<Record<string, unknown>>): CachePoll | null {
