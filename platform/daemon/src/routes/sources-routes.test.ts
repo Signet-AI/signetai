@@ -251,6 +251,21 @@ describe("Sources routes", () => {
 		expect(((await res.json()) as { error: string }).error).toContain("not a raw token");
 	});
 
+	it("rejects raw GitHub tokens at the route boundary", async () => {
+		const res = await makeApp().request("/api/sources/github", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				repos: ["Signet-AI/signetai"],
+				tokenRef: `github_pat_${"a".repeat(60)}`,
+			}),
+		});
+
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toContain("not a raw token");
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+	});
+
 	it("does not block the connect response on a slow Obsidian source scan", async () => {
 		let releaseScan = () => {};
 		const syncGate = new Promise<void>((resolve) => {

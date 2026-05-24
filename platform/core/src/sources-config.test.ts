@@ -374,6 +374,17 @@ describe("sources-config", () => {
 			ok: false,
 			error: "GitHub discussions require tokenRef because they use the GitHub GraphQL API",
 		});
+		for (const tokenRef of [
+			`ghp_${"a".repeat(36)}`,
+			`github_pat_${"b".repeat(60)}`,
+			`Bearer ghp_${"c".repeat(36)}`,
+			`Authorization: token ghp_${"d".repeat(36)}`,
+		]) {
+			expect(addGitHubSource({ repos: ["Signet-AI/signetai"], tokenRef }, agentsDir)).toEqual({
+				ok: false,
+				error: "GitHub tokenRef must be a secret reference, not a raw token",
+			});
+		}
 		expect(addGitHubSource({ repos: ["Signet-AI/signetai"], docPaths: ["src/daemon.ts"] }, agentsDir)).toEqual({
 			ok: false,
 			error: "Invalid GitHub docPaths: src/daemon.ts",

@@ -423,6 +423,9 @@ function buildGitHubSettings(
 		}
 	}
 	const tokenRef = input.tokenRef !== undefined ? input.tokenRef.trim() || undefined : existing?.tokenRef;
+	if (tokenRef && looksLikeRawGitHubToken(tokenRef)) {
+		return { error: "GitHub tokenRef must be a secret reference, not a raw token" };
+	}
 	const resourceTypes = input.resourceTypes
 		? [...input.resourceTypes]
 		: existing?.resourceTypes?.length
@@ -734,6 +737,16 @@ function looksLikeRawDiscordToken(value: string): boolean {
 	return (
 		/^mfa\.[A-Za-z0-9_-]{20,}$/.test(withoutAuthScheme) ||
 		/^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}$/.test(withoutAuthScheme)
+	);
+}
+
+function looksLikeRawGitHubToken(value: string): boolean {
+	const trimmed = value.trim();
+	const withoutHeaderPrefix = trimmed.replace(/^authorization:\s*/i, "").trim();
+	const withoutAuthScheme = withoutHeaderPrefix.replace(/^(bearer|token)\s+/i, "").trim();
+	if (withoutAuthScheme !== trimmed) return true;
+	return (
+		/^github_pat_[A-Za-z0-9_]{20,}$/.test(withoutAuthScheme) || /^gh[opsru]_[A-Za-z0-9_]{20,}$/.test(withoutAuthScheme)
 	);
 }
 
