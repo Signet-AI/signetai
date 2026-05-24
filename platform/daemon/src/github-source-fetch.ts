@@ -34,7 +34,7 @@ export interface GitHubPullRequest {
 	readonly state: string;
 	readonly html_url: string;
 	readonly user: { readonly login: string } | null;
-	readonly labels: readonly GitHubLabel[];
+	readonly labels?: readonly GitHubLabel[];
 	readonly created_at: string;
 	readonly updated_at: string;
 	readonly closed_at: string | null;
@@ -42,8 +42,8 @@ export interface GitHubPullRequest {
 	readonly draft: boolean;
 	readonly base: { readonly ref: string };
 	readonly head: { readonly ref: string };
-	readonly comments: number;
-	readonly review_comments: number;
+	readonly comments?: number;
+	readonly review_comments?: number;
 }
 
 export interface GitHubComment {
@@ -534,13 +534,13 @@ function pullResource(pull: GitHubPullRequest): GitHubResource {
 		body: pull.body ?? "",
 		state: pull.state,
 		url: pull.html_url,
-		labels: pull.labels.map((label) => label.name),
+		labels: (pull.labels ?? []).map((label) => label.name),
 		author: pull.user?.login ?? null,
 		createdAt: pull.created_at,
 		updatedAt: pull.updated_at,
 		closedAt: pull.closed_at,
 		mergedAt: pull.merged_at,
-		commentsCount: pull.comments + pull.review_comments,
+		commentsCount: (pull.comments ?? 0) + (pull.review_comments ?? 0),
 		extra: { draft: pull.draft, base: pull.base.ref, head: pull.head.ref },
 	};
 }

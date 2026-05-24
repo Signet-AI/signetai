@@ -4,6 +4,7 @@ import {
 	fetchDiscussionComments,
 	fetchDiscussions,
 	fetchIssues,
+	fetchPullRequests,
 	fetchPullRequestsBySearch,
 	fetchRepoDocs,
 } from "./github-source-fetch";
@@ -105,6 +106,36 @@ describe("github-source-fetch", () => {
 		expect(result.resources).toHaveLength(101);
 		expect(new URL(requested[0] ?? "").searchParams.get("page")).toBe("1");
 		expect(new URL(requested[1] ?? "").searchParams.get("page")).toBe("2");
+	});
+
+	it("maps pull request list responses without issue labels", async () => {
+		globalThis.fetch = mock(() =>
+			Promise.resolve(
+				Response.json([
+					{
+						number: 17,
+						title: "Pull request",
+						body: "body",
+						state: "open",
+						html_url: "https://github.com/o/r/pull/17",
+						user: { login: "alice" },
+						created_at: "2026-01-01T00:00:00.000Z",
+						updated_at: "2026-01-02T00:00:00.000Z",
+						closed_at: null,
+						merged_at: null,
+						draft: false,
+						base: { ref: "main" },
+						head: { ref: "feature" },
+					},
+				]),
+			),
+		) as typeof fetch;
+
+		const result = await fetchPullRequests({ owner: "o", repo: "r" }, undefined, "open", 1);
+
+		expect(result.resources[0]?.number).toBe(17);
+		expect(result.resources[0]?.labels).toEqual([]);
+		expect(result.resources[0]?.commentsCount).toBe(0);
 	});
 
 	it("maps GraphQL discussion closed state without requiring a state string field", async () => {
