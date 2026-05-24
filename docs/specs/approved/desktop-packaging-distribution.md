@@ -52,6 +52,11 @@ Arch.
    platform artifacts required by `electron-updater`, including macOS zip
    artifacts, so desktop users can move to new dashboard/runtime bundles
    without reinstalling manually.
+8. macOS LaunchAgent entrypoints for official bundle installs must resolve to
+   a Signet-owned native daemon or launcher binary before they are marketed as
+   fully attributed system background items. Package-manager installs that run
+   the JavaScript daemon through Bun or Node.js must disclose that macOS may
+   show the runtime signer's name in Login Items / Background Activity.
 
 ## Integration notes
 

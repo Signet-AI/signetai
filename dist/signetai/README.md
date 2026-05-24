@@ -10,12 +10,19 @@ state.
 ## Install
 
 ```bash
-# bun (recommended)
-bun add -g signetai
+# native bundle (recommended)
+curl -fsSL https://signetai.sh/install.sh | bash
 
-# npm
+# npm package
 npm install -g signetai
+
+# Bun package
+bun add -g signetai
 ```
+
+On macOS, the native bundle installer is preferred because package-manager
+installs run the background daemon through Bun or Node.js. macOS may attribute
+Login Items / Background Activity to that runtime's signer instead of Signet.
 
 ## Quick Start
 

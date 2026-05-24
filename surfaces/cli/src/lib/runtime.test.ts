@@ -11,6 +11,7 @@ import {
 	didSystemdDaemonStart,
 	getDaemonStatus,
 	launchdDaemonPlistPath,
+	macOSLaunchAgentAttributionNotice,
 	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
 	resolveDaemonLaunchCommand,
@@ -57,6 +58,43 @@ describe("resolveDaemonLaunchCommand", () => {
 			process.execPath,
 			"/opt/signet/runtime/daemon-js/daemon.js",
 		]);
+	});
+});
+
+describe("macOSLaunchAgentAttributionNotice", () => {
+	it("warns when macOS launchd will attribute a JavaScript daemon to Bun", () => {
+		const notice = macOSLaunchAgentAttributionNotice("/opt/signet/dist/daemon.js", {
+			env: {},
+			execPath: "/Users/user/.bun/bin/bun",
+			pathValue: "",
+			platform: "darwin",
+		});
+
+		expect(notice).toContain("Background Activity");
+		expect(notice).toContain("Jarred Sumner");
+		expect(notice).toContain("https://signetai.sh/install.sh");
+	});
+
+	it("does not warn for native daemon binaries", () => {
+		expect(
+			macOSLaunchAgentAttributionNotice("/opt/signet/runtime/daemon-rs/signet-daemon", {
+				env: {},
+				execPath: "/Users/user/.bun/bin/bun",
+				pathValue: "",
+				platform: "darwin",
+			}),
+		).toBeNull();
+	});
+
+	it("does not warn outside macOS", () => {
+		expect(
+			macOSLaunchAgentAttributionNotice("/opt/signet/dist/daemon.js", {
+				env: {},
+				execPath: "/Users/user/.bun/bin/bun",
+				pathValue: "",
+				platform: "linux",
+			}),
+		).toBeNull();
 	});
 });
 
