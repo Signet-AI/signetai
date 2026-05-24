@@ -1235,7 +1235,7 @@ function firstNonEmpty(...values: readonly string[]): string {
 
 function stringField(raw: Readonly<Record<string, unknown>>, key: string): string {
 	const value = raw[key];
-	return typeof value === "string" ? value.trim() : "";
+	return typeof value === "string" ? sanitizeCacheText(value.trim()) : "";
 }
 
 function intField(raw: Readonly<Record<string, unknown>>, key: string): number {

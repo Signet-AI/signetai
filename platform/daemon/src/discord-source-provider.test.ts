@@ -179,7 +179,7 @@ describe("discord-source-provider", () => {
 			join(cachePath, "000001.log"),
 			[
 				`{"id":"111111111111111111","type":1,"recipients":[{"id":"222222222222222222","username":"alice","global_name":"Alice"}]}`,
-				`noise {"t":"MESSAGE_CREATE","token":"do-not-store","d":{"id":"333333333333333333","channel_id":"111111111111111111","content":"launch checklist in a DM mfa.CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC","timestamp":"2026-04-23T18:20:43.123Z","author":{"id":"222222222222222222","username":"alice","global_name":"Alice"},"attachments":[{"id":"444444444444444444","filename":"plan.txt","size":10}],"mentions":[{"id":"555555555555555555","username":"bob"}],"embeds":[{"title":"mfa.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","description":"safe summary","fields":[{"name":"Authorization","value":"mfa.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"}]}]}} tail`,
+				`noise {"t":"MESSAGE_CREATE","token":"do-not-store","d":{"id":"333333333333333333","channel_id":"111111111111111111","content":"launch checklist in a DM mfa.CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC","timestamp":"2026-04-23T18:20:43.123Z","author":{"id":"222222222222222222","username":"alice","global_name":"Alice"},"attachments":[{"id":"444444444444444444","filename":"plan.txt","size":10}],"mentions":[{"id":"555555555555555555","username":"bob"}],"embeds":[{"title":"mfa.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","description":"safe summary","fields":[{"name":"Authorization","value":"mfa.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"}]}],"poll":{"question":{"text":"mfa.DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD"},"answers":[{"answer_id":1,"poll_media":{"text":"mfa.EEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"}}]}}} tail`,
 			].join("\n"),
 		);
 		const added = addDiscordSource(
@@ -214,6 +214,7 @@ describe("discord-source-provider", () => {
 		expect(rows.map((row) => row.source_kind)).toContain("source_discord_attachment");
 		expect(rows.map((row) => row.source_kind)).toContain("source_discord_mention");
 		expect(rows.map((row) => row.source_kind)).toContain("source_discord_embed");
+		expect(rows.map((row) => row.source_kind)).toContain("source_discord_poll");
 		expect(rows.find((row) => row.source_kind === "source_discord_message")?.source_meta_json).toContain(
 			'"localOnly":true',
 		);
@@ -222,6 +223,8 @@ describe("discord-source-provider", () => {
 		expect(indexedText).not.toContain("mfa.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
 		expect(indexedText).not.toContain("mfa.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
 		expect(indexedText).not.toContain("mfa.CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC");
+		expect(indexedText).not.toContain("mfa.DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD");
+		expect(indexedText).not.toContain("mfa.EEEEEEEEEEEEEEEEEEEEEEEEEEEEEE");
 		expect(indexedText).toContain("[redacted]");
 	});
 
