@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
-export type SignetSourceKind = "obsidian";
+export type SignetSourceKind = "obsidian" | (string & {});
 export type SignetSourceMode = "read-only";
+export type SignetSourceProviderSettings = Readonly<Record<string, unknown>>;
 
 export interface SignetSourceEntry {
 	readonly id: string;
@@ -17,6 +18,7 @@ export interface SignetSourceEntry {
 	readonly updatedAt: string;
 	readonly lastIndexedAt?: string;
 	readonly excludeGlobs?: readonly string[];
+	readonly providerSettings?: SignetSourceProviderSettings;
 }
 
 export const DEFAULT_OBSIDIAN_EXCLUDE_GLOBS = [
@@ -272,7 +274,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isSourceEntry(value: unknown): value is SignetSourceEntry {
 	return (
 		isRecord(value) &&
-		value.kind === "obsidian" &&
+		typeof value.kind === "string" &&
+		value.kind.trim().length > 0 &&
 		typeof value.id === "string" &&
 		typeof value.name === "string" &&
 		typeof value.root === "string" &&
@@ -282,6 +285,20 @@ function isSourceEntry(value: unknown): value is SignetSourceEntry {
 		typeof value.updatedAt === "string" &&
 		(value.lastIndexedAt === undefined || typeof value.lastIndexedAt === "string") &&
 		(value.excludeGlobs === undefined ||
-			(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string")))
+			(Array.isArray(value.excludeGlobs) && value.excludeGlobs.every((entry) => typeof entry === "string"))) &&
+		(value.providerSettings === undefined || isJsonRecord(value.providerSettings))
 	);
+}
+
+function isJsonRecord(value: unknown): value is SignetSourceProviderSettings {
+	if (!isRecord(value)) return false;
+	return Object.values(value).every(isJsonValue);
+}
+
+function isJsonValue(value: unknown): boolean {
+	if (value === null) return true;
+	if (typeof value === "string" || typeof value === "boolean") return true;
+	if (typeof value === "number") return Number.isFinite(value);
+	if (Array.isArray(value)) return value.every(isJsonValue);
+	return isJsonRecord(value);
 }

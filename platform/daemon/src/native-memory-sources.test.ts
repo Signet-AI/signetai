@@ -490,16 +490,32 @@ describe("native memory sources", () => {
 
 		const row = getDbAccessor().withReadDb(
 			(db) =>
-				db.prepare("SELECT source_path, source_kind, harness, content FROM memory_artifacts").get() as {
+				db
+					.prepare(
+						`SELECT source_path, source_kind, harness, source_id, source_root,
+						        source_external_id, source_parent_path, source_meta_json, content
+						 FROM memory_artifacts`,
+					)
+					.get() as {
 					source_path: string;
 					source_kind: string;
 					harness: string;
+					source_id: string;
+					source_root: string;
+					source_external_id: string;
+					source_parent_path: string;
+					source_meta_json: string;
 					content: string;
 				},
 		);
 		expect(row.source_path).toBe(file);
 		expect(row.source_kind).toBe("source_obsidian_markdown");
 		expect(row.harness).toBe("obsidian");
+		expect(row.source_id).toStartWith("obsidian:");
+		expect(row.source_root).toBe(root);
+		expect(row.source_external_id).toBe("permanent/Signet.md");
+		expect(row.source_parent_path).toBe("permanent");
+		expect(JSON.parse(row.source_meta_json)).toMatchObject({ provider: "obsidian" });
 		expect(row.content).toContain("Obsidian source knowledge base note");
 	});
 
@@ -561,7 +577,7 @@ describe("native memory sources", () => {
 			embeddings: (
 				db
 					.prepare("SELECT COUNT(*) AS count FROM embeddings WHERE agent_id = ? AND source_type = ?")
-					.get("agent-native", "source_obsidian_chunk") as { count: number }
+					.get("agent-native", "source_chunk") as { count: number }
 			).count,
 		}));
 		expect(rows.entities).toBeGreaterThan(0);
@@ -669,7 +685,7 @@ describe("native memory sources", () => {
 			(db) =>
 				db
 					.prepare(
-						"SELECT source_id, chunk_text FROM embeddings WHERE source_type = 'source_obsidian_chunk' ORDER BY source_id",
+						"SELECT source_id, chunk_text FROM embeddings WHERE source_type = 'source_chunk' ORDER BY source_id",
 					)
 					.all() as Array<{ source_id: string; chunk_text: string }>,
 		);
@@ -796,7 +812,7 @@ describe("native memory sources", () => {
 			chunks: (
 				db
 					.prepare(
-						"SELECT COUNT(*) AS count FROM embeddings WHERE agent_id = ? AND source_type = 'source_obsidian_chunk' AND source_id >= ? AND source_id < ?",
+						"SELECT COUNT(*) AS count FROM embeddings WHERE agent_id = ? AND source_type = 'source_chunk' AND source_id >= ? AND source_id < ?",
 					)
 					.get("agent-native", `${sourceId}:`, `${sourceId}:\uffff`) as { count: number }
 			).count,
@@ -837,7 +853,7 @@ describe("native memory sources", () => {
 			chunks: (
 				db
 					.prepare(
-						"SELECT COUNT(*) AS count FROM embeddings WHERE agent_id = ? AND source_type = 'source_obsidian_chunk' AND source_id >= ? AND source_id < ?",
+						"SELECT COUNT(*) AS count FROM embeddings WHERE agent_id = ? AND source_type = 'source_chunk' AND source_id >= ? AND source_id < ?",
 					)
 					.get("agent-native", `${sourceId}:`, `${sourceId}:\uffff`) as { count: number }
 			).count,

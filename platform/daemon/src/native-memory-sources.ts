@@ -1,8 +1,14 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { DEFAULT_OBSIDIAN_EXCLUDE_GLOBS, loadSourcesConfig, markSourceIndexed } from "@signet/core";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import {
+	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
+	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
+	SOURCE_CHUNK_SOURCE_TYPE,
+	loadSourcesConfig,
+	markSourceIndexed,
+} from "@signet/core";
 import { resolveDaemonAgentId } from "./agent-id";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
@@ -10,7 +16,6 @@ import { logger } from "./logger";
 import type { EmbeddingConfig } from "./memory-config";
 import { hashNormalizedBody, indexExternalMemoryArtifact, softDeleteArtifactRowsForPath } from "./memory-lineage";
 import {
-	OBSIDIAN_CHUNK_SOURCE_TYPE,
 	type SourceEmbeddingFetch,
 	buildObsidianSourceChunks,
 	indexObsidianSourceEmbeddings,
@@ -60,6 +65,7 @@ export interface NativeMemoryBridgeOptions {
 	readonly sourceFileDelayMs?: number;
 	readonly sourceCleanupEnabled?: boolean;
 	readonly sourceGraphEnabled?: boolean;
+	readonly shouldContinue?: (source: NativeMemorySource) => boolean;
 	readonly onFileIndexed?: (event: NativeMemoryFileIndexEvent) => void;
 }
 
@@ -236,6 +242,14 @@ function contentFingerprint(content: string): string {
 	return hashNormalizedBody(content);
 }
 
+function normalizedRoot(root: string): string {
+	return resolve(root).replace(/\\/g, "/").replace(/\/$/, "");
+}
+
+function sourceRelativePath(root: string, filePath: string): string {
+	return relative(normalizedRoot(root), filePath.replace(/\\/g, "/")).replace(/\\/g, "/");
+}
+
 function sourceFileDelayMs(source: NativeMemorySource, options: NativeMemoryBridgeOptions): number {
 	if (options.sourceFileDelayMs !== undefined) {
 		return Math.max(0, Math.floor(options.sourceFileDelayMs));
@@ -298,10 +312,15 @@ function obsidianEmbeddingsExist(input: {
 				.prepare(
 					`SELECT source_id FROM embeddings
 					 WHERE agent_id = ?
-					   AND source_type = ?
+					   AND source_type IN (?, ?)
 					   AND source_id IN (${chunks.map(() => "?").join(", ")})`,
 				)
-				.all(input.agentId, OBSIDIAN_CHUNK_SOURCE_TYPE, ...chunks.map((chunk) => chunk.id)) as Array<{
+				.all(
+					input.agentId,
+					SOURCE_CHUNK_SOURCE_TYPE,
+					LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
+					...chunks.map((chunk) => chunk.id),
+				) as Array<{
 				source_id: string;
 			}>;
 			return new Set(rows.map((row) => row.source_id)).size === chunks.length;
@@ -312,8 +331,7 @@ function obsidianEmbeddingsExist(input: {
 }
 
 function activeNativeArtifactPaths(source: NativeMemorySource, agentId: string): string[] {
-	const normalizedRoot = resolve(source.root).replace(/\\/g, "/").replace(/\/$/, "");
-	const rootPrefix = `${normalizedRoot}/`;
+	const rootPrefix = `${normalizedRoot(source.root)}/`;
 	try {
 		return getDbAccessor().withReadDb((db) => {
 			const rows = db
@@ -321,14 +339,17 @@ function activeNativeArtifactPaths(source: NativeMemorySource, agentId: string):
 					`SELECT source_path FROM memory_artifacts
 					 WHERE agent_id = ?
 					   AND harness = ?
-					   AND source_path >= ?
-					   AND source_path < ?
+					   AND (
+						   source_id = ?
+						   OR (source_id IS NULL AND source_path >= ? AND source_path < ?)
+					   )
 					   AND source_kind IN (${source.files.map(() => "?").join(", ")})
 					   AND COALESCE(is_deleted, 0) = 0`,
 				)
 				.all(
 					agentId,
 					source.harness,
+					source.sourceId ?? "",
 					rootPrefix,
 					prefixUpperBound(rootPrefix),
 					...source.files.map((file) => file.kind),
@@ -410,6 +431,7 @@ export async function indexNativeMemoryFile(
 	try {
 		const artifactChanged = persistedHash !== hash;
 		if (artifactChanged) {
+			const sourceExternalId = obsidian ? sourceRelativePath(source.root, filePath) : null;
 			indexExternalMemoryArtifact({
 				agentId,
 				sourcePath: filePath,
@@ -417,6 +439,16 @@ export async function indexNativeMemoryFile(
 				harness: source.harness,
 				content,
 				sourceMtimeMs: mtimeMs,
+				sourceId,
+				sourceRoot: obsidian ? normalizedRoot(source.root) : null,
+				sourceExternalId,
+				sourceParentPath: sourceExternalId ? dirname(sourceExternalId).replace(/^\.$/, "") : null,
+				sourceMeta: obsidian
+					? {
+							provider: "obsidian",
+							displayName: source.displayName,
+						}
+					: undefined,
 			});
 		}
 		let semanticIndexed = false;
@@ -498,8 +530,7 @@ export function removeNativeMemoryFile(
 }
 
 export function purgeNativeMemorySourceArtifacts(source: NativeMemorySource, agentId?: string): number {
-	const normalizedRoot = resolve(source.root).replace(/\\/g, "/").replace(/\/$/, "");
-	const rootPrefix = `${normalizedRoot}/`;
+	const rootPrefix = `${normalizedRoot(source.root)}/`;
 	for (const key of indexed.keys()) {
 		const parts = key.split(":");
 		const cachedAgentId = parts[0];
@@ -516,14 +547,23 @@ export function purgeNativeMemorySourceArtifacts(source: NativeMemorySource, age
 		const agentWhere = agentId ? "agent_id = ? AND " : "";
 		const rootUpperBound = prefixUpperBound(rootPrefix);
 		const params = agentId
-			? [agentId, source.harness, rootPrefix, rootUpperBound, ...source.files.map((file) => file.kind)]
-			: [source.harness, rootPrefix, rootUpperBound, ...source.files.map((file) => file.kind)];
+			? [
+					agentId,
+					source.harness,
+					source.sourceId ?? "",
+					rootPrefix,
+					rootUpperBound,
+					...source.files.map((file) => file.kind),
+				]
+			: [source.harness, source.sourceId ?? "", rootPrefix, rootUpperBound, ...source.files.map((file) => file.kind)];
 		const result = db
 			.prepare(
 				`DELETE FROM memory_artifacts
 				 WHERE ${agentWhere}harness = ?
-				   AND source_path >= ?
-				   AND source_path < ?
+				   AND (
+					   source_id = ?
+					   OR (source_id IS NULL AND source_path >= ? AND source_path < ?)
+				   )
 				   AND source_kind IN (${source.files.map(() => "?").join(", ")})`,
 			)
 			.run(...params);
@@ -559,6 +599,7 @@ export function startNativeMemoryBridge(
 		let count = 0;
 		const yielder = yieldEvery(options.yieldEveryFiles ?? 20);
 		for (const source of activeBridgeSources(sources, options)) {
+			if (options.shouldContinue && !options.shouldContinue(source)) continue;
 			let changedCount = 0;
 			let scanned = 0;
 			const key = sourceStateKey(source, agentId);
@@ -578,6 +619,7 @@ export function startNativeMemoryBridge(
 						? buildObsidianMarkdownPathIndex(source.root, files)
 						: undefined;
 				for (const file of files) {
+					if (options.shouldContinue && !options.shouldContinue(source)) break;
 					scanned++;
 					const changed = await indexNativeMemoryFile(source, file, agentId, {
 						...options,
@@ -606,7 +648,9 @@ export function startNativeMemoryBridge(
 				}
 			}
 			known.set(key, current);
-			if (rootExists && source.sourceId) markSourceIndexed(source.sourceId, undefined, options.agentsDir);
+			if (rootExists && source.sourceId && (!options.shouldContinue || options.shouldContinue(source))) {
+				markSourceIndexed(source.sourceId, undefined, options.agentsDir);
+			}
 		}
 		return count;
 	};

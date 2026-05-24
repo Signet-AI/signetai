@@ -80,6 +80,7 @@ import { up as epistemicAssertions } from "./071-epistemic-assertions";
 import { up as agentScopedIdempotencyKey } from "./072-agent-scoped-idempotency-key";
 import { up as recallContextDedupe } from "./073-recall-context-dedupe";
 import { up as aggregateMemoryLinks } from "./074-aggregate-memory-links";
+import { up as memoryArtifactSourceProvenance } from "./075-memory-artifact-source-provenance";
 
 // -- Public interface consumed by Database.init() --
 
@@ -700,6 +701,20 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: aggregateMemoryLinks,
 		artifacts: {
 			tables: ["aggregate_memory_sources"],
+		},
+	},
+	{
+		version: 75,
+		name: "memory-artifact-source-provenance",
+		up: memoryArtifactSourceProvenance,
+		artifacts: {
+			columns: [
+				{ table: "memory_artifacts", column: "source_id" },
+				{ table: "memory_artifacts", column: "source_root" },
+				{ table: "memory_artifacts", column: "source_external_id" },
+				{ table: "memory_artifacts", column: "source_parent_path" },
+				{ table: "memory_artifacts", column: "source_meta_json" },
+			],
 		},
 	},
 ];

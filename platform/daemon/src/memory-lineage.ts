@@ -535,6 +535,11 @@ function upsertArtifactRowInTx(
 	const rawSourceNodeId = typeof frontmatter.source_node_id === "string" ? frontmatter.source_node_id : null;
 	const sourceNodeId =
 		rawSourceNodeId === NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID && !options.trustNativeMarker ? null : rawSourceNodeId;
+	const sourceId = typeof frontmatter.source_id === "string" ? frontmatter.source_id : null;
+	const sourceRoot = typeof frontmatter.source_root === "string" ? frontmatter.source_root : null;
+	const sourceExternalId = typeof frontmatter.source_external_id === "string" ? frontmatter.source_external_id : null;
+	const sourceParentPath = typeof frontmatter.source_parent_path === "string" ? frontmatter.source_parent_path : null;
+	const sourceMetaJson = typeof frontmatter.source_meta_json === "string" ? frontmatter.source_meta_json : null;
 	const memorySentence = typeof frontmatter.memory_sentence === "string" ? frontmatter.memory_sentence : null;
 	const quality = typeof frontmatter.memory_sentence_quality === "string" ? frontmatter.memory_sentence_quality : null;
 	const sourceSha =
@@ -546,8 +551,9 @@ function upsertArtifactRowInTx(
 			session_key, session_token, project, harness, captured_at,
 			started_at, ended_at, manifest_path, source_node_id,
 			memory_sentence, memory_sentence_quality, content, updated_at,
-			source_mtime_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			source_mtime_ms, source_id, source_root, source_external_id,
+			source_parent_path, source_meta_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(agent_id, source_path) DO UPDATE SET
 			source_sha256 = excluded.source_sha256,
 			source_kind = excluded.source_kind,
@@ -566,6 +572,11 @@ function upsertArtifactRowInTx(
 			content = excluded.content,
 			updated_at = excluded.updated_at,
 			source_mtime_ms = excluded.source_mtime_ms,
+			source_id = excluded.source_id,
+			source_root = excluded.source_root,
+			source_external_id = excluded.source_external_id,
+			source_parent_path = excluded.source_parent_path,
+			source_meta_json = excluded.source_meta_json,
 			is_deleted = 0,
 			deleted_at = NULL`,
 	).run(
@@ -588,6 +599,11 @@ function upsertArtifactRowInTx(
 		body,
 		updatedAt,
 		sourceMtimeMs,
+		sourceId,
+		sourceRoot,
+		sourceExternalId,
+		sourceParentPath,
+		sourceMetaJson,
 	);
 }
 
@@ -612,6 +628,11 @@ export function indexExternalMemoryArtifact(input: {
 	readonly sourceMtimeMs: number;
 	readonly capturedAt?: string;
 	readonly project?: string | null;
+	readonly sourceId?: string | null;
+	readonly sourceRoot?: string | null;
+	readonly sourceExternalId?: string | null;
+	readonly sourceParentPath?: string | null;
+	readonly sourceMeta?: Readonly<Record<string, unknown>>;
 }): void {
 	const capturedAt =
 		input.capturedAt ??
@@ -630,6 +651,11 @@ export function indexExternalMemoryArtifact(input: {
 			started_at: capturedAt,
 			ended_at: capturedAt,
 			updated_at: new Date().toISOString(),
+			source_id: input.sourceId ?? null,
+			source_root: input.sourceRoot ?? null,
+			source_external_id: input.sourceExternalId ?? null,
+			source_parent_path: input.sourceParentPath ?? null,
+			source_meta_json: input.sourceMeta ? JSON.stringify(input.sourceMeta) : null,
 			source_node_id: NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID,
 			content_sha256: hashNormalizedBody(input.content),
 			memory_sentence: `Indexed ${input.harness} native memory from ${basename(input.sourcePath)}.`,

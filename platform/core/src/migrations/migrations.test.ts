@@ -691,6 +691,23 @@ describe("migration framework", () => {
 		expect(indexes.map((row) => row.name)).toContain("idx_memory_artifacts_agent_deleted");
 	});
 
+	test("migration 075 adds provider-neutral source provenance to memory_artifacts", () => {
+		db = createFreshDb();
+		runMigrations(db);
+
+		const cols = db.query("PRAGMA table_info(memory_artifacts)").all() as Array<{ name: string }>;
+		const colNames = cols.map((col) => col.name);
+		expect(colNames).toContain("source_id");
+		expect(colNames).toContain("source_root");
+		expect(colNames).toContain("source_external_id");
+		expect(colNames).toContain("source_parent_path");
+		expect(colNames).toContain("source_meta_json");
+
+		const indexes = db.query("PRAGMA index_list(memory_artifacts)").all() as Array<{ name: string }>;
+		expect(indexes.map((row) => row.name)).toContain("idx_memory_artifacts_agent_source");
+		expect(indexes.map((row) => row.name)).toContain("idx_memory_artifacts_agent_source_root");
+	});
+
 	test("migration 070 adds ontology control-plane status and version state safely", () => {
 		db = createFreshDb();
 		db.exec(`

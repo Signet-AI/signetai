@@ -75,6 +75,27 @@ describe("sources-config", () => {
 		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
 	});
 
+	it("round-trips provider-neutral source settings for future adapters", () => {
+		const agentsDir = tmp();
+		const source = {
+			id: "discord:test",
+			kind: "discord",
+			name: "Discord",
+			root: "discord://workspace",
+			enabled: true,
+			mode: "read-only" as const,
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			providerSettings: {
+				guildIds: ["123", "456"],
+				includeThreads: true,
+			},
+		};
+		writeFileSync(getSourcesConfigPath(agentsDir), `${JSON.stringify({ version: 1, sources: [source] })}\n`);
+
+		expect(loadSourcesConfig(agentsDir).sources).toEqual([source]);
+	});
+
 	it("removes a source by id from the config", () => {
 		const agentsDir = tmp();
 		const vault = join(agentsDir, "vault");

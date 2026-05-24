@@ -79,7 +79,7 @@ describe("Obsidian source embeddings", () => {
 					.prepare(
 						`SELECT source_type, source_id, agent_id, dimensions, chunk_text
 					 FROM embeddings
-					 WHERE source_type = 'source_obsidian_chunk'
+					 WHERE source_type = 'source_chunk'
 					 ORDER BY source_id`,
 					)
 					.all() as Array<{
@@ -144,6 +144,57 @@ describe("Obsidian source embeddings", () => {
 		expect(fetches).toBe(first.chunks);
 	});
 
+	it("removes legacy Obsidian chunk rows once generic chunks are refreshed", async () => {
+		const filePath = join(vault, "literature", "source-memory.md");
+		const content =
+			"# Source Memory\n\nThis section explains that Obsidian vault files remain canonical source truth while Signet indexes addressable chunks for retrieval.\n";
+
+		await indexObsidianSourceEmbeddings({
+			agentId: "obsidian-embedding-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath,
+			content,
+			embeddingConfig,
+			fetchEmbedding: async () => testVector(1),
+		});
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, 'source_obsidian_chunk', ?, ?, ?, ?)`,
+			).run(
+				"legacy-source-chunk",
+				"legacy-source-chunk-hash",
+				Buffer.from(new Float32Array(testVector(1)).buffer),
+				embeddingConfig.dimensions,
+				"obsidian:test-vault:literature/source-memory.md#source-memory:1-2:legacy",
+				"source_path: legacy",
+				new Date().toISOString(),
+				"obsidian-embedding-agent",
+			);
+		});
+
+		await indexObsidianSourceEmbeddings({
+			agentId: "obsidian-embedding-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath,
+			content,
+			embeddingConfig,
+			fetchEmbedding: async () => testVector(1),
+		});
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT source_type FROM embeddings ORDER BY source_type")
+					.all() as Array<{ source_type: string }>,
+		);
+		expect(rows.map((row) => row.source_type)).toEqual(["source_chunk"]);
+	});
+
 	it("keeps chunk IDs distinct for repeated heading paths", () => {
 		const filePath = join(vault, "literature", "repeated-headings.md");
 		const chunks = buildObsidianSourceChunks({
@@ -193,7 +244,7 @@ describe("Obsidian source embeddings", () => {
 		const remaining = getDbAccessor().withReadDb(
 			(db) =>
 				db
-					.prepare("SELECT source_id FROM embeddings WHERE source_type = 'source_obsidian_chunk' ORDER BY source_id")
+					.prepare("SELECT source_id FROM embeddings WHERE source_type = 'source_chunk' ORDER BY source_id")
 					.all() as Array<{ source_id: string }>,
 		);
 		expect(remaining).toHaveLength(1);
@@ -218,7 +269,7 @@ describe("Obsidian source embeddings", () => {
 		const remaining = getDbAccessor().withReadDb(
 			(db) =>
 				(
-					db.prepare("SELECT COUNT(*) AS count FROM embeddings WHERE source_type = 'source_obsidian_chunk'").get() as {
+					db.prepare("SELECT COUNT(*) AS count FROM embeddings WHERE source_type = 'source_chunk'").get() as {
 						count: number;
 					}
 				).count,
@@ -276,11 +327,11 @@ describe("Obsidian source embeddings", () => {
 			async () => testVector(1),
 		);
 
-		const hit = response.results.find((row) => row.type === "source_obsidian_chunk");
+		const hit = response.results.find((row) => row.type === "source_chunk");
 		expect(hit).toBeTruthy();
 		expect(hit?.source).toBe("source_obsidian");
 		expect(hit?.source_path).toBe(filePath);
-		expect(hit?.content).toContain("[Obsidian vault chunk:");
+		expect(hit?.content).toContain("[Source chunk:");
 		expect(hit?.content).toContain("heading: Retrieval Covenant");
 	});
 
@@ -323,7 +374,7 @@ describe("Obsidian source embeddings", () => {
 			cfg,
 			async () => testVector(1),
 		);
-		const hit = agentARecall.results.find((row) => row.type === "source_obsidian_chunk");
+		const hit = agentARecall.results.find((row) => row.type === "source_chunk");
 		expect(hit).toBeTruthy();
 		expect(hit?.content).not.toContain("agent-b");
 
@@ -334,7 +385,7 @@ describe("Obsidian source embeddings", () => {
 				db
 					.prepare(
 						`SELECT agent_id, COUNT(*) AS count FROM embeddings
-						 WHERE source_type = 'source_obsidian_chunk'
+						 WHERE source_type = 'source_chunk'
 						 GROUP BY agent_id ORDER BY agent_id`,
 					)
 					.all() as Array<{ agent_id: string; count: number }>,
