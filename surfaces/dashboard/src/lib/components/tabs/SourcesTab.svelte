@@ -5,7 +5,9 @@ import {
 	addDiscordSource,
 	addGitHubSource,
 	addObsidianSource,
+	getSourceSnapshot,
 	getSources,
+	importSourceSnapshot,
 	pickSourceDirectory,
 	removeSource,
 } from "$lib/api";
@@ -14,6 +16,7 @@ import Check from "@lucide/svelte/icons/check";
 import CheckCircle2 from "@lucide/svelte/icons/check-circle-2";
 import CirclePlus from "@lucide/svelte/icons/circle-plus";
 import Database from "@lucide/svelte/icons/database";
+import Download from "@lucide/svelte/icons/download";
 import Folder from "@lucide/svelte/icons/folder";
 import FolderOpen from "@lucide/svelte/icons/folder-open";
 import Info from "@lucide/svelte/icons/info";
@@ -21,6 +24,7 @@ import Link2 from "@lucide/svelte/icons/link-2";
 import Plus from "@lucide/svelte/icons/plus";
 import RefreshCw from "@lucide/svelte/icons/refresh-cw";
 import Search from "@lucide/svelte/icons/search";
+import Upload from "@lucide/svelte/icons/upload";
 import X from "@lucide/svelte/icons/x";
 import { onDestroy, onMount } from "svelte";
 
@@ -98,6 +102,8 @@ let sources = $state<SignetSourceEntry[]>([]);
 let loading = $state(true);
 let adding = $state(false);
 let removingSourceId = $state<string | null>(null);
+let snapshotBusySourceId = $state<string | null>(null);
+let snapshotIncludeLocalDiscordIds = $state<Set<string>>(new Set());
 let pickingFolder = $state(false);
 // biome-ignore lint/style/useConst: Svelte bind:value mutates this rune from markup.
 let searchTerm = $state("");
@@ -766,6 +772,88 @@ async function disconnectSource(source: SignetSourceEntry): Promise<void> {
 	}
 }
 
+function snapshotIncludesLocalDiscord(sourceId: string): boolean {
+	return snapshotIncludeLocalDiscordIds.has(sourceId);
+}
+
+function setSnapshotIncludesLocalDiscord(sourceId: string, checked: boolean): void {
+	const next = new Set(snapshotIncludeLocalDiscordIds);
+	if (checked) next.add(sourceId);
+	else next.delete(sourceId);
+	snapshotIncludeLocalDiscordIds = next;
+}
+
+function snapshotFilename(source: SignetSourceEntry): string {
+	const safeName = source.name
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return `${safeName || source.kind}-source-snapshot.json`;
+}
+
+async function exportSnapshot(source: SignetSourceEntry): Promise<void> {
+	snapshotBusySourceId = source.id;
+	status = null;
+	error = null;
+	try {
+		const result = await getSourceSnapshot(source.id, snapshotIncludesLocalDiscord(source.id));
+		if (result.error) {
+			error = result.error;
+			return;
+		}
+		const blob = new Blob([JSON.stringify(result.snapshot, null, 2)], { type: "application/json" });
+		const href = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = href;
+		link.download = snapshotFilename(source);
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		URL.revokeObjectURL(href);
+		status = `Exported ${source.name} snapshot.`;
+	} finally {
+		snapshotBusySourceId = null;
+	}
+}
+
+async function importSnapshotFile(source: SignetSourceEntry, event: Event): Promise<void> {
+	const input = event.currentTarget as HTMLInputElement;
+	const file = input.files?.[0];
+	if (!file) return;
+	const confirmed = window.confirm(
+		`Import snapshot into ${source.name}?\n\nThis replaces Signet's indexed rows for this source. The original ${source.kind === "discord" ? "Discord data" : source.kind === "github" ? "GitHub data" : "source files"} will not be touched.`,
+	);
+	if (!confirmed) {
+		input.value = "";
+		return;
+	}
+	snapshotBusySourceId = source.id;
+	status = null;
+	error = null;
+	try {
+		const snapshot = JSON.parse(await file.text()) as unknown;
+		const result = await importSourceSnapshot(source.id, snapshot, snapshotIncludesLocalDiscord(source.id));
+		if (result.error) {
+			error = result.error;
+			return;
+		}
+		const skipped = result.skipped?.localDiscordArtifacts ?? 0;
+		status = `Imported ${result.imported ?? 0} ${source.name} snapshot artifacts${skipped > 0 ? `; skipped ${skipped} local Discord cache artifacts` : ""}.`;
+		await refreshSources();
+	} catch (err) {
+		error =
+			err instanceof SyntaxError
+				? "Snapshot file is not valid JSON."
+				: err instanceof Error
+					? err.message
+					: String(err);
+	} finally {
+		input.value = "";
+		snapshotBusySourceId = null;
+	}
+}
+
 function formatDate(value: string | undefined): string {
 	if (!value) return "Not completed yet";
 	const date = new Date(value);
@@ -1129,41 +1217,76 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 													</div>
 													<code>{source.root}</code>
 												</div>
-													<ul>
-														<li><CheckCircle2 /> {source.enabled ? "Enabled" : "Disabled"}</li>
-														<li><Database /> {sourceScanLabel(source)}</li>
-														<li class={`source-health source-health--${sourceHealthTone(source)}`}>
-															<Info /> {sourceHealthLabel(source)}
-														</li>
-														<li><Database /> Last complete scan: {formatDate(source.lastIndexedAt)}</li>
-													</ul>
-													{#if source.indexJob?.status === "queued" || source.indexJob?.status === "running"}
-														<div class="source-index-progress">
-															<div class="source-index-progress__head">
-																<span>{source.indexJob.status === "queued" ? "Queued" : "Indexing"}</span>
-																<strong>{sourceIndexPercent(source)}%</strong>
-															</div>
-															<div
-																class="source-index-progress__bar"
-																role="progressbar"
-																aria-valuemin="0"
-																aria-valuemax="100"
-																aria-valuenow={sourceIndexPercent(source)}
-																aria-label={`Indexing ${source.name}`}
-															>
-																<span style={`width: ${sourceIndexPercent(source)}%`}></span>
-															</div>
-															{#if sourceIndexCurrentPath(source)}
-																<code class="source-index-progress__path">{sourceIndexCurrentPath(source)}</code>
-															{/if}
+												<ul>
+													<li><CheckCircle2 /> {source.enabled ? "Enabled" : "Disabled"}</li>
+													<li><Database /> {sourceScanLabel(source)}</li>
+													<li class={`source-health source-health--${sourceHealthTone(source)}`}>
+														<Info /> {sourceHealthLabel(source)}
+													</li>
+													<li><Database /> Last complete scan: {formatDate(source.lastIndexedAt)}</li>
+												</ul>
+												{#if source.indexJob?.status === "queued" || source.indexJob?.status === "running"}
+													<div class="source-index-progress">
+														<div class="source-index-progress__head">
+															<span>{source.indexJob.status === "queued" ? "Queued" : "Indexing"}</span>
+															<strong>{sourceIndexPercent(source)}%</strong>
 														</div>
-													{/if}
-													{#if source.excludeGlobs?.length}
-														<div class="exclude-summary">
+														<div
+															class="source-index-progress__bar"
+															role="progressbar"
+															aria-valuemin="0"
+															aria-valuemax="100"
+															aria-valuenow={sourceIndexPercent(source)}
+															aria-label={`Indexing ${source.name}`}
+														>
+															<span style={`width: ${sourceIndexPercent(source)}%`}></span>
+														</div>
+														{#if sourceIndexCurrentPath(source)}
+															<code class="source-index-progress__path">{sourceIndexCurrentPath(source)}</code>
+														{/if}
+													</div>
+												{/if}
+												{#if source.excludeGlobs?.length}
+													<div class="exclude-summary">
 														<span>Ignoring</span>
 														<code>{source.excludeGlobs.join(", ")}</code>
 													</div>
 												{/if}
+												<div class="source-ops">
+													<div class="source-ops__buttons">
+														<button
+															class="source-action-button"
+															type="button"
+															disabled={snapshotBusySourceId === source.id}
+															onclick={() => void exportSnapshot(source)}
+														>
+															{#if snapshotBusySourceId === source.id}<span class="spin"><RefreshCw /></span>{:else}<Download />{/if}
+															Export snapshot
+														</button>
+														<label class="source-action-button" class:source-action-button--disabled={snapshotBusySourceId === source.id}>
+															{#if snapshotBusySourceId === source.id}<span class="spin"><RefreshCw /></span>{:else}<Upload />{/if}
+															Import snapshot
+															<input
+																class="snapshot-file-input"
+																type="file"
+																accept="application/json,.json"
+																disabled={snapshotBusySourceId === source.id}
+																onchange={(event) => void importSnapshotFile(source, event)}
+															/>
+														</label>
+													</div>
+													{#if source.kind === "discord"}
+														<label class="source-option-row source-option-row--compact">
+															<input
+																checked={snapshotIncludesLocalDiscord(source.id)}
+																type="checkbox"
+																onchange={(event) =>
+																	setSnapshotIncludesLocalDiscord(source.id, event.currentTarget.checked)}
+															/>
+															<span>Include local Discord cache</span>
+														</label>
+													{/if}
+												</div>
 												<button
 													class="disconnect-button"
 													type="button"
@@ -2549,6 +2672,69 @@ function sourceIndexCurrentPath(source: SignetSourceEntry): string {
 	.exclude-summary code {
 		white-space: normal;
 		word-break: break-word;
+	}
+
+	.source-ops {
+		display: grid;
+		gap: 8px;
+		border: 1px solid var(--sig-border);
+		padding: 8px;
+		background: rgba(255, 255, 255, 0.02);
+	}
+
+	.source-ops__buttons {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+
+	.source-action-button {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		min-height: 28px;
+		border: 1px solid var(--sig-border-strong);
+		border-radius: 0;
+		padding: 0 10px;
+		background: var(--sig-surface);
+		color: var(--sig-text);
+		font: 10px var(--font-mono);
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		cursor: pointer;
+		transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease), color var(--dur) var(--ease);
+	}
+
+	.source-action-button:hover:not(:disabled):not(.source-action-button--disabled) {
+		border-color: var(--sig-accent);
+		background: rgba(255, 255, 255, 0.04);
+		color: var(--sig-text-bright);
+	}
+
+	.source-action-button:disabled,
+	.source-action-button--disabled {
+		cursor: wait;
+		opacity: 0.6;
+	}
+
+	.source-action-button :global(svg) {
+		width: 13px;
+		height: 13px;
+	}
+
+	.snapshot-file-input {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	.source-option-row--compact {
+		font-size: 10px;
+		color: var(--sig-text-muted);
 	}
 
 	.disconnect-button {

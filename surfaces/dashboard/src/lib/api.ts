@@ -184,6 +184,19 @@ export interface PickDirectoryResponse {
 	error?: string;
 }
 
+export interface SourceSnapshotFetchResult {
+	snapshot?: unknown;
+	error?: string;
+}
+
+export interface SourceSnapshotImportResult {
+	imported?: number;
+	skipped?: {
+		localDiscordArtifacts?: number;
+	};
+	error?: string;
+}
+
 export interface Identity {
 	name: string;
 	creature: string;
@@ -1315,6 +1328,48 @@ export async function removeSource(sourceId: string): Promise<RemoveSourceRespon
 			method: "DELETE",
 		});
 		const body = (await response.json().catch(() => null)) as RemoveSourceResponse | null;
+		if (!response.ok) return { error: body?.error ?? `Request failed with ${response.status}` };
+		return body ?? {};
+	} catch (err) {
+		return { error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+export async function getSourceSnapshot(
+	sourceId: string,
+	includeLocalDiscord = false,
+): Promise<SourceSnapshotFetchResult> {
+	try {
+		const query = includeLocalDiscord ? "?includeLocalDiscord=true" : "";
+		const response = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(sourceId)}/snapshot${query}`);
+		const body = (await response.json().catch(() => null)) as unknown;
+		if (!response.ok) {
+			return {
+				error:
+					body && typeof body === "object" && "error" in body && typeof body.error === "string"
+						? body.error
+						: `Request failed with ${response.status}`,
+			};
+		}
+		return { snapshot: body };
+	} catch (err) {
+		return { error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+export async function importSourceSnapshot(
+	sourceId: string,
+	snapshot: unknown,
+	includeLocalDiscord = false,
+): Promise<SourceSnapshotImportResult> {
+	try {
+		const query = includeLocalDiscord ? "?includeLocalDiscord=true" : "";
+		const response = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(sourceId)}/snapshot/import${query}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(snapshot),
+		});
+		const body = (await response.json().catch(() => null)) as SourceSnapshotImportResult | null;
 		if (!response.ok) return { error: body?.error ?? `Request failed with ${response.status}` };
 		return body ?? {};
 	} catch (err) {
