@@ -46,6 +46,20 @@ class NativePluginFailingTempConnector extends TempConnector {
 	}
 }
 
+class NativePluginConfigParsingTempConnector extends TempConnector {
+	protected override supportsNativePluginInstall(): boolean {
+		return true;
+	}
+	protected override installNativePlugin(codexHome: string): { success: boolean; filesWritten: readonly string[]; warning?: string } {
+		if (readFileSync(this.getConfigPath(), "utf-8").includes("[mcp_servers.signet]")) {
+			return { success: false, filesWritten: [], warning: "codex refused stale mcp_servers.signet" };
+		}
+		const installedRoot = join(codexHome, "plugins", "cache", "signet-local", "signet", "0.1.0");
+		mkdirSync(installedRoot, { recursive: true });
+		return { success: true, filesWritten: [installedRoot] };
+	}
+}
+
 let tempHome: string;
 let codexDir: string;
 let configPath: string;
@@ -97,6 +111,10 @@ function nativePluginConnector(): TempConnector {
 
 function failingNativePluginConnector(): TempConnector {
 	return new NativePluginFailingTempConnector(tempHome);
+}
+
+function configParsingNativePluginConnector(): TempConnector {
+	return new NativePluginConfigParsingTempConnector(tempHome);
 }
 
 describe("CodexConnector.install — legacy SIGNET block migration", () => {
@@ -343,7 +361,8 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		expect(config).toContain("[marketplaces.signet-local]");
 		expect(config).toContain("[plugins.\"signet@signet-local\"]");
 		expect(config).toContain("enabled = true");
-		expect(config).not.toContain("[mcp_servers.signet]");
+		expect(config).toContain("[mcp_servers.signet]");
+		expect(config).toContain("command = 'signet-mcp'");
 		expect(config).toContain("[hooks.state.");
 
 		const plugin = JSON.parse(readFileSync(pluginManifestPath, "utf-8")) as {
@@ -364,6 +383,31 @@ describe("CodexConnector.install — native plugin bundle", () => {
 		expect(readFileSync(configPath, "utf-8")).toBe(firstConfig);
 		expect(firstConfig.match(/\[plugins\."signet@signet-local"\]/g)).toHaveLength(1);
 		expect(firstConfig.match(/\[marketplaces\.signet-local\]/g)).toHaveLength(1);
+	});
+
+	test("removes stale compatibility MCP before native plugin add reads Codex config", async () => {
+		writeFileSync(
+			configPath,
+			[
+				"[model]",
+				'name = "gpt-5.4-mini"',
+				"",
+				"[mcp_servers.signet]",
+				"transport = 'sse'",
+				"command = 'signet-mcp'",
+				"",
+			].join("\n"),
+		);
+
+		const result = await configParsingNativePluginConnector().install(tempHome);
+
+		const config = readFileSync(configPath, "utf-8");
+		expect(result.message).toBe("Codex integration installed — native plugin bundle + Signet lifecycle hooks");
+		expect(result.warnings).not.toContain("codex refused stale mcp_servers.signet");
+		expect(config).toContain("[plugins.\"signet@signet-local\"]");
+		expect(config).toContain("[mcp_servers.signet]");
+		expect(config).toContain("command = 'signet-mcp'");
+		expect(config).not.toContain("transport = 'sse'");
 	});
 
 	test("falls back to compatibility hooks and MCP when native plugin add fails", async () => {
