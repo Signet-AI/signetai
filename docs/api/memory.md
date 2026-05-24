@@ -518,7 +518,7 @@ Hybrid recall combining FTS5, prospective hints, vector similarity,
 structured path evidence, graph traversal, and optional reranking. The daemon
 authorizes candidate IDs before any content-bearing rerank, summary,
 dampening, expansion, or access-tracking stage runs. Requires `recall`
-permission. For the full execution model, see [Hybrid Recall](./MEMORY.md#hybrid-recall).
+permission. For the full execution model, see [Hybrid Recall](../MEMORY.md#hybrid-recall).
 
 **Request body**
 
