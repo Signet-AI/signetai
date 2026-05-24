@@ -238,7 +238,7 @@ function upsertDependency(
 	return true;
 }
 
-function purgeSourceArtifactStructureInTx(
+export function purgeSourceArtifactStructureInTx(
 	db: WriteDb,
 	input: PurgeSourceArtifactStructureInput,
 ): PurgeSourceArtifactStructureResult {
@@ -295,100 +295,107 @@ export function indexSourceArtifactStructure(
 	input: IndexSourceArtifactStructureInput,
 ): IndexSourceArtifactStructureResult {
 	const now = new Date().toISOString();
-	return getDbAccessor().withWriteTx((db) => {
-		purgeSourceArtifactStructureInTx(db, input);
+	return getDbAccessor().withWriteTx((db) => indexSourceArtifactStructureInTx(db, input, now));
+}
 
-		let entitiesTouched = 0;
-		let dependenciesTouched = 0;
-		let aspectsTouched = 0;
-		let attributesTouched = 0;
+export function indexSourceArtifactStructureInTx(
+	db: WriteDb,
+	input: IndexSourceArtifactStructureInput,
+	now = new Date().toISOString(),
+): IndexSourceArtifactStructureResult {
+	purgeSourceArtifactStructureInTx(db, input);
 
-		const source = upsertSourceEntity(db, {
-			id: idFor(input.agentId, input.sourceId, "source", input.sourceRoot),
-			name: displayNameFromPath(input.sourceRoot),
-			canonicalName: sourceCanonical(input.sourceId, "source", "/"),
-			entityType: "source",
+	let entitiesTouched = 0;
+	let dependenciesTouched = 0;
+	let aspectsTouched = 0;
+	let attributesTouched = 0;
+
+	const source = upsertSourceEntity(db, {
+		id: idFor(input.agentId, input.sourceId, "source", input.sourceRoot),
+		name: displayNameFromPath(input.sourceRoot),
+		canonicalName: sourceCanonical(input.sourceId, "source", "/"),
+		entityType: "source",
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourceKind: input.sourceKind,
+		sourceRoot: input.sourceRoot,
+		sourcePath: input.sourceRoot,
+		now,
+	});
+	entitiesTouched++;
+
+	let parentEntityId = source.id;
+	if (input.sourceParentPath?.trim()) {
+		const parentPath = input.sourceParentPath.trim();
+		const parent = upsertSourceEntity(db, {
+			id: idFor(input.agentId, input.sourceId, "reference", parentPath),
+			name: displayNameFromPath(parentPath),
+			canonicalName: sourceCanonical(input.sourceId, "reference", parentPath),
+			entityType: "source_document_reference",
 			agentId: input.agentId,
 			sourceId: input.sourceId,
 			sourceKind: input.sourceKind,
 			sourceRoot: input.sourceRoot,
-			sourcePath: input.sourceRoot,
+			sourcePath: parentPath,
 			now,
 		});
 		entitiesTouched++;
+		parentEntityId = parent.id;
+	}
 
-		let parentEntityId = source.id;
-		if (input.sourceParentPath?.trim()) {
-			const parentPath = input.sourceParentPath.trim();
-			const parent = upsertSourceEntity(db, {
-				id: idFor(input.agentId, input.sourceId, "reference", parentPath),
-				name: displayNameFromPath(parentPath),
-				canonicalName: sourceCanonical(input.sourceId, "reference", parentPath),
-				entityType: "source_document_reference",
-				agentId: input.agentId,
-				sourceId: input.sourceId,
-				sourceKind: input.sourceKind,
-				sourceRoot: input.sourceRoot,
-				sourcePath: parentPath,
-				now,
-			});
-			entitiesTouched++;
-			parentEntityId = parent.id;
-		}
+	const doc = upsertSourceEntity(db, {
+		id: idFor(input.agentId, input.sourceId, "document", input.sourcePath),
+		name: displayNameFor(input),
+		canonicalName: sourceCanonical(input.sourceId, "document", input.sourcePath),
+		entityType: "source_document",
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourceKind: input.sourceKind,
+		sourceRoot: input.sourceRoot,
+		sourcePath: input.sourcePath,
+		now,
+	});
+	entitiesTouched++;
 
-		const doc = upsertSourceEntity(db, {
-			id: idFor(input.agentId, input.sourceId, "document", input.sourcePath),
-			name: displayNameFor(input),
-			canonicalName: sourceCanonical(input.sourceId, "document", input.sourcePath),
-			entityType: "source_document",
+	if (
+		upsertDependency(db, {
+			sourceEntityId: parentEntityId,
+			targetEntityId: doc.id,
 			agentId: input.agentId,
 			sourceId: input.sourceId,
 			sourceKind: input.sourceKind,
 			sourceRoot: input.sourceRoot,
 			sourcePath: input.sourcePath,
+			reason: `Source artifact ${input.sourcePath} belongs to ${input.sourceParentPath ?? input.sourceRoot}`,
 			now,
-		});
-		entitiesTouched++;
+		})
+	) {
+		dependenciesTouched++;
+	}
 
-		if (
-			upsertDependency(db, {
-				sourceEntityId: parentEntityId,
-				targetEntityId: doc.id,
-				agentId: input.agentId,
-				sourceId: input.sourceId,
-				sourceKind: input.sourceKind,
-				sourceRoot: input.sourceRoot,
-				sourcePath: input.sourcePath,
-				reason: `Source artifact ${input.sourcePath} belongs to ${input.sourceParentPath ?? input.sourceRoot}`,
-				now,
-			})
-		) {
-			dependenciesTouched++;
-		}
-
-		for (const section of parseSections(input.content)) {
-			const aspectId = idFor(input.agentId, input.sourceId, "aspect", input.sourcePath, section.heading);
-			const aspectCanon = slug(section.heading);
-			db.prepare(
-				`INSERT INTO entity_aspects
+	for (const section of parseSections(input.content)) {
+		const aspectId = idFor(input.agentId, input.sourceId, "aspect", input.sourcePath, section.heading);
+		const aspectCanon = slug(section.heading);
+		db.prepare(
+			`INSERT INTO entity_aspects
 				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(entity_id, canonical_name) DO UPDATE SET updated_at = excluded.updated_at, name = excluded.name`,
-			).run(aspectId, doc.id, input.agentId, section.heading, aspectCanon, section.level === 1 ? 0.9 : 0.7, now, now);
-			aspectsTouched++;
+		).run(aspectId, doc.id, input.agentId, section.heading, aspectCanon, section.level === 1 ? 0.9 : 0.7, now, now);
+		aspectsTouched++;
 
-			let claimIndex = 0;
-			for (const claim of bodyClaims(section.body)) {
-				const attrId = idFor(
-					input.agentId,
-					input.sourceId,
-					"attribute",
-					input.sourcePath,
-					section.heading,
-					claimIndex.toString(),
-				);
-				db.prepare(
-					`INSERT INTO entity_attributes
+		let claimIndex = 0;
+		for (const claim of bodyClaims(section.body)) {
+			const attrId = idFor(
+				input.agentId,
+				input.sourceId,
+				"attribute",
+				input.sourcePath,
+				section.heading,
+				claimIndex.toString(),
+			);
+			db.prepare(
+				`INSERT INTO entity_attributes
 					 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, group_key, claim_key,
 					  confidence, importance, status, created_at, updated_at, source_id, source_kind, source_path, source_root)
 					 VALUES (?, ?, ?, NULL, 'claim', ?, ?, ?, ?, 0.8, 0.5, 'active', ?, ?, ?, ?, ?, ?)
@@ -400,32 +407,31 @@ export function indexSourceArtifactStructure(
 					   source_kind = excluded.source_kind,
 					   source_path = excluded.source_path,
 					   source_root = excluded.source_root`,
-				).run(
-					attrId,
-					aspectId,
-					input.agentId,
-					claim,
-					claim.toLowerCase(),
-					slug(input.sourceKind),
-					`${aspectCanon}_${claimIndex}`,
-					now,
-					now,
-					input.sourceId,
-					input.sourceKind,
-					input.sourcePath,
-					input.sourceRoot,
-				);
-				attributesTouched++;
-				claimIndex++;
-			}
+			).run(
+				attrId,
+				aspectId,
+				input.agentId,
+				claim,
+				claim.toLowerCase(),
+				slug(input.sourceKind),
+				`${aspectCanon}_${claimIndex}`,
+				now,
+				now,
+				input.sourceId,
+				input.sourceKind,
+				input.sourcePath,
+				input.sourceRoot,
+			);
+			attributesTouched++;
+			claimIndex++;
 		}
+	}
 
-		return {
-			documentEntityId: doc.id,
-			entitiesTouched,
-			dependenciesTouched,
-			aspectsTouched,
-			attributesTouched,
-		};
-	});
+	return {
+		documentEntityId: doc.id,
+		entitiesTouched,
+		dependenciesTouched,
+		aspectsTouched,
+		attributesTouched,
+	};
 }

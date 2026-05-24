@@ -4,6 +4,7 @@ import { getDbAccessor } from "./db-accessor";
 import type { WriteDb } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds } from "./db-helpers";
 import { hashNormalizedBody } from "./memory-lineage";
+import { indexSourceArtifactStructureInTx } from "./source-artifact-graph";
 
 export const SOURCE_SNAPSHOT_VERSION = 1;
 
@@ -176,6 +177,7 @@ export function importSourceSnapshot(options: ImportSourceSnapshotOptions): Impo
 			const writeDb = db as WriteDb as Database;
 			const conflict = findPathOwnershipConflict(writeDb, artifacts, options.agentId, options.source.id);
 			if (conflict) throw new Error(conflict);
+			purgeImportScopeGraph(writeDb, options.source.id, options.agentId, options.source.root, includeLocalDiscord);
 			deleteImportScope(writeDb, options.source.id, options.agentId, includeLocalDiscord);
 			purgeImportScopeChunks(writeDb, options.source.id, options.agentId, includeLocalDiscord);
 			const stmt = writeDb.prepare(
@@ -241,6 +243,22 @@ export function importSourceSnapshot(options: ImportSourceSnapshotOptions): Impo
 					artifact.sourceParentPath,
 					artifact.sourceMetaJson,
 				);
+				if (indexesSnapshotArtifactGraph(artifact)) {
+					indexSourceArtifactStructureInTx(
+						db as WriteDb,
+						{
+							agentId: options.agentId,
+							sourceId: artifact.sourceId,
+							sourceKind: artifact.sourceKind,
+							sourceRoot: artifact.sourceRoot ?? options.source.root,
+							sourceParentPath: artifact.sourceParentPath ?? undefined,
+							sourcePath: artifact.sourcePath,
+							displayName: sourceArtifactDisplayName(artifact),
+							content: artifact.content,
+						},
+						artifact.updatedAt,
+					);
+				}
 			}
 		});
 	} catch (err) {
@@ -306,6 +324,106 @@ function purgeImportScopeChunks(db: Database, sourceId: string, agentId: string,
 	syncVecDeleteByEmbeddingIds(db as WriteDb, ids);
 	const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
 	for (const id of ids) stmt.run(id);
+}
+
+function purgeImportScopeGraph(
+	db: Database,
+	sourceId: string,
+	agentId: string,
+	sourceRoot: string,
+	includeLocalDiscord: boolean,
+): void {
+	const entityRows = db
+		.prepare(
+			`SELECT id, source_path
+			   FROM entities
+			  WHERE agent_id = ?
+			    AND source_id = ?`,
+		)
+		.all(agentId, sourceId) as Array<{ id: string; source_path: string | null }>;
+	const entityIds = entityRows
+		.filter((row) => shouldPurgeImportedSourcePath(row.source_path, sourceRoot, includeLocalDiscord))
+		.map((row) => row.id);
+
+	const attrRows = db
+		.prepare(
+			`SELECT id, source_path
+			   FROM entity_attributes
+			  WHERE agent_id = ?
+			    AND source_id = ?`,
+		)
+		.all(agentId, sourceId) as Array<{ id: string; source_path: string | null }>;
+	const depRows = db
+		.prepare(
+			`SELECT id, source_path
+			   FROM entity_dependencies
+			  WHERE agent_id = ?
+			    AND source_id = ?`,
+		)
+		.all(agentId, sourceId) as Array<{ id: string; source_path: string | null }>;
+	const communityRows = db
+		.prepare(
+			`SELECT id, source_path
+			   FROM entity_communities
+			  WHERE agent_id = ?
+			    AND source_id = ?`,
+		)
+		.all(agentId, sourceId) as Array<{ id: string; source_path: string | null }>;
+
+	const deleteAspect = db.prepare("DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?");
+	for (const entityId of entityIds) deleteAspect.run(agentId, entityId);
+
+	const deleteAttr = db.prepare("DELETE FROM entity_attributes WHERE agent_id = ? AND id = ?");
+	for (const row of attrRows) {
+		if (shouldPurgeImportedSourcePath(row.source_path, sourceRoot, includeLocalDiscord))
+			deleteAttr.run(agentId, row.id);
+	}
+
+	const deleteDep = db.prepare("DELETE FROM entity_dependencies WHERE agent_id = ? AND id = ?");
+	for (const row of depRows) {
+		if (shouldPurgeImportedSourcePath(row.source_path, sourceRoot, includeLocalDiscord)) deleteDep.run(agentId, row.id);
+	}
+
+	const deleteCommunity = db.prepare("DELETE FROM entity_communities WHERE agent_id = ? AND id = ?");
+	for (const row of communityRows) {
+		if (shouldPurgeImportedSourcePath(row.source_path, sourceRoot, includeLocalDiscord)) {
+			deleteCommunity.run(agentId, row.id);
+		}
+	}
+
+	const deleteEntity = db.prepare("DELETE FROM entities WHERE agent_id = ? AND id = ?");
+	for (const entityId of entityIds) deleteEntity.run(agentId, entityId);
+}
+
+function shouldPurgeImportedSourcePath(
+	sourcePath: string | null,
+	sourceRoot: string,
+	includeLocalDiscord: boolean,
+): boolean {
+	if (includeLocalDiscord) return true;
+	if (sourcePath === sourceRoot) return false;
+	return !isLocalDiscordArtifact({ sourcePath: sourcePath ?? "", sourceMetaJson: null });
+}
+
+function indexesSnapshotArtifactGraph(artifact: SourceSnapshotArtifact): boolean {
+	return !["source_discord_checkpoint", "source_discord_failure", "source_github_failure"].includes(
+		artifact.sourceKind,
+	);
+}
+
+function sourceArtifactDisplayName(artifact: SourceSnapshotArtifact): string | undefined {
+	if (!artifact.sourceMetaJson) return undefined;
+	try {
+		const parsed = JSON.parse(artifact.sourceMetaJson) as unknown;
+		if (!isRecord(parsed)) return undefined;
+		for (const key of ["name", "username", "filename", "title"] as const) {
+			const value = parsed[key];
+			if (typeof value === "string" && value.trim().length > 0) return value.trim();
+		}
+	} catch {
+		return undefined;
+	}
+	return undefined;
 }
 
 function artifactFromRow(row: ArtifactRow): SourceSnapshotArtifact {

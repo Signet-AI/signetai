@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { hashNormalizedBody } from "../memory-lineage";
 import type { NativeMemoryBridgeHandle, NativeMemoryBridgeOptions, NativeMemorySource } from "../native-memory-sources";
+import { indexSourceArtifactStructure } from "../source-artifact-graph";
 import {
 	beginSourceIndexJob,
 	clearSourceIndexProgressForTests,
@@ -582,14 +583,24 @@ describe("Sources routes", () => {
 			sourceRoot: added.source.root,
 			sourcePath: "discord://guild/123/channel/456/message/stale",
 			sourceKind: "source_discord_message",
-			content: "stale message",
+			content: "# Stale Message\n\nThis stale graph claim should disappear after snapshot import.",
 			metaJson: JSON.stringify({ guildId: "123", channelId: "456" }),
+		});
+		indexSourceArtifactStructure({
+			agentId: "default",
+			sourceId: added.source.id,
+			sourceKind: "source_discord_message",
+			sourceRoot: added.source.root,
+			sourcePath: "discord://guild/123/channel/456/message/stale",
+			content: "# Stale Message\n\nThis stale graph claim should disappear after snapshot import.",
 		});
 		insertSourceChunk({
 			id: "snapshot-stale-discord-chunk",
 			sourceId: `${added.source.id}:guild/123/channel/456/message/stale#0`,
 			chunkText: "source_path: discord://guild/123/channel/456/message/stale\n\nstale chunk",
 		});
+		const freshContent =
+			"# Fresh Imported Message\n\nFresh imported Discord message should be restored into source graph structure.";
 		const snapshot = {
 			version: 1,
 			exportedAt: "2026-05-24T00:00:00.000Z",
@@ -601,7 +612,7 @@ describe("Sources routes", () => {
 					sourceRoot: added.source.root,
 					sourcePath: "discord://guild/123/channel/456/message/fresh",
 					sourceKind: "source_discord_message",
-					content: "fresh imported message",
+					content: freshContent,
 					metaJson: JSON.stringify({ guildId: "123", channelId: "456" }),
 				}),
 			],
@@ -622,10 +633,34 @@ describe("Sources routes", () => {
 					.prepare("SELECT source_path, content FROM memory_artifacts WHERE source_id = ? ORDER BY source_path")
 					.all(added.source.id) as Array<{ source_path: string; content: string }>,
 		);
-		expect(rows).toEqual([
-			{ source_path: "discord://guild/123/channel/456/message/fresh", content: "fresh imported message" },
-		]);
+		expect(rows).toEqual([{ source_path: "discord://guild/123/channel/456/message/fresh", content: freshContent }]);
 		expect(sourceChunkRows(added.source.id)).toEqual([]);
+		const graph = getDbAccessor().withReadDb((db) => ({
+			documentPaths: (
+				db
+					.prepare(
+						`SELECT source_path
+						   FROM entities
+						  WHERE agent_id = ?
+						    AND source_id = ?
+						    AND entity_type = 'source_document'
+						  ORDER BY source_path`,
+					)
+					.all("default", added.source.id) as Array<{ source_path: string }>
+			).map((row) => row.source_path),
+			attributes: db
+				.prepare(
+					`SELECT source_path, content
+					   FROM entity_attributes
+					  WHERE agent_id = ?
+					    AND source_id = ?
+					  ORDER BY source_path, content`,
+				)
+				.all("default", added.source.id) as Array<{ source_path: string; content: string }>,
+		}));
+		expect(graph.documentPaths).toEqual(["discord://guild/123/channel/456/message/fresh"]);
+		expect(graph.attributes.some((row) => row.content.includes("Fresh imported Discord message"))).toBe(true);
+		expect(graph.attributes.some((row) => row.content.includes("stale graph claim"))).toBe(false);
 	});
 
 	it("preserves local Discord cache DM artifacts during default snapshot import", async () => {
@@ -655,6 +690,22 @@ describe("Sources routes", () => {
 			sourceKind: "source_discord_message",
 			content: "stale public cache",
 			metaJson: JSON.stringify({ guildId: "123", channelId: "456" }),
+		});
+		indexSourceArtifactStructure({
+			agentId: "default",
+			sourceId: added.source.id,
+			sourceKind: "source_discord_message",
+			sourceRoot: added.source.root,
+			sourcePath: "discord-cache://guild/@me/channel/111/message/local",
+			content: "local dm should remain",
+		});
+		indexSourceArtifactStructure({
+			agentId: "default",
+			sourceId: added.source.id,
+			sourceKind: "source_discord_message",
+			sourceRoot: added.source.root,
+			sourcePath: "discord-cache://guild/123/channel/456/message/stale",
+			content: "stale public cache",
 		});
 		insertSourceChunk({
 			id: "snapshot-local-discord-chunk",
@@ -718,6 +769,24 @@ describe("Sources routes", () => {
 				id: "snapshot-local-discord-chunk",
 				source_id: `${added.source.id}:discord-cache://guild/@me/channel/111/message/local#0`,
 			},
+		]);
+		const graphPaths = getDbAccessor().withReadDb((db) =>
+			(
+				db
+					.prepare(
+						`SELECT source_path
+						   FROM entities
+						  WHERE agent_id = ?
+						    AND source_id = ?
+						    AND entity_type = 'source_document'
+						  ORDER BY source_path`,
+					)
+					.all("default", added.source.id) as Array<{ source_path: string }>
+			).map((row) => row.source_path),
+		);
+		expect(graphPaths).toEqual([
+			"discord-cache://guild/123/channel/456/message/fresh",
+			"discord-cache://guild/@me/channel/111/message/local",
 		]);
 	});
 
