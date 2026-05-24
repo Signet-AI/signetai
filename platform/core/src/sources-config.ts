@@ -471,7 +471,14 @@ function isDiscordSnowflake(value: string): boolean {
 }
 
 function looksLikeRawDiscordToken(value: string): boolean {
-	return /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}$/.test(value);
+	const trimmed = value.trim();
+	const withoutHeaderPrefix = trimmed.replace(/^authorization:\s*/i, "").trim();
+	const withoutAuthScheme = withoutHeaderPrefix.replace(/^(bot|bearer)\s+/i, "").trim();
+	if (withoutAuthScheme !== trimmed) return true;
+	return (
+		/^mfa\.[A-Za-z0-9_-]{20,}$/.test(withoutAuthScheme) ||
+		/^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}$/.test(withoutAuthScheme)
+	);
 }
 
 function cleanPositiveInteger(value: unknown, max: number): number | undefined {

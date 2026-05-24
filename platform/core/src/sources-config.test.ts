@@ -170,6 +170,17 @@ describe("sources-config", () => {
 				agentsDir,
 			),
 		).toEqual({ ok: false, error: "Discord tokenRef must be a secret reference, not a raw token" });
+		for (const tokenRef of [
+			"Bot MzI0NzY5ODEwMDc4NzQ3NjY4.GbM8rb.fakeFakeFakeFakeFakeFakeFakeFake",
+			"Authorization: Bot MzI0NzY5ODEwMDc4NzQ3NjY4.GbM8rb.fakeFakeFakeFakeFakeFakeFakeFake",
+			`mfa.${"a".repeat(84)}`,
+			`Bearer mfa.${"b".repeat(84)}`,
+		]) {
+			expect(addDiscordSource({ guildIds: ["123456789012345678"], tokenRef }, agentsDir)).toEqual({
+				ok: false,
+				error: "Discord tokenRef must be a secret reference, not a raw token",
+			});
+		}
 		expect(
 			addDiscordSource(
 				{
