@@ -35,6 +35,14 @@ function globDir(dir: string, pattern: RegExp): string[] {
 	return readdirSync(absDir).filter((f) => pattern.test(f));
 }
 
+function readApiReferenceDocs(): string {
+	const apiDocs = ["docs/API.md"];
+	for (const file of globDir("docs/api", /\.md$/).sort()) {
+		apiDocs.push(`docs/api/${file}`);
+	}
+	return apiDocs.map((file) => read(file)).join("\n\n");
+}
+
 function listTsFilesRecursive(dir: string): string[] {
 	const absDir = join(ROOT, dir);
 	if (!existsSync(absDir) || !statSync(absDir).isDirectory()) return [];
@@ -434,7 +442,7 @@ interface DriftReport {
 
 function generateReport(): DriftReport {
 	const claudeMd = read("CLAUDE.md");
-	const apiMd = read("docs/API.md");
+	const apiMd = readApiReferenceDocs();
 	const architectureMd = read("docs/ARCHITECTURE.md");
 	const routes = checkRouteDrift(apiMd);
 	const migrations = checkMigrationDrift(architectureMd);
@@ -444,10 +452,10 @@ function generateReport(): DriftReport {
 	const summary: string[] = [];
 
 	if (routes.missingFromDocs.length > 0) {
-		summary.push(`${routes.missingFromDocs.length} route(s) in source but missing from docs/API.md`);
+		summary.push(`${routes.missingFromDocs.length} route(s) in source but missing from API reference docs`);
 	}
 	if (routes.extraInDocs.length > 0) {
-		summary.push(`${routes.extraInDocs.length} route(s) in docs/API.md but not found in source`);
+		summary.push(`${routes.extraInDocs.length} route(s) in API reference docs but not found in source`);
 	}
 	if (migrations.hasDrift) {
 		const migSummary =
@@ -496,7 +504,7 @@ function formatMarkdown(report: DriftReport): string {
 		lines.push("## Route Drift", "");
 
 		if (report.routes.missingFromDocs.length > 0) {
-			lines.push("### Missing from docs/API.md", "");
+			lines.push("### Missing from API reference docs", "");
 			lines.push("| Method | Path | Source File |");
 			lines.push("|--------|------|-------------|");
 			for (const r of report.routes.missingFromDocs) {
@@ -506,7 +514,7 @@ function formatMarkdown(report: DriftReport): string {
 		}
 
 		if (report.routes.extraInDocs.length > 0) {
-			lines.push("### In docs/API.md but not in source", "");
+			lines.push("### In API reference docs but not in source", "");
 			lines.push("| Methods | Endpoint |");
 			lines.push("|---------|----------|");
 			for (const r of report.routes.extraInDocs) {
