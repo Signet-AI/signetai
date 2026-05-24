@@ -253,6 +253,35 @@ describe("github-source-fetch", () => {
 		expect(requested).not.toContain("docs%2FAPI.md");
 	});
 
+	it("keeps single-star doc globs within one path segment", async () => {
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.includes("/git/trees/")) {
+				return Promise.resolve(
+					Response.json({
+						tree: [
+							{ type: "blob", path: "docs/API.md" },
+							{ type: "blob", path: "docs/private/notes.md" },
+						],
+					}),
+				);
+			}
+			return Promise.resolve(
+				Response.json({
+					content: Buffer.from("# doc").toString("base64"),
+					encoding: "base64",
+					sha: "abc",
+				}),
+			);
+		}) as typeof fetch;
+
+		const direct = await fetchRepoDocs({ owner: "o", repo: "r" }, ["docs/*.md"], "main", 10);
+		const recursive = await fetchRepoDocs({ owner: "o", repo: "r" }, ["docs/**/*.md"], "main", 10);
+
+		expect(direct.resources.map((resource) => resource.path)).toEqual(["docs/API.md"]);
+		expect(recursive.resources.map((resource) => resource.path)).toEqual(["docs/API.md", "docs/private/notes.md"]);
+	});
+
 	it("applies maxItems to wildcard docs", async () => {
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			const text = String(url);

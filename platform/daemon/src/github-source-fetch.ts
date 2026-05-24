@@ -613,14 +613,26 @@ function encodeGitHubContentPath(path: string): string {
 }
 
 function globToRegexSource(pattern: string): string {
-	return pattern
-		.split("")
-		.map((char) => {
-			if (char === "*") return ".*";
-			if (char === "?") return ".";
-			return escapeRegex(char);
-		})
-		.join("");
+	let source = "";
+	let index = 0;
+	while (index < pattern.length) {
+		if (pattern.startsWith("**/", index)) {
+			source += "(?:.*/)?";
+			index += 3;
+			continue;
+		}
+		if (pattern.startsWith("**", index)) {
+			source += ".*";
+			index += 2;
+			continue;
+		}
+		const char = pattern[index] ?? "";
+		if (char === "*") source += "[^/]*";
+		else if (char === "?") source += "[^/]";
+		else source += escapeRegex(char);
+		index++;
+	}
+	return source;
 }
 
 function escapeRegex(char: string): string {
