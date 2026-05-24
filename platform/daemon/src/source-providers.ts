@@ -1,5 +1,6 @@
 import type { SignetSourceEntry, SignetSourceKind, SourceFailureState } from "@signet/core";
 import { discordSourceProvider } from "./discord-source-provider";
+import { githubSourceProvider } from "./github-source-provider";
 import {
 	type NativeMemorySource,
 	obsidianNativeMemorySource,
@@ -54,9 +55,10 @@ export function registerSourceProvider(provider: SourceProviderAdapter): void {
 export function getSourceProvider(kind: SignetSourceKind): SourceProviderAdapter | undefined {
 	if (kind === obsidianSourceProvider.kind) return obsidianSourceProvider;
 	if (kind === discordSourceProvider.kind) return discordSourceProvider;
+	if (kind === githubSourceProvider.kind) return githubSourceProvider;
 	return additionalProviders.get(kind);
 }
 
 export function configuredSourceProviders(): readonly SourceProviderAdapter[] {
-	return [obsidianSourceProvider, discordSourceProvider, ...additionalProviders.values()];
+	return [obsidianSourceProvider, discordSourceProvider, githubSourceProvider, ...additionalProviders.values()];
 }

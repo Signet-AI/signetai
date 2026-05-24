@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import {
 	type SourcesDeps,
 	addDiscordSourceFromCli,
+	addGitHubSourceFromCli,
 	addObsidianVaultSource,
 	exportConfiguredSourceSnapshot,
 	importConfiguredSourceSnapshot,
@@ -139,6 +140,20 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 		.action((path: string, options: { name?: string; exclude?: string[] }) =>
 			addObsidianVaultSource(path, options, deps),
 		);
+
+	add
+		.command("github")
+		.description("Index GitHub repositories as read-only recall sources")
+		.requiredOption("--repo <owner/repo>", "GitHub repo pattern (repeatable, supports owner/*)", collect, [])
+		.option("--token-ref <secret>", "Signet secret name or external secret reference for a GitHub token")
+		.option("--name <name>", "Display name for the GitHub source")
+		.option("--resource-type <type>", "Resource type: issues, pulls, discussions, docs (repeatable)", collect, [])
+		.option("--state <state>", "Resource state: open, closed, or all", "all")
+		.option("--no-include-comments", "Skip issue, PR, and discussion comments")
+		.option("--label <label>", "Label filter (repeatable)", collect, [])
+		.option("--doc-path <path>", "Markdown doc path or glob (repeatable)", collect, [])
+		.option("--max-items <count>", "Maximum items per repo per resource class")
+		.action((options) => addGitHubSourceFromCli(options, deps));
 
 	add
 		.command("discord")

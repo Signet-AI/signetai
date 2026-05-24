@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { addDiscordSource, addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
+import { addDiscordSource, addGitHubSource, addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
 import chalk from "chalk";
 
 export interface SourcesDeps {
@@ -76,6 +76,18 @@ export interface ImportSourceSnapshotOptions {
 	readonly includeLocalDiscord?: boolean;
 }
 
+export interface AddGitHubSourceOptions {
+	readonly repo?: readonly string[];
+	readonly tokenRef?: string;
+	readonly name?: string;
+	readonly resourceType?: readonly string[];
+	readonly state?: "open" | "closed" | "all";
+	readonly includeComments?: boolean;
+	readonly label?: readonly string[];
+	readonly docPath?: readonly string[];
+	readonly maxItems?: string;
+}
+
 export async function addObsidianVaultSource(
 	path: string,
 	options: AddObsidianSourceOptions,
@@ -99,8 +111,12 @@ export async function addObsidianVaultSource(
 
 export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, deps: SourcesDeps): Promise<void> {
 	const guildIds = options.guild ?? [];
-	const maxMessagesPerChannel =
-		options.maxMessages === undefined ? undefined : Number.parseInt(options.maxMessages, 10);
+	const maxMessagesPerChannel = parseIntegerOption(options.maxMessages, "Discord max-messages");
+	if (isParseError(maxMessagesPerChannel)) {
+		console.error(chalk.red(`✗ ${maxMessagesPerChannel.error}`));
+		process.exitCode = 1;
+		return;
+	}
 	const result = addDiscordSource(
 		{
 			guildIds,
@@ -143,6 +159,50 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
 }
 
+export async function addGitHubSourceFromCli(options: AddGitHubSourceOptions, deps: SourcesDeps): Promise<void> {
+	const maxItemsPerRepo = parseIntegerOption(options.maxItems, "GitHub max-items");
+	if (isParseError(maxItemsPerRepo)) {
+		console.error(chalk.red(`✗ ${maxItemsPerRepo.error}`));
+		process.exitCode = 1;
+		return;
+	}
+	const resourceTypes = options.resourceType?.filter(isGitHubResourceType);
+	if (options.resourceType && resourceTypes?.length !== options.resourceType.length) {
+		console.error(chalk.red("✗ GitHub resource types must be one of: issues, pulls, discussions, docs"));
+		process.exitCode = 1;
+		return;
+	}
+	const result = addGitHubSource(
+		{
+			repos: options.repo ?? [],
+			tokenRef: options.tokenRef,
+			name: options.name,
+			resourceTypes,
+			state: options.state,
+			includeComments: options.includeComments,
+			labels: options.label,
+			docPaths: options.docPath,
+			maxItemsPerRepo,
+		},
+		deps.agentsDir,
+	);
+	if (result.ok === false) {
+		console.error(chalk.red(`✗ ${result.error}`));
+		process.exitCode = 1;
+		return;
+	}
+
+	const verb = result.created ? "Added" : "Updated";
+	console.log(chalk.green(`✓ ${verb} GitHub source: ${result.source.name}`));
+	console.log(chalk.dim(`  ${result.source.root}`));
+	if (result.source.providerSettings?.tokenRef) {
+		console.log(chalk.dim(`  tokenRef: ${result.source.providerSettings.tokenRef}`));
+	}
+	console.log();
+	console.log(chalk.dim("The daemon indexes GitHub through the shared Sources job pipeline."));
+	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
+}
+
 export async function listSources(deps: SourcesDeps): Promise<void> {
 	const config = loadSourcesConfig(deps.agentsDir);
 	if (config.sources.length === 0) {
@@ -164,6 +224,14 @@ export async function listSources(deps: SourcesDeps): Promise<void> {
 			if (source.providerSettings.syncMode === "desktop-cache")
 				console.log(chalk.dim(`  desktop cache: ${String(source.providerSettings.desktopCachePath ?? source.root)}`));
 			if (source.providerSettings.syncMode !== "desktop-cache" && typeof source.providerSettings.tokenRef === "string")
+				console.log(chalk.dim(`  tokenRef: ${source.providerSettings.tokenRef}`));
+		}
+		if (source.kind === "github" && source.providerSettings) {
+			const repos = Array.isArray(source.providerSettings.repos)
+				? source.providerSettings.repos.filter((entry) => typeof entry === "string")
+				: [];
+			if (repos.length > 0) console.log(chalk.dim(`  repos: ${repos.join(", ")}`));
+			if (typeof source.providerSettings.tokenRef === "string")
 				console.log(chalk.dim(`  tokenRef: ${source.providerSettings.tokenRef}`));
 		}
 		if (source.excludeGlobs?.length) console.log(chalk.dim(`  excludes: ${source.excludeGlobs.join(", ")}`));
@@ -272,4 +340,21 @@ export async function importConfiguredSourceSnapshot(
 	if ((result.skippedLocalDiscordArtifacts ?? 0) > 0) {
 		console.log(chalk.dim(`  Skipped ${result.skippedLocalDiscordArtifacts} local Discord @me artifacts.`));
 	}
+}
+
+function isGitHubResourceType(value: string): value is "issues" | "pulls" | "discussions" | "docs" {
+	return value === "issues" || value === "pulls" || value === "discussions" || value === "docs";
+}
+
+type ParseIntegerResult = number | undefined | { readonly error: string };
+
+function parseIntegerOption(value: string | undefined, label: string): ParseIntegerResult {
+	if (value === undefined) return undefined;
+	const trimmed = value.trim();
+	if (!/^\d+$/.test(trimmed)) return { error: `${label} must be an integer` };
+	return Number(trimmed);
+}
+
+function isParseError(value: ParseIntegerResult): value is { readonly error: string } {
+	return typeof value === "object";
 }

@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-05-24
-- Features: add source snapshot operations; import Discord desktop cache; add Discord source adapter.
+- Features: add GitHub source provider; add source snapshot operations; import Discord desktop cache; add Discord source adapter.
 - Bug fixes: disclose macOS launchagent attribution; surface aggregate usage and credit fallback.
 - Refactoring: unify provider routing factory.
 - Docs: split HTTP reference.
@@ -36,6 +36,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: load updater through cjs interop.
 
 ## Release Ledger
+
+## [0.128.0] - 2026-05-24
+
+Release summary: 1 feature.
+Tag range: `bundle-0.125.2-c660ef134864110168f775acbc7738d90057914a..v0.128.0`.
+
+### Features
+
+- **sources**: add GitHub source provider (#764)
 
 ## [0.127.0] - 2026-05-24
 

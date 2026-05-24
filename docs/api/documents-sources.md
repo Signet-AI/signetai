@@ -135,7 +135,7 @@ the document are soft-deleted one at a time with audit history.
 
 Sources connect read-only external knowledge bases to Signet recall without
 turning them into ordinary saved memories. Supported source kinds are
-`obsidian` and `discord`.
+`obsidian`, `discord`, and `github`.
 
 ### GET /api/sources
 
@@ -159,7 +159,18 @@ agent.
       "updatedAt": "2026-05-06T09:00:00.000Z",
       "lastIndexedAt": "2026-05-06T09:01:00.000Z",
       "excludeGlobs": ["**/.obsidian/**", "**/.trash/**", "**/.hermes/**"],
-      "stats": { "artifacts": 42, "chunks": 108, "indexed": 42 }
+      "stats": { "artifacts": 42, "chunks": 108, "indexed": 42 },
+      "health": {
+        "status": "healthy",
+        "generatedAt": "2026-05-06T09:01:00.000Z",
+        "latestArtifactAt": "2026-05-06T09:01:00.000Z",
+        "latestCheckpointAt": null,
+        "chunkCoverage": 1,
+        "failures": { "total": 0, "recoverable": 0 },
+        "checkpoints": { "total": 0, "partial": 0, "stale": 0 },
+        "purge": { "deletedArtifacts": 0, "orphanChunks": 0 },
+        "semantic": { "entities": 8, "attributes": 0, "dependencies": 12, "communities": 3, "total": 23 }
+      }
     }
   ]
 }
@@ -267,6 +278,51 @@ windows, attachments, mentions, embeds, polls, checkpoints, and import stats.
 Cache imports are observational and never reconcile deletes from missing or
 evicted local cache files.
 
+### POST /api/sources/github
+
+Add or update a GitHub source and queue a shared source index job. Without a
+token reference, GitHub sources default to issues, pull requests, and selected
+Markdown docs. Discussions require `tokenRef` because they use the GitHub
+GraphQL API. Raw GitHub tokens are rejected; pass a Signet secret name or
+external secret reference instead.
+
+**Request body**
+
+```json
+{
+  "repos": ["Signet-AI/signetai"],
+  "tokenRef": "GITHUB_TOKEN",
+  "name": "Signet GitHub",
+  "resourceTypes": ["issues", "pulls", "discussions", "docs"],
+  "state": "all",
+  "includeComments": true,
+  "labels": ["bug", "needs review"],
+  "docPaths": ["README.md", "docs/**/*.md"],
+  "maxItemsPerRepo": 500
+}
+```
+
+`repo` is accepted as a single-repository alias. `docPaths` are limited to
+Markdown files or Markdown globs so GitHub source indexing stays focused on
+chosen docs instead of broad source-code ingestion.
+
+**Response**
+
+```json
+{
+  "source": { "id": "github:abc123", "kind": "github" },
+  "created": true,
+  "indexed": 0,
+  "queued": true,
+  "job": { "status": "queued", "sourceId": "github:abc123" }
+}
+```
+
+The sync path indexes source-owned artifacts for issues, pull requests,
+discussions, selected Markdown docs, comments, and partial-failure artifacts.
+Partial GitHub failures cause the shared source job to report failure while
+preserving source-owned rows that were indexed successfully.
+
 ### DELETE /api/sources/:sourceId
 
 Remove a source config and purge Signet-owned source artifacts, graph rows,
@@ -278,6 +334,38 @@ and source chunk embeddings. Source files are not modified.
 {
   "source": { "id": "obsidian:abc123", "kind": "obsidian" },
   "purged": 150
+}
+```
+
+### GET /api/sources/:sourceId/health
+
+Return operational diagnostics for a configured source. The payload is the same
+health object embedded in `GET /api/sources`, plus the source config and index
+stats.
+
+Diagnostics include artifact/chunk counts, latest artifact and checkpoint
+timestamps, Discord partial-failure/checkpoint counts, stale checkpoint counts,
+purge residue, and source-provenance graph row counts. If diagnostic queries
+fail, the route returns `status: "unhealthy"` with an `error` field instead of
+synthesizing a healthy source.
+
+**Response**
+
+```json
+{
+  "source": { "id": "discord:abc123", "kind": "discord", "name": "Team Discord" },
+  "stats": { "artifacts": 420, "chunks": 250, "indexed": 420 },
+  "health": {
+    "status": "degraded",
+    "generatedAt": "2026-05-24T00:00:00.000Z",
+    "latestArtifactAt": "2026-05-24T00:00:00.000Z",
+    "latestCheckpointAt": "2026-05-24T00:00:00.000Z",
+    "chunkCoverage": 0.6,
+    "failures": { "total": 1, "recoverable": 1 },
+    "checkpoints": { "total": 20, "partial": 1, "stale": 0 },
+    "purge": { "deletedArtifacts": 0, "orphanChunks": 0 },
+    "semantic": { "entities": 12, "attributes": 4, "dependencies": 6, "communities": 2, "total": 24 }
+  }
 }
 ```
 

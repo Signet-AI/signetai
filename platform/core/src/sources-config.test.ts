@@ -4,13 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
+	DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN,
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
 	addDiscordSource,
+	addGitHubSource,
 	addObsidianSource,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
 	parseDiscordSettings,
+	parseGitHubSettings,
 	removeSource,
 } from "./sources-config";
 
@@ -275,6 +278,120 @@ describe("sources-config", () => {
 			includePolls: true,
 			includeThreadMembers: true,
 			syncMode: "gateway-tail",
+		});
+	});
+
+	it("adds a GitHub source with validated provider settings", () => {
+		const agentsDir = tmp();
+
+		const result = addGitHubSource(
+			{
+				repos: ["Signet-AI/signetai", "Signet-AI/signetai"],
+				tokenRef: "GITHUB_TOKEN",
+				name: "Signet GitHub",
+				resourceTypes: ["issues", "pulls", "discussions", "docs"],
+				state: "open",
+				labels: ["bug", "needs review", "bug"],
+				docPaths: ["README.md", "docs/**/*.md"],
+				maxItemsPerRepo: 25,
+				now: "2026-01-02T00:00:00.000Z",
+			},
+			agentsDir,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok === false) throw new Error(result.error);
+		expect(result.source.kind).toBe("github");
+		expect(result.source.root).toBe("github://repos/Signet-AI/signetai");
+		expect(result.source.providerSettings).toEqual({
+			repos: ["Signet-AI/signetai"],
+			tokenRef: "GITHUB_TOKEN",
+			resourceTypes: ["issues", "pulls", "discussions", "docs"],
+			state: "open",
+			includeComments: true,
+			labels: ["bug", "needs review"],
+			docPaths: ["README.md", "docs/**/*.md"],
+			maxItemsPerRepo: 25,
+		});
+	});
+
+	it("defaults GitHub sources without tokenRef to REST-fetchable resources", () => {
+		const result = addGitHubSource({ repos: ["Signet-AI/signetai"] }, tmp());
+
+		expect(result.ok).toBe(true);
+		if (result.ok === false) throw new Error(result.error);
+		expect(parseGitHubSettings(result.source.providerSettings).resourceTypes).toEqual([
+			...DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN,
+		]);
+	});
+
+	it("preserves GitHub settings on partial update", () => {
+		const agentsDir = tmp();
+		const first = addGitHubSource(
+			{
+				repos: ["Signet-AI/signetai"],
+				tokenRef: "GITHUB_TOKEN",
+				resourceTypes: ["issues", "discussions"],
+				labels: ["reviewed"],
+				docPaths: ["docs/API.md"],
+				maxItemsPerRepo: 12,
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			agentsDir,
+		);
+		const second = addGitHubSource(
+			{ repos: ["Signet-AI/signetai"], name: "Renamed", now: "2026-01-02T00:00:00.000Z" },
+			agentsDir,
+		);
+
+		expect(first.ok).toBe(true);
+		expect(second.ok).toBe(true);
+		if (second.ok === false) throw new Error(second.error);
+		expect(second.created).toBe(false);
+		expect(second.source.name).toBe("Renamed");
+		expect(parseGitHubSettings(second.source.providerSettings)).toMatchObject({
+			tokenRef: "GITHUB_TOKEN",
+			resourceTypes: ["issues", "discussions"],
+			labels: ["reviewed"],
+			docPaths: ["docs/API.md"],
+			maxItemsPerRepo: 12,
+		});
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("rejects invalid GitHub source boundaries", () => {
+		const agentsDir = tmp();
+
+		expect(addGitHubSource({ repos: [] }, agentsDir)).toEqual({
+			ok: false,
+			error: "At least one GitHub repo pattern is required",
+		});
+		expect(addGitHubSource({ repos: ["not-a-repo"] }, agentsDir)).toEqual({
+			ok: false,
+			error: "Invalid GitHub repo pattern: not-a-repo. Expected owner/repo or owner/*",
+		});
+		expect(addGitHubSource({ repos: ["Signet-AI/signetai"], resourceTypes: ["discussions"] }, agentsDir)).toEqual({
+			ok: false,
+			error: "GitHub discussions require tokenRef because they use the GitHub GraphQL API",
+		});
+		for (const tokenRef of [
+			`ghp_${"a".repeat(36)}`,
+			`github_pat_${"b".repeat(60)}`,
+			`Bearer ghp_${"c".repeat(36)}`,
+			`Authorization: token ghp_${"d".repeat(36)}`,
+		]) {
+			expect(addGitHubSource({ repos: ["Signet-AI/signetai"], tokenRef }, agentsDir)).toEqual({
+				ok: false,
+				error: "GitHub tokenRef must be a secret reference, not a raw token",
+			});
+		}
+		expect(addGitHubSource({ repos: ["Signet-AI/signetai"], docPaths: ["src/daemon.ts"] }, agentsDir)).toEqual({
+			ok: false,
+			error: "Invalid GitHub docPaths: src/daemon.ts",
+		});
+		expect(addGitHubSource({ repos: ["Signet-AI/signetai"], maxItemsPerRepo: 0 }, agentsDir)).toEqual({
+			ok: false,
+			error: "GitHub maxItemsPerRepo must be an integer between 1 and 10000",
 		});
 	});
 

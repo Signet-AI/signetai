@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
 import {
 	addDiscordSourceFromCli,
+	addGitHubSourceFromCli,
 	addObsidianVaultSource,
 	exportConfiguredSourceSnapshot,
 	importConfiguredSourceSnapshot,
@@ -119,6 +120,42 @@ describe("sources CLI features", () => {
 		expect(logs.join("\n")).toContain("mode: desktop-cache");
 		expect(logs.join("\n")).not.toContain("tokenRef:");
 		expect(process.exitCode).not.toBe(1);
+	});
+
+	it("adds a GitHub source from CLI options", async () => {
+		await addGitHubSourceFromCli(
+			{
+				repo: ["Signet-AI/signetai"],
+				resourceType: ["issues", "docs"],
+				label: ["sources"],
+				docPath: ["docs/API.md"],
+				maxItems: "25",
+				name: "GitHub CLI",
+			},
+			{ agentsDir: dir },
+		);
+
+		const [source] = loadSourcesConfig(dir).sources;
+		expect(source?.kind).toBe("github");
+		expect(source?.providerSettings?.repos).toEqual(["Signet-AI/signetai"]);
+		expect(source?.providerSettings?.resourceTypes).toEqual(["issues", "docs"]);
+		expect(logs.join("\n")).toContain("Added GitHub source: GitHub CLI");
+		expect(process.exitCode).not.toBe(1);
+	});
+
+	it("rejects malformed GitHub max-items values", async () => {
+		await addGitHubSourceFromCli(
+			{
+				repo: ["Signet-AI/signetai"],
+				resourceType: ["issues"],
+				maxItems: "25oops",
+			},
+			{ agentsDir: dir },
+		);
+
+		expect(errors.join("\n")).toContain("GitHub max-items must be an integer");
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+		expect(process.exitCode).toBe(1);
 	});
 
 	it("sets a non-zero exit code when removing an unknown source", async () => {

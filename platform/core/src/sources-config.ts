@@ -42,6 +42,8 @@ export interface AddObsidianSourceInput {
 }
 
 export type DiscordSourceSyncMode = "rest" | "gateway-tail" | "desktop-cache";
+export type GitHubSourceResourceType = "issues" | "pulls" | "discussions" | "docs";
+export type GitHubSourceState = "open" | "closed" | "all";
 
 export interface DiscordSourceSettings {
 	readonly guildIds: readonly string[];
@@ -83,6 +85,30 @@ export interface AddDiscordSourceInput {
 	readonly now?: string;
 }
 
+export interface GitHubSourceSettings {
+	readonly repos: readonly string[];
+	readonly tokenRef?: string;
+	readonly resourceTypes: readonly GitHubSourceResourceType[];
+	readonly state: GitHubSourceState;
+	readonly includeComments: boolean;
+	readonly labels?: readonly string[];
+	readonly docPaths: readonly string[];
+	readonly maxItemsPerRepo: number;
+}
+
+export interface AddGitHubSourceInput {
+	readonly repos: readonly string[];
+	readonly tokenRef?: string;
+	readonly name?: string;
+	readonly resourceTypes?: readonly GitHubSourceResourceType[];
+	readonly state?: GitHubSourceState;
+	readonly includeComments?: boolean;
+	readonly labels?: readonly string[];
+	readonly docPaths?: readonly string[];
+	readonly maxItemsPerRepo?: number;
+	readonly now?: string;
+}
+
 export type AddSourceResult =
 	| { readonly ok: true; readonly source: SignetSourceEntry; readonly created: boolean }
 	| { readonly ok: false; readonly error: string };
@@ -95,6 +121,12 @@ const SOURCES_CONFIG_VERSION = 1;
 export const DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL = 1000;
 export const MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL = 10_000;
 export const DEFAULT_DISCORD_DESKTOP_CACHE_PATH = defaultDiscordDesktopCachePath();
+export const DEFAULT_GITHUB_RESOURCE_TYPES = ["issues", "pulls", "discussions", "docs"] as const;
+export const DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN = ["issues", "pulls", "docs"] as const;
+export const DEFAULT_GITHUB_DOC_PATHS = ["README.md", "CHANGELOG.md"] as const;
+export const DEFAULT_GITHUB_MAX_ITEMS_PER_REPO = 500;
+export const MAX_GITHUB_MAX_ITEMS_PER_REPO = 10_000;
+const VALID_GITHUB_RESOURCE_TYPES = new Set<string>(DEFAULT_GITHUB_RESOURCE_TYPES);
 
 export function getAgentsDir(): string {
 	return process.env.SIGNET_PATH || `${homedir()}/.agents`;
@@ -156,6 +188,10 @@ export function addDiscordSource(input: AddDiscordSourceInput, agentsDir = getAg
 	return withSourcesConfigLock(agentsDir, () => addDiscordSourceUnlocked(input, agentsDir));
 }
 
+export function addGitHubSource(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addGitHubSourceUnlocked(input, agentsDir));
+}
+
 function addDiscordSourceUnlocked(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	try {
 		return addDiscordSourceChecked(input, agentsDir);
@@ -214,6 +250,62 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 	return { ok: true, source, created: true };
 }
 
+function addGitHubSourceUnlocked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	try {
+		return addGitHubSourceChecked(input, agentsDir);
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
+function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	const settings = buildGitHubSettings(input);
+	if ("error" in settings) return { ok: false, error: settings.error };
+
+	const now = input.now ?? new Date().toISOString();
+	const cfg = loadSourcesConfigForWrite(agentsDir);
+	const settingsKey = settings.repos.slice().sort().join(",");
+	const sourceId = `github:${createHash("sha256").update(settingsKey).digest("hex").slice(0, 16)}`;
+	const root = `github://repos/${settings.repos.slice().sort().join(",")}`;
+	const existing = cfg.sources.find((source) => source.id === sourceId);
+	if (existing) {
+		const existingSettings = parseGitHubSettings(existing.providerSettings);
+		const updatedSettings = buildGitHubSettings(input, existingSettings);
+		if ("error" in updatedSettings) return { ok: false, error: updatedSettings.error };
+		const updated: SignetSourceEntry = {
+			...existing,
+			name: cleanName(input.name) ?? existing.name,
+			root,
+			enabled: true,
+			providerSettings: githubSettingsProviderSettings(updatedSettings),
+			updatedAt: now,
+		};
+		saveSourcesConfig(
+			{
+				version: SOURCES_CONFIG_VERSION,
+				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
+			},
+			agentsDir,
+		);
+		return { ok: true, source: updated, created: false };
+	}
+
+	const source: SignetSourceEntry = {
+		id: sourceId,
+		kind: "github",
+		name: cleanName(input.name) ?? settings.repos[0] ?? "GitHub Source",
+		root,
+		enabled: true,
+		mode: "read-only",
+		createdAt: now,
+		updatedAt: now,
+		providerSettings: githubSettingsProviderSettings(settings),
+	};
+	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
+	return { ok: true, source, created: true };
+}
+
 export function parseDiscordSettings(raw?: SignetSourceProviderSettings): DiscordSourceSettings {
 	const guildIds = Array.isArray(raw?.guildIds) ? cleanDiscordIds(raw.guildIds) : [];
 	const tokenRef = typeof raw?.tokenRef === "string" ? raw.tokenRef.trim() : "";
@@ -240,6 +332,32 @@ export function parseDiscordSettings(raw?: SignetSourceProviderSettings): Discor
 		includeThreadMembers: raw?.includeThreadMembers !== false,
 		...(since ? { since } : {}),
 		syncMode: isDiscordSyncMode(raw?.syncMode) ? raw.syncMode : "rest",
+	};
+}
+
+export function parseGitHubSettings(raw?: SignetSourceProviderSettings): GitHubSourceSettings {
+	const repos = Array.isArray(raw?.repos) ? cleanGitHubRepos(raw.repos) : [];
+	const tokenRef = typeof raw?.tokenRef === "string" ? raw.tokenRef.trim() || undefined : undefined;
+	const resourceTypes =
+		Array.isArray(raw?.resourceTypes) && raw.resourceTypes.every((type) => typeof type === "string")
+			? raw.resourceTypes.filter((type): type is GitHubSourceResourceType => isGitHubResourceType(type))
+			: tokenRef
+				? [...DEFAULT_GITHUB_RESOURCE_TYPES]
+				: [...DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN];
+	const labels = Array.isArray(raw?.labels) ? cleanStringArray(raw.labels) : undefined;
+	const docPaths = Array.isArray(raw?.docPaths)
+		? cleanStringArray(raw.docPaths).filter(isSafeGitHubDocPath)
+		: [...DEFAULT_GITHUB_DOC_PATHS];
+	return {
+		repos,
+		...(tokenRef ? { tokenRef } : {}),
+		resourceTypes: resourceTypes.length > 0 ? resourceTypes : [...DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN],
+		state: isGitHubState(raw?.state) ? raw.state : "all",
+		includeComments: raw?.includeComments !== false,
+		...(labels && labels.length > 0 ? { labels } : {}),
+		docPaths: docPaths.length > 0 ? docPaths : [...DEFAULT_GITHUB_DOC_PATHS],
+		maxItemsPerRepo:
+			cleanPositiveInteger(raw?.maxItemsPerRepo, MAX_GITHUB_MAX_ITEMS_PER_REPO) ?? DEFAULT_GITHUB_MAX_ITEMS_PER_REPO,
 	};
 }
 
@@ -293,6 +411,77 @@ function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettin
 	};
 }
 
+function buildGitHubSettings(
+	input: AddGitHubSourceInput,
+	existing?: GitHubSourceSettings,
+): GitHubSourceSettings | { readonly error: string } {
+	const repos = input.repos !== undefined ? cleanGitHubRepos(input.repos) : (existing?.repos ?? []);
+	if (repos.length === 0) return { error: "At least one GitHub repo pattern is required" };
+	for (const repo of repos) {
+		if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_*.-]+$/.test(repo)) {
+			return { error: `Invalid GitHub repo pattern: ${repo}. Expected owner/repo or owner/*` };
+		}
+	}
+	const tokenRef = input.tokenRef !== undefined ? input.tokenRef.trim() || undefined : existing?.tokenRef;
+	if (tokenRef && looksLikeRawGitHubToken(tokenRef)) {
+		return { error: "GitHub tokenRef must be a secret reference, not a raw token" };
+	}
+	const resourceTypes = input.resourceTypes
+		? [...input.resourceTypes]
+		: existing?.resourceTypes?.length
+			? [...existing.resourceTypes]
+			: tokenRef
+				? [...DEFAULT_GITHUB_RESOURCE_TYPES]
+				: [...DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN];
+	if (resourceTypes.length === 0) return { error: "GitHub resourceTypes must include at least one resource type" };
+	const invalidTypes = resourceTypes.filter((type) => !isGitHubResourceType(type));
+	if (invalidTypes.length > 0) {
+		return {
+			error: `Invalid GitHub resource types: ${invalidTypes.join(", ")}. Must be one of: ${[...DEFAULT_GITHUB_RESOURCE_TYPES].join(", ")}`,
+		};
+	}
+	if (!tokenRef && resourceTypes.includes("discussions")) {
+		return { error: "GitHub discussions require tokenRef because they use the GitHub GraphQL API" };
+	}
+	if (input.state !== undefined && !isGitHubState(input.state)) {
+		return { error: "GitHub state must be one of: open, closed, all" };
+	}
+	if (input.includeComments !== undefined && typeof input.includeComments !== "boolean") {
+		return { error: "GitHub includeComments must be a boolean" };
+	}
+	if (input.labels !== undefined && !isStringArray(input.labels)) {
+		return { error: "GitHub labels must be an array of strings" };
+	}
+	if (input.docPaths !== undefined) {
+		if (!isStringArray(input.docPaths)) return { error: "GitHub docPaths must be an array of strings" };
+		const invalid = cleanStringArray(input.docPaths).filter((path) => !isSafeGitHubDocPath(path));
+		if (invalid.length > 0) return { error: `Invalid GitHub docPaths: ${invalid.join(", ")}` };
+	}
+	if (input.maxItemsPerRepo !== undefined) {
+		const maxItemsPerRepo = cleanPositiveInteger(input.maxItemsPerRepo, MAX_GITHUB_MAX_ITEMS_PER_REPO);
+		if (maxItemsPerRepo !== input.maxItemsPerRepo) {
+			return {
+				error: `GitHub maxItemsPerRepo must be an integer between 1 and ${MAX_GITHUB_MAX_ITEMS_PER_REPO}`,
+			};
+		}
+	}
+	const labels = input.labels !== undefined ? cleanStringArray(input.labels) : existing?.labels;
+	const docPaths =
+		input.docPaths !== undefined
+			? cleanStringArray(input.docPaths)
+			: (existing?.docPaths ?? [...DEFAULT_GITHUB_DOC_PATHS]);
+	return {
+		repos,
+		...(tokenRef ? { tokenRef } : {}),
+		resourceTypes,
+		state: input.state ?? existing?.state ?? "all",
+		includeComments: input.includeComments ?? existing?.includeComments ?? true,
+		...(labels && labels.length > 0 ? { labels } : {}),
+		docPaths,
+		maxItemsPerRepo: input.maxItemsPerRepo ?? existing?.maxItemsPerRepo ?? DEFAULT_GITHUB_MAX_ITEMS_PER_REPO,
+	};
+}
+
 function discordSettingsProviderSettings(settings: DiscordSourceSettings): SignetSourceProviderSettings {
 	return {
 		guildIds: settings.guildIds,
@@ -313,6 +502,19 @@ function discordSettingsProviderSettings(settings: DiscordSourceSettings): Signe
 		includeThreadMembers: settings.includeThreadMembers,
 		...(settings.since ? { since: settings.since } : {}),
 		syncMode: settings.syncMode,
+	};
+}
+
+function githubSettingsProviderSettings(settings: GitHubSourceSettings): SignetSourceProviderSettings {
+	return {
+		repos: settings.repos,
+		...(settings.tokenRef ? { tokenRef: settings.tokenRef } : {}),
+		resourceTypes: settings.resourceTypes,
+		state: settings.state,
+		includeComments: settings.includeComments,
+		...(settings.labels ? { labels: settings.labels } : {}),
+		docPaths: settings.docPaths,
+		maxItemsPerRepo: settings.maxItemsPerRepo,
 	};
 }
 
@@ -497,6 +699,32 @@ function cleanLocalPath(value: string | undefined): string | undefined {
 	return trimmed ? resolve(trimmed.replace(/^~(?=$|\/|\\)/, homedir())) : undefined;
 }
 
+function cleanGitHubRepos(values: readonly unknown[]): readonly string[] {
+	return Array.from(
+		new Set(
+			values
+				.filter((value): value is string => typeof value === "string")
+				.map((value) => value.trim())
+				.filter(Boolean),
+		),
+	);
+}
+
+function cleanStringArray(values: readonly unknown[]): readonly string[] {
+	return Array.from(
+		new Set(
+			values
+				.filter((value): value is string => typeof value === "string")
+				.map((value) => value.trim())
+				.filter(Boolean),
+		),
+	);
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+	return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
 function isDiscordSnowflake(value: string): boolean {
 	return /^\d{17,20}$/.test(value);
 }
@@ -509,6 +737,16 @@ function looksLikeRawDiscordToken(value: string): boolean {
 	return (
 		/^mfa\.[A-Za-z0-9_-]{20,}$/.test(withoutAuthScheme) ||
 		/^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}$/.test(withoutAuthScheme)
+	);
+}
+
+function looksLikeRawGitHubToken(value: string): boolean {
+	const trimmed = value.trim();
+	const withoutHeaderPrefix = trimmed.replace(/^authorization:\s*/i, "").trim();
+	const withoutAuthScheme = withoutHeaderPrefix.replace(/^(bearer|token)\s+/i, "").trim();
+	if (withoutAuthScheme !== trimmed) return true;
+	return (
+		/^github_pat_[A-Za-z0-9_]{20,}$/.test(withoutAuthScheme) || /^gh[opsru]_[A-Za-z0-9_]{20,}$/.test(withoutAuthScheme)
 	);
 }
 
@@ -544,6 +782,31 @@ function looksLikeDiscordDesktopCacheRoot(value: string): boolean {
 		.toLowerCase()
 		.replace(/[\s_-]+/g, "");
 	return ["discord", "discordcanary", "discordptb", "discorddevelopment", "vesktop"].includes(base);
+}
+
+function isGitHubResourceType(value: unknown): value is GitHubSourceResourceType {
+	return typeof value === "string" && VALID_GITHUB_RESOURCE_TYPES.has(value);
+}
+
+function isGitHubState(value: unknown): value is GitHubSourceState {
+	return value === "open" || value === "closed" || value === "all";
+}
+
+function isMarkdownDocPath(path: string): boolean {
+	return path.toLowerCase().endsWith(".md");
+}
+
+function isMarkdownDocGlob(path: string): boolean {
+	const lowered = path.toLowerCase();
+	return lowered.endsWith("/*.md") || lowered.endsWith("/**/*.md");
+}
+
+function isSafeGitHubDocPath(value: string): boolean {
+	const path = value.trim();
+	if (!path) return false;
+	if (path.startsWith("/") || path.includes("\\") || path.includes("?") || path.includes("#")) return false;
+	if (path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) return false;
+	return isMarkdownDocPath(path) || isMarkdownDocGlob(path);
 }
 
 function mergeDefaultObsidianExcludeGlobs(values: readonly string[] | undefined): readonly string[] {
