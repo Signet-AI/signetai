@@ -238,6 +238,113 @@ describe("discord-source-provider", () => {
 		expect(rows.map((row) => row.source_kind)).toContain("source_discord_message_window");
 	});
 
+	it("allows channel filters to target active threads directly by id or name", async () => {
+		const requested: string[] = [];
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			requested.push(text);
+			if (text.includes("/guilds/123456789012345678?with_counts=true")) {
+				return Promise.resolve(Response.json({ id: "123456789012345678", name: "Guild A" }));
+			}
+			if (text.includes("/guilds/123456789012345678/channels")) {
+				return Promise.resolve(
+					Response.json([{ id: "123456789012345679", type: DISCORD_CHANNEL_TYPES.guildText, name: "general" }]),
+				);
+			}
+			if (text.includes("/guilds/123456789012345678/threads/active")) {
+				return Promise.resolve(
+					Response.json({
+						threads: [
+							{
+								id: "123456789012345680",
+								type: DISCORD_CHANNEL_TYPES.publicThread,
+								name: "target-by-id",
+								parent_id: "123456789012345679",
+							},
+							{
+								id: "123456789012345681",
+								type: DISCORD_CHANNEL_TYPES.publicThread,
+								name: "target-by-name",
+								parent_id: "123456789012345679",
+							},
+							{
+								id: "123456789012345682",
+								type: DISCORD_CHANNEL_TYPES.publicThread,
+								name: "not-targeted",
+								parent_id: "123456789012345679",
+							},
+						],
+					}),
+				);
+			}
+			if (text.includes("/channels/123456789012345680/messages")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							id: "999999999999999990",
+							type: 0,
+							channel_id: "123456789012345680",
+							content: "thread selected by id",
+							author: { id: "123456789012345683", username: "alice" },
+							timestamp: "2026-01-02T00:00:00.000Z",
+						},
+					]),
+				);
+			}
+			if (text.includes("/channels/123456789012345681/messages")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							id: "999999999999999991",
+							type: 0,
+							channel_id: "123456789012345681",
+							content: "thread selected by name",
+							author: { id: "123456789012345684", username: "bob" },
+							timestamp: "2026-01-02T00:00:00.000Z",
+						},
+					]),
+				);
+			}
+			if (text.includes("/thread-members")) return Promise.resolve(Response.json([]));
+			if (text.includes("/members?")) return Promise.resolve(Response.json([]));
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				channelFilter: ["123456789012345680", "target-by-name"],
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const result = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures).toEqual([]);
+		expect(requested.some((url) => url.includes("/channels/123456789012345679/messages"))).toBe(false);
+		expect(requested.some((url) => url.includes("/channels/123456789012345680/messages"))).toBe(true);
+		expect(requested.some((url) => url.includes("/channels/123456789012345681/messages"))).toBe(true);
+		expect(requested.some((url) => url.includes("/channels/123456789012345682/messages"))).toBe(false);
+		const rows = sourceRows(added.source.id);
+		expect(
+			rows.some((row) => row.source_path === "discord://guild/123456789012345678/channel/123456789012345680"),
+		).toBe(true);
+		expect(
+			rows.some((row) => row.source_path === "discord://guild/123456789012345678/channel/123456789012345681"),
+		).toBe(true);
+		expect(
+			rows.some((row) => row.source_path === "discord://guild/123456789012345678/channel/123456789012345682"),
+		).toBe(false);
+	});
+
 	it("purges source-owned Discord artifacts and generic chunks by source id", async () => {
 		const added = addDiscordSource(
 			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", now: "2026-01-01T00:00:00.000Z" },

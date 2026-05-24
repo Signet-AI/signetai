@@ -99,8 +99,9 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 		indexed += writeArtifact(context.source, agentId, guildArtifact(context.source, guild));
 		const channels = await fetchGuildChannels(fetchConfig, guildId);
 		indexed += writeFetchFailures(context.source, agentId, failures, channels.errors, { guildId, phase: "channels" });
-		const channelRows = applyChannelFilter(channels.data, settings.channelFilter);
-		const channelsById = new Map(channelRows.map((channel) => [channel.id, channel]));
+		const channelFilter = buildChannelFilter(settings.channelFilter);
+		const channelRows = applyChannelFilter(channels.data, channelFilter);
+		const filteredChannelIds = new Set(channelRows.map((channel) => channel.id));
 
 		for (const channel of channelRows) {
 			if (!context.shouldContinue()) break;
@@ -124,11 +125,12 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 				phase: "active_threads",
 			});
 			for (const thread of activeThreads.data) {
-				if (thread.parent_id && !channelsById.has(thread.parent_id)) continue;
+				if (!matchesThreadFilter(thread, channelFilter, filteredChannelIds)) continue;
 				threadMap.set(thread.id, thread);
 			}
 			if (settings.includeArchivedThreads) {
-				for (const channel of channelRows.filter(isThreadParent)) {
+				const threadCatalogParents = (channelFilter ? channels.data : channelRows).filter(isThreadParent);
+				for (const channel of threadCatalogParents) {
 					if (!context.shouldContinue()) break;
 					const archivedPublic = await fetchArchivedThreads(
 						fetchConfig,
@@ -141,7 +143,9 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 						channelId: channel.id,
 						phase: "archived_public_threads",
 					});
-					for (const thread of archivedPublic.data) threadMap.set(thread.id, thread);
+					for (const thread of archivedPublic.data) {
+						if (matchesThreadFilter(thread, channelFilter, filteredChannelIds)) threadMap.set(thread.id, thread);
+					}
 					if (settings.includePrivateArchivedThreads) {
 						const archivedPrivate = await fetchArchivedThreads(
 							fetchConfig,
@@ -154,7 +158,9 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 							channelId: channel.id,
 							phase: "archived_private_threads",
 						});
-						for (const thread of archivedPrivate.data) threadMap.set(thread.id, thread);
+						for (const thread of archivedPrivate.data) {
+							if (matchesThreadFilter(thread, channelFilter, filteredChannelIds)) threadMap.set(thread.id, thread);
+						}
 					}
 				}
 			}
@@ -713,13 +719,27 @@ function messagesToMarkdown(guild: DiscordGuild, channel: DiscordChannel, messag
 
 function applyChannelFilter(
 	channels: readonly DiscordChannel[],
-	channelFilter: readonly string[] | undefined,
+	channelFilter: ReadonlySet<string> | null,
 ): readonly DiscordChannel[] {
-	if (!channelFilter || channelFilter.length === 0) return channels;
-	const filters = new Set(channelFilter.map((entry) => entry.toLowerCase()));
+	if (!channelFilter) return channels;
 	return channels.filter(
-		(channel) => filters.has(channel.id.toLowerCase()) || filters.has((channel.name ?? "").toLowerCase()),
+		(channel) => channelFilter.has(channel.id.toLowerCase()) || channelFilter.has((channel.name ?? "").toLowerCase()),
 	);
+}
+
+function buildChannelFilter(channelFilter: readonly string[] | undefined): ReadonlySet<string> | null {
+	if (!channelFilter || channelFilter.length === 0) return null;
+	return new Set(channelFilter.map((entry) => entry.toLowerCase()));
+}
+
+function matchesThreadFilter(
+	thread: DiscordChannel,
+	channelFilter: ReadonlySet<string> | null,
+	filteredChannelIds: ReadonlySet<string>,
+): boolean {
+	if (!channelFilter) return true;
+	if (channelFilter.has(thread.id.toLowerCase()) || channelFilter.has((thread.name ?? "").toLowerCase())) return true;
+	return Boolean(thread.parent_id && filteredChannelIds.has(thread.parent_id));
 }
 
 function isThreadParent(channel: DiscordChannel): boolean {
