@@ -223,7 +223,9 @@ export async function fetchGuildChannels(
 	config: DiscordFetchConfig,
 	guildId: string,
 ): Promise<DiscordFetchResult<DiscordChannel>> {
-	const response = await discordRequest(config, `/guilds/${guildId}/channels`);
+	const prefix = `Channels fetch failed for guild ${guildId}`;
+	const response = await catchDiscordRequest(config, `/guilds/${guildId}/channels`);
+	if (!response.ok) return failedExceptionResult(prefix, response.error);
 	if (response.status !== 200) return failedResult(`Channels fetch failed for guild ${guildId}`, response);
 	const rl = parseRateLimit(response.headers);
 	return {
@@ -247,7 +249,12 @@ export async function fetchGuildMembers(
 	while (members.length < maxMembers) {
 		const params = new URLSearchParams({ limit: String(Math.min(PER_PAGE, maxMembers - members.length)) });
 		if (after) params.set("after", after);
-		const response = await discordRequest(config, `/guilds/${guildId}/members?${params}`);
+		const prefix = `Members fetch failed for guild ${guildId}`;
+		const response = await catchDiscordRequest(config, `/guilds/${guildId}/members?${params}`);
+		if (!response.ok) {
+			errors.push(errorForException(prefix, response.error));
+			break;
+		}
 		const rl = parseRateLimit(response.headers);
 		rateLimitRemaining = rl.remaining;
 		rateLimitReset = rl.reset;
@@ -292,7 +299,12 @@ export async function fetchChannelMessages(
 	while (fetched < maxMessages) {
 		const params = new URLSearchParams({ limit: String(Math.min(PER_PAGE, maxMessages - fetched)) });
 		if (cursor) params.set("before", cursor);
-		const response = await discordRequest(config, `/channels/${channelId}/messages?${params}`);
+		const prefix = `Messages fetch failed for channel ${channelId}`;
+		const response = await catchDiscordRequest(config, `/channels/${channelId}/messages?${params}`);
+		if (!response.ok) {
+			errors.push(errorForException(prefix, response.error));
+			break;
+		}
 		const rl = parseRateLimit(response.headers);
 		rateLimitRemaining = rl.remaining;
 		rateLimitReset = rl.reset;
@@ -327,7 +339,9 @@ export async function fetchGuildActiveThreads(
 	config: DiscordFetchConfig,
 	guildId: string,
 ): Promise<DiscordFetchResult<DiscordChannel>> {
-	const response = await discordRequest(config, `/guilds/${guildId}/threads/active`);
+	const prefix = `Active threads fetch failed for guild ${guildId}`;
+	const response = await catchDiscordRequest(config, `/guilds/${guildId}/threads/active`);
+	if (!response.ok) return failedExceptionResult(prefix, response.error);
 	if (response.status !== 200) return failedResult(`Active threads fetch failed for guild ${guildId}`, response);
 	const rl = parseRateLimit(response.headers);
 	const body = isRecord(response.body) ? response.body : {};
@@ -353,7 +367,12 @@ export async function fetchArchivedThreads(
 	while (threads.length < maxThreads) {
 		const params = new URLSearchParams({ limit: String(Math.min(PER_PAGE, maxThreads - threads.length)) });
 		if (before) params.set("before", before);
-		const response = await discordRequest(config, `/channels/${channelId}/threads/archived/${kind}?${params}`);
+		const prefix = `Archived ${kind} threads fetch failed for channel ${channelId}`;
+		const response = await catchDiscordRequest(config, `/channels/${channelId}/threads/archived/${kind}?${params}`);
+		if (!response.ok) {
+			errors.push(errorForException(prefix, response.error));
+			break;
+		}
 		const rl = parseRateLimit(response.headers);
 		rateLimitRemaining = rl.remaining;
 		rateLimitReset = rl.reset;
@@ -376,7 +395,9 @@ export async function fetchThreadMembers(
 	config: DiscordFetchConfig,
 	threadId: string,
 ): Promise<DiscordFetchResult<DiscordThreadMember>> {
-	const response = await discordRequest(config, `/channels/${threadId}/thread-members?with_member=true`);
+	const prefix = `Thread members fetch failed for thread ${threadId}`;
+	const response = await catchDiscordRequest(config, `/channels/${threadId}/thread-members?with_member=true`);
+	if (!response.ok) return failedExceptionResult(prefix, response.error);
 	if (response.status !== 200) return failedResult(`Thread members fetch failed for thread ${threadId}`, response);
 	const rl = parseRateLimit(response.headers);
 	return {
@@ -424,6 +445,26 @@ function failedResult<T>(prefix: string, response: DiscordApiResponse): DiscordF
 	};
 }
 
+async function catchDiscordRequest(
+	config: DiscordFetchConfig,
+	path: string,
+): Promise<({ readonly ok: true } & DiscordApiResponse) | { readonly ok: false; readonly error: unknown }> {
+	try {
+		return { ok: true, ...(await discordRequest(config, path)) };
+	} catch (err) {
+		return { ok: false, error: err };
+	}
+}
+
+function failedExceptionResult<T>(prefix: string, err: unknown): DiscordFetchResult<T> {
+	return {
+		data: [],
+		rateLimitRemaining: 5,
+		rateLimitReset: 0,
+		errors: [errorForException(prefix, err)],
+	};
+}
+
 function errorForResponse(prefix: string, response: DiscordApiResponse): DiscordFetchError {
 	const suffix =
 		typeof response.body === "string"
@@ -435,6 +476,13 @@ function errorForResponse(prefix: string, response: DiscordApiResponse): Discord
 		message: `${prefix}: ${response.status}${suffix}`,
 		retryable: response.status >= 500,
 		status: response.status,
+	};
+}
+
+function errorForException(prefix: string, err: unknown): DiscordFetchError {
+	return {
+		message: `${prefix}: ${err instanceof Error ? err.message : String(err)}`,
+		retryable: true,
 	};
 }
 

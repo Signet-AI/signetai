@@ -5,6 +5,7 @@ import {
 	fetchChannelMessages,
 	fetchGuild,
 	fetchGuildActiveThreads,
+	fetchGuildChannels,
 	fetchGuildMembers,
 	fetchThreadMembers,
 	isDiscordTextReadableChannel,
@@ -116,6 +117,37 @@ describe("discord-source-fetch", () => {
 
 		expect(result.data).toEqual([]);
 		expect(result.errors[0]?.message).toContain("403: rate limit text");
+	});
+
+	it("returns structured errors when non-guild fetches exhaust retries", async () => {
+		const fetchImpl = mock(() => Promise.reject(new Error("network down"))) as unknown as typeof fetch;
+		const config = { token: "TOKEN", fetchImpl, sleepMs: async () => undefined };
+
+		const channels = await fetchGuildChannels(config, "123456789012345678");
+		const members = await fetchGuildMembers(config, "123456789012345678", 1);
+		const messages = await fetchChannelMessages(config, "123456789012345679", 1);
+		const activeThreads = await fetchGuildActiveThreads(config, "123456789012345678");
+		const archivedThreads = await fetchArchivedThreads(config, "123456789012345679", "public", 1);
+		const threadMembers = await fetchThreadMembers(config, "123456789012345680");
+
+		expect(channels.errors[0]?.message).toContain("Channels fetch failed for guild 123456789012345678");
+		expect(members.errors[0]?.message).toContain("Members fetch failed for guild 123456789012345678");
+		expect(messages.errors[0]?.message).toContain("Messages fetch failed for channel 123456789012345679");
+		expect(activeThreads.errors[0]?.message).toContain("Active threads fetch failed for guild 123456789012345678");
+		expect(archivedThreads.errors[0]?.message).toContain(
+			"Archived public threads fetch failed for channel 123456789012345679",
+		);
+		expect(threadMembers.errors[0]?.message).toContain("Thread members fetch failed for thread 123456789012345680");
+		for (const error of [
+			...channels.errors,
+			...members.errors,
+			...messages.errors,
+			...activeThreads.errors,
+			...archivedThreads.errors,
+			...threadMembers.errors,
+		]) {
+			expect(error.retryable).toBe(true);
+		}
 	});
 
 	it("converts ISO timestamps to Discord snowflake lower bounds", () => {
