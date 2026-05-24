@@ -186,7 +186,7 @@ function discoverCandidates(root: string, fullScan: boolean, stats: CacheStats):
 		}
 		if (stat.isDirectory()) {
 			if (path !== root && shouldSkipDir(basename(path))) return;
-			for (const entry of readdirSync(path)) visit(join(path, entry));
+			for (const entry of readDirectoryEntries(path, stats)) visit(join(path, entry));
 			return;
 		}
 		stats.filesVisited++;
@@ -210,6 +210,15 @@ function discoverCandidates(root: string, fullScan: boolean, stats: CacheStats):
 	};
 	visit(root);
 	return candidates;
+}
+
+function readDirectoryEntries(path: string, stats: CacheStats): readonly string[] {
+	try {
+		return readdirSync(path);
+	} catch {
+		stats.filesSkipped++;
+		return [];
+	}
 }
 
 function readCandidateFile(candidate: CacheCandidate, stats: CacheStats): Buffer | null {

@@ -314,6 +314,50 @@ describe("discord-source-provider", () => {
 		expect(stats?.source_meta_json).toContain('"filesSkipped":1');
 	});
 
+	it("skips unreadable Discord Desktop cache directories without failing the source sync", async () => {
+		const cachePath = join(dir, "discord", "Local Storage", "leveldb");
+		mkdirSync(cachePath, { recursive: true });
+		writeFileSync(
+			join(cachePath, "000001.log"),
+			[
+				`{"id":"111111111111111111","type":1,"recipients":[{"id":"222222222222222222","username":"alice"}]}`,
+				`{"id":"333333333333333333","channel_id":"111111111111111111","content":"directory skip still imports","timestamp":"2026-04-23T18:20:43.123Z","author":{"id":"222222222222222222","username":"alice"}}`,
+			].join("\n"),
+		);
+		const unreadableDir = join(cachePath, "mutable-cache-dir");
+		mkdirSync(unreadableDir, { recursive: true });
+		chmodSync(unreadableDir, 0);
+		const added = addDiscordSource(
+			{
+				name: "Desktop Cache",
+				desktopCachePath: join(dir, "discord"),
+				syncMode: "desktop-cache",
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		let result: Awaited<ReturnType<NonNullable<typeof discordSourceProvider.sync>>> | undefined;
+		try {
+			result = await discordSourceProvider.sync?.({
+				source: added.source,
+				agentsDir: dir,
+				agentId: "default",
+				shouldContinue: () => true,
+			});
+		} finally {
+			chmodSync(unreadableDir, 0o700);
+		}
+
+		expect(result?.failures).toEqual([]);
+		const rows = sourceRows(added.source.id);
+		expect(rows.some((row) => row.content.includes("directory skip still imports"))).toBe(true);
+		const stats = rows.find((row) => row.source_kind === "source_discord_desktop_import");
+		expect(stats?.source_meta_json).toContain('"filesSkipped":1');
+	});
+
 	it("records guild fetch failures and continues syncing later guilds", async () => {
 		const added = addDiscordSource(
 			{
