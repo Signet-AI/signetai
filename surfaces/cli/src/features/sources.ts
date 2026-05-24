@@ -1,9 +1,20 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { addDiscordSource, addGitHubSource, addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
+import {
+	type AddDiscordSourceInput,
+	type AddGitHubSourceInput,
+	type SignetSourceEntry,
+	addDiscordSource,
+	addGitHubSource,
+	addObsidianSource,
+	loadSourcesConfig,
+	removeSource,
+} from "@signet/core";
 import chalk from "chalk";
 
 export interface SourcesDeps {
 	readonly agentsDir: string;
+	readonly addDiscordSourceToDaemon?: (input: AddDiscordSourceInput) => Promise<DaemonAddSourceResult>;
+	readonly addGitHubSourceToDaemon?: (input: AddGitHubSourceInput) => Promise<DaemonAddSourceResult>;
 	readonly removeSourceFromDaemon?: (sourceId: string) => Promise<DaemonRemoveSourceResult>;
 	readonly exportSourceSnapshotFromDaemon?: (
 		sourceId: string,
@@ -15,6 +26,16 @@ export interface SourcesDeps {
 		options: { readonly includeLocalDiscord?: boolean },
 	) => Promise<DaemonImportSourceSnapshotResult>;
 }
+
+export type DaemonAddSourceResult =
+	| {
+			readonly ok: true;
+			readonly source: SignetSourceEntry;
+			readonly created: boolean;
+			readonly queued?: boolean;
+			readonly job?: unknown;
+	  }
+	| { readonly ok: false; readonly error: string; readonly fallbackToLocal?: boolean };
 
 export type DaemonRemoveSourceResult =
 	| {
@@ -117,28 +138,32 @@ export async function addDiscordSourceFromCli(options: AddDiscordSourceOptions, 
 		process.exitCode = 1;
 		return;
 	}
-	const result = addDiscordSource(
-		{
-			guildIds,
-			tokenRef: options.tokenRef ?? "",
-			name: options.name,
-			desktopCachePath: options.desktopCachePath,
-			desktopCacheFullScan: options.fullCache,
-			channelFilter: options.channel,
-			maxMessagesPerChannel,
-			includeThreads: options.threads,
-			includeArchivedThreads: options.archivedThreads,
-			includePrivateArchivedThreads: options.includePrivateArchivedThreads,
-			includeMembers: options.members,
-			includeAttachments: options.attachments,
-			includeEmbeds: options.embeds,
-			includePolls: options.polls,
-			includeThreadMembers: options.threadMembers,
-			since: options.since,
-			syncMode: options.mode,
-		},
-		deps.agentsDir,
-	);
+	const input: AddDiscordSourceInput = {
+		guildIds,
+		tokenRef: options.tokenRef ?? "",
+		name: options.name,
+		desktopCachePath: options.desktopCachePath,
+		desktopCacheFullScan: options.fullCache,
+		channelFilter: options.channel,
+		maxMessagesPerChannel,
+		includeThreads: options.threads,
+		includeArchivedThreads: options.archivedThreads,
+		includePrivateArchivedThreads: options.includePrivateArchivedThreads,
+		includeMembers: options.members,
+		includeAttachments: options.attachments,
+		includeEmbeds: options.embeds,
+		includePolls: options.polls,
+		includeThreadMembers: options.threadMembers,
+		since: options.since,
+		syncMode: options.mode,
+	};
+	const daemonResult = await addSourceThroughDaemon(input, deps.addDiscordSourceToDaemon);
+	if (daemonResult) {
+		const handled = printDaemonAddSourceResult("Discord", daemonResult);
+		if (handled) return;
+	}
+
+	const result = addDiscordSource(input, deps.agentsDir);
 	if (result.ok === false) {
 		console.error(chalk.red(`✗ ${result.error}`));
 		process.exitCode = 1;
@@ -172,20 +197,24 @@ export async function addGitHubSourceFromCli(options: AddGitHubSourceOptions, de
 		process.exitCode = 1;
 		return;
 	}
-	const result = addGitHubSource(
-		{
-			repos: options.repo ?? [],
-			tokenRef: options.tokenRef,
-			name: options.name,
-			resourceTypes,
-			state: options.state,
-			includeComments: options.includeComments,
-			labels: options.label,
-			docPaths: options.docPath,
-			maxItemsPerRepo,
-		},
-		deps.agentsDir,
-	);
+	const input: AddGitHubSourceInput = {
+		repos: options.repo ?? [],
+		tokenRef: options.tokenRef,
+		name: options.name,
+		resourceTypes,
+		state: options.state,
+		includeComments: options.includeComments,
+		labels: options.label,
+		docPaths: options.docPath,
+		maxItemsPerRepo,
+	};
+	const daemonResult = await addSourceThroughDaemon(input, deps.addGitHubSourceToDaemon);
+	if (daemonResult) {
+		const handled = printDaemonAddSourceResult("GitHub", daemonResult);
+		if (handled) return;
+	}
+
+	const result = addGitHubSource(input, deps.agentsDir);
 	if (result.ok === false) {
 		console.error(chalk.red(`✗ ${result.error}`));
 		process.exitCode = 1;
@@ -344,6 +373,39 @@ export async function importConfiguredSourceSnapshot(
 
 function isGitHubResourceType(value: string): value is "issues" | "pulls" | "discussions" | "docs" {
 	return value === "issues" || value === "pulls" || value === "discussions" || value === "docs";
+}
+
+async function addSourceThroughDaemon<TInput>(
+	input: TInput,
+	addSourceToDaemon: ((input: TInput) => Promise<DaemonAddSourceResult>) | undefined,
+): Promise<DaemonAddSourceResult | undefined> {
+	if (!addSourceToDaemon) return undefined;
+	const result = await addSourceToDaemon(input);
+	if (result.ok === false && result.fallbackToLocal) {
+		console.warn(chalk.yellow(`! Daemon add unavailable (${result.error}). Falling back to local config-only add.`));
+		return undefined;
+	}
+	return result;
+}
+
+function printDaemonAddSourceResult(kind: string, result: DaemonAddSourceResult): boolean {
+	if (result.ok === false) {
+		console.error(chalk.red(`✗ ${result.error}`));
+		process.exitCode = 1;
+		return true;
+	}
+
+	const verb = result.created ? "Added" : "Updated";
+	console.log(chalk.green(`✓ ${verb} ${kind} source: ${result.source.name}`));
+	console.log(chalk.dim(`  ${result.source.root}`));
+	if (
+		typeof result.source.providerSettings?.tokenRef === "string" &&
+		result.source.providerSettings.tokenRef.length > 0
+	) {
+		console.log(chalk.dim(`  tokenRef: ${result.source.providerSettings.tokenRef}`));
+	}
+	if (result.queued) console.log(chalk.dim("  queued initial index job"));
+	return true;
 }
 
 type ParseIntegerResult = number | undefined | { readonly error: string };

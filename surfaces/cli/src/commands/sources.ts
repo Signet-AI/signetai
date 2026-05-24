@@ -1,5 +1,7 @@
+import type { SignetSourceEntry } from "@signet/core";
 import type { Command } from "commander";
 import {
+	type DaemonAddSourceResult,
 	type SourcesDeps,
 	addDiscordSourceFromCli,
 	addGitHubSourceFromCli,
@@ -153,7 +155,14 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 		.option("--label <label>", "Label filter (repeatable)", collect, [])
 		.option("--doc-path <path>", "Markdown doc path or glob (repeatable)", collect, [])
 		.option("--max-items <count>", "Maximum items per repo per resource class")
-		.action((options) => addGitHubSourceFromCli(options, deps));
+		.action((options) =>
+			addGitHubSourceFromCli(options, {
+				...deps,
+				addGitHubSourceToDaemon: deps.secretApiCall
+					? (input) => addSourceThroughDaemon(deps.secretApiCall, "/api/sources/github", input)
+					: undefined,
+			}),
+		);
 
 	add
 		.command("discord")
@@ -175,7 +184,61 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 		.option("--no-polls", "Skip poll metadata artifacts")
 		.option("--no-thread-members", "Skip thread member snapshots")
 		.option("--mode <mode>", "Sync mode: rest, gateway-tail, or desktop-cache", "rest")
-		.action((options) => addDiscordSourceFromCli(options, deps));
+		.action((options) =>
+			addDiscordSourceFromCli(options, {
+				...deps,
+				addDiscordSourceToDaemon: deps.secretApiCall
+					? (input) => addSourceThroughDaemon(deps.secretApiCall, "/api/sources/discord", input)
+					: undefined,
+			}),
+		);
+}
+
+async function addSourceThroughDaemon(
+	secretApiCall: DaemonApiCall,
+	path: string,
+	body: unknown,
+): Promise<DaemonAddSourceResult> {
+	const result = await secretApiCall("POST", path, body, 30_000);
+	if (!result.ok) {
+		const error = errorFromDaemonData(result.data);
+		return {
+			ok: false,
+			error,
+			fallbackToLocal: error.startsWith("Could not reach Signet daemon") || error.startsWith("Request timed out"),
+		};
+	}
+	return addSourceResultFromDaemonData(result.data);
+}
+
+function addSourceResultFromDaemonData(data: unknown): DaemonAddSourceResult {
+	if (typeof data !== "object" || data === null || !("source" in data)) {
+		return { ok: false, error: "daemon returned an invalid source add response" };
+	}
+	const source = (data as { source?: unknown }).source;
+	if (!isDaemonSourceEntry(source)) {
+		return { ok: false, error: "daemon returned an invalid source add response" };
+	}
+	return {
+		ok: true,
+		source,
+		created: (data as { created?: unknown }).created === true,
+		queued: (data as { queued?: unknown }).queued === true,
+		job: (data as { job?: unknown }).job,
+	};
+}
+
+function isDaemonSourceEntry(value: unknown): value is SignetSourceEntry {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"id" in value &&
+		"name" in value &&
+		"root" in value &&
+		typeof value.id === "string" &&
+		typeof value.name === "string" &&
+		typeof value.root === "string"
+	);
 }
 
 function errorFromDaemonData(data: unknown): string {
