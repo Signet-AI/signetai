@@ -75,6 +75,7 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 				config,
 				resource,
 				settings,
+				failures,
 			);
 			indexed += written;
 			seenPaths.add(resourcePath(repo.fullName, resource));
@@ -143,6 +144,7 @@ async function writeResourceWithComments(
 	config: GitHubFetchConfig,
 	resource: GitHubResource,
 	settings: GitHubSourceSettings,
+	failures: SourceFailureState[],
 ): Promise<number> {
 	let indexed = writeResourceArtifact(source, agentId, repo, resource);
 	if (!settings.includeComments || resource.commentsCount <= 0 || resource.type === "doc") return indexed;
@@ -153,9 +155,7 @@ async function writeResourceWithComments(
 		}
 	} catch (err) {
 		logGitHubFetchError(source.id, repo, `${resource.type}_comments`, err);
-		indexed += writeFailureArtifact(
-			source,
-			agentId,
+		failures.push(
 			failureState(source, `GitHub ${resource.type} comment fetch failed: ${errorMessage(err)}`, {
 				repo,
 				type: resource.type,

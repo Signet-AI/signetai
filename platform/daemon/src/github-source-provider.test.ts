@@ -146,6 +146,67 @@ describe("github-source-provider", () => {
 		expect(sourceRows(source.id).map((row) => row.source_kind)).toContain("source_github_failure");
 	});
 
+	it("propagates comment fetch failures to the provider result", async () => {
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.endsWith("/repos/Signet-AI/signetai")) {
+				return Promise.resolve(
+					Response.json({
+						name: "signetai",
+						full_name: "Signet-AI/signetai",
+						default_branch: "main",
+						html_url: "https://github.com/Signet-AI/signetai",
+						owner: { login: "Signet-AI" },
+					}),
+				);
+			}
+			if (text.includes("/issues?")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							number: 12,
+							title: "Index GitHub",
+							body: "issue body",
+							state: "open",
+							html_url: "https://github.com/Signet-AI/signetai/issues/12",
+							user: { login: "alice" },
+							labels: [],
+							created_at: "2026-01-01T00:00:00.000Z",
+							updated_at: "2026-01-02T00:00:00.000Z",
+							closed_at: null,
+							comments: 1,
+						},
+					]),
+				);
+			}
+			if (text.includes("/issues/12/comments")) {
+				return Promise.resolve(Response.json({ message: "missing" }, { status: 404 }));
+			}
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+		const added = addGitHubSource(
+			{
+				repos: ["Signet-AI/signetai"],
+				resourceTypes: ["issues"],
+				maxItemsPerRepo: 5,
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const result = await githubSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures[0]?.message).toContain("comment fetch failed");
+		expect(sourceRows(added.source.id).map((row) => row.source_kind)).toContain("source_github_failure");
+	});
+
 	it("purges source-owned GitHub artifacts through the provider", () => {
 		indexExternalMemoryArtifact({
 			agentId: "default",

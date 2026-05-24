@@ -47,7 +47,7 @@ export interface GitHubPullRequest {
 }
 
 export interface GitHubComment {
-	readonly id: number;
+	readonly id: number | string;
 	readonly body: string;
 	readonly user?: { readonly login?: string } | null;
 	readonly author?: { readonly login?: string } | string | null;
@@ -392,7 +392,7 @@ export async function fetchDiscussionComments(config: GitHubFetchConfig, number:
 		data?: { repository?: { discussion?: { comments?: { nodes?: DiscussionCommentNode[] } } } };
 	};
 	return (body.data?.repository?.discussion?.comments?.nodes ?? []).map((node) => ({
-		id: Number(node.id),
+		id: node.id,
 		body: node.body,
 		author: node.author,
 		user: node.author,

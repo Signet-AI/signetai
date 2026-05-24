@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import {
 	expandRepoGlob,
+	fetchDiscussionComments,
 	fetchDiscussions,
 	fetchIssues,
 	fetchPullRequestsBySearch,
@@ -105,6 +106,43 @@ describe("github-source-fetch", () => {
 
 		expect(result.resources[0]?.state).toBe("closed");
 		expect(result.resources[0]?.labels).toEqual(["roadmap"]);
+	});
+
+	it("preserves opaque GraphQL discussion comment ids", async () => {
+		globalThis.fetch = mock(() =>
+			Promise.resolve(
+				Response.json({
+					data: {
+						repository: {
+							discussion: {
+								comments: {
+									nodes: [
+										{
+											id: "DC_kwDOOpaqueOne",
+											body: "first",
+											createdAt: "2026-01-01T00:00:00.000Z",
+											updatedAt: "2026-01-01T00:00:00.000Z",
+											author: { login: "alice" },
+										},
+										{
+											id: "DC_kwDOOpaqueTwo",
+											body: "second",
+											createdAt: "2026-01-02T00:00:00.000Z",
+											updatedAt: "2026-01-02T00:00:00.000Z",
+											author: { login: "bob" },
+										},
+									],
+								},
+							},
+						},
+					},
+				}),
+			),
+		) as typeof fetch;
+
+		const comments = await fetchDiscussionComments({ owner: "o", repo: "r", token: "token" }, 7);
+
+		expect(comments.map((comment) => comment.id)).toEqual(["DC_kwDOOpaqueOne", "DC_kwDOOpaqueTwo"]);
 	});
 
 	it("applies maxItems to wildcard docs", async () => {
