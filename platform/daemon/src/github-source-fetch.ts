@@ -437,37 +437,59 @@ export async function fetchDiscussions(
 
 export async function fetchDiscussionComments(config: GitHubFetchConfig, number: number): Promise<GitHubComment[]> {
 	const query = `
-		query($owner:String!, $name:String!, $number:Int!, $first:Int!) {
+		query($owner:String!, $name:String!, $number:Int!, $first:Int!, $after:String) {
 			repository(owner:$owner, name:$name) {
 				discussion(number:$number) {
-					comments(first:$first) {
+					comments(first:$first, after:$after) {
 						nodes { id body createdAt updatedAt author { login } }
+						pageInfo { hasNextPage endCursor }
 					}
 				}
 			}
-		}`;
-	const response = await githubRequest(GRAPHQL_URL, config.token, "POST", {
-		query,
-		variables: { owner: config.owner, name: config.repo, number, first: MAX_COMMENTS_PER_RESOURCE },
-	});
-	if (response.status !== 200) throw new Error(`Discussion comments fetch failed: ${response.status}`);
-	const body = response.body as {
-		data?: { repository?: { discussion?: { comments?: { nodes?: DiscussionCommentNode[] } } } };
-		errors?: Array<{ message?: string }>;
-	};
-	if (body.errors?.length) {
-		throw new Error(
-			`Discussion comments GraphQL error: ${body.errors.map((error) => error.message ?? "GraphQL error").join("; ")}`,
+	}`;
+	const comments: GitHubComment[] = [];
+	let cursor: string | null = null;
+	while (comments.length < MAX_COMMENTS_PER_RESOURCE) {
+		const response = await githubRequest(GRAPHQL_URL, config.token, "POST", {
+			query,
+			variables: {
+				owner: config.owner,
+				name: config.repo,
+				number,
+				first: Math.min(PER_PAGE, MAX_COMMENTS_PER_RESOURCE - comments.length),
+				after: cursor,
+			},
+		});
+		if (response.status !== 200) throw new Error(`Discussion comments fetch failed: ${response.status}`);
+		const body = response.body as {
+			data?: {
+				repository?: { discussion?: { comments?: { nodes?: DiscussionCommentNode[]; pageInfo?: DiscussionPageInfo } } };
+			};
+			errors?: Array<{ message?: string }>;
+		};
+		if (body.errors?.length) {
+			throw new Error(
+				`Discussion comments GraphQL error: ${body.errors.map((error) => error.message ?? "GraphQL error").join("; ")}`,
+			);
+		}
+		const discussionComments = body.data?.repository?.discussion?.comments;
+		const nodes = discussionComments?.nodes ?? [];
+		comments.push(
+			...nodes.map((node) => ({
+				id: node.id,
+				body: node.body,
+				author: node.author,
+				user: node.author,
+				created_at: node.createdAt,
+				updated_at: node.updatedAt,
+			})),
 		);
+		if (nodes.length === 0) break;
+		if (!discussionComments?.pageInfo?.hasNextPage) break;
+		cursor = discussionComments.pageInfo.endCursor ?? null;
+		if (!cursor) break;
 	}
-	return (body.data?.repository?.discussion?.comments?.nodes ?? []).map((node) => ({
-		id: node.id,
-		body: node.body,
-		author: node.author,
-		user: node.author,
-		created_at: node.createdAt,
-		updated_at: node.updatedAt,
-	}));
+	return comments.slice(0, MAX_COMMENTS_PER_RESOURCE);
 }
 
 export async function fetchRepoDocs(

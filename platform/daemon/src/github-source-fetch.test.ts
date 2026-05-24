@@ -460,6 +460,47 @@ describe("github-source-fetch", () => {
 		expect(comments.map((comment) => comment.id)).toEqual(["DC_kwDOOpaqueOne", "DC_kwDOOpaqueTwo"]);
 	});
 
+	it("paginates discussion comments with GraphQL-safe page sizes", async () => {
+		const requests: Array<{ first?: number; after?: string | null }> = [];
+		globalThis.fetch = mock((_url: string | URL | Request, init?: RequestInit) => {
+			const body = JSON.parse(String(init?.body ?? "{}")) as { variables?: { first?: number; after?: string | null } };
+			requests.push({ first: body.variables?.first, after: body.variables?.after });
+			return Promise.resolve(
+				Response.json({
+					data: {
+						repository: {
+							discussion: {
+								comments: {
+									nodes: [
+										{
+											id: requests.length === 1 ? "DC_first" : "DC_second",
+											body: requests.length === 1 ? "first" : "second",
+											createdAt: "2026-01-01T00:00:00.000Z",
+											updatedAt: "2026-01-01T00:00:00.000Z",
+											author: { login: "alice" },
+										},
+									],
+									pageInfo: {
+										hasNextPage: requests.length === 1,
+										endCursor: requests.length === 1 ? "cursor-1" : null,
+									},
+								},
+							},
+						},
+					},
+				}),
+			);
+		}) as typeof fetch;
+
+		const comments = await fetchDiscussionComments({ owner: "o", repo: "r", token: "token" }, 7);
+
+		expect(requests).toEqual([
+			{ first: 100, after: null },
+			{ first: 100, after: "cursor-1" },
+		]);
+		expect(comments.map((comment) => comment.id)).toEqual(["DC_first", "DC_second"]);
+	});
+
 	it("throws on discussion comment GraphQL errors", async () => {
 		globalThis.fetch = mock(() =>
 			Promise.resolve(
