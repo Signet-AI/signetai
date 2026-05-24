@@ -345,6 +345,63 @@ describe("discord-source-provider", () => {
 		).toBe(false);
 	});
 
+	it("orders checkpoint cursors by numeric Discord snowflake value", async () => {
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.includes("/guilds/123456789012345678?with_counts=true")) {
+				return Promise.resolve(Response.json({ id: "123456789012345678", name: "Guild A" }));
+			}
+			if (text.includes("/guilds/123456789012345678/channels")) {
+				return Promise.resolve(
+					Response.json([{ id: "123456789012345679", type: DISCORD_CHANNEL_TYPES.guildText, name: "general" }]),
+				);
+			}
+			if (text.includes("/channels/123456789012345679/messages")) {
+				return Promise.resolve(
+					Response.json([
+						{
+							id: "99",
+							type: 0,
+							channel_id: "123456789012345679",
+							content: "older numeric cursor",
+							author: { id: "123456789012345680", username: "alice" },
+							timestamp: "2015-01-01T00:00:00.000Z",
+						},
+						{
+							id: "1000",
+							type: 0,
+							channel_id: "123456789012345679",
+							content: "newer numeric cursor",
+							author: { id: "123456789012345681", username: "bob" },
+							timestamp: "2015-01-01T00:00:01.000Z",
+						},
+					]),
+				);
+			}
+			if (text.includes("/members?")) return Promise.resolve(Response.json([]));
+			if (text.includes("/threads/active")) return Promise.resolve(Response.json({ threads: [] }));
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+		const added = addDiscordSource(
+			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", now: "2026-01-01T00:00:00.000Z" },
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const result = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures).toEqual([]);
+		const checkpoint = sourceRows(added.source.id).find((row) => row.source_kind === "source_discord_checkpoint");
+		expect(checkpoint?.source_meta_json).toContain('"latestCursor":"1000"');
+		expect(checkpoint?.source_meta_json).toContain('"backfillCursor":"99"');
+	});
+
 	it("purges source-owned Discord artifacts and generic chunks by source id", async () => {
 		const added = addDiscordSource(
 			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", now: "2026-01-01T00:00:00.000Z" },

@@ -645,7 +645,7 @@ function checkpointArtifact(
 	messages: readonly DiscordMessage[],
 	status: "authoritative" | "partial",
 ): DiscordArtifact {
-	const sorted = messages.slice().sort((a, b) => a.id.localeCompare(b.id));
+	const sorted = messages.slice().sort(compareDiscordMessagesByCursor);
 	const latest = sorted[sorted.length - 1];
 	const earliest = sorted[0];
 	return {
@@ -674,6 +674,27 @@ function checkpointArtifact(
 			backfillComplete: messages.length === 0,
 		},
 	};
+}
+
+function compareDiscordMessagesByCursor(left: DiscordMessage, right: DiscordMessage): number {
+	const leftId = parseDiscordSnowflake(left.id);
+	const rightId = parseDiscordSnowflake(right.id);
+	if (leftId !== null && rightId !== null) {
+		if (leftId < rightId) return -1;
+		if (leftId > rightId) return 1;
+		return 0;
+	}
+	const byTimestamp = left.timestamp.localeCompare(right.timestamp);
+	if (byTimestamp !== 0) return byTimestamp;
+	return left.id.localeCompare(right.id);
+}
+
+function parseDiscordSnowflake(value: string): bigint | null {
+	try {
+		return BigInt(value);
+	} catch {
+		return null;
+	}
 }
 
 function failureState(
