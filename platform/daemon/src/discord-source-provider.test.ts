@@ -123,6 +123,44 @@ describe("discord-source-provider", () => {
 		expect(rows.map((row) => row.source_kind)).toContain("source_discord_failure");
 	});
 
+	it("records guild fetch failures and continues syncing later guilds", async () => {
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678", "223456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				now: "2026-01-01T00:00:00.000Z",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		globalThis.fetch = mock((url: string | URL | Request) => {
+			const text = String(url);
+			if (text.includes("/guilds/123456789012345678?with_counts=true")) {
+				return Promise.resolve(new Response("discord unavailable", { status: 503 }));
+			}
+			if (text.includes("/guilds/223456789012345678?with_counts=true")) {
+				return Promise.resolve(Response.json({ id: "223456789012345678", name: "Guild B" }));
+			}
+			if (text.includes("/guilds/223456789012345678/channels")) return Promise.resolve(Response.json([]));
+			if (text.includes("/members?")) return Promise.resolve(Response.json([]));
+			if (text.includes("/threads/active")) return Promise.resolve(Response.json({ threads: [] }));
+			return Promise.resolve(Response.json([]));
+		}) as typeof fetch;
+
+		const result = await discordSourceProvider.sync?.({
+			source: added.source,
+			agentsDir: dir,
+			agentId: "default",
+			shouldContinue: () => true,
+		});
+
+		expect(result?.failures[0]?.message).toContain("Discord guild fetch failed");
+		const rows = sourceRows(added.source.id);
+		expect(rows.some((row) => row.source_kind === "source_discord_failure")).toBe(true);
+		expect(rows.some((row) => row.source_path === "discord://guild/223456789012345678")).toBe(true);
+	});
+
 	it("indexes forum and media parent channels without fetching parent message history", async () => {
 		const requested: string[] = [];
 		globalThis.fetch = mock((url: string | URL | Request) => {

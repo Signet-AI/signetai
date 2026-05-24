@@ -73,7 +73,20 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 	for (const guildId of settings.guildIds) {
 		if (!context.shouldContinue()) break;
 		context.onProgress?.({ scanned, total, indexed, currentPath: `discord://guild/${guildId}` });
-		const guild = await fetchGuild(fetchConfig, guildId);
+		let guild: DiscordGuild | null;
+		try {
+			guild = await fetchGuild(fetchConfig, guildId);
+		} catch (err) {
+			const failure = failureState(context.source, `Discord guild fetch failed for ${guildId}: ${errorMessage(err)}`, {
+				guildId,
+				phase: "guild",
+			});
+			failures.push(failure);
+			writeFailureArtifact(context.source, agentId, failure);
+			indexed++;
+			scanned++;
+			continue;
+		}
 		if (!guild) {
 			const failure = failureState(context.source, `Discord guild unavailable or forbidden: ${guildId}`, { guildId });
 			failures.push(failure);
@@ -671,6 +684,10 @@ function failureState(
 		message,
 		metadata,
 	};
+}
+
+function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
 }
 
 function messagesToMarkdown(guild: DiscordGuild, channel: DiscordChannel, messages: readonly DiscordMessage[]): string {

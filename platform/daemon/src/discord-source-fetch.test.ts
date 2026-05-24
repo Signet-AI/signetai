@@ -80,6 +80,33 @@ describe("discord-source-fetch", () => {
 		await expect(fetchGuild({ token: "TOKEN", fetchImpl }, "123456789012345678")).resolves.toBeNull();
 	});
 
+	it("clears request timeouts when fetch rejects before a response", async () => {
+		const originalSetTimeout = globalThis.setTimeout;
+		const originalClearTimeout = globalThis.clearTimeout;
+		const handles: unknown[] = [];
+		const cleared: unknown[] = [];
+		globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+			const handle = { handler, timeout, args };
+			handles.push(handle);
+			return handle;
+		}) as typeof setTimeout;
+		globalThis.clearTimeout = ((handle?: string | number | Timer) => {
+			cleared.push(handle);
+		}) as typeof clearTimeout;
+		try {
+			const fetchImpl = mock(() => Promise.reject(new Error("network down"))) as unknown as typeof fetch;
+
+			await expect(
+				fetchGuild({ token: "TOKEN", fetchImpl, sleepMs: async () => undefined }, "123456789012345678"),
+			).rejects.toThrow("network down");
+
+			expect(cleared).toEqual(handles);
+		} finally {
+			globalThis.setTimeout = originalSetTimeout;
+			globalThis.clearTimeout = originalClearTimeout;
+		}
+	});
+
 	it("surfaces non-JSON API errors without throwing away partial fetch state", async () => {
 		const fetchImpl = mock(() =>
 			Promise.resolve(new Response("rate limit text", { status: 403, headers: { "content-type": "text/plain" } })),

@@ -177,30 +177,33 @@ async function discordRequest(config: DiscordFetchConfig, path: string): Promise
 		try {
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-			const response = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
-				headers: {
-					Authorization: `Bot ${config.token}`,
-					"User-Agent": "Signet-Daemon (discord-source)",
-				},
-				signal: controller.signal,
-			});
-			clearTimeout(timeout);
+			try {
+				const response = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
+					headers: {
+						Authorization: `Bot ${config.token}`,
+						"User-Agent": "Signet-Daemon (discord-source)",
+					},
+					signal: controller.signal,
+				});
 
-			if (response.status === 429) {
-				const retryAfter = Number(response.headers.get("retry-after") ?? "1") * 1000;
-				await sleepMs(Math.min(retryAfter, 60_000));
-				continue;
+				if (response.status === 429) {
+					const retryAfter = Number(response.headers.get("retry-after") ?? "1") * 1000;
+					await sleepMs(Math.min(retryAfter, 60_000));
+					continue;
+				}
+				if (response.status >= 500 && attempt < MAX_RETRIES - 1) {
+					lastError = new Error(`Discord API ${response.status}: ${await response.clone().text()}`);
+					await sleepMs(RETRY_BASE_DELAY_MS * (attempt + 1));
+					continue;
+				}
+				return {
+					status: response.status,
+					headers: response.headers,
+					body: await parseDiscordResponseBody(response),
+				};
+			} finally {
+				clearTimeout(timeout);
 			}
-			if (response.status >= 500 && attempt < MAX_RETRIES - 1) {
-				lastError = new Error(`Discord API ${response.status}: ${await response.clone().text()}`);
-				await sleepMs(RETRY_BASE_DELAY_MS * (attempt + 1));
-				continue;
-			}
-			return {
-				status: response.status,
-				headers: response.headers,
-				body: await parseDiscordResponseBody(response),
-			};
 		} catch (err) {
 			lastError = err instanceof Error ? err : new Error(String(err));
 			if (attempt < MAX_RETRIES - 1) await sleepMs(RETRY_BASE_DELAY_MS * (attempt + 1));
