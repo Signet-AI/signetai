@@ -200,6 +200,45 @@ describe("sources-config", () => {
 			expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
 		});
 
+		it("preserves existing GitHub settings during partial updates", () => {
+			const agentsDir = tmp();
+			const first = addGitHubSource(
+				{
+					repos: ["owner/repo"],
+					name: "Repo A",
+					tokenRef: "GITHUB_TOKEN",
+					resourceTypes: ["issues", "discussions"],
+					state: "closed",
+					includeComments: false,
+					labels: ["bug", "needs triage"],
+					docPaths: ["docs/setup.md"],
+					maxItemsPerRepo: 42,
+					now: "2026-01-01T00:00:00.000Z",
+				},
+				agentsDir,
+			);
+			expect(first.ok).toBe(true);
+			if (first.ok === false) throw new Error(first.error);
+
+			const second = addGitHubSource(
+				{ repos: ["owner/repo"], name: "Repo B", now: "2026-01-02T00:00:00.000Z" },
+				agentsDir,
+			);
+			expect(second.ok).toBe(true);
+			if (second.ok === false) throw new Error(second.error);
+
+			expect(second.created).toBe(false);
+			expect(second.source.name).toBe("Repo B");
+			const settings = parseGitHubSettings(second.source.settings);
+			expect(settings.tokenRef).toBe("GITHUB_TOKEN");
+			expect(settings.resourceTypes).toEqual(["issues", "discussions"]);
+			expect(settings.state).toBe("closed");
+			expect(settings.includeComments).toBe(false);
+			expect(settings.labels).toEqual(["bug", "needs triage"]);
+			expect(settings.docPaths).toEqual(["docs/setup.md"]);
+			expect(settings.maxItemsPerRepo).toBe(42);
+		});
+
 		it("keeps identical GitHub repo sets separate per agent", () => {
 			const agentsDir = tmp();
 			const first = addGitHubSource(

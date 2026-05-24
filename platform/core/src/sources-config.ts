@@ -275,12 +275,13 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 	);
 
 	if (existing) {
+		const existingSettings = parseGitHubSettings(existing.settings);
 		const updated: SignetSourceEntry = {
 			...existing,
 			name: cleanName(input.name) ?? existing.name,
 			enabled: true,
 			updatedAt: now,
-			settings: buildGitHubSettings(input, repos),
+			settings: buildGitHubSettings(input, repos, existingSettings),
 			agentId,
 		};
 		saveSourcesConfig(
@@ -309,22 +310,28 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 	return { ok: true, source, created: true };
 }
 
-function buildGitHubSettings(input: AddGitHubSourceInput, repos: readonly string[]): Readonly<Record<string, unknown>> {
-	const tokenRef = input.tokenRef?.trim() || undefined;
+function buildGitHubSettings(
+	input: AddGitHubSourceInput,
+	repos: readonly string[],
+	existing?: GitHubSourceSettings,
+): Readonly<Record<string, unknown>> {
+	const tokenRef = input.tokenRef !== undefined ? input.tokenRef.trim() || undefined : existing?.tokenRef;
 	const resourceTypes = input.resourceTypes
 		? [...input.resourceTypes]
-		: tokenRef
-			? [...DEFAULT_GITHUB_RESOURCE_TYPES]
-			: [...DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN];
+		: existing?.resourceTypes?.length
+			? [...existing.resourceTypes]
+			: tokenRef
+				? [...DEFAULT_GITHUB_RESOURCE_TYPES]
+				: [...DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN];
 	return {
 		repos: repos,
 		tokenRef,
 		resourceTypes,
-		state: input.state ?? "all",
-		includeComments: input.includeComments ?? true,
-		labels: input.labels ? cleanStringArray(input.labels) : undefined,
-		docPaths: input.docPaths ? cleanStringArray(input.docPaths) : [...DEFAULT_GITHUB_DOC_PATHS],
-		maxItemsPerRepo: input.maxItemsPerRepo ?? 500,
+		state: input.state ?? existing?.state ?? "all",
+		includeComments: input.includeComments ?? existing?.includeComments ?? true,
+		labels: input.labels !== undefined ? cleanStringArray(input.labels) : existing?.labels,
+		docPaths: input.docPaths !== undefined ? cleanStringArray(input.docPaths) : (existing?.docPaths ?? [...DEFAULT_GITHUB_DOC_PATHS]),
+		maxItemsPerRepo: input.maxItemsPerRepo ?? existing?.maxItemsPerRepo ?? 500,
 	};
 }
 
