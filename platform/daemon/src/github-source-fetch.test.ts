@@ -7,6 +7,7 @@ import {
 	fetchPullRequests,
 	fetchPullRequestsBySearch,
 	fetchRepoDocs,
+	fetchRepoInfo,
 } from "./github-source-fetch";
 
 const originalFetch = globalThis.fetch;
@@ -61,6 +62,37 @@ describe("github-source-fetch", () => {
 
 		expect(result.resources).toEqual([]);
 		expect(calls).toBeLessThanOrEqual(5);
+	});
+
+	it("clears request timeout handles when fetch attempts fail", async () => {
+		const originalSetTimeout = globalThis.setTimeout;
+		const originalClearTimeout = globalThis.clearTimeout;
+		const requestTimeouts: unknown[] = [];
+		const clearedTimeouts: unknown[] = [];
+		globalThis.setTimeout = ((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+			if (delay === 30_000) {
+				const handle = { id: `request-${requestTimeouts.length + 1}` };
+				requestTimeouts.push(handle);
+				return handle as ReturnType<typeof setTimeout>;
+			}
+			return originalSetTimeout(callback, 0, ...args);
+		}) as typeof setTimeout;
+		globalThis.clearTimeout = ((handle?: ReturnType<typeof setTimeout>) => {
+			if (requestTimeouts.includes(handle)) {
+				clearedTimeouts.push(handle);
+				return;
+			}
+			originalClearTimeout(handle);
+		}) as typeof clearTimeout;
+		globalThis.fetch = mock(() => Promise.reject(new Error("network down"))) as typeof fetch;
+
+		try {
+			await expect(fetchRepoInfo({ owner: "o", repo: "r" })).rejects.toThrow("network down");
+			expect(clearedTimeouts).toEqual(requestTimeouts);
+		} finally {
+			globalThis.setTimeout = originalSetTimeout;
+			globalThis.clearTimeout = originalClearTimeout;
+		}
 	});
 
 	it("escapes PR label search values", async () => {

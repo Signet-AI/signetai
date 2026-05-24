@@ -118,9 +118,9 @@ async function githubRequest(url: string, token?: string, method = "GET", body?:
 
 	let lastError: Error | null = null;
 	for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+		const controller = new AbortController();
+		let timeout: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 		try {
-			const controller = new AbortController();
-			const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 			const response = await fetch(url, {
 				method,
 				headers,
@@ -128,6 +128,7 @@ async function githubRequest(url: string, token?: string, method = "GET", body?:
 				signal: controller.signal,
 			});
 			clearTimeout(timeout);
+			timeout = null;
 			const remaining = Number(response.headers.get("x-ratelimit-remaining") ?? "5000");
 			const reset = Number(response.headers.get("x-ratelimit-reset") ?? "0") * 1000;
 			if (remaining < 10 && reset > Date.now()) {
@@ -152,6 +153,8 @@ async function githubRequest(url: string, token?: string, method = "GET", body?:
 			if (attempt < MAX_RETRIES - 1) {
 				await new Promise((resolve) => setTimeout(resolve, RETRY_BASE_DELAY_MS * (attempt + 1)));
 			}
+		} finally {
+			if (timeout) clearTimeout(timeout);
 		}
 	}
 	throw lastError ?? new Error("GitHub API request failed after retries");
