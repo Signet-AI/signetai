@@ -51,6 +51,8 @@ silently disappear from the API reference.
 | POST | `/api/sources/pick-directory` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/obsidian` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/discord` | platform/daemon/src/routes/sources-routes.ts |
+| GET | `/api/sources/:sourceId/snapshot` | platform/daemon/src/routes/sources-routes.ts |
+| POST | `/api/sources/:sourceId/snapshot/import` | platform/daemon/src/routes/sources-routes.ts |
 | DELETE | `/api/sources/:sourceId` | platform/daemon/src/routes/sources-routes.ts |
 | GET | `/api/knowledge/entities` | platform/daemon/src/routes/knowledge-routes.ts |
 | POST | `/api/knowledge/entities/:id/pin` | platform/daemon/src/routes/knowledge-routes.ts |

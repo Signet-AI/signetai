@@ -38,6 +38,7 @@ import {
 	updateSourceIndexJobProgress,
 } from "../source-index-progress";
 import { getSourceProvider } from "../source-providers";
+import { exportSourceSnapshot, importSourceSnapshot } from "../source-snapshots";
 
 interface SourceIndexJobInput {
 	readonly source: SignetSourceEntry;
@@ -202,6 +203,48 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 	});
 
+	app.get("/api/sources/:sourceId/snapshot", (c) => {
+		const sourceId = c.req.param("sourceId");
+		const source = findConfiguredSource(sourceId, agentsDir);
+		if (!source) return c.json({ error: "Source not found" }, 404);
+		const includeLocalDiscord = c.req.query("includeLocalDiscord") === "true";
+		return c.json(
+			exportSourceSnapshot({
+				source,
+				agentId: resolveDaemonAgentId(),
+				includeLocalDiscord,
+			}),
+		);
+	});
+
+	app.post("/api/sources/:sourceId/snapshot/import", async (c) => {
+		const sourceId = c.req.param("sourceId");
+		const source = findConfiguredSource(sourceId, agentsDir);
+		if (!source) return c.json({ error: "Source not found" }, 404);
+		if (isSourceImportBlocked(source.id)) {
+			return c.json({ error: "Source snapshot import cannot run while source indexing is queued or running" }, 409);
+		}
+		markSourceIndexInFlight(source.id);
+		try {
+			let body: unknown;
+			try {
+				body = await c.req.json();
+			} catch {
+				return c.json({ error: "Invalid JSON body" }, 400);
+			}
+			const result = importSourceSnapshot({
+				source,
+				agentId: resolveDaemonAgentId(),
+				snapshot: body,
+				includeLocalDiscord: c.req.query("includeLocalDiscord") === "true",
+			});
+			if (result.ok === false) return c.json({ error: result.error }, 400);
+			return c.json(result);
+		} finally {
+			clearSourceIndexInFlight(source.id);
+		}
+	});
+
 	app.delete("/api/sources/:sourceId", (c) => {
 		const sourceId = c.req.param("sourceId");
 		const result = removeSource(sourceId, agentsDir);
@@ -216,6 +259,15 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			clearSourceDeletionTombstone(result.source.id, sourceAgentId, agentsDir);
 		return c.json({ source: result.source, purged });
 	});
+}
+
+function findConfiguredSource(sourceId: string, agentsDir: string): SignetSourceEntry | undefined {
+	return loadSourcesConfig(agentsDir).sources.find((source) => source.id === sourceId);
+}
+
+function isSourceImportBlocked(sourceId: string): boolean {
+	const job = getSourceIndexJob(sourceId);
+	return isSourceIndexInFlight(sourceId) || job?.status === "queued" || job?.status === "running";
 }
 
 function enqueueSourceIndexJob(input: SourceIndexJobInput): SourceIndexJob {

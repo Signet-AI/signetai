@@ -281,6 +281,69 @@ and source chunk embeddings. Source files are not modified.
 }
 ```
 
+### GET /api/sources/:sourceId/snapshot
+
+Export source-owned artifact rows as a Signet source snapshot. Snapshots use
+`memory_artifacts` provenance instead of a provider-specific archive database.
+
+**Query parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `includeLocalDiscord` | Include local Discord Desktop `@me` cache artifacts. Defaults to `false`. |
+
+By default, Discord Desktop cache DMs under the synthetic guild id `@me` are
+excluded so shared snapshots do not publish local-only private data.
+
+**Response**
+
+```json
+{
+  "version": 1,
+  "exportedAt": "2026-05-24T00:00:00.000Z",
+  "source": { "id": "discord:abc123", "kind": "discord", "name": "Team Discord", "root": "discord://123" },
+  "agentId": "default",
+  "artifacts": [
+    {
+      "sourcePath": "discord://guild/123/channel/456/message/789",
+      "sourceKind": "source_discord_message",
+      "sourceId": "discord:abc123",
+      "content": "# Discord Message\n..."
+    }
+  ],
+  "skipped": { "localDiscordArtifacts": 0 }
+}
+```
+
+### POST /api/sources/:sourceId/snapshot/import
+
+Import a Signet source snapshot into an existing configured source. The import
+replaces source-owned artifact rows for that source and reuses the normal
+artifact upsert path so FTS and provenance stay consistent.
+
+**Query parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `includeLocalDiscord` | Import local Discord Desktop `@me` cache artifacts from the snapshot. Defaults to `false`. |
+
+Default imports preserve existing local `@me` Discord cache artifacts and skip
+any `@me` artifacts present in the incoming snapshot.
+
+**Request body**
+
+The JSON returned by `GET /api/sources/:sourceId/snapshot`.
+
+**Response**
+
+```json
+{
+  "ok": true,
+  "imported": 42,
+  "skipped": { "localDiscordArtifacts": 3 }
+}
+```
+
 ### POST /api/sources/pick-directory
 
 Best-effort local directory picker used by dashboard/browser flows. It returns

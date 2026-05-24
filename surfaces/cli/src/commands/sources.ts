@@ -3,6 +3,8 @@ import {
 	type SourcesDeps,
 	addDiscordSourceFromCli,
 	addObsidianVaultSource,
+	exportConfiguredSourceSnapshot,
+	importConfiguredSourceSnapshot,
 	listSources,
 	removeConfiguredSource,
 } from "../features/sources.js";
@@ -53,6 +55,75 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 			}),
 		);
 
+	const snapshot = sources.command("snapshot").description("Export or import source-owned snapshot data");
+
+	snapshot
+		.command("export <sourceId>")
+		.description("Export source-owned artifacts as a JSON snapshot")
+		.option("--out <path>", "Write snapshot JSON to a file instead of stdout")
+		.option("--include-local-discord", "Include local Discord @me desktop-cache artifacts")
+		.action((sourceId: string, options: { out?: string; includeLocalDiscord?: boolean }) =>
+			exportConfiguredSourceSnapshot(sourceId, options, {
+				...deps,
+				exportSourceSnapshotFromDaemon: deps.secretApiCall
+					? async (id, exportOptions) => {
+							const query = exportOptions.includeLocalDiscord ? "?includeLocalDiscord=true" : "";
+							const result = await deps.secretApiCall?.(
+								"GET",
+								`/api/sources/${encodeURIComponent(id)}/snapshot${query}`,
+								undefined,
+								30_000,
+							);
+							if (!result?.ok) return { ok: false, error: errorFromDaemonData(result?.data) };
+							const data = result.data as { artifacts?: unknown[]; skipped?: { localDiscordArtifacts?: number } };
+							return {
+								ok: true,
+								snapshot: result.data,
+								artifactCount: Array.isArray(data.artifacts) ? data.artifacts.length : 0,
+								skippedLocalDiscordArtifacts:
+									typeof data.skipped?.localDiscordArtifacts === "number" ? data.skipped.localDiscordArtifacts : 0,
+							};
+						}
+					: undefined,
+			}),
+		);
+
+	snapshot
+		.command("import <sourceId> <file>")
+		.description("Import a source snapshot into an existing configured source")
+		.option("--include-local-discord", "Import local Discord @me desktop-cache artifacts from the snapshot")
+		.action((sourceId: string, file: string, options: { includeLocalDiscord?: boolean }) =>
+			importConfiguredSourceSnapshot(
+				sourceId,
+				{ file, ...options },
+				{
+					...deps,
+					importSourceSnapshotToDaemon: deps.secretApiCall
+						? async (id, sourceSnapshot, importOptions) => {
+								const query = importOptions.includeLocalDiscord ? "?includeLocalDiscord=true" : "";
+								const result = await deps.secretApiCall?.(
+									"POST",
+									`/api/sources/${encodeURIComponent(id)}/snapshot/import${query}`,
+									sourceSnapshot,
+									60_000,
+								);
+								if (!result?.ok) return { ok: false, error: errorFromDaemonData(result?.data) };
+								const data = result.data as {
+									imported?: unknown;
+									skipped?: { localDiscordArtifacts?: unknown };
+								};
+								return {
+									ok: true,
+									imported: typeof data.imported === "number" ? data.imported : 0,
+									skippedLocalDiscordArtifacts:
+										typeof data.skipped?.localDiscordArtifacts === "number" ? data.skipped.localDiscordArtifacts : 0,
+								};
+							}
+						: undefined,
+				},
+			),
+		);
+
 	const add = sources.command("add").description("Add an external read-only knowledge source");
 
 	add
@@ -90,4 +161,10 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 		.option("--no-thread-members", "Skip thread member snapshots")
 		.option("--mode <mode>", "Sync mode: rest, gateway-tail, or desktop-cache", "rest")
 		.action((options) => addDiscordSourceFromCli(options, deps));
+}
+
+function errorFromDaemonData(data: unknown): string {
+	return typeof data === "object" && data !== null && "error" in data
+		? String((data as { error?: unknown }).error)
+		: "daemon request failed";
 }

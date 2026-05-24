@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addObsidianSource, loadSourcesConfig } from "@signet/core";
-import { addDiscordSourceFromCli, addObsidianVaultSource, removeConfiguredSource } from "./sources";
+import {
+	addDiscordSourceFromCli,
+	addObsidianVaultSource,
+	exportConfiguredSourceSnapshot,
+	importConfiguredSourceSnapshot,
+	removeConfiguredSource,
+} from "./sources";
 
 describe("sources CLI features", () => {
 	let dir = "";
@@ -120,5 +126,64 @@ describe("sources CLI features", () => {
 
 		expect(errors.join("\n")).toContain("Source not found");
 		expect(process.exitCode).toBe(1);
+	});
+
+	it("exports a source snapshot from the daemon to a file", async () => {
+		const out = join(dir, "snapshot.json");
+		await exportConfiguredSourceSnapshot(
+			"discord:source",
+			{ out },
+			{
+				agentsDir: dir,
+				exportSourceSnapshotFromDaemon: async (sourceId, options) => ({
+					ok: true,
+					snapshot: { version: 1, source: { id: sourceId }, artifacts: [{ id: "a1" }] },
+					artifactCount: 1,
+					skippedLocalDiscordArtifacts: options.includeLocalDiscord ? 0 : 2,
+				}),
+			},
+		);
+
+		expect(JSON.parse(readFileSync(out, "utf8"))).toMatchObject({ version: 1, source: { id: "discord:source" } });
+		expect(logs.join("\n")).toContain("Exported source snapshot: discord:source");
+		expect(errors.join("\n")).toContain("Exported 1 source artifacts");
+		expect(errors.join("\n")).toContain("Skipped 2 local Discord @me artifacts");
+		expect(process.exitCode).not.toBe(1);
+	});
+
+	it("imports a source snapshot through the daemon", async () => {
+		const file = join(dir, "snapshot.json");
+		await exportConfiguredSourceSnapshot(
+			"discord:source",
+			{ out: file, includeLocalDiscord: true },
+			{
+				agentsDir: dir,
+				exportSourceSnapshotFromDaemon: async () => ({
+					ok: true,
+					snapshot: { version: 1, source: { id: "discord:source" }, artifacts: [] },
+					artifactCount: 0,
+					skippedLocalDiscordArtifacts: 0,
+				}),
+			},
+		);
+		logs = [];
+		errors = [];
+
+		await importConfiguredSourceSnapshot(
+			"discord:source",
+			{ file, includeLocalDiscord: true },
+			{
+				agentsDir: dir,
+				importSourceSnapshotToDaemon: async (sourceId, snapshot, options) => ({
+					ok: true,
+					imported: sourceId === "discord:source" && options.includeLocalDiscord && !!snapshot ? 3 : 0,
+					skippedLocalDiscordArtifacts: 0,
+				}),
+			},
+		);
+
+		expect(logs.join("\n")).toContain("Imported source snapshot: discord:source");
+		expect(logs.join("\n")).toContain("Imported 3 source artifacts");
+		expect(process.exitCode).not.toBe(1);
 	});
 });

@@ -1,9 +1,19 @@
+import { readFileSync, writeFileSync } from "node:fs";
 import { addDiscordSource, addObsidianSource, loadSourcesConfig, removeSource } from "@signet/core";
 import chalk from "chalk";
 
 export interface SourcesDeps {
 	readonly agentsDir: string;
 	readonly removeSourceFromDaemon?: (sourceId: string) => Promise<DaemonRemoveSourceResult>;
+	readonly exportSourceSnapshotFromDaemon?: (
+		sourceId: string,
+		options: { readonly includeLocalDiscord?: boolean },
+	) => Promise<DaemonSourceSnapshotResult>;
+	readonly importSourceSnapshotToDaemon?: (
+		sourceId: string,
+		snapshot: unknown,
+		options: { readonly includeLocalDiscord?: boolean },
+	) => Promise<DaemonImportSourceSnapshotResult>;
 }
 
 export type DaemonRemoveSourceResult =
@@ -11,6 +21,23 @@ export type DaemonRemoveSourceResult =
 			readonly ok: true;
 			readonly source?: { readonly name?: string; readonly root?: string };
 			readonly purged?: number;
+	  }
+	| { readonly ok: false; readonly error: string };
+
+export type DaemonSourceSnapshotResult =
+	| {
+			readonly ok: true;
+			readonly snapshot: unknown;
+			readonly artifactCount?: number;
+			readonly skippedLocalDiscordArtifacts?: number;
+	  }
+	| { readonly ok: false; readonly error: string };
+
+export type DaemonImportSourceSnapshotResult =
+	| {
+			readonly ok: true;
+			readonly imported?: number;
+			readonly skippedLocalDiscordArtifacts?: number;
 	  }
 	| { readonly ok: false; readonly error: string };
 
@@ -37,6 +64,16 @@ export interface AddDiscordSourceOptions {
 	readonly polls?: boolean;
 	readonly threadMembers?: boolean;
 	readonly mode?: "rest" | "gateway-tail" | "desktop-cache";
+}
+
+export interface ExportSourceSnapshotOptions {
+	readonly out?: string;
+	readonly includeLocalDiscord?: boolean;
+}
+
+export interface ImportSourceSnapshotOptions {
+	readonly file: string;
+	readonly includeLocalDiscord?: boolean;
 }
 
 export async function addObsidianVaultSource(
@@ -164,4 +201,75 @@ export async function removeConfiguredSource(sourceId: string, deps: SourcesDeps
 		chalk.dim("  Indexed source rows/chunks/graph artifacts were not purged because the daemon API was unavailable."),
 	);
 	console.log(chalk.dim("  Start the daemon and run this command again if a database purge is still required."));
+}
+
+export async function exportConfiguredSourceSnapshot(
+	sourceId: string,
+	options: ExportSourceSnapshotOptions,
+	deps: SourcesDeps,
+): Promise<void> {
+	if (!deps.exportSourceSnapshotFromDaemon) {
+		console.error(chalk.red("✗ Source snapshot export requires the Signet daemon API."));
+		process.exitCode = 1;
+		return;
+	}
+	const result = await deps.exportSourceSnapshotFromDaemon(sourceId, {
+		includeLocalDiscord: options.includeLocalDiscord,
+	});
+	if (result.ok === false) {
+		console.error(chalk.red(`✗ ${result.error}`));
+		process.exitCode = 1;
+		return;
+	}
+
+	const text = `${JSON.stringify(result.snapshot, null, 2)}\n`;
+	if (options.out) {
+		writeFileSync(options.out, text, "utf8");
+		console.log(chalk.green(`✓ Exported source snapshot: ${sourceId}`));
+		console.log(chalk.dim(`  ${options.out}`));
+	} else {
+		console.log(text.trimEnd());
+	}
+	console.error(chalk.dim(`Exported ${result.artifactCount ?? 0} source artifacts.`));
+	if ((result.skippedLocalDiscordArtifacts ?? 0) > 0) {
+		console.error(
+			chalk.dim(
+				`Skipped ${result.skippedLocalDiscordArtifacts} local Discord @me artifacts. Use --include-local-discord to include them.`,
+			),
+		);
+	}
+}
+
+export async function importConfiguredSourceSnapshot(
+	sourceId: string,
+	options: ImportSourceSnapshotOptions,
+	deps: SourcesDeps,
+): Promise<void> {
+	if (!deps.importSourceSnapshotToDaemon) {
+		console.error(chalk.red("✗ Source snapshot import requires the Signet daemon API."));
+		process.exitCode = 1;
+		return;
+	}
+	let snapshot: unknown;
+	try {
+		snapshot = JSON.parse(readFileSync(options.file, "utf8")) as unknown;
+	} catch (err) {
+		console.error(chalk.red(`✗ Could not read source snapshot: ${err instanceof Error ? err.message : String(err)}`));
+		process.exitCode = 1;
+		return;
+	}
+
+	const result = await deps.importSourceSnapshotToDaemon(sourceId, snapshot, {
+		includeLocalDiscord: options.includeLocalDiscord,
+	});
+	if (result.ok === false) {
+		console.error(chalk.red(`✗ ${result.error}`));
+		process.exitCode = 1;
+		return;
+	}
+	console.log(chalk.green(`✓ Imported source snapshot: ${sourceId}`));
+	console.log(chalk.dim(`  Imported ${result.imported ?? 0} source artifacts.`));
+	if ((result.skippedLocalDiscordArtifacts ?? 0) > 0) {
+		console.log(chalk.dim(`  Skipped ${result.skippedLocalDiscordArtifacts} local Discord @me artifacts.`));
+	}
 }

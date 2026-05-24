@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { addDiscordSource, addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { hashNormalizedBody } from "../memory-lineage";
 import type { NativeMemoryBridgeHandle, NativeMemoryBridgeOptions, NativeMemorySource } from "../native-memory-sources";
 import {
 	beginSourceIndexJob,
@@ -12,6 +13,7 @@ import {
 	completeSourceIndexJob,
 	completeSourceIndexJobFromProgress,
 	getSourceIndexJob,
+	markSourceIndexInFlight,
 	markSourceIndexJobRunning,
 	updateSourceIndexJobProgress,
 } from "../source-index-progress";
@@ -458,6 +460,323 @@ describe("Sources routes", () => {
 		expect(body.sources[0]?.stats).toEqual({ artifacts: 1, chunks: 1, indexed: 1 });
 	});
 
+	it("exports source snapshots while excluding local Discord cache DMs by default", async () => {
+		const added = addDiscordSource(
+			{
+				name: "Snapshot Discord",
+				desktopCachePath: join(dir, "discord"),
+				syncMode: "desktop-cache",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord-cache://guild/123/channel/456/message/789",
+			sourceKind: "source_discord_message",
+			content: "public cached message",
+			metaJson: JSON.stringify({ guildId: "123", channelId: "456" }),
+		});
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord-cache://guild/@me/channel/111/message/222",
+			sourceKind: "source_discord_message",
+			content: "private dm message",
+			metaJson: JSON.stringify({ guildId: "@me", channelId: "111" }),
+		});
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/snapshot`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			artifacts: Array<{ sourcePath: string; content: string }>;
+			skipped?: { localDiscordArtifacts?: number };
+		};
+		expect(body.artifacts).toHaveLength(1);
+		expect(body.artifacts[0]?.content).toBe("public cached message");
+		expect(body.artifacts[0]?.sourcePath).not.toContain("@me");
+		expect(body.skipped?.localDiscordArtifacts).toBe(1);
+
+		const local = await makeApp().request(
+			`/api/sources/${encodeURIComponent(added.source.id)}/snapshot?includeLocalDiscord=true`,
+		);
+		const localBody = (await local.json()) as { artifacts: Array<{ sourcePath: string }> };
+		expect(localBody.artifacts.map((artifact) => artifact.sourcePath)).toContain(
+			"discord-cache://guild/@me/channel/111/message/222",
+		);
+	});
+
+	it("imports source snapshots through existing source artifact provenance", async () => {
+		const added = addDiscordSource(
+			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", name: "Import Discord" },
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord://guild/123/channel/456/message/stale",
+			sourceKind: "source_discord_message",
+			content: "stale message",
+			metaJson: JSON.stringify({ guildId: "123", channelId: "456" }),
+		});
+		insertSourceChunk({
+			id: "snapshot-stale-discord-chunk",
+			sourceId: `${added.source.id}:guild/123/channel/456/message/stale#0`,
+			chunkText: "source_path: discord://guild/123/channel/456/message/stale\n\nstale chunk",
+		});
+		const snapshot = {
+			version: 1,
+			exportedAt: "2026-05-24T00:00:00.000Z",
+			source: { id: added.source.id, kind: "discord", name: "Import Discord", root: added.source.root },
+			agentId: "default",
+			artifacts: [
+				sourceSnapshotArtifact({
+					sourceId: added.source.id,
+					sourceRoot: added.source.root,
+					sourcePath: "discord://guild/123/channel/456/message/fresh",
+					sourceKind: "source_discord_message",
+					content: "fresh imported message",
+					metaJson: JSON.stringify({ guildId: "123", channelId: "456" }),
+				}),
+			],
+			skipped: { localDiscordArtifacts: 0 },
+		};
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/snapshot/import`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(snapshot),
+		});
+		expect(res.status).toBe(200);
+		expect((await res.json()) as { imported: number }).toMatchObject({ imported: 1 });
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT source_path, content FROM memory_artifacts WHERE source_id = ? ORDER BY source_path")
+					.all(added.source.id) as Array<{ source_path: string; content: string }>,
+		);
+		expect(rows).toEqual([
+			{ source_path: "discord://guild/123/channel/456/message/fresh", content: "fresh imported message" },
+		]);
+		expect(sourceChunkRows(added.source.id)).toEqual([]);
+	});
+
+	it("preserves local Discord cache DM artifacts during default snapshot import", async () => {
+		const added = addDiscordSource(
+			{
+				name: "Preserve Local Discord",
+				desktopCachePath: join(dir, "discord"),
+				syncMode: "desktop-cache",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord-cache://guild/@me/channel/111/message/local",
+			sourceKind: "source_discord_message",
+			content: "local dm should remain",
+			metaJson: JSON.stringify({ guildId: "@me", channelId: "111" }),
+		});
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord-cache://guild/123/channel/456/message/stale",
+			sourceKind: "source_discord_message",
+			content: "stale public cache",
+			metaJson: JSON.stringify({ guildId: "123", channelId: "456" }),
+		});
+		insertSourceChunk({
+			id: "snapshot-local-discord-chunk",
+			sourceId: `${added.source.id}:discord-cache://guild/@me/channel/111/message/local#0`,
+			chunkText: "source_path: discord-cache://guild/@me/channel/111/message/local\n\nlocal dm chunk",
+		});
+		insertSourceChunk({
+			id: "snapshot-public-discord-chunk",
+			sourceId: `${added.source.id}:discord-cache://guild/123/channel/456/message/stale#0`,
+			chunkText: "source_path: discord-cache://guild/123/channel/456/message/stale\n\nstale public chunk",
+		});
+
+		const snapshot = {
+			version: 1,
+			exportedAt: "2026-05-24T00:00:00.000Z",
+			source: { id: added.source.id, kind: "discord", name: "Preserve Local Discord", root: added.source.root },
+			agentId: "default",
+			artifacts: [
+				sourceSnapshotArtifact({
+					sourceId: added.source.id,
+					sourceRoot: added.source.root,
+					sourcePath: "discord-cache://guild/123/channel/456/message/fresh",
+					sourceKind: "source_discord_message",
+					content: "fresh public cache",
+					metaJson: JSON.stringify({ guildId: "123", channelId: "456" }),
+				}),
+				sourceSnapshotArtifact({
+					sourceId: added.source.id,
+					sourceRoot: added.source.root,
+					sourcePath: "discord-cache://guild/@me/channel/111/message/imported",
+					sourceKind: "source_discord_message",
+					content: "imported dm should be skipped",
+					metaJson: JSON.stringify({ guildId: "@me", channelId: "111" }),
+				}),
+			],
+			skipped: { localDiscordArtifacts: 0 },
+		};
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/snapshot/import`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(snapshot),
+		});
+		expect(res.status).toBe(200);
+		expect((await res.json()) as { imported: number; skipped: { localDiscordArtifacts: number } }).toMatchObject({
+			imported: 1,
+			skipped: { localDiscordArtifacts: 1 },
+		});
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT source_path, content FROM memory_artifacts WHERE source_id = ? ORDER BY source_path")
+					.all(added.source.id) as Array<{ source_path: string; content: string }>,
+		);
+		expect(rows).toEqual([
+			{ source_path: "discord-cache://guild/123/channel/456/message/fresh", content: "fresh public cache" },
+			{ source_path: "discord-cache://guild/@me/channel/111/message/local", content: "local dm should remain" },
+		]);
+		expect(sourceChunkRows(added.source.id)).toEqual([
+			{
+				id: "snapshot-local-discord-chunk",
+				source_id: `${added.source.id}:discord-cache://guild/@me/channel/111/message/local#0`,
+			},
+		]);
+	});
+
+	it("rejects source snapshots that would overwrite another source path", async () => {
+		const added = addDiscordSource(
+			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", name: "Import Conflict Discord" },
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		insertSourceArtifact({
+			sourceId: "obsidian:other",
+			sourceRoot: vault,
+			sourcePath: "discord://guild/123/channel/456/message/shared",
+			sourceKind: "source_obsidian_markdown",
+			content: "other source content",
+			metaJson: JSON.stringify({ provider: "obsidian" }),
+		});
+		const snapshot = {
+			version: 1,
+			exportedAt: "2026-05-24T00:00:00.000Z",
+			source: { id: added.source.id, kind: "discord", name: "Import Conflict Discord", root: added.source.root },
+			agentId: "default",
+			artifacts: [
+				sourceSnapshotArtifact({
+					sourceId: added.source.id,
+					sourceRoot: added.source.root,
+					sourcePath: "discord://guild/123/channel/456/message/shared",
+					sourceKind: "source_discord_message",
+					content: "attacker controlled content",
+					metaJson: JSON.stringify({ guildId: "123", channelId: "456" }),
+				}),
+			],
+			skipped: { localDiscordArtifacts: 0 },
+		};
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/snapshot/import`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(snapshot),
+		});
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toContain("already owned by another source");
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT source_id, content FROM memory_artifacts WHERE source_path = ?")
+					.get("discord://guild/123/channel/456/message/shared") as { source_id: string; content: string },
+		);
+		expect(row).toEqual({ source_id: "obsidian:other", content: "other source content" });
+	});
+
+	it("rejects source snapshot import while indexing is active", async () => {
+		const added = addDiscordSource(
+			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", name: "Busy Import Discord" },
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const job = beginSourceIndexJob(added.source.id);
+		markSourceIndexJobRunning(added.source.id, job.id);
+		markSourceIndexInFlight(added.source.id);
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/snapshot/import`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({}),
+		});
+
+		expect(res.status).toBe(409);
+		expect(((await res.json()) as { error: string }).error).toContain("cannot run while source indexing");
+	});
+
+	it("reserves the source while snapshot import is parsing", async () => {
+		const added = addDiscordSource(
+			{ guildIds: ["123456789012345678"], tokenRef: "DISCORD_BOT_TOKEN", name: "Reserved Import Discord" },
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const snapshot = {
+			version: 1,
+			exportedAt: "2026-05-24T00:00:00.000Z",
+			source: { id: added.source.id, kind: "discord", name: "Reserved Import Discord", root: added.source.root },
+			agentId: "default",
+			artifacts: [],
+			skipped: { localDiscordArtifacts: 0 },
+		};
+		let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+		const body = new ReadableStream<Uint8Array>({
+			start(next) {
+				controller = next;
+			},
+		});
+		const app = makeApp();
+		const first = app.request(
+			new Request(`http://localhost/api/sources/${encodeURIComponent(added.source.id)}/snapshot/import`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body,
+				duplex: "half",
+			} as RequestInit & { duplex: "half" }),
+		);
+
+		const second = await app.request(`/api/sources/${encodeURIComponent(added.source.id)}/snapshot/import`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(snapshot),
+		});
+		expect(second.status).toBe(409);
+
+		controller?.enqueue(new TextEncoder().encode(JSON.stringify(snapshot)));
+		controller?.close();
+		expect((await first).status).toBe(200);
+	});
+
 	it("surfaces background source sync progress in the sources response", async () => {
 		const added = addObsidianSource({ root: vault, name: "Background Vault" }, dir);
 		expect(added.ok).toBe(true);
@@ -534,4 +853,113 @@ describe("Sources routes", () => {
 		expect(res.status).toBe(404);
 		expect(((await res.json()) as { error: string }).error).toContain("Source not found");
 	});
+
+	function insertSourceArtifact(input: {
+		sourceId: string;
+		sourceRoot: string;
+		sourcePath: string;
+		sourceKind: string;
+		content: string;
+		metaJson: string;
+	}): void {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, source_id, source_root,
+				  source_external_id, source_meta_json, session_id, session_token, harness,
+				  captured_at, content, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"default",
+				input.sourcePath,
+				hashNormalizedBody(input.content),
+				input.sourceKind,
+				input.sourceId,
+				input.sourceRoot,
+				`artifact:${input.sourcePath}`,
+				input.metaJson,
+				`native:discord:${input.sourcePath}`,
+				"snapshot-token",
+				"discord",
+				"2026-05-24T00:00:00.000Z",
+				input.content,
+				"2026-05-24T00:00:00.000Z",
+			);
+		});
+	}
+
+	function insertSourceChunk(input: { id: string; sourceId: string; chunkText: string }): void {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				input.id,
+				`${input.id}-hash`,
+				new Uint8Array([0]),
+				1,
+				"source_chunk",
+				input.sourceId,
+				input.chunkText,
+				"2026-05-24T00:00:00.000Z",
+				"default",
+			);
+		});
+	}
+
+	function sourceChunkRows(sourceId: string): Array<{ id: string; source_id: string }> {
+		return getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT id, source_id
+						   FROM embeddings
+						  WHERE agent_id = ?
+						    AND source_type = ?
+						    AND source_id >= ?
+						    AND source_id < ?
+						  ORDER BY id`,
+					)
+					.all("default", "source_chunk", `${sourceId}:`, `${sourceId}:\uffff`) as Array<{
+					id: string;
+					source_id: string;
+				}>,
+		);
+	}
+
+	function sourceSnapshotArtifact(input: {
+		sourceId: string;
+		sourceRoot: string;
+		sourcePath: string;
+		sourceKind: string;
+		content: string;
+		metaJson: string;
+	}): Record<string, unknown> {
+		return {
+			sourcePath: input.sourcePath,
+			sourceSha256: hashNormalizedBody(input.content),
+			sourceKind: input.sourceKind,
+			sessionId: `native:discord:${input.sourcePath}`,
+			sessionKey: "native:discord",
+			sessionToken: "snapshot-token",
+			project: null,
+			harness: "discord",
+			capturedAt: "2026-05-24T00:00:00.000Z",
+			startedAt: "2026-05-24T00:00:00.000Z",
+			endedAt: "2026-05-24T00:00:00.000Z",
+			manifestPath: null,
+			sourceNodeId: null,
+			memorySentence: "snapshot artifact",
+			memorySentenceQuality: "fallback",
+			content: input.content,
+			updatedAt: "2026-05-24T00:00:00.000Z",
+			sourceMtimeMs: Date.parse("2026-05-24T00:00:00.000Z"),
+			sourceId: input.sourceId,
+			sourceRoot: input.sourceRoot,
+			sourceExternalId: `artifact:${input.sourcePath}`,
+			sourceParentPath: null,
+			sourceMetaJson: input.metaJson,
+		};
+	}
 });

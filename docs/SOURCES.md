@@ -40,6 +40,8 @@ signet sources add discord --guild 123456789012345678 --token-ref DISCORD_BOT_TO
 signet sources add discord --mode desktop-cache --name "Local Discord Cache"
 signet sources add discord --mode desktop-cache --desktop-cache-path ~/.config/discord --full-cache
 signet sources list
+signet sources snapshot export discord:... --out discord-source.snapshot.json
+signet sources snapshot import discord:... discord-source.snapshot.json
 signet sources remove discord:...
 ```
 
@@ -77,6 +79,20 @@ the source still purges all Signet-owned rows for that source.
 Partial Discord listings are never treated as authoritative deletes. If a channel, thread, member, or message fetch fails, Signet records a source failure artifact and preserves existing source-owned rows until a successful sync can refresh them.
 
 Discord sources stay read-only. Signet does not write to Discord, automate user tokens, or selfbot against user accounts.
+
+Source snapshots
+----------------
+
+Source snapshots export Signet source artifacts with their provenance so a
+Discord-backed source can be backed up or moved without adopting Discrawl's
+standalone SQLite archive model. Snapshots use `memory_artifacts` rows and are
+imported back through the shared artifact path, which keeps source paths,
+external IDs, FTS indexing, and purge-by-source behavior intact.
+
+Discord Desktop cache DMs are local-only. Snapshot export/import excludes
+artifacts under the synthetic `@me` guild by default; use
+`--include-local-discord` only when intentionally moving that private local
+cache data.
 
 Obsidian v1
 -----------
