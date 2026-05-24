@@ -197,9 +197,10 @@ chunk embeddings to its own database.
 
 ### POST /api/sources/discord
 
-Add or update a Discord source and queue a shared source index job. Discord
-sources require a bot token secret reference; raw Discord tokens are rejected
-at the config boundary.
+Add or update a Discord source and queue a shared source index job. REST and
+gateway modes require a bot token secret reference; raw Discord tokens are
+rejected at the config boundary. Desktop cache mode reads local Discord Desktop
+cache artifacts and does not require a token.
 
 **Request body**
 
@@ -226,6 +227,22 @@ at the config boundary.
 `guildId` is accepted as a single-guild alias. `channels` is accepted as an
 alias for `channelFilter`.
 
+For local Discord Desktop cache import:
+
+```json
+{
+  "name": "Local Discord Cache",
+  "syncMode": "desktop-cache",
+  "desktopCachePath": "/home/user/.config/discord",
+  "desktopCacheFullScan": false
+}
+```
+
+`desktopCachePath` is optional when the platform default Discord Desktop data
+folder exists. The selected cache root must be a known Discord-compatible
+application data folder. `desktopCacheFullScan` expands cache file scanning;
+the default scans LevelDB/log JSON and route-bearing Chromium cache entries.
+
 **Response**
 
 ```json
@@ -243,6 +260,12 @@ channels, forums, active and archived threads, member snapshots, thread member
 snapshots, per-message artifacts, message windows, mentions, attachment
 metadata, embeds, polls, checkpoints, and partial-failure artifacts. Partial Discord listings are not
 used as authoritative deletes.
+
+The desktop-cache sync path indexes classifiable route-bearing cached messages,
+DMs under the synthetic guild id `@me`, cache-observed channel metadata, message
+windows, attachments, mentions, embeds, polls, checkpoints, and import stats.
+Cache imports are observational and never reconcile deletes from missing or
+evicted local cache files.
 
 ### DELETE /api/sources/:sourceId
 
