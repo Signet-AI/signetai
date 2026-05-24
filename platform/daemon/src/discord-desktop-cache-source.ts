@@ -73,6 +73,7 @@ interface CacheChannel {
 	readonly guildId: string;
 	readonly name: string;
 	readonly kind: string;
+	readonly synthetic?: boolean;
 }
 
 interface CacheMessage {
@@ -92,6 +93,7 @@ interface CacheMessage {
 	readonly mentions: readonly CacheMention[];
 	readonly embeds: readonly CacheEmbed[];
 	readonly poll?: CachePoll;
+	readonly routeAmbiguous?: boolean;
 }
 
 interface CacheAttachment {
@@ -231,25 +233,32 @@ function readCandidateFile(candidate: CacheCandidate, stats: CacheStats): Buffer
 }
 
 function collectTextPayload(snapshot: CacheSnapshot, text: string, fallbackMtimeMs: number, stats: CacheStats): void {
-	collectChannelRoutes(snapshot, text);
+	const routes = collectChannelRoutes(text);
+	mergeChannelRoutes(snapshot.routes, routes);
 	const values = extractJSONValues(text);
 	stats.jsonObjects += values.length;
-	for (const value of values) collectValue(snapshot, value, fallbackMtimeMs);
+	for (const value of values) collectValue(snapshot, value, fallbackMtimeMs, routes);
+	mergeChannelRoutes(snapshot.routes, routes);
 }
 
-function collectValue(snapshot: CacheSnapshot, value: unknown, fallbackMtimeMs: number): void {
+function collectValue(
+	snapshot: CacheSnapshot,
+	value: unknown,
+	fallbackMtimeMs: number,
+	routes: Map<string, string>,
+): void {
 	if (Array.isArray(value)) {
-		for (const child of value) collectValue(snapshot, child, fallbackMtimeMs);
+		for (const child of value) collectValue(snapshot, child, fallbackMtimeMs, routes);
 		return;
 	}
 	if (!isRecord(value)) return;
 	collectUserLabel(snapshot, value);
-	collectSelectedDirectMessageRoutes(snapshot, value);
+	collectSelectedDirectMessageRoutes(routes, value);
 	const channel = parseChannel(value);
 	if (channel) snapshot.channels.set(channel.id, channel);
-	const message = parseMessage(value, fallbackMtimeMs, snapshot.channels, snapshot.routes);
+	const message = parseMessage(value, fallbackMtimeMs, snapshot.channels, routes);
 	if (message) snapshot.messages.set(message.id, message);
-	for (const child of Object.values(value)) collectValue(snapshot, child, fallbackMtimeMs);
+	for (const child of Object.values(value)) collectValue(snapshot, child, fallbackMtimeMs, routes);
 }
 
 function finalizeSnapshot(snapshot: CacheSnapshot, stats: CacheStats): void {
@@ -291,13 +300,14 @@ function finalizeSnapshot(snapshot: CacheSnapshot, stats: CacheStats): void {
 function reconcileMessages(snapshot: CacheSnapshot): void {
 	for (const [id, message] of snapshot.messages) {
 		const channel = snapshot.channels.get(message.channelId);
-		const routedGuildId = snapshot.routes.get(message.channelId);
-		const guildId = channel?.guildId || routedGuildId || message.guildId;
+		const usableChannel = message.routeAmbiguous && channel?.synthetic ? undefined : channel;
+		const routedGuildId = message.routeAmbiguous ? "" : snapshot.routes.get(message.channelId);
+		const guildId = usableChannel?.guildId || routedGuildId || message.guildId;
 		if (!guildId) {
 			snapshot.messages.set(id, message);
 			continue;
 		}
-		const channelName = channel?.name || message.channelName || `channel-${shortId(message.channelId)}`;
+		const channelName = usableChannel?.name || message.channelName || `channel-${shortId(message.channelId)}`;
 		snapshot.messages.set(id, { ...message, guildId, channelName });
 		if (!channel) snapshot.channels.set(message.channelId, syntheticChannel(message.channelId, guildId, channelName));
 	}
@@ -731,7 +741,8 @@ function parseMessage(
 	if (!content && !author) return null;
 	const createdAt = parseDiscordTime(stringField(raw, "timestamp")) ?? snowflakeTime(id) ?? new Date(fallbackMtimeMs);
 	const channel = channels.get(channelId);
-	const guildId = stringField(raw, "guild_id") || channel?.guildId || routes.get(channelId) || "";
+	const routeGuildId = routes.get(channelId);
+	const guildId = stringField(raw, "guild_id") || channel?.guildId || routeGuildId || "";
 	const authorId = author ? stringField(author, "id") : "";
 	const authorName = author
 		? firstNonEmpty(
@@ -759,6 +770,7 @@ function parseMessage(
 		mentions: parseMentions(raw),
 		embeds: parseEmbeds(raw),
 		...(parsePoll(raw) ? { poll: parsePoll(raw) ?? undefined } : {}),
+		...(routes.has(channelId) && !routeGuildId && !guildId ? { routeAmbiguous: true } : {}),
 	};
 }
 
@@ -843,34 +855,48 @@ function collectUserLabel(snapshot: CacheSnapshot, raw: Readonly<Record<string, 
 	if (!existing || label.priority > existing.priority || !existing.name) snapshot.userLabels.set(id, label);
 }
 
-function collectSelectedDirectMessageRoutes(snapshot: CacheSnapshot, raw: Readonly<Record<string, unknown>>): void {
+function collectSelectedDirectMessageRoutes(routes: Map<string, string>, raw: Readonly<Record<string, unknown>>): void {
 	for (const candidate of [raw, recordField(raw, "_state"), recordField(raw, "state")].filter(isRecord)) {
 		const selected = recordField(candidate, "selectedChannelIds");
 		const selectedNull = selected ? stringField(selected, "null") : "";
-		if (looksSnowflake(selectedNull)) collectChannelRoute(snapshot, selectedNull, DIRECT_MESSAGE_GUILD_ID);
+		if (looksSnowflake(selectedNull)) collectChannelRoute(routes, selectedNull, DIRECT_MESSAGE_GUILD_ID);
 		if (candidate.selectedGuildId === null) {
 			const channelId = stringField(candidate, "selectedChannelId");
-			if (looksSnowflake(channelId)) collectChannelRoute(snapshot, channelId, DIRECT_MESSAGE_GUILD_ID);
+			if (looksSnowflake(channelId)) collectChannelRoute(routes, channelId, DIRECT_MESSAGE_GUILD_ID);
 		}
 	}
 }
 
-function collectChannelRoutes(snapshot: CacheSnapshot, text: string): void {
+function collectChannelRoutes(text: string): Map<string, string> {
+	const routes = new Map<string, string>();
 	channelRoutePattern.lastIndex = 0;
 	for (const match of text.matchAll(channelRoutePattern)) {
 		const guildId = match[1];
 		const channelId = match[2];
-		if (guildId && channelId && looksSnowflake(channelId)) collectChannelRoute(snapshot, channelId, guildId);
+		if (guildId && channelId && looksSnowflake(channelId)) collectChannelRoute(routes, channelId, guildId);
 	}
+	return routes;
 }
 
-function collectChannelRoute(snapshot: CacheSnapshot, channelId: string, guildId: string): void {
-	if (snapshot.routes.has(channelId)) {
-		const existing = snapshot.routes.get(channelId);
-		if (existing !== guildId) snapshot.routes.set(channelId, "");
+function collectChannelRoute(routes: Map<string, string>, channelId: string, guildId: string): void {
+	if (routes.has(channelId)) {
+		const existing = routes.get(channelId);
+		if (existing !== guildId) routes.set(channelId, "");
 		return;
 	}
-	snapshot.routes.set(channelId, guildId);
+	routes.set(channelId, guildId);
+}
+
+function mergeChannelRoutes(target: Map<string, string>, source: ReadonlyMap<string, string>): void {
+	for (const [channelId, guildId] of source) {
+		if (!guildId) {
+			target.delete(channelId);
+			continue;
+		}
+		const existing = target.get(channelId);
+		if (!existing) target.set(channelId, guildId);
+		else if (existing !== guildId) target.delete(channelId);
+	}
 }
 
 function extractJSONValues(text: string): readonly unknown[] {
@@ -1040,7 +1066,13 @@ function syntheticGuild(id: string): CacheGuild {
 
 function syntheticChannel(id: string, guildId: string, name: string): CacheChannel {
 	const fallbackName = name || (guildId === DIRECT_MESSAGE_GUILD_ID ? `dm-${shortId(id)}` : `channel-${shortId(id)}`);
-	return { id, guildId, name: fallbackName, kind: guildId === DIRECT_MESSAGE_GUILD_ID ? "dm" : "desktop" };
+	return {
+		id,
+		guildId,
+		name: fallbackName,
+		kind: guildId === DIRECT_MESSAGE_GUILD_ID ? "dm" : "desktop",
+		synthetic: true,
+	};
 }
 
 function guildName(id: string): string {

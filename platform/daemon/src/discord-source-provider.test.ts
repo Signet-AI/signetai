@@ -238,6 +238,13 @@ describe("discord-source-provider", () => {
 				`{"id":"333333333333333340","channel_id":"111111111111111118","content":"ambiguous route message","timestamp":"2026-04-23T18:20:43Z","author":{"id":"222222222222222229","username":"alice"}}`,
 			].join("\n"),
 		);
+		writeFileSync(
+			join(cachePath, "clear_later_0"),
+			[
+				"https://discord.com/channels/999999999999999998/111111111111111118",
+				`{"id":"333333333333333341","channel_id":"111111111111111118","content":"later clear route message","timestamp":"2026-04-23T18:20:45Z","author":{"id":"222222222222222229","username":"alice"}}`,
+			].join("\n"),
+		);
 		const added = addDiscordSource(
 			{
 				guildIds: [],
@@ -268,6 +275,7 @@ describe("discord-source-provider", () => {
 			),
 		).toBe(true);
 		expect(rows.some((row) => row.content.includes("ambiguous route message"))).toBe(false);
+		expect(rows.some((row) => row.content.includes("later clear route message"))).toBe(true);
 		const stats = rows.find((row) => row.source_kind === "source_discord_desktop_import");
 		expect(stats?.source_meta_json).toContain('"skippedMessages":1');
 	});
