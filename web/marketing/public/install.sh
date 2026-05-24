@@ -12,4 +12,4 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-exec bash -c 'curl -fsSL "$1" | bash' _ "$INSTALLER_URL"
+curl -fsSL "$INSTALLER_URL" | bash

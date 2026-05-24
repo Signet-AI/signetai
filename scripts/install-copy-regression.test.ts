@@ -34,6 +34,8 @@ describe("install copy", () => {
 		const installer = read("web/marketing/public/install.sh");
 
 		expect(installer).toContain("releases/download/bundle-latest/install.sh");
+		expect(installer).toContain('curl -fsSL "$INSTALLER_URL" | bash');
+		expect(installer).not.toContain("bash -c");
 		expect(installer).not.toContain("bun add -g signetai");
 		expect(installer).not.toContain("npm install -g signetai");
 	});
