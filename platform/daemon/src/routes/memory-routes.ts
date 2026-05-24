@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { vectorSearch } from "@signet/core";
 import type { Hono } from "hono";
 import { getAgentScope, resolveAgentId } from "../agent-id";
@@ -88,6 +91,40 @@ function parseOptionalIsoTimestamp(value: unknown): string | null {
 	if (!trimmed) return null;
 	const ts = new Date(trimmed);
 	return Number.isNaN(ts.getTime()) ? null : ts.toISOString();
+}
+
+function codexHome(): string {
+	return process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+}
+
+function noteSlug(title: string | undefined, content: string): string {
+	const seed = title?.trim() || content.slice(0, 80);
+	const slug = seed
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 48);
+	return slug || createHash("sha256").update(content).digest("hex").slice(0, 12);
+}
+
+function writeCodexNativeNote(input: { readonly content: string; readonly title?: string; readonly tags?: string }): string {
+	const now = new Date();
+	const timestamp = now.toISOString().replace(/[:.]/g, "-");
+	const slug = noteSlug(input.title, input.content);
+	const dir = join(codexHome(), "memories", "extensions", "ad_hoc", "notes");
+	mkdirSync(dir, { recursive: true });
+	const path = join(dir, `${timestamp}-${slug}.md`);
+	const frontmatter = [
+		"---",
+		"source: signet_save_note",
+		`created_at: ${JSON.stringify(now.toISOString())}`,
+		...(input.title?.trim() ? [`title: ${JSON.stringify(input.title.trim())}`] : []),
+		...(input.tags?.trim() ? [`tags: ${JSON.stringify(input.tags.trim())}`] : []),
+		"---",
+		"",
+	].join("\n");
+	writeFileSync(path, `${frontmatter}${input.content.trim()}\n`, "utf-8");
+	return path;
 }
 
 interface RememberRowProvenance {
@@ -349,6 +386,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		return requirePermission("remember", authConfig)(c, next);
 	});
 	app.use("/api/memory/save", async (c, next) => {
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/memory/codex-native-note", async (c, next) => {
 		return requirePermission("remember", authConfig)(c, next);
 	});
 	app.use("/api/hook/remember", async (c, next) => {
@@ -681,6 +721,35 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		} catch (e) {
 			logger.error("memory", "Error searching memories", e as Error);
 			return c.json({ results: [], error: "Search failed" });
+		}
+	});
+
+	// =========================================================================
+	// POST /api/memory/codex-native-note
+	// =========================================================================
+	app.post("/api/memory/codex-native-note", async (c) => {
+		const body = await c.req.json().catch(() => ({}));
+		const content = typeof body.content === "string" ? body.content.trim() : "";
+		if (!content) return c.json({ error: "content is required" }, 400);
+		if (content.length > 8000) return c.json({ error: "content must be at most 8000 characters" }, 400);
+		const title = typeof body.title === "string" ? body.title : undefined;
+		const tags = typeof body.tags === "string" ? body.tags : undefined;
+
+		const pipelineCfg = loadMemoryConfig(AGENTS_DIR).pipelineV2;
+		if (pipelineCfg.mutationsFrozen) {
+			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		}
+
+		try {
+			const path = writeCodexNativeNote({ content, title, tags });
+			logger.info("memory", "Saved Codex native memory note", {
+				path,
+				actor: c.get("auth")?.claims?.sub ?? c.req.header("x-signet-actor") ?? "anonymous",
+			});
+			return c.json({ ok: true, path });
+		} catch (e) {
+			logger.error("memory", "Failed to save Codex native memory note", e as Error);
+			return c.json({ error: "Failed to save Codex native memory note" }, 500);
 		}
 	});
 

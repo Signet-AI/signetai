@@ -191,6 +191,52 @@ describe("hybridRecall", () => {
 		});
 	});
 
+	it("can restrict recall to source-backed artifacts", async () => {
+		const now = new Date().toISOString();
+		const vec = unitVector();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, source_id, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'decision', ?, 'default', ?, ?, 'test')`,
+			).run("mem-source-only-regular", "source only marker regular memory", "sess-source-only", now, now);
+			db.prepare(
+				`INSERT INTO embeddings (
+					id, content_hash, vector, dimensions, source_type, source_id,
+					chunk_text, created_at, agent_id
+				) VALUES (?, ?, ?, 768, 'source_chunk', ?, ?, ?, 'default')`,
+			).run(
+				"emb-source-only",
+				"hash-source-only",
+				vectorBlob(vec),
+				"obsidian:vault:source-only.md#overview:1-1:0",
+				"source_id: obsidian:vault\nsource_provider: obsidian\nsource_path: /vault/source-only.md\nsource only marker source artifact.",
+				now,
+			);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "source only marker",
+				keywordQuery: "source only marker",
+				limit: 3,
+				agentId: "default",
+				readPolicy: "isolated",
+				sourceOnly: true,
+			},
+			testCfg(),
+			async () => vec,
+		);
+
+		expect(result.results.map((row) => row.id)).not.toContain("mem-source-only-regular");
+		expect(result.results[0]).toMatchObject({
+			source: "source_obsidian",
+			type: "source_chunk",
+			source_path: "/vault/source-only.md",
+			supplementary: true,
+		});
+	});
+
 	it("refills capped recall responses after suppressing repeated session rows", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {

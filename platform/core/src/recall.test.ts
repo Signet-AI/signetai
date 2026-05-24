@@ -113,6 +113,14 @@ describe("recall surface helpers", () => {
 		});
 	});
 
+	it("forwards source-only recall constraints only when callers set them", () => {
+		expect(buildRecallRequestBody("graph", { sourceOnly: true })).toEqual({
+			query: "graph",
+			sourceOnly: true,
+		});
+		expect(buildRecallRequestBody("graph", { sourceOnly: false })).toEqual({ query: "graph" });
+	});
+
 	it("normalizes legacy structured aspect tuples for remember callers", () => {
 		const body = buildRememberRequestBody("Remember this", {
 			tags: ["graph", "parity"],

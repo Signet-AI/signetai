@@ -74,6 +74,8 @@ export interface RecallParams {
 	sessionKey?: string;
 	/** Return already-recalled rows and annotate them instead of suppressing them. */
 	includeRecalled?: boolean;
+	/** Restrict recall to source-backed artifacts/chunks instead of normal memory rows. */
+	sourceOnly?: boolean;
 	/** Internal ledger metadata for call-site attribution. */
 	recallSurface?: string;
 	recallMode?: string;
@@ -1909,7 +1911,7 @@ export async function hybridRecall(
 		: needsPostFilter
 			? limit * 3
 			: limit;
-	const topIds = scored.slice(0, preHydrate).map((s) => s.id);
+	const topIds = params.sourceOnly === true ? [] : scored.slice(0, preHydrate).map((s) => s.id);
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
 	const allowSourceFallbacks = !hasMemoryMetadataFilters(params);
 

@@ -103,6 +103,7 @@ export interface RecallRequestOptions {
 	readonly sessionKey?: string;
 	readonly includeRecalled?: boolean;
 	readonly scope?: "global" | "agent" | "session";
+	readonly sourceOnly?: boolean;
 	readonly aggregate?: boolean;
 	readonly aggregateBudget?: AggregateRecallBudget;
 	readonly aggregate_budget?: AggregateRecallBudget;
@@ -307,6 +308,7 @@ export function buildRecallRequestBody(query: string, options: RecallRequestOpti
 		sessionKey: options.sessionKey,
 		includeRecalled: options.includeRecalled === true ? true : undefined,
 		scope: options.scope,
+		sourceOnly: options.sourceOnly === true ? true : undefined,
 		aggregate: options.aggregate === true ? true : undefined,
 		aggregateBudget: options.aggregateBudget ?? options.aggregate_budget,
 		saveAggregate:

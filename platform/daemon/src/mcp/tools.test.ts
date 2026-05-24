@@ -689,6 +689,50 @@ describe("createMcpServer", () => {
 		});
 	});
 
+	describe("signet_source_search", () => {
+		it("constrains recall to source-backed artifacts", async () => {
+			const cap: { url?: string; body?: string } = {};
+			mockFetch(
+				200,
+				{
+					method: "hybrid",
+					results: [
+						{
+							id: "source-1",
+							content: "Source-backed context",
+							score: 0.92,
+							source: "source_obsidian",
+							type: "source_chunk",
+							created_at: "2026-05-24T00:00:00.000Z",
+							supplementary: true,
+						},
+					],
+					meta: { totalReturned: 1, hasSupplementary: true, noHits: false },
+				},
+				cap,
+			);
+
+			const result = await callTool(server, "signet_source_search", {
+				query: "source-backed context",
+				limit: 4,
+				session_key: "session-a",
+				agent_id: "agent-a",
+				include_recalled: true,
+			});
+
+			expect(cap.url).toBe("http://localhost:3850/api/memory/recall");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body.query).toBe("source-backed context");
+			expect(body.limit).toBe(4);
+			expect(body.sessionKey).toBe("session-a");
+			expect(body.agentId).toBe("agent-a");
+			expect(body.includeRecalled).toBe(true);
+			expect(body.sourceOnly).toBe(true);
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toContain("Source-backed context");
+		});
+	});
+
 	describe("session_search", () => {
 		it("calls the session transcript search endpoint with lineage hints", async () => {
 			const cap: { url?: string; method?: string; body?: string } = {};
@@ -876,9 +920,16 @@ describe("createMcpServer", () => {
 	});
 
 	describe("signet_save_note", () => {
-		it("writes explicit notes under Codex native memory ad-hoc extensions", async () => {
-			const codexHome = join(tempAgentsDir, ".codex");
-			process.env.CODEX_HOME = codexHome;
+		it("routes explicit Codex notes through the daemon mutation boundary", async () => {
+			const cap: { url?: string; method?: string; body?: string } = {};
+			mockFetch(
+				200,
+				{
+					ok: true,
+					path: "/tmp/.codex/memories/extensions/ad_hoc/notes/2026-05-24-bridge-note.md",
+				},
+				cap,
+			);
 
 			const result = await callTool(server, "signet_save_note", {
 				title: "Bridge Note",
@@ -886,13 +937,16 @@ describe("createMcpServer", () => {
 				tags: "codex,signet",
 			});
 
+			expect(cap.url).toBe("http://localhost:3850/api/memory/codex-native-note");
+			expect(cap.method).toBe("POST");
+			const body = JSON.parse(cap.body ?? "{}");
+			expect(body).toEqual({
+				title: "Bridge Note",
+				content: "Codex should ingest this explicit Signet note.",
+				tags: "codex,signet",
+			});
 			expect(result.isError).toBeUndefined();
-			const payload = JSON.parse(result.content[0]?.text ?? "{}") as { path: string };
-			expect(payload.path).toContain(join(".codex", "memories", "extensions", "ad_hoc", "notes"));
-			const content = readFileSync(payload.path, "utf-8");
-			expect(content).toContain("source: signet_save_note");
-			expect(content).toContain("Codex should ingest this explicit Signet note.");
-			expect(content).not.toContain("MEMORY.md");
+			expect(result.content[0]?.text).toContain("extensions/ad_hoc/notes");
 		});
 	});
 

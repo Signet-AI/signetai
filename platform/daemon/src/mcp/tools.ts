@@ -7,10 +7,6 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
 	applyRecallScoreThreshold,
@@ -311,40 +307,6 @@ function errorResult(msg: string): {
 		content: [{ type: "text" as const, text: msg }],
 		isError: true as const,
 	};
-}
-
-function codexHome(): string {
-	return process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
-}
-
-function noteSlug(title: string | undefined, content: string): string {
-	const seed = title?.trim() || content.slice(0, 80);
-	const slug = seed
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.slice(0, 48);
-	return slug || createHash("sha256").update(content).digest("hex").slice(0, 12);
-}
-
-function writeCodexNativeNote(input: { readonly content: string; readonly title?: string; readonly tags?: string }): string {
-	const now = new Date();
-	const timestamp = now.toISOString().replace(/[:.]/g, "-");
-	const slug = noteSlug(input.title, input.content);
-	const dir = join(codexHome(), "memories", "extensions", "ad_hoc", "notes");
-	mkdirSync(dir, { recursive: true });
-	const path = join(dir, `${timestamp}-${slug}.md`);
-	const frontmatter = [
-		"---",
-		"source: signet_save_note",
-		`created_at: ${JSON.stringify(now.toISOString())}`,
-		...(input.title?.trim() ? [`title: ${JSON.stringify(input.title.trim())}`] : []),
-		...(input.tags?.trim() ? [`tags: ${JSON.stringify(input.tags.trim())}`] : []),
-		"---",
-		"",
-	].join("\n");
-	writeFileSync(path, `${frontmatter}${input.content.trim()}\n`, "utf-8");
-	return path;
 }
 
 async function graphIqToolResult(
@@ -990,13 +952,16 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		async ({ query, limit, project, session_key, agent_id, include_recalled }) => {
 			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/recall", {
 				method: "POST",
-				body: buildRecallRequestBody(query, {
-					limit: limit ?? 10,
-					project,
-					sessionKey: session_key,
-					agentId: agent_id,
-					includeRecalled: include_recalled,
-				}),
+				body: {
+					...buildRecallRequestBody(query, {
+						limit: limit ?? 10,
+						project,
+						sessionKey: session_key,
+						agentId: agent_id,
+						includeRecalled: include_recalled,
+					}),
+					sourceOnly: true,
+				},
 			});
 
 			if (!result.ok) return errorResult(`Source search failed: ${result.error}`);
@@ -1128,12 +1093,13 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			annotations: { readOnlyHint: false },
 		},
 		async ({ content, title, tags }) => {
-			try {
-				const path = writeCodexNativeNote({ content, title, tags });
-				return textResult({ ok: true, path });
-			} catch (err) {
-				return errorResult(`Save note failed: ${err instanceof Error ? err.message : String(err)}`);
-			}
+			const result = await daemonFetch<unknown>(baseUrl, "/api/memory/codex-native-note", {
+				method: "POST",
+				body: { content, title, tags },
+			});
+
+			if (!result.ok) return errorResult(`Save note failed: ${result.error}`);
+			return textResult(result.data);
 		},
 	);
 
