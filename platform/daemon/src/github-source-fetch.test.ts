@@ -218,6 +218,21 @@ describe("github-source-fetch", () => {
 		expect(comments.map((comment) => comment.id)).toEqual(["DC_kwDOOpaqueOne", "DC_kwDOOpaqueTwo"]);
 	});
 
+	it("throws on discussion comment GraphQL errors", async () => {
+		globalThis.fetch = mock(() =>
+			Promise.resolve(
+				Response.json({
+					errors: [{ message: "discussion comments unavailable" }],
+					data: { repository: { discussion: null } },
+				}),
+			),
+		) as typeof fetch;
+
+		await expect(fetchDiscussionComments({ owner: "o", repo: "r", token: "token" }, 7)).rejects.toThrow(
+			"Discussion comments GraphQL error: discussion comments unavailable",
+		);
+	});
+
 	it("applies maxItems to wildcard docs", async () => {
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			const text = String(url);

@@ -413,7 +413,13 @@ export async function fetchDiscussionComments(config: GitHubFetchConfig, number:
 	if (response.status !== 200) throw new Error(`Discussion comments fetch failed: ${response.status}`);
 	const body = response.body as {
 		data?: { repository?: { discussion?: { comments?: { nodes?: DiscussionCommentNode[] } } } };
+		errors?: Array<{ message?: string }>;
 	};
+	if (body.errors?.length) {
+		throw new Error(
+			`Discussion comments GraphQL error: ${body.errors.map((error) => error.message ?? "GraphQL error").join("; ")}`,
+		);
+	}
 	return (body.data?.repository?.discussion?.comments?.nodes ?? []).map((node) => ({
 		id: node.id,
 		body: node.body,
